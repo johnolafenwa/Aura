@@ -142,6 +142,14 @@ impl<'a> FunctionChecker<'a> {
         self.current_module_namespace()
             .and_then(|current| find_namespace_in_modules(&current.imported_modules, path))
             .or_else(|| find_namespace_in_modules(self.imported_modules, path))
+            .or_else(|| self.aliased_module(path))
+    }
+
+    /// The module bound by `import path as alias`, found by its alias.
+    fn aliased_module(&self, alias: &str) -> Option<&ModuleNamespace> {
+        self.current_module_namespace()
+            .and_then(|current| current.imported_modules.get(alias))
+            .or_else(|| self.imported_modules.get(alias))
     }
 
     pub(super) fn current_module_namespace(&self) -> Option<&ModuleNamespace> {

@@ -119,6 +119,7 @@ seven real loopback requests.
 | --- | --- | --- |
 | `dynamic_values.au` | Parses a recursive `json.Value`, uses an exact scalar accessor, builds a mixed Object/Array tree, and dumps sorted compact JSON and two-space-indented JSON | |
 | `typed_codec.au` | Implements `json.Codec` for a tool-argument class, decodes text through a bounded generic function, and prints field-path errors and a schema | |
+| `derived_codec.au` | Derives `json.Codec` for nested tool-argument classes with defaults, prints field-path errors for range, type, and unknown-key failures, and prints the derived schema | |
 
 ### `bytes/`
 

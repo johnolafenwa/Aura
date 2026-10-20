@@ -349,6 +349,10 @@ pub struct ImplDecl {
     pub for_type: TypeRef,
     pub methods: Vec<FunctionDecl>,
     pub span: Span,
+    /// Written without a body, as in `impl json.Codec for Point`, so the
+    /// compiler derives the methods.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub derived: bool,
 }
 
 /// Source-level ownership spelling for an ordinary parameter.

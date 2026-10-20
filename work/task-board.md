@@ -2,22 +2,31 @@
 
 Last updated: 2026-10-19
 
-## Batch 6 step 2: the `json.Codec` trait (in progress)
+## Batch 6 step 3: derived codecs for classes (in progress)
 
-- Target: add the `json.Codec` trait, `json.DecodeError`, and the
-  generic `json.encode`, `json.decode`, `json.decode_text`, and `json.schema`
-  functions, with explicit implementations, on both backends. John asked on
-  2026-10-19 for the work to continue through Batch 6 to Batch 7's key
-  decisions.
-- Done: module-qualified trait names in implementations, bounds, and
-  supertraits. The `json` module gains an Aura-source part,
-  `crates/aura-compiler/std/json.au`, that the compiler checks as module
-  `json` and merges into the namespace `import json` binds. Notes are in
+- Target: derive `encode`, `decode`, and `schema` from a bodyless
+  `impl json.Codec for C` for a class, with field paths in errors, on both
+  backends. John asked on 2026-10-19 for the work to continue through
+  Batch 6 to Batch 7's key decisions.
+- Done: a checker pre-pass writes the methods as Aura source per class and
+  field type. `AU2046` rejects what cannot be derived. Fixes found on the
+  way: `json.decode` from an imported module, a temporary passed to
+  `json.encode`, and `case j.Value.X` patterns through a module alias. Notes
+  are in `2026-10-19-batch-6-step-3-derived-codecs.md`.
+- Verification: `json_codec_derived`, `json_codec_derived_import_forms`, and
+  `json_aliased_module_patterns` run-pass fixtures, eleven `json_derive_*`
+  check-fail fixtures, a cross-module CLI test on both backends, and
+  `examples/json/derived_codec.au`.
+- Next: open the PR, then step 4, derived codecs for enums and unions.
+
+## Batch 6 step 2: the `json.Codec` trait (complete)
+
+- Target: add the `json.Codec` trait, `json.DecodeError`, and the generic
+  `json.encode`, `json.decode`, `json.decode_text`, and `json.schema`
+  functions, with explicit implementations, on both backends.
+- Done: merged in PR #83 (`3765188`). Notes are in
   `2026-10-19-batch-6-step-2-json-codec.md`.
-- Verification: `json_codec_explicit` and three check-fail fixtures, two
-  cross-module CLI tests on both backends, and
-  `examples/json/typed_codec.au`.
-- Next: open the PR, then step 3, derived `encode` and `decode` for classes.
+- Next: step 3.
 
 ## Batch 6 step 1: associated methods through a type parameter (complete)
 

@@ -124,6 +124,16 @@ pub fn parse(source: &str) -> Result<Module> {
     Ok(module)
 }
 
+/// Parses compiler-generated source with every line number shifted by
+/// `line_offset`, so its spans stay apart from the user's source.
+pub(crate) fn parse_generated(source: &str, line_offset: usize) -> Result<Module> {
+    let mut tokens = lex(source)?;
+    for token in &mut tokens {
+        token.span.line += line_offset;
+    }
+    Parser::new(tokens).parse_module()
+}
+
 /// Docstrings that belong to the module's public interface, in source order.
 pub(crate) fn public_docstrings(module: &Module) -> Vec<&DocString> {
     let mut docs = Vec::new();
@@ -989,7 +999,20 @@ impl Parser {
         }
         self.expect_keyword(TokenKind::KwFor)?;
         let for_type = self.parse_type()?;
-        self.expect_simple(TokenKind::Colon)?;
+        if self.eat_simple(&TokenKind::Colon).is_none() {
+            // `impl Trait for Type` with no body asks for derived methods.
+            self.expect_statement_terminator()?;
+            return Ok(ImplDecl {
+                type_params,
+                type_param_bounds,
+                trait_name,
+                trait_args,
+                for_type,
+                methods: Vec::new(),
+                span,
+                derived: true,
+            });
+        }
         self.expect_newline()?;
         self.expect_simple(TokenKind::Indent)?;
 
@@ -1023,6 +1046,7 @@ impl Parser {
             for_type,
             methods,
             span,
+            derived: false,
         })
     }
 

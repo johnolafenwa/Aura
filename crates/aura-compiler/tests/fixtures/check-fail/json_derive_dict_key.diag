@@ -1,0 +1,5 @@
+error[AU2046]: cannot derive `json.Codec` for `Index`: field `rows` has a `dict` type whose keys are not `str`, and JSON object keys are strings
+ --> crates/aura-compiler/tests/fixtures/check-fail/json_derive_dict_key.au:5:11
+  |
+5 |     rows: dict[int64, str]
+  |           ^

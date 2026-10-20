@@ -323,8 +323,9 @@ trait Codec:
 - `schema` returns a JSON Schema document that describes what `decode`
   accepts.
 
-An implementation defines all three methods. The compiler does not derive
-them.
+An implementation with a body defines all three methods. An implementation
+with no body asks the compiler to derive them, as
+[Derived Codecs](#derived-codecs) describes.
 
 This program decodes tool arguments from text and reports errors with the
 path of the field that failed:
@@ -362,6 +363,78 @@ form lets a function bounded by `T: json.Codec` decode any such type. See
 Printing a `DecodeError` gives the path and a message, such as
 `$.query: expected string, found another kind`.
 
+### Derived Codecs
+
+Write `impl json.Codec for Name` with no body, and the compiler writes
+`encode`, `decode`, and `schema` for the class `Name`:
+
+<<< ../../examples/json/derived_codec.au{aura}
+
+A class encodes as an object with one key per field, in declaration order.
+`None` encodes as `null`, and a field is never left out. Encoding reads the
+value and leaves it usable.
+
+Each field type has one JSON form:
+
+| Field type | JSON form | Decoding rule |
+| --- | --- | --- |
+| `bool` | `true` or `false` | |
+| `int8`, `int16`, `int32`, `uint8`, `uint16`, `uint32` | integer | A value outside the type's range is `OutOfRange`. |
+| `int64` | integer | |
+| `float32`, `float64` | number | An integer is accepted when it converts exactly. |
+| `str` | string | |
+| `json.Value` | any value | The value passes through unchanged. |
+| `list[T]` | array | |
+| `dict[str, T]` | object | |
+| a tuple such as `(int64, str)` | array of exactly that length | |
+| `T \| None` | the form of `T`, or `null` | |
+| a class or enum that implements `json.Codec` | its own encoding | |
+
+The decoder is strict:
+
+- A key that names no field is `UnknownField`.
+- A missing key takes the field's default. A field without a default is
+  `MissingField`. A `T | None` field is required unless it declares `= None`.
+- The wrong JSON kind is `WrongType`. A number with a fraction, such as
+  `1.5`, is `WrongType` for an integer field. A string never becomes a
+  number. The parser reads `1.0` as an integer, as
+  [Number Classification](#number-classification) describes.
+- Decoding stops at the first error in document order. The values already
+  decoded are dropped.
+
+The derived schema is a JSON Schema 2020-12 document that matches the
+decoder. A class is an object with `properties`, a `required` list of the
+fields without defaults, and `"additionalProperties": false`. A narrow
+integer carries `minimum` and `maximum`. A `T | None` field is an `anyOf`
+with `{"type": "null"}`. A tuple uses `prefixItems`. A class reached through
+a field appears once under `$defs` and is referenced with `$ref`, which also
+covers a recursive class.
+
+The checker rejects these with `AU2046`:
+
+- a bodyless implementation of a trait other than `json.Codec`
+- a class declared in another module, a generic class, or an enum
+- a class that declares `__init__`. Decode a plain wire class and call the
+  initializer in an explicit implementation instead.
+- a field of a type with no JSON form: a set, `Array`, `bytes`, `Result`, a
+  callable, `uint64`, `uintsize`, `intsize`, `int128`, or `uint128`
+- a `dict` whose keys are not `str`, or a union other than `T | None`
+
+A field of a class or enum type that does not implement `json.Codec` is
+`AU2002`. The message starts with `derived json.Codec for` and names the
+class.
+
+```aura check-fail:AU2046
+import json
+
+
+class Bag:
+    items: set[str]
+
+
+impl json.Codec for Bag
+```
+
 ## Diagnostics
 
 Compile-time codes:
@@ -371,6 +444,7 @@ Compile-time codes:
 | `AU2001` | Unknown `json` name, enum variant, function, or accessor. |
 | `AU2002` | Type mismatch in an argument, constructor payload, return, or annotation, or a type argument to `json.decode` that does not implement `json.Codec`. |
 | `AU2004` | Wrong arity, argument name, or positional/named binding. |
+| `AU2046` | A derived `json.Codec` that the compiler cannot write. See [Derived Codecs](#derived-codecs). |
 
 The ordinary ownership diagnostics apply to moved Values, Errors, strings,
 arrays, and objects.
@@ -444,8 +518,10 @@ Aura 0.5 has no API to shut down, join, size, or configure the service. The
 service capacity does not apply to `json.is_valid`, `json.parse_string_map`,
 or `json.stringify_map`.
 
-The compiler does not derive `json.Codec` implementations. Schema validation,
-MessagePack, CBOR, Protobuf, and other binary formats are not available.
+The compiler derives `json.Codec` for classes only. A derived codec for an
+enum or for a union other than `T | None` is not implemented. A derived
+schema carries no `description` values. Schema validation, MessagePack, CBOR,
+Protobuf, and other binary formats are not available.
 
 Collection and string growth controlled by the codec, and both runtime
 conversion trees, use fallible allocation and report failure as `AU4005`. An
@@ -458,9 +534,9 @@ language does not claim that every host out-of-memory condition can be caught.
 The value and error model, parse and dump, accessors, ordering, formatting,
 and resource limits are implemented Aura 0.5 behavior.
 
-The `json.Codec` trait, `json.DecodeError`, and the generic `encode`,
-`decode`, `decode_text`, and `schema` functions are implemented on both
-backends.
+The `json.Codec` trait, `json.DecodeError`, derived codecs for classes, and
+the generic `encode`, `decode`, `decode_text`, and `schema` functions are
+implemented on both backends.
 
 `is_valid`, `stringify_map`, and `parse_string_map` are bounded
 flat-dictionary operations. Aura 0.5 has no streaming JSON codec.

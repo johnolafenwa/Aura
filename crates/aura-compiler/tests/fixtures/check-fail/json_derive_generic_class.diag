@@ -1,0 +1,5 @@
+error[AU2046]: a derived `json.Codec` for the generic class `Box` is not implemented
+ --> crates/aura-compiler/tests/fixtures/check-fail/json_derive_generic_class.au:8:1
+  |
+8 | impl json.Codec for Box
+  | ^

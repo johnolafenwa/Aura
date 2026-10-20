@@ -1,0 +1,12 @@
+import json
+
+
+class Inner:
+    value: int64
+
+
+class Outer:
+    inner: Inner
+
+
+impl json.Codec for Outer

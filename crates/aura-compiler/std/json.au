@@ -74,3 +74,315 @@ public def decode_text[T: Codec](text: str) -> Result[T, DecodeError]:
 
 public def schema[T: Codec]() -> json.Value:
     return T.schema()
+
+
+# Helpers for derived implementations. The compiler generates calls to
+# these names; they are not part of the documented `json` API.
+
+
+public def __kind(value: json.Value) -> str:
+    match value:
+        case json.Value.Null:
+            return "null"
+        case json.Value.Bool(_):
+            return "boolean"
+        case json.Value.Int(_):
+            return "integer"
+        case json.Value.Float(_):
+            return "number"
+        case json.Value.String(_):
+            return "string"
+        case json.Value.Array(_):
+            return "array"
+        case json.Value.Object(_):
+            return "object"
+
+
+public def __error(kind: own DecodeErrorKind) -> DecodeError:
+    return DecodeError(path="$", kind=kind)
+
+
+public def __wrong_type(expected: own str, value: json.Value) -> DecodeError:
+    return __error(DecodeErrorKind.WrongType(expected=expected, found=__kind(value)))
+
+
+public def __at(error: own DecodeError, step: own str) -> DecodeError:
+    match own error:
+        case DecodeError(path=path, kind=kind):
+            match path.strip_prefix("$"):
+                case str as rest:
+                    return DecodeError(path="$" + step + rest, kind=kind)
+                case None:
+                    return DecodeError(path=path, kind=kind)
+
+
+public def __is_null(value: json.Value) -> bool:
+    return json.is_null(value)
+
+
+public def __array(value: own json.Value) -> Result[list[json.Value], DecodeError]:
+    found = __kind(value)
+    match own json.into_array(value):
+        case list[json.Value] as items:
+            return Result.Ok(items)
+        case None:
+            return Result.Err(
+                __error(DecodeErrorKind.WrongType(expected="array", found=found))
+            )
+
+
+public def __tuple_items(
+    value: own json.Value,
+    count: int64,
+) -> Result[list[json.Value], DecodeError]:
+    match own __array(value):
+        case Result.Ok(items):
+            if items.len() != count:
+                expected = f"{count}-element array"
+                found = f"{items.len()}-element array"
+                return Result.Err(
+                    __error(DecodeErrorKind.WrongType(expected=expected, found=found))
+                )
+            return Result.Ok(items)
+        case Result.Err(error):
+            return Result.Err(error)
+
+
+public def __entries(
+    value: own json.Value
+) -> Result[list[(str, json.Value)], DecodeError]:
+    found = __kind(value)
+    match own json.into_object(value):
+        case dict[str, json.Value] as fields:
+            # Removing the last entry is cheap, so take entries from the end
+            # and restore document order afterwards.
+            keys = fields.keys()
+            mut reversed: list[(str, json.Value)] = []
+            mut index = keys.len() - 1
+            while index >= 0:
+                key = keys[index].clone()
+                match own fields.remove(key.clone()):
+                    case Lookup.Found(item):
+                        reversed.append((key, item))
+                    case Lookup.Missing:
+                        pass
+                index -= 1
+            mut entries: list[(str, json.Value)] = []
+            for entry in own reversed:
+                entries.insert(0, entry)
+            return Result.Ok(entries)
+        case None:
+            return Result.Err(
+                __error(DecodeErrorKind.WrongType(expected="object", found=found))
+            )
+
+
+public def __decode_bool(value: own json.Value) -> Result[bool, DecodeError]:
+    match value:
+        case json.Value.Bool(flag):
+            return Result.Ok(flag)
+        case _:
+            return Result.Err(__wrong_type("boolean", value))
+
+
+public def __decode_str(value: own json.Value) -> Result[str, DecodeError]:
+    found = __kind(value)
+    match own json.into_string(value):
+        case str as text:
+            return Result.Ok(text)
+        case None:
+            return Result.Err(
+                __error(DecodeErrorKind.WrongType(expected="string", found=found))
+            )
+
+
+public def __decode_int64(value: own json.Value) -> Result[int64, DecodeError]:
+    match value:
+        case json.Value.Int(number):
+            return Result.Ok(number)
+        case _:
+            return Result.Err(__wrong_type("integer", value))
+
+
+def __decode_int_in(
+    value: own json.Value,
+    low: int64,
+    high: int64,
+    type_name: own str,
+) -> Result[int64, DecodeError]:
+    match own __decode_int64(value):
+        case Result.Ok(number):
+            if number < low or number > high:
+                return Result.Err(
+                    __error(DecodeErrorKind.OutOfRange(type_name=type_name))
+                )
+            return Result.Ok(number)
+        case Result.Err(error):
+            return Result.Err(error)
+
+
+public def __decode_int8(value: own json.Value) -> Result[int8, DecodeError]:
+    match own __decode_int_in(value, -128, 127, "int8"):
+        case Result.Ok(number):
+            return Result.Ok(number as int8)
+        case Result.Err(error):
+            return Result.Err(error)
+
+
+public def __decode_int16(value: own json.Value) -> Result[int16, DecodeError]:
+    match own __decode_int_in(value, -32768, 32767, "int16"):
+        case Result.Ok(number):
+            return Result.Ok(number as int16)
+        case Result.Err(error):
+            return Result.Err(error)
+
+
+public def __decode_int32(value: own json.Value) -> Result[int32, DecodeError]:
+    match own __decode_int_in(value, -2147483648, 2147483647, "int32"):
+        case Result.Ok(number):
+            return Result.Ok(number as int32)
+        case Result.Err(error):
+            return Result.Err(error)
+
+
+public def __decode_uint8(value: own json.Value) -> Result[uint8, DecodeError]:
+    match own __decode_int_in(value, 0, 255, "uint8"):
+        case Result.Ok(number):
+            return Result.Ok(number as uint8)
+        case Result.Err(error):
+            return Result.Err(error)
+
+
+public def __decode_uint16(value: own json.Value) -> Result[uint16, DecodeError]:
+    match own __decode_int_in(value, 0, 65535, "uint16"):
+        case Result.Ok(number):
+            return Result.Ok(number as uint16)
+        case Result.Err(error):
+            return Result.Err(error)
+
+
+public def __decode_uint32(value: own json.Value) -> Result[uint32, DecodeError]:
+    match own __decode_int_in(value, 0, 4294967295, "uint32"):
+        case Result.Ok(number):
+            return Result.Ok(number as uint32)
+        case Result.Err(error):
+            return Result.Err(error)
+
+
+def __converts_exactly(number: int64) -> bool:
+    converted = number as float64
+    # 2**63 rounds from int64 max and has no int64 value to compare with.
+    if converted >= 9223372036854775807.0:
+        return false
+    return (converted as int64) == number
+
+
+public def __decode_float64(value: own json.Value) -> Result[float64, DecodeError]:
+    match value:
+        case json.Value.Float(number):
+            return Result.Ok(number)
+        case json.Value.Int(number):
+            if __converts_exactly(number):
+                return Result.Ok(number as float64)
+            return Result.Err(__error(DecodeErrorKind.OutOfRange(type_name="float64")))
+        case _:
+            return Result.Err(__wrong_type("number", value))
+
+
+public def __decode_float32(value: own json.Value) -> Result[float32, DecodeError]:
+    match value:
+        case json.Value.Float(number):
+            return Result.Ok(number as float32)
+        case json.Value.Int(number):
+            narrowed = number as float32
+            if __converts_exactly(number) and (narrowed as float64) == (
+                number as float64
+            ):
+                return Result.Ok(narrowed)
+            return Result.Err(__error(DecodeErrorKind.OutOfRange(type_name="float32")))
+        case _:
+            return Result.Err(__wrong_type("number", value))
+
+
+public def __type_schema(type_name: own str) -> json.Value:
+    return json.Value.Object({"type": json.Value.String(type_name)})
+
+
+public def __integer_schema(low: int64, high: int64) -> json.Value:
+    return json.Value.Object(
+        {
+            "type": json.Value.String("integer"),
+            "minimum": json.Value.Int(low),
+            "maximum": json.Value.Int(high),
+        }
+    )
+
+
+public def __ref(name: str) -> json.Value:
+    return json.Value.Object({"$ref": json.Value.String("#/$defs/" + name)})
+
+
+public def __with_defs(
+    body: own json.Value,
+    defs: own dict[str, json.Value],
+) -> json.Value:
+    if defs.len() == 0:
+        return body
+    match own json.into_object(body):
+        case dict[str, json.Value] as fields:
+            mut result = fields
+            result["$defs"] = json.Value.Object(defs)
+            return json.Value.Object(result)
+        case None:
+            return json.Value.Object({"$defs": json.Value.Object(defs)})
+
+
+public def __lift(
+    defs: mut dict[str, json.Value],
+    name: own str,
+    schema: own json.Value,
+) -> json.Value:
+    match own json.into_object(schema):
+        case dict[str, json.Value] as fields:
+            mut body = fields
+            match own body.remove("$defs"):
+                case Lookup.Found(nested):
+                    match own json.into_object(nested):
+                        case dict[str, json.Value] as entries:
+                            for key, entry in own entries.items():
+                                if not (key in defs):
+                                    defs[key] = entry
+                        case None:
+                            pass
+                case Lookup.Missing:
+                    pass
+            if not (name in defs):
+                defs[name.clone()] = json.Value.Object(body)
+        case None:
+            pass
+    return __ref(name)
+
+
+public def __copy(value: json.Value) -> json.Value:
+    match value:
+        case json.Value.Null:
+            return json.Value.Null
+        case json.Value.Bool(flag):
+            return json.Value.Bool(flag)
+        case json.Value.Int(number):
+            return json.Value.Int(number)
+        case json.Value.Float(number):
+            return json.Value.Float(number)
+        case json.Value.String(text):
+            return json.Value.String(text.clone())
+        case json.Value.Array(items):
+            mut copied: list[json.Value] = []
+            for item in items:
+                copied.append(__copy(item))
+            return json.Value.Array(copied)
+        case json.Value.Object(fields):
+            mut copied: dict[str, json.Value] = {}
+            for key in fields.keys():
+                view item = fields[key]
+                copied[key.clone()] = __copy(item)
+            return json.Value.Object(copied)

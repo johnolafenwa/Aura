@@ -21797,11 +21797,37 @@ impl<'a> Lowerer<'a> {
                             self.default_helper_owner = (function.decl.type_params.is_empty()
                                 && !is_builtin_module_name(&module_path))
                             .then(|| imported_module_function_name(&module_path, field));
-                            let lowered_args = self.lower_user_args(
+                            // Only parameters that mention a type parameter
+                            // take the inferred type; the others keep the
+                            // caller's spelling of their declared type.
+                            let contextual_param_types = (!function.decl.type_params.is_empty())
+                                .then(|| {
+                                    self.contextual_param_types(
+                                        &function,
+                                        explicit_type_args,
+                                        field,
+                                        args,
+                                        callee.span,
+                                        expected,
+                                    )
+                                    .into_iter()
+                                    .zip(&function.signature.params)
+                                    .zip(&function.decl.params)
+                                    .map(|((inferred, declared), param)| {
+                                        if crate::sema::has_unresolved_type_params(declared) {
+                                            inferred
+                                        } else {
+                                            self.lower_type_ref_with_provenance(&param.ty)
+                                        }
+                                    })
+                                    .collect::<Vec<_>>()
+                                });
+                            let lowered_args = self.lower_user_args_with_types(
                                 &format!("function `{}`", function.decl.name),
                                 &function.decl.params,
                                 args,
                                 callee.span,
+                                contextual_param_types.as_deref(),
                                 Some(&function.signature.param_passings),
                             );
                             let callee_name = self.specialized_function_use(
@@ -22319,83 +22345,18 @@ impl<'a> Lowerer<'a> {
                 }
                 let resolved_function = self.resolve_function_info(name).cloned();
                 let contextual_param_types = resolved_function.as_ref().map(|function_info| {
-                    let substitutions = match &callee.kind {
-                        ExprKind::Specialize { type_args, .. } => {
-                            let type_args = type_args
-                                .iter()
-                                .map(|ty| self.lower_type_ref_with_provenance(ty))
-                                .collect::<Vec<_>>();
-                            substitutions_from_decl_type_args(
-                                &function_info.decl.type_params,
-                                &type_args,
-                            )
-                        }
-                        _ => {
-                            let mut substitutions = std::collections::HashMap::new();
-                            if let Some(expected) = expected {
-                                let type_params = function_info
-                                    .decl
-                                    .type_params
-                                    .iter()
-                                    .cloned()
-                                    .collect::<BTreeSet<_>>();
-                                let _ = crate::sema::type_pattern_matches(
-                                    &function_info.signature.return_type,
-                                    expected,
-                                    &type_params,
-                                    &mut substitutions,
-                                );
-                            }
-                            let ordered_args = bind_call_arguments(
-                                name,
-                                &callable_params_from_decl(&function_info.decl.params),
-                                args,
-                                callee.span,
-                                CallConvention::PositionalOrNamed,
-                            )
-                            .expect("type-checked generic call should bind during MIR lowering");
-                            let type_params = function_info
-                                .decl
-                                .type_params
-                                .iter()
-                                .cloned()
-                                .collect::<BTreeSet<_>>();
-                            // Infer from non-integer-literal arguments first so a
-                            // literal can adopt a concrete float type established
-                            // by another argument instead of prematurely fixing T
-                            // to its standalone int64 default.
-                            for literal_pass in [false, true] {
-                                for (argument, param) in ordered_args
-                                    .iter()
-                                    .zip(function_info.signature.params.iter())
-                                {
-                                    let Some(argument) = argument else {
-                                        continue;
-                                    };
-                                    if is_integer_literal_expr(&argument.value) != literal_pass {
-                                        continue;
-                                    }
-                                    let Some(actual) = self.infer_expr_type(&argument.value) else {
-                                        continue;
-                                    };
-                                    let actual = inference_shape(actual, param);
-                                    let _ = crate::sema::type_pattern_matches(
-                                        param,
-                                        &actual,
-                                        &type_params,
-                                        &mut substitutions,
-                                    );
-                                }
-                            }
-                            substitutions
-                        }
+                    let explicit_type_args = match &callee.kind {
+                        ExprKind::Specialize { type_args, .. } => Some(type_args.as_slice()),
+                        _ => None,
                     };
-                    function_info
-                        .signature
-                        .params
-                        .iter()
-                        .map(|param| substitute_type(param, &substitutions))
-                        .collect::<Vec<_>>()
+                    self.contextual_param_types(
+                        function_info,
+                        explicit_type_args,
+                        name,
+                        args,
+                        callee.span,
+                        expected,
+                    )
                 });
                 let lowered_args = if let Some(function_info) = resolved_function.as_ref() {
                     // A generic default is specialized at the call site.
@@ -23039,6 +23000,94 @@ impl<'a> Lowerer<'a> {
             .map(|argument| argument.expect("every parameter should have a lowered argument"))
             .chain(span_range_args)
             .collect()
+    }
+
+    /// The parameter types of a call of `function_info`, with its type
+    /// parameters inferred from explicit type arguments, the expected
+    /// result, and the arguments, so argument temporaries get concrete types.
+    fn contextual_param_types(
+        &self,
+        function_info: &crate::sema::FunctionInfo,
+        explicit_type_args: Option<&[crate::ast::TypeRef]>,
+        name: &str,
+        args: &[Argument],
+        span: Span,
+        expected: Option<&Type>,
+    ) -> Vec<Type> {
+        let substitutions = match explicit_type_args {
+            Some(type_args) => {
+                let type_args = type_args
+                    .iter()
+                    .map(|ty| self.lower_type_ref_with_provenance(ty))
+                    .collect::<Vec<_>>();
+                substitutions_from_decl_type_args(&function_info.decl.type_params, &type_args)
+            }
+            None => {
+                let mut substitutions = std::collections::HashMap::new();
+                if let Some(expected) = expected {
+                    let type_params = function_info
+                        .decl
+                        .type_params
+                        .iter()
+                        .cloned()
+                        .collect::<BTreeSet<_>>();
+                    let _ = crate::sema::type_pattern_matches(
+                        &function_info.signature.return_type,
+                        expected,
+                        &type_params,
+                        &mut substitutions,
+                    );
+                }
+                let ordered_args = bind_call_arguments(
+                    name,
+                    &callable_params_from_decl(&function_info.decl.params),
+                    args,
+                    span,
+                    CallConvention::PositionalOrNamed,
+                )
+                .expect("type-checked generic call should bind during MIR lowering");
+                let type_params = function_info
+                    .decl
+                    .type_params
+                    .iter()
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                // Infer from non-integer-literal arguments first so a
+                // literal can adopt a concrete float type established
+                // by another argument instead of prematurely fixing T
+                // to its standalone int64 default.
+                for literal_pass in [false, true] {
+                    for (argument, param) in ordered_args
+                        .iter()
+                        .zip(function_info.signature.params.iter())
+                    {
+                        let Some(argument) = argument else {
+                            continue;
+                        };
+                        if is_integer_literal_expr(&argument.value) != literal_pass {
+                            continue;
+                        }
+                        let Some(actual) = self.infer_expr_type(&argument.value) else {
+                            continue;
+                        };
+                        let actual = inference_shape(actual, param);
+                        let _ = crate::sema::type_pattern_matches(
+                            param,
+                            &actual,
+                            &type_params,
+                            &mut substitutions,
+                        );
+                    }
+                }
+                substitutions
+            }
+        };
+        function_info
+            .signature
+            .params
+            .iter()
+            .map(|param| substitute_type(param, &substitutions))
+            .collect::<Vec<_>>()
     }
 
     fn lower_args(&mut self, args: &[Argument]) -> Vec<MirArg> {

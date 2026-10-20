@@ -1,0 +1,5 @@
+error[AU2046]: cannot derive `json.Codec` for `Reading`: field `value` has a union type, and a derived codec supports only `T | None` unions
+ --> crates/aura-compiler/tests/fixtures/check-fail/json_derive_union_field.au:5:12
+  |
+5 |     value: int64 | str
+  |            ^

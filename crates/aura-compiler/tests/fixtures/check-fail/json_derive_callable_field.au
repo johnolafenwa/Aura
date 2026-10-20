@@ -1,0 +1,8 @@
+import json
+
+
+class Handler:
+    run: def(int64) -> int64
+
+
+impl json.Codec for Handler

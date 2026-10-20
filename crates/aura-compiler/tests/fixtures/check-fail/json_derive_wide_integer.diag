@@ -1,0 +1,5 @@
+error[AU2046]: cannot derive `json.Codec` for `Counter`: field `total` has the type `uint64`, and a derived codec supports integers up to `int64` and `uint32`
+ --> crates/aura-compiler/tests/fixtures/check-fail/json_derive_wide_integer.au:5:12
+  |
+5 |     total: uint64
+  |            ^

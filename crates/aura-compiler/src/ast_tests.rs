@@ -91,6 +91,7 @@ fn item_name_matches_decl_name() {
         for_type: dummy_type("Point"),
         methods: vec![dummy_function("show")],
         span: Span::new(1, 1),
+        derived: false,
     });
 
     assert_eq!(class_item.name(), "Point");

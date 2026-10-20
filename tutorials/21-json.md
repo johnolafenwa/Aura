@@ -189,8 +189,36 @@ of the dynamic `json.Value` API.
 
 ## Convert Your Own Types
 
-Implement `json.Codec` to turn a class into JSON and back. The trait has
-three methods: `encode`, `decode`, and `schema`.
+Write `impl json.Codec for Name` with no body, and the compiler writes the
+three `json.Codec` methods for the class: `encode`, `decode`, and `schema`.
+
+```aura
+import json
+
+class Server:
+    host: str
+    port: uint16 = 8080
+
+impl json.Codec for Server
+
+match json.decode_text[Server]("{\"host\": \"localhost\"}"):
+    case Result.Ok(server):
+        print(f"{server.host}:{server.port}")    # localhost:8080
+    case Result.Err(error):
+        print(error)
+
+print(json.dumps(json.encode(Server(host="example.org", port=443))))
+# {"host":"example.org","port":443}
+```
+
+The decoder is strict. A missing field without a default, an unknown key, the
+wrong JSON kind, and a number outside the field's range are errors. Each
+error's `path` names the field, such as `$.port`. See
+[examples/json/derived_codec.au](../examples/json/derived_codec.au) for nested
+classes, lists, and the derived schema.
+
+Write the methods yourself when the JSON form differs from the fields. Here a
+port encodes as a bare integer:
 
 ```aura
 import json
@@ -220,10 +248,8 @@ match json.decode_text[Port]("8080"):
         print(error)
 ```
 
-`json.decode_text[Port]` parses the text and calls `Port.decode`. A failure is
-a `json.DecodeError` whose `path` names the field, such as `$.query`. See
-[examples/json/typed_codec.au](../examples/json/typed_codec.au) for a class
-with several fields and an optional default.
+See [examples/json/typed_codec.au](../examples/json/typed_codec.au) for a
+hand-written codec with several fields and a default.
 
 ## Full Contract
 

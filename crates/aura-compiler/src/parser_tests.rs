@@ -4234,7 +4234,7 @@ fn declaration_parser_reports_the_exact_stage_that_rejected_incomplete_syntax() 
         ("impl \n", "expected identifier"),
         ("impl Display Point:\n    pass\n", "expected KwFor"),
         ("impl Display for \n", "expected identifier"),
-        ("impl Display for Point\n", "expected Colon"),
+        ("impl Display for Point extra\n", "expected Newline"),
         (
             "impl Display[int32 Extra] for Point:\n    pass\n",
             "expected RBracket",
@@ -5026,4 +5026,19 @@ fn triple_strings_outside_documentation_slots_are_ordinary_literals() {
             ..
         }) if text == "aura"
     ));
+}
+
+#[test]
+fn an_impl_without_a_body_is_marked_derived() {
+    let module = parse("impl json.Codec for Point\nimpl Show for Point:\n    pass\n")
+        .expect("a bodyless impl should parse");
+    let impls = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Impl(decl) => Some((decl.trait_name.as_str(), decl.derived, decl.methods.len())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(impls, vec![("json.Codec", true, 0), ("Show", false, 0)]);
 }

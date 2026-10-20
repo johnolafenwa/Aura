@@ -53,6 +53,8 @@ use properties::{
 #[cfg(test)]
 use types::type_pattern_specificity;
 mod init;
+mod json_derive;
+pub(crate) use json_derive::GENERATED_LINE_OFFSET;
 mod program;
 pub(crate) use program::INITIALIZER_NAME;
 pub use program::{

@@ -1,0 +1,40 @@
+import json
+
+
+class Filter:
+    field: str
+    values: list[str]
+
+
+impl json.Codec for Filter
+
+
+class SearchArgs:
+    query: str
+    limit: uint8 = 10
+    filters: list[Filter] = []
+    cursor: str | None = None
+
+
+impl json.Codec for SearchArgs
+
+
+def run(text: str):
+    match json.decode_text[SearchArgs](text):
+        case Result.Ok(args):
+            print(
+                f"search {args.query} limit {args.limit} filters {args.filters.len()}"
+            )
+            print(json.dumps(json.encode(args)))
+        case Result.Err(error):
+            print(error)
+
+
+def main():
+    run(
+        "{\"query\": \"aura\", \"filters\": [{\"field\": \"lang\", \"values\": [\"en\"]}]}"
+    )
+    run("{\"query\": \"aura\", \"limit\": 300}")
+    run("{\"query\": \"aura\", \"filters\": [{\"field\": \"lang\", \"values\": [1]}]}")
+    run("{\"query\": \"aura\", \"page\": 2}")
+    print(json.dumps(json.schema[SearchArgs]()))

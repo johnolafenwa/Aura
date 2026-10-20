@@ -1,0 +1,8 @@
+import json
+
+
+class Counter:
+    total: uint64
+
+
+impl json.Codec for Counter

@@ -1,0 +1,18 @@
+{"count":65535,"flag":true,"large":9000000000,"medium":70000,"name":"mixed","narrow":0.5,"ratio":2.5,"raw":[null],"small":-5}
+-5 70000 9000000000 65535 2.5 mixed
+{"name":"root","next":{"name":"leaf","next":null,"price":null,"scores":{},"secret":"hidden","span":[3,4],"tags":[]},"price":"125c","scores":{"x":1.0,"y":0.25},"secret":"hidden","span":[1,2],"tags":[{"aliases":[],"label":"a","single":["x"],"weight":1},{"aliases":[],"label":"b","single":["x"],"weight":9}]}
+$: missing field `name`
+$: unknown field `color`
+$.span: expected 2-element array, found 1-element array
+$.span[1]: expected integer, found string
+$.tags[1].weight: number out of range for uint8
+$.scores.x: expected number, found boolean
+$.price: expected cents
+$.next.name: expected string, found integer
+$.span[0]: expected integer, found number
+$: expected object, found array
+$.count: number out of range for uint16
+{}
+empty ok
+{"additionalProperties":false,"properties":{"aliases":{"items":{"type":"string"},"type":"array"},"label":{"type":"string"},"single":{"items":false,"minItems":1,"prefixItems":[{"type":"string"}],"type":"array"},"weight":{"maximum":255,"minimum":0,"type":"integer"}},"required":["label"],"type":"object"}
+{"$defs":{"Money":{"type":"string"},"Node":{"additionalProperties":false,"properties":{"name":{"type":"string"},"next":{"anyOf":[{"$ref":"#/$defs/Node"},{"type":"null"}]},"price":{"anyOf":[{"$ref":"#/$defs/Money"},{"type":"null"}]},"scores":{"additionalProperties":{"type":"number"},"type":"object"},"secret":{"type":"string"},"span":{"items":false,"minItems":2,"prefixItems":[{"type":"integer"},{"type":"integer"}],"type":"array"},"tags":{"items":{"$ref":"#/$defs/Tag"},"type":"array"}},"required":["name","span"],"type":"object"},"Tag":{"additionalProperties":false,"properties":{"aliases":{"items":{"type":"string"},"type":"array"},"label":{"type":"string"},"single":{"items":false,"minItems":1,"prefixItems":[{"type":"string"}],"type":"array"},"weight":{"maximum":255,"minimum":0,"type":"integer"}},"required":["label"],"type":"object"}},"additionalProperties":false,"properties":{"name":{"type":"string"},"next":{"anyOf":[{"$ref":"#/$defs/Node"},{"type":"null"}]},"price":{"anyOf":[{"$ref":"#/$defs/Money"},{"type":"null"}]},"scores":{"additionalProperties":{"type":"number"},"type":"object"},"secret":{"type":"string"},"span":{"items":false,"minItems":2,"prefixItems":[{"type":"integer"},{"type":"integer"}],"type":"array"},"tags":{"items":{"$ref":"#/$defs/Tag"},"type":"array"}},"required":["name","span"],"type":"object"}
