@@ -33,6 +33,10 @@ schema, and `dispatch` borrows each decorated binding by name.
 - `reference_tool_runner_package_has_pinned_output_on_both_backends`.
 - `python3 -m unittest scripts/test_bench_binary_size.py`.
 - `npm run check:doc-examples`, which checks the tutorial and the case study.
+- The native binaries gate. The agent now decodes JSON, so it links
+  `serde_json` and grew from 1,520,368 to 1,886,456 bytes on Linux x86-64
+  and from 1,446,128 to 1,789,712 bytes on macOS arm64. The gate's
+  baselines and its `serde_json` rule for the agent record that.
 
 ## Follow-Up
 

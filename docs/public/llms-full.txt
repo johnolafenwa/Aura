@@ -17792,12 +17792,14 @@ Design record:
 A native executable contains the Aura runtime code its program can reach.
 A program that never uses TLS, WebSocket, TOML, or JSON does not carry their
 libraries. The counts below are exact bytes from release builds of
-`bdf9265972dd8baf4dbd2ab4008b49bdaf546b22`.
+`bdf9265972dd8baf4dbd2ab4008b49bdaf546b22`. The reference agent row comes
+from a release build of version 2 of the agent, which decodes its tool calls
+as JSON.
 
 | Executable | Linux x86-64 | macOS arm64 |
 | --- | ---: | ---: |
 | Native hello world | 927,888 | 922,344 |
-| Reference agent (`tool_runner`) | 1,520,368 | 1,446,128 |
+| Reference agent (`tool_runner`) | 1,886,456 | 1,789,712 |
 | JSON example | 1,364,960 | 1,307,576 |
 | TLS example | 3,258,840 | 2,823,168 |
 | WebSocket example | 3,556,472 | 3,100,648 |
@@ -17812,8 +17814,8 @@ The JSON example is `examples/json/dynamic_values.au`. The TLS example is
 
 | Executable | Links | Does not link |
 | --- | --- | --- |
-| Hello world, reference agent | runtime core | `serde_json`, `toml`, `http`, `httparse` |
-| JSON example | runtime core, `serde_json` | `toml` |
+| Hello world | runtime core | `serde_json`, `toml`, `http`, `httparse` |
+| Reference agent, JSON example | runtime core, `serde_json` | `toml` |
 | TLS example | runtime core, `rustls`, `ring` | `serde_json`, `http`, `httparse` |
 | WebSocket example | runtime core, `rustls`, `ring`, `tungstenite`, `http`, `httparse`, `url` | `serde_json` |
 
