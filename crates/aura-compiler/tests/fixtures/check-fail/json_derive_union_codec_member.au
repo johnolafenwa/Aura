@@ -1,0 +1,8 @@
+import json
+
+
+class Reading:
+    value: json.Value | str
+
+
+impl json.Codec for Reading

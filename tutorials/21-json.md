@@ -215,7 +215,33 @@ The decoder is strict. A missing field without a default, an unknown key, the
 wrong JSON kind, and a number outside the field's range are errors. Each
 error's `path` names the field, such as `$.port`. See
 [examples/json/derived_codec.au](../examples/json/derived_codec.au) for nested
-classes, lists, and the derived schema.
+classes, lists, an enum field, and the derived schema.
+
+Enums derive the same way. In an enum without payloads, each variant encodes
+as its name. Otherwise a variant encodes as an object whose `"type"` key
+names it, with one key per named payload:
+
+```aura
+import json
+
+enum Event:
+    Started
+    Moved(x: int64, y: int64)
+
+impl json.Codec for Event
+
+print(json.dumps(json.encode(Event.Moved(x=3, y=4))))
+# {"type":"Moved","x":3,"y":4}
+
+match json.decode_text[Event]("{\"type\": \"Started\"}"):
+    case Result.Ok(_):
+        print("started")
+    case Result.Err(error):
+        print(error)
+```
+
+A field can also hold a union whose members have different JSON kinds, such
+as `int64 | str`. The decoder picks the member from the JSON kind.
 
 Write the methods yourself when the JSON form differs from the fields. Here a
 port encodes as a bare integer:

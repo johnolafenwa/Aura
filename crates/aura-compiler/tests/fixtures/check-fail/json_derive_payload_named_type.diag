@@ -1,0 +1,6 @@
+error[AU2046]: cannot derive `json.Codec` for `Event`: variant `Click` has a payload named `type`, which is the variant tag
+ --> crates/aura-compiler/tests/fixtures/check-fail/json_derive_payload_named_type.au:5:11
+  |
+5 |     Click(type: str, x: int64)
+  |           ^
+  = help: rename the payload

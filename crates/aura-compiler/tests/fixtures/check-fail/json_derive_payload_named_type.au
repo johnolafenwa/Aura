@@ -1,0 +1,8 @@
+import json
+
+
+enum Event:
+    Click(type: str, x: int64)
+
+
+impl json.Codec for Event

@@ -1,8 +1,22 @@
 import json
 
 
+class Point:
+    x: int64
+
+
+class Size:
+    width: int64
+
+
 class Reading:
-    value: int64 | str
+    value: Point | Size
+
+
+impl json.Codec for Point
+
+
+impl json.Codec for Size
 
 
 impl json.Codec for Reading

@@ -10,7 +10,7 @@
 //! reported at the `impl` line instead.
 
 use super::{BTreeMap, BTreeSet, Diagnostic, ImportedBinding, Item, Module, ModuleContext, Result};
-use crate::ast::{ClassDecl, ImplDecl, Stmt, TypeRef, TypeRefKind};
+use crate::ast::{ClassDecl, EnumDecl, Expr, ImplDecl, Stmt, TypeRef, TypeRefKind};
 use crate::diag::Span;
 
 /// First line number of generated source.
@@ -90,13 +90,8 @@ pub(super) fn expand(module: &mut Module, context: &mut ModuleContext) -> Result
             )
             .with_help("write the trait's methods in an indented block after `:`"));
         }
-        let class = derived_class(module, decl)?;
-        targets.push((
-            index,
-            class.name.clone(),
-            decl.span,
-            decl.trait_name.clone(),
-        ));
+        let name = derived_target(module, decl)?;
+        targets.push((index, name, decl.span, decl.trait_name.clone()));
     }
 
     let Some(namespace) =
@@ -114,7 +109,7 @@ pub(super) fn expand(module: &mut Module, context: &mut ModuleContext) -> Result
 
     let mut generator = Generator::new(module, context);
     for (_, class, span, trait_name) in &targets {
-        generator.derive_class(class, *span, trait_name)?;
+        generator.derive(class, *span, trait_name)?;
     }
     let Generator {
         functions,
@@ -198,20 +193,22 @@ fn module_binding_is_json(path: &str, context: &ModuleContext) -> bool {
         )
 }
 
-fn derived_class<'a>(module: &'a Module, decl: &ImplDecl) -> Result<&'a ClassDecl> {
+/// Checks that `decl` derives a codec for a class or enum of this module
+/// that a derived codec can describe, and returns the type's name.
+fn derived_target(module: &Module, decl: &ImplDecl) -> Result<String> {
     let TypeRefKind::Named { name, args } = &decl.for_type.kind else {
         return Err(Diagnostic::coded_at(
             CODE,
             decl.span,
-            "a derived `json.Codec` needs a class declared in this module",
+            "a derived `json.Codec` needs a class or enum declared in this module",
         ));
     };
     let reject = |message: String| Err(Diagnostic::coded_at(CODE, decl.span, message));
+    let generic = !args.is_empty() || !decl.type_params.is_empty();
     for item in &module.items {
         match item {
             Item::Class(class) if &class.name == name => {
-                if !class.type_params.is_empty() || !args.is_empty() || !decl.type_params.is_empty()
-                {
+                if generic || !class.type_params.is_empty() {
                     return reject(format!(
                         "a derived `json.Codec` for the generic class `{name}` is not implemented"
                     ));
@@ -228,19 +225,64 @@ fn derived_class<'a>(module: &'a Module, decl: &ImplDecl) -> Result<&'a ClassDec
                         "decode a plain wire class and call the initializer in an explicit implementation",
                     ));
                 }
-                return Ok(class);
+                return Ok(name.clone());
             }
             Item::Enum(decl_enum) if &decl_enum.name == name => {
-                return reject(format!(
-                    "a derived `json.Codec` for the enum `{name}` is not implemented"
-                ));
+                if generic || !decl_enum.type_params.is_empty() {
+                    return reject(format!(
+                        "a derived `json.Codec` for the generic enum `{name}` is not implemented"
+                    ));
+                }
+                check_variants(decl_enum)?;
+                return Ok(name.clone());
             }
             _ => {}
         }
     }
     reject(format!(
-        "a derived `json.Codec` must be in the module that declares the class `{name}`"
+        "a derived `json.Codec` must be in the module that declares the type `{name}`"
     ))
+}
+
+/// Rejects variants whose payloads have no JSON key: positional payloads,
+/// and a payload named like the `"type"` tag.
+fn check_variants(decl: &EnumDecl) -> Result<()> {
+    for variant in &decl.variants {
+        let Some(first) = variant.payloads.first() else {
+            continue;
+        };
+        if !variant.named_payloads {
+            return Err(Diagnostic::coded_at(
+                CODE,
+                variant.span,
+                format!(
+                    "cannot derive `json.Codec` for `{}`: variant `{}` has a positional payload, which has no JSON key",
+                    decl.name, variant.name
+                ),
+            )
+            .with_help(format!(
+                "name the payload, such as `{}(value: {})`",
+                variant.name,
+                render(&first.ty)
+            )));
+        }
+        if let Some(payload) = variant
+            .payloads
+            .iter()
+            .find(|payload| payload.name.as_deref() == Some("type"))
+        {
+            return Err(Diagnostic::coded_at(
+                CODE,
+                payload.span,
+                format!(
+                    "cannot derive `json.Codec` for `{}`: variant `{}` has a payload named `type`, which is the variant tag",
+                    decl.name, variant.name
+                ),
+            )
+            .with_help("rename the payload"));
+        }
+    }
+    Ok(())
 }
 
 /// The JSON shape of one field type.
@@ -262,7 +304,12 @@ enum Shape {
     Dict(Box<Shape>),
     Tuple(Vec<Shape>),
     Optional(Box<Shape>),
-    /// A class of this module with a derived implementation.
+    /// A union of members with distinct JSON kinds, maybe with `None`.
+    Union {
+        members: Vec<Shape>,
+        nullable: bool,
+    },
+    /// A class or enum of this module with a derived implementation.
     Derived(String),
     /// Any other named type, which must implement `json.Codec`.
     Codec(String),
@@ -299,6 +346,17 @@ impl Shape {
                     .join(", ")
             ),
             Shape::Optional(item) => format!("{} | None", item.aura_type()),
+            Shape::Union { members, nullable } => {
+                let mut text = members
+                    .iter()
+                    .map(Shape::aura_type)
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                if *nullable {
+                    text.push_str(" | None");
+                }
+                text
+            }
             Shape::Derived(name) | Shape::Codec(name) => name.clone(),
         }
     }
@@ -358,6 +416,30 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn enum_decl(&self, name: &str) -> Option<&'a EnumDecl> {
+        self.module.items.iter().find_map(|item| match item {
+            Item::Enum(decl) if decl.name == name => Some(decl),
+            _ => None,
+        })
+    }
+
+    /// The JSON kind of a union member's encoding, when it is fixed.
+    fn json_kind(&self, shape: &Shape) -> Option<&'static str> {
+        match shape {
+            Shape::Bool => Some("boolean"),
+            Shape::Int { .. } | Shape::Int64 => Some("integer"),
+            Shape::Float64 | Shape::Float32 => Some("number"),
+            Shape::Str => Some("string"),
+            Shape::List(_) | Shape::Tuple(_) => Some("array"),
+            Shape::Dict(_) => Some("object"),
+            Shape::Derived(name) => match self.enum_decl(name) {
+                Some(decl) if is_unit_enum(decl) => Some("string"),
+                _ => Some("object"),
+            },
+            Shape::Value | Shape::Codec(_) | Shape::Optional(_) | Shape::Union { .. } => None,
+        }
+    }
+
     fn emit(&mut self, text: String) {
         self.functions.push(Chunk {
             text,
@@ -366,7 +448,7 @@ impl<'a> Generator<'a> {
         });
     }
 
-    fn derive_class(&mut self, name: &str, span: Span, trait_name: &str) -> Result<()> {
+    fn derive(&mut self, name: &str, span: Span, trait_name: &str) -> Result<()> {
         self.owner = name.to_string();
         self.span = span;
         let index = self.helper(&Shape::Derived(name.to_string()))?;
@@ -393,12 +475,12 @@ impl<'a> Generator<'a> {
     }
 
     /// Classifies a field type, or rejects it with the field's name.
-    fn shape(&self, ty: &TypeRef, class: &str, field: &str, depth: usize) -> Result<Shape> {
+    fn shape(&self, ty: &TypeRef, owner: &str, what: &str, depth: usize) -> Result<Shape> {
         let reject = |detail: String| {
             Err(Diagnostic::coded_at(
                 CODE,
                 ty.span,
-                format!("cannot derive `json.Codec` for `{class}`: field `{field}` {detail}"),
+                format!("cannot derive `json.Codec` for `{owner}`: {what} {detail}"),
             ))
         };
         if depth > 64 {
@@ -406,30 +488,66 @@ impl<'a> Generator<'a> {
         }
         match &ty.kind {
             TypeRefKind::Named { name, args } => {
-                self.named_shape(ty, name, args, class, field, depth)
+                self.named_shape(ty, name, args, owner, what, depth)
             }
             TypeRefKind::Tuple(items) => Ok(Shape::Tuple(
                 items
                     .iter()
-                    .map(|item| self.shape(item, class, field, depth + 1))
+                    .map(|item| self.shape(item, owner, what, depth + 1))
                     .collect::<Result<_>>()?,
             )),
             TypeRefKind::Union(members) => {
-                let (none, other): (Vec<_>, Vec<_>) = members.iter().partition(|member| {
-                    matches!(&member.kind, TypeRefKind::Named { name, args } if name == "None" && args.is_empty())
-                });
-                if none.len() == 1 && other.len() == 1 {
-                    return Ok(Shape::Optional(Box::new(self.shape(
-                        other[0],
-                        class,
-                        field,
-                        depth + 1,
-                    )?)));
+                let mut flat = Vec::new();
+                let mut nullable = false;
+                for member in members {
+                    if matches!(&member.kind, TypeRefKind::Named { name, args } if name == "None" && args.is_empty())
+                    {
+                        nullable = true;
+                        continue;
+                    }
+                    match self.shape(member, owner, what, depth + 1)? {
+                        Shape::Optional(item) => {
+                            nullable = true;
+                            flat.push(*item);
+                        }
+                        Shape::Union {
+                            members,
+                            nullable: inner,
+                        } => {
+                            nullable |= inner;
+                            flat.extend(members);
+                        }
+                        shape => flat.push(shape),
+                    }
                 }
-                reject(
-                    "has a union type, and a derived codec supports only `T | None` unions"
-                        .to_string(),
-                )
+                if flat.len() == 1 && nullable {
+                    return Ok(Shape::Optional(Box::new(flat.remove(0))));
+                }
+                if flat.len() < 2 {
+                    return reject(format!("has the type `{}`", render(ty)));
+                }
+                let mut kinds: Vec<(&'static str, String)> = Vec::new();
+                for member in &flat {
+                    let Some(kind) = self.json_kind(member) else {
+                        return reject(format!(
+                            "has the union type `{}`, and a derived codec cannot tell which member `{}` is from its JSON",
+                            render(ty),
+                            written(member)
+                        ));
+                    };
+                    if let Some((_, other)) = kinds.iter().find(|(seen, _)| *seen == kind) {
+                        return reject(format!(
+                            "has the union type `{}`, and its members `{other}` and `{}` both encode as a JSON {kind}",
+                            render(ty),
+                            written(member)
+                        ));
+                    }
+                    kinds.push((kind, written(member)));
+                }
+                Ok(Shape::Union {
+                    members: flat,
+                    nullable,
+                })
             }
             TypeRefKind::Callable { .. } | TypeRefKind::Function { .. } => {
                 reject("has a callable type, which has no JSON form".to_string())
@@ -442,15 +560,15 @@ impl<'a> Generator<'a> {
         ty: &TypeRef,
         name: &str,
         args: &[TypeRef],
-        class: &str,
-        field: &str,
+        owner: &str,
+        what: &str,
         depth: usize,
     ) -> Result<Shape> {
         let reject = |detail: String| {
             Err(Diagnostic::coded_at(
                 CODE,
                 ty.span,
-                format!("cannot derive `json.Codec` for `{class}`: field `{field}` {detail}"),
+                format!("cannot derive `json.Codec` for `{owner}`: {what} {detail}"),
             ))
         };
         let scalar = match name {
@@ -474,8 +592,8 @@ impl<'a> Generator<'a> {
             ("list", [item]) => {
                 return Ok(Shape::List(Box::new(self.shape(
                     item,
-                    class,
-                    field,
+                    owner,
+                    what,
                     depth + 1,
                 )?)))
             }
@@ -489,8 +607,8 @@ impl<'a> Generator<'a> {
                 }
                 return Ok(Shape::Dict(Box::new(self.shape(
                     item,
-                    class,
-                    field,
+                    owner,
+                    what,
                     depth + 1,
                 )?)));
             }
@@ -520,7 +638,7 @@ impl<'a> Generator<'a> {
                         "uses the generic alias `{name}`, which a derived codec does not expand"
                     ));
                 }
-                return self.shape(target, class, field, depth + 1);
+                return self.shape(target, owner, what, depth + 1);
             }
         }
         if !args.is_empty() {
@@ -763,8 +881,65 @@ impl<'a> Generator<'a> {
                     ),
                 )
             }
+            Shape::Union { members, nullable } => {
+                let mut encode = "match value:\n".to_string();
+                let mut decode = format!("kind = {JSON}.__kind(value)\n");
+                let mut schema = format!("mut options: list[{value}] = []\n");
+                let mut expected = Vec::new();
+                let has_integer = members
+                    .iter()
+                    .any(|member| self.json_kind(member) == Some("integer"));
+                for member in members {
+                    let member_ty = member.aura_type();
+                    let kind = self.json_kind(member).unwrap_or("value");
+                    let helper = self.helper(member)?;
+                    encode.push_str(&format!(
+                        "\x20   case {member_ty} as member:\n\
+                         \x20       return __aura_json_encode_{helper}(member)\n"
+                    ));
+                    let test = if kind == "number" && !has_integer {
+                        "kind == \"number\" or kind == \"integer\"".to_string()
+                    } else {
+                        format!("kind == \"{kind}\"")
+                    };
+                    decode.push_str(&format!(
+                        "if {test}:\n\
+                         \x20   match own __aura_json_decode_{helper}(value):\n\
+                         \x20       case Result.Ok(decoded):\n\
+                         \x20           return Result.Ok(decoded)\n\
+                         \x20       case Result.Err(error):\n\
+                         \x20           return Result.Err(error)\n"
+                    ));
+                    schema.push_str(&format!(
+                        "options.append(__aura_json_schema_{helper}(defs))\n"
+                    ));
+                    expected.push(kind);
+                }
+                if *nullable {
+                    encode.push_str(&format!(
+                        "\x20   case None:\n\
+                         \x20       return {value}.Null\n"
+                    ));
+                    decode.push_str(
+                        "if kind == \"null\":\n\
+                         \x20   return Result.Ok(None)\n",
+                    );
+                    schema.push_str(&format!("options.append({JSON}.__type_schema(\"null\"))\n"));
+                    expected.push("null");
+                }
+                decode.push_str(&format!(
+                    "return Result.Err(\n\
+                     \x20   {JSON}.__error({JSON}.DecodeErrorKind.WrongType(expected=\"{}\", found=kind))\n\
+                     )",
+                    alternatives(&expected)
+                ));
+                schema.push_str(&format!(
+                    "return {value}.Object({{\"anyOf\": {value}.Array(options)}})"
+                ));
+                (encode.trim_end().to_string(), decode, schema)
+            }
             Shape::Derived(name) => {
-                self.derived_class_helpers(name, index)?;
+                self.derived_helpers(name, index)?;
                 (
                     format!("return __aura_json_encode_class_{index}(value)"),
                     format!("return __aura_json_decode_class_{index}(value)"),
@@ -801,120 +976,25 @@ impl<'a> Generator<'a> {
         Ok(index)
     }
 
-    /// Generates the object encoder, decoder, and schema for a derived class.
-    fn derived_class_helpers(&mut self, name: &str, index: usize) -> Result<()> {
+    /// Generates the encoder, decoder, and schema body for a derived class
+    /// or enum.
+    fn derived_helpers(&mut self, name: &str, index: usize) -> Result<()> {
         if !self.classes_done.insert(name.to_string()) {
             return Ok(());
         }
-        let Some(class) = self.class(name) else {
-            return Ok(());
-        };
         let value = format!("{JSON}.Value");
         let error = format!("{JSON}.DecodeError");
-        let mut fields = Vec::new();
-        for field in &class.fields {
-            let shape = self.shape(&field.ty, name, &field.name, 0)?;
-            let helper = self.helper(&shape)?;
-            fields.push((field, shape.aura_type(), helper));
-        }
-
-        let mut encode = format!("mut fields: dict[str, {value}] = {{}}\n");
-        for (field, _, helper) in &fields {
-            encode.push_str(&format!(
-                "fields[\"{0}\"] = __aura_json_encode_{helper}(value.{0})\n",
-                field.name
-            ));
-        }
-        encode.push_str(&format!("return {value}.Object(fields)"));
-
-        let mut decode = format!(
-            "match own {JSON}.__entries(value):\n\
-             \x20   case Result.Err(error):\n\
-             \x20       return Result.Err(error)\n\
-             \x20   case Result.Ok(entries):\n"
-        );
-        for (field, ty, _) in &fields {
-            decode.push_str(&format!(
-                "\x20       mut field_{}: list[{ty}] = []\n",
-                field.name
-            ));
-        }
-        decode.push_str("\x20       for key, item in own entries:\n");
-        for (position, (field, _, helper)) in fields.iter().enumerate() {
-            let keyword = if position == 0 { "if" } else { "elif" };
-            decode.push_str(&format!(
-                "\x20           {keyword} key == \"{0}\":\n\
-                 \x20               match own __aura_json_decode_{helper}(item):\n\
-                 \x20                   case Result.Ok(decoded):\n\
-                 \x20                       field_{0}.append(decoded)\n\
-                 \x20                   case Result.Err(error):\n\
-                 \x20                       return Result.Err({JSON}.__at(error, \".{0}\"))\n",
-                field.name
-            ));
-        }
-        let unknown = format!(
-            "return Result.Err({JSON}.__error({JSON}.DecodeErrorKind.UnknownField(name=key)))"
-        );
-        if fields.is_empty() {
-            decode.push_str(&format!("\x20           {unknown}\n"));
-        } else {
-            decode.push_str(&format!(
-                "\x20           else:\n\x20               {unknown}\n"
-            ));
-        }
-        for (field, ty, _) in &fields {
-            decode.push_str(&format!(
-                "\x20       if field_{0}.len() == 0:\n",
-                field.name
-            ));
-            match &field.default {
-                Some(default) => {
-                    let helper = format!("__aura_json_default_{index}_{}", field.name);
-                    self.defaults.insert(helper.clone(), default.clone());
-                    self.emit(format!("def {helper}() -> {ty}:\n    return None"));
-                    decode.push_str(&format!(
-                        "\x20           field_{0}.append({helper}())\n",
-                        field.name
-                    ));
-                }
-                None => decode.push_str(&format!(
-                    "\x20           return Result.Err({JSON}.__error({JSON}.DecodeErrorKind.MissingField(name=\"{}\")))\n",
-                    field.name
-                )),
+        let (encode, decode, schema) = if let Some(decl) = self.enum_decl(name) {
+            if is_unit_enum(decl) {
+                self.unit_enum_helpers(decl)
+            } else {
+                self.payload_enum_helpers(decl, index)?
             }
-        }
-        let arguments = fields
-            .iter()
-            .map(|(field, _, _)| format!("{0}=field_{0}.pop()", field.name))
-            .collect::<Vec<_>>()
-            .join(", ");
-        decode.push_str(&format!("\x20       return Result.Ok({name}({arguments}))"));
-
-        let mut schema = format!("mut properties: dict[str, {value}] = {{}}\n");
-        for (field, _, helper) in &fields {
-            schema.push_str(&format!(
-                "properties[\"{}\"] = __aura_json_schema_{helper}(defs)\n",
-                field.name
-            ));
-        }
-        let required = fields
-            .iter()
-            .filter(|(field, _, _)| field.default.is_none())
-            .map(|(field, _, _)| format!("{value}.String(\"{}\")", field.name))
-            .collect::<Vec<_>>()
-            .join(", ");
-        schema.push_str(&format!(
-            "required: list[{value}] = [{required}]\n\
-             return {value}.Object(\n\
-             \x20   {{\n\
-             \x20       \"type\": {value}.String(\"object\"),\n\
-             \x20       \"properties\": {value}.Object(properties),\n\
-             \x20       \"required\": {value}.Array(required),\n\
-             \x20       \"additionalProperties\": {value}.Bool(false),\n\
-             \x20   }}\n\
-             )"
-        ));
-
+        } else if let Some(class) = self.class(name) {
+            self.class_helpers(class, index)?
+        } else {
+            return Ok(());
+        };
         self.emit(format!(
             "def __aura_json_encode_class_{index}(value: {name}) -> {value}:\n{}",
             indent(&encode)
@@ -929,6 +1009,330 @@ impl<'a> Generator<'a> {
         ));
         Ok(())
     }
+
+    /// Classifies each field or payload and returns it with its helper.
+    fn fields(
+        &mut self,
+        owner: &str,
+        fields: Vec<(String, &TypeRef, Option<Expr>, String)>,
+    ) -> Result<Vec<Field>> {
+        let mut result = Vec::new();
+        for (name, ty, default, what) in fields {
+            let shape = self.shape(ty, owner, &what, 0)?;
+            let helper = self.helper(&shape)?;
+            result.push(Field {
+                name,
+                ty: shape.aura_type(),
+                helper,
+                default,
+            });
+        }
+        Ok(result)
+    }
+
+    fn class_helpers(
+        &mut self,
+        class: &ClassDecl,
+        index: usize,
+    ) -> Result<(String, String, String)> {
+        let name = class.name.clone();
+        let value = format!("{JSON}.Value");
+        let fields = self.fields(
+            &name,
+            class
+                .fields
+                .iter()
+                .map(|field| {
+                    (
+                        field.name.clone(),
+                        &field.ty,
+                        field.default.clone(),
+                        format!("field `{}`", field.name),
+                    )
+                })
+                .collect(),
+        )?;
+
+        let mut encode = format!("mut fields: dict[str, {value}] = {{}}\n");
+        for field in &fields {
+            encode.push_str(&format!(
+                "fields[\"{0}\"] = __aura_json_encode_{1}(value.{0})\n",
+                field.name, field.helper
+            ));
+        }
+        encode.push_str(&format!("return {value}.Object(fields)"));
+
+        let arguments = fields
+            .iter()
+            .map(|field| format!("{0}=field_{0}.pop()", field.name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let body = self.fields_decoder(
+            &format!("{index}"),
+            &fields,
+            &format!("{name}({arguments})"),
+        );
+        let decode = format!(
+            "match own {JSON}.__entries(value):\n\
+             \x20   case Result.Err(error):\n\
+             \x20       return Result.Err(error)\n\
+             \x20   case Result.Ok(entries):\n{}",
+            indent(&indent(&body))
+        );
+        let schema = format!(
+            "{}\nreturn {}",
+            object_schema("properties", &fields, None),
+            "properties"
+        );
+        Ok((encode, decode, schema))
+    }
+
+    fn unit_enum_helpers(&self, decl: &EnumDecl) -> (String, String, String) {
+        let name = &decl.name;
+        let value = format!("{JSON}.Value");
+        let mut encode = "match value:\n".to_string();
+        let mut decode = format!(
+            "match own {JSON}.__decode_str(value):\n\
+             \x20   case Result.Err(error):\n\
+             \x20       return Result.Err(error)\n\
+             \x20   case Result.Ok(variant):\n"
+        );
+        let mut names = Vec::new();
+        for variant in &decl.variants {
+            let variant = &variant.name;
+            encode.push_str(&format!(
+                "\x20   case {name}.{variant}:\n\
+                 \x20       return {value}.String(\"{variant}\")\n"
+            ));
+            decode.push_str(&format!(
+                "\x20       if variant == \"{variant}\":\n\
+                 \x20           return Result.Ok({name}.{variant})\n"
+            ));
+            names.push(format!("{value}.String(\"{variant}\")"));
+        }
+        decode.push_str(&format!(
+            "\x20       return Result.Err({JSON}.__error({JSON}.DecodeErrorKind.UnknownVariant(name=variant)))"
+        ));
+        let schema = format!(
+            "return {value}.Object({{\"enum\": {value}.Array([{}])}})",
+            names.join(", ")
+        );
+        (encode.trim_end().to_string(), decode, schema)
+    }
+
+    fn payload_enum_helpers(
+        &mut self,
+        decl: &EnumDecl,
+        index: usize,
+    ) -> Result<(String, String, String)> {
+        let name = decl.name.clone();
+        let value = format!("{JSON}.Value");
+        let error = format!("{JSON}.DecodeError");
+        let mut encode = "match value:\n".to_string();
+        let mut decode = format!(
+            "match own {JSON}.__tagged(value):\n\
+             \x20   case Result.Err(error):\n\
+             \x20       return Result.Err(error)\n\
+             \x20   case Result.Ok(tagged):\n\
+             \x20       match own tagged:\n\
+             \x20           case (tag, entries):\n"
+        );
+        let mut schema = format!("mut variants: list[{value}] = []\n");
+        for (position, variant) in decl.variants.iter().enumerate() {
+            let variant_name = &variant.name;
+            let fields = self.fields(
+                &name,
+                variant
+                    .payloads
+                    .iter()
+                    .map(|payload| {
+                        let payload_name = payload.name.clone().unwrap_or_default();
+                        let what = format!("payload `{variant_name}.{payload_name}`");
+                        (payload_name, &payload.ty, None, what)
+                    })
+                    .collect(),
+            )?;
+
+            let tag = format!("{value}.String(\"{variant_name}\")");
+            if fields.is_empty() {
+                encode.push_str(&format!(
+                    "\x20   case {name}.{variant_name}:\n\
+                     \x20       return {value}.Object({{\"type\": {tag}}})\n"
+                ));
+            } else {
+                let bindings = (0..fields.len())
+                    .map(|slot| format!("p{slot}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                encode.push_str(&format!(
+                    "\x20   case {name}.{variant_name}({bindings}):\n\
+                     \x20       mut fields: dict[str, {value}] = {{\"type\": {tag}}}\n"
+                ));
+                for (slot, field) in fields.iter().enumerate() {
+                    encode.push_str(&format!(
+                        "\x20       fields[\"{}\"] = __aura_json_encode_{}(p{slot})\n",
+                        field.name, field.helper
+                    ));
+                }
+                encode.push_str(&format!("\x20       return {value}.Object(fields)\n"));
+            }
+
+            let construct = if fields.is_empty() {
+                format!("{name}.{variant_name}")
+            } else {
+                let arguments = fields
+                    .iter()
+                    .map(|field| format!("{0}=field_{0}.pop()", field.name))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{name}.{variant_name}({arguments})")
+            };
+            let body = self.fields_decoder(&format!("{index}_{position}"), &fields, &construct);
+            self.emit(format!(
+                "def __aura_json_decode_variant_{index}_{position}(\n\
+                 \x20   entries: own list[(str, {value})]\n\
+                 ) -> Result[{name}, {error}]:\n{}",
+                indent(&body)
+            ));
+            decode.push_str(&format!(
+                "\x20               if tag == \"{variant_name}\":\n\
+                 \x20                   return __aura_json_decode_variant_{index}_{position}(entries)\n"
+            ));
+
+            let properties = format!("properties_{position}");
+            schema.push_str(&format!(
+                "{}\nvariants.append({properties})\n",
+                object_schema(&properties, &fields, Some(variant_name))
+            ));
+        }
+        decode.push_str(&format!(
+            "\x20               return Result.Err(\n\
+             \x20                   {JSON}.__at({JSON}.__error({JSON}.DecodeErrorKind.UnknownVariant(name=tag)), \".type\")\n\
+             \x20               )"
+        ));
+        schema.push_str(&format!(
+            "return {value}.Object({{\"oneOf\": {value}.Array(variants)}})"
+        ));
+        Ok((encode.trim_end().to_string(), decode, schema))
+    }
+
+    /// The body of a function that decodes `entries`, a list of `(key,
+    /// value)` pairs in document order, into `fields` and returns
+    /// `construct`, which reads each field with `field_{name}.pop()`.
+    fn fields_decoder(&mut self, defaults: &str, fields: &[Field], construct: &str) -> String {
+        let mut decode = String::new();
+        for field in fields {
+            decode.push_str(&format!(
+                "mut field_{}: list[{}] = []\n",
+                field.name, field.ty
+            ));
+        }
+        decode.push_str("for key, item in own entries:\n");
+        for (position, field) in fields.iter().enumerate() {
+            let keyword = if position == 0 { "if" } else { "elif" };
+            decode.push_str(&format!(
+                "\x20   {keyword} key == \"{0}\":\n\
+                 \x20       match own __aura_json_decode_{1}(item):\n\
+                 \x20           case Result.Ok(decoded):\n\
+                 \x20               field_{0}.append(decoded)\n\
+                 \x20           case Result.Err(error):\n\
+                 \x20               return Result.Err({JSON}.__at(error, \".{0}\"))\n",
+                field.name, field.helper
+            ));
+        }
+        let unknown = format!(
+            "return Result.Err({JSON}.__error({JSON}.DecodeErrorKind.UnknownField(name=key)))"
+        );
+        if fields.is_empty() {
+            decode.push_str(&format!("\x20   {unknown}\n"));
+        } else {
+            decode.push_str(&format!("\x20   else:\n\x20       {unknown}\n"));
+        }
+        for field in fields {
+            decode.push_str(&format!("if field_{0}.len() == 0:\n", field.name));
+            match &field.default {
+                Some(default) => {
+                    let helper = format!("__aura_json_default_{defaults}_{}", field.name);
+                    self.defaults.insert(helper.clone(), default.clone());
+                    self.emit(format!("def {helper}() -> {}:\n    return None", field.ty));
+                    decode.push_str(&format!(
+                        "\x20   field_{}.append({helper}())\n",
+                        field.name
+                    ));
+                }
+                None => decode.push_str(&format!(
+                    "\x20   return Result.Err({JSON}.__error({JSON}.DecodeErrorKind.MissingField(name=\"{}\")))\n",
+                    field.name
+                )),
+            }
+        }
+        decode.push_str(&format!("return Result.Ok({construct})"));
+        decode
+    }
+}
+
+/// One field of a class, or one payload of an enum variant.
+struct Field {
+    name: String,
+    ty: String,
+    helper: usize,
+    default: Option<Expr>,
+}
+
+/// A shape's type as the user writes it.
+fn written(shape: &Shape) -> String {
+    shape.aura_type().replace(&format!("{JSON}."), "json.")
+}
+
+/// `a or b`, or `a, b, or c`.
+fn alternatives(items: &[&str]) -> String {
+    match items {
+        [] => String::new(),
+        [only] => only.to_string(),
+        [first, second] => format!("{first} or {second}"),
+        [rest @ .., last] => format!("{}, or {last}", rest.join(", ")),
+    }
+}
+
+fn is_unit_enum(decl: &EnumDecl) -> bool {
+    decl.variants
+        .iter()
+        .all(|variant| variant.payloads.is_empty())
+}
+
+/// Statements that bind `target` to the object schema of `fields`. A
+/// `variant` adds a `"type"` property fixed to its name.
+fn object_schema(target: &str, fields: &[Field], variant: Option<&str>) -> String {
+    let value = format!("{JSON}.Value");
+    let mut properties = format!("mut {target}_fields: dict[str, {value}] = {{}}\n");
+    let mut required = Vec::new();
+    if let Some(variant) = variant {
+        properties.push_str(&format!(
+            "{target}_fields[\"type\"] = {value}.Object({{\"const\": {value}.String(\"{variant}\")}})\n"
+        ));
+        required.push(format!("{value}.String(\"type\")"));
+    }
+    for field in fields {
+        properties.push_str(&format!(
+            "{target}_fields[\"{}\"] = __aura_json_schema_{}(defs)\n",
+            field.name, field.helper
+        ));
+        if field.default.is_none() {
+            required.push(format!("{value}.String(\"{}\")", field.name));
+        }
+    }
+    format!(
+        "{properties}{target}_required: list[{value}] = [{}]\n\
+         {target} = {value}.Object(\n\
+         \x20   {{\n\
+         \x20       \"type\": {value}.String(\"object\"),\n\
+         \x20       \"properties\": {value}.Object({target}_fields),\n\
+         \x20       \"required\": {value}.Array({target}_required),\n\
+         \x20       \"additionalProperties\": {value}.Bool(false),\n\
+         \x20   }}\n\
+         )",
+        required.join(", ")
+    )
 }
 
 fn indent(body: &str) -> String {

@@ -9,10 +9,19 @@ class Filter:
 impl json.Codec for Filter
 
 
+enum Sort:
+    Relevance
+    Newest
+
+
+impl json.Codec for Sort
+
+
 class SearchArgs:
     query: str
     limit: uint8 = 10
     filters: list[Filter] = []
+    sort: Sort = Sort.Relevance
     cursor: str | None = None
 
 
@@ -36,5 +45,6 @@ def main():
     )
     run("{\"query\": \"aura\", \"limit\": 300}")
     run("{\"query\": \"aura\", \"filters\": [{\"field\": \"lang\", \"values\": [1]}]}")
+    run("{\"query\": \"aura\", \"sort\": \"Oldest\"}")
     run("{\"query\": \"aura\", \"page\": 2}")
     print(json.dumps(json.schema[SearchArgs]()))

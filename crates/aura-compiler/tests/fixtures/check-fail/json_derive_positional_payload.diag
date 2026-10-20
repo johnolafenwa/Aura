@@ -1,0 +1,6 @@
+error[AU2046]: cannot derive `json.Codec` for `Status`: variant `Failed` has a positional payload, which has no JSON key
+ --> crates/aura-compiler/tests/fixtures/check-fail/json_derive_positional_payload.au:6:5
+  |
+6 |     Failed(str)
+  |     ^
+  = help: name the payload, such as `Failed(value: str)`

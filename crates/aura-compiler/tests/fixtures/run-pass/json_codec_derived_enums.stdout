@@ -1,0 +1,24 @@
+"Medium"
+"High"
+$: unknown variant `Extreme`
+{"members":[{"radius":1.5,"type":"Circle"},{"height":3,"type":"Rect","width":2},{"type":"Empty"}],"name":"pair","type":"Group"}
+{"members":[{"radius":1.5,"type":"Circle"},{"height":3,"type":"Rect","width":2},{"type":"Empty"}],"name":"pair","type":"Group"}
+{"radius":2.0,"type":"Circle"}
+$: missing field `type`
+$.type: expected string, found integer
+$.type: unknown variant `Hexagon`
+$: missing field `height`
+$: unknown field `depth`
+$: unknown field `extra`
+$.members[0].radius: expected number, found string
+$: expected object, found string
+{"level":"Low","shape":null,"tags":[],"value":null}
+{"level":"High","shape":{"type":"Empty"},"tags":[true,2.0,0.5],"value":7}
+{"level":"High","shape":null,"tags":[],"value":"seven"}
+{"level":"High","shape":null,"tags":[],"value":null}
+$.value: expected integer, string, or null, found number
+$.tags[0]: expected boolean or number, found string
+$.level: unknown variant `Top`
+{"enum":["Low","Medium","High"]}
+{"$defs":{"Shape":{"oneOf":[{"additionalProperties":false,"properties":{"radius":{"type":"number"},"type":{"const":"Circle"}},"required":["type","radius"],"type":"object"},{"additionalProperties":false,"properties":{"height":{"maximum":2147483647,"minimum":-2147483648,"type":"integer"},"type":{"const":"Rect"},"width":{"maximum":2147483647,"minimum":-2147483648,"type":"integer"}},"required":["type","width","height"],"type":"object"},{"additionalProperties":false,"properties":{"members":{"items":{"$ref":"#/$defs/Shape"},"type":"array"},"name":{"type":"string"},"type":{"const":"Group"}},"required":["type","name","members"],"type":"object"},{"additionalProperties":false,"properties":{"type":{"const":"Empty"}},"required":["type"],"type":"object"}]}},"oneOf":[{"additionalProperties":false,"properties":{"radius":{"type":"number"},"type":{"const":"Circle"}},"required":["type","radius"],"type":"object"},{"additionalProperties":false,"properties":{"height":{"maximum":2147483647,"minimum":-2147483648,"type":"integer"},"type":{"const":"Rect"},"width":{"maximum":2147483647,"minimum":-2147483648,"type":"integer"}},"required":["type","width","height"],"type":"object"},{"additionalProperties":false,"properties":{"members":{"items":{"$ref":"#/$defs/Shape"},"type":"array"},"name":{"type":"string"},"type":{"const":"Group"}},"required":["type","name","members"],"type":"object"},{"additionalProperties":false,"properties":{"type":{"const":"Empty"}},"required":["type"],"type":"object"}]}
+{"$defs":{"Level":{"enum":["Low","Medium","High"]},"Shape":{"oneOf":[{"additionalProperties":false,"properties":{"radius":{"type":"number"},"type":{"const":"Circle"}},"required":["type","radius"],"type":"object"},{"additionalProperties":false,"properties":{"height":{"maximum":2147483647,"minimum":-2147483648,"type":"integer"},"type":{"const":"Rect"},"width":{"maximum":2147483647,"minimum":-2147483648,"type":"integer"}},"required":["type","width","height"],"type":"object"},{"additionalProperties":false,"properties":{"members":{"items":{"$ref":"#/$defs/Shape"},"type":"array"},"name":{"type":"string"},"type":{"const":"Group"}},"required":["type","name","members"],"type":"object"},{"additionalProperties":false,"properties":{"type":{"const":"Empty"}},"required":["type"],"type":"object"}]}},"additionalProperties":false,"properties":{"level":{"$ref":"#/$defs/Level"},"shape":{"anyOf":[{"$ref":"#/$defs/Shape"},{"type":"null"}]},"tags":{"items":{"anyOf":[{"type":"boolean"},{"type":"number"}]},"type":"array"},"value":{"anyOf":[{"type":"integer"},{"type":"string"},{"type":"null"}]}},"required":["level"],"type":"object"}

@@ -177,6 +177,29 @@ public def __entries(
             )
 
 
+public def __tagged(
+    value: own json.Value
+) -> Result[(str, list[(str, json.Value)]), DecodeError]:
+    match own __entries(value):
+        case Result.Err(error):
+            return Result.Err(error)
+        case Result.Ok(entries):
+            mut tag: list[json.Value] = []
+            mut rest: list[(str, json.Value)] = []
+            for key, item in own entries:
+                if key == "type":
+                    tag.append(item)
+                else:
+                    rest.append((key, item))
+            if tag.len() == 0:
+                return Result.Err(__error(DecodeErrorKind.MissingField(name="type")))
+            match own __decode_str(tag.pop()):
+                case Result.Ok(name):
+                    return Result.Ok((name, rest))
+                case Result.Err(error):
+                    return Result.Err(__at(error, ".type"))
+
+
 public def __decode_bool(value: own json.Value) -> Result[bool, DecodeError]:
     match value:
         case json.Value.Bool(flag):

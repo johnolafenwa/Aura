@@ -17,7 +17,10 @@ in this file.
   `json.encode`, `json.decode`, `json.decode_text`, and `json.schema`
   functions.
 - `impl json.Codec for Name` with no body derives `encode`, `decode`, and a
-  JSON Schema for a class. `AU2046` reports what cannot be derived.
+  JSON Schema for a class or enum. An enum without payloads encodes as the
+  variant name, and any other enum as an object tagged by `"type"`. A field
+  can hold a union whose members have different JSON kinds, such as
+  `int64 | str`. `AU2046` reports what cannot be derived.
 
 ### Fixed
 

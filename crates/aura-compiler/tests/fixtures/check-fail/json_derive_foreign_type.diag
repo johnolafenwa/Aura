@@ -1,4 +1,4 @@
-error[AU2046]: a derived `json.Codec` must be in the module that declares the class `str`
+error[AU2046]: a derived `json.Codec` must be in the module that declares the type `str`
  --> crates/aura-compiler/tests/fixtures/check-fail/json_derive_foreign_type.au:4:1
   |
 4 | impl json.Codec for str

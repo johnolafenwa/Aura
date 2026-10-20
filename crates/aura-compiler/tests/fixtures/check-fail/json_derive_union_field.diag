@@ -1,5 +1,5 @@
-error[AU2046]: cannot derive `json.Codec` for `Reading`: field `value` has a union type, and a derived codec supports only `T | None` unions
- --> crates/aura-compiler/tests/fixtures/check-fail/json_derive_union_field.au:5:12
-  |
-5 |     value: int64 | str
-  |            ^
+error[AU2046]: cannot derive `json.Codec` for `Reading`: field `value` has the union type `Point | Size`, and its members `Point` and `Size` both encode as a JSON object
+ --> crates/aura-compiler/tests/fixtures/check-fail/json_derive_union_field.au:13:12
+   |
+13 |     value: Point | Size
+   |            ^
