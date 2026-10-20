@@ -1,6 +1,6 @@
 # Batch 7 design checkpoint: Rust-class native performance
 
-Status: **Proposed 2026-10-20. Waiting on the owner's four decisions.**
+Status: **Ratified 2026-10-20 by the owner.**
 
 Date: 2026-10-20. Source baseline: Batch 6 step 8, the reference tool runner
 version 2.
@@ -291,3 +291,21 @@ Each names the recommended default first.
 4. **SIMD.** Vectorize inside the current contracts, with no new language
    surface (D1). Recommended, because results stay bit-identical. The
    alternatives add reassociating reductions (D2) or SIMD types (D3).
+
+## Ratification Record
+
+The owner ratified this checkpoint on 2026-10-20 and approved all four
+recommendations:
+
+1. Cranelift stays the release backend. Batch 7 finishes the `NativeBuilder`
+   boundary, and a C emission prototype follows only if a gap remains that
+   needs a general optimizer.
+2. Frames become cheap first. A MIR inliner then inlines small,
+   non-recursive functions and keeps their frame records.
+3. Every bounds check stays observable. The compiler removes only checks it
+   proves redundant.
+4. Vectorization stays inside the current Array contracts, with no new
+   language surface.
+
+Every other rule above is the ratified default. Step 1 proposes the numeric
+targets, which the owner ratifies before step 2 starts.

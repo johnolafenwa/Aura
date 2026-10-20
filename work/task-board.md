@@ -2,7 +2,7 @@
 
 Last updated: 2026-10-20
 
-## Batch 7 design checkpoint: Rust-class native performance (waiting on John)
+## Batch 7 design checkpoint: Rust-class native performance (ratified)
 
 - Target: bring Batch 7's four key decisions to John, as he asked on
   2026-10-19: the native backend, inlining, bounds checks, and SIMD.
@@ -11,8 +11,9 @@ Last updated: 2026-10-20
   and a ten-step delivery plan. Notes are in
   `2026-10-20-batch-7-design-checkpoint.md`.
 - Verification: documentation checks only. The checkpoint changes no code.
-- Next: John answers the four owner questions. No Batch 7 code starts
-  before then.
+- Ratified: John chose "Approve all" on 2026-10-20.
+- Next: step 1, Rust baselines for the collection programs and
+  compile-time measurement, then proposed numeric targets for John.
 
 ## Batch 6 step 8: the reference agent, version 2 (complete)
 

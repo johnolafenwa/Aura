@@ -30,6 +30,6 @@ for the work to continue through Batch 6 to these decisions.
 
 ## Follow-Up
 
-- John answers the four owner questions.
+- John approved all four recommendations on 2026-10-20.
 - Step 1 adds Rust baselines for the collection programs and compile-time
   measurements, then proposes numeric targets to ratify.
