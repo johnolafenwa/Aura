@@ -17667,7 +17667,7 @@ decisions.
 
 | Workload | Aura compared with its reference |
 | --- | --- |
-| fib | 29.664884 times the exact Rust comparison |
+| fib | 29.664884 times the exact Rust comparison on the foundations host; about 8 times with static frame descriptors on Linux |
 | Task creation | 29.068501 times the exact Rust comparison |
 | TCP | near parity |
 | Retry | favors Aura |
@@ -17683,8 +17683,9 @@ them.
 
 ### Per-Call Attribution
 
-Eleven symbol-preserving xctrace recordings attribute recovered Fibonacci
-samples as follows:
+Eleven symbol-preserving xctrace recordings on the foundations host attribute
+recovered Fibonacci samples as follows. They measure `aa52bfc` and earlier,
+before calls used static frame descriptors.
 
 | Category | Share of recovered samples |
 | --- | ---: |
@@ -17692,12 +17693,29 @@ samples as follows:
 | Other runtime work | 37.38% |
 | Scalar argument and result moves | 6.28% |
 
-The unprofiled estimate is 33.85854 ns per logical recursive call. A safe
-frame-storage experiment improved time by 11.10%. That is below the required
-20%, so it was reverted. This work shipped no call-overhead fix. The
+The
 [boundary note](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/15-backend-boundary.md#per-call-cost-attribution)
-has all eight categories, the sample exclusions, and the options considered
-for future work.
+has all eight categories and the sample exclusions.
+
+### Call Frame Cost
+
+Each generated function has one static frame descriptor. It holds the
+function name, source path, and position. The runtime validates the
+descriptor's text on the function's first call. Each call then records one
+pointer and the current task's state comes from a cached pointer. A call
+that does not hand a view back to its caller stores nothing else.
+
+Callgrind counts the instructions of the whole `fib(30)` process:
+
+| Build | Instructions | Per recursive call |
+| --- | ---: | ---: |
+| `aa52bfc` | 1,917,708,454 | about 1,150 |
+| Static frame descriptors | 568,735,408 | about 340 |
+
+On the shared Linux container, 15 alternating GO to DONE runs give a
+`fib(30)` median of 129.3 ms at `aa52bfc` and 34.7 ms with descriptors. The
+Rust reference takes about 4 ms. Creating and joining 10,000 tasks is
+unchanged at about 446 ms.
 
 ## Performance Direction
 

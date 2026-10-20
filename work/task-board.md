@@ -17,7 +17,20 @@ Last updated: 2026-10-20
   LLVM and removes it. LLVM's inliner replaces the planned MIR inliner.
 - Next: step 1, below.
 
-## Batch 7 step 1: Rust baselines, build times, and proposed targets (in progress)
+## Batch 7 step 2: cheap call frames (in progress)
+
+- Target: cut the per-call frame cost on the direct backend without
+  changing frame records, the depth limit, or parity.
+- Done: one static frame descriptor per function, validated on first call;
+  a pointer-sized call stack that keeps its spill allocation; a cached task
+  id and task state; returned-view records only for calls that use them.
+  Notes are in `2026-10-20-batch-7-step-2-cheap-frames.md`.
+- Verification: the workspace tests, the backend parity matrix, clippy,
+  fmt, and the native binaries gate pass locally. Callgrind counts for
+  `fib(30)` fall from 1,917,708,454 to 568,735,408 instructions.
+- Next: hosted CI, then step 3, explicit retain and release in MIR.
+
+## Batch 7 step 1: Rust baselines, build times, and proposed targets (complete)
 
 - Target: Rust counterparts for the five runtime value programs, a
   measurement of `aura build` times, and numeric targets for John to ratify
@@ -28,7 +41,7 @@ Last updated: 2026-10-20
   in `2026-10-20-batch-7-step-1-baselines.md`.
 - Verification: script unit tests and the Rust protocol smoke check pass.
   Measurements ran on a shared Linux container and are diagnostic-grade.
-- Next: John ratifies or changes the targets, then step 2, cheap frames.
+- Done: merged in PR #91. The targets wait for John's ratification.
 
 ## Batch 6 step 8: the reference agent, version 2 (complete)
 

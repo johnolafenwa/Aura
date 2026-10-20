@@ -15,9 +15,10 @@ use std::mem;
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::process;
+use std::ptr::NonNull;
 use std::slice;
 use std::str;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(test)]
 use std::sync::MutexGuard;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
@@ -358,44 +359,171 @@ impl Drop for DirectTaskAncestry {
     }
 }
 
+/// Static call-frame metadata for one generated function.
+///
+/// Native codegen emits one descriptor per function in writable object data,
+/// with `validated` zero. The first entry validates both texts and sets it, so
+/// later calls read the flag instead of rescanning the text. The layout is a
+/// private ABI between codegen and this runtime.
+#[repr(C)]
+pub struct DirectFrameDescriptor {
+    validated: AtomicU64,
+    line: i64,
+    column: i64,
+    path_ptr: *const u8,
+    path_len: usize,
+    function_ptr: *const u8,
+    function_len: usize,
+}
+
+const DIRECT_FRAME_DESCRIPTOR_VALIDATED: u64 = 1;
+
+impl DirectFrameDescriptor {
+    #[cfg(test)]
+    fn new(
+        line: i64,
+        column: i64,
+        path_ptr: *const u8,
+        path_len: usize,
+        function_ptr: *const u8,
+        function_len: usize,
+    ) -> Self {
+        Self {
+            validated: AtomicU64::new(0),
+            line,
+            column,
+            path_ptr,
+            path_len,
+            function_ptr,
+            function_len,
+        }
+    }
+
+    #[cfg(test)]
+    fn is_validated(&self) -> bool {
+        self.validated.load(Ordering::Acquire) == DIRECT_FRAME_DESCRIPTOR_VALIDATED
+    }
+
+    /// Validates the descriptor's text once; later calls read the flag.
+    fn ensure_validated(&self) {
+        if self.validated.load(Ordering::Acquire) != DIRECT_FRAME_DESCRIPTOR_VALIDATED {
+            self.validate_slow();
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn validate_slow(&self) {
+        if unsafe { DirectStaticFrameText::validate(self.function_ptr, self.function_len) }.is_err()
+        {
+            reject_invalid_direct_frame_utf8();
+        }
+        if self.has_path()
+            && unsafe { DirectStaticFrameText::validate(self.path_ptr, self.path_len) }.is_err()
+        {
+            reject_invalid_direct_frame_utf8();
+        }
+        self.validated
+            .store(DIRECT_FRAME_DESCRIPTOR_VALIDATED, Ordering::Release);
+    }
+
+    fn has_path(&self) -> bool {
+        !self.path_ptr.is_null() && self.path_len != 0
+    }
+
+    /// The function name. Valid only after `ensure_validated`.
+    fn function(&self) -> DirectFrameText {
+        DirectFrameText::Static(DirectStaticFrameText {
+            address: self.function_ptr as usize,
+            len: self.function_len,
+        })
+    }
+
+    /// The full frame record. Valid only after `ensure_validated`.
+    fn frame(&self) -> DirectRuntimeCallFrame {
+        let path = if self.has_path() {
+            Some(DirectFrameText::Static(DirectStaticFrameText {
+                address: self.path_ptr as usize,
+                len: self.path_len,
+            }))
+        } else {
+            direct_program_path_frame_text()
+        };
+        DirectRuntimeCallFrame {
+            function: self.function(),
+            span: DirectRuntimeSourceSpan::point(
+                path,
+                Span::new(
+                    usize::try_from(self.line).unwrap_or_default(),
+                    usize::try_from(self.column).unwrap_or_default(),
+                ),
+            ),
+        }
+    }
+}
+
+/// One active call. Generated code pushes a validated static descriptor, so a
+/// call stores one pointer and builds the frame record only for diagnostics.
+enum DirectCallFrameEntry {
+    Descriptor(NonNull<DirectFrameDescriptor>),
+    Frame(Box<DirectRuntimeCallFrame>),
+}
+
+impl DirectCallFrameEntry {
+    fn frame(&self) -> DirectRuntimeCallFrame {
+        match self {
+            // SAFETY: descriptors are immutable program data that outlive
+            // every call, and entry validated this one before it was pushed.
+            Self::Descriptor(descriptor) => unsafe { descriptor.as_ref() }.frame(),
+            Self::Frame(frame) => frame.as_ref().clone(),
+        }
+    }
+
+    fn materialize(&self) -> RuntimeCallFrame {
+        self.frame().materialize()
+    }
+}
+
+/// The active call stack. A depth-one chain stays inline. Once a deeper call
+/// spills to the heap, the allocation is kept, so recursion that moves
+/// between depths does not allocate and free on each call.
 #[derive(Default)]
 enum DirectCallFrameStorage {
     #[default]
     Empty,
-    Inline(DirectRuntimeCallFrame),
-    Spill(Vec<DirectRuntimeCallFrame>),
+    Inline(DirectCallFrameEntry),
+    Spill(Vec<DirectCallFrameEntry>),
 }
 
 impl DirectCallFrameStorage {
+    #[cfg(test)]
     fn push(&mut self, frame: DirectRuntimeCallFrame) {
-        match std::mem::take(self) {
-            Self::Empty => *self = Self::Inline(frame),
-            Self::Inline(first) => {
-                let mut frames = Vec::with_capacity(4);
-                frames.push(first);
-                frames.push(frame);
-                *self = Self::Spill(frames);
-            }
-            Self::Spill(mut frames) => {
-                frames.push(frame);
-                *self = Self::Spill(frames);
-            }
-        }
+        self.push_entry(DirectCallFrameEntry::Frame(Box::new(frame)));
     }
 
-    fn pop(&mut self) -> Option<DirectRuntimeCallFrame> {
-        match std::mem::take(self) {
-            Self::Empty => None,
-            Self::Inline(frame) => Some(frame),
-            Self::Spill(mut frames) => {
-                let popped = frames.pop();
-                *self = match frames.len() {
-                    0 => Self::Empty,
-                    1 => Self::Inline(frames.pop().expect("one frame remains")),
-                    _ => Self::Spill(frames),
-                };
-                popped
+    fn push_entry(&mut self, entry: DirectCallFrameEntry) {
+        if let Self::Spill(frames) = self {
+            frames.push(entry);
+            return;
+        }
+        *self = match std::mem::take(self) {
+            Self::Inline(first) => {
+                let mut frames = Vec::with_capacity(8);
+                frames.push(first);
+                frames.push(entry);
+                Self::Spill(frames)
             }
+            _ => Self::Inline(entry),
+        };
+    }
+
+    fn pop(&mut self) -> Option<DirectCallFrameEntry> {
+        if let Self::Spill(frames) = self {
+            return frames.pop();
+        }
+        match std::mem::take(self) {
+            Self::Inline(frame) => Some(frame),
+            _ => None,
         }
     }
 
@@ -420,7 +548,7 @@ impl DirectCallFrameStorage {
             Self::Spill(frames) => frames
                 .iter()
                 .rev()
-                .map(DirectRuntimeCallFrame::materialize)
+                .map(DirectCallFrameEntry::materialize)
                 .collect(),
         }
     }
@@ -489,7 +617,7 @@ struct DirectTaskRuntimeState {
     call_frames: DirectCallFrameStorage,
     task_ancestry: DirectTaskAncestry,
     fallback_cancellation: CancellationContext,
-    returned_view_frames: Vec<DirectReturnedViewFrame>,
+    returned_views: DirectReturnedViewStack,
     pending_mutable_sinks: Option<DirectPendingMutableSinks>,
     mutable_sinks: HashMap<i64, DirectMutableWritebackSink>,
     next_mutable_sink_id: i64,
@@ -505,6 +633,94 @@ struct DirectReturnedViewFrame {
     returned_selectors: Vec<i64>,
     pending_child_selectors: Vec<i64>,
     mutable_sinks: Vec<i64>,
+}
+
+/// Returned-view records for the active calls that use them, innermost last.
+///
+/// Most calls neither receive mutable sinks nor return a view, so a call gets
+/// a record only when it needs one. Each record carries the call depth it
+/// belongs to. A plain call costs nothing here.
+#[derive(Default)]
+struct DirectReturnedViewStack {
+    entries: Vec<(usize, DirectReturnedViewFrame)>,
+}
+
+impl DirectReturnedViewStack {
+    fn enter(&mut self, depth: usize, mutable_sinks: Vec<i64>) {
+        if !mutable_sinks.is_empty() {
+            self.entries.push((
+                depth,
+                DirectReturnedViewFrame {
+                    mutable_sinks,
+                    ..DirectReturnedViewFrame::default()
+                },
+            ));
+        }
+    }
+
+    /// Leaves the call at `depth` and hands its returned view to the caller,
+    /// replacing whatever an earlier child handed over.
+    fn exit(&mut self, depth: usize) {
+        let (returned, selectors) = match self.entries.last() {
+            Some((top, _)) if *top == depth => self
+                .entries
+                .pop()
+                .map(|(_, frame)| (frame.returned, frame.returned_selectors))
+                .unwrap_or_default(),
+            _ => (None, Vec::new()),
+        };
+        let parent = depth - 1;
+        if parent == 0 {
+            return;
+        }
+        match self.entries.last_mut() {
+            Some((top, frame)) if *top == parent => {
+                frame.pending_child = returned;
+                frame.pending_child_selectors = selectors;
+            }
+            _ if returned.is_some() || !selectors.is_empty() => self.entries.push((
+                parent,
+                DirectReturnedViewFrame {
+                    pending_child: returned,
+                    pending_child_selectors: selectors,
+                    ..DirectReturnedViewFrame::default()
+                },
+            )),
+            _ => {}
+        }
+    }
+
+    fn current(&self, depth: usize) -> Option<&DirectReturnedViewFrame> {
+        match self.entries.last() {
+            Some((top, frame)) if *top == depth => Some(frame),
+            _ => None,
+        }
+    }
+
+    /// The record for the call at `depth`, created on first use.
+    fn current_mut(&mut self, depth: usize) -> &mut DirectReturnedViewFrame {
+        if !matches!(self.entries.last(), Some((top, _)) if *top == depth) {
+            self.entries
+                .push((depth, DirectReturnedViewFrame::default()));
+        }
+        &mut self
+            .entries
+            .last_mut()
+            .expect("a record was just ensured")
+            .1
+    }
+
+    fn take_pending_child(&mut self, depth: usize) -> Option<String> {
+        match self.entries.last_mut() {
+            Some((top, frame)) if *top == depth => frame.pending_child.take(),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 enum DirectPendingMutableSinks {
@@ -541,7 +757,7 @@ impl Default for DirectTaskRuntimeState {
             call_frames: DirectCallFrameStorage::Empty,
             task_ancestry: DirectTaskAncestry::default(),
             fallback_cancellation: CancellationContext::default(),
-            returned_view_frames: Vec::new(),
+            returned_views: DirectReturnedViewStack::default(),
             pending_mutable_sinks: None,
             mutable_sinks: HashMap::new(),
             next_mutable_sink_id: 1,
@@ -585,8 +801,83 @@ thread_local! {
     // Each pinned worker multiplexes several stackful native tasks, so an
     // ordinary worker-local flag would leak across every yield. Keep all
     // resumable direct state behind the globally unique task identity instead.
-    static DIRECT_TASK_RUNTIME_STATES: RefCell<BTreeMap<u64, Box<DirectTaskRuntimeState>>> =
-        const { RefCell::new(BTreeMap::new()) };
+    static DIRECT_TASK_RUNTIME_STATES: RefCell<DirectTaskRuntimeStates> =
+        const { RefCell::new(DirectTaskRuntimeStates::new()) };
+}
+
+/// Runtime state per task on this worker, with the last entry looked up kept
+/// as a pointer. Each call's frame entry and exit look up the current task,
+/// so the cache saves a map search on every call. Each box keeps its address
+/// while its entry exists, and every insertion or removal clears the cache.
+struct DirectTaskRuntimeStates {
+    states: BTreeMap<u64, Box<DirectTaskRuntimeState>>,
+    cached: Option<(u64, NonNull<DirectTaskRuntimeState>)>,
+}
+
+impl DirectTaskRuntimeStates {
+    const fn new() -> Self {
+        Self {
+            states: BTreeMap::new(),
+            cached: None,
+        }
+    }
+
+    fn get_or_default(&mut self, key: u64) -> &mut DirectTaskRuntimeState {
+        if let Some((cached_key, mut state)) = self.cached {
+            if cached_key == key {
+                // SAFETY: the entry still owns this box, since every removal
+                // clears the cache, and `&mut self` makes this the only access.
+                return unsafe { state.as_mut() };
+            }
+        }
+        let state = self
+            .states
+            .entry(key)
+            .or_insert_with(|| {
+                boxed_direct_task_runtime_state(false, DirectTaskAncestry::default())
+            })
+            .as_mut();
+        self.cached = Some((key, NonNull::from(&mut *state)));
+        state
+    }
+
+    fn get_mut(&mut self, key: u64) -> Option<&mut DirectTaskRuntimeState> {
+        if self.cached.is_some_and(|(cached_key, _)| cached_key == key) {
+            return Some(self.get_or_default(key));
+        }
+        let state = self.states.get_mut(&key)?.as_mut();
+        self.cached = Some((key, NonNull::from(&mut *state)));
+        Some(state)
+    }
+
+    fn insert(
+        &mut self,
+        key: u64,
+        state: Box<DirectTaskRuntimeState>,
+    ) -> Option<Box<DirectTaskRuntimeState>> {
+        self.cached = None;
+        self.states.insert(key, state)
+    }
+
+    fn remove(&mut self, key: u64) -> Option<Box<DirectTaskRuntimeState>> {
+        self.cached = None;
+        self.states.remove(&key)
+    }
+
+    fn take_all(&mut self) -> BTreeMap<u64, Box<DirectTaskRuntimeState>> {
+        self.cached = None;
+        std::mem::take(&mut self.states)
+    }
+
+    #[cfg(test)]
+    fn values(&self) -> impl Iterator<Item = &Box<DirectTaskRuntimeState>> {
+        self.states.values()
+    }
+
+    #[cfg(test)]
+    fn contains_key(&self, key: &u64) -> bool {
+        self.states.contains_key(key)
+    }
 }
 
 #[cfg(test)]
@@ -615,17 +906,7 @@ fn with_direct_task_runtime_state_for_key<T>(
     key: u64,
     work: impl FnOnce(&mut DirectTaskRuntimeState) -> T,
 ) -> T {
-    DIRECT_TASK_RUNTIME_STATES.with(|states| {
-        let mut states = states.borrow_mut();
-        work(
-            states
-                .entry(key)
-                .or_insert_with(|| {
-                    boxed_direct_task_runtime_state(false, DirectTaskAncestry::default())
-                })
-                .as_mut(),
-        )
-    })
+    DIRECT_TASK_RUNTIME_STATES.with(|states| work(states.borrow_mut().get_or_default(key)))
 }
 
 fn with_direct_task_runtime_state<T>(work: impl FnOnce(&mut DirectTaskRuntimeState) -> T) -> T {
@@ -639,7 +920,7 @@ fn register_direct_owned_value(value: *mut OpaqueValue) {
     let key = direct_task_runtime_key();
     let overflow = DIRECT_TASK_RUNTIME_STATES.with(|states| {
         let mut states = states.borrow_mut();
-        let Some(state) = states.get_mut(&key) else {
+        let Some(state) = states.get_mut(key) else {
             return false;
         };
         if !state.ownership_tracking_active {
@@ -666,7 +947,7 @@ fn unregister_direct_owned_value(value: *mut OpaqueValue) -> bool {
     let key = direct_task_runtime_key();
     let removed = DIRECT_TASK_RUNTIME_STATES.with(|states| {
         let mut states = states.borrow_mut();
-        let Some(state) = states.get_mut(&key) else {
+        let Some(state) = states.get_mut(key) else {
             return false;
         };
         let address = value as usize;
@@ -691,7 +972,7 @@ impl Drop for DirectTaskRuntimeScopeGuard {
     fn drop(&mut self) {
         let (current, restored_previous) = DIRECT_TASK_RUNTIME_STATES.with(|states| {
             let mut states = states.borrow_mut();
-            let current = states.remove(&self.key);
+            let current = states.remove(self.key);
             let previous = self.previous.take();
             let restored_previous = previous.is_some();
             if let Some(previous) = previous {
@@ -724,7 +1005,7 @@ impl Drop for DirectTaskRuntimeScopeGuard {
         // completed task cannot leave state behind for a reused task id.
         if !restored_previous {
             let transient =
-                DIRECT_TASK_RUNTIME_STATES.with(|states| states.borrow_mut().remove(&self.key));
+                DIRECT_TASK_RUNTIME_STATES.with(|states| states.borrow_mut().remove(self.key));
             if let Some(transient) = transient {
                 release_direct_task_runtime_state(transient);
             }
@@ -800,7 +1081,7 @@ fn capture_direct_runtime_frames_once(diagnostic: &mut Diagnostic) {
 }
 
 fn clear_direct_task_runtime_states() {
-    let stale = DIRECT_TASK_RUNTIME_STATES.with(|states| std::mem::take(&mut *states.borrow_mut()));
+    let stale = DIRECT_TASK_RUNTIME_STATES.with(|states| states.borrow_mut().take_all());
     for state in stale.into_values() {
         release_direct_task_runtime_state(state);
     }
@@ -808,7 +1089,7 @@ fn clear_direct_task_runtime_states() {
 
 fn discard_current_direct_task_runtime_state() {
     let key = direct_task_runtime_key();
-    let state = DIRECT_TASK_RUNTIME_STATES.with(|states| states.borrow_mut().remove(&key));
+    let state = DIRECT_TASK_RUNTIME_STATES.with(|states| states.borrow_mut().remove(key));
     if let Some(state) = state {
         release_direct_task_runtime_state(state);
     }
@@ -816,7 +1097,7 @@ fn discard_current_direct_task_runtime_state() {
     // Releasing owned cleanup arguments should not create runtime state, but
     // discard any defensive fallback entry before the task id can be observed
     // again by scheduler teardown.
-    let transient = DIRECT_TASK_RUNTIME_STATES.with(|states| states.borrow_mut().remove(&key));
+    let transient = DIRECT_TASK_RUNTIME_STATES.with(|states| states.borrow_mut().remove(key));
     if let Some(transient) = transient {
         release_direct_task_runtime_state(transient);
     }
@@ -4305,6 +4586,44 @@ pub unsafe extern "C-unwind" fn aura_direct_enter_call_with_frame(
         function: function.clone(),
         span: DirectRuntimeSourceSpan::point(path, start),
     };
+    enter_direct_call_frame(
+        DirectCallFrameEntry::Frame(Box::new(frame)),
+        line,
+        column,
+        &function,
+    );
+}
+
+/// Enters one generated Aura call frame described by static metadata.
+///
+/// # Safety
+///
+/// `descriptor` must point to a `DirectFrameDescriptor` whose text ranges
+/// stay readable and unchanged for the rest of the program. Native codegen
+/// satisfies this private ABI contract with one object-file descriptor per
+/// function. UTF-8 is validated on the descriptor's first entry.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_enter_frame(descriptor: *const DirectFrameDescriptor) {
+    let Some(descriptor) = NonNull::new(descriptor.cast_mut()) else {
+        reject_invalid_direct_frame_utf8();
+    };
+    // SAFETY: the caller guarantees the descriptor outlives the program.
+    let metadata = unsafe { descriptor.as_ref() };
+    metadata.ensure_validated();
+    enter_direct_call_frame(
+        DirectCallFrameEntry::Descriptor(descriptor),
+        metadata.line,
+        metadata.column,
+        &metadata.function(),
+    );
+}
+
+fn enter_direct_call_frame(
+    entry: DirectCallFrameEntry,
+    line: i64,
+    column: i64,
+    function: &DirectFrameText,
+) {
     let (depth_exceeded, invalid_pending_sinks) = with_direct_task_runtime_state(|state| {
         if state.call_depth >= DIRECT_MAX_CALL_DEPTH {
             (true, false)
@@ -4315,11 +4634,8 @@ pub unsafe extern "C-unwind" fn aura_direct_enter_call_with_frame(
                 None => Vec::new(),
             };
             state.call_depth += 1;
-            state.call_frames.push(frame);
-            state.returned_view_frames.push(DirectReturnedViewFrame {
-                mutable_sinks,
-                ..DirectReturnedViewFrame::default()
-            });
+            state.call_frames.push_entry(entry);
+            state.returned_views.enter(state.call_depth, mutable_sinks);
             (false, false)
         }
     });
@@ -4327,7 +4643,7 @@ pub unsafe extern "C-unwind" fn aura_direct_enter_call_with_frame(
         runtime_error("direct mutable write-through sinks were not prepared for a concrete call");
     }
     if depth_exceeded {
-        reject_direct_call_depth(line, column, &function);
+        reject_direct_call_depth(line, column, function);
     }
 }
 
@@ -4335,17 +4651,9 @@ pub unsafe extern "C-unwind" fn aura_direct_enter_call_with_frame(
 pub unsafe extern "C-unwind" fn aura_direct_exit_call() {
     with_direct_task_runtime_state(|state| {
         if state.call_depth > 0 {
+            state.returned_views.exit(state.call_depth);
             state.call_depth -= 1;
             let _ = state.call_frames.pop();
-            let (returned, selectors) = state
-                .returned_view_frames
-                .pop()
-                .map(|frame| (frame.returned, frame.returned_selectors))
-                .unwrap_or_default();
-            if let Some(parent) = state.returned_view_frames.last_mut() {
-                parent.pending_child = returned;
-                parent.pending_child_selectors = selectors;
-            }
         }
     });
 }
@@ -9625,8 +9933,8 @@ pub extern "C-unwind" fn aura_direct_current_mutable_sink(index: i64) -> i64 {
             .unwrap_or_else(|_| runtime_error("invalid direct mutable sink index"));
         with_direct_task_runtime_state(|state| {
             state
-                .returned_view_frames
-                .last()
+                .returned_views
+                .current(state.call_depth)
                 .and_then(|frame| frame.mutable_sinks.get(index))
                 .copied()
                 .unwrap_or(0)
@@ -9855,10 +10163,10 @@ pub extern "C-unwind" fn aura_direct_set_returned_view_projection(
     task_runtime_boundary(|| {
         let projection = decode_bytes(projection_ptr, projection_len);
         let installed = with_direct_task_runtime_state(|state| {
-            let Some(frame) = state.returned_view_frames.last_mut() else {
+            if state.call_depth == 0 {
                 return false;
-            };
-            frame.returned = Some(projection);
+            }
+            state.returned_views.current_mut(state.call_depth).returned = Some(projection);
             true
         });
         if !installed {
@@ -9874,10 +10182,14 @@ pub extern "C-unwind" fn aura_direct_set_returned_view_projection(
 pub extern "C-unwind" fn aura_direct_push_returned_view_selector(word: i64) {
     task_runtime_boundary(|| {
         let installed = with_direct_task_runtime_state(|state| {
-            let Some(frame) = state.returned_view_frames.last_mut() else {
+            if state.call_depth == 0 {
                 return false;
-            };
-            frame.returned_selectors.push(word);
+            }
+            state
+                .returned_views
+                .current_mut(state.call_depth)
+                .returned_selectors
+                .push(word);
             true
         });
         if !installed {
@@ -9894,8 +10206,8 @@ pub extern "C-unwind" fn aura_direct_take_returned_view_selector(index: i64) -> 
         with_direct_task_runtime_state(|state| {
             usize::try_from(index).ok().and_then(|index| {
                 state
-                    .returned_view_frames
-                    .last()
+                    .returned_views
+                    .current(state.call_depth)
                     .and_then(|frame| frame.pending_child_selectors.get(index))
                     .copied()
             })
@@ -9912,10 +10224,8 @@ pub extern "C-unwind" fn aura_direct_take_returned_view_projection(
     task_runtime_boundary(|| {
         let projections = unsafe { slice::from_raw_parts(projections_ptr, projections_len) };
         let selected = with_direct_task_runtime_state(|state| {
-            state
-                .returned_view_frames
-                .last_mut()
-                .and_then(|frame| frame.pending_child.take())
+            let depth = state.call_depth;
+            state.returned_views.take_pending_child(depth)
         })
         .unwrap_or_else(|| runtime_error("direct returned view has no transferred projection"));
         projections

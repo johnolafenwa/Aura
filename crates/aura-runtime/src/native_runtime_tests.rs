@@ -16401,6 +16401,242 @@ fn native_runtime_frame_metadata_rejects_invalid_utf8_before_mutating_call_state
     );
 }
 
+fn leaked_frame_descriptor(
+    line: i64,
+    column: i64,
+    path: &'static [u8],
+    function: &'static [u8],
+) -> *const super::DirectFrameDescriptor {
+    Box::leak(Box::new(super::DirectFrameDescriptor::new(
+        line,
+        column,
+        if path.is_empty() {
+            std::ptr::null()
+        } else {
+            path.as_ptr()
+        },
+        path.len(),
+        if function.is_empty() {
+            std::ptr::null()
+        } else {
+            function.as_ptr()
+        },
+        function.len(),
+    )))
+}
+
+#[test]
+fn native_runtime_returned_views_store_only_calls_that_use_them() {
+    let mut views = super::DirectReturnedViewStack::default();
+    for depth in 1..=100 {
+        views.enter(depth, Vec::new());
+    }
+    for depth in (1..=100).rev() {
+        views.exit(depth);
+    }
+    assert!(
+        views.is_empty(),
+        "plain calls must not store returned-view records"
+    );
+
+    // A callee's returned projection reaches its caller once.
+    views.enter(1, Vec::new());
+    views.enter(2, Vec::new());
+    let callee = views.current_mut(2);
+    callee.returned = Some("items[*]".to_string());
+    callee.returned_selectors.push(9);
+    views.exit(2);
+    assert_eq!(
+        views
+            .current(1)
+            .and_then(|frame| frame.pending_child_selectors.first().copied()),
+        Some(9)
+    );
+    assert_eq!(views.take_pending_child(1).as_deref(), Some("items[*]"));
+    assert_eq!(views.take_pending_child(1), None);
+
+    // A later child that returns no view clears the caller's earlier one.
+    views.enter(2, Vec::new());
+    views.current_mut(2).returned = Some("first".to_string());
+    views.exit(2);
+    views.enter(2, Vec::new());
+    views.exit(2);
+    assert_eq!(views.take_pending_child(1), None);
+    assert!(views
+        .current(1)
+        .is_none_or(|frame| frame.pending_child_selectors.is_empty()));
+    views.exit(1);
+
+    // Mutable sinks belong to the call that received them.
+    views.enter(1, vec![5]);
+    views.enter(2, Vec::new());
+    assert!(views.current(2).is_none());
+    views.exit(2);
+    assert_eq!(
+        views.current(1).map(|frame| frame.mutable_sinks.clone()),
+        Some(vec![5])
+    );
+    views.exit(1);
+    assert!(views.is_empty());
+}
+
+#[test]
+fn native_runtime_frame_descriptor_layout_matches_native_codegen() {
+    use std::mem::{align_of, offset_of, size_of};
+    type Descriptor = super::DirectFrameDescriptor;
+    assert_eq!(offset_of!(Descriptor, validated), 0);
+    assert_eq!(offset_of!(Descriptor, line), 8);
+    assert_eq!(offset_of!(Descriptor, column), 16);
+    assert_eq!(offset_of!(Descriptor, path_ptr), 24);
+    assert_eq!(offset_of!(Descriptor, path_len), 32);
+    assert_eq!(offset_of!(Descriptor, function_ptr), 40);
+    assert_eq!(offset_of!(Descriptor, function_len), 48);
+    assert_eq!(size_of::<Descriptor>(), 56);
+    assert_eq!(align_of::<Descriptor>(), 8);
+}
+
+#[test]
+fn native_runtime_frame_descriptor_validates_once_and_materializes_its_frame() {
+    let descriptor = leaked_frame_descriptor(4, 9, b"/workspace/main.au", b"helper");
+    super::reset_direct_runtime_frame_materialization_count();
+    super::with_direct_task_runtime_scope(|| {
+        assert!(!unsafe { &*descriptor }.is_validated());
+        unsafe {
+            super::aura_direct_enter_frame(descriptor);
+        }
+        assert!(
+            unsafe { &*descriptor }.is_validated(),
+            "the first entry must validate and mark the descriptor"
+        );
+        unsafe {
+            super::aura_direct_enter_frame(descriptor);
+        }
+        assert_eq!(
+            super::direct_runtime_frame_materialization_count(),
+            0,
+            "entering a descriptor frame must not materialize diagnostics"
+        );
+        let frames = super::direct_runtime_call_frames();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].function, "helper");
+        assert_eq!(frames[0].span.path.as_deref(), Some("/workspace/main.au"));
+        assert_eq!(frames[0].span.start, Span::new(4, 9));
+        assert_eq!(frames[0].span.end, Span::new(4, 10));
+        unsafe {
+            super::aura_direct_exit_call();
+            super::aura_direct_exit_call();
+        }
+        assert!(super::direct_runtime_call_frames().is_empty());
+        Ok::<_, Diagnostic>(Value::Unit)
+    })
+    .expect("descriptor frame probe should complete");
+}
+
+#[test]
+fn native_runtime_frame_descriptor_rejects_invalid_text_before_call_activation() {
+    for (path, function) in [
+        (&b"/workspace/main.au"[..], &[0xff, 0xfe][..]),
+        (&[0xc3][..], &b"helper"[..]),
+        (&b"/workspace/main.au"[..], &b""[..]),
+    ] {
+        let descriptor = leaked_frame_descriptor(2, 1, path, function);
+        let address = descriptor as usize;
+        let diagnostic = run_lightweight_root_task(move || {
+            super::with_direct_task_runtime_scope(|| {
+                Ok(super::with_task_runtime_error_capture(|| {
+                    unsafe {
+                        super::aura_direct_enter_frame(address as *const _);
+                    }
+                    #[allow(unreachable_code)]
+                    Value::Unit
+                }))
+            })
+        })
+        .expect_err("an invalid frame descriptor should fail at the scheduler boundary");
+        assert_eq!(
+            diagnostic.message,
+            "aura direct runtime received invalid UTF-8 bytes"
+        );
+        assert!(diagnostic.call_frames.is_empty());
+        assert!(
+            !unsafe { &*descriptor }.is_validated(),
+            "a rejected descriptor must stay unvalidated"
+        );
+    }
+
+    let diagnostic = run_lightweight_root_task(|| {
+        super::with_direct_task_runtime_scope(|| {
+            Ok(super::with_task_runtime_error_capture(|| {
+                unsafe {
+                    super::aura_direct_enter_frame(std::ptr::null());
+                }
+                #[allow(unreachable_code)]
+                Value::Unit
+            }))
+        })
+    })
+    .expect_err("a null frame descriptor should fail at the scheduler boundary");
+    assert_eq!(
+        diagnostic.message,
+        "aura direct runtime received invalid UTF-8 bytes"
+    );
+}
+
+#[test]
+fn native_runtime_frame_descriptor_depth_limit_names_the_function() {
+    let address = leaked_frame_descriptor(7, 3, b"/workspace/main.au", b"recurse") as usize;
+    let diagnostic = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            Ok(super::with_task_runtime_error_capture(|| {
+                for _ in 0..=super::DIRECT_MAX_CALL_DEPTH {
+                    unsafe {
+                        super::aura_direct_enter_frame(address as *const _);
+                    }
+                }
+                Value::Unit
+            }))
+        })
+    })
+    .expect_err("the call past the depth limit should trap");
+    assert_eq!(
+        diagnostic.message,
+        format!(
+            "maximum call depth of {} exceeded while calling `recurse`",
+            super::DIRECT_MAX_CALL_DEPTH
+        )
+    );
+    assert_eq!(diagnostic.call_frames.len(), super::DIRECT_MAX_CALL_DEPTH);
+    assert_eq!(diagnostic.call_frames[0].function, "recurse");
+}
+
+#[test]
+fn native_runtime_state_lookup_follows_nested_scope_replacement() {
+    super::with_direct_task_runtime_scope(|| {
+        super::with_direct_task_runtime_state(|state| state.next_cleanup_id = 41);
+        assert_eq!(
+            super::with_direct_task_runtime_state(|state| state.next_cleanup_id),
+            41
+        );
+        super::with_direct_task_runtime_scope(|| {
+            assert_eq!(
+                super::with_direct_task_runtime_state(|state| state.next_cleanup_id),
+                1,
+                "a nested scope must not see the outer scope's cached state"
+            );
+            super::with_direct_task_runtime_state(|state| state.next_cleanup_id = 7);
+            Ok::<_, Diagnostic>(Value::Unit)
+        })
+        .expect("inner scope should complete");
+        assert_eq!(
+            super::with_direct_task_runtime_state(|state| state.next_cleanup_id),
+            41,
+            "leaving the nested scope must restore the outer state"
+        );
+        Ok::<_, Diagnostic>(Value::Unit)
+    })
+    .expect("outer scope should complete");
+}
+
 #[test]
 fn native_runtime_frame_metadata_rejects_a_null_required_name_before_call_activation() {
     let diagnostic = run_lightweight_root_task(|| {
@@ -21773,19 +22009,22 @@ fn direct_frame_metadata_materializes_call_frames_and_task_ancestry() {
     assert_eq!(
         storage
             .pop()
-            .map(|frame| frame.function.materialize())
+            .map(|frame| frame.materialize().function)
             .as_deref(),
         Some("frame2")
     );
     assert_eq!(
         storage
             .pop()
-            .map(|frame| frame.function.materialize())
+            .map(|frame| frame.materialize().function)
             .as_deref(),
         Some("frame1")
     );
     assert_eq!(storage.len(), 1);
-    assert!(!storage.has_heap_spill());
+    assert!(
+        storage.has_heap_spill(),
+        "a spilled stack keeps its allocation so call depth changes do not reallocate"
+    );
     assert_eq!(storage.materialize_innermost_first().len(), 1);
     assert!(storage.pop().is_some());
     assert!(storage.pop().is_none());

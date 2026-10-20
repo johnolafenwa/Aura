@@ -1099,7 +1099,7 @@ impl<'a> NativeCodegen<'a> {
             &mut object,
             runtime_init => ("aura_direct_runtime_init", [types::I64, types::I64, types::I64, types::I64], None),
             run_root => ("aura_direct_run_root", [types::I64], Some(types::I32)),
-            enter_call => ("aura_direct_enter_call_with_frame", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], None),
+            enter_call => ("aura_direct_enter_frame", [types::I64], None),
             exit_call => ("aura_direct_exit_call", [], None),
             set_returned_view_projection => ("aura_direct_set_returned_view_projection", [types::I64, types::I64], None),
             take_returned_view_projection => ("aura_direct_take_returned_view_projection", [types::I64, types::I64], Some(types::I64)),
@@ -2079,31 +2079,22 @@ impl<'a> NativeCodegen<'a> {
         let take_returned_view_selector = self
             .object
             .declare_func_in_func(self.take_returned_view_selector, builder.func);
-        let line = builder.ins().iconst(types::I64, function.span.line as i64);
-        let column = builder
-            .ins()
-            .iconst(types::I64, function.span.column as i64);
         let public_function_name = public_direct_function_name(&function.name);
-        let (function_ptr, function_len) = declare_string_constant(
-            &mut self.object,
-            &mut self.string_data,
-            &mut builder,
-            public_function_name.as_bytes(),
-        )?;
         let function_path = function
             .source_path
             .as_deref()
             .unwrap_or(&self.program_path);
-        let (path_ptr, path_len) = declare_string_constant(
+        let descriptor = declare_frame_descriptor(
             &mut self.object,
             &mut self.string_data,
-            &mut builder,
+            &format!("aura_frame_{}", func_id.as_u32()),
+            function.span,
             function_path.as_bytes(),
+            public_function_name.as_bytes(),
         )?;
-        builder.ins().call(
-            enter_call,
-            &[line, column, path_ptr, path_len, function_ptr, function_len],
-        );
+        let descriptor = self.object.declare_data_in_func(descriptor, builder.func);
+        let descriptor = builder.ins().symbol_value(types::I64, descriptor);
+        builder.ins().call(enter_call, &[descriptor]);
 
         let mut variable_index = 0usize;
         let mut variables = HashMap::new();
@@ -18700,27 +18691,83 @@ fn declare_string_constant(
     builder: &mut FunctionBuilder<'_>,
     bytes: &[u8],
 ) -> std::result::Result<(Value, Value), String> {
-    let id = if let Some(id) = string_data.get(bytes) {
-        *id
-    } else {
-        let name = format!("aura_data_{}", string_data.len());
-        let id = try_or_string_error!(
-            object.declare_data(&name, Linkage::Local, false, false),
-            "failed to declare string data: {}"
-        );
-        let mut data = DataDescription::new();
-        data.define(bytes.to_vec().into_boxed_slice());
-        try_or_string_error!(
-            object.define_data(id, &data),
-            "failed to define string data: {}"
-        );
-        string_data.insert(bytes.to_vec(), id);
-        id
-    };
+    let id = string_data_id(object, string_data, bytes)?;
     let global = object.declare_data_in_func(id, builder.func);
     let ptr = builder.ins().symbol_value(types::I64, global);
     let len = builder.ins().iconst(types::I64, bytes.len() as i64);
     Ok((ptr, len))
+}
+
+fn string_data_id(
+    object: &mut ObjectModule,
+    string_data: &mut HashMap<Vec<u8>, DataId>,
+    bytes: &[u8],
+) -> std::result::Result<DataId, String> {
+    if let Some(id) = string_data.get(bytes) {
+        return Ok(*id);
+    }
+    let name = format!("aura_data_{}", string_data.len());
+    let id = try_or_string_error!(
+        object.declare_data(&name, Linkage::Local, false, false),
+        "failed to declare string data: {}"
+    );
+    let mut data = DataDescription::new();
+    data.define(bytes.to_vec().into_boxed_slice());
+    try_or_string_error!(
+        object.define_data(id, &data),
+        "failed to define string data: {}"
+    );
+    string_data.insert(bytes.to_vec(), id);
+    Ok(id)
+}
+
+// Field offsets of the runtime's `DirectFrameDescriptor`: a validation flag,
+// the line and column, then the path and function name as pointer and length.
+const FRAME_DESCRIPTOR_LINE: usize = 8;
+const FRAME_DESCRIPTOR_COLUMN: usize = 16;
+const FRAME_DESCRIPTOR_PATH_PTR: u32 = 24;
+const FRAME_DESCRIPTOR_PATH_LEN: usize = 32;
+const FRAME_DESCRIPTOR_FUNCTION_PTR: u32 = 40;
+const FRAME_DESCRIPTOR_FUNCTION_LEN: usize = 48;
+const FRAME_DESCRIPTOR_BYTES: usize = 56;
+
+/// Defines one function's static frame descriptor. It is writable because the
+/// runtime marks it validated on the function's first call.
+fn declare_frame_descriptor(
+    object: &mut ObjectModule,
+    string_data: &mut HashMap<Vec<u8>, DataId>,
+    name: &str,
+    span: Span,
+    path: &[u8],
+    function: &[u8],
+) -> std::result::Result<DataId, String> {
+    let path_id = string_data_id(object, string_data, path)?;
+    let function_id = string_data_id(object, string_data, function)?;
+    let id = try_or_string_error!(
+        object.declare_data(name, Linkage::Local, true, false),
+        "failed to declare frame descriptor: {}"
+    );
+    let mut bytes = vec![0u8; FRAME_DESCRIPTOR_BYTES];
+    for (offset, value) in [
+        (FRAME_DESCRIPTOR_LINE, span.line as u64),
+        (FRAME_DESCRIPTOR_COLUMN, span.column as u64),
+        (FRAME_DESCRIPTOR_PATH_LEN, path.len() as u64),
+        (FRAME_DESCRIPTOR_FUNCTION_LEN, function.len() as u64),
+    ] {
+        bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+    }
+    let mut data = DataDescription::new();
+    data.define(bytes.into_boxed_slice());
+    data.set_align(8);
+    let path_global = object.declare_data_in_data(path_id, &mut data);
+    data.write_data_addr(FRAME_DESCRIPTOR_PATH_PTR, path_global, 0);
+    let function_global = object.declare_data_in_data(function_id, &mut data);
+    data.write_data_addr(FRAME_DESCRIPTOR_FUNCTION_PTR, function_global, 0);
+    try_or_string_error!(
+        object.define_data(id, &data),
+        "failed to define frame descriptor: {}"
+    );
+    Ok(id)
 }
 
 fn signature_for(

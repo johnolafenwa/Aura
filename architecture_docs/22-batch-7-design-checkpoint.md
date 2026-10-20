@@ -355,7 +355,7 @@ Each step is one pull request with its tests, docs, and measurements.
 | Step | Work |
 | --- | --- |
 | 1 | Rust baselines for the collection programs, compile-time measurement, and proposed targets |
-| 2 | Cheap frames: one-time frame text validation, task state passed once, preallocated frame storage |
+| 2 | Cheap frames: one-time frame text validation, task state passed once, preallocated frame storage. Done: `fib(30)` went from 32.8x to about 8x Rust on Linux |
 | 3 | Explicit retain and release in MIR, and cancellation of matched pairs |
 | 4 | Inline list length and element reads from a fixed internal layout, with one bounds check |
 | 5 | Bounds-check removal in proven `for` loops, and direct `Array` element reads |

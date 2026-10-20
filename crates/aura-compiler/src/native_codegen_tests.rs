@@ -2270,8 +2270,14 @@ def main() -> int32:
     assert!(
         referenced
             .iter()
+            .any(|symbol| symbol.ends_with("aura_direct_enter_frame")),
+        "generated function entry must pass one static frame descriptor: {referenced:?}"
+    );
+    assert!(
+        !referenced
+            .iter()
             .any(|symbol| symbol.contains("aura_direct_enter_call_with_frame")),
-        "generated function entry must use the complete frame ABI: {referenced:?}"
+        "generated function entry must not pass frame text on every call: {referenced:?}"
     );
     assert!(
         referenced
