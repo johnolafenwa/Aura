@@ -1,0 +1,6 @@
+type Fn[A, R] = Callable[def(args: A) -> R]
+
+
+def main():
+    double = Fn[int64](lambda args: args * 2)
+    print(double(2))

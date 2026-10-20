@@ -4,7 +4,7 @@
 - Ratified direction: 2026-09-06, user approval of the priority roadmap
 - Date: 2026-08-02
 - Version target: Aura 0.4
-- Implementation: Concrete decorators in Batch 6 step 6; generic decorators in step 7
+- Implementation: Concrete decorators in Batch 6 step 6 (PR #87); generic decorators and generic decorator factories in step 7
 - Roadmap decision: Batch S1, design-only checkpoint
 - Related: ADR-0013, ADR-0015, ADR-0016, ADR-0022, ADR-0033, ADR-0037,
   ADR-0038, and ADR-0050

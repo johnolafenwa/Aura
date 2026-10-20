@@ -1,0 +1,19 @@
+type Fn[A, R] = Callable[def(args: A) -> R]
+type Check[T] = def(value: T) -> bool
+
+
+def compose[A, B, C](first: own Fn[A, B], second: own Fn[B, C]) -> Fn[A, C]:
+    return Fn[A, C](lambda [own first, own second] args: second(first(args)))
+
+
+def is_even(value: int64) -> bool:
+    return value % 2 == 0
+
+
+def main():
+    double = Fn[int64, int64](lambda args: args * 2)
+    describe = Fn[int64, str](lambda args: f"<{args}>")
+    both = compose(double, describe)
+    print(both(21))
+    check = Check[int64](is_even)
+    print(check(4))

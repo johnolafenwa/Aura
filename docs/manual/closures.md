@@ -108,7 +108,19 @@ It cannot pass through a thin `def` parameter, field, element, or annotated resu
 
 `Callable[def(...) -> R]`, `Callable[mut def(...) -> R]`, and `Callable[own def(...) -> R]` are owned storage types. They hold a Shared, Mutable, or Consuming callable with a complete contract and an erased capture set. See [Function Values](/manual/functions#function-values) for contracts. `TaskCallable[...]` is the same storage with every capture proven Transfer.
 
-Packing is explicit. Call a non-generic alias of such a type with one value to pack it. The packed value keeps the closure's own environment.
+Packing is explicit. Call an alias of such a type with one value to pack it. The packed value keeps the closure's own environment. A generic alias takes its type arguments first, as in `Fn[int64, str](value)`. Inside a generic function, the arguments may name its type parameters:
+
+```aura
+type Fn[A, R] = Callable[def(args: A) -> R]
+
+def compose[A, B, C](first: own Fn[A, B], second: own Fn[B, C]) -> Fn[A, C]:
+    return Fn[A, C](lambda [own first, own second] args: second(first(args)))
+
+both = compose(Fn[int64, int64](lambda args: args * 2), Fn[int64, str](lambda args: f"<{args}>"))
+print(both(21))
+```
+
+A generic alias called without type arguments reports `AU2002`.
 
 ```aura
 class Counter:

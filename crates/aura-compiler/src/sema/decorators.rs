@@ -49,6 +49,8 @@ struct Application {
     span: Span,
     function: String,
     signature: String,
+    /// The decorated function's `own` parameters.
+    owned: Vec<String>,
 }
 
 impl Applications {
@@ -65,10 +67,26 @@ impl Applications {
             .iter()
             .find(|application| application.span == span)
         {
+            let reason = std::mem::take(&mut diagnostic.message);
             diagnostic.message = format!(
-                "decorator on `{}` must take and return `{}`: {}",
-                application.function, application.signature, diagnostic.message
+                "decorator on `{}` must take and return `{}`: {reason}",
+                application.function, application.signature
             );
+            if reason.contains("would be renamed") {
+                diagnostic.help = vec![
+                    "a decorator's callable type names each parameter, so the decorated function must use the same names"
+                        .to_string(),
+                ];
+            } else if let Some(owned) = application
+                .owned
+                .iter()
+                .find(|owned| reason.contains(&format!("{owned}: own ")))
+            {
+                diagnostic.help.push(format!(
+                    "`{}` consumes `{owned}`, and a wrapper that calls it again, such as a retry, has no argument left to pass; write an explicit loop that builds a new argument for each attempt",
+                    application.function
+                ));
+            }
         }
         diagnostic
     }
@@ -158,17 +176,26 @@ fn desugar(
     };
 
     let undecorated = format!("{UNDECORATED_PREFIX}{name}");
+    // The packed function is the innermost decorator's argument, so a
+    // mismatch in passing it reports at that decorator.
+    let innermost = function.decorators[function.decorators.len() - 1].span;
     let mut value = call(
         Expr {
             kind: ExprKind::Name(alias.name.clone()),
-            span,
+            span: innermost,
         },
         Expr {
             kind: ExprKind::Name(undecorated.clone()),
-            span,
+            span: innermost,
         },
-        span,
+        innermost,
     );
+    let owned = function
+        .params
+        .iter()
+        .filter(|param| param.mode == ParamMode::Own)
+        .map(|param| param.name.clone())
+        .collect::<Vec<_>>();
     let signature = render(&callable);
     // The undecorated function keeps its decorators for hover and docs.
     for decorator in function.decorators.iter().rev() {
@@ -176,6 +203,7 @@ fn desugar(
             span: decorator.span,
             function: name.clone(),
             signature: signature.clone(),
+            owned: owned.clone(),
         });
         value = call(decorator.expr.clone(), value, decorator.span);
     }

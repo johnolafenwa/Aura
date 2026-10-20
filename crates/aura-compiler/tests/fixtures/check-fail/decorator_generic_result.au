@@ -1,0 +1,19 @@
+type Fn[A, R] = Callable[def(args: A) -> R]
+
+
+def describe[A, R](f: own Fn[A, R]) -> Fn[A, str]:
+    return Fn[A, str](lambda [own f] args: describe_call(f, args))
+
+
+def describe_call[A, R](f: Fn[A, R], args: A) -> str:
+    f(args)
+    return "called"
+
+
+@describe
+def bump(args: int64) -> int64:
+    return args + 1
+
+
+def main():
+    print(bump(1))

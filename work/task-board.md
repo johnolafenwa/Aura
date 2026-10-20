@@ -2,25 +2,33 @@
 
 Last updated: 2026-10-20
 
-## Batch 6 step 6: decorators (in progress)
+## Batch 6 step 7: generic decorators and the retry rule (in progress)
+
+- Target: generic decorators inferred per use, generic decorator factories
+  such as `@retry(3)`, and the rule that a retry cannot wrap a function
+  with an `own` parameter, on both backends. John asked on 2026-10-19 for
+  the work to continue through Batch 6 to Batch 7's key decisions.
+- Done: a generic callable alias packs or adapts a value as
+  `Fn[A, R](value)`, in sema and MIR. A call `factory(...)(args)` infers
+  the generic factory's remaining type parameters from the outer call, in
+  sema, MIR typing, and the MIR callable validator. Decorator mismatches
+  report at the innermost decorator, with help for renamed parameters and
+  for `own` parameters. Notes are in
+  `2026-10-20-batch-6-step-7-generic-decorators.md`.
+- Verification: run-pass `decorators_generic` and
+  `callable_alias_generic_pack`, five check-fail fixtures, a cross-module
+  CLI test on both backends with stacked factories, and
+  `examples/basics/retry_decorator.au`.
+- Next: open the PR, then step 8, the reference agent example.
+
+## Batch 6 step 6: decorators (complete)
 
 - Target: decorator syntax on module-level functions, concrete decorators,
   top-to-bottom evaluation with bottom-to-top application, and recursion
-  through the decorated binding, on both backends. John asked on 2026-10-19
-  for the work to continue through Batch 6 to Batch 7's key decisions.
-- Done: the parser reads `@expression` lines above a module-level `def`.
-  `sema/decorators.rs` rewrites each decorated function into a private
-  undecorated function and a `Callable[def(...) -> R]` constant built by
-  calling the decorators. `AU2047` covers the rejected forms. Hover, `aura
-  doc`, and `aura fmt` show and keep decorator lines. A module member that
-  holds a shared callable can be called as `tools.run(3)`. Three
-  direct-backend callable bugs found on the way are fixed. Notes are in
+  through the decorated binding, on both backends.
+- Done: merged in PR #87. Notes are in
   `2026-10-20-batch-6-step-6-decorators.md`.
-- Verification: run-pass `decorators`, run-fail `decorator_trap`, six
-  check-fail and three parse-fail fixtures, a cross-module CLI test on both
-  backends, analysis and API docs tests, a formatter test, and
-  `examples/basics/decorators.au`.
-- Next: open the PR, then step 7, generic decorators and the `@retry` rule.
+- Next: step 7.
 
 ## Batch 6 step 5: schema descriptions and the agreement test (complete)
 

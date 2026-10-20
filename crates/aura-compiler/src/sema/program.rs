@@ -68,6 +68,44 @@ pub struct AliasInfo {
 }
 
 impl AliasInfo {
+    /// The alias target with its type parameters replaced by `args`.
+    pub(crate) fn specialized_target(
+        &self,
+        args: &[Type],
+        span: crate::diag::Span,
+        module_name: &str,
+        canonical_names: &BTreeMap<String, String>,
+        budget: &super::type_budget::ExpansionBudget,
+    ) -> Result<Type> {
+        if args.len() != self.decl.type_params.len() {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                span,
+                format!(
+                    "type alias `{}` expects {} type arguments, found {}",
+                    self.decl.name,
+                    self.decl.type_params.len(),
+                    args.len()
+                ),
+            ));
+        }
+        let substitutions = super::substitutions_from_decl_type_args(&self.decl.type_params, args);
+        budget.check_substitution(&self.target, &substitutions, span)?;
+        budget.check_substitution_key(
+            &self.target,
+            &substitutions,
+            module_name,
+            canonical_names,
+            span,
+        )?;
+        Ok(super::substitute_alias_type(
+            &self.target,
+            &substitutions,
+            module_name,
+            canonical_names,
+        ))
+    }
+
     /// A constructor alias reuses the expanded nominal constructor. No scalar
     /// or union constructor is synthesized by this adapter.
     pub(crate) fn constructor_callee(
@@ -78,33 +116,14 @@ impl AliasInfo {
         canonical_names: &BTreeMap<String, String>,
         budget: &super::type_budget::ExpansionBudget,
     ) -> Result<Option<Expr>> {
-        let target = if let Some(args) = type_args {
-            if args.len() != self.decl.type_params.len() {
-                return Err(Diagnostic::coded_at(
-                    "AU2002",
-                    span,
-                    format!(
-                        "type alias `{}` expects {} type arguments, found {}",
-                        self.decl.name,
-                        self.decl.type_params.len(),
-                        args.len()
-                    ),
-                ));
+        let target = match type_args {
+            Some(args) => {
+                self.specialized_target(args, span, module_name, canonical_names, budget)?
             }
-            let substitutions =
-                super::substitutions_from_decl_type_args(&self.decl.type_params, args);
-            budget.check_substitution(&self.target, &substitutions, span)?;
-            budget.check_substitution_key(
-                &self.target,
-                &substitutions,
-                module_name,
-                canonical_names,
-                span,
-            )?;
-            super::substitute_alias_type(&self.target, &substitutions, module_name, canonical_names)
-        } else {
-            budget.check_substitution(&self.target, &HashMap::new(), span)?;
-            self.target.clone()
+            None => {
+                budget.check_substitution(&self.target, &HashMap::new(), span)?;
+                self.target.clone()
+            }
         };
         let Type::Named(name, args) = target else {
             return Ok(None);

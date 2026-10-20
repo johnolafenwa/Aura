@@ -371,7 +371,7 @@ A safe restriction requires an explicit adapter. For example, declare `type Unar
 
 An adapter cannot rename a slot, invent defaults, or make keyword-only slots positional. It also cannot change parameter types, modes, capabilities, or result guarantees.
 
-Use an adapter to bring each value to a common contract. Calling a non-generic alias of a thin `def` type with one function value or capture-free lambda, such as `Unary(increment)`, yields that alias's contract when the alias admits the value. Otherwise it reports `AU2015`. Thin adapters add no environment. A capturing closure packs into an owned `Callable[...]` storage type instead. See [Closures](/manual/closures#typing-rules). Owned `Callable[...]` and `TaskCallable[...]` constructors keep their own capture, call-kind, and Transfer admission rules.
+Use an adapter to bring each value to a common contract. Calling an alias of a thin `def` type with one function value or capture-free lambda, such as `Unary(increment)`, yields that alias's contract when the alias admits the value. A generic alias takes its type arguments first, as in `Check[int64](is_even)`. Otherwise it reports `AU2015`. Thin adapters add no environment. A capturing closure packs into an owned `Callable[...]` storage type instead. See [Closures](/manual/closures#typing-rules). Owned `Callable[...]` and `TaskCallable[...]` constructors keep their own capture, call-kind, and Transfer admission rules.
 
 ### Generic Function Values
 
@@ -469,6 +469,40 @@ This prints `evaluate outer`, `evaluate inner`, `apply inner`, `apply outer`, th
 
 The decorated constant initializes in declaration order with the module's other constants. A decorator expression that reads the decorated name reports `AU2001`, because the binding is not initialized yet. A trap inside a decorator stops module initialization, and no later decorator runs. An importing module never runs the decorators again.
 
+### Generic Decorators
+
+A generic decorator infers its type parameters from each function it decorates. One `traced` serves every one-parameter function whose parameter is named `args`:
+
+```aura
+type Fn[A, R] = Callable[def(args: A) -> R]
+
+def traced[A, R](f: own Fn[A, R]) -> Fn[A, R]:
+    return Fn[A, R](lambda [own f] args: trace_call(f, args))
+
+def trace_call[A, R](f: Fn[A, R], args: A) -> R:
+    print("enter")
+    return f(args)
+
+@traced
+def label(args: str) -> str:
+    return f"<{args}>"
+
+@traced
+def square(args: int64) -> int64:
+    return args * args
+
+print(label("x"))
+print(square(3))
+```
+
+Inference runs once per decorator, against the decorated function's exact type. A type parameter stands for a value type, never for a whole signature, so the decorator fixes the number of parameters, their names, and their modes. A function whose parameter has another name reports `AU2015`. A decorator whose result is a different type reports `AU2002`.
+
+A decorator factory may be generic too. Its own arguments, such as the attempt count in `@retry(3)`, fix what they can. The function it decorates fixes the rest:
+
+<<< ../../examples/basics/retry_decorator.au{aura}
+
+A retry calls the wrapped function again with the same argument, so it needs a shared or Copy parameter. A function that takes `own` arguments fails at the decorator with `AU2002`. Its help points to an explicit loop that builds a new argument for each attempt.
+
 ### Restrictions
 
 The checker rejects these with `AU2047`:
@@ -479,7 +513,7 @@ The checker rejects these with `AU2047`:
 - a decorated function that returns a view
 - a decorator line that is not followed by a module-level `def`
 
-A decorator inside a function body, or in a class body other than `@property`, reports `AU2005`. Decorators on classes, enums, and methods are not implemented. A generic decorator cannot return a new closure, because packing a closure needs a non-generic alias.
+A decorator inside a function body, or in a class body other than `@property`, reports `AU2005`. Decorators on classes, enums, and methods are not implemented.
 
 ### Tooling
 

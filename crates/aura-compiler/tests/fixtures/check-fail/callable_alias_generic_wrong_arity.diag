@@ -1,0 +1,5 @@
+error[AU2002]: type alias `Fn` expects 2 type arguments, found 1
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_alias_generic_wrong_arity.au:5:14
+  |
+5 |     double = Fn[int64](lambda args: args * 2)
+  |              ^

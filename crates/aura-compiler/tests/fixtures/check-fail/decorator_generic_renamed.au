@@ -1,0 +1,14 @@
+type Fn[A, R] = Callable[def(args: A) -> R]
+
+
+def traced[A, R](f: own Fn[A, R]) -> Fn[A, R]:
+    return Fn[A, R](lambda [own f] args: f(args))
+
+
+@traced
+def bump(n: int64) -> int64:
+    return n + 1
+
+
+def main():
+    print(bump(1))

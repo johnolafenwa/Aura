@@ -66,7 +66,7 @@ pub use program::{
     TraitInfo, TraitMethodInfo,
 };
 mod aliases;
-pub(crate) use aliases::expand_alias_callee;
+pub(crate) use aliases::{expand_alias_callee, specialized_alias_callee};
 mod managers;
 pub(crate) use managers::{
     classify_manager, hidden_manager_binding, manager_method_call, ManagerEntry, ManagerExit,
@@ -6603,29 +6603,20 @@ impl<'a> FunctionChecker<'a> {
     /// own captured state.
     fn type_of_callable_pack(
         &self,
-        alias: &AliasInfo,
+        name: &str,
+        target: &Type,
         callable: &CallableType,
         args: &[Argument],
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<Type> {
-        if !alias.decl.type_params.is_empty() {
-            return Err(Diagnostic::coded_at(
-                "AU2002",
-                span,
-                format!(
-                    "callable alias `{}` is generic; pack through a concrete callable annotation instead",
-                    alias.decl.name
-                ),
-            ));
-        }
         let [argument] = args else {
             return Err(Diagnostic::coded_at(
                 "AU2004",
                 span,
                 format!(
                     "`{}(...)` packs exactly one callable value, found {} argument{}",
-                    alias.decl.name,
+                    name,
                     args.len(),
                     if args.len() == 1 { "" } else { "s" }
                 ),
@@ -6635,10 +6626,7 @@ impl<'a> FunctionChecker<'a> {
             return Err(Diagnostic::coded_at(
                 "AU2004",
                 argument.span,
-                format!(
-                    "`{}(...)` takes its callable value positionally",
-                    alias.decl.name
-                ),
+                format!("`{}(...)` takes its callable value positionally", name),
             ));
         }
         let contract = callable.contract();
@@ -6708,7 +6696,7 @@ impl<'a> FunctionChecker<'a> {
                             } else {
                                 "shared"
                             },
-                            alias.decl.name
+                            name
                         ),
                     )
                     .with_help(
@@ -6725,7 +6713,7 @@ impl<'a> FunctionChecker<'a> {
                             capture.span,
                             format!(
                                 "capture `{}` of type `{}` is not Transfer, so the closure cannot become `{}`: {failure}",
-                                capture.name, capture.ty, alias.decl.name
+                                capture.name, capture.ty, name
                             ),
                         ));
                     }
@@ -6738,7 +6726,7 @@ impl<'a> FunctionChecker<'a> {
                     argument.value.span,
                     format!(
                         "`{}(...)` expects a function value, lambda, or packed callable, found `{actual}`",
-                        alias.decl.name
+                        name
                     ),
                 ));
             }
@@ -6749,7 +6737,7 @@ impl<'a> FunctionChecker<'a> {
                 argument.value.span,
                 format!(
                     "an erased `Callable` cannot become `{}`; its environment was never proven Transfer",
-                    alias.decl.name
+                    name
                 ),
             ));
         }
@@ -6760,12 +6748,12 @@ impl<'a> FunctionChecker<'a> {
                     "a {} value cannot be packed as {} `{}`; a call kind may only weaken",
                     source_kind.label(),
                     callable.call_kind.label(),
-                    alias.decl.name
+                    name
                 ),
             ));
         }
         self.consume_value_expr(&argument.value, locals)?;
-        Ok(alias.target.clone())
+        Ok(target.clone())
     }
 
     /// `Alias(value)` for a thin `def(...)` alias adapts one function value or
@@ -6773,28 +6761,19 @@ impl<'a> FunctionChecker<'a> {
     /// contract must be admitted by the alias, and no environment is added.
     fn type_of_thin_alias_adapter(
         &self,
-        alias: &AliasInfo,
+        name: &str,
+        target: &Type,
         args: &[Argument],
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<Type> {
-        if !alias.decl.type_params.is_empty() {
-            return Err(Diagnostic::coded_at(
-                "AU2002",
-                span,
-                format!(
-                    "thin callable alias `{}` is generic; adapt through a concrete callable annotation instead",
-                    alias.decl.name
-                ),
-            ));
-        }
         let [argument] = args else {
             return Err(Diagnostic::coded_at(
                 "AU2004",
                 span,
                 format!(
                     "`{}(...)` adapts exactly one callable value, found {} argument{}",
-                    alias.decl.name,
+                    name,
                     args.len(),
                     if args.len() == 1 { "" } else { "s" }
                 ),
@@ -6804,13 +6783,10 @@ impl<'a> FunctionChecker<'a> {
             return Err(Diagnostic::coded_at(
                 "AU2004",
                 argument.span,
-                format!(
-                    "`{}(...)` takes its callable value positionally",
-                    alias.decl.name
-                ),
+                format!("`{}(...)` takes its callable value positionally", name),
             ));
         }
-        let alias_ty = alias.target.clone();
+        let alias_ty = target.clone();
         let actual =
             self.type_of_expr_hint_uncontracted(&argument.value, locals, Some(&alias_ty))?;
         if actual != alias_ty {
@@ -6820,7 +6796,7 @@ impl<'a> FunctionChecker<'a> {
                         argument.value.span,
                         format!(
                             "thin alias `{}` cannot hold a capturing closure; an owned environment needs `Callable[...]` storage",
-                            alias.decl.name
+                            name
                         ),
                     ));
                 }
@@ -9950,13 +9926,52 @@ impl<'a> FunctionChecker<'a> {
                 grouped_expr(callee).kind,
                 ExprKind::Name(_) | ExprKind::Member { .. }
             );
+            let callable_alias = matches!(alias.target, Type::Function { .. } | Type::Callable(_));
+            if callable_alias && bare_alias_callee && !alias.decl.type_params.is_empty() {
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    span,
+                    format!(
+                        "callable alias `{}` is generic; write its type arguments, as in `{}[...](value)`",
+                        alias.decl.name, alias.decl.name
+                    ),
+                ));
+            }
             if matches!(alias.target, Type::Function { .. }) && bare_alias_callee {
-                return self.type_of_thin_alias_adapter(alias, args, span, locals);
+                return self.type_of_thin_alias_adapter(
+                    &alias.decl.name,
+                    &alias.target,
+                    args,
+                    span,
+                    locals,
+                );
             }
             if let Type::Callable(callable) = &alias.target {
                 if bare_alias_callee {
-                    return self.type_of_callable_pack(alias, callable, args, span, locals);
+                    return self.type_of_callable_pack(
+                        &alias.decl.name,
+                        &alias.target,
+                        callable,
+                        args,
+                        span,
+                        locals,
+                    );
                 }
+            }
+        }
+        // `Alias[T, ...](value)` packs or adapts through a generic callable
+        // alias with its type arguments written out.
+        if let Some((base, type_args)) = specialized_alias_callee(grouped_expr(callee)) {
+            if let Some(alias) = resolve_alias(base)
+                .filter(|alias| matches!(alias.target, Type::Function { .. } | Type::Callable(_)))
+            {
+                let (name, target) = self.specialize_callable_alias(alias, &type_args, span)?;
+                return match &target {
+                    Type::Callable(callable) => {
+                        self.type_of_callable_pack(&name, &target, callable, args, span, locals)
+                    }
+                    _ => self.type_of_thin_alias_adapter(&name, &target, args, span, locals),
+                };
             }
         }
         if let Some(expanded) = expand_alias_callee(
@@ -15246,7 +15261,7 @@ impl<'a> FunctionChecker<'a> {
                         );
                     }
                 }
-                let callee_ty = self.type_of_expr(base_callee, locals)?;
+                let callee_ty = self.type_of_curried_callee(base_callee, args, locals, expected)?;
                 match callee_ty {
                     Type::Function {
                         params,
@@ -15334,6 +15349,113 @@ impl<'a> FunctionChecker<'a> {
                 }
             }
         }
+    }
+
+    /// Types the callee of `factory(...)(args)`. When the factory is generic
+    /// and its own arguments leave a type parameter unknown, the outer call
+    /// fixes it: the returned callable must accept `args` and, with an
+    /// expected type, produce it. A decorator factory such as `@retry(3)`
+    /// relies on this.
+    fn type_of_curried_callee(
+        &self,
+        callee: &Expr,
+        args: &[Argument],
+        locals: &mut HashMap<String, LocalBinding>,
+        expected: Option<&Type>,
+    ) -> Result<Type> {
+        if !matches!(callee.kind, ExprKind::Call { .. }) {
+            return self.type_of_expr(callee, locals);
+        }
+        let before = locals.clone();
+        let error = match self.type_of_expr(callee, locals) {
+            Err(error) if error.message.starts_with("cannot infer type parameter") => error,
+            result => return result,
+        };
+        *locals = before;
+        match self.curried_callee_hint(callee, args, locals, expected)? {
+            Some(hint) => self.type_of_expr_hint(callee, locals, Some(&hint)),
+            None => Err(error),
+        }
+    }
+
+    fn curried_callee_hint(
+        &self,
+        callee: &Expr,
+        args: &[Argument],
+        locals: &HashMap<String, LocalBinding>,
+        expected: Option<&Type>,
+    ) -> Result<Option<Type>> {
+        let ExprKind::Call {
+            callee: factory,
+            args: factory_args,
+        } = &callee.kind
+        else {
+            return Ok(None);
+        };
+        let info = match &factory.kind {
+            ExprKind::Name(name) if !locals.contains_key(name) => self.resolve_function_info(name),
+            ExprKind::Member { .. } => self
+                .qualified_module_item(factory)
+                .and_then(|(module, name)| self.module_namespace(&module)?.functions.get(&name)),
+            _ => None,
+        };
+        let Some(info) = info else {
+            return Ok(None);
+        };
+        if info.decl.type_params.is_empty() || args.iter().any(|arg| arg.name.is_some()) {
+            return Ok(None);
+        }
+        let returned = &info.signature.return_type;
+        let (params, result) = match returned {
+            Type::Callable(callable) => (&callable.params, &callable.return_type),
+            Type::Function {
+                params,
+                return_type,
+            } => (params, return_type.as_ref()),
+            _ => return Ok(None),
+        };
+        if params.len() != args.len() {
+            return Ok(None);
+        }
+        let mut substitutions = HashMap::new();
+        // The factory's own positional arguments bind what they can; a
+        // conflict surfaces when the call is checked with the hint.
+        for (param, arg) in info.signature.params.iter().zip(factory_args) {
+            if arg.name.is_some() {
+                break;
+            }
+            if let Ok(actual) = self.type_of_expr_without_move_state(&arg.value, locals, None) {
+                let _ = unify_type_pattern(param, &actual, &mut substitutions);
+            }
+        }
+        for (param, arg) in params.iter().zip(args) {
+            let Ok(actual) = self.type_of_expr_without_move_state(&arg.value, locals, None) else {
+                return Ok(None);
+            };
+            // The returned callable's passing modes are part of its pattern,
+            // so a mismatch here is the call's real error.
+            unify_type_pattern(&param.ty, &actual, &mut substitutions).map_err(|error| {
+                Diagnostic::coded_at(
+                    "AU2002",
+                    arg.span,
+                    format!(
+                        "the callable `{}(...)` returns cannot take this argument: {}",
+                        info.decl.name, error.message
+                    ),
+                )
+            })?;
+        }
+        if let Some(expected) = expected {
+            if unify_type_pattern(result, expected, &mut substitutions).is_err() {
+                return Ok(None);
+            }
+        }
+        Ok(info
+            .decl
+            .type_params
+            .iter()
+            .all(|param| substitutions.contains_key(param))
+            .then(|| substitute_type(returned, &substitutions)))
     }
 
     fn resolve_member_type(

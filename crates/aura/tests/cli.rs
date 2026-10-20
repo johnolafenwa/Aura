@@ -16262,6 +16262,78 @@ def main():
 }
 
 #[test]
+fn generic_decorators_infer_each_use_across_modules_on_both_backends() {
+    let tools = r#"public type Fn[A, R] = Callable[def(args: A) -> R]
+public type Decorator[A, R] = Callable[def(f: own Fn[A, R]) -> Fn[A, R]]
+
+public def traced[A, R](f: own Fn[A, R]) -> Fn[A, R]:
+    print("traced")
+    return Fn[A, R](lambda [own f] args: trace_call(f, args))
+
+def trace_call[A, R](f: Fn[A, R], args: A) -> R:
+    print("enter")
+    return f(args)
+
+public def retry[A, R, E](attempts: own int32) -> Decorator[A, Result[R, E]]:
+    return Decorator[A, Result[R, E]](lambda [own attempts] own f: retrying(f, attempts))
+
+def retrying[A, R, E](f: own Fn[A, Result[R, E]], attempts: own int32) -> Fn[A, Result[R, E]]:
+    return Fn[A, Result[R, E]](lambda [own f, own attempts] args: attempt(f, args, attempts))
+
+def attempt[A, R, E](f: Fn[A, Result[R, E]], args: A, attempts: int32) -> Result[R, E]:
+    mut tries: int32 = 1
+    while tries < attempts:
+        match own f(args):
+            case Ok(value):
+                return Ok(value)
+            case Err(error):
+                print(f"retry {tries}")
+        tries += 1
+    return f(args)
+"#;
+    let main = r#"import tools
+from tools import traced
+
+@traced
+def fact(args: int64) -> int64:
+    if args <= 1:
+        return 1
+    return args * fact(args - 1)
+
+@tools.traced
+def shout(args: str) -> str:
+    return f"{args}!"
+
+@tools.retry(2)
+@tools.retry(2)
+@traced
+def half(args: int64) -> Result[int64, str]:
+    if args % 2 == 0:
+        return Ok(args // 2)
+    return Err("odd")
+
+def show(result: own Result[int64, str]):
+    match own result:
+        case Ok(value):
+            print(value)
+        case Err(error):
+            print(error)
+
+def main():
+    print(fact(3))
+    print(shout("hi"))
+    show(half(4))
+    show(half(1))
+"#;
+    assert_run_and_direct_program_stdout(
+        "aura-generic-decorators-modules",
+        main,
+        &[("tools.au", tools)],
+        "traced\ntraced\ntraced\nenter\nenter\nenter\n6\nenter\nhi!\nenter\n2\nenter\nretry 1\nenter\nretry 1\nenter\nretry 1\nenter\nodd\n",
+    );
+}
+
+#[test]
 fn module_qualified_traits_work_in_bounds_impls_and_supertraits_on_both_backends() {
     let shapes = r#"public trait Named:
     def name(self) -> str

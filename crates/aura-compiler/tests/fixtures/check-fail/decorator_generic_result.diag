@@ -1,0 +1,5 @@
+error[AU2002]: decorator on `bump` must take and return `Callable[def(args: int64) -> int64]`: result type mismatch for function `describe`: expected `str`, found `int64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/decorator_generic_result.au:13:1
+   |
+13 | @describe
+   | ^

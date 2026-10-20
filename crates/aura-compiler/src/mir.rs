@@ -4533,6 +4533,22 @@ fn call_result_callable_identities(
             } else {
                 evidence_valid = false;
             }
+            // A type parameter no argument fixes is free, so the result takes
+            // it from the destination, as the checker did for a generic
+            // factory such as `retry(3)` called with its own arguments.
+            if evidence_valid {
+                if let Ok(Some(destination)) = context.place_type(function, target) {
+                    let mut trial = substitutions.clone();
+                    if crate::sema::type_pattern_matches(
+                        &callee.return_type,
+                        &destination,
+                        &type_params,
+                        &mut trial,
+                    ) {
+                        substitutions = trial;
+                    }
+                }
+            }
             if evidence_valid {
                 substitute_type(&callee.return_type, &substitutions)
             } else {
@@ -11901,11 +11917,21 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_type_ref_with_provenance(&self, type_ref: &crate::ast::TypeRef) -> Type {
+        self.lower_type_ref_scoped(type_ref, &BTreeSet::new())
+    }
+
+    /// Lowers a written type in which the names in `type_params` are the
+    /// enclosing function's type parameters.
+    fn lower_type_ref_scoped(
+        &self,
+        type_ref: &crate::ast::TypeRef,
+        type_params: &BTreeSet<String>,
+    ) -> Type {
         match &type_ref.kind {
             TypeRefKind::Union(members) => Type::normalize_union(
                 members
                     .iter()
-                    .map(|member| self.lower_type_ref_with_provenance(member))
+                    .map(|member| self.lower_type_ref_scoped(member, type_params))
                     .collect(),
                 self.module_name,
                 &self.program.canonical_type_names,
@@ -11918,12 +11944,12 @@ impl<'a> Lowerer<'a> {
             } => lower_callable_type_ref(
                 *task,
                 *call_kind,
-                self.lower_type_ref_with_provenance(signature),
+                self.lower_type_ref_scoped(signature, type_params),
             ),
             TypeRefKind::Tuple(elements) => Type::Tuple(
                 elements
                     .iter()
-                    .map(|element| self.lower_type_ref_with_provenance(element))
+                    .map(|element| self.lower_type_ref_scoped(element, type_params))
                     .collect(),
             ),
             TypeRefKind::Function {
@@ -11936,14 +11962,14 @@ impl<'a> Lowerer<'a> {
                     .map(|param| FunctionParamContract {
                         keyword_only: param.keyword_only,
                         name: param.name.clone().unwrap_or_default(),
-                        ty: self.lower_type_ref_with_provenance(&param.ty),
+                        ty: self.lower_type_ref_scoped(&param.ty, type_params),
                         passing: resolve_param_passing(param.mode),
                         has_default: param.has_default,
                     })
                     .collect::<Vec<_>>();
                 let return_type = crate::sema::wrap_returned_view(
                     &params,
-                    self.lower_type_ref_with_provenance(return_type),
+                    self.lower_type_ref_scoped(return_type, type_params),
                     view_return.as_ref(),
                 );
                 Type::Function {
@@ -11958,6 +11984,9 @@ impl<'a> Lowerer<'a> {
                 if source_name == "None" {
                     return Type::Unit;
                 }
+                if args.is_empty() && type_params.contains(source_name) {
+                    return Type::TypeParam(source_name.clone());
+                }
                 let source_name = match source_name.as_str() {
                     "str" => "str",
                     "int" => "int64",
@@ -11965,7 +11994,7 @@ impl<'a> Lowerer<'a> {
                 };
                 let lowered_args = args
                     .iter()
-                    .map(|arg| self.lower_type_ref_with_provenance(arg))
+                    .map(|arg| self.lower_type_ref_scoped(arg, type_params))
                     .collect::<Vec<_>>();
                 if let Some(expanded) =
                     self.program
@@ -11983,7 +12012,7 @@ impl<'a> Lowerer<'a> {
                 Type::Named(
                     name,
                     args.iter()
-                        .map(|arg| self.lower_type_ref_with_provenance(arg))
+                        .map(|arg| self.lower_type_ref_scoped(arg, type_params))
                         .collect(),
                 )
             }
@@ -21113,11 +21142,9 @@ impl<'a> Lowerer<'a> {
         .expect("checked alias callee")
     }
 
-    /// A non-generic alias of a thin `def(...)` type used as a callee is the
-    /// explicit contract adapter `Alias(value)`; it lowers to the adapted
-    /// value in a temporary carrying the alias contract.
-    fn thin_callable_alias_target(&self, callee: &Expr) -> Option<Type> {
-        let alias = match &callee.kind {
+    /// The alias named by a callee, unless the name is a local.
+    fn callee_alias(&self, callee: &Expr) -> Option<&crate::sema::AliasInfo> {
+        match &callee.kind {
             ExprKind::Name(name)
                 if !self.local_types.contains_key(&self.render_local_name(name)) =>
             {
@@ -21128,33 +21155,159 @@ impl<'a> Lowerer<'a> {
                 .and_then(|module| self.module_namespace(&module))
                 .and_then(|namespace| namespace.aliases.get(field)),
             _ => None,
-        }?;
-        (alias.decl.type_params.is_empty() && matches!(alias.target, Type::Function { .. }))
-            .then(|| alias.target.clone())
+        }
     }
 
-    /// A non-generic alias of an owned callable type used as a callee is the
-    /// packing constructor `Alias(value)`; the packed value keeps the
-    /// closure's own environment and only its static type is erased.
+    /// The target of a callable alias used as a callee: a non-generic `Alias`,
+    /// or a generic one specialized as `Alias[T, ...]`.
+    fn callee_alias_target(&self, callee: &Expr) -> Option<Type> {
+        if let Some(alias) = self.callee_alias(callee) {
+            return alias
+                .decl
+                .type_params
+                .is_empty()
+                .then(|| alias.target.clone());
+        }
+        let (base, type_args) = crate::sema::specialized_alias_callee(callee)?;
+        let alias = self.callee_alias(base)?;
+        if !matches!(alias.target, Type::Function { .. } | Type::Callable(_)) {
+            return None;
+        }
+        // A type argument may name the enclosing function's type parameters,
+        // which its parameter and return types carry.
+        let mut type_params = BTreeSet::new();
+        collect_type_params_from_type(&self.return_type, &mut type_params);
+        for ty in self.local_types.values() {
+            collect_type_params_from_type(ty, &mut type_params);
+        }
+        let args = type_args
+            .iter()
+            .map(|arg| self.lower_type_ref_scoped(arg, &type_params))
+            .collect::<Vec<_>>();
+        let budget = self
+            .program
+            .type_definitions
+            .expansion_budget()
+            .for_checked_lowering();
+        Some(
+            alias
+                .specialized_target(
+                    &args,
+                    callee.span,
+                    self.module_name,
+                    &self.program.canonical_type_names,
+                    &budget,
+                )
+                .expect("checked callable alias specialization"),
+        )
+    }
+
+    /// A thin `def(...)` alias used as a callee is the explicit contract
+    /// adapter `Alias(value)`; it lowers to the adapted value in a temporary
+    /// carrying the alias contract.
+    fn thin_callable_alias_target(&self, callee: &Expr) -> Option<Type> {
+        self.callee_alias_target(callee)
+            .filter(|target| matches!(target, Type::Function { .. }))
+    }
+
+    /// An owned callable alias used as a callee is the packing constructor
+    /// `Alias(value)`; the packed value keeps the closure's own environment
+    /// and only its static type is erased.
     fn callable_alias_target(&self, callee: &Expr) -> Option<(Type, Type)> {
-        let alias = match &callee.kind {
-            ExprKind::Name(name)
-                if !self.local_types.contains_key(&self.render_local_name(name)) =>
-            {
-                self.program.alias_info(name, self.module_name)
-            }
-            ExprKind::Member { object, field } => self
-                .infer_module_path(object)
-                .and_then(|module| self.module_namespace(&module))
-                .and_then(|namespace| namespace.aliases.get(field)),
-            _ => None,
-        }?;
-        match &alias.target {
-            Type::Callable(callable) if alias.decl.type_params.is_empty() => {
-                Some((alias.target.clone(), callable.contract()))
+        match self.callee_alias_target(callee)? {
+            Type::Callable(callable) => {
+                let contract = callable.contract();
+                Some((Type::Callable(callable), contract))
             }
             _ => None,
         }
+    }
+
+    /// Mirrors the checker's typing of `factory(...)(args)`: when the
+    /// factory is generic, the outer call's arguments and expected type fix
+    /// the callable it returns.
+    fn curried_callee_hint(
+        &self,
+        callee: &Expr,
+        args: &[Argument],
+        expected: Option<&Type>,
+    ) -> Option<Type> {
+        let ExprKind::Call {
+            callee: factory,
+            args: factory_args,
+        } = &callee.kind
+        else {
+            return None;
+        };
+        let info = match &factory.kind {
+            ExprKind::Name(name)
+                if !self.local_types.contains_key(&self.render_local_name(name)) =>
+            {
+                self.resolve_function_info(name)?
+            }
+            ExprKind::Member { object, field } => {
+                let namespace = self.module_namespace(&self.infer_module_path(object)?)?;
+                namespace
+                    .functions
+                    .get(field)
+                    .or_else(|| namespace.all_functions.get(field))?
+            }
+            _ => return None,
+        };
+        if info.decl.type_params.is_empty() {
+            return None;
+        }
+        let returned = &info.signature.return_type;
+        let (params, result) = match returned {
+            Type::Callable(callable) => (callable.params.as_slice(), &callable.return_type),
+            Type::Function {
+                params,
+                return_type,
+            } => (params.as_slice(), return_type.as_ref()),
+            _ => return None,
+        };
+        if params.len() != args.len() {
+            return None;
+        }
+        let type_params = info
+            .decl
+            .type_params
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut substitutions = HashMap::new();
+        for (param, arg) in info.signature.params.iter().zip(factory_args) {
+            if arg.name.is_some() {
+                break;
+            }
+            if let Some(actual) = self.infer_expr_type(&arg.value) {
+                let mut trial = substitutions.clone();
+                if crate::sema::type_pattern_matches(param, &actual, &type_params, &mut trial) {
+                    substitutions = trial;
+                }
+            }
+        }
+        for (param, arg) in params.iter().zip(args) {
+            let actual = self.infer_expr_type(&arg.value)?;
+            if !crate::sema::type_pattern_matches(
+                &param.ty,
+                &actual,
+                &type_params,
+                &mut substitutions,
+            ) {
+                return None;
+            }
+        }
+        if let Some(expected) = expected {
+            let mut trial = substitutions.clone();
+            if crate::sema::type_pattern_matches(result, expected, &type_params, &mut trial) {
+                substitutions = trial;
+            }
+        }
+        type_params
+            .iter()
+            .all(|param| substitutions.contains_key(param))
+            .then(|| crate::sema::substitute_type(returned, &substitutions))
     }
 
     fn lower_call(
@@ -21274,13 +21427,17 @@ impl<'a> Lowerer<'a> {
             _ => false,
         };
         if !direct_decl_callee {
-            if let Some(params) = self.infer_expr_type(callee).and_then(|ty| match ty {
+            // A generic factory call such as `retry(3)` takes the type the
+            // checker inferred from this outer call.
+            let hint = self.curried_callee_hint(callee, args, expected);
+            let callee_ty = hint.clone().or_else(|| self.infer_expr_type(callee));
+            if let Some(params) = callee_ty.and_then(|ty| match ty {
                 Type::Function { params, .. } => Some(params),
                 Type::Closure { params, .. } => Some(*params),
                 Type::Callable(callable) => Some(callable.params),
                 _ => None,
             }) {
-                let function = self.lower_expr_at_sequence_point(callee, None);
+                let function = self.lower_expr_at_sequence_point(callee, hint.as_ref());
                 let args = self.lower_function_value_args(args, &params, callee.span);
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
@@ -23776,6 +23933,11 @@ impl<'a> Lowerer<'a> {
             }
             if let Some(ty) = self.type_param_associated_call_type(expr) {
                 return Some(ty);
+            }
+            match self.curried_callee_hint(callee, args, None) {
+                Some(Type::Callable(callable)) => return Some(callable.return_type),
+                Some(Type::Function { return_type, .. }) => return Some(*return_type),
+                _ => {}
             }
         }
         match &expr.kind {
