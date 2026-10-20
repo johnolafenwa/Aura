@@ -802,7 +802,7 @@ fn dense_arrays_copy_vec_inputs_normalize_coordinates_and_slice_the_first_axis()
         .unwrap()
     );
     assert_eq!(
-        source.elements[1],
+        *source.elements.get(1).unwrap(),
         Value::Int(IntegerValue::from_i32(1)),
         "constructing and mutating an Array must not alter its Vec source"
     );
@@ -1132,7 +1132,9 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
         while let Some(value) = pending.pop() {
             match value {
                 Value::Array(array) => arrays.push(array),
-                Value::Vec(vector) => pending.extend(vector.elements.iter().rev()),
+                Value::Vec(vector) => {
+                    pending.extend(vector.elements.as_values().unwrap_or_default().iter().rev())
+                }
                 Value::Tuple(tuple) => pending.extend(tuple.elements.iter().rev()),
                 Value::Map(map) => {
                     pending.extend(map.entries.iter().rev().map(|(_, value)| value));
@@ -1219,7 +1221,7 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
         }
 
         if let Value::Vec(vector) = &mut copy {
-            let Value::Array(array) = &mut vector.elements[0] else {
+            let Value::Array(array) = &mut vector.elements.values_mut()[0] else {
                 panic!("the first Vec element should remain an Array");
             };
             array
@@ -1228,7 +1230,7 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
             let Value::Vec(source_vector) = &source else {
                 unreachable!("the copy retained the source Vec variant");
             };
-            let Value::Array(source_array) = &source_vector.elements[0] else {
+            let Value::Array(source_array) = &source_vector.elements.as_values().unwrap()[0] else {
                 unreachable!("the source Vec contains an Array");
             };
             assert_eq!(
@@ -1352,9 +1354,10 @@ fn array_containing_language_copy_reports_outer_shape_and_storage_allocation_fai
         super::slice_vec_owned(source_vector, None, None)
     })
     .expect("a sufficient allocation budget should produce an owned Vec slice");
-    let (Value::Array(source_array), Value::Array(slice_array)) =
-        (&source_vector.elements[0], &slice.elements[0])
-    else {
+    let (Value::Array(source_array), Value::Array(slice_array)) = (
+        &source_vector.elements.as_values().unwrap()[0],
+        &slice.elements.as_values().unwrap()[0],
+    ) else {
         panic!("list[Array[T]] slices should retain their element values");
     };
     let (ArrayStorage::Int32(source_storage), ArrayStorage::Int32(slice_storage)) =
@@ -2801,7 +2804,8 @@ fn function_values_remain_observable_inside_structural_runtime_aggregates() {
         panic!("function collection should retain its Vec runtime shape");
     };
     assert_eq!(cloned_callbacks.element_type, signature);
-    let [Value::Function(first), Value::Function(second)] = cloned_callbacks.elements.as_slice()
+    let [Value::Function(first), Value::Function(second)] =
+        cloned_callbacks.elements.as_values().unwrap()
     else {
         panic!("function collection should retain both callable values");
     };
@@ -3240,7 +3244,7 @@ fn bytes_runtime_materialization_is_fallible_exact_and_non_consuming() {
     );
     assert!(materialized_vec.elements.iter().all(|value| {
         matches!(
-            value,
+            &*value,
             Value::Int(value)
                 if value.runtime_kind() == Some(crate::integer::IntegerKind::Uint8)
         )
@@ -6771,7 +6775,7 @@ fn phase73_observable_runtime_json_clone_preserves_empty_containers_and_nested_b
                 if !vector.elements.is_empty() {
                     output.push(vector.elements.as_ptr() as usize);
                 }
-                for element in &vector.elements {
+                for element in vector.elements.as_values().unwrap_or_default() {
                     container_buffers(element, output);
                 }
             }
@@ -6945,7 +6949,7 @@ fn dynamic_json_parse_materializes_a_structurally_dense_valid_input() {
     assert_eq!(values.elements.len(), ELEMENTS);
     assert!(values.elements.first().is_some_and(|value| {
         matches!(
-            value,
+            &*value,
             Value::EnumVariant(variant)
                 if variant.enum_name == "json.Value"
                     && variant.variant_name == "Null"
@@ -6954,7 +6958,7 @@ fn dynamic_json_parse_materializes_a_structurally_dense_valid_input() {
     }));
     assert!(values.elements.last().is_some_and(|value| {
         matches!(
-            value,
+            &*value,
             Value::EnumVariant(variant)
                 if variant.enum_name == "json.Value"
                     && variant.variant_name == "Null"

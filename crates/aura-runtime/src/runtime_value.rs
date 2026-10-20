@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ffi::{c_void, OsStr};
@@ -24,6 +25,7 @@ use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 
 pub use crate::collection_index::{DictEntries, SetElements, SharedVec};
+pub use crate::list_elements::ListElements;
 use base64::Engine as _;
 use corosensei::stack::{DefaultStack, Stack};
 use corosensei::{Coroutine, CoroutineResult, Yielder};
@@ -698,7 +700,7 @@ impl PartialEq for EnumVariantValue {
 #[derive(Clone, Debug)]
 pub struct VecValue {
     pub element_type: Type,
-    pub elements: SharedVec<Value>,
+    pub elements: ListElements,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -901,22 +903,22 @@ impl ArrayValue {
             ArrayDType::Int32 => ArrayStorage::Int32(try_collect_array_storage(
                 vector.elements.len(),
                 "Array.from_list",
-                |index| array_int32_scalar(&vector.elements[index], index),
+                |index| array_int32_scalar(&vector.elements.at(index), index),
             )?),
             ArrayDType::Int64 => ArrayStorage::Int64(try_collect_array_storage(
                 vector.elements.len(),
                 "Array.from_list",
-                |index| array_int64_scalar(&vector.elements[index], index),
+                |index| array_int64_scalar(&vector.elements.at(index), index),
             )?),
             ArrayDType::Float32 => ArrayStorage::Float32(try_collect_array_storage(
                 vector.elements.len(),
                 "Array.from_list",
-                |index| array_float32_scalar(&vector.elements[index], index),
+                |index| array_float32_scalar(&vector.elements.at(index), index),
             )?),
             ArrayDType::Float64 => ArrayStorage::Float64(try_collect_array_storage(
                 vector.elements.len(),
                 "Array.from_list",
-                |index| array_float64_scalar(&vector.elements[index], index),
+                |index| array_float64_scalar(&vector.elements.at(index), index),
             )?),
         };
         Self::new(shape, storage)
@@ -2055,8 +2057,8 @@ pub fn slice_vec_owned(
 ) -> Result<VecValue> {
     let (start, end) = normalize_slice_bounds(start, end, vector.elements.len())?;
     let mut elements = try_array_buffer(end - start, "Array-containing Vec slice")?;
-    for value in &vector.elements[start..end] {
-        elements.push(try_clone_array_containing_value(value)?);
+    for value in vector.elements.iter().skip(start).take(end - start) {
+        elements.push(try_clone_array_containing_value(&value)?);
     }
     Ok(VecValue {
         element_type: vector.element_type.clone(),
@@ -2131,9 +2133,20 @@ pub fn span_index(list_len: usize, start: i128, len: i128, index: i128) -> Resul
 }
 
 /// The elements a span range covers.
-pub fn span_elements(vector: &VecValue, start: i128, len: i128) -> Result<&[Value]> {
+pub fn span_elements(vector: &VecValue, start: i128, len: i128) -> Result<Cow<'_, [Value]>> {
     let (start, len) = checked_span_range(vector.elements.len(), start, len)?;
-    Ok(&vector.elements[start..start + len])
+    Ok(match vector.elements.as_values() {
+        Some(values) => Cow::Borrowed(&values[start..start + len]),
+        None => Cow::Owned(
+            vector
+                .elements
+                .iter()
+                .skip(start)
+                .take(len)
+                .map(Cow::into_owned)
+                .collect(),
+        ),
+    })
 }
 
 /// `value in span`, `span.index(value)`, and `span.count(value)`.
@@ -2165,21 +2178,21 @@ pub fn span_extract(vector: &mut VecValue, start: i128, len: i128) -> Result<Vec
     let (start, len) = checked_span_range(vector.elements.len(), start, len)?;
     Ok(VecValue {
         element_type: vector.element_type.clone(),
-        elements: vector.elements.drain(start..start + len).collect(),
+        elements: vector.elements.take_range(start, start + len),
     })
 }
 
 pub fn span_restore(vector: &mut VecValue, start: i128, values: VecValue) -> Result<()> {
     checked_span_range(vector.elements.len(), start, 0)?;
     let start = start as usize;
-    vector.elements.splice(start..start, values.elements);
+    vector.elements.insert_all(start, values.elements);
     Ok(())
 }
 
 pub fn span_fill(vector: &mut VecValue, start: i128, len: i128, value: &Value) -> Result<()> {
     let (start, len) = checked_span_range(vector.elements.len(), start, len)?;
-    for element in &mut vector.elements[start..start + len] {
-        *element = value.clone();
+    for index in start..start + len {
+        vector.elements.replace(index, value.clone());
     }
     Ok(())
 }
@@ -2515,6 +2528,12 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                         None
                     }
                 }
+                // Scalar elements hold no `Array`, so the copy can share
+                // their storage.
+                Value::Vec(vector) if vector.elements.as_values().is_none() => {
+                    representation_stats::note_cloned_elements(vector.elements.len());
+                    Some(Value::Vec(vector.clone()))
+                }
                 Value::Vec(vector) => {
                     representation_stats::note_cloned_elements(vector.elements.len());
                     let elements =
@@ -2530,7 +2549,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                             next_index: 1,
                             elements,
                         })?;
-                        next = Some(&vector.elements[0]);
+                        next = vector.elements.as_values().and_then(<[Value]>::first);
                         None
                     }
                 }
@@ -2659,7 +2678,8 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     mut elements,
                 } => {
                     elements.push(cloned);
-                    if let Some(element) = vector.elements.get(next_index) {
+                    let values = vector.elements.as_values().unwrap_or_default();
+                    if let Some(element) = values.get(next_index) {
                         next_index += 1;
                         state.push_frame(CloneFrame::Vec {
                             vector,
@@ -2840,8 +2860,8 @@ impl RngValue {
         lock_mutex(&self.inner).next_float()
     }
 
-    pub fn shuffle(&self, values: &mut [Value]) {
-        lock_mutex(&self.inner).shuffle(values);
+    pub fn shuffle(&self, values: &mut ListElements) {
+        values.shuffle(&mut lock_mutex(&self.inner));
     }
 }
 
@@ -7187,6 +7207,8 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
                     Some(enum_value(variant, vec![Value::String(value.clone())]))
                 }
                 ("Array", [Value::Vec(vector)]) => {
+                    // A `json.Value` array holds variants, never scalars.
+                    let values = vector.elements.as_values()?;
                     representation_stats::note_cloned_elements(vector.elements.len());
                     let elements = Vec::with_capacity(vector.elements.len());
                     if vector.elements.is_empty() {
@@ -7204,7 +7226,7 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
                             next_index: 1,
                             elements,
                         });
-                        next = Some(&vector.elements[0]);
+                        next = values.first();
                         None
                     }
                 }
@@ -7247,7 +7269,7 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
                     mut elements,
                 } => {
                     elements.push(completed.take()?);
-                    if let Some(value) = vector.elements.get(next_index) {
+                    if let Some(value) = vector.elements.as_values()?.get(next_index) {
                         next_index += 1;
                         frames.push(CloneFrame::Array {
                             variant,
@@ -7474,10 +7496,8 @@ impl Value {
                         }
                     }
                     match value {
-                        Value::Int(value) => rendered.push_str(&value.to_string()),
-                        Value::Float(value) => rendered.push_str(&render_float(*value)),
-                        Value::Bool(value) => {
-                            rendered.push_str(if *value { "true" } else { "false" })
+                        Value::Int(_) | Value::Float(_) | Value::Bool(_) => {
+                            render_scalar(value, &mut rendered);
                         }
                         Value::String(value) => rendered.push_str(value),
                         Value::Tuple(tuple) => {
@@ -7493,10 +7513,22 @@ impl Value {
                                 }
                             }
                         }
+                        Value::Vec(values) if values.elements.as_values().is_none() => {
+                            // Scalars render the same with or without a hook.
+                            rendered.push('[');
+                            for (index, value) in values.elements.iter().enumerate() {
+                                if index > 0 {
+                                    rendered.push_str(", ");
+                                }
+                                render_scalar(&value, &mut rendered);
+                            }
+                            rendered.push(']');
+                        }
                         Value::Vec(values) => {
                             rendered.push('[');
                             actions.push(RenderAction::Static("]"));
-                            for (index, value) in values.elements.iter().enumerate().rev() {
+                            let elements = values.elements.as_values().unwrap_or_default();
+                            for (index, value) in elements.iter().enumerate().rev() {
                                 actions.push(RenderAction::Value(value));
                                 if index > 0 {
                                     actions.push(RenderAction::Static(", "));
@@ -8450,6 +8482,18 @@ impl ChannelValue {
     }
 }
 
+/// Appends the text of an `int`, `float`, or `bool` value and returns true,
+/// or returns false for any other value.
+fn render_scalar(value: &Value, rendered: &mut String) -> bool {
+    match value {
+        Value::Int(value) => rendered.push_str(&value.to_string()),
+        Value::Float(value) => rendered.push_str(&render_float(*value)),
+        Value::Bool(value) => rendered.push_str(if *value { "true" } else { "false" }),
+        _ => return false,
+    }
+    true
+}
+
 pub fn collect_queue_values(value: &Value, queues: &mut Vec<ChannelValue>) {
     match value {
         Value::Union(union) => collect_queue_values(&union.payload, queues),
@@ -8460,7 +8504,7 @@ pub fn collect_queue_values(value: &Value, queues: &mut Vec<ChannelValue>) {
             }
         }
         Value::Vec(vector) => {
-            for element in &vector.elements {
+            for element in vector.elements.as_values().unwrap_or_default() {
                 collect_queue_values(element, queues);
             }
         }
@@ -14966,14 +15010,15 @@ fn runtime_uint8_elements<'a>(value: &'a Value, call: &str) -> Result<&'a [Value
     ) || value
         .elements
         .iter()
-        .any(|value| exact_runtime_uint8(value).is_none())
+        .any(|value| exact_runtime_uint8(&value).is_none())
     {
         return Err(Diagnostic::coded(
             "AU4001",
             format!("`{call}` expects an exact runtime `list[uint8]` value"),
         ));
     }
-    Ok(&value.elements)
+    // `uint8` elements are never kept in a scalar form.
+    Ok(value.elements.as_values().unwrap_or_default())
 }
 
 fn host_bytes_from_runtime_elements(elements: &[Value]) -> Result<Vec<u8>> {
@@ -15910,13 +15955,15 @@ pub fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
                         frames
                             .try_reserve(1)
                             .map_err(json_runtime_allocation_error)?;
+                        // `json.Value` elements are variants, never scalars.
+                        let elements = values.elements.as_values().unwrap_or_default();
                         frames.push(ConversionFrame::Array {
-                            values: &values.elements,
+                            values: elements,
                             next_index: 1,
                             converted,
                             child_depth,
                         });
-                        next = Some((&values.elements[0], child_depth));
+                        next = elements.first().map(|element| (element, child_depth));
                         None
                     }
                 }

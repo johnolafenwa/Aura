@@ -34,7 +34,7 @@ use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::panic;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
@@ -2514,7 +2514,7 @@ fn direct_ffi_adapter_writes_back_bytes_and_keeps_handles_opaque() {
             .elements
             .iter()
             .map(|value| {
-                let Value::Int(value) = value else {
+                let Value::Int(value) = &*value else {
                     panic!("byte vector should contain integers");
                 };
                 value.as_i128().unwrap() as u8
@@ -4131,7 +4131,7 @@ fn expect_result_ok_vec_ints(ptr: *mut OpaqueValue) -> Vec<i128> {
                 Value::Vec(values) => values
                     .elements
                     .iter()
-                    .map(|value| match value {
+                    .map(|value| match &*value {
                         Value::Int(value) => value.as_i128().expect("expected signed integer"),
                         other => panic!("expected int element, found {:?}", other),
                     })
@@ -4152,7 +4152,7 @@ fn expect_result_ok_vec_strings(ptr: *mut OpaqueValue) -> Vec<String> {
                 Value::Vec(values) => values
                     .elements
                     .iter()
-                    .map(|value| match value {
+                    .map(|value| match &*value {
                         Value::String(text) => text.to_string(),
                         other => panic!("expected string element, found {:?}", other),
                     })
@@ -5271,28 +5271,28 @@ fn runtime_init_is_callable() {
 
 #[test]
 fn native_runtime_ref_count_helpers_reject_zero_and_overflow() {
-    let released = AtomicUsize::new(1);
+    let released = AtomicU32::new(1);
     assert!(super::release_ref_count(&released).expect("final release should succeed"));
     assert_eq!(released.load(Ordering::Relaxed), 0);
 
-    let released_retain = AtomicUsize::new(0);
+    let released_retain = AtomicU32::new(0);
     let retain_after_release_error = super::retain_ref_count(&released_retain)
         .expect_err("retain after release should be rejected");
     assert!(retain_after_release_error.contains("already-released"));
 
-    let overflow = AtomicUsize::new(usize::MAX);
+    let overflow = AtomicU32::new(u32::MAX);
     let overflow_error =
         super::retain_ref_count(&overflow).expect_err("overflow should be rejected");
     assert!(overflow_error.contains("overflow"));
-    assert_eq!(overflow.load(Ordering::Relaxed), usize::MAX);
+    assert_eq!(overflow.load(Ordering::Relaxed), u32::MAX);
 
-    let zero = AtomicUsize::new(0);
+    let zero = AtomicU32::new(0);
     let underflow_error =
         super::release_ref_count(&zero).expect_err("underflow should be rejected");
     assert!(underflow_error.contains("already-released"));
     assert_eq!(zero.load(Ordering::Relaxed), 0);
 
-    let shared = AtomicUsize::new(2);
+    let shared = AtomicU32::new(2);
     assert!(!super::release_ref_count(&shared).expect("shared release should succeed"));
     assert_eq!(shared.load(Ordering::Relaxed), 1);
     super::retain_ref_count(&shared).expect("retain should succeed");
@@ -6616,7 +6616,7 @@ fn native_runtime_process_error_and_wait_all_helpers_cover_remaining_paths() {
             let ints = values
                 .elements
                 .iter()
-                .map(|value| match value {
+                .map(|value| match &*value {
                     Value::Int(value) => value.as_i128().expect("expected signed integer"),
                     other => panic!("expected int wait_all value, found {:?}", other),
                 })
@@ -9177,7 +9177,7 @@ fn direct_runtime_map_and_set_helpers_cover_collection_surface() {
     match entries {
         Value::Vec(values) => {
             assert_eq!(values.elements.len(), 1);
-            let Value::Tuple(entry) = &values.elements[0] else {
+            let Value::Tuple(entry) = &values.elements.as_values().unwrap()[0] else {
                 panic!("expected map item tuple");
             };
             assert_eq!(
@@ -10757,7 +10757,10 @@ fn direct_enum_owned_payload_buffer_moves_string_vec_and_map_allocations() {
 
     let text = "owned enum payload".repeat(32);
     let text_ptr = text.as_ptr();
-    let elements = vec![Value::Bool(true), Value::Bool(false)];
+    let elements = vec![
+        Value::String("a".to_string()),
+        Value::String("b".to_string()),
+    ];
     let elements_ptr = elements.as_ptr();
     let entries = vec![(Value::String("key".to_string()), Value::Bool(true))];
     let entries_ptr = entries.as_ptr();
@@ -10806,7 +10809,7 @@ fn direct_enum_owned_payload_buffer_moves_string_vec_and_map_allocations() {
                         assert_eq!(value.as_ptr(), *expected)
                     }
                     ([Value::Vec(value)], Allocation::Vec(expected)) => {
-                        assert_eq!(value.elements.as_ptr(), *expected)
+                        assert_eq!(value.elements.as_ptr(), *expected as usize)
                     }
                     ([Value::Map(value)], Allocation::Map(expected)) => {
                         assert_eq!(value.entries.as_ptr(), *expected)
@@ -11273,7 +11276,7 @@ fn direct_owned_collection_and_queue_adapters_preserve_allocation_identity() {
     expect_unit(super::aura_direct_vec_push_in_place(vector, vector_item));
     unsafe {
         super::with_value(vector, |value| match value {
-            Value::Vec(vector) => match vector.elements.as_slice() {
+            Value::Vec(vector) => match vector.elements.as_values().unwrap() {
                 [Value::String(value)] => assert_eq!(value.as_ptr(), vector_storage),
                 other => panic!("expected one str vector element, found {other:?}"),
             },
@@ -11396,7 +11399,7 @@ fn direct_owned_index_and_fallback_adapters_preserve_allocation_identity() {
     ));
     unsafe {
         super::with_value(vector, |value| match value {
-            Value::Vec(vector) => match vector.elements.as_slice() {
+            Value::Vec(vector) => match vector.elements.as_values().unwrap() {
                 [Value::String(value)] => assert_eq!(value.as_ptr(), replacement_storage),
                 other => panic!("expected one replacement str, found {other:?}"),
             },
@@ -19561,7 +19564,10 @@ fn native_runtime_collection_helpers_cover_remaining_success_paths() {
     match entries {
         Value::Vec(entries) => {
             assert_eq!(entries.elements.len(), 2);
-            assert!(matches!(&entries.elements[0], Value::Tuple(_)));
+            assert!(matches!(
+                &entries.elements.as_values().unwrap()[0],
+                Value::Tuple(_)
+            ));
         }
         other => panic!("expected map entries vec, found {:?}", other),
     }
@@ -24203,8 +24209,8 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
     unsafe {
         super::with_value(users as *mut OpaqueValue, |value| match value {
             Value::Vec(vector) => {
-                assert_eq!(field_visits(&vector.elements[0]), "41");
-                assert_eq!(field_visits(&vector.elements[1]), "5");
+                assert_eq!(field_visits(&vector.elements.as_values().unwrap()[0]), "41");
+                assert_eq!(field_visits(&vector.elements.as_values().unwrap()[1]), "5");
             }
             other => panic!("expected a list, found {other:?}"),
         })
@@ -25080,19 +25086,34 @@ fn list_element_reads_borrow_the_element_in_place() {
     }
 }
 
-/// Reads element `index` of `list` the way generated code does, from the
-/// list view and the layout offsets.
-fn read_list_view_word(list: *mut OpaqueValue, index: usize, offset: i32) -> i64 {
+fn list_view_access(list: *mut OpaqueValue) -> u32 {
     let layout = super::direct_list_layout();
+    unsafe { *((list as *const u8).add(layout.access_offset as usize) as *const u32) }
+}
+
+/// Reads element `index` of `list` the way generated code does, from the
+/// list view and the layout offsets, after checking its access code.
+fn read_list_view_word(
+    list: *mut OpaqueValue,
+    index: usize,
+    access: super::DirectListAccess,
+) -> i64 {
+    let layout = super::direct_list_layout();
+    assert_eq!(
+        list_view_access(list),
+        access as u32,
+        "the test list is confined and has the expected form"
+    );
     let base = list as *const u8;
     unsafe {
-        let shared = *(base.add(layout.shared_offset as usize) as *const usize);
-        assert_eq!(shared, 0, "the test list is confined to this thread");
         let elements = *(base.add(layout.elements_offset as usize) as *const usize);
         let len = *(base.add(layout.len_offset as usize) as *const usize);
         assert!(index < len, "the test reads inside the list");
         let element = elements as *const u8;
-        *(element.add(index * layout.element_stride as usize + offset as usize) as *const i64)
+        match access {
+            super::DirectListAccess::Bool => i64::from(*element.add(index)),
+            _ => *(element.add(index * 8) as *const i64),
+        }
     }
 }
 
@@ -25103,44 +25124,71 @@ fn list_view_len(list: *mut OpaqueValue) -> usize {
 
 #[test]
 fn list_view_reads_scalar_elements_in_place() {
+    use super::DirectListAccess;
     let layout = super::direct_list_layout();
-    let int_offset = layout
-        .int_offset
-        .expect("both integer representations keep their value at one offset");
     let integers = super::aura_direct_vec_empty();
+    assert_eq!(list_view_access(integers), DirectListAccess::Values as u32);
     for value in [5, -7, i64::MAX, i64::MIN] {
         super::aura_direct_vec_push_in_place(integers, super::aura_direct_box_i64(value));
     }
     assert_eq!(list_view_len(integers), 4);
     for (index, expected) in [5, -7, i64::MAX, i64::MIN].into_iter().enumerate() {
-        let low = read_list_view_word(integers, index, int_offset);
-        let high = read_list_view_word(integers, index, int_offset + 8);
-        assert_eq!(low, expected);
-        assert_eq!(high, expected >> 63, "an int64 sign-extends to 128 bits");
+        assert_eq!(
+            read_list_view_word(integers, index, DirectListAccess::Int64),
+            expected
+        );
     }
+    // An integer that `int64` storage cannot keep exactly moves the list to
+    // `Value` elements, which generated code does not read in place.
     let wide = super::aura_direct_vec_empty();
     super::aura_direct_vec_push_in_place(
         wide,
         boxed_value(Value::Int(IntegerValue::from_literal(u64::MAX as u128))),
     );
-    let low = read_list_view_word(wide, 0, int_offset);
-    let high = read_list_view_word(wide, 0, int_offset + 8);
-    assert_ne!(
-        high,
-        low >> 63,
-        "a value past int64 fails the in-place check"
+    assert_eq!(list_view_access(wide), DirectListAccess::Values as u32);
+    assert_eq!(list_view_len(wide), 1);
+    super::aura_direct_vec_push_in_place(
+        integers,
+        boxed_value(Value::Int(IntegerValue::from_literal(1))),
     );
+    assert_eq!(list_view_access(integers), DirectListAccess::Values as u32);
+    assert_eq!(list_view_len(integers), 5);
 
     let floats = super::aura_direct_vec_empty();
     super::aura_direct_vec_push_in_place(floats, boxed_value(Value::Float(2.5)));
     assert_eq!(
-        f64::from_bits(read_list_view_word(floats, 0, layout.float_offset) as u64),
+        f64::from_bits(read_list_view_word(floats, 0, DirectListAccess::Float64) as u64),
         2.5
     );
     let flags = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_in_place(flags, boxed_value(Value::Bool(false)));
     super::aura_direct_vec_push_in_place(flags, boxed_value(Value::Bool(true)));
-    assert_eq!(read_list_view_word(flags, 0, layout.bool_offset) & 0xff, 1);
+    assert_eq!(read_list_view_word(flags, 1, DirectListAccess::Bool), 1);
+    assert_eq!(read_list_view_word(flags, 0, DirectListAccess::Bool), 0);
+    assert_eq!(
+        list_view_access(int_value(3)),
+        DirectListAccess::None as u32
+    );
     super::aura_direct_check_list_layout(layout.fingerprint());
+    for value in [integers, wide, floats, flags] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
+fn shared_lists_are_never_read_in_place() {
+    use super::DirectListAccess;
+    let list = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_scalar(list, 4, 0);
+    assert_eq!(list_view_access(list), DirectListAccess::Int64 as u32);
+    unsafe { super::share_direct_value(list) };
+    assert_eq!(list_view_access(list), DirectListAccess::None as u32);
+    // A write under the lock keeps the code clear.
+    super::aura_direct_vec_push_scalar(list, 5, 0);
+    assert_eq!(list_view_access(list), DirectListAccess::None as u32);
+    assert_eq!(super::aura_direct_vec_index_scalar(list, 1, 0), 5);
+    assert_eq!(super::aura_direct_vec_len(list), 2);
+    unsafe { release_value(list) };
 }
 
 #[test]
@@ -25159,8 +25207,8 @@ fn list_view_follows_every_write() {
         super::aura_direct_vec_push_in_place(list, super::aura_direct_box_i64(value));
         assert_eq!(list_view_len(list), value as usize + 1);
     }
-    let int_offset = super::direct_list_layout().int_offset.unwrap();
-    assert_eq!(read_list_view_word(list, 39, int_offset), 39);
+    let int64 = super::DirectListAccess::Int64;
+    assert_eq!(read_list_view_word(list, 39, int64), 39);
     super::aura_direct_vec_pop_in_place(list);
     assert_eq!(list_view_len(list), 39);
     // A copy shares the storage until one side writes. The writer gets new
@@ -25169,8 +25217,8 @@ fn list_view_follows_every_write() {
     super::aura_direct_vec_push_in_place(copy, super::aura_direct_box_i64(99));
     assert_eq!(list_view_len(copy), 40);
     assert_eq!(list_view_len(list), 39);
-    assert_eq!(read_list_view_word(copy, 39, int_offset), 99);
-    assert_eq!(read_list_view_word(list, 38, int_offset), 38);
+    assert_eq!(read_list_view_word(copy, 39, int64), 99);
+    assert_eq!(read_list_view_word(list, 38, int64), 38);
     expect_unit(super::aura_direct_vec_clear_in_place(list));
     assert_eq!(list_view_len(list), 0);
     // A write that unwinds still refreshes the view.
@@ -25215,6 +25263,7 @@ fn rank_one_arrays_expose_their_storage_as_a_list_view() {
             )
         }
     }
+    use super::DirectListAccess;
     let array = |shape: Vec<usize>, storage| {
         boxed_value(Value::Array(
             ArrayValue::new(shape.into_boxed_slice(), storage).unwrap(),
@@ -25227,6 +25276,7 @@ fn rank_one_arrays_expose_their_storage_as_a_list_view() {
     let (elements, len) = view(int64);
     assert_eq!(len, 3);
     assert_eq!(unsafe { *(elements as *const i64).add(1) }, -5);
+    assert_eq!(list_view_access(int64), DirectListAccess::ArrayInt64 as u32);
     let nine = super::aura_direct_box_i64(9);
     let fill = super::aura_direct_array_fill_in_place(int64, nine, 0, 0);
     unsafe {
@@ -25244,15 +25294,24 @@ fn rank_one_arrays_expose_their_storage_as_a_list_view() {
     let int32 = array(vec![2], ArrayStorage::Int32(vec![7, -8].into_boxed_slice()));
     let (elements, len) = view(int32);
     assert_eq!((len, unsafe { *(elements as *const i32).add(1) }), (2, -8));
+    assert_eq!(list_view_access(int32), DirectListAccess::ArrayInt32 as u32);
     let float32 = array(vec![1], ArrayStorage::Float32(vec![1.5].into_boxed_slice()));
     let (elements, _) = view(float32);
     assert_eq!(unsafe { *(elements as *const f32) }, 1.5);
+    assert_eq!(
+        list_view_access(float32),
+        DirectListAccess::ArrayFloat32 as u32
+    );
     let float64 = array(
         vec![1],
         ArrayStorage::Float64(vec![2.25].into_boxed_slice()),
     );
     let (elements, _) = view(float64);
     assert_eq!(unsafe { *(elements as *const f64) }, 2.25);
+    assert_eq!(
+        list_view_access(float64),
+        DirectListAccess::ArrayFloat64 as u32
+    );
 
     let grid = array(
         vec![2, 2],
@@ -25263,6 +25322,7 @@ fn rank_one_arrays_expose_their_storage_as_a_list_view() {
         (0, 0),
         "another rank always takes the runtime path"
     );
+    assert_eq!(list_view_access(grid), DirectListAccess::None as u32);
     for value in [int64, int32, float32, float64, grid] {
         unsafe { super::aura_direct_release_value(value) };
     }

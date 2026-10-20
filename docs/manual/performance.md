@@ -307,6 +307,7 @@ M2 Pro host feed later performance decisions.
 | Array reduction | 6.682308 times NumPy, 1.339087 times the same-session Rust kernel |
 | `record_field_reads` | about 18 times Python 3.13, about 13 times Rust |
 | `string_list_scan` | about 12 times Rust |
+| `int_list_sum` | about 4.1 times Rust |
 | AuraDB `update` by id | about 3 times Python 3.13 |
 
 These gaps are specific to these workloads. Scheduling, runtime
@@ -426,10 +427,9 @@ same way, with one bounds check. A loop that reads each of 100,000
 instead of 3,445,483,320, and takes about 10.8 ms instead of 367 ms. An
 `Array` with more dimensions reads through the runtime.
 
-`int_list_sum` still spends most of its time waiting on memory. Each list
-element takes 112 bytes, so 100,000 elements do not fit in the processor
-cache. The same loop over 10,000 elements runs about twice as fast per
-element.
+A list whose elements are all `int64`, all `float64`, or all `bool` values
+stores them unboxed. [Unboxed Scalar Lists](#unboxed-scalar-lists) gives
+the details.
 
 ### Integer Array Kernels
 
@@ -452,6 +452,39 @@ runs before and five after. Times include building the inputs, about 45 ms.
 | `int64` `sum()` | 4,080 ms | 100 ms |
 | `int32` `wrapping_mul` | 2,935 ms | 58 ms |
 | `int32` `max()`, unchanged | 68 ms | 52 ms |
+
+### Unboxed Scalar Lists
+
+A list whose elements are all `int64`, all `float64`, or all `bool` values
+stores the scalars themselves. Each `int64` or `float64` element takes 8
+bytes, and each `bool` takes 1 byte. A boxed element takes 112 bytes. Any
+other list stores boxed values.
+
+The storage follows the elements. Adding a value of another type, such as
+a `str` to an `int64 | str` list, moves the list to boxed storage. An empty
+list takes the form of its first element. A program cannot tell which form
+a list uses: printing, equality, hashing, copies, and errors behave the
+same.
+
+Native code reads the length and the elements of an unboxed list in place.
+A list that another task can reach goes through the runtime.
+
+On the shared Linux container, 11 alternating whole-process runs give these
+medians. Before reads lists as the List Reads section describes, with boxed
+elements.
+
+| Program | Before | After |
+| --- | ---: | ---: |
+| `int_list_sum` | 21.0 ms | 9.5 ms |
+| `string_list_scan` | 32.5 ms | 31.6 ms |
+| `record_field_reads` | 122.0 ms | 122.5 ms |
+| `dict_build_get` | 326.3 ms | 316.5 ms |
+| `set_insert_contains` | 40.8 ms | 41.7 ms |
+
+`int_list_sum` runs about 4.1 times the Rust reference. Callgrind counts
+73,209,689 instructions instead of 78,657,685, so most of the gain comes
+from the smaller list fitting in the processor cache. The other programs
+run within 1% of their previous instruction counts.
 
 ## Performance Direction
 

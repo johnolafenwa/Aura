@@ -327,6 +327,38 @@ Callgrind counts for `int_list_sum` fall from 106,060,271 to 78,654,607
 instructions. A loop that reads 2,000,000 `float64` Array elements by index
 falls from 3,445,483,320 to 63,478,022.
 
+### Batch 7 unboxed scalar lists
+
+This step, added after step 6, stores scalar list elements without a
+`Value` box:
+
+- `VecValue.elements` is a `ListElements`. Its `Int64`, `Float64`, and
+  `Bool` forms keep the scalars, 8 bytes or 1 byte each. The `Values` form
+  keeps 112-byte `Value`s. Each form sits in a `SharedVec`, so copies stay
+  copy-on-write.
+- The form follows the elements alone. A list is in the `Int64` form only
+  when every element is an `int64` that `IntegerValue::from_i64` rebuilds
+  exactly, so an untyped literal or another integer kind keeps the
+  `Values` form. Moving between forms loses nothing, and equality, hashing,
+  rendering, and `Debug` output do not depend on the form.
+- Whole-element edits keep a scalar form: `push`, `pop`, `replace`,
+  `insert`, `remove`, `swap`, `reverse`, `truncate`, `append`, and the span
+  operations. An element that does not fit the form moves the list to
+  `Values`. `get_mut` and `values_mut` also move it, because they hand out
+  a `&mut Value`. An empty list takes the form of its first element.
+- Reads return `Cow<Value>`: borrowed from the `Values` form or built from
+  a scalar. The MIR interpreter's `place_ref` returns the same `Cow`, and a
+  scalar element ends any projection path.
+- `OpaqueValue` holds a `u32` `DirectListAccess` code next to a `u32`
+  reference count, so a box stays 160 bytes. The code names the layout of
+  the list view: none, `Values`, `Int64`, `Float64`, `Bool`, or one of the
+  four rank-1 `Array` dtypes. `share_direct_value` sets it to none, and a
+  shared value never refreshes it. One compare in generated code checks
+  both that the value is confined and that its elements have the expected
+  layout. `emit_list_len` accepts any list form.
+- The reference count overflows at 4,294,967,295 references to one box,
+  which reports the existing overflow error.
+
 ## Batch 1 phase 1: normalized types and alias expansion
 
 The first type family establishes a shared producer in `sema/types.rs` for

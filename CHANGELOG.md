@@ -83,6 +83,11 @@ in this file.
   flat index. Adding two one-million-element `int64` arrays
   takes about 0.9 ms instead of 37 ms, and an `int32` `sum()` of one
   million elements under 0.1 ms instead of 39 ms.
+- A list whose elements are all `int64`, all `float64`, or all `bool` values
+  stores them unboxed: 8 bytes per `int64` or `float64` element and 1 byte
+  per `bool`, instead of 112. Native code reads them in place.
+  `int_list_sum` went from 21.0 ms to 9.5 ms on Linux x86-64, about 4.1
+  times the Rust reference.
 
 ### Fixed
 
