@@ -12,7 +12,8 @@ use super::{
 };
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::call::BuiltinMember;
-use crate::sema::{optional_type, substitute_type, substitutions_from_decl_type_args, Type};
+use crate::runtime_ops::RuntimeOp;
+use crate::sema::{substitute_type, substitutions_from_decl_type_args, Type};
 use std::collections::{BTreeSet, HashMap};
 
 impl Lowerer<'_> {
@@ -147,6 +148,13 @@ impl Lowerer<'_> {
                 let receiver = self.completed_operand_type(object, params)?;
                 self.completed_member_call_type(&receiver, field)
             }
+            CallTarget::Runtime { op, receiver, .. } => {
+                let receiver = match receiver {
+                    Some(object) => self.completed_operand_type(object, params)?,
+                    None => Type::Unit,
+                };
+                op.result_type(&receiver)
+            }
             CallTarget::Extern(call) => Some(call.return_type.clone()),
             // A call through a callable value has the contract's pointee
             // type when the contract returns a view (C9).
@@ -183,10 +191,6 @@ impl Lowerer<'_> {
             return None;
         }
         if let Type::Named(name, args) = receiver {
-            if field == "sqrt" && args.is_empty() && matches!(name.as_str(), "float32" | "float64")
-            {
-                return Some(receiver.clone());
-            }
             if let Some(class) = self.resolve_class_info(name) {
                 if let Some(method) = class.methods.get(field) {
                     let substitutions =
@@ -196,6 +200,9 @@ impl Lowerer<'_> {
                         &substitutions,
                     ));
                 }
+            }
+            if let Some(op) = RuntimeOp::resolve_member(receiver, field, |_| false) {
+                return op.result_type(receiver);
             }
             if let Some(ty) = runtime_member_result_type(name, args, field) {
                 return Some(ty);
@@ -300,45 +307,9 @@ pub(super) fn validate_assigned_local_types(
 /// Result types of the runtime members that expression inference in
 /// lowering does not name.
 fn runtime_member_result_type(name: &str, args: &[Type], field: &str) -> Option<Type> {
-    if args.is_empty()
-        && matches!(
-            BuiltinMember::resolve(name, field),
-            Some(BuiltinMember::DurationToMilliseconds | BuiltinMember::DurationToSeconds)
-        )
-    {
-        return Some(Type::named("float64"));
-    }
-    let result =
-        |ok: Type, error: &str| Type::Named("Result".to_string(), vec![ok, Type::named(error)]);
-    let bytes = || Type::Named("list".to_string(), vec![Type::named("uint8")]);
     Some(match (name, field) {
-        ("random.Rng", "next_int") => Type::named("int64"),
-        ("random.Rng", "next_float") => Type::named("float64"),
-        ("random.Rng", "shuffle") => Type::Unit,
         ("str" | "list" | "Array", "__slice") => Type::Named(name.to_string(), args.to_vec()),
         ("Queue", "get_or") => args.first()?.clone(),
-        ("process.Child", "stdin" | "stdout" | "stderr") => {
-            optional_type(Type::named("process.Pipe"))
-        }
-        ("process.Child", "wait") => Type::named("process.Wait"),
-        ("process.Child", "wait_or_none") => result(
-            optional_type(Type::named("process.ExitStatus")),
-            "process.Error",
-        ),
-        ("process.Child", "wait_ok") => result(Type::named("process.ExitStatus"), "process.Error"),
-        ("process.Child", "kill" | "terminate")
-        | ("process.Pipe", "write_all" | "write_bytes" | "flush")
-        | ("process.Supervisor", "start" | "stop") => result(Type::Unit, "process.Error"),
-        ("process.Child" | "process.Pipe" | "process.Supervisor", "close") => Type::Unit,
-        ("process.Pipe", "read_all") => result(Type::named("str"), "process.Error"),
-        ("process.Pipe", "read_line") => result(optional_type(Type::named("str")), "process.Error"),
-        ("process.Pipe", "read_bytes") => result(optional_type(bytes()), "process.Error"),
-        ("process.Supervisor", "wait") => Type::named("process.SupervisorWait"),
-        ("process.Supervisor", "wait_or_none") => result(
-            optional_type(Type::named("process.SupervisorEvent")),
-            "process.Error",
-        ),
-        ("process.Supervisor", "is_empty") => Type::named("bool"),
         _ => return None,
     })
 }

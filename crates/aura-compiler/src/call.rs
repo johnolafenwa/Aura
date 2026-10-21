@@ -2624,6 +2624,11 @@ impl BuiltinMember {
             .bind_args(&format!("`{}`", self.name()), args, span)
     }
 
+    /// The member's parameters after the receiver, in declaration order.
+    pub fn params(self) -> impl Iterator<Item = CallableParam<'static>> {
+        self.call_shape().params.iter().map(|param| param.binding)
+    }
+
     pub const fn argument_passing(self, index: usize) -> Option<ReceiverKind> {
         let shape = self.call_shape();
         if index < shape.params.len() {

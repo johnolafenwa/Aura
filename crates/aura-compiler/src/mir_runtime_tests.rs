@@ -22922,3 +22922,95 @@ fn index_in_range_facts_are_checked_by_the_interpreter() {
         error.message
     );
 }
+
+#[test]
+fn step8d_interpreter_runs_resolved_runtime_ops_like_member_calls() {
+    use crate::runtime_ops::RuntimeOp;
+    let resolved = crate::lower_source_to_mir(
+        r#"
+import random
+
+def main():
+    mut rng = random.Rng(7)
+    first = rng.next_int(0, 1000)
+    mut again = random.Rng(7)
+    print(first == again.next_int(0, 1000))
+    value: int32 = 2147483647
+    print(value.wrapping_add(1))
+    print(value.saturating_add(1))
+    print(value.to_float())
+    print(value.to_string().len())
+    print(1500ms.to_ms())
+    print(16.0.sqrt())
+    name = "aura"
+    print(name.clone())
+"#,
+    )
+    .expect("resolved op fixture should lower");
+    let ops = resolved
+        .functions
+        .iter()
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Runtime { op, .. },
+                        ..
+                    },
+                ..
+            } => Some(*op),
+            _ => None,
+        })
+        .collect::<Vec<RuntimeOp>>();
+    assert!(
+        ops.len() >= 8,
+        "the fixture should lower runtime ops: {ops:?}"
+    );
+
+    // The same module with every op spelled as a member call, as hand-built
+    // or older MIR spells it.
+    let mut unresolved = resolved.clone();
+    for instruction in unresolved
+        .functions
+        .iter_mut()
+        .flat_map(|function| &mut function.blocks)
+        .flat_map(|block| &mut block.instructions)
+    {
+        let Instruction::Assign {
+            value: Rvalue::Call { callee, .. },
+            ..
+        } = instruction
+        else {
+            continue;
+        };
+        let CallTarget::Runtime {
+            op,
+            receiver: Some(receiver),
+            receiver_place,
+        } = callee
+        else {
+            continue;
+        };
+        *callee = CallTarget::Member {
+            object: receiver.clone(),
+            field: op.member_name().to_string(),
+            receiver_place: receiver_place.clone(),
+        };
+    }
+
+    let expected = "true\n-2147483648\n2147483647\n2147483647.0\n10\n1500.0\n4.0\naura\n";
+    let runtime = crate::run_mir(&resolved).expect("resolved ops should run");
+    assert_eq!(runtime.stdout, expected);
+    let member = crate::run_mir(&unresolved).expect("member calls should run");
+    assert_eq!(member.stdout, runtime.stdout);
+
+    // Loading serialized MIR resolves member spellings again.
+    let json = serde_json::to_vec(&unresolved).expect("MIR serializes");
+    let loaded = super::deserialize_runtime_module(&json).expect("MIR deserializes");
+    assert_eq!(
+        serde_json::to_value(&loaded).expect("MIR serializes"),
+        serde_json::to_value(&resolved).expect("MIR serializes")
+    );
+}

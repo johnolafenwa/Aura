@@ -11,7 +11,7 @@ use std::time::{Duration as StdDuration, Instant};
 
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::builtin_modules::host_builtin_metadata;
-use crate::call::{BuiltinAssociatedFunction, BuiltinMember};
+use crate::call::BuiltinAssociatedFunction;
 use crate::diag::{
     Diagnostic, Result, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span,
 };
@@ -26,6 +26,7 @@ use crate::mir::{
     MirTraitImpl, Operand, Rvalue, Terminator, MIR_LOOP_SAFEPOINT_INTERVAL,
 };
 use crate::randomness::{self, SecureRandomError};
+use crate::runtime_ops::builtin_member_for_receiver;
 use crate::runtime_value::{
     append_string_checked, cast_numeric_value, catch_lightweight_task_failure,
     claim_task_result_observations, clone_json_codec_source, concat_strings_checked,
@@ -359,6 +360,9 @@ fn rvalue_materializes_process_run(value: &Rvalue) -> bool {
                 CallTarget::Member { object, .. } | CallTarget::TraitMember { object, .. } => {
                     operand_is_process_run_function(object)
                 }
+                CallTarget::Runtime { receiver, .. } => receiver
+                    .as_ref()
+                    .is_some_and(operand_is_process_run_function),
             };
             callee_materializes || args_materialize_process_run(args)
         }
@@ -395,7 +399,7 @@ pub fn run_serialized_mir(mir_json: &[u8], source_path: &str, source: &str) -> R
 }
 
 fn deserialize_runtime_module(mir_json: &[u8]) -> Result<MirModule> {
-    let module = match serde_json::from_slice::<MirModule>(mir_json) {
+    let mut module = match serde_json::from_slice::<MirModule>(mir_json) {
         Ok(module) => module,
         Err(error) => {
             return Err(Diagnostic::coded(
@@ -404,6 +408,9 @@ fn deserialize_runtime_module(mir_json: &[u8]) -> Result<MirModule> {
             ))
         }
     };
+    // Embedded MIR from another compiler build, or written by hand, may
+    // still spell resolved operations as member calls.
+    crate::mir::resolve_runtime_ops(&mut module);
     Ok(module)
 }
 
@@ -5313,6 +5320,32 @@ impl MirRuntime {
             CallTarget::Value(function) => {
                 self.evaluate_function_value_call(function, args, env, expected_return_type)
             }
+            // A resolved operation runs the built-in method it names, so the
+            // interpreter keeps one implementation per method.
+            CallTarget::Runtime {
+                op,
+                receiver,
+                receiver_place,
+            } => {
+                let Some(object) = receiver else {
+                    return Err(Diagnostic::new(format!(
+                        "MIR runtime operation `{op}` has no receiver"
+                    )));
+                };
+                let receiver_static_ty = self
+                    .resolve_operand_type(object, env)
+                    .filter(|ty| !matches!(ty, Type::TypeParam(_)));
+                let receiver = self.evaluate_owned_operand(object, env)?;
+                self.evaluate_receiver_method(
+                    receiver,
+                    receiver_static_ty,
+                    op.member_name(),
+                    receiver_place.as_deref(),
+                    args,
+                    expected_return_type,
+                    env,
+                )
+            }
             CallTarget::Member {
                 object,
                 field,
@@ -5487,12 +5520,9 @@ impl MirRuntime {
                         .clone()
                         .or_else(|| self.infer_runtime_value_type(&receiver));
                     if let Some(resolved_receiver_ty) = resolved_receiver_ty {
-                        let builtin_name = match &resolved_receiver_ty {
-                            Type::Named(name, _) => Some(name.as_str()),
-                            _ => None,
-                        };
-                        if builtin_name
-                            .and_then(|name| BuiltinMember::resolve_runtime(name, field))
+                        // An instance receiver was handled above, so no class
+                        // method shadows the built-in member here.
+                        if builtin_member_for_receiver(&resolved_receiver_ty, field, |_| false)
                             .is_none()
                         {
                             if let Some(method) = self
@@ -5514,353 +5544,353 @@ impl MirRuntime {
                     }
                 }
 
-                let mut receiver = match receiver {
-                    Value::Vec(vector) => {
-                        return self.evaluate_vec_method(
-                            vector,
-                            field,
-                            receiver_place.as_deref(),
-                            args,
-                            env,
-                        )
-                    }
-                    Value::Map(map) => {
-                        return self.evaluate_map_method(
-                            map,
-                            field,
-                            receiver_place.as_deref(),
-                            args,
-                            env,
-                        )
-                    }
-                    Value::Set(set) => {
-                        return self.evaluate_set_method(
-                            set,
-                            field,
-                            receiver_place.as_deref(),
-                            args,
-                            env,
-                        )
-                    }
-                    receiver => receiver,
-                };
-                match &receiver {
-                    Value::Float(value) if field == "sqrt" => {
-                        if !args.is_empty() {
-                            return Err(Diagnostic::new("`sqrt` does not take arguments"));
-                        }
-                        Ok(Value::Float(value.sqrt()))
-                    }
-                    Value::Int(value) if field == "to_string" => {
-                        if !args.is_empty() {
-                            return Err(Diagnostic::new("`to_string` does not take arguments"));
-                        }
-                        Ok(Value::String(value.to_string()))
-                    }
-                    Value::Int(value) if field == "to_float" => {
-                        if !args.is_empty() {
-                            return Err(Diagnostic::new("`to_float` does not take arguments"));
-                        }
-                        Ok(Value::Float(value.to_f64()))
-                    }
-                    Value::Int(value)
-                        if matches!(
-                            field.as_str(),
-                            "wrapping_add"
-                                | "wrapping_sub"
-                                | "wrapping_mul"
-                                | "saturating_add"
-                                | "saturating_sub"
-                                | "saturating_mul"
-                        ) =>
-                    {
-                        let values = evaluate_named_args(args, env)?;
-                        let bound = bind_builtin_args(&["rhs"], values)?;
-                        macro_rules! mismatch {
-                            () => {
-                                Diagnostic::coded(
-                                    "AU4001",
-                                    format!(
-                                        "`{field}` expects matching fixed-width integer operands"
-                                    ),
-                                )
-                            };
-                        }
-                        let Some(receiver_kind) = receiver_static_ty
-                            .as_ref()
-                            .and_then(|ty| match ty {
-                                Type::Named(name, args) if args.is_empty() => {
-                                    IntegerKind::from_runtime_type_name(name)
-                                }
-                                _ => None,
-                            })
-                            .or_else(|| value.runtime_kind())
-                        else {
-                            return Err(mismatch!());
-                        };
-                        // Call checking has already made `rhs` exactly the receiver type, but a
-                        // contextual integer literal can still arrive through a materialized MIR
-                        // place carrying its default `int64` runtime tag. Direct emission loads
-                        // that operand as the checked receiver type; mirror that coercion here.
-                        let with_receiver_kind =
-                            |operand: IntegerValue| operand.with_runtime_kind(receiver_kind);
-                        let Some(left) = with_receiver_kind(*value) else {
-                            return Err(mismatch!());
-                        };
-                        let Value::Int(rhs) = &bound[0].value else {
-                            return Err(mismatch!());
-                        };
-                        let Some(rhs) = with_receiver_kind(*rhs) else {
-                            return Err(mismatch!());
-                        };
-                        let result = match field.as_str() {
-                            "wrapping_add" => left.wrapping_add(rhs),
-                            "wrapping_sub" => left.wrapping_sub(rhs),
-                            "wrapping_mul" => left.wrapping_mul(rhs),
-                            "saturating_add" => left.saturating_add(rhs),
-                            "saturating_sub" => left.saturating_sub(rhs),
-                            _ => {
-                                debug_assert_eq!(field, "saturating_mul");
-                                left.saturating_mul(rhs)
-                            }
-                        };
-                        let Some(result) = result else {
-                            return Err(mismatch!());
-                        };
-                        Ok(Value::Int(result))
-                    }
-                    Value::Int(value)
-                        if matches!(
-                            field.as_str(),
-                            "wrapping_shl" | "wrapping_shr" | "saturating_shl" | "saturating_shr"
-                        ) =>
-                    {
-                        let values = evaluate_named_args(args, env)?;
-                        let bound = bind_builtin_args(&["count"], values)?;
-                        macro_rules! mismatch {
-                            () => {
-                                Diagnostic::coded(
-                                    "AU4001",
-                                    format!(
-                                        "`{field}` expects matching fixed-width integer operands"
-                                    ),
-                                )
-                            };
-                        }
-                        let Some(receiver_kind) = receiver_static_ty
-                            .as_ref()
-                            .and_then(|ty| match ty {
-                                Type::Named(name, args) if args.is_empty() => {
-                                    IntegerKind::from_runtime_type_name(name)
-                                }
-                                _ => None,
-                            })
-                            .or_else(|| value.runtime_kind())
-                        else {
-                            return Err(mismatch!());
-                        };
-                        let with_receiver_kind =
-                            |operand: IntegerValue| operand.with_runtime_kind(receiver_kind);
-                        let Some(left) = with_receiver_kind(*value) else {
-                            return Err(mismatch!());
-                        };
-                        let Value::Int(count) = &bound[0].value else {
-                            return Err(mismatch!());
-                        };
-                        let Some(count) = with_receiver_kind(*count) else {
-                            return Err(mismatch!());
-                        };
-                        let result = match field.as_str() {
-                            "wrapping_shl" => left.wrapping_shl(count),
-                            "wrapping_shr" => left.wrapping_shr(count),
-                            "saturating_shl" => left.saturating_shl(count),
-                            _ => {
-                                debug_assert_eq!(field, "saturating_shr");
-                                left.saturating_shr(count)
-                            }
-                        };
-                        result
-                            .map(Value::Int)
-                            .map_err(|error| integer_shift_diagnostic(error, None))
-                    }
-                    Value::Float(value) if field == "to_string" => {
-                        if !args.is_empty() {
-                            return Err(Diagnostic::new("`to_string` does not take arguments"));
-                        }
-                        Ok(Value::String(Value::Float(*value).render()))
-                    }
-                    Value::Bool(value) if field == "to_string" => {
-                        if !args.is_empty() {
-                            return Err(Diagnostic::new("`to_string` does not take arguments"));
-                        }
-                        Ok(Value::String(value.to_string()))
-                    }
-                    Value::Duration(value) if field == "to_ms" => {
-                        if !args.is_empty() {
-                            return Err(Diagnostic::new("`to_ms` does not take arguments"));
-                        }
-                        Ok(Value::Float(duration_to_milliseconds(*value)))
-                    }
-                    Value::Duration(value) if field == "to_seconds" => {
-                        if !args.is_empty() {
-                            return Err(Diagnostic::new("`to_seconds` does not take arguments"));
-                        }
-                        Ok(Value::Float(duration_to_seconds(*value)))
-                    }
-                    Value::Rng(rng) => self.evaluate_rng_method(rng.clone(), field, args, env),
-                    Value::String(value) => {
-                        self.evaluate_string_method(value.clone(), field, args, env)
-                    }
-                    Value::Channel(channel) => {
-                        self.evaluate_channel_method(channel.clone(), field, args, env)
-                    }
-                    Value::Task(task) => self.evaluate_task_method(task.clone(), field, args, env),
-                    Value::TaskGroup(group) => {
-                        self.evaluate_task_group_method(group.clone(), field, args, env)
-                    }
-                    Value::File(file) => self.evaluate_file_method(file.clone(), field, args, env),
-                    Value::TcpListener(listener) => {
-                        self.evaluate_tcp_listener_method(listener.clone(), field, args, env)
-                    }
-                    Value::TcpStream(stream) => {
-                        self.evaluate_tcp_stream_method(stream.clone(), field, args, env)
-                    }
-                    Value::UdpSocket(socket) => {
-                        self.evaluate_udp_socket_method(socket.clone(), field, args, env)
-                    }
-                    Value::UdpDatagram(datagram) => {
-                        self.evaluate_udp_datagram_method(datagram.clone(), field, args, env)
-                    }
-                    Value::HttpListener(listener) => {
-                        self.evaluate_http_listener_method(listener.clone(), field, args, env)
-                    }
-                    Value::HttpExchange(exchange) => {
-                        self.evaluate_http_exchange_method(exchange.clone(), field, args, env)
-                    }
-                    Value::HttpResponse(response) => {
-                        self.evaluate_http_response_method(response.clone(), field, args, env)
-                    }
-                    Value::WebSocketListener(listener) => {
-                        self.evaluate_websocket_listener_method(listener.clone(), field, args, env)
-                    }
-                    Value::WebSocket(socket) => {
-                        self.evaluate_websocket_method(socket.clone(), field, args, env)
-                    }
-                    Value::UnixListener(listener) => {
-                        self.evaluate_unix_listener_method(listener.clone(), field, args, env)
-                    }
-                    Value::UnixStream(stream) => {
-                        self.evaluate_unix_stream_method(stream.clone(), field, args, env)
-                    }
-                    Value::TlsListener(listener) => {
-                        self.evaluate_tls_listener_method(listener.clone(), field, args, env)
-                    }
-                    Value::TlsStream(stream) => {
-                        self.evaluate_tls_stream_method(stream.clone(), field, args, env)
-                    }
-                    Value::ProcessChild(child) => {
-                        self.evaluate_process_child_method(child.clone(), field, args, env)
-                    }
-                    Value::ProcessPipe(pipe) => {
-                        self.evaluate_process_pipe_method(pipe.clone(), field, args, env)
-                    }
-                    Value::ProcessCompleted(completed) => {
-                        self.evaluate_process_completed_method(completed.clone(), field, args, env)
-                    }
-                    Value::ProcessSupervisor(supervisor) => self
-                        .evaluate_process_supervisor_method(supervisor.clone(), field, args, env),
-                    Value::Instance(instance) => {
-                        let resolved_receiver_ty = receiver_static_ty
-                            .clone()
-                            .unwrap_or(Type::named(&instance.class_name));
-                        let class =
-                            self.classes
-                                .get(&instance.class_name)
-                                .cloned()
-                                .ok_or_else(|| {
-                                    Diagnostic::new(format!(
-                                        "unknown MIR class `{}`",
-                                        instance.class_name
-                                    ))
-                                })?;
-                        let method = class
-                            .methods
-                            .iter()
-                            .find(|method| method.name == *field)
-                            .cloned()
-                            .or_else(|| {
-                                self.find_trait_impl_method(&resolved_receiver_ty, field)
-                                    .or_else(|| {
-                                        self.find_trait_impl_method_for_class_name(
-                                            &instance.class_name,
-                                            field,
-                                        )
-                                    })
-                                    .cloned()
-                            })
-                            .ok_or_else(|| {
-                                Diagnostic::new(format!(
-                                    "class `{}` has no MIR method `{}`",
-                                    class.name, field
-                                ))
-                            })?;
-                        let function = self
-                            .functions
-                            .get(&method.function_name)
-                            .cloned()
-                            .ok_or_else(|| {
-                                Diagnostic::new(format!(
-                                    "unknown MIR method body `{}`",
-                                    method.function_name
-                                ))
-                            })?;
-                        let evaluated_args = evaluate_named_args(args, env)?;
-                        let writeback_places = evaluated_args
-                            .iter()
-                            .map(|argument| argument.writeback_place.clone())
-                            .collect::<Vec<_>>();
-                        let outcome = self.call_function_with_receiver_type(
-                            &function,
-                            Some(if method.receiver == Some(MirReceiverKind::Value) {
-                                std::mem::replace(&mut receiver, Value::Unit)
-                            } else {
-                                try_clone_mir_value(&receiver)?
-                            }),
-                            evaluated_args,
-                            expected_return_type,
-                            None,
-                            Some(&resolved_receiver_ty),
-                        )?;
-                        if method.receiver == Some(MirReceiverKind::BorrowMut) {
-                            let updated = outcome.updated_receiver.ok_or_else(|| {
-                                Diagnostic::new(format!(
-                                    "mutable MIR method `{}` did not return an updated receiver",
-                                    field
-                                ))
-                            })?;
-                            if let Some(place) = receiver_place {
-                                env.write_place(place, updated)?;
-                            }
-                        }
-                        self.apply_borrowed_param_writebacks(
-                            &function.params,
-                            &writeback_places,
-                            outcome.updated_params,
-                            env,
-                        )?;
-                        let value = outcome.value.into_result()?;
-                        self.publish_returned_view_projection(outcome.returned_view_projection);
-                        Ok(value)
-                    }
-                    // Checked non-instance trait calls return through the trait-dispatch
-                    // block above before reaching this exhaustive runtime-value match.
-                    other => Err(Diagnostic::new(format!(
-                        "unsupported MIR member call `{}` on `{}`",
-                        field,
-                        other.render()
-                    ))),
-                }
+                self.evaluate_receiver_method(
+                    receiver,
+                    receiver_static_ty,
+                    field,
+                    receiver_place.as_deref(),
+                    args,
+                    expected_return_type,
+                    env,
+                )
             }
+        }
+    }
+
+    /// Runs a built-in method, or a class method on an instance, on an
+    /// evaluated receiver. Every member call that no trait or private
+    /// operation path handled ends here, and so does every resolved runtime
+    /// operation, under its source member name.
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_receiver_method(
+        &mut self,
+        receiver: Value,
+        receiver_static_ty: Option<Type>,
+        field: &str,
+        receiver_place: Option<&str>,
+        args: &[MirArg],
+        expected_return_type: Option<&Type>,
+        env: &mut Env,
+    ) -> Result<Value> {
+        let mut receiver = match receiver {
+            Value::Vec(vector) => {
+                return self.evaluate_vec_method(vector, field, receiver_place, args, env)
+            }
+            Value::Map(map) => {
+                return self.evaluate_map_method(map, field, receiver_place, args, env)
+            }
+            Value::Set(set) => {
+                return self.evaluate_set_method(set, field, receiver_place, args, env)
+            }
+            receiver => receiver,
+        };
+        match &receiver {
+            Value::Float(value) if field == "sqrt" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`sqrt` does not take arguments"));
+                }
+                Ok(Value::Float(value.sqrt()))
+            }
+            Value::Int(value) if field == "to_string" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`to_string` does not take arguments"));
+                }
+                Ok(Value::String(value.to_string()))
+            }
+            Value::Int(value) if field == "to_float" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`to_float` does not take arguments"));
+                }
+                Ok(Value::Float(value.to_f64()))
+            }
+            Value::Int(value)
+                if matches!(
+                    field,
+                    "wrapping_add"
+                        | "wrapping_sub"
+                        | "wrapping_mul"
+                        | "saturating_add"
+                        | "saturating_sub"
+                        | "saturating_mul"
+                ) =>
+            {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["rhs"], values)?;
+                macro_rules! mismatch {
+                    () => {
+                        Diagnostic::coded(
+                            "AU4001",
+                            format!("`{field}` expects matching fixed-width integer operands"),
+                        )
+                    };
+                }
+                let Some(receiver_kind) = receiver_static_ty
+                    .as_ref()
+                    .and_then(|ty| match ty {
+                        Type::Named(name, args) if args.is_empty() => {
+                            IntegerKind::from_runtime_type_name(name)
+                        }
+                        _ => None,
+                    })
+                    .or_else(|| value.runtime_kind())
+                else {
+                    return Err(mismatch!());
+                };
+                // Call checking has already made `rhs` exactly the receiver type, but a
+                // contextual integer literal can still arrive through a materialized MIR
+                // place carrying its default `int64` runtime tag. Direct emission loads
+                // that operand as the checked receiver type; mirror that coercion here.
+                let with_receiver_kind =
+                    |operand: IntegerValue| operand.with_runtime_kind(receiver_kind);
+                let Some(left) = with_receiver_kind(*value) else {
+                    return Err(mismatch!());
+                };
+                let Value::Int(rhs) = &bound[0].value else {
+                    return Err(mismatch!());
+                };
+                let Some(rhs) = with_receiver_kind(*rhs) else {
+                    return Err(mismatch!());
+                };
+                let result = match field {
+                    "wrapping_add" => left.wrapping_add(rhs),
+                    "wrapping_sub" => left.wrapping_sub(rhs),
+                    "wrapping_mul" => left.wrapping_mul(rhs),
+                    "saturating_add" => left.saturating_add(rhs),
+                    "saturating_sub" => left.saturating_sub(rhs),
+                    _ => {
+                        debug_assert_eq!(field, "saturating_mul");
+                        left.saturating_mul(rhs)
+                    }
+                };
+                let Some(result) = result else {
+                    return Err(mismatch!());
+                };
+                Ok(Value::Int(result))
+            }
+            Value::Int(value)
+                if matches!(
+                    field,
+                    "wrapping_shl" | "wrapping_shr" | "saturating_shl" | "saturating_shr"
+                ) =>
+            {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["count"], values)?;
+                macro_rules! mismatch {
+                    () => {
+                        Diagnostic::coded(
+                            "AU4001",
+                            format!("`{field}` expects matching fixed-width integer operands"),
+                        )
+                    };
+                }
+                let Some(receiver_kind) = receiver_static_ty
+                    .as_ref()
+                    .and_then(|ty| match ty {
+                        Type::Named(name, args) if args.is_empty() => {
+                            IntegerKind::from_runtime_type_name(name)
+                        }
+                        _ => None,
+                    })
+                    .or_else(|| value.runtime_kind())
+                else {
+                    return Err(mismatch!());
+                };
+                let with_receiver_kind =
+                    |operand: IntegerValue| operand.with_runtime_kind(receiver_kind);
+                let Some(left) = with_receiver_kind(*value) else {
+                    return Err(mismatch!());
+                };
+                let Value::Int(count) = &bound[0].value else {
+                    return Err(mismatch!());
+                };
+                let Some(count) = with_receiver_kind(*count) else {
+                    return Err(mismatch!());
+                };
+                let result = match field {
+                    "wrapping_shl" => left.wrapping_shl(count),
+                    "wrapping_shr" => left.wrapping_shr(count),
+                    "saturating_shl" => left.saturating_shl(count),
+                    _ => {
+                        debug_assert_eq!(field, "saturating_shr");
+                        left.saturating_shr(count)
+                    }
+                };
+                result
+                    .map(Value::Int)
+                    .map_err(|error| integer_shift_diagnostic(error, None))
+            }
+            Value::Float(value) if field == "to_string" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`to_string` does not take arguments"));
+                }
+                Ok(Value::String(Value::Float(*value).render()))
+            }
+            Value::Bool(value) if field == "to_string" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`to_string` does not take arguments"));
+                }
+                Ok(Value::String(value.to_string()))
+            }
+            Value::Duration(value) if field == "to_ms" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`to_ms` does not take arguments"));
+                }
+                Ok(Value::Float(duration_to_milliseconds(*value)))
+            }
+            Value::Duration(value) if field == "to_seconds" => {
+                if !args.is_empty() {
+                    return Err(Diagnostic::new("`to_seconds` does not take arguments"));
+                }
+                Ok(Value::Float(duration_to_seconds(*value)))
+            }
+            Value::Rng(rng) => self.evaluate_rng_method(rng.clone(), field, args, env),
+            Value::String(value) => self.evaluate_string_method(value.clone(), field, args, env),
+            Value::Channel(channel) => {
+                self.evaluate_channel_method(channel.clone(), field, args, env)
+            }
+            Value::Task(task) => self.evaluate_task_method(task.clone(), field, args, env),
+            Value::TaskGroup(group) => {
+                self.evaluate_task_group_method(group.clone(), field, args, env)
+            }
+            Value::File(file) => self.evaluate_file_method(file.clone(), field, args, env),
+            Value::TcpListener(listener) => {
+                self.evaluate_tcp_listener_method(listener.clone(), field, args, env)
+            }
+            Value::TcpStream(stream) => {
+                self.evaluate_tcp_stream_method(stream.clone(), field, args, env)
+            }
+            Value::UdpSocket(socket) => {
+                self.evaluate_udp_socket_method(socket.clone(), field, args, env)
+            }
+            Value::UdpDatagram(datagram) => {
+                self.evaluate_udp_datagram_method(datagram.clone(), field, args, env)
+            }
+            Value::HttpListener(listener) => {
+                self.evaluate_http_listener_method(listener.clone(), field, args, env)
+            }
+            Value::HttpExchange(exchange) => {
+                self.evaluate_http_exchange_method(exchange.clone(), field, args, env)
+            }
+            Value::HttpResponse(response) => {
+                self.evaluate_http_response_method(response.clone(), field, args, env)
+            }
+            Value::WebSocketListener(listener) => {
+                self.evaluate_websocket_listener_method(listener.clone(), field, args, env)
+            }
+            Value::WebSocket(socket) => {
+                self.evaluate_websocket_method(socket.clone(), field, args, env)
+            }
+            Value::UnixListener(listener) => {
+                self.evaluate_unix_listener_method(listener.clone(), field, args, env)
+            }
+            Value::UnixStream(stream) => {
+                self.evaluate_unix_stream_method(stream.clone(), field, args, env)
+            }
+            Value::TlsListener(listener) => {
+                self.evaluate_tls_listener_method(listener.clone(), field, args, env)
+            }
+            Value::TlsStream(stream) => {
+                self.evaluate_tls_stream_method(stream.clone(), field, args, env)
+            }
+            Value::ProcessChild(child) => {
+                self.evaluate_process_child_method(child.clone(), field, args, env)
+            }
+            Value::ProcessPipe(pipe) => {
+                self.evaluate_process_pipe_method(pipe.clone(), field, args, env)
+            }
+            Value::ProcessCompleted(completed) => {
+                self.evaluate_process_completed_method(completed.clone(), field, args, env)
+            }
+            Value::ProcessSupervisor(supervisor) => {
+                self.evaluate_process_supervisor_method(supervisor.clone(), field, args, env)
+            }
+            Value::Instance(instance) => {
+                let resolved_receiver_ty = receiver_static_ty
+                    .clone()
+                    .unwrap_or(Type::named(&instance.class_name));
+                let class = self
+                    .classes
+                    .get(&instance.class_name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        Diagnostic::new(format!("unknown MIR class `{}`", instance.class_name))
+                    })?;
+                let method = class
+                    .methods
+                    .iter()
+                    .find(|method| method.name == *field)
+                    .cloned()
+                    .or_else(|| {
+                        self.find_trait_impl_method(&resolved_receiver_ty, field)
+                            .or_else(|| {
+                                self.find_trait_impl_method_for_class_name(
+                                    &instance.class_name,
+                                    field,
+                                )
+                            })
+                            .cloned()
+                    })
+                    .ok_or_else(|| {
+                        Diagnostic::new(format!(
+                            "class `{}` has no MIR method `{}`",
+                            class.name, field
+                        ))
+                    })?;
+                let function = self
+                    .functions
+                    .get(&method.function_name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        Diagnostic::new(format!(
+                            "unknown MIR method body `{}`",
+                            method.function_name
+                        ))
+                    })?;
+                let evaluated_args = evaluate_named_args(args, env)?;
+                let writeback_places = evaluated_args
+                    .iter()
+                    .map(|argument| argument.writeback_place.clone())
+                    .collect::<Vec<_>>();
+                let outcome = self.call_function_with_receiver_type(
+                    &function,
+                    Some(if method.receiver == Some(MirReceiverKind::Value) {
+                        std::mem::replace(&mut receiver, Value::Unit)
+                    } else {
+                        try_clone_mir_value(&receiver)?
+                    }),
+                    evaluated_args,
+                    expected_return_type,
+                    None,
+                    Some(&resolved_receiver_ty),
+                )?;
+                if method.receiver == Some(MirReceiverKind::BorrowMut) {
+                    let updated = outcome.updated_receiver.ok_or_else(|| {
+                        Diagnostic::new(format!(
+                            "mutable MIR method `{}` did not return an updated receiver",
+                            field
+                        ))
+                    })?;
+                    if let Some(place) = receiver_place {
+                        env.write_place(place, updated)?;
+                    }
+                }
+                self.apply_borrowed_param_writebacks(
+                    &function.params,
+                    &writeback_places,
+                    outcome.updated_params,
+                    env,
+                )?;
+                let value = outcome.value.into_result()?;
+                self.publish_returned_view_projection(outcome.returned_view_projection);
+                Ok(value)
+            }
+            // Checked non-instance trait calls return through the trait-dispatch
+            // block above before reaching this exhaustive runtime-value match.
+            other => Err(Diagnostic::new(format!(
+                "unsupported MIR member call `{}` on `{}`",
+                field,
+                other.render()
+            ))),
         }
     }
 

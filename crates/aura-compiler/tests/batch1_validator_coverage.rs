@@ -1121,7 +1121,8 @@ fn native_backend_rejects_sqrt_with_arguments() {
     let main = function_mut(&mut encoded, "main");
     let call = find_instruction(main, |instruction| {
         rvalue_kind(instruction) == Some("Call")
-            && instruction["Assign"]["value"]["Call"]["callee"]["Member"]["field"] == json!("sqrt")
+            && instruction["Assign"]["value"]["Call"]["callee"]["Runtime"]["op"]
+                == json!({ "Scalar": "Sqrt" })
     });
     call["Assign"]["value"]["Call"]["args"] =
         json!([{ "name": null, "value": { "Float": 1.0 }, "writeback_place": null }]);

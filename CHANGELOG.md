@@ -7,6 +7,12 @@ in this file.
 
 ## Unreleased
 
+### Changed
+
+- `aura mir` prints built-in calls on files, sockets, processes,
+  `random.Rng`, numbers, and `Duration` as resolved `Runtime` calls instead
+  of member calls.
+
 ### Performance
 
 - Native code keeps the result of a trait method called on a bounded

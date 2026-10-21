@@ -4816,13 +4816,13 @@ fn direct_backend_resource_member_argument_errors_cover_network_and_process_path
             named("fs.File"),
             "write_all",
             Vec::new(),
-            "expected `write_all()` to receive one argument",
+            "expected `write_all()` to receive `text`",
         ),
         (
             named("fs.File"),
             "write_bytes",
             Vec::new(),
-            "expected `write_bytes()` to receive one argument",
+            "expected `write_bytes()` to receive `bytes`",
         ),
         (
             named("fs.File"),
@@ -5287,7 +5287,8 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
             Type::named("str"),
             "to_string",
             vec![arg(None, Operand::Int(1))],
-            "expected `to_string()` to take no arguments",
+            // The checker gives `to_string()` only to numbers and `bool`.
+            "does not know runtime member `str.to_string`",
         ),
         (
             Type::named("str"),
@@ -6150,7 +6151,8 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "to_string",
                 vec![arg(Operand::Int(1))],
             ),
-            "expected `to_string()` to take no arguments",
+            // The checker gives `to_string()` only to numbers and `bool`.
+            "does not know runtime member `str.to_string`",
         ),
         (
             module_with_main_member_call_result_type(

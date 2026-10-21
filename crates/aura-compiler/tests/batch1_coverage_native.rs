@@ -4,6 +4,7 @@
 //! shared validator does refuse are asserted on both public boundaries so
 //! the file never records a backend-only containment as the whole story.
 
+use aura_compiler::runtime_ops::RuntimeOp;
 use aura_compiler::{emit_host_native_object, lower_source_to_mir, run_mir, MirModule};
 use serde_json::{json, Value};
 
@@ -31,12 +32,11 @@ fn instructions_mut(function: &mut Value) -> impl Iterator<Item = &mut Value> {
         .filter(|instruction| instruction.is_object())
 }
 
+/// The first call to member `field`, spelled as a `Member` call or as a
+/// resolved runtime operation.
 fn member_call_mut<'a>(function: &'a mut Value, field: &str) -> &'a mut Value {
-    let field = json!(field);
     instructions_mut(function)
-        .find(|instruction| {
-            instruction["Assign"]["value"]["Call"]["callee"]["Member"]["field"] == field
-        })
+        .find(|instruction| member_field(instruction).as_deref() == Some(field))
         .map(|instruction| &mut instruction["Assign"]["value"]["Call"])
         .unwrap_or_else(|| panic!("member call `{field}` not found"))
 }
@@ -76,27 +76,33 @@ fn path<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a Value> {
     keys.iter().try_fold(value, |value, key| value.get(key))
 }
 
-fn member_field(instruction: &Value) -> Option<&str> {
-    path(
-        instruction,
-        &["Assign", "value", "Call", "callee", "Member", "field"],
-    )
-    .and_then(Value::as_str)
+/// The callee variant of a member call: `Member`, or `Runtime` for a
+/// resolved runtime operation.
+fn member_callee_kind(instruction: &Value) -> Option<&'static str> {
+    let callee = path(instruction, &["Assign", "value", "Call", "callee"])?;
+    ["Member", "Runtime"]
+        .into_iter()
+        .find(|kind| callee.get(kind).is_some())
+}
+
+/// The source member a call names; a resolved runtime operation names the
+/// member it was resolved from.
+fn member_field(instruction: &Value) -> Option<String> {
+    let callee = &instruction["Assign"]["value"]["Call"]["callee"];
+    match member_callee_kind(instruction)? {
+        "Member" => callee["Member"]["field"].as_str().map(str::to_string),
+        _ => {
+            let op: RuntimeOp = serde_json::from_value(callee["Runtime"]["op"].clone())
+                .expect("a runtime callee names a runtime op");
+            Some(op.member_name().to_string())
+        }
+    }
 }
 
 fn member_has_receiver_place(instruction: &Value) -> bool {
-    path(
-        instruction,
-        &[
-            "Assign",
-            "value",
-            "Call",
-            "callee",
-            "Member",
-            "receiver_place",
-        ],
-    )
-    .is_some_and(Value::is_string)
+    member_callee_kind(instruction).is_some_and(|kind| {
+        instruction["Assign"]["value"]["Call"]["callee"][kind]["receiver_place"].is_string()
+    })
 }
 
 fn returned_view_type(pointee: Value) -> Value {
@@ -468,7 +474,7 @@ fn member_calls_without_receiver_places_are_refused_or_lowered_by_field_kind() {
         let mut encoded = encode(COLLECTIONS);
         for instruction in instructions_mut(function_mut(&mut encoded, "main")) {
             if member_has_receiver_place(instruction) {
-                fields.push(member_field(instruction).unwrap().to_string());
+                fields.push(member_field(instruction).unwrap());
             }
         }
     }
@@ -482,7 +488,8 @@ fn member_calls_without_receiver_places_are_refused_or_lowered_by_field_kind() {
         for instruction in instructions_mut(function_mut(&mut encoded, "main")) {
             if member_has_receiver_place(instruction) {
                 if seen == index {
-                    instruction["Assign"]["value"]["Call"]["callee"]["Member"]["receiver_place"] =
+                    let kind = member_callee_kind(instruction).expect("a member call");
+                    instruction["Assign"]["value"]["Call"]["callee"][kind]["receiver_place"] =
                         json!(null);
                 }
                 seen += 1;
@@ -543,7 +550,7 @@ fn native_backend_rejects_malformed_collection_member_arguments() {
     let main = function_mut(&mut encoded, "main");
     let mut seen = 0;
     for instruction in instructions_mut(main) {
-        if member_field(instruction) == Some("clear") {
+        if member_field(instruction).as_deref() == Some("clear") {
             seen += 1;
             if seen == 2 {
                 instruction["Assign"]["value"]["Call"]["args"] = json!([extra]);

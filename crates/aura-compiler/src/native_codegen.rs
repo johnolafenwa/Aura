@@ -27,6 +27,7 @@ use crate::native_runtime::{
     encode_direct_ffi_call_spec, DirectFfiCallSpec, DirectFfiParam, DirectFfiType,
 };
 use crate::runtime_abi::{AbiType, RuntimeFn, RuntimeTable};
+use crate::runtime_ops::{ResourceOp, RuntimeOp, ScalarOp, ValueOp};
 use crate::sema::{optional_type, text_convenience_result_type};
 use crate::sema::{substitute_type, FunctionParamContract, Type};
 
@@ -48,7 +49,10 @@ pub fn emit_host_object_with_metadata(
     program_path: &str,
     program_source: &str,
 ) -> std::result::Result<Vec<u8>, String> {
-    let module = reachability::prune_unreachable_functions(module);
+    let mut module = reachability::prune_unreachable_functions(module);
+    // Hand-built or older MIR may still spell resolved operations as member
+    // calls; the pass is idempotent on lowered MIR.
+    crate::mir::resolve_runtime_ops(&mut module);
     let context = NativeCodegen::new(&module, program_path, program_source)?;
     context.emit()
 }
@@ -164,29 +168,6 @@ fn direct_array_element_type(ty: &DirectType) -> Option<&Type> {
         }
         _ => None,
     }
-}
-
-fn is_fixed_width_integer_type(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::Named(name, args)
-            if args.is_empty()
-                && matches!(
-                    name.as_str(),
-                    "int8"
-                        | "int16"
-                        | "int32"
-                        | "int64"
-                        | "int128"
-                        | "intsize"
-                        | "uint8"
-                        | "uint16"
-                        | "uint32"
-                        | "uint64"
-                        | "uint128"
-                        | "uintsize"
-                )
-    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1957,6 +1938,57 @@ enum LentReceiverKind {
     Shared,
     /// A `mut self` method: its writeback stores the receiver back.
     MutableWriteback,
+}
+
+/// How the emitter passes one argument of a handle runtime operation.
+#[derive(Clone, Copy)]
+enum RuntimeOpArgLayout {
+    /// One boxed value word.
+    Boxed,
+    /// One boxed value word, stored back to the argument's writeback place
+    /// after the call.
+    BoxedWriteback,
+    /// An `int32`, boxed.
+    BoxedInt32,
+    /// A scalar `int64` word.
+    Int64,
+}
+
+fn runtime_op_arg_layout(op: RuntimeOp, name: &str) -> RuntimeOpArgLayout {
+    use crate::runtime_ops::{ResourceOp, RngOp};
+    match (op, name) {
+        (RuntimeOp::Rng(RngOp::NextInt), _) => RuntimeOpArgLayout::Int64,
+        (RuntimeOp::Rng(RngOp::Shuffle), _) => RuntimeOpArgLayout::BoxedWriteback,
+        (RuntimeOp::Resource(ResourceOp::ProcessSupervisorStart), _) => RuntimeOpArgLayout::Boxed,
+        (RuntimeOp::Resource(_), "max_bytes" | "count" | "status") => {
+            RuntimeOpArgLayout::BoxedInt32
+        }
+        _ => RuntimeOpArgLayout::Boxed,
+    }
+}
+
+/// One lowered argument of a handle runtime operation.
+enum RuntimeOpArg {
+    Boxed(ValueRef),
+    Word(Value),
+}
+
+/// What a member call on a receiver runs: a member named in MIR, or a
+/// runtime operation lowering resolved.
+#[derive(Clone, Copy)]
+enum MemberCallee<'a> {
+    Field(&'a str),
+    Runtime(RuntimeOp),
+}
+
+impl<'a> MemberCallee<'a> {
+    /// The source member name.
+    fn field(self) -> &'a str {
+        match self {
+            MemberCallee::Field(field) => field,
+            MemberCallee::Runtime(op) => op.member_name(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -5132,7 +5164,27 @@ impl<'a> FunctionCompiler<'a> {
                 object,
                 field,
                 receiver_place,
-            } => self.compile_member_call(object, field, receiver_place.as_deref(), args),
+            } => self.compile_member_call(
+                object,
+                MemberCallee::Field(field),
+                receiver_place.as_deref(),
+                args,
+            ),
+            CallTarget::Runtime {
+                op,
+                receiver: Some(object),
+                receiver_place,
+            } => self.compile_member_call(
+                object,
+                MemberCallee::Runtime(*op),
+                receiver_place.as_deref(),
+                args,
+            ),
+            CallTarget::Runtime {
+                op, receiver: None, ..
+            } => Err(format!(
+                "direct backend received runtime operation `{op}` without a receiver"
+            )),
             CallTarget::TraitMember {
                 object,
                 trait_name,
@@ -7169,18 +7221,34 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_member_call(
         &mut self,
         object: &Operand,
-        field: &str,
+        callee: MemberCallee<'_>,
         receiver_place: Option<&str>,
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
+        let field = callee.field();
         if let Some(result) = self.compile_borrowed_element_member_call(object, field, args)? {
             return Ok(result);
         }
         if let Some(lent) = self.lendable_receiver(object, field, args)? {
-            return self.compile_lent_member_call(lent, field, receiver_place, args);
+            return self.compile_lent_member_call(lent, callee, receiver_place, args);
         }
         let object = self.load_operand(object)?;
-        self.compile_member_call_on_receiver(object, field, receiver_place, args)
+        self.compile_member_callee_on_receiver(object, callee, receiver_place, args)
+    }
+
+    fn compile_member_callee_on_receiver(
+        &mut self,
+        object: ValueRef,
+        callee: MemberCallee<'_>,
+        receiver_place: Option<&str>,
+        args: &[MirArg],
+    ) -> std::result::Result<ValueRef, String> {
+        match callee {
+            MemberCallee::Field(field) => {
+                self.compile_member_call_on_receiver(object, field, receiver_place, args)
+            }
+            MemberCallee::Runtime(op) => self.compile_runtime_op(op, object, receiver_place, args),
+        }
     }
 
     /// The loan behind `operand` when it lends one element of a local list
@@ -7451,7 +7519,7 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_lent_member_call(
         &mut self,
         lent: LentReceiver,
-        field: &str,
+        callee: MemberCallee<'_>,
         receiver_place: Option<&str>,
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
@@ -7464,14 +7532,14 @@ impl<'a> FunctionCompiler<'a> {
                 // in place and the move back publishes the change.
                 self.clear_temporary_opaque_owned(&receiver);
                 let result =
-                    self.compile_member_call_on_receiver(receiver.clone(), field, None, args)?;
+                    self.compile_member_callee_on_receiver(receiver.clone(), callee, None, args)?;
                 self.mark_temporary_opaque_owned(&receiver);
                 self.store_place(&lent.place, receiver)?;
                 Ok(result)
             }
             // A `mut self` method's writeback stores the receiver back.
             LentReceiverKind::MutableWriteback => {
-                self.compile_member_call_on_receiver(receiver, field, receiver_place, args)
+                self.compile_member_callee_on_receiver(receiver, callee, receiver_place, args)
             }
         }
     }
@@ -7483,52 +7551,6 @@ impl<'a> FunctionCompiler<'a> {
         receiver_place: Option<&str>,
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
-        if let DirectType::Opaque(Type::Named(name, _)) = &object.ty {
-            if let Some(
-                member @ (BuiltinMember::DurationToMilliseconds | BuiltinMember::DurationToSeconds),
-            ) = BuiltinMember::resolve_runtime(name, field)
-            {
-                if !args.is_empty() {
-                    return Err(format!(
-                        "direct backend expected `{}()` to take no arguments",
-                        member.name()
-                    ));
-                }
-                let unit_nanoseconds = match member {
-                    BuiltinMember::DurationToMilliseconds => {
-                        crate::runtime_value::NANOS_PER_MILLISECOND
-                    }
-                    BuiltinMember::DurationToSeconds => crate::runtime_value::NANOS_PER_SECOND,
-                    _ => unreachable!("Duration conversion match is exhaustive"),
-                };
-                let unit_nanoseconds = self
-                    .builder
-                    .ins()
-                    .iconst(types::I64, unit_nanoseconds as i64);
-                let inst = self.builder.ins().call(
-                    self.runtime[RuntimeFn::DurationToFloat],
-                    &[object.values[0], unit_nanoseconds],
-                );
-                return Ok(ValueRef {
-                    values: self.builder.inst_results(inst).to_vec(),
-                    ty: DirectType::Scalar(ScalarKind::Float64),
-                });
-            }
-        }
-
-        if matches!(object.ty.scalar_kind(), Some(kind) if kind.is_float()) && field == "sqrt" {
-            if !args.is_empty() {
-                return Err("direct backend expected `sqrt()` to take no arguments".to_string());
-            }
-            let inst = self
-                .builder
-                .ins()
-                .call(self.runtime[RuntimeFn::SqrtF64], &[object.values[0]]);
-            return Ok(ValueRef {
-                values: self.builder.inst_results(inst).to_vec(),
-                ty: object.ty,
-            });
-        }
         if object.ty.scalar_kind().is_some()
             && matches!(field, "add" | "sub" | "mul" | "div")
             && args.len() == 1
@@ -7607,98 +7629,10 @@ impl<'a> FunctionCompiler<'a> {
                 self.compile_opaque_member_call(&ty, object, field, receiver_place, args, None)
             }
             DirectType::Scalar(_) => {
-                if matches!(object.ty.scalar_kind(), Some(kind) if kind.is_integer())
-                    && matches!(
-                        field,
-                        "wrapping_add"
-                            | "wrapping_sub"
-                            | "wrapping_mul"
-                            | "saturating_add"
-                            | "saturating_sub"
-                            | "saturating_mul"
-                            | "wrapping_shl"
-                            | "wrapping_shr"
-                            | "saturating_shl"
-                            | "saturating_shr"
-                    )
-                {
-                    let argument_name = if field.ends_with("shl") || field.ends_with("shr") {
-                        "count"
-                    } else {
-                        "rhs"
-                    };
-                    let ordered = ordered_named_args(&[argument_name], args)?;
-                    let argument = ordered[0];
-                    let target = object.ty.clone();
-                    let left = self.ensure_opaque(object)?;
-                    let right = self.load_operand_as_opaque_direct(&argument.value, &target)?;
-                    let operation = match field {
-                        "wrapping_add" | "saturating_add" => 0,
-                        "wrapping_sub" | "saturating_sub" => 1,
-                        "wrapping_shl" | "saturating_shl" => 3,
-                        "wrapping_shr" | "saturating_shr" => 4,
-                        _ => {
-                            debug_assert!(matches!(field, "wrapping_mul" | "saturating_mul"));
-                            2
-                        }
-                    };
-                    let arithmetic_mode = if field.starts_with("wrapping_") { 1 } else { 2 };
-                    let operation = self.builder.ins().iconst(types::I64, operation);
-                    let arithmetic_mode = self.builder.ins().iconst(types::I64, arithmetic_mode);
-                    let zero = self.builder.ins().iconst(types::I64, 0);
-                    let inst = self.builder.ins().call(
-                        self.runtime[RuntimeFn::IntegerWidthBinary],
-                        &[
-                            left.values[0],
-                            right.values[0],
-                            operation,
-                            arithmetic_mode,
-                            zero,
-                            zero,
-                        ],
-                    );
-                    let result = self.owned_opaque_result(
-                        self.builder.inst_results(inst).to_vec(),
-                        direct_type_to_type(&target),
-                    );
-                    return self.coerce_value(result, &target);
-                }
-                if field == "to_float"
-                    && matches!(object.ty.scalar_kind(), Some(kind) if kind.is_integer())
-                {
-                    if !args.is_empty() {
-                        return Err(DIRECT_TO_FLOAT_ARITY_ERROR.to_string());
-                    }
-                    let value = if matches!(object.ty.scalar_kind(), Some(ScalarKind::Uint64)) {
-                        self.builder
-                            .ins()
-                            .fcvt_from_uint(types::F64, object.values[0])
-                    } else {
-                        self.builder
-                            .ins()
-                            .fcvt_from_sint(types::F64, object.values[0])
-                    };
-                    return Ok(ValueRef {
-                        values: vec![value],
-                        ty: DirectType::Scalar(ScalarKind::Float64),
-                    });
-                }
-                if field == "to_string" {
-                    if !args.is_empty() {
-                        return Err("direct backend expected `to_string()` to take no arguments"
-                            .to_string());
-                    }
-                    let object = self.ensure_opaque(object)?;
-                    let inst = self
-                        .builder
-                        .ins()
-                        .call(self.runtime[RuntimeFn::StringifyValue], &[object.values[0]]);
-                    return Ok(self.owned_opaque_result(
-                        self.builder.inst_results(inst).to_vec(),
-                        Type::named("str"),
-                    ));
-                }
                 let receiver_ty = direct_type_to_type(&object.ty);
+                if let Some(op) = RuntimeOp::resolve_member(&receiver_ty, field, |_| false) {
+                    return self.compile_runtime_op(op, object, receiver_place, args);
+                }
                 if self.find_trait_method(&receiver_ty, field).is_some() {
                     return self.compile_class_member_call(
                         &receiver_ty.to_string(),
@@ -11395,8 +11329,12 @@ impl<'a> FunctionCompiler<'a> {
                     .is_some();
                 if has_exit {
                     let operand = Operand::Place(place.to_string());
-                    let result =
-                        self.compile_member_call(&operand, exit_method, Some(place), &[])?;
+                    let result = self.compile_member_call(
+                        &operand,
+                        MemberCallee::Field(exit_method),
+                        Some(place),
+                        &[],
+                    )?;
                     if record_exit_failure {
                         let class_name = class_ty.class_name.clone();
                         self.record_manager_exit_failure_value(&class_name, result)?;
@@ -11566,6 +11504,358 @@ impl<'a> FunctionCompiler<'a> {
         Ok(result)
     }
 
+    /// Emits a resolved runtime operation on its loaded receiver. The op
+    /// names the helper and its immediate words; this code decides only how
+    /// each value is laid out in machine words.
+    fn compile_runtime_op(
+        &mut self,
+        op: RuntimeOp,
+        object: ValueRef,
+        _receiver_place: Option<&str>,
+        args: &[MirArg],
+    ) -> std::result::Result<ValueRef, String> {
+        match op {
+            RuntimeOp::Scalar(scalar) => self.compile_scalar_runtime_op(scalar, object, args),
+            RuntimeOp::Value(value) => self.compile_value_runtime_op(value, object, args),
+            RuntimeOp::Resource(_) | RuntimeOp::Rng(_) => {
+                self.compile_handle_runtime_op(op, object, args)
+            }
+        }
+    }
+
+    /// Appends an op's immediate words, then its source line and column
+    /// words when the helper takes them. A member call has no source span,
+    /// so both are one zero word.
+    fn push_runtime_call_words(
+        &mut self,
+        call: crate::runtime_ops::RuntimeCall,
+        words: &mut Vec<Value>,
+    ) {
+        for immediate in call.immediates {
+            words.push(self.builder.ins().iconst(types::I64, *immediate));
+        }
+        if call.span {
+            let zero = self.builder.ins().iconst(types::I64, 0);
+            words.extend([zero, zero]);
+        }
+    }
+
+    /// A resource handle or `random.Rng` method: the receiver and each
+    /// argument pass as one word, and the helper's result word is the value.
+    fn compile_handle_runtime_op(
+        &mut self,
+        op: RuntimeOp,
+        object: ValueRef,
+        args: &[MirArg],
+    ) -> std::result::Result<ValueRef, String> {
+        let call = op.runtime_call();
+        let receiver_ty = direct_type_to_type(&object.ty);
+        let object = self.ensure_opaque(object)?;
+        let params = op.params().collect::<Vec<_>>();
+        let names = params.iter().map(|param| param.name).collect::<Vec<_>>();
+        let bound = ordered_optional_named_args(&names, args)?;
+        let mut lowered = Vec::with_capacity(params.len());
+        let mut writeback = None;
+        for (index, param) in params.iter().enumerate() {
+            let Some(argument) = bound[index] else {
+                if param.required {
+                    return Err(format!(
+                        "direct backend expected `{}()` to receive `{}`",
+                        op.member_name(),
+                        param.name
+                    ));
+                }
+                let default = self.default_runtime_op_arg(op, param.name)?;
+                lowered.push(default);
+                continue;
+            };
+            let value = match runtime_op_arg_layout(op, param.name) {
+                RuntimeOpArgLayout::Boxed => {
+                    let loaded = self.load_operand(&argument.value)?;
+                    RuntimeOpArg::Boxed(self.ensure_opaque(loaded)?)
+                }
+                RuntimeOpArgLayout::BoxedWriteback => {
+                    let loaded = self.load_operand(&argument.value)?;
+                    writeback = Some((index, argument));
+                    RuntimeOpArg::Boxed(self.ensure_opaque(loaded)?)
+                }
+                RuntimeOpArgLayout::BoxedInt32 => {
+                    let loaded = self.load_operand(&argument.value)?;
+                    let value =
+                        self.coerce_value(loaded, &DirectType::Scalar(ScalarKind::Int32))?;
+                    RuntimeOpArg::Boxed(self.ensure_opaque(value)?)
+                }
+                RuntimeOpArgLayout::Int64 => {
+                    let loaded = self
+                        .load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
+                    let value =
+                        self.coerce_value(loaded, &DirectType::Scalar(ScalarKind::Int64))?;
+                    RuntimeOpArg::Word(value.values[0])
+                }
+            };
+            lowered.push(value);
+        }
+        // An `own` parameter takes its argument: each one is handed over
+        // after every argument is loaded.
+        let member = op.builtin_member();
+        let mut words = vec![object.values[0]];
+        for (index, value) in lowered.iter().enumerate() {
+            words.push(match value {
+                RuntimeOpArg::Boxed(value)
+                    if member.argument_passing(index) == Some(ReceiverKind::Value) =>
+                {
+                    self.transfer_owned_opaque_value(value)
+                }
+                RuntimeOpArg::Boxed(value) => value.values[0],
+                RuntimeOpArg::Word(word) => *word,
+            });
+        }
+        self.push_runtime_call_words(call, &mut words);
+        let results = self.runtime_call_results(self.runtime[call.function], &words);
+        if let Some((index, argument)) = writeback {
+            let Some(place) = &argument.writeback_place else {
+                return Err(format!(
+                    "direct backend expected `{}()` to carry a mutable argument writeback place",
+                    op.member_name()
+                ));
+            };
+            let RuntimeOpArg::Boxed(value) = &lowered[index] else {
+                unreachable!("a writeback argument is boxed");
+            };
+            self.store_place(place, value.clone())?;
+            return Ok(unit_value(&mut self.builder));
+        }
+        let result_ty = op
+            .result_type(&receiver_ty)
+            .ok_or_else(|| format!("direct backend does not know the result type of `{op}`"))?;
+        let scalar = match &result_ty {
+            // A close helper returns the handle's last reference.
+            Type::Unit => {
+                self.release_opaque_handle(results[0]);
+                return Ok(unit_value(&mut self.builder));
+            }
+            Type::Named(name, type_args) if type_args.is_empty() => match name.as_str() {
+                "bool" => Some(ScalarKind::Bool),
+                "int64" => Some(ScalarKind::Int64),
+                "float64" => Some(ScalarKind::Float64),
+                "int32" => {
+                    self.emit_int32_bounds_check(results[0], None)?;
+                    Some(ScalarKind::Int32)
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        Ok(match scalar {
+            Some(kind) => ValueRef {
+                values: results,
+                ty: DirectType::Scalar(kind),
+            },
+            None => self.owned_opaque_result(results, result_ty),
+        })
+    }
+
+    /// The value an omitted optional argument of a handle op passes.
+    fn default_runtime_op_arg(
+        &mut self,
+        op: RuntimeOp,
+        name: &str,
+    ) -> std::result::Result<RuntimeOpArg, String> {
+        let stdio = || Type::Named("process.Stdio".to_string(), Vec::new());
+        Ok(match name {
+            // An absent timeout waits without a deadline.
+            "timeout" => RuntimeOpArg::Word(self.builder.ins().iconst(types::I64, 0)),
+            "cwd" => {
+                let unit = unit_value(&mut self.builder);
+                RuntimeOpArg::Boxed(self.ensure_opaque(unit)?)
+            }
+            "env" => {
+                let results = self.runtime_call_results(self.runtime[RuntimeFn::MapEmpty], &[]);
+                RuntimeOpArg::Boxed(self.owned_opaque_result(
+                    results,
+                    Type::Named(
+                        "dict".to_string(),
+                        vec![Type::named("str"), Type::named("str")],
+                    ),
+                ))
+            }
+            "stdin" => {
+                let results = self.runtime_call_results(self.runtime[RuntimeFn::ProcessNull], &[]);
+                RuntimeOpArg::Boxed(self.owned_opaque_result(results, stdio()))
+            }
+            "stdout" | "stderr" => {
+                let results =
+                    self.runtime_call_results(self.runtime[RuntimeFn::ProcessInherit], &[]);
+                RuntimeOpArg::Boxed(self.owned_opaque_result(results, stdio()))
+            }
+            "restart" => RuntimeOpArg::Boxed(self.compile_enum_variant_for_target(
+                "process.RestartPolicy",
+                "OnFailure",
+                &[],
+                None,
+            )?),
+            "backoff" => {
+                let milliseconds = self.builder.ins().iconst(types::I64, 100);
+                let unit_nanoseconds = self.builder.ins().iconst(
+                    types::I64,
+                    crate::runtime_value::NANOS_PER_MILLISECOND as i64,
+                );
+                let results = self.runtime_call_results(
+                    self.runtime[RuntimeFn::DurationFromI64],
+                    &[milliseconds, unit_nanoseconds],
+                );
+                RuntimeOpArg::Boxed(self.owned_opaque_result(results, Type::named("Duration")))
+            }
+            "max_restarts" => {
+                let minus_one = self.builder.ins().iconst(types::I64, -1);
+                RuntimeOpArg::Boxed(self.ensure_opaque(ValueRef {
+                    values: vec![minus_one],
+                    ty: DirectType::Scalar(ScalarKind::Int32),
+                })?)
+            }
+            "group" => {
+                let one = self.builder.ins().iconst(types::I64, 1);
+                RuntimeOpArg::Boxed(self.ensure_opaque(ValueRef {
+                    values: vec![one],
+                    ty: DirectType::Scalar(ScalarKind::Bool),
+                })?)
+            }
+            _ => {
+                return Err(format!(
+                    "direct backend has no default for argument `{name}` of `{op}`"
+                ))
+            }
+        })
+    }
+
+    /// An integer, `float64`, or `Duration` method.
+    fn compile_scalar_runtime_op(
+        &mut self,
+        op: ScalarOp,
+        object: ValueRef,
+        args: &[MirArg],
+    ) -> std::result::Result<ValueRef, String> {
+        let runtime_op = RuntimeOp::Scalar(op);
+        let call = runtime_op.runtime_call();
+        let no_arguments = || {
+            format!(
+                "direct backend expected `{}()` to take no arguments",
+                runtime_op.member_name()
+            )
+        };
+        match op {
+            ScalarOp::Sqrt => {
+                if !args.is_empty() {
+                    return Err(no_arguments());
+                }
+                let results =
+                    self.runtime_call_results(self.runtime[call.function], &[object.values[0]]);
+                Ok(ValueRef {
+                    values: results,
+                    ty: object.ty,
+                })
+            }
+            ScalarOp::DurationToMilliseconds | ScalarOp::DurationToSeconds => {
+                if !args.is_empty() {
+                    return Err(no_arguments());
+                }
+                let mut words = vec![object.values[0]];
+                self.push_runtime_call_words(call, &mut words);
+                let results = self.runtime_call_results(self.runtime[call.function], &words);
+                Ok(ValueRef {
+                    values: results,
+                    ty: DirectType::Scalar(ScalarKind::Float64),
+                })
+            }
+            ScalarOp::ToFloat => {
+                if !args.is_empty() {
+                    return Err(DIRECT_TO_FLOAT_ARITY_ERROR.to_string());
+                }
+                // A scalar integer converts inline; a boxed one calls the
+                // helper.
+                if let Some(kind) = object.ty.scalar_kind() {
+                    let value = if kind == ScalarKind::Uint64 {
+                        self.builder
+                            .ins()
+                            .fcvt_from_uint(types::F64, object.values[0])
+                    } else {
+                        self.builder
+                            .ins()
+                            .fcvt_from_sint(types::F64, object.values[0])
+                    };
+                    return Ok(ValueRef {
+                        values: vec![value],
+                        ty: DirectType::Scalar(ScalarKind::Float64),
+                    });
+                }
+                let object = self.ensure_opaque(object)?;
+                let results =
+                    self.runtime_call_results(self.runtime[call.function], &[object.values[0]]);
+                Ok(ValueRef {
+                    values: results,
+                    ty: DirectType::Scalar(ScalarKind::Float64),
+                })
+            }
+            ScalarOp::WrappingAdd
+            | ScalarOp::WrappingSub
+            | ScalarOp::WrappingMul
+            | ScalarOp::SaturatingAdd
+            | ScalarOp::SaturatingSub
+            | ScalarOp::SaturatingMul
+            | ScalarOp::WrappingShl
+            | ScalarOp::WrappingShr
+            | ScalarOp::SaturatingShl
+            | ScalarOp::SaturatingShr => {
+                let names = runtime_op
+                    .params()
+                    .map(|param| param.name)
+                    .collect::<Vec<_>>();
+                let ordered = ordered_named_args(&names, args)?;
+                let argument = ordered[0];
+                let (target, result_ty) = match &object.ty {
+                    DirectType::Opaque(ty) => (
+                        ensure_direct_type(ty, &self.classes, "integer receiver")?,
+                        ty.clone(),
+                    ),
+                    other => (other.clone(), direct_type_to_type(other)),
+                };
+                let left = self.ensure_opaque(object)?;
+                let right = self.load_operand_as_opaque_direct(&argument.value, &target)?;
+                let mut words = vec![left.values[0], right.values[0]];
+                self.push_runtime_call_words(call, &mut words);
+                let results = self.runtime_call_results(self.runtime[call.function], &words);
+                let result = self.owned_opaque_result(results, result_ty);
+                self.coerce_value(result, &target)
+            }
+        }
+    }
+
+    /// `to_string`, `clone`, or `copy`: the boxed receiver is the one word.
+    fn compile_value_runtime_op(
+        &mut self,
+        op: ValueOp,
+        object: ValueRef,
+        args: &[MirArg],
+    ) -> std::result::Result<ValueRef, String> {
+        let runtime_op = RuntimeOp::Value(op);
+        if !args.is_empty() {
+            return Err(format!(
+                "direct backend expected `{}()` to take no arguments",
+                runtime_op.member_name()
+            ));
+        }
+        let receiver_ty = direct_type_to_type(&object.ty);
+        let result_ty = runtime_op
+            .result_type(&receiver_ty)
+            .ok_or_else(|| format!("direct backend does not know the result type of `{op:?}`"))?;
+        let object = self.ensure_opaque(object)?;
+        let results = self.runtime_call_results(
+            self.runtime[runtime_op.runtime_call().function],
+            &[object.values[0]],
+        );
+        Ok(self.owned_opaque_result(results, result_ty))
+    }
+
     fn compile_opaque_member_call(
         &mut self,
         object_ty: &Type,
@@ -11591,121 +11881,8 @@ impl<'a> FunctionCompiler<'a> {
                 );
             }
         }
-        if is_fixed_width_integer_type(object_ty)
-            && matches!(
-                field,
-                "wrapping_add"
-                    | "wrapping_sub"
-                    | "wrapping_mul"
-                    | "saturating_add"
-                    | "saturating_sub"
-                    | "saturating_mul"
-                    | "wrapping_shl"
-                    | "wrapping_shr"
-                    | "saturating_shl"
-                    | "saturating_shr"
-            )
-        {
-            let argument_name = if field.ends_with("shl") || field.ends_with("shr") {
-                "count"
-            } else {
-                "rhs"
-            };
-            let ordered = ordered_named_args(&[argument_name], args)?;
-            let argument = ordered[0];
-            let target = ensure_direct_type(object_ty, &self.classes, "integer receiver")?;
-            let left = self.ensure_opaque(object)?;
-            let right = self.load_operand_as_opaque_direct(&argument.value, &target)?;
-            let operation = match field {
-                "wrapping_add" | "saturating_add" => 0,
-                "wrapping_sub" | "saturating_sub" => 1,
-                "wrapping_shl" | "saturating_shl" => 3,
-                "wrapping_shr" | "saturating_shr" => 4,
-                _ => {
-                    debug_assert!(matches!(field, "wrapping_mul" | "saturating_mul"));
-                    2
-                }
-            };
-            let arithmetic_mode = if field.starts_with("wrapping_") { 1 } else { 2 };
-            let operation = self.builder.ins().iconst(types::I64, operation);
-            let arithmetic_mode = self.builder.ins().iconst(types::I64, arithmetic_mode);
-            let zero = self.builder.ins().iconst(types::I64, 0);
-            let inst = self.builder.ins().call(
-                self.runtime[RuntimeFn::IntegerWidthBinary],
-                &[
-                    left.values[0],
-                    right.values[0],
-                    operation,
-                    arithmetic_mode,
-                    zero,
-                    zero,
-                ],
-            );
-            let result = self
-                .owned_opaque_result(self.builder.inst_results(inst).to_vec(), object_ty.clone());
-            return self.coerce_value(result, &target);
-        }
-        if field == "to_float" && is_fixed_width_integer_type(object_ty) {
-            if !args.is_empty() {
-                return Err(DIRECT_TO_FLOAT_ARITY_ERROR.to_string());
-            }
-            let object = self.ensure_opaque(object)?;
-            let inst = self
-                .builder
-                .ins()
-                .call(self.runtime[RuntimeFn::IntegerToFloat], &[object.values[0]]);
-            return Ok(ValueRef {
-                values: self.builder.inst_results(inst).to_vec(),
-                ty: DirectType::Scalar(ScalarKind::Float64),
-            });
-        }
-        if field == "to_string" {
-            if !args.is_empty() {
-                return Err(
-                    "direct backend expected `to_string()` to take no arguments".to_string()
-                );
-            }
-            let object = self.ensure_opaque(object)?;
-            let inst = self
-                .builder
-                .ins()
-                .call(self.runtime[RuntimeFn::StringifyValue], &[object.values[0]]);
-            return Ok(self.owned_opaque_result(
-                self.builder.inst_results(inst).to_vec(),
-                Type::named("str"),
-            ));
-        }
-        if field == "clone"
-            || (field == "copy"
-                && matches!(
-                    object_ty,
-                    Type::Named(name, _) if matches!(name.as_str(), "list" | "dict" | "set")
-                ))
-        {
-            if !args.is_empty() {
-                return Err(format!(
-                    "direct backend expected `{field}()` to take no arguments"
-                ));
-            }
-            let object = self.ensure_opaque(object)?;
-            if matches!(object_ty, Type::Named(name, arguments) if name == "Array" && arguments.len() == 1)
-            {
-                let zero = self.builder.ins().iconst(types::I64, 0);
-                let inst = self.builder.ins().call(
-                    self.runtime[RuntimeFn::ArrayClone],
-                    &[object.values[0], zero, zero],
-                );
-                return Ok(self.owned_opaque_result(
-                    self.builder.inst_results(inst).to_vec(),
-                    object_ty.clone(),
-                ));
-            }
-            let inst = self
-                .builder
-                .ins()
-                .call(self.runtime[RuntimeFn::CloneValue], &[object.values[0]]);
-            return Ok(self
-                .owned_opaque_result(self.builder.inst_results(inst).to_vec(), object_ty.clone()));
+        if let Some(op) = RuntimeOp::resolve_member(object_ty, field, |_| false) {
+            return self.compile_runtime_op(op, object, receiver_place, args);
         }
         if let Type::Named(name, class_args) = object_ty {
             if name == "str" {
@@ -11959,67 +12136,6 @@ impl<'a> FunctionCompiler<'a> {
                     )),
                 };
             }
-            if name == "random.Rng" {
-                let object = self.ensure_opaque(object)?;
-                return match field {
-                    "next_int" => {
-                        let ordered = ordered_named_args(&["lo", "hi"], args)?;
-                        let lo_arg = ordered[0];
-                        let hi_arg = ordered[1];
-                        let lo = self.load_operand_with_integer_hint(
-                            &lo_arg.value,
-                            Some(ScalarKind::Int64),
-                        )?;
-                        let lo = self.coerce_value(lo, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let hi = self.load_operand_with_integer_hint(
-                            &hi_arg.value,
-                            Some(ScalarKind::Int64),
-                        )?;
-                        let hi = self.coerce_value(hi, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::RngNextInt],
-                            &[object.values[0], lo.values[0], hi.values[0]],
-                        );
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Int64),
-                        })
-                    }
-                    "next_float" => {
-                        ordered_named_args(&[], args)?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::RngNextFloat], &[object.values[0]]);
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Float64),
-                        })
-                    }
-                    "shuffle" => {
-                        let ordered = ordered_named_args(&["values"], args)?;
-                        let argument = ordered[0];
-                        let vector = self.load_operand(&argument.value)?;
-                        let vector = self.ensure_opaque(vector)?;
-                        let _ = self.builder.ins().call(
-                            self.runtime[RuntimeFn::RngShuffle],
-                            &[object.values[0], vector.values[0]],
-                        );
-                        let Some(place) = &argument.writeback_place else {
-                            return Err(
-                                "direct backend expected `shuffle()` to carry a mutable argument writeback place"
-                                    .to_string(),
-                            );
-                        };
-                        self.store_place(place, vector)?;
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
-            }
             if name == "Array" {
                 let object = self.ensure_opaque(object)?;
                 let element_ty = class_args
@@ -12031,6 +12147,20 @@ impl<'a> FunctionCompiler<'a> {
                 let array_ty = Type::Named("Array".to_string(), vec![element_ty.clone()]);
                 let zero = self.builder.ins().iconst(types::I64, 0);
                 return match field {
+                    "clone" => {
+                        if !args.is_empty() {
+                            return Err("direct backend expected `clone()` to take no arguments"
+                                .to_string());
+                        }
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ArrayClone],
+                            &[object.values[0], zero, zero],
+                        );
+                        Ok(self.owned_opaque_result(
+                            self.builder.inst_results(inst).to_vec(),
+                            object_ty.clone(),
+                        ))
+                    }
                     "__slice" => {
                         let [start_arg, has_start_arg, end_arg, has_end_arg, line_arg, column_arg] =
                             direct_internal_slice_args(args)?;
@@ -13418,2015 +13548,24 @@ impl<'a> FunctionCompiler<'a> {
                     )),
                 };
             }
-            if name == "fs.File" {
-                let object = self.ensure_opaque(object)?;
-                return match field {
-                    "read_all" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `read_all()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::FileReadAll], &[object.values[0]]);
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::named("str"),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "read_bytes" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `read_bytes()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::FileReadBytes], &[object.values[0]]);
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::Named("list".to_string(), vec![Type::named("uint8")]),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "write_all" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected `write_all()` to receive one argument"
-                                    .to_string(),
-                            );
-                        };
-                        let loaded = self.load_operand(&argument.value)?;
-                        let text = self.ensure_opaque(loaded)?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::FileWriteAll],
-                            &[object.values[0], text.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                            ),
-                        ))
-                    }
-                    "write_bytes" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected `write_bytes()` to receive one argument"
-                                    .to_string(),
-                            );
-                        };
-                        let loaded = self.load_operand(&argument.value)?;
-                        let bytes = self.ensure_opaque(loaded)?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::FileWriteBytes],
-                            &[object.values[0], bytes.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                            ),
-                        ))
-                    }
-                    "flush" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `flush()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::FileFlush], &[object.values[0]]);
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                            ),
-                        ))
-                    }
-                    "sync" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `sync()` to take no arguments".to_string()
-                            );
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::FileSync], &[object.values[0]]);
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                            ),
-                        ))
-                    }
-                    "close" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `close()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::FileClose], &[object.values[0]]);
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
+            // These handles own no host resource, so leaving their scope
+            // closes nothing.
+            if field == "close"
+                && matches!(
+                    name.as_str(),
+                    "net.HttpExchange" | "net.HttpResponse" | "net.WebSocketListener"
+                )
+            {
+                let _ = self.ensure_opaque(object)?;
+                return Ok(unit_value(&mut self.builder));
             }
-            if name == "process.Child" {
-                let object = self.ensure_opaque(object)?;
-                return match field {
-                    "stdin" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `stdin()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessChildStdin],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            optional_type(Type::Named("process.Pipe".to_string(), Vec::new())),
-                        ))
-                    }
-                    "stdout" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `stdout()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessChildStdout],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            optional_type(Type::Named("process.Pipe".to_string(), Vec::new())),
-                        ))
-                    }
-                    "stderr" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `stderr()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessChildStderr],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            optional_type(Type::Named("process.Pipe".to_string(), Vec::new())),
-                        ))
-                    }
-                    "wait" => {
-                        let bound = ordered_optional_named_args(&["timeout"], args)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessChildWait],
-                            &[object.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named("process.Wait".to_string(), Vec::new()),
-                        ))
-                    }
-                    "wait_or_none" => {
-                        let bound = ordered_optional_named_args(&["timeout"], args)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessChildWaitOrNone],
-                            &[object.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    optional_type(Type::Named(
-                                        "process.ExitStatus".to_string(),
-                                        Vec::new(),
-                                    )),
-                                    Type::Named("process.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "wait_ok" => {
-                        let bound = ordered_optional_named_args(&["timeout"], args)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessChildWaitOk],
-                            &[object.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::Named("process.ExitStatus".to_string(), Vec::new()),
-                                    Type::Named("process.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "kill" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `kill()` to take no arguments".to_string()
-                            );
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessChildKill],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::Unit,
-                                    Type::Named("process.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "terminate" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `terminate()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessChildTerminate],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::Unit,
-                                    Type::Named("process.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "close" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `close()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessChildClose],
-                            &[object.values[0]],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
-            }
-            if name == "process.Pipe" {
-                let object = self.ensure_opaque(object)?;
-                return match field {
-                    "read_all" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `read_all()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessPipeReadAll],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::named("str"),
-                                    Type::Named("process.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "read_line" => {
-                        let bound = ordered_optional_named_args(&["timeout"], args)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessPipeReadLine],
-                            &[object.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    optional_type(Type::named("str")),
-                                    Type::Named("process.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "read_bytes" => {
-                        let bound = ordered_optional_named_args(&["max_bytes", "timeout"], args)?;
-                        let count = required_named_arg(
-                            bound[0],
-                            "direct backend expected `read_bytes()` to receive `max_bytes`",
-                        )?;
-                        let loaded_count = self.load_operand(&count.value)?;
-                        let count = self
-                            .coerce_value(loaded_count, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let count = self.ensure_opaque(count)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessPipeReadBytes],
-                            &[object.values[0], count.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    optional_type(Type::Named(
-                                        "list".to_string(),
-                                        vec![Type::named("uint8")],
-                                    )),
-                                    Type::Named("process.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "write_all" => {
-                        let bound = ordered_optional_named_args(&["text", "timeout"], args)?;
-                        let argument = required_named_arg(
-                            bound[0],
-                            "direct backend expected `write_all()` to receive `text`",
-                        )?;
-                        let loaded = self.load_operand(&argument.value)?;
-                        let text = self.ensure_opaque(loaded)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessPipeWriteAll],
-                            &[object.values[0], text.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::Unit,
-                                    Type::Named("process.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "write_bytes" => {
-                        let bound = ordered_optional_named_args(&["bytes", "timeout"], args)?;
-                        let argument = required_named_arg(
-                            bound[0],
-                            "direct backend expected `write_bytes()` to receive `bytes`",
-                        )?;
-                        let loaded = self.load_operand(&argument.value)?;
-                        let bytes = self.ensure_opaque(loaded)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessPipeWriteBytes],
-                            &[object.values[0], bytes.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::Unit,
-                                    Type::Named("process.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "flush" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `flush()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessPipeFlush],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::Unit,
-                                    Type::Named("process.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "close" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `close()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessPipeClose],
-                            &[object.values[0]],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
-            }
-            if name == "process.Completed" {
-                let object = self.ensure_opaque(object)?;
-                return match field {
-                    "status" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `status()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessCompletedStatus],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named("process.ExitStatus".to_string(), Vec::new()),
-                        ))
-                    }
-                    "success" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `success()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessCompletedSuccess],
-                            &[object.values[0]],
-                        );
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Bool),
-                        })
-                    }
-                    "stdout" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `stdout()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessCompletedStdout],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::named("str"),
-                        ))
-                    }
-                    "stderr" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `stderr()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessCompletedStderr],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::named("str"),
-                        ))
-                    }
-                    "stdout_bytes" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `stdout_bytes()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessCompletedStdoutBytes],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named("list".to_string(), vec![Type::named("uint8")]),
-                        ))
-                    }
-                    "stderr_bytes" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `stderr_bytes()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessCompletedStderrBytes],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named("list".to_string(), vec![Type::named("uint8")]),
-                        ))
-                    }
-                    "check" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `check()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessCompletedCheck],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::Unit,
-                                    Type::Named("process.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
-            }
-            if name == "process.Supervisor" {
-                let object = self.ensure_opaque(object)?;
-                return match field {
-                    "start" => {
-                        let bound = ordered_optional_named_args(
-                            &[
-                                "name",
-                                "command",
-                                "cwd",
-                                "env",
-                                "stdin",
-                                "stdout",
-                                "stderr",
-                                "restart",
-                                "backoff",
-                                "max_restarts",
-                                "group",
-                            ],
-                            args,
-                        )?;
-                        let required = |index: usize, label: &str| {
-                            required_named_arg(
-                                bound[index],
-                                &format!(
-                                    "direct backend expected `start()` to receive `{}`",
-                                    label
-                                ),
-                            )
-                        };
-                        let name_loaded = self.load_operand(&required(0, "name")?.value)?;
-                        let name = self.ensure_opaque(name_loaded)?;
-                        let command_loaded = self.load_operand(&required(1, "command")?.value)?;
-                        let command = self.ensure_opaque(command_loaded)?;
-                        let cwd = if let Some(argument) = bound[2] {
-                            let loaded = self.load_operand(&argument.value)?;
-                            self.ensure_opaque(loaded)?
-                        } else {
-                            let unit = unit_value(&mut self.builder);
-                            self.ensure_opaque(unit)?
-                        };
-                        let env = if let Some(argument) = bound[3] {
-                            let loaded = self.load_operand(&argument.value)?;
-                            self.ensure_opaque(loaded)?
-                        } else {
-                            let init = self
-                                .builder
-                                .ins()
-                                .call(self.runtime[RuntimeFn::MapEmpty], &[]);
-                            self.owned_opaque_result(
-                                self.builder.inst_results(init).to_vec(),
-                                Type::Named(
-                                    "dict".to_string(),
-                                    vec![Type::named("str"), Type::named("str")],
-                                ),
-                            )
-                        };
-                        let stdin = if let Some(argument) = bound[4] {
-                            let loaded = self.load_operand(&argument.value)?;
-                            self.ensure_opaque(loaded)?
-                        } else {
-                            let inst = self
-                                .builder
-                                .ins()
-                                .call(self.runtime[RuntimeFn::ProcessNull], &[]);
-                            self.owned_opaque_result(
-                                self.builder.inst_results(inst).to_vec(),
-                                Type::Named("process.Stdio".to_string(), Vec::new()),
-                            )
-                        };
-                        let stdout = if let Some(argument) = bound[5] {
-                            let loaded = self.load_operand(&argument.value)?;
-                            self.ensure_opaque(loaded)?
-                        } else {
-                            let inst = self
-                                .builder
-                                .ins()
-                                .call(self.runtime[RuntimeFn::ProcessInherit], &[]);
-                            self.owned_opaque_result(
-                                self.builder.inst_results(inst).to_vec(),
-                                Type::Named("process.Stdio".to_string(), Vec::new()),
-                            )
-                        };
-                        let stderr = if let Some(argument) = bound[6] {
-                            let loaded = self.load_operand(&argument.value)?;
-                            self.ensure_opaque(loaded)?
-                        } else {
-                            let inst = self
-                                .builder
-                                .ins()
-                                .call(self.runtime[RuntimeFn::ProcessInherit], &[]);
-                            self.owned_opaque_result(
-                                self.builder.inst_results(inst).to_vec(),
-                                Type::Named("process.Stdio".to_string(), Vec::new()),
-                            )
-                        };
-                        let restart = if let Some(argument) = bound[7] {
-                            let loaded = self.load_operand(&argument.value)?;
-                            self.ensure_opaque(loaded)?
-                        } else {
-                            self.compile_enum_variant_for_target(
-                                "process.RestartPolicy",
-                                "OnFailure",
-                                &[],
-                                None,
-                            )?
-                        };
-                        let backoff = if let Some(argument) = bound[8] {
-                            let loaded = self.load_operand(&argument.value)?;
-                            self.ensure_opaque(loaded)?
-                        } else {
-                            let milliseconds = self.builder.ins().iconst(types::I64, 100);
-                            let unit_nanoseconds = self.builder.ins().iconst(
-                                types::I64,
-                                crate::runtime_value::NANOS_PER_MILLISECOND as i64,
-                            );
-                            let inst = self.builder.ins().call(
-                                self.runtime[RuntimeFn::DurationFromI64],
-                                &[milliseconds, unit_nanoseconds],
-                            );
-                            self.owned_opaque_result(
-                                self.builder.inst_results(inst).to_vec(),
-                                Type::named("Duration"),
-                            )
-                        };
-                        let max_restarts = if let Some(argument) = bound[9] {
-                            let loaded = self.load_operand(&argument.value)?;
-                            self.ensure_opaque(loaded)?
-                        } else {
-                            let minus_one = self.builder.ins().iconst(types::I64, -1);
-                            self.ensure_opaque(ValueRef {
-                                values: vec![minus_one],
-                                ty: DirectType::Scalar(ScalarKind::Int32),
-                            })?
-                        };
-                        let group = if let Some(argument) = bound[10] {
-                            let loaded = self.load_operand(&argument.value)?;
-                            self.ensure_opaque(loaded)?
-                        } else {
-                            let one = self.builder.ins().iconst(types::I64, 1);
-                            self.ensure_opaque(ValueRef {
-                                values: vec![one],
-                                ty: DirectType::Scalar(ScalarKind::Bool),
-                            })?
-                        };
-                        let name = self.transfer_owned_opaque_value(&name);
-                        let command = self.transfer_owned_opaque_value(&command);
-                        let cwd = self.transfer_owned_opaque_value(&cwd);
-                        let env = self.transfer_owned_opaque_value(&env);
-                        let stdin = self.transfer_owned_opaque_value(&stdin);
-                        let stdout = self.transfer_owned_opaque_value(&stdout);
-                        let stderr = self.transfer_owned_opaque_value(&stderr);
-                        let restart = self.transfer_owned_opaque_value(&restart);
-                        let backoff = self.transfer_owned_opaque_value(&backoff);
-                        let max_restarts = self.transfer_owned_opaque_value(&max_restarts);
-                        let group = self.transfer_owned_opaque_value(&group);
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessSupervisorStart],
-                            &[
-                                object.values[0],
-                                name,
-                                command,
-                                cwd,
-                                env,
-                                stdin,
-                                stdout,
-                                stderr,
-                                restart,
-                                backoff,
-                                max_restarts,
-                                group,
-                            ],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::Unit,
-                                    Type::Named("process.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "wait" => {
-                        let bound = ordered_optional_named_args(&["timeout"], args)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessSupervisorWait],
-                            &[object.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named("process.SupervisorWait".to_string(), Vec::new()),
-                        ))
-                    }
-                    "wait_or_none" => {
-                        let bound = ordered_optional_named_args(&["timeout"], args)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessSupervisorWaitOrNone],
-                            &[object.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    optional_type(Type::Named(
-                                        "process.SupervisorEvent".to_string(),
-                                        Vec::new(),
-                                    )),
-                                    Type::Named("process.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "stop" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `stop()` to take no arguments".to_string()
-                            );
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessSupervisorStop],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::Unit,
-                                    Type::Named("process.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "is_empty" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `is_empty()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessSupervisorIsEmpty],
-                            &[object.values[0]],
-                        );
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Bool),
-                        })
-                    }
-                    "close" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `close()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ProcessSupervisorClose],
-                            &[object.values[0]],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
-            }
-            if name == "net.TcpListener" {
-                let object = self.ensure_opaque(object)?;
-                return match field {
-                    "accept" => {
-                        let bound = ordered_optional_named_args(&["timeout"], args)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::TcpListenerAccept],
-                            &[object.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::Named("net.TcpStream".to_string(), Vec::new()),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "local_addr" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `local_addr()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::TcpListenerLocalAddr],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::named("str"),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "close" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `close()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::TcpListenerClose],
-                            &[object.values[0]],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
-            }
-            if name == "net.TcpStream" {
-                let object = self.ensure_opaque(object)?;
-                return match field {
-                    "read_all" => {
-                        let bound = ordered_optional_named_args(&["timeout"], args)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::TcpStreamReadAll],
-                            &[object.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::named("str"),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "read_line" => {
-                        let bound = ordered_optional_named_args(&["timeout"], args)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::TcpStreamReadLine],
-                            &[object.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    optional_type(Type::named("str")),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "read_bytes" => {
-                        let bound = ordered_optional_named_args(&["max_bytes", "timeout"], args)?;
-                        let count = required_named_arg(
-                            bound[0],
-                            "direct backend expected `read_bytes()` to receive `max_bytes`",
-                        )?;
-                        let loaded_count = self.load_operand(&count.value)?;
-                        let count = self
-                            .coerce_value(loaded_count, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let count = self.ensure_opaque(count)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::TcpStreamReadBytes],
-                            &[object.values[0], count.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    optional_type(Type::Named(
-                                        "list".to_string(),
-                                        vec![Type::named("uint8")],
-                                    )),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "read_exact" => {
-                        let bound = ordered_optional_named_args(&["count", "timeout"], args)?;
-                        let count = required_named_arg(
-                            bound[0],
-                            "direct backend expected `read_exact()` to receive `count`",
-                        )?;
-                        let loaded_count = self.load_operand(&count.value)?;
-                        let count = self
-                            .coerce_value(loaded_count, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let count = self.ensure_opaque(count)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::TcpStreamReadExact],
-                            &[object.values[0], count.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::Named("list".to_string(), vec![Type::named("uint8")]),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "write_all" => {
-                        let bound = ordered_optional_named_args(&["text", "timeout"], args)?;
-                        let argument = required_named_arg(
-                            bound[0],
-                            "direct backend expected `write_all()` to receive `text`",
-                        )?;
-                        let loaded = self.load_operand(&argument.value)?;
-                        let text = self.ensure_opaque(loaded)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::TcpStreamWriteAll],
-                            &[object.values[0], text.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                            ),
-                        ))
-                    }
-                    "write_bytes" => {
-                        let bound = ordered_optional_named_args(&["bytes", "timeout"], args)?;
-                        let argument = required_named_arg(
-                            bound[0],
-                            "direct backend expected `write_bytes()` to receive `bytes`",
-                        )?;
-                        let loaded = self.load_operand(&argument.value)?;
-                        let bytes = self.ensure_opaque(loaded)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::TcpStreamWriteBytes],
-                            &[object.values[0], bytes.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                            ),
-                        ))
-                    }
-                    "flush" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `flush()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::TcpStreamFlush], &[object.values[0]]);
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                            ),
-                        ))
-                    }
-                    "local_addr" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `local_addr()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::TcpStreamLocalAddr],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::named("str"),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "peer_addr" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `peer_addr()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::TcpStreamPeerAddr],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::named("str"),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "shutdown_read" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `shutdown_read()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::TcpStreamShutdownRead],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                            ),
-                        ))
-                    }
-                    "shutdown_write" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `shutdown_write()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::TcpStreamShutdownWrite],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                            ),
-                        ))
-                    }
-                    "shutdown_both" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `shutdown_both()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::TcpStreamShutdownBoth],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                            ),
-                        ))
-                    }
-                    "close" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `close()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::TcpStreamClose], &[object.values[0]]);
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
-            }
-            if name == "net.UdpSocket" {
-                let object = self.ensure_opaque(object)?;
-                return match field {
-                    "send_text" => {
-                        let bound =
-                            ordered_optional_named_args(&["address", "text", "timeout"], args)?;
-                        let address = required_named_arg(
-                            bound[0],
-                            "direct backend expected `send_text()` to receive `address`",
-                        )?;
-                        let text = required_named_arg(
-                            bound[1],
-                            "direct backend expected `send_text()` to receive `text`",
-                        )?;
-                        let loaded_address = self.load_operand(&address.value)?;
-                        let address = self.ensure_opaque(loaded_address)?;
-                        let loaded_text = self.load_operand(&text.value)?;
-                        let text = self.ensure_opaque(loaded_text)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[2])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::UdpSocketSendText],
-                            &[object.values[0], address.values[0], text.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                            ),
-                        ))
-                    }
-                    "send_bytes" => {
-                        let bound =
-                            ordered_optional_named_args(&["address", "bytes", "timeout"], args)?;
-                        let address = required_named_arg(
-                            bound[0],
-                            "direct backend expected `send_bytes()` to receive `address`",
-                        )?;
-                        let bytes = required_named_arg(
-                            bound[1],
-                            "direct backend expected `send_bytes()` to receive `bytes`",
-                        )?;
-                        let loaded_address = self.load_operand(&address.value)?;
-                        let address = self.ensure_opaque(loaded_address)?;
-                        let loaded_bytes = self.load_operand(&bytes.value)?;
-                        let bytes = self.ensure_opaque(loaded_bytes)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[2])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::UdpSocketSendBytes],
-                            &[
-                                object.values[0],
-                                address.values[0],
-                                bytes.values[0],
-                                timeout,
-                            ],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                            ),
-                        ))
-                    }
-                    "recv" => {
-                        let bound = ordered_optional_named_args(&["max_bytes", "timeout"], args)?;
-                        let count = required_named_arg(
-                            bound[0],
-                            "direct backend expected `recv()` to receive `max_bytes`",
-                        )?;
-                        let loaded_count = self.load_operand(&count.value)?;
-                        let count = self
-                            .coerce_value(loaded_count, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let count = self.ensure_opaque(count)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::UdpSocketRecv],
-                            &[object.values[0], count.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    optional_type(Type::Named(
-                                        "list".to_string(),
-                                        vec![Type::named("uint8")],
-                                    )),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "recv_from" => {
-                        let bound = ordered_optional_named_args(&["max_bytes", "timeout"], args)?;
-                        let count = required_named_arg(
-                            bound[0],
-                            "direct backend expected `recv_from()` to receive `max_bytes`",
-                        )?;
-                        let loaded_count = self.load_operand(&count.value)?;
-                        let count = self
-                            .coerce_value(loaded_count, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let count = self.ensure_opaque(count)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::UdpSocketRecvFrom],
-                            &[object.values[0], count.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    optional_type(Type::Named(
-                                        "net.UdpDatagram".to_string(),
-                                        Vec::new(),
-                                    )),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "local_addr" => {
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::UdpSocketLocalAddr],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::named("str"),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "peer_addr" => {
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::UdpSocketPeerAddr],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::named("str"),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "close" => {
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::UdpSocketClose], &[object.values[0]]);
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
-            }
-            if name == "net.UdpDatagram" {
-                let object = self.ensure_opaque(object)?;
-                return match field {
-                    "address" => {
-                        let results = self.runtime_call_results(
-                            self.runtime[RuntimeFn::UdpDatagramAddress],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(results, Type::named("str")))
-                    }
-                    "bytes" => {
-                        let results = self.runtime_call_results(
-                            self.runtime[RuntimeFn::UdpDatagramBytes],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            results,
-                            Type::Named("list".to_string(), vec![Type::named("uint8")]),
-                        ))
-                    }
-                    "text" => {
-                        let results = self.runtime_call_results(
-                            self.runtime[RuntimeFn::UdpDatagramText],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            results,
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::named("str"),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
-            }
-            if name == "net.HttpListener" {
-                let object = self.ensure_opaque(object)?;
-                return match field {
-                    "accept" => {
-                        let bound = ordered_optional_named_args(&["timeout"], args)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::HttpListenerAccept],
-                            &[object.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::Named("net.HttpExchange".to_string(), Vec::new()),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "local_addr" => {
-                        let results = self.runtime_call_results(
-                            self.runtime[RuntimeFn::HttpListenerLocalAddr],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            results,
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::named("str"),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "close" => {
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::HttpListenerClose],
-                            &[object.values[0]],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
-            }
-            if name == "net.HttpExchange" {
-                let object = self.ensure_opaque(object)?;
-                return match field {
-                    "method" => {
-                        let results = self.runtime_call_results(
-                            self.runtime[RuntimeFn::HttpExchangeMethod],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(results, Type::named("str")))
-                    }
-                    "path" => {
-                        let results = self.runtime_call_results(
-                            self.runtime[RuntimeFn::HttpExchangePath],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(results, Type::named("str")))
-                    }
-                    "headers" => {
-                        let results = self.runtime_call_results(
-                            self.runtime[RuntimeFn::HttpExchangeHeaders],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            results,
-                            Type::Named(
-                                "dict".to_string(),
-                                vec![Type::named("str"), Type::named("str")],
-                            ),
-                        ))
-                    }
-                    "body_text" => {
-                        let results = self.runtime_call_results(
-                            self.runtime[RuntimeFn::HttpExchangeBodyText],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            results,
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::named("str"),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "body_bytes" => {
-                        let results = self.runtime_call_results(
-                            self.runtime[RuntimeFn::HttpExchangeBodyBytes],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            results,
-                            Type::Named("list".to_string(), vec![Type::named("uint8")]),
-                        ))
-                    }
-                    "respond_text" => {
-                        let bound = ordered_named_args(&["status", "text", "headers"], args)?;
-                        let loaded_status = self.load_operand(&bound[0].value)?;
-                        let status = self
-                            .coerce_value(loaded_status, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let status = self.ensure_opaque(status)?;
-                        let loaded_text = self.load_operand(&bound[1].value)?;
-                        let text = self.ensure_opaque(loaded_text)?;
-                        let loaded_headers = self.load_operand(&bound[2].value)?;
-                        let headers = self.ensure_opaque(loaded_headers)?;
-                        let text = self.transfer_owned_opaque_value(&text);
-                        let headers = self.transfer_owned_opaque_value(&headers);
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::HttpExchangeRespondText],
-                            &[object.values[0], status.values[0], text, headers],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                            ),
-                        ))
-                    }
-                    "respond_bytes" => {
-                        let bound = ordered_named_args(&["status", "bytes", "headers"], args)?;
-                        let loaded_status = self.load_operand(&bound[0].value)?;
-                        let status = self
-                            .coerce_value(loaded_status, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let status = self.ensure_opaque(status)?;
-                        let loaded_bytes = self.load_operand(&bound[1].value)?;
-                        let bytes = self.ensure_opaque(loaded_bytes)?;
-                        let loaded_headers = self.load_operand(&bound[2].value)?;
-                        let headers = self.ensure_opaque(loaded_headers)?;
-                        let bytes = self.transfer_owned_opaque_value(&bytes);
-                        let headers = self.transfer_owned_opaque_value(&headers);
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::HttpExchangeRespondBytes],
-                            &[object.values[0], status.values[0], bytes, headers],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                            ),
-                        ))
-                    }
-                    "close" => Ok(unit_value(&mut self.builder)),
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
-            }
-            if name == "net.HttpResponse" {
-                let object = self.ensure_opaque(object)?;
-                return match field {
-                    "status" => {
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::HttpResponseStatus],
-                            &[object.values[0]],
-                        );
-                        let status = self.builder.inst_results(inst)[0];
-                        self.emit_int32_bounds_check(status, None)?;
-                        Ok(ValueRef {
-                            values: vec![status],
-                            ty: DirectType::Scalar(ScalarKind::Int32),
-                        })
-                    }
-                    "reason" => {
-                        let results = self.runtime_call_results(
-                            self.runtime[RuntimeFn::HttpResponseReason],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(results, Type::named("str")))
-                    }
-                    "headers" => {
-                        let results = self.runtime_call_results(
-                            self.runtime[RuntimeFn::HttpResponseHeaders],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            results,
-                            Type::Named(
-                                "dict".to_string(),
-                                vec![Type::named("str"), Type::named("str")],
-                            ),
-                        ))
-                    }
-                    "text" => {
-                        let results = self.runtime_call_results(
-                            self.runtime[RuntimeFn::HttpResponseText],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            results,
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::named("str"),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "bytes" => {
-                        let results = self.runtime_call_results(
-                            self.runtime[RuntimeFn::HttpResponseBytes],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            results,
-                            Type::Named("list".to_string(), vec![Type::named("uint8")]),
-                        ))
-                    }
-                    "close" => Ok(unit_value(&mut self.builder)),
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
-            }
-            if name == "net.WebSocketListener" {
-                let object = self.ensure_opaque(object)?;
-                return match field {
-                    "accept" => {
-                        let bound = ordered_optional_named_args(&["timeout"], args)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::WebsocketListenerAccept],
-                            &[object.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::Named("net.WebSocket".to_string(), Vec::new()),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "local_addr" => {
-                        let results = self.runtime_call_results(
-                            self.runtime[RuntimeFn::WebsocketListenerLocalAddr],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            results,
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::named("str"),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "close" => Ok(unit_value(&mut self.builder)),
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
-            }
-            if name == "net.WebSocket" {
-                let object = self.ensure_opaque(object)?;
-                return match field {
-                    "send_text" => {
-                        let bound = ordered_optional_named_args(&["text", "timeout"], args)?;
-                        let text = required_named_arg(
-                            bound[0],
-                            "direct backend expected `send_text()` to receive `text`",
-                        )?;
-                        let loaded_text = self.load_operand(&text.value)?;
-                        let text = self.ensure_opaque(loaded_text)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::WebsocketSendText],
-                            &[object.values[0], text.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                            ),
-                        ))
-                    }
-                    "send_bytes" => {
-                        let bound = ordered_optional_named_args(&["bytes", "timeout"], args)?;
-                        let bytes = required_named_arg(
-                            bound[0],
-                            "direct backend expected `send_bytes()` to receive `bytes`",
-                        )?;
-                        let loaded_bytes = self.load_operand(&bytes.value)?;
-                        let bytes = self.ensure_opaque(loaded_bytes)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::WebsocketSendBytes],
-                            &[object.values[0], bytes.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                            ),
-                        ))
-                    }
-                    "recv_text" => {
-                        let bound = ordered_optional_named_args(&["timeout"], args)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::WebsocketRecvText],
-                            &[object.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    optional_type(Type::named("str")),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "recv_bytes" => {
-                        let bound = ordered_optional_named_args(&["timeout"], args)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::WebsocketRecvBytes],
-                            &[object.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    optional_type(Type::Named(
-                                        "list".to_string(),
-                                        vec![Type::named("uint8")],
-                                    )),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "close" => {
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::WebsocketClose], &[object.values[0]]);
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
-            }
-            if name == "net.UnixListener" {
-                let object = self.ensure_opaque(object)?;
-                return match field {
-                    "accept" => {
-                        let bound = ordered_optional_named_args(&["timeout"], args)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::UnixListenerAccept],
-                            &[object.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::Named("net.UnixStream".to_string(), Vec::new()),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "close" => {
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::UnixListenerClose],
-                            &[object.values[0]],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
-            }
-            if name == "net.UnixStream" {
-                let object = self.ensure_opaque(object)?;
-                return match field {
-                    "read_line" => {
-                        let bound = ordered_optional_named_args(&["timeout"], args)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::UnixStreamReadLine],
-                            &[object.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    optional_type(Type::named("str")),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "read_exact" => {
-                        let bound = ordered_optional_named_args(&["count", "timeout"], args)?;
-                        let count = required_named_arg(
-                            bound[0],
-                            "direct backend expected `read_exact()` to receive `count`",
-                        )?;
-                        let loaded_count = self.load_operand(&count.value)?;
-                        let count = self
-                            .coerce_value(loaded_count, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let count = self.ensure_opaque(count)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::UnixStreamReadExact],
-                            &[object.values[0], count.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::Named("list".to_string(), vec![Type::named("uint8")]),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "write_all" => {
-                        let bound = ordered_optional_named_args(&["text", "timeout"], args)?;
-                        let text = required_named_arg(
-                            bound[0],
-                            "direct backend expected `write_all()` to receive `text`",
-                        )?;
-                        let loaded_text = self.load_operand(&text.value)?;
-                        let text = self.ensure_opaque(loaded_text)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::UnixStreamWriteAll],
-                            &[object.values[0], text.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                            ),
-                        ))
-                    }
-                    "close" => {
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::UnixStreamClose],
-                            &[object.values[0]],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
-            }
-            if name == "net.TlsListener" {
-                let object = self.ensure_opaque(object)?;
-                return match field {
-                    "accept" => {
-                        let bound = ordered_optional_named_args(&["timeout"], args)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::TlsListenerAccept],
-                            &[object.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::Named("net.TlsStream".to_string(), Vec::new()),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "local_addr" => {
-                        let results = self.runtime_call_results(
-                            self.runtime[RuntimeFn::TlsListenerLocalAddr],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            results,
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::named("str"),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "close" => {
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::TlsListenerClose],
-                            &[object.values[0]],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
-            }
-            if name == "net.TlsStream" {
-                let object = self.ensure_opaque(object)?;
-                return match field {
-                    "read_line" => {
-                        let bound = ordered_optional_named_args(&["timeout"], args)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::TlsStreamReadLine],
-                            &[object.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    optional_type(Type::named("str")),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "read_exact" => {
-                        let bound = ordered_optional_named_args(&["count", "timeout"], args)?;
-                        let count = required_named_arg(
-                            bound[0],
-                            "direct backend expected `read_exact()` to receive `count`",
-                        )?;
-                        let loaded_count = self.load_operand(&count.value)?;
-                        let count = self
-                            .coerce_value(loaded_count, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let count = self.ensure_opaque(count)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::TlsStreamReadExact],
-                            &[object.values[0], count.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::Named("list".to_string(), vec![Type::named("uint8")]),
-                                    Type::Named("io.Error".to_string(), Vec::new()),
-                                ],
-                            ),
-                        ))
-                    }
-                    "write_all" => {
-                        let bound = ordered_optional_named_args(&["text", "timeout"], args)?;
-                        let text = required_named_arg(
-                            bound[0],
-                            "direct backend expected `write_all()` to receive `text`",
-                        )?;
-                        let loaded_text = self.load_operand(&text.value)?;
-                        let text = self.ensure_opaque(loaded_text)?;
-                        let timeout = self.lower_optional_opaque_arg(bound[1])?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::TlsStreamWriteAll],
-                            &[object.values[0], text.values[0], timeout],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
-                            ),
-                        ))
-                    }
-                    "close" => {
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::TlsStreamClose], &[object.values[0]]);
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
+            if ResourceOp::ALL
+                .iter()
+                .any(|op| op.receiver_type_name() == name)
+            {
+                return Err(format!(
+                    "direct backend does not know runtime member `{name}.{field}`"
+                ));
             }
             if self.classes.contains_key(name)
                 || (BuiltinMember::resolve(name, field).is_none()
@@ -17241,6 +15380,11 @@ fn validate_rvalue(
                 }
                 CallTarget::Member { object, .. } | CallTarget::TraitMember { object, .. } => {
                     validate_operand(object)?
+                }
+                CallTarget::Runtime { receiver, .. } => {
+                    if let Some(object) = receiver {
+                        validate_operand(object)?
+                    }
                 }
             }
             for argument in args {
