@@ -29,11 +29,10 @@ use crate::sema::Type;
 /// value can call it. A wrapper has its builtin's name and calls it, so it
 /// does not shadow the builtin.
 pub(crate) fn is_builtin_wrapper(function: &MirFunction) -> bool {
+    // Checked by name: building the module's namespace on every call made
+    // each interpreter start and every function-value lookup slow.
     function.source_path.is_none()
-        && crate::builtin_modules::builtin_module_namespace(std::slice::from_ref(
-            &function.module_name,
-        ))
-        .is_some()
+        && crate::builtin_modules::is_builtin_root_module(&function.module_name)
 }
 
 /// Rewrites every call that names a resolved runtime operation, and every

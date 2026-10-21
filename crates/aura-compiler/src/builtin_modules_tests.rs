@@ -878,3 +878,20 @@ fn every_host_builtin_has_its_own_native_entry_symbol() {
         None
     );
 }
+
+#[test]
+fn builtin_root_module_names_match_their_namespaces() {
+    for name in super::builtin_module_registry().keys() {
+        assert!(
+            super::is_builtin_root_module(name),
+            "{name} is a root module"
+        );
+    }
+    for name in ["main", "app", "list", "io.extra", ""] {
+        assert!(
+            !super::is_builtin_root_module(name),
+            "{name} is not a root module"
+        );
+        assert!(super::builtin_module_namespace(&[name.to_string()]).is_none());
+    }
+}

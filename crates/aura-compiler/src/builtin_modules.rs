@@ -2430,6 +2430,28 @@ pub(crate) fn builtin_module_function_metadata(name: &str) -> Option<&'static Ho
         .get(name)
 }
 
+/// Whether `name` is a runtime-provided root module, without building its
+/// namespace.
+pub(crate) fn is_builtin_root_module(name: &str) -> bool {
+    matches!(
+        name,
+        "io" | "fs"
+            | "net"
+            | "process"
+            | "random"
+            | "control"
+            | "sys"
+            | "path"
+            | "math"
+            | "bytes"
+            | "json"
+            | "toml"
+            | "log"
+            | "metrics"
+            | "trace"
+    )
+}
+
 pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespace> {
     match path {
         [name] => builtin_root_namespace(name),
