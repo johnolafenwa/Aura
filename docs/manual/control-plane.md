@@ -1,6 +1,6 @@
 # Control-Plane Modules
 
-This page covers Aura 0.5's small, typed host and control-plane modules:
+This page covers Aura 0.6's small, typed host and control-plane modules:
 `sys`, `path`, `json`, `toml`, `log`, `trace`, `metrics`, and `control`, plus
 a summary of the HTTP client. They are meant for service launchers, workers,
 evaluation harnesses, and agent infrastructure. They behave the same through
@@ -81,7 +81,9 @@ tree. TOML uses the same typed top-level dictionary boundary:
 - `toml.is_valid` accepts any valid TOML document. `toml.parse_string_map`
   rejects nested tables and non-string values.
 
-Aura 0.5 has no derived class or enum schemas and no generated codecs.
+These helpers carry flat string maps. To encode, decode, or describe a class
+or enum, implement `json.Codec`, or derive it with `impl json.Codec for Name`.
+See [Typed Codecs](/manual/json#typed-codecs). TOML has no typed codecs.
 
 ## Logs, Metrics, And Traces
 
@@ -99,7 +101,7 @@ process share.
 - Incrementing past either `int64` bound is a runtime diagnostic and leaves
   the checked operation incomplete.
 
-The counters suit worker and test instrumentation. Aura 0.5 has no metrics
+The counters suit worker and test instrumentation. Aura 0.6 has no metrics
 exporter, export protocol, or scoped trace span API.
 
 ## Network Boundary
@@ -109,7 +111,7 @@ URLs. Validation uses the platform-independent Web PKI root set.
 
 - Request and response bodies support content length, connection-close
   framing, and chunked transfer encoding.
-- The 0.5 parser keeps a 16 MiB limit on an incoming wire message.
+- The 0.6 parser keeps a 16 MiB limit on an incoming wire message.
 - It accepts at most 64 headers and rejects conflicting framing headers.
 - Its `dict[str, str]` header boundary cannot represent repeated equal header
   names losslessly.
@@ -339,7 +341,9 @@ call in the process.
 **Data formats.** Dynamic JSON has the fixed tree, numeric, depth,
 node-materialization, and byte limits documented in
 [JSON Module](/manual/json). TOML and the bounded flat-dictionary helpers keep
-their limits. There are no derived codecs or streaming encoders.
+their limits. JSON derives codecs and schemas for classes and enums, as
+[Typed Codecs](/manual/json#typed-codecs) describes. There are no streaming
+encoders, and TOML has no typed codecs.
 
 **Telemetry.** Telemetry has no exporter, batching, scoped spans, or metric
 labels. It guarantees delivery only as far as the standard-error write.

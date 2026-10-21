@@ -2,6 +2,17 @@
 
 Last updated: 2026-10-21
 
+## Aura 0.6.0 preview release (in progress)
+
+- Target: release 0.6.0-preview with Batch 6 and phase 1 of Batch 7. This
+  is the release in step 7 of the Batch 7 delivery plan.
+- Done: versions, docs, and CHANGELOG moved to 0.6.0. Details are in
+  `2026-10-21-v0.6.0-preview-release.md`.
+- Verification: local release checks pass. Hosted CI runs on the release
+  PR.
+- Remaining: merge the release PR and push the tag after John approves.
+  Then start phase 2 of Batch 7 with step 8.
+
 ## Batch 7 design checkpoint: Rust-class native performance (ratified)
 
 - Target: bring Batch 7's four key decisions to John, as he asked on
@@ -17,7 +28,7 @@ Last updated: 2026-10-21
   LLVM and removes it. LLVM's inliner replaces the planned MIR inliner.
 - Next: step 1, below.
 
-## Batch 7 strings, keys, and membership without boxes (in progress)
+## Batch 7 strings, keys, and membership without boxes (complete)
 
 - Target: remove the per-operation boxes in the string, `dict`, `set`, and
   record programs before step 7, the option recommended to John on
@@ -29,7 +40,7 @@ Last updated: 2026-10-21
 - Verification: see the work note. Every program prints the same output.
   `string_list_scan`, `dict_build_get`, and `set_insert_contains` now meet
   their phase 1 targets. `record_field_reads` is about 11x Rust against 8x.
-- Next: hosted CI, then step 7.
+- Done: merged in PR #98.
 
 ## Batch 7 unboxed scalar lists (complete)
 

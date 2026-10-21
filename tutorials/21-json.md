@@ -179,7 +179,8 @@ shows.
 
 These are not implemented:
 
-- derived `json.Codec` implementations
+- a derived `json.Codec` for a generic class or enum
+- validation against a JSON Schema
 - a streaming JSON API
 - an arbitrary-precision number type
 

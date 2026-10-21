@@ -1,6 +1,6 @@
 # Install Aura On Linux
 
-The Aura 0.5 preview supports x86-64 Ubuntu 24.04 and compatible Linux
+The Aura 0.6 preview supports x86-64 Ubuntu 24.04 and compatible Linux
 distributions that use glibc. The release has no Linux ARM64 or musl
 archives.
 
@@ -55,7 +55,7 @@ command -v aura
 aura --version
 ```
 
-The version begins with `aura 0.5.0-preview`.
+The version begins with `aura 0.6.0-preview`.
 
 ## 6. Run A Program
 

@@ -14,7 +14,7 @@ A file can declare these items at the top level:
 | Module constants | immutable complete-value constants such as `limit: int64 = 10` |
 | Classes | `class`, `copy class`, `public class`, `public copy class` |
 | Enums | `enum`, `public enum` |
-| Functions | `def`, `public def` |
+| Functions | `def`, `public def`, each with optional decorator lines such as `@traced` |
 | Traits | `trait`, `public trait` |
 | Implementations | `impl Trait for Type` |
 | Foreign declarations | authorized `extern "C" def` and `extern "C" opaque class` |
@@ -581,6 +581,10 @@ positions.
 - recursive Null, Boolean, Int, Float, str, Array, and Object variants
 - deterministic sorted-key output, compact or pretty
 - typed parse failures, with fixed depth and byte limits
+- the `json.Codec` trait and the generic `json.encode`, `json.decode`,
+  `json.decode_text`, and `json.schema` functions
+- `impl json.Codec for Name` with no body, which derives `encode`, `decode`,
+  and a JSON Schema for a class or enum
 
 ### Bytes, Text Codecs, And Hashes
 
@@ -655,7 +659,7 @@ Reads have fixed size caps:
 | TLS certificate, private-key, and CA-file loading | a separate 64 MiB ceiling |
 | incoming HTTP parsing | 16 MiB of wire data per message |
 
-Aura 0.5 has no chunked file-read API.
+Aura 0.6 has no chunked file-read API.
 
 ### Member Methods
 
@@ -739,7 +743,7 @@ stream.
 - `next_int` draws from a half-open range.
 - `next_float` draws from `[0.0, 1.0)`.
 - `shuffle` shuffles a generic list in place.
-- Seed mapping and sequences are stable throughout Aura 0.3.x, 0.4.x, and 0.5.x. They are
+- Seed mapping and sequences are stable throughout Aura 0.3.x, 0.4.x, 0.5.x, and 0.6.x. They are
   identical under MIR execution and direct execution. MIR is the compiler's
   mid-level intermediate representation.
 
@@ -803,7 +807,7 @@ The concurrency surface includes:
 
 ### Scheduler
 
-Aura 0.5 runs task bodies on cooperative, pinned scheduler workers on both
+Aura 0.6 runs task bodies on cooperative, pinned scheduler workers on both
 maintained backends. Aura tasks are lightweight tasks backed by this
 scheduler.
 
