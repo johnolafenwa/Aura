@@ -694,35 +694,32 @@ fn strip_temporary_local_types(function: &mut Value, kinds: &[&str]) {
 }
 
 #[test]
-fn native_backend_infers_temporary_types_from_rvalues() {
+fn native_backend_reads_temporary_types_from_mir() {
+    // MIR records the type of every temporary, so the direct backend emits
+    // the source-produced module and neither boundary infers a stripped type.
     assert_source_emits(TEMPORARIES);
-    let mut encoded = encode(TEMPORARIES);
-    strip_temporary_local_types(
-        function_mut(&mut encoded, "main"),
-        &[
-            "Closure",
-            "TupleLiteral",
-            "TupleElement",
-            "Binary",
-            "NamedCall",
-            "ValueCall",
-        ],
-    );
-    assert_native_emits(encoded);
-
-    let mut encoded = encode(ARRAYS);
-    strip_temporary_local_types(
-        function_mut(&mut encoded, "main"),
-        &["Binary", "MemberCall"],
-    );
-    assert_native_emits(encoded);
-
-    // Inference is intentional here as well: the `select` result temporary
-    // is typed from the call, so stripping its declared type changes nothing
-    // on either boundary.
-    let mut encoded = encode(SELECT);
-    strip_temporary_local_types(function_mut(&mut encoded, "main"), &["NamedCall"]);
-    assert_accepted_on_both_boundaries(encoded, "0\n");
+    for (source, kinds) in [
+        (
+            TEMPORARIES,
+            &[
+                "Closure",
+                "TupleLiteral",
+                "TupleElement",
+                "Binary",
+                "NamedCall",
+                "ValueCall",
+            ][..],
+        ),
+        (ARRAYS, &["Binary", "MemberCall"][..]),
+        (SELECT, &["NamedCall"][..]),
+    ] {
+        let mut encoded = encode(source);
+        strip_temporary_local_types(function_mut(&mut encoded, "main"), kinds);
+        assert_rejected_on_both_boundaries(
+            encoded,
+            "invalid MIR function `main` assigns untyped local",
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

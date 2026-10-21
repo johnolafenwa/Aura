@@ -7,6 +7,13 @@ in this file.
 
 ## Unreleased
 
+### Performance
+
+- Native code keeps the result of a trait method called on a bounded
+  generic receiver, such as `item.total()` for `T: Totals`, as its declared
+  type instead of a boxed value. Arithmetic and printing on it no longer go
+  through the runtime's boxed helpers. `Queue.get_or` results do the same.
+
 ### Fixed
 
 - Building the same program twice produces the same native object. Native

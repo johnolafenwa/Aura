@@ -13877,3 +13877,215 @@ def main():
         assert_eq!(claims, 1, "`{name}` should claim one loop index in range");
     }
 }
+
+/// The recorded type of the root each matching assignment in `function`
+/// writes; the validator requires one for every assigned local.
+fn assigned_local_types(
+    module: &MirModule,
+    function: &str,
+    matches: impl Fn(&Rvalue) -> bool,
+) -> Vec<Type> {
+    let function = module
+        .functions
+        .iter()
+        .chain(module.top_level.iter())
+        .find(|candidate| candidate.name == function)
+        .unwrap_or_else(|| panic!("`{function}` should lower"));
+    let assigned = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign { target, value } if !target.contains('.') && matches(value) => {
+                Some(target)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !assigned.is_empty(),
+        "`{}` should assign the value",
+        function.name
+    );
+    assigned
+        .into_iter()
+        .map(|target| {
+            function
+                .local_types
+                .iter()
+                .find(|local| &local.name == target)
+                .map(|local| local.ty.clone())
+                .unwrap_or_else(|| panic!("`{target}` in `{}` has no type", function.name))
+        })
+        .collect()
+}
+
+#[test]
+fn every_assigned_temporary_records_its_type() {
+    let module = crate::lower_source_to_mir(
+        r#"
+trait Show:
+    def show(self) -> str
+
+trait Counter:
+    def bump(mut self) -> None
+    def total(self) -> int64
+
+class Tally:
+    count: int64
+
+impl Counter for Tally:
+    def bump(mut self) -> None:
+        self.count += 1
+    def total(self) -> int64:
+        return self.count
+
+impl Show for int64:
+    def show(self) -> str:
+        return "int64"
+
+def render[T: Show](value: T) -> str:
+    return value.show()
+
+def advance[T: Counter](item: mut T) -> int64:
+    item.bump()
+    return item.total() * 2
+
+def first_or_zero(values: list[int64]) -> int64:
+    match values.get(0):
+        case Lookup.Found(value):
+            return value
+        case Lookup.Missing:
+            return 0
+
+def main():
+    mut tally = Tally(count=0)
+    print(advance(tally))
+    print(render(3))
+    print(Duration.ms(125).to_ms())
+    print(first_or_zero([4]))
+"#,
+    )
+    .expect("typed source should lower");
+
+    let is_print = |value: &Rvalue| matches!(value, Rvalue::Call { callee: CallTarget::Name(name), .. } if name == "print");
+    for ty in assigned_local_types(&module, "main", is_print) {
+        assert_eq!(ty, Type::Unit, "a print result is unit");
+    }
+    let trait_call = |field: &'static str| {
+        move |value: &Rvalue| {
+            matches!(
+                value,
+                Rvalue::Call { callee: CallTarget::TraitMember { field: called, .. }, .. }
+                    if called == field
+            )
+        }
+    };
+    assert_eq!(
+        assigned_local_types(&module, "render", trait_call("show")),
+        vec![Type::named("str")],
+        "a bounded trait call has the trait method's return type"
+    );
+    assert_eq!(
+        assigned_local_types(&module, "advance", trait_call("bump")),
+        vec![Type::Unit]
+    );
+    assert_eq!(
+        assigned_local_types(&module, "advance", trait_call("total")),
+        vec![Type::named("int64")]
+    );
+    assert_eq!(
+        assigned_local_types(&module, "advance", |value| matches!(
+            value,
+            Rvalue::Binary {
+                op: BinaryOp::Mul,
+                ..
+            }
+        )),
+        vec![Type::named("int64")],
+        "arithmetic over trait results keeps the operand type"
+    );
+    assert_eq!(
+        assigned_local_types(&module, "main", |value| matches!(
+            value,
+            Rvalue::Call { callee: CallTarget::Member { field, .. }, .. } if field == "to_ms"
+        )),
+        vec![Type::named("float64")],
+        "a builtin member call has the member's result type"
+    );
+    assert_eq!(
+        assigned_local_types(&module, "first_or_zero", |value| matches!(
+            value,
+            Rvalue::VariantPayload { .. }
+        )),
+        vec![Type::named("int64")]
+    );
+    validate_loan_flow(&module).expect("completely typed MIR should validate");
+}
+
+#[test]
+fn validator_rejects_untyped_or_unknown_assigned_locals() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    print(1)
+"#,
+    )
+    .expect("typed source should lower");
+    validate_loan_flow(&module).expect("source-produced MIR should validate");
+    let print_target = |module: &MirModule| {
+        module
+            .functions
+            .iter()
+            .find(|function| function.name == "main")
+            .and_then(|function| {
+                function
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.instructions)
+                    .find_map(|instruction| match instruction {
+                        Instruction::Assign {
+                            target,
+                            value:
+                                Rvalue::Call {
+                                    callee: CallTarget::Name(name),
+                                    ..
+                                },
+                        } if name == "print" => Some(target.clone()),
+                        _ => None,
+                    })
+            })
+            .expect("main should assign the print result")
+    };
+    let target = print_target(&module);
+
+    let mut untyped = module.clone();
+    let main = untyped
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    main.local_types.retain(|local| local.name != target);
+    let error = validate_loan_flow(&untyped).expect_err("an untyped assigned local is invalid");
+    assert!(
+        error.contains(&format!("assigns untyped local `{target}`")),
+        "{error}"
+    );
+
+    let mut unknown = module;
+    let main = unknown
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    for local in &mut main.local_types {
+        if local.name == target {
+            local.ty = Type::Named("list".to_string(), vec![Type::named("Unknown")]);
+        }
+    }
+    let error = validate_loan_flow(&unknown).expect_err("an Unknown-typed local is invalid");
+    assert!(
+        error.contains(&format!("assigns local `{target}` of unknown type")),
+        "{error}"
+    );
+}

@@ -214,7 +214,7 @@ fn list_reserve_rejects_a_non_integer_runtime_count() {
 }
 
 #[test]
-fn divmod_infers_its_operand_type_from_untyped_runtime_values() {
+fn divmod_with_untyped_operand_locals_is_rejected() {
     let source = "def main():\n    print(divmod(7, 2))\n    print(divmod(7.5, 2.0))\n";
     let mut encoded = encode(source);
     let main = function_mut(&mut encoded, "main");
@@ -244,8 +244,14 @@ fn divmod_infers_its_operand_type_from_untyped_runtime_values() {
         .unwrap()
         .retain(|entry| !targets.iter().any(|target| entry["name"] == *target));
     let mir: MirModule = serde_json::from_value(encoded).expect("forged MIR should deserialize");
-    let output = run_mir(&mir).expect("divmod infers operand types from the runtime values");
-    assert_eq!(output.stdout, "(3, 1)\n(3.0, 1.5)\n");
+    // MIR types every assigned local, so the shared validator rejects the
+    // stripped temporaries before the interpreter can infer them at runtime.
+    let error = run_mir(&mir).expect_err("untyped divmod locals must not run");
+    assert!(
+        error.message.contains("assigns untyped local"),
+        "{}",
+        error.message
+    );
 }
 
 #[test]

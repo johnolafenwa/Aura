@@ -13,7 +13,7 @@ fn object_mentions(object: &[u8], symbol: &str) -> bool {
 }
 
 #[test]
-fn public_object_codegen_infers_host_and_wait_result_types() {
+fn public_object_codegen_reads_host_and_wait_result_types_from_mir() {
     let task_type = Type::Named("Task".to_string(), vec![Type::named("int32")]);
     let tasks_type = Type::Named("Vec".to_string(), vec![task_type.clone()]);
     let module = MirModule {
@@ -34,11 +34,11 @@ fn public_object_codegen_infers_host_and_wait_result_types() {
                 },
                 MirLocalType {
                     name: "host_result".to_string(),
-                    ty: Type::named("Unknown"),
+                    ty: Type::Named("list".to_string(), vec![Type::named("str")]),
                 },
                 MirLocalType {
                     name: "wait_result".to_string(),
-                    ty: Type::named("Unknown"),
+                    ty: Type::Named("WaitAny".to_string(), vec![Type::named("int32")]),
                 },
             ],
             return_type: Type::named("int32"),
@@ -80,8 +80,7 @@ fn public_object_codegen_infers_host_and_wait_result_types() {
         top_level: None,
     };
 
-    let object =
-        emit_host_native_object(&module).expect("valid inferred calls should emit an object");
+    let object = emit_host_native_object(&module).expect("valid typed calls should emit an object");
     assert!(
         object_mentions(&object, "aura_host_sys_args"),
         "the host builtin call must lower through its own runtime entry"

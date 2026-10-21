@@ -1468,6 +1468,7 @@ fn borrowed_noncopy_place_cannot_bind_an_owned_method_receiver() {
         .find(|function| function["name"] == "inspect")
         .unwrap();
     function["params"][0]["passing"] = json!("Borrow");
+    function["local_types"] = json!([{ "name": "%t999", "ty": "Unit" }]);
     function["blocks"] = json!([{ "label": "entry", "instructions": [{ "Assign": {
         "target": "%t999", "value": { "Call": {
             "callee": { "Member": { "object": { "Place": "value" }, "field": "take",
@@ -1545,6 +1546,7 @@ fn borrowed_copy_value_may_call_an_owned_receiver_method() {
         .find(|function| function["name"] == "inspect")
         .unwrap();
     function["params"][0]["passing"] = json!("Borrow");
+    function["local_types"] = json!([{ "name": "%t999", "ty": "Unit" }]);
     function["blocks"] = json!([{ "label": "entry", "instructions": [{ "Assign": {
         "target": "%t999", "value": { "Call": {
             "callee": { "Member": { "object": { "Place": "value" }, "field": "take",

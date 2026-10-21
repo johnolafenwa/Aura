@@ -745,16 +745,18 @@ fn returned_loans_cannot_return_arm_local_payload_projections() {
 }
 
 #[test]
-fn member_calls_on_untyped_locals_are_tolerated() {
+fn untyped_assigned_locals_are_rejected() {
+    // MIR records the type of every assigned local, so no backend infers
+    // one from the value at run time or from the rvalue at compile time.
     let mut encoded = encode("def main():\n    values = [1]\n    print(values.len())\n");
     function_mut(&mut encoded, "main")["local_types"]
         .as_array_mut()
         .unwrap()
         .retain(|local| local["name"] != "values");
-    let mir = decode(encoded);
-    let output = run_mir(&mir).expect("an untyped receiver falls back to runtime dispatch");
-    assert_eq!(output.stdout, "1\n");
-    emit_host_native_object(&mir).expect("the direct backend accepts the untyped receiver");
+    assert_rejected(
+        encoded,
+        "invalid MIR function `main` assigns untyped local `values`",
+    );
 }
 
 #[test]

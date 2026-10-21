@@ -9304,6 +9304,7 @@ pub(crate) fn validate_loan_flow(module: &MirModule) -> std::result::Result<(), 
         validate_enum_variant_payloads(function, &context)?;
         validate_initializer_slot(function, &context)?;
         validate_function_loan_flow(function, &context)?;
+        local_types::validate_assigned_local_types(function)?;
     }
     Ok(())
 }
@@ -12280,6 +12281,7 @@ impl<'a> Lowerer<'a> {
             self.blocks[self.current_block].terminator =
                 Some(Terminator::Return(spec.default_return));
         }
+        self.complete_local_types(&spec.params);
 
         let mut function = MirFunction {
             name: spec.name,
@@ -18703,75 +18705,14 @@ impl<'a> Lowerer<'a> {
                 start,
                 end,
                 colon_span,
-            } => {
-                if let Some(copy) = self.lower_span_value_slice(
-                    object,
-                    start.as_deref(),
-                    end.as_deref(),
-                    *colon_span,
-                    self.infer_expr_type(expr)
-                        .unwrap_or_else(|| Type::named("Unknown")),
-                ) {
-                    return copy;
-                }
-                let temp = self.new_temp_for_expr(expr);
-                let lowered_object = self.lower_expr_at_sequence_point(object, None);
-                let lowered_start = start
-                    .as_deref()
-                    .map(|start| self.lower_index_domain_expr(start))
-                    .unwrap_or(Operand::Int(0));
-                let lowered_end = end
-                    .as_deref()
-                    .map(|end| self.lower_index_domain_expr(end))
-                    .unwrap_or(Operand::Int(0));
-                let receiver_place = match &lowered_object {
-                    Operand::Place(place) | Operand::MovePlace(place) => Some(place.clone()),
-                    _ => self.render_place_expr_option(object),
-                };
-                self.emit(Instruction::Assign {
-                    target: temp.clone(),
-                    value: Rvalue::Call {
-                        callee: CallTarget::Member {
-                            object: lowered_object,
-                            field: INTERNAL_SLICE_FIELD.to_string(),
-                            receiver_place,
-                        },
-                        args: vec![
-                            MirArg {
-                                name: None,
-                                value: lowered_start,
-                                writeback_place: None,
-                            },
-                            MirArg {
-                                name: None,
-                                value: Operand::Bool(start.is_some()),
-                                writeback_place: None,
-                            },
-                            MirArg {
-                                name: None,
-                                value: lowered_end,
-                                writeback_place: None,
-                            },
-                            MirArg {
-                                name: None,
-                                value: Operand::Bool(end.is_some()),
-                                writeback_place: None,
-                            },
-                            MirArg {
-                                name: None,
-                                value: Operand::Int(colon_span.line as u128),
-                                writeback_place: None,
-                            },
-                            MirArg {
-                                name: None,
-                                value: Operand::Int(colon_span.column as u128),
-                                writeback_place: None,
-                            },
-                        ],
-                    },
-                });
-                Operand::Place(temp)
-            }
+            } => self.lower_slice_expr(
+                expr,
+                object,
+                start.as_deref(),
+                end.as_deref(),
+                *colon_span,
+                None,
+            ),
             ExprKind::Call { callee, args } => self.lower_call(expr, callee, args, None),
             ExprKind::Conditional {
                 then_expr,
@@ -20061,6 +20002,19 @@ impl<'a> Lowerer<'a> {
                 _ => self.lower_expr(expr),
             },
             ExprKind::Call { callee, args } => self.lower_call(expr, callee, args, expected),
+            ExprKind::Slice {
+                object,
+                start,
+                end,
+                colon_span,
+            } => self.lower_slice_expr(
+                expr,
+                object,
+                start.as_deref(),
+                end.as_deref(),
+                *colon_span,
+                expected,
+            ),
             _ => self.lower_expr(expr),
         }
     }
@@ -20092,6 +20046,90 @@ impl<'a> Lowerer<'a> {
                     )
         ) && type_is_copy_in_program(ty, self.program)
             && !self.has_custom_display(ty)
+    }
+
+    fn lower_slice_expr(
+        &mut self,
+        expr: &Expr,
+        object: &Expr,
+        start: Option<&Expr>,
+        end: Option<&Expr>,
+        colon_span: Span,
+        expected: Option<&Type>,
+    ) -> Operand {
+        if let Some(copy) = self.lower_span_value_slice(
+            object,
+            start,
+            end,
+            colon_span,
+            self.infer_expr_type(expr)
+                .unwrap_or_else(|| Type::named("Unknown")),
+        ) {
+            return copy;
+        }
+        let temp = self.new_temp_for_expr(expr);
+        // A slice has its object's type, so an object whose own type is
+        // open, such as an empty literal, takes the expected slice type.
+        let object_hint = expected
+            .filter(|ty| !type_contains_unknown(ty))
+            .filter(|_| {
+                self.infer_expr_type(object)
+                    .is_none_or(|ty| type_contains_unknown(&ty))
+            });
+        let lowered_object = self.lower_expr_at_sequence_point(object, object_hint);
+        let lowered_start = start
+            .map(|start| self.lower_index_domain_expr(start))
+            .unwrap_or(Operand::Int(0));
+        let lowered_end = end
+            .map(|end| self.lower_index_domain_expr(end))
+            .unwrap_or(Operand::Int(0));
+        let receiver_place = match &lowered_object {
+            Operand::Place(place) | Operand::MovePlace(place) => Some(place.clone()),
+            _ => self.render_place_expr_option(object),
+        };
+        self.emit(Instruction::Assign {
+            target: temp.clone(),
+            value: Rvalue::Call {
+                callee: CallTarget::Member {
+                    object: lowered_object,
+                    field: INTERNAL_SLICE_FIELD.to_string(),
+                    receiver_place,
+                },
+                args: vec![
+                    MirArg {
+                        name: None,
+                        value: lowered_start,
+                        writeback_place: None,
+                    },
+                    MirArg {
+                        name: None,
+                        value: Operand::Bool(start.is_some()),
+                        writeback_place: None,
+                    },
+                    MirArg {
+                        name: None,
+                        value: lowered_end,
+                        writeback_place: None,
+                    },
+                    MirArg {
+                        name: None,
+                        value: Operand::Bool(end.is_some()),
+                        writeback_place: None,
+                    },
+                    MirArg {
+                        name: None,
+                        value: Operand::Int(colon_span.line as u128),
+                        writeback_place: None,
+                    },
+                    MirArg {
+                        name: None,
+                        value: Operand::Int(colon_span.column as u128),
+                        writeback_place: None,
+                    },
+                ],
+            },
+        });
+        Operand::Place(temp)
     }
 
     fn lower_expr_at_sequence_point(&mut self, expr: &Expr, expected: Option<&Type>) -> Operand {
@@ -22871,7 +22909,19 @@ impl<'a> Lowerer<'a> {
                     {
                         Some(element.clone())
                     } else {
-                        self.infer_expr_type(&argument.value)
+                        // An argument whose own type is open, such as an
+                        // empty literal, takes the parameter's type.
+                        let inferred = self.infer_expr_type(&argument.value);
+                        if inferred.as_ref().is_none_or(type_contains_unknown) {
+                            local_types::builtin_member_argument_type(
+                                builtin_member,
+                                index,
+                                class_args,
+                            )
+                            .or(inferred)
+                        } else {
+                            inferred
+                        }
                     };
                     let index_domain_argument = class_name == "list"
                         && matches!(
@@ -25263,6 +25313,13 @@ impl<'a> Lowerer<'a> {
     }
 
     fn type_implements_trait_bound(&self, ty: &Type, bound: &TraitBound) -> bool {
+        // A union satisfies a bound when every member does (ADR-0052 A8).
+        if let Type::Union(union) = ty {
+            return union
+                .members
+                .iter()
+                .all(|member| self.type_implements_trait_bound(member, bound));
+        }
         self.trait_impls_in_scope().any(|trait_impl| {
             self.trait_impl_substitutions_for_bound(trait_impl, ty, bound)
                 .or_else(|| {
@@ -26717,6 +26774,9 @@ mod spans;
 
 #[path = "mir_type_param_calls.rs"]
 mod type_param_calls;
+
+#[path = "mir_local_types.rs"]
+mod local_types;
 
 pub(crate) use spans::span_member_mutates_receiver;
 
