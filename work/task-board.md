@@ -11,9 +11,11 @@ Last updated: 2026-10-21
   `2026-10-21-batch-7-step-8a-repeatable-builds.md`.
 - Done: 8b, one runtime ABI table, merged in PR #102. Details are in
   `2026-10-21-batch-7-step-8b-runtime-abi-table.md`.
-- In progress: 8c, complete local types in MIR. Details are in
+- Done: 8c, complete local types in MIR, merged in PR #103. Details are in
   `2026-10-21-batch-7-step-8c-local-types.md`.
-- Next: 8d, resolved runtime operations.
+- In progress: 8d, resolved runtime operations, PR 1 of 4 (resource
+  handles, Rng, scalar and value members). Details are in
+  `2026-10-21-batch-7-step-8d1-runtime-ops.md`.
 
 ## Aura 0.6.0 preview release (complete)
 

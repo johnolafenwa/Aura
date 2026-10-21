@@ -5441,18 +5441,12 @@ def main():
         .flat_map(|block| &block.instructions)
         .find_map(|instruction| match instruction {
             Instruction::Assign {
-                value:
-                    Rvalue::Call {
-                        callee:
-                            CallTarget::Member {
-                                object,
-                                field,
-                                receiver_place,
-                            },
-                        ..
-                    },
+                value: Rvalue::Call { callee, .. },
                 ..
-            } if field == "to_string" => Some((object, receiver_place.as_deref())),
+            } => callee
+                .member_parts()
+                .filter(|parts| parts.field == "to_string")
+                .map(|parts| (parts.object, parts.receiver_place)),
             _ => None,
         })
         .expect("projected scalar should lower through to_string");
@@ -6270,12 +6264,9 @@ def main() -> int32:
             |block| block.instructions.iter().any(|instruction| matches!(
                 instruction,
                 Instruction::Assign {
-                    value: Rvalue::Call {
-                        callee: CallTarget::Member { field, .. },
-                        ..
-                    },
+                    value: Rvalue::Call { callee, .. },
                     ..
-                } if field == "to_ms"
+                } if callee.member_parts().is_some_and(|parts| parts.field == "to_ms")
             ))
         ));
 }
@@ -7473,13 +7464,14 @@ def respond_bytes(exchange: mut net.HttpExchange, status: int32, bytes: own list
             .flat_map(|block| &block.instructions)
             .find_map(|instruction| match instruction {
                 Instruction::Assign {
-                    value:
-                        Rvalue::Call {
-                            callee: CallTarget::Member { field, .. },
-                            args,
-                        },
+                    value: Rvalue::Call { callee, args },
                     ..
-                } if field == member_name => Some(args),
+                } if callee
+                    .member_parts()
+                    .is_some_and(|parts| parts.field == member_name) =>
+                {
+                    Some(args)
+                }
                 _ => None,
             })
             .unwrap_or_else(|| panic!("{function_name} should call {member_name}"))
@@ -7619,22 +7611,16 @@ def main() -> int32:
         .flat_map(|block| block.instructions.iter())
         .find_map(|instruction| match instruction {
             Instruction::Assign {
-                value:
-                    Rvalue::Call {
-                        callee:
-                            CallTarget::Member {
-                                field,
-                                receiver_place,
-                                ..
-                            },
-                        args,
-                    },
+                value: Rvalue::Call { callee, args },
                 ..
-            } if field == "shuffle" => Some((receiver_place, args)),
+            } => callee
+                .member_parts()
+                .filter(|parts| parts.field == "shuffle")
+                .map(|parts| (parts.receiver_place, args)),
             _ => None,
         })
         .expect("shuffle call should lower");
-    assert_eq!(shuffle.0.as_deref(), Some("rng"));
+    assert_eq!(shuffle.0, Some("rng"));
     assert_eq!(shuffle.1.len(), 1);
     assert_eq!(shuffle.1[0].name.as_deref(), Some("values"));
     assert_eq!(
@@ -7780,12 +7766,9 @@ def main() -> int32:
             matches!(
                 instruction,
                 Instruction::Assign {
-                    value: Rvalue::Call {
-                        callee: CallTarget::Member { field, .. },
-                        ..
-                    },
+                    value: Rvalue::Call { callee, .. },
                     ..
-                } if field == "to_ms"
+                } if callee.member_parts().is_some_and(|parts| parts.field == "to_ms")
             )
         })
     }));
@@ -8177,6 +8160,15 @@ def generic_helper[T](value: own T) -> T:
         Type::named("int32"),
         BTreeMap::new(),
     )
+}
+
+/// A member's lowered result type: the resolved runtime operation's result
+/// type, or else the remaining built-in member table.
+fn member_result_type(lowerer: &Lowerer<'_>, receiver: &Type, field: &str) -> Option<Type> {
+    match crate::runtime_ops::RuntimeOp::resolve_member(receiver, field, |_| false) {
+        Some(op) => op.result_type(receiver),
+        None => lowerer.builtin_runtime_member_return_type(receiver, field),
+    }
 }
 
 fn trait_lowerer() -> Lowerer<'static> {
@@ -9141,7 +9133,7 @@ fn mir_types_public_length_members_as_int64() {
 
     for (receiver, field) in cases {
         assert_eq!(
-            lowerer.builtin_runtime_member_return_type(&receiver, field),
+            member_result_type(&lowerer, &receiver, field),
             Some(Type::named("int64")),
             "{receiver}.{field} must lower with an int64 result"
         );
@@ -9395,41 +9387,41 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         Some(vec![Type::named("int32")])
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("str"), "len"),
+        member_result_type(&lowerer, &Type::named("str"), "len"),
         Some(Type::named("int64"))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("str"), "byte_len"),
+        member_result_type(&lowerer, &Type::named("str"), "byte_len"),
         Some(Type::named("int64"))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("str"), "split"),
+        member_result_type(&lowerer, &Type::named("str"), "split"),
         Some(Type::Named("list".to_string(), vec![Type::named("str")]))
     );
+    assert_eq!(member_result_type(&lowerer, &Type::Unit, "to_string"), None);
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::Unit, "to_string"),
-        None
-    );
-    assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("int32"), "to_string"),
+        member_result_type(&lowerer, &Type::named("int32"), "to_string"),
         Some(Type::named("str"))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(
+        member_result_type(
+            &lowerer,
             &Type::Named("list".to_string(), vec![Type::named("str")]),
             "pop"
         ),
         Some(Type::named("str"))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(
+        member_result_type(
+            &lowerer,
             &Type::Named("set".to_string(), vec![Type::named("str")]),
             "add"
         ),
         Some(Type::Unit)
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(
+        member_result_type(
+            &lowerer,
             &Type::Named(
                 "dict".to_string(),
                 vec![Type::named("str"), Type::named("int32")]
@@ -9442,7 +9434,8 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(
+        member_result_type(
+            &lowerer,
             &Type::Named(
                 "dict".to_string(),
                 vec![Type::named("str"), Type::named("int32")]
@@ -9452,7 +9445,8 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         Some(Type::Named("list".to_string(), vec![Type::named("str")]))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(
+        member_result_type(
+            &lowerer,
             &Type::Named(
                 "dict".to_string(),
                 vec![Type::named("str"), Type::named("int32")]
@@ -9465,7 +9459,8 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(
+        member_result_type(
+            &lowerer,
             &Type::Named("Task".to_string(), vec![Type::named("bool")]),
             "result"
         ),
@@ -9475,14 +9470,16 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(
+        member_result_type(
+            &lowerer,
             &Type::Named("Task".to_string(), vec![Type::named("bool")]),
             "poll"
         ),
         Some(Type::Named("Poll".to_string(), vec![Type::named("bool")]))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(
+        member_result_type(
+            &lowerer,
             &Type::Named("Queue".to_string(), vec![Type::named("bool")]),
             "get"
         ),
@@ -9492,7 +9489,8 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(
+        member_result_type(
+            &lowerer,
             &Type::Named("Queue".to_string(), vec![Type::named("bool")]),
             "put"
         ),
@@ -9505,28 +9503,28 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("list"), "get"),
+        member_result_type(&lowerer, &Type::named("list"), "get"),
         Some(Type::Named(
             "Lookup".to_string(),
             vec![Type::named("Unknown")]
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("dict"), "keys"),
+        member_result_type(&lowerer, &Type::named("dict"), "keys"),
         Some(Type::Named(
             "list".to_string(),
             vec![Type::named("Unknown")]
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("dict"), "values"),
+        member_result_type(&lowerer, &Type::named("dict"), "values"),
         Some(Type::Named(
             "list".to_string(),
             vec![Type::named("Unknown")]
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("dict"), "items"),
+        member_result_type(&lowerer, &Type::named("dict"), "items"),
         Some(Type::Named(
             "list".to_string(),
             vec![Type::Tuple(vec![
@@ -9536,28 +9534,28 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("dict"), "get"),
+        member_result_type(&lowerer, &Type::named("dict"), "get"),
         Some(Type::Named(
             "Lookup".to_string(),
             vec![Type::named("Unknown")]
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("Queue"), "get"),
+        member_result_type(&lowerer, &Type::named("Queue"), "get"),
         Some(Type::Named(
             "QueueReceive".to_string(),
             vec![Type::named("Unknown")]
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("Queue"), "poll"),
+        member_result_type(&lowerer, &Type::named("Queue"), "poll"),
         Some(Type::Named(
             "Poll".to_string(),
             vec![Type::named("Unknown")]
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("Queue"), "put"),
+        member_result_type(&lowerer, &Type::named("Queue"), "put"),
         Some(Type::Named(
             "Result".to_string(),
             vec![
@@ -9567,7 +9565,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("Queue"), "try_put"),
+        member_result_type(&lowerer, &Type::named("Queue"), "try_put"),
         Some(Type::Named(
             "Result".to_string(),
             vec![
@@ -9577,25 +9575,25 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("TaskGroup"), "start"),
+        member_result_type(&lowerer, &Type::named("TaskGroup"), "start"),
         Some(Type::Named(
             "Task".to_string(),
             vec![Type::named("Unknown")]
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("TaskGroup"), "start_soon"),
+        member_result_type(&lowerer, &Type::named("TaskGroup"), "start_soon"),
         Some(Type::Unit)
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("fs.File"), "read_all"),
+        member_result_type(&lowerer, &Type::named("fs.File"), "read_all"),
         Some(Type::Named(
             "Result".to_string(),
             vec![Type::named("str"), Type::named("io.Error")]
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("fs.File"), "read_bytes"),
+        member_result_type(&lowerer, &Type::named("fs.File"), "read_bytes"),
         Some(Type::Named(
             "Result".to_string(),
             vec![
@@ -9605,37 +9603,37 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("fs.File"), "flush"),
+        member_result_type(&lowerer, &Type::named("fs.File"), "flush"),
         Some(Type::Named(
             "Result".to_string(),
             vec![Type::Unit, Type::named("io.Error")]
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("fs.File"), "close"),
+        member_result_type(&lowerer, &Type::named("fs.File"), "close"),
         Some(Type::Unit)
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("process.Completed"), "stdout"),
+        member_result_type(&lowerer, &Type::named("process.Completed"), "stdout"),
         Some(Type::named("str"))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("net.TcpListener"), "close"),
+        member_result_type(&lowerer, &Type::named("net.TcpListener"), "close"),
         Some(Type::Unit)
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("net.TcpStream"), "shutdown_read"),
+        member_result_type(&lowerer, &Type::named("net.TcpStream"), "shutdown_read"),
         Some(Type::Named(
             "Result".to_string(),
             vec![Type::Unit, Type::named("io.Error")]
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("net.TcpStream"), "close"),
+        member_result_type(&lowerer, &Type::named("net.TcpStream"), "close"),
         Some(Type::Unit)
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("net.UdpSocket"), "recv"),
+        member_result_type(&lowerer, &Type::named("net.UdpSocket"), "recv"),
         Some(Type::Named(
             "Result".to_string(),
             vec![
@@ -9648,31 +9646,31 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("net.UdpSocket"), "close"),
+        member_result_type(&lowerer, &Type::named("net.UdpSocket"), "close"),
         Some(Type::Unit)
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("net.HttpListener"), "close"),
+        member_result_type(&lowerer, &Type::named("net.HttpListener"), "close"),
         Some(Type::Unit)
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("net.HttpExchange"), "close"),
+        member_result_type(&lowerer, &Type::named("net.HttpExchange"), "close"),
         Some(Type::Unit)
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("net.HttpResponse"), "reason"),
+        member_result_type(&lowerer, &Type::named("net.HttpResponse"), "reason"),
         Some(Type::named("str"))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("net.HttpResponse"), "close"),
+        member_result_type(&lowerer, &Type::named("net.HttpResponse"), "close"),
         Some(Type::Unit)
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("net.WebSocketListener"), "close"),
+        member_result_type(&lowerer, &Type::named("net.WebSocketListener"), "close"),
         Some(Type::Unit)
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("net.WebSocket"), "recv_bytes"),
+        member_result_type(&lowerer, &Type::named("net.WebSocket"), "recv_bytes"),
         Some(Type::Named(
             "Result".to_string(),
             vec![
@@ -9685,15 +9683,15 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("net.WebSocket"), "close"),
+        member_result_type(&lowerer, &Type::named("net.WebSocket"), "close"),
         Some(Type::Unit)
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("net.UnixListener"), "close"),
+        member_result_type(&lowerer, &Type::named("net.UnixListener"), "close"),
         Some(Type::Unit)
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("net.UnixStream"), "read_exact"),
+        member_result_type(&lowerer, &Type::named("net.UnixStream"), "read_exact"),
         Some(Type::Named(
             "Result".to_string(),
             vec![
@@ -9703,15 +9701,15 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("net.UnixStream"), "close"),
+        member_result_type(&lowerer, &Type::named("net.UnixStream"), "close"),
         Some(Type::Unit)
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("net.TlsListener"), "close"),
+        member_result_type(&lowerer, &Type::named("net.TlsListener"), "close"),
         Some(Type::Unit)
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("net.TlsStream"), "read_line"),
+        member_result_type(&lowerer, &Type::named("net.TlsStream"), "read_line"),
         Some(Type::Named(
             "Result".to_string(),
             vec![
@@ -9721,7 +9719,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         ))
     );
     assert_eq!(
-        lowerer.builtin_runtime_member_return_type(&Type::named("net.TlsStream"), "close"),
+        member_result_type(&lowerer, &Type::named("net.TlsStream"), "close"),
         Some(Type::Unit)
     );
 
@@ -14008,7 +14006,8 @@ def main():
     assert_eq!(
         assigned_local_types(&module, "main", |value| matches!(
             value,
-            Rvalue::Call { callee: CallTarget::Member { field, .. }, .. } if field == "to_ms"
+            Rvalue::Call { callee, .. }
+                if callee.member_parts().is_some_and(|parts| parts.field == "to_ms")
         )),
         vec![Type::named("float64")],
         "a builtin member call has the member's result type"
@@ -14088,4 +14087,284 @@ def main():
         error.contains(&format!("assigns local `{target}` of unknown type")),
         "{error}"
     );
+}
+
+/// Every call target in function `name` of `module`.
+fn function_callees<'a>(module: &'a MirModule, name: &str) -> Vec<&'a CallTarget> {
+    module
+        .functions
+        .iter()
+        .find(|function| function.name == name)
+        .unwrap_or_else(|| panic!("{name} MIR should exist"))
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::Call { callee, .. },
+                ..
+            }
+            | Instruction::WriteLoan {
+                value: Rvalue::Call { callee, .. },
+                ..
+            } => Some(callee),
+            _ => None,
+        })
+        .collect()
+}
+
+fn runtime_ops_in(module: &MirModule, name: &str) -> Vec<crate::runtime_ops::RuntimeOp> {
+    function_callees(module, name)
+        .into_iter()
+        .filter_map(|callee| match callee {
+            CallTarget::Runtime { op, .. } => Some(*op),
+            _ => None,
+        })
+        .collect()
+}
+
+fn member_fields_in<'a>(module: &'a MirModule, name: &str) -> Vec<&'a str> {
+    function_callees(module, name)
+        .into_iter()
+        .filter_map(|callee| match callee {
+            CallTarget::Member { field, .. } => Some(field.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn step8d_resource_rng_and_scalar_members_lower_to_runtime_ops() {
+    use crate::runtime_ops::{ResourceOp, RngOp, RuntimeOp, ScalarOp, ValueOp};
+    let module = crate::lower_source_to_mir(
+        r#"
+import fs
+import io
+import net
+import random
+
+def files() -> Result[None, io.Error]:
+    with file = try fs.open("/tmp/aura-step8d-missing"):
+        text = try file.read_all()
+        print(text)
+    return Result.Ok(None)
+
+def sockets() -> Result[None, io.Error]:
+    with socket = try net.udp_bind("127.0.0.1:0"):
+        print(try socket.local_addr())
+    return Result.Ok(None)
+
+def main():
+    mut rng = random.Rng(7)
+    print(rng.next_int(0, 10))
+    value: int32 = 5
+    print(value.wrapping_add(1))
+    print(value.to_float())
+    print(value.to_string())
+    print(2s.to_ms())
+    name = "aura"
+    print(name.clone())
+    match files():
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            pass
+    match sockets():
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            pass
+"#,
+    )
+    .expect("resource, Rng and scalar members should lower");
+
+    let file_ops = runtime_ops_in(&module, "files");
+    assert!(
+        file_ops.contains(&RuntimeOp::Resource(ResourceOp::FileReadAll)),
+        "{file_ops:?}"
+    );
+    let socket_ops = runtime_ops_in(&module, "sockets");
+    assert!(
+        socket_ops.contains(&RuntimeOp::Resource(ResourceOp::UdpSocketLocalAddr)),
+        "{socket_ops:?}"
+    );
+    let main_ops = runtime_ops_in(&module, "main");
+    for expected in [
+        RuntimeOp::Rng(RngOp::NextInt),
+        RuntimeOp::Scalar(ScalarOp::WrappingAdd),
+        RuntimeOp::Scalar(ScalarOp::ToFloat),
+        RuntimeOp::Scalar(ScalarOp::DurationToMilliseconds),
+        RuntimeOp::Value(ValueOp::ToString),
+        RuntimeOp::Value(ValueOp::Clone),
+    ] {
+        assert!(main_ops.contains(&expected), "{expected} in {main_ops:?}");
+    }
+    for function in ["files", "sockets", "main"] {
+        let members = member_fields_in(&module, function);
+        assert!(
+            members.is_empty(),
+            "{function} should keep no built-in member calls: {members:?}"
+        );
+    }
+
+    // The pass is idempotent, and its result validates.
+    let mut again = module.clone();
+    resolve_runtime_ops(&mut again);
+    assert_eq!(
+        serde_json::to_value(&again).expect("MIR serializes"),
+        serde_json::to_value(&module).expect("MIR serializes")
+    );
+    validate_loan_flow(&module).expect("resolved runtime ops should validate");
+}
+
+#[test]
+fn step8d_class_methods_and_type_param_receivers_keep_member_calls() {
+    let module = crate::lower_source_to_mir(
+        r#"
+trait Closer:
+    def close(self) -> int64
+
+class Handle:
+    id: int64
+
+    def read_all(self) -> int64:
+        return self.id
+
+    def to_string(self) -> str:
+        return "handle"
+
+impl Closer for Handle:
+    def close(self) -> int64:
+        return self.id
+
+def shut[T: Closer](value: T) -> int64:
+    return value.close()
+
+def main():
+    handle = Handle(id=3)
+    print(handle.read_all())
+    print(handle.to_string())
+    print(shut(handle))
+"#,
+    )
+    .expect("class methods named like built-ins should lower");
+
+    assert!(runtime_ops_in(&module, "main").is_empty());
+    let members = member_fields_in(&module, "main");
+    assert!(members.contains(&"read_all"), "{members:?}");
+    assert!(members.contains(&"to_string"), "{members:?}");
+    let generic = function_callees(&module, "shut");
+    assert!(
+        generic
+            .iter()
+            .all(|callee| !matches!(callee, CallTarget::Runtime { .. })),
+        "a type-parameter receiver must not resolve to a runtime op: {generic:?}"
+    );
+    assert!(
+        generic.iter().any(|callee| matches!(
+            callee,
+            CallTarget::Member { field, .. } | CallTarget::TraitMember { field, .. }
+                if field == "close"
+        )),
+        "{generic:?}"
+    );
+}
+
+fn rng_runtime_fixture() -> MirModule {
+    crate::lower_source_to_mir(
+        r#"
+import random
+
+def main():
+    mut rng = random.Rng(7)
+    print(rng.next_int(0, 10))
+"#,
+    )
+    .expect("Rng fixture should lower")
+}
+
+fn first_runtime_call(module: &mut MirModule) -> (&mut CallTarget, &mut Vec<MirArg>) {
+    module
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "main")
+        .into_iter()
+        .flat_map(|function| &mut function.blocks)
+        .flat_map(|block| &mut block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::Call { callee, args },
+                ..
+            } if matches!(callee, CallTarget::Runtime { .. }) => Some((callee, args)),
+            _ => None,
+        })
+        .expect("the fixture should lower a runtime op")
+}
+
+#[test]
+fn step8d_validator_rejects_forged_runtime_ops() {
+    use crate::runtime_ops::{ResourceOp, RuntimeOp, ScalarOp};
+    let baseline = rng_runtime_fixture();
+    validate_loan_flow(&baseline).expect("the source-produced op should validate");
+
+    // An op from another family than the receiver's type.
+    let mut wrong_family = baseline.clone();
+    let (callee, _) = first_runtime_call(&mut wrong_family);
+    let CallTarget::Runtime { op, .. } = callee else {
+        unreachable!()
+    };
+    *op = RuntimeOp::Resource(ResourceOp::FileReadAll);
+    assert_public_boundaries_reject(
+        &wrong_family,
+        "invalid MIR runtime operation `Resource.FileReadAll` in `main` does not apply to a receiver of type `random.Rng`",
+    );
+
+    // A scalar op on a non-scalar receiver.
+    let mut wrong_receiver = baseline.clone();
+    let (callee, _) = first_runtime_call(&mut wrong_receiver);
+    let CallTarget::Runtime { op, .. } = callee else {
+        unreachable!()
+    };
+    *op = RuntimeOp::Scalar(ScalarOp::ToFloat);
+    assert_public_boundaries_reject(&wrong_receiver, "does not apply to a receiver of type");
+
+    // A missing receiver.
+    let mut receiverless = baseline.clone();
+    let (callee, _) = first_runtime_call(&mut receiverless);
+    let CallTarget::Runtime { receiver, .. } = callee else {
+        unreachable!()
+    };
+    *receiver = None;
+    assert_public_boundaries_reject(&receiverless, "has no receiver");
+
+    // Too many arguments.
+    let mut extra = baseline.clone();
+    let (_, args) = first_runtime_call(&mut extra);
+    args.push(MirArg {
+        name: None,
+        value: Operand::Int(1),
+        writeback_place: None,
+    });
+    assert_public_boundaries_reject(
+        &extra,
+        "invalid MIR runtime operation `Rng.NextInt` in `main`: expected `next_int()` to take at most 2 argument(s), found 3",
+    );
+
+    // A missing required argument.
+    let mut missing = baseline.clone();
+    let (_, args) = first_runtime_call(&mut missing);
+    args.pop();
+    assert_public_boundaries_reject(&missing, "expected `next_int()` to receive `hi`");
+
+    // An argument name the op does not declare.
+    let mut unknown = baseline.clone();
+    let (_, args) = first_runtime_call(&mut unknown);
+    args[0].name = Some("seed".to_string());
+    assert_public_boundaries_reject(&unknown, "`next_int()` has no parameter `seed`");
+
+    // A named argument for a parameter a positional argument already bound.
+    let mut twice = baseline.clone();
+    let (_, args) = first_runtime_call(&mut twice);
+    args[1].name = Some("lo".to_string());
+    assert_public_boundaries_reject(&twice, "`next_int()` receives `lo` twice");
 }

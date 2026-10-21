@@ -10,6 +10,7 @@ use crate::call::{
 };
 use crate::diag::Span;
 use crate::integer::{minimal_signed_type_for_negative_literal, IntegerValue};
+use crate::runtime_ops::RuntimeOp;
 use crate::sema::{
     binary_operator_trait, resolve_param_passing, substitute_trait_bound, substitute_type,
     substitutions_from_decl_type_args, type_is_copy_in_program, unary_operator_trait,
@@ -1085,6 +1086,70 @@ pub enum CallTarget {
         field: String,
         receiver_place: Option<String>,
     },
+    /// A built-in operation resolved from a member call on a receiver of
+    /// concrete built-in type (see `crate::runtime_ops`). `receiver` is the
+    /// call's receiver operand and `receiver_place` its writeback place, as
+    /// in `Member`.
+    Runtime {
+        op: RuntimeOp,
+        receiver: Option<Operand>,
+        receiver_place: Option<String>,
+    },
+}
+
+/// The receiver, member name, and writeback place of a member call.
+#[derive(Clone, Copy, Debug)]
+pub struct MemberCallParts<'a> {
+    pub object: &'a Operand,
+    pub field: &'a str,
+    pub receiver_place: Option<&'a str>,
+    /// The trait a `TraitMember` call selects through.
+    pub trait_name: Option<&'a str>,
+}
+
+impl CallTarget {
+    /// The member call this callee makes: a `Member` or `TraitMember` call,
+    /// or a resolved runtime operation with a receiver, which names its
+    /// source member.
+    pub fn member_parts(&self) -> Option<MemberCallParts<'_>> {
+        match self {
+            CallTarget::Member {
+                object,
+                field,
+                receiver_place,
+            } => Some(MemberCallParts {
+                object,
+                field,
+                receiver_place: receiver_place.as_deref(),
+                trait_name: None,
+            }),
+            CallTarget::TraitMember {
+                object,
+                trait_name,
+                field,
+                receiver_place,
+            } => Some(MemberCallParts {
+                object,
+                field,
+                receiver_place: receiver_place.as_deref(),
+                trait_name: Some(trait_name),
+            }),
+            CallTarget::Runtime {
+                op,
+                receiver: Some(object),
+                receiver_place,
+            } => Some(MemberCallParts {
+                object,
+                field: op.member_name(),
+                receiver_place: receiver_place.as_deref(),
+                trait_name: None,
+            }),
+            CallTarget::Runtime { receiver: None, .. }
+            | CallTarget::Name(_)
+            | CallTarget::Value(_)
+            | CallTarget::Extern(_) => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2803,7 +2868,12 @@ impl<'a> MirLoanValidationContext<'a> {
                 {
                     return Ok(method.receiver);
                 }
-                if let Some(member) = BuiltinMember::resolve(name, field) {
+                // The class lookup above already found no shadowing method.
+                if let Some(member) =
+                    crate::runtime_ops::builtin_member_for_receiver(&receiver_type, field, |_| {
+                        false
+                    })
+                {
                     return Ok(Some(lower_receiver_kind(member.receiver_passing())));
                 }
                 if name == "list" && spans::span_member_mutates_receiver(field) {
@@ -3406,17 +3476,23 @@ impl<'a> MirLoanValidationContext<'a> {
                 ("<indirect>".to_string(), Vec::new(), None)
             }
             CallTarget::Extern(call) => (format!("extern {}", call.symbol), Vec::new(), None),
-            CallTarget::Member {
-                object,
-                field,
-                receiver_place,
-            } => {
+            CallTarget::Runtime {
+                op, receiver: None, ..
+            } => (format!("runtime {op}"), Vec::new(), None),
+            CallTarget::Member { .. } | CallTarget::Runtime { .. } => {
+                let MemberCallParts {
+                    object,
+                    field,
+                    receiver_place,
+                    ..
+                } = callee
+                    .member_parts()
+                    .expect("member and receiver runtime calls have member parts");
                 let object_origin = match object {
                     Operand::Place(place) => Some(place.as_str()),
                     _ => None,
                 };
-                if let (Some(receiver_place), Some(object_origin)) =
-                    (receiver_place.as_deref(), object_origin)
+                if let (Some(receiver_place), Some(object_origin)) = (receiver_place, object_origin)
                 {
                     if receiver_place != object_origin {
                         return Err(format!(
@@ -3457,17 +3533,12 @@ impl<'a> MirLoanValidationContext<'a> {
                 )
             }
         };
-        if let CallTarget::Member {
-            object,
-            field,
-            receiver_place,
-        }
-        | CallTarget::TraitMember {
+        if let Some(MemberCallParts {
             object,
             field,
             receiver_place,
             ..
-        } = callee
+        }) = callee.member_parts()
         {
             for candidate in &candidates {
                 match candidate.receiver {
@@ -3478,7 +3549,7 @@ impl<'a> MirLoanValidationContext<'a> {
                                 caller.name
                             ));
                         };
-                        let Some(writeback_place) = receiver_place.as_deref() else {
+                        let Some(writeback_place) = receiver_place else {
                             return Err(format!(
                                 "invalid MIR member call `{field}` in `{}` requires a mutable receiver writeback place",
                                 caller.name
@@ -4013,10 +4084,9 @@ fn rvalue_has_task_borrowed_closure(value: &Rvalue, state: &ValidatedLoanState) 
             .iter()
             .any(|entry| operand_has(&entry.key) || operand_has(&entry.value)),
         Rvalue::Construct { fields, .. } => fields.iter().any(|field| operand_has(&field.value)),
-        Rvalue::Call {
-            callee: CallTarget::Member { object, .. } | CallTarget::TraitMember { object, .. },
-            ..
-        } => operand_has(object),
+        Rvalue::Call { callee, .. } => callee
+            .member_parts()
+            .is_some_and(|parts| operand_has(parts.object)),
         _ => false,
     }
 }
@@ -4282,11 +4352,10 @@ fn rebase_callable_rvalue(
             ),
             _ => Vec::new(),
         },
-        Rvalue::Call {
-            callee:
-                CallTarget::Member { object, field, .. } | CallTarget::TraitMember { object, field, .. },
-            args,
-        } => {
+        Rvalue::Call { callee, args } if callee.member_parts().is_some() => {
+            let MemberCallParts { object, field, .. } = callee
+                .member_parts()
+                .expect("the guard matched member parts");
             let container = match object {
                 Operand::Place(receiver) | Operand::MovePlace(receiver) => {
                     rebase_container_result_callables(
@@ -4298,9 +4367,6 @@ fn rebase_callable_rvalue(
             if !container.is_empty() {
                 return container;
             }
-            let Rvalue::Call { callee, .. } = value else {
-                unreachable!()
-            };
             call_result_callable_identities(function, callee, args, target, context, state)
         }
         Rvalue::Call { callee, args } => {
@@ -4582,11 +4648,15 @@ fn call_result_callable_identities(
                 _ => None,
             })
         }
-        CallTarget::Member { object, field, .. }
-        | CallTarget::TraitMember { object, field, .. } => {
-            let trait_name = match callee {
-                CallTarget::TraitMember { trait_name, .. } => Some(trait_name.as_str()),
-                _ => None,
+        CallTarget::Member { .. } | CallTarget::TraitMember { .. } | CallTarget::Runtime { .. } => {
+            let Some(MemberCallParts {
+                object,
+                field,
+                trait_name,
+                ..
+            }) = callee.member_parts()
+            else {
+                return Vec::new();
             };
             let Ok(candidates) =
                 context.member_function_candidates(function, object, trait_name, field)
@@ -4694,6 +4764,9 @@ fn function_body_moves_root(function: &MirFunction, root: &str) -> bool {
                     CallTarget::Member { object, .. } | CallTarget::TraitMember { object, .. } => {
                         operand_moves(object, root)
                     }
+                    CallTarget::Runtime { receiver, .. } => receiver
+                        .as_ref()
+                        .is_some_and(|object| operand_moves(object, root)),
                     CallTarget::Name(_) | CallTarget::Extern(_) => false,
                 };
                 callee_moves || args.iter().any(|arg| operand_moves(&arg.value, root))
@@ -5358,18 +5431,16 @@ fn container_mutation_callables(
     value: &Rvalue,
     state: &ValidatedLoanState,
 ) -> std::result::Result<Option<ContainerMutation>, String> {
-    let Rvalue::Call {
-        callee:
-            CallTarget::Member { object, field, .. } | CallTarget::TraitMember { object, field, .. },
-        args,
-    } = value
-    else {
+    let Rvalue::Call { callee, args } = value else {
+        return Ok(None);
+    };
+    let Some(MemberCallParts { object, field, .. }) = callee.member_parts() else {
         return Ok(None);
     };
     let (Operand::Place(receiver) | Operand::MovePlace(receiver)) = object else {
         return Ok(None);
     };
-    let inserted_operand = match field.as_str() {
+    let inserted_operand = match field {
         "append" | "add" | "extend" | "update" => args.first(),
         "insert" | "set" | "setdefault" => args.get(1),
         _ if field == INTERNAL_VEC_SET_INDEX_FIELD || field == INTERNAL_MAP_SET_INDEX_FIELD => {
@@ -5381,7 +5452,7 @@ fn container_mutation_callables(
         _ => return Ok(None),
     };
     let inserts_operand = matches!(
-        field.as_str(),
+        field,
         "append" | "add" | "extend" | "update" | "insert" | "set" | "setdefault"
     ) || field == INTERNAL_VEC_SET_INDEX_FIELD
         || field == INTERNAL_MAP_SET_INDEX_FIELD;
@@ -5441,7 +5512,7 @@ fn container_mutation_callables(
                 replacements,
             }));
         };
-        let whole_container = matches!(field.as_str(), "extend" | "update");
+        let whole_container = matches!(field, "extend" | "update");
         match &operand.value {
             Operand::Function { name, signature } => {
                 incoming
@@ -7255,25 +7326,23 @@ fn validate_loan_rvalue(
         Rvalue::Binary { left, right, .. } => operands(&[left.clone(), right.clone()]),
         Rvalue::Call { callee, args } => {
             match callee {
-                CallTarget::Name(_) | CallTarget::Extern(_) => {}
+                CallTarget::Name(_)
+                | CallTarget::Extern(_)
+                | CallTarget::Runtime { receiver: None, .. } => {}
                 CallTarget::Value(value) => validate_loan_operand(function, value, context, state)?,
-                CallTarget::Member {
-                    object,
-                    field,
-                    receiver_place,
-                }
-                | CallTarget::TraitMember {
-                    object,
-                    field,
-                    receiver_place,
-                    ..
-                } => {
+                CallTarget::Member { .. }
+                | CallTarget::TraitMember { .. }
+                | CallTarget::Runtime { .. } => {
+                    let MemberCallParts {
+                        object,
+                        field,
+                        receiver_place,
+                        trait_name,
+                    } = callee
+                        .member_parts()
+                        .expect("member and receiver runtime calls have member parts");
                     validate_canonical_mir_identifier(function, field, false)?;
                     validate_loan_operand(function, object, context, state)?;
-                    let trait_name = match callee {
-                        CallTarget::TraitMember { trait_name, .. } => Some(trait_name.as_str()),
-                        _ => None,
-                    };
                     let receiver_passing =
                         context.member_receiver_passing(function, object, trait_name, field)?;
                     let operand_place = match object {
@@ -7289,7 +7358,7 @@ fn validate_loan_rvalue(
                         ));
                     }
                     if let (Some(receiver_place), Some(operand_place)) =
-                        (receiver_place.as_deref(), operand_place)
+                        (receiver_place, operand_place)
                     {
                         if receiver_place != operand_place {
                             return Err(format!(
@@ -7328,7 +7397,7 @@ fn validate_loan_rvalue(
                             }
                         }
                     }
-                    if let Some(place) = receiver_place.as_deref().or(operand_place) {
+                    if let Some(place) = receiver_place.or(operand_place) {
                         validate_checked_loan_place_access(
                             function,
                             place,
@@ -7376,6 +7445,21 @@ fn validate_loan_rvalue(
                         context.validate_owned_call_args(function, callee, args, state)?;
                     }
                 }
+                CallTarget::Runtime {
+                    op,
+                    receiver: Some(object),
+                    ..
+                } => {
+                    for callee in context.member_function_candidates(
+                        function,
+                        object,
+                        None,
+                        op.member_name(),
+                    )? {
+                        context.validate_owned_call_args(function, callee, args, state)?;
+                    }
+                }
+                CallTarget::Runtime { receiver: None, .. } => {}
                 CallTarget::TraitMember {
                     object,
                     trait_name,
@@ -7576,12 +7660,12 @@ fn borrowed_noncopy_origins_for_rvalue(
         // Ordinary call results are fresh owned values (ADR-0038); only a
         // builtin element index read can expose a borrowed container's
         // non-Copy element without cloning or removing it.
-        Rvalue::Call {
-            callee:
-                CallTarget::Member { object, field, .. } | CallTarget::TraitMember { object, field, .. },
-            ..
-        } if field == INTERNAL_VEC_INDEX_FIELD || field == INTERNAL_MAP_INDEX_FIELD => {
-            candidates.push(object);
+        Rvalue::Call { callee, .. }
+            if callee.member_parts().is_some_and(|parts| {
+                parts.field == INTERNAL_VEC_INDEX_FIELD || parts.field == INTERNAL_MAP_INDEX_FIELD
+            }) =>
+        {
+            candidates.extend(callee.member_parts().map(|parts| parts.object));
         }
         _ => {}
     }
@@ -9303,6 +9387,7 @@ pub(crate) fn validate_loan_flow(module: &MirModule) -> std::result::Result<(), 
     for function in module.functions.iter().chain(module.top_level.iter()) {
         validate_enum_variant_payloads(function, &context)?;
         validate_initializer_slot(function, &context)?;
+        runtime_ops::validate_runtime_ops(function, &context)?;
         validate_function_loan_flow(function, &context)?;
         local_types::validate_assigned_local_types(function)?;
     }
@@ -9721,6 +9806,16 @@ fn rvalue_place_mentions<'a>(value: &'a Rvalue, mentions: &mut Vec<&'a str>) {
                     operand_place_mention(object, mentions);
                     mentions.extend(receiver_place.as_deref());
                 }
+                CallTarget::Runtime {
+                    receiver,
+                    receiver_place,
+                    ..
+                } => {
+                    if let Some(object) = receiver {
+                        operand_place_mention(object, mentions);
+                    }
+                    mentions.extend(receiver_place.as_deref());
+                }
                 CallTarget::Name(_) | CallTarget::Extern(_) => {}
             }
             arg_place_mentions(args, mentions);
@@ -9907,6 +10002,7 @@ pub fn lower(program: &Program) -> MirModule {
         top_level,
     };
     type_param_calls::specialize_type_param_calls(program, &mut module);
+    runtime_ops::resolve_runtime_ops(&mut module);
     // Every union the module holds or operates on gets one explicit-tag
     // layout and drop plan (ADR-0052 A9).
     crate::union_layout::plan_module_unions(&mut module, |member| {
@@ -24880,6 +24976,13 @@ impl<'a> Lowerer<'a> {
                                 }
                             }
                         }
+                        // A class method was found above, so none shadows
+                        // the built-in member.
+                        if let Some(op) =
+                            RuntimeOp::resolve_member(&receiver_type, field, |_| false)
+                        {
+                            return op.result_type(&receiver_type);
+                        }
                         if let Some(runtime_ty) =
                             self.builtin_runtime_member_return_type(&receiver_type, field)
                         {
@@ -25565,70 +25668,6 @@ impl<'a> Lowerer<'a> {
         let Type::Named(name, args) = receiver_type else {
             return None;
         };
-        let bytes_ty = Type::Named("list".to_string(), vec![Type::named("uint8")]);
-        let io_error_ty = Type::Named("io.Error".to_string(), Vec::new());
-        if args.is_empty()
-            && field == "to_float"
-            && matches!(
-                name.as_str(),
-                "int8"
-                    | "int16"
-                    | "int32"
-                    | "int64"
-                    | "int128"
-                    | "intsize"
-                    | "uint8"
-                    | "uint16"
-                    | "uint32"
-                    | "uint64"
-                    | "uint128"
-                    | "uintsize"
-            )
-        {
-            return Some(Type::named("float64"));
-        }
-        if args.is_empty()
-            && matches!(
-                BuiltinMember::resolve(name, field),
-                Some(
-                    BuiltinMember::IntegerWrappingAdd
-                        | BuiltinMember::IntegerWrappingSub
-                        | BuiltinMember::IntegerWrappingMul
-                        | BuiltinMember::IntegerSaturatingAdd
-                        | BuiltinMember::IntegerSaturatingSub
-                        | BuiltinMember::IntegerSaturatingMul
-                        | BuiltinMember::IntegerWrappingShl
-                        | BuiltinMember::IntegerWrappingShr
-                        | BuiltinMember::IntegerSaturatingShl
-                        | BuiltinMember::IntegerSaturatingShr
-                )
-            )
-        {
-            return Some(receiver_type.clone());
-        }
-        if args.is_empty()
-            && field == "to_string"
-            && matches!(
-                name.as_str(),
-                "bool"
-                    | "int8"
-                    | "int16"
-                    | "int32"
-                    | "int64"
-                    | "int128"
-                    | "intsize"
-                    | "uint8"
-                    | "uint16"
-                    | "uint32"
-                    | "uint64"
-                    | "uint128"
-                    | "uintsize"
-                    | "float32"
-                    | "float64"
-            )
-        {
-            return Some(Type::named("str"));
-        }
         match (name.as_str(), field) {
             ("Array", "shape") => Some(Type::Named("list".to_string(), vec![Type::named("int64")])),
             ("Array", "len") => Some(Type::named("int64")),
@@ -25656,8 +25695,7 @@ impl<'a> Lowerer<'a> {
             | ("str", "to_lower")
             | ("str", "to_upper")
             | ("str", "trim")
-            | ("str", "join")
-            | ("str", "clone") => Some(Type::named("str")),
+            | ("str", "join") => Some(Type::named("str")),
             ("str", "strip_prefix") | ("str", "strip_suffix") => {
                 Some(optional_type(Type::named("str")))
             }
@@ -25668,7 +25706,6 @@ impl<'a> Lowerer<'a> {
             ) => text_convenience_result_type(field),
             ("list", "len") => Some(Type::named("int64")),
             ("list", "is_empty") => Some(Type::named("bool")),
-            ("list", "copy") => Some(Type::Named("list".to_string(), args.clone())),
             ("list", "append")
             | ("list", "extend")
             | ("list", "clear")
@@ -25689,12 +25726,10 @@ impl<'a> Lowerer<'a> {
             )),
             ("set", "len") => Some(Type::named("int64")),
             ("set", "is_empty") => Some(Type::named("bool")),
-            ("set", "copy") => Some(Type::Named("set".to_string(), args.clone())),
             ("set", "contains") => Some(Type::named("bool")),
             ("set", "add" | "remove" | "discard" | "clear" | "reserve") => Some(Type::Unit),
             ("dict", "len") => Some(Type::named("int64")),
             ("dict", "is_empty") => Some(Type::named("bool")),
-            ("dict", "copy") => Some(Type::Named("dict".to_string(), args.clone())),
             ("dict", "contains_key") => Some(Type::named("bool")),
             ("dict", "keys") => Some(Type::Named(
                 "list".to_string(),
@@ -25770,6 +25805,11 @@ impl<'a> Lowerer<'a> {
             ("Queue", "close") | ("TaskGroup", "cancel") | ("TaskGroup", "close") => {
                 Some(Type::Unit)
             }
+            // `with` cleanup closes these handles with no runtime call, so
+            // they have no resolved operation.
+            ("net.HttpExchange", "close")
+            | ("net.HttpResponse", "close")
+            | ("net.WebSocketListener", "close") => Some(Type::Unit),
             ("Task", "result") => Some(Type::Named(
                 "TaskResult".to_string(),
                 vec![args.first().cloned().unwrap_or(Type::Unit)],
@@ -25785,220 +25825,6 @@ impl<'a> Lowerer<'a> {
             ("TaskGroup", "start_soon") | ("TaskGroup", "start_soon_with_stack") => {
                 Some(Type::Unit)
             }
-            ("fs.File", "read_all") => Some(Type::Named(
-                "Result".to_string(),
-                vec![Type::named("str"), io_error_ty.clone()],
-            )),
-            ("fs.File", "read_bytes") => Some(Type::Named(
-                "Result".to_string(),
-                vec![bytes_ty.clone(), io_error_ty.clone()],
-            )),
-            ("fs.File", "write_all")
-            | ("fs.File", "write_bytes")
-            | ("fs.File", "flush")
-            | ("fs.File", "sync") => Some(Type::Named(
-                "Result".to_string(),
-                vec![Type::Unit, io_error_ty.clone()],
-            )),
-            ("fs.File", "close") => Some(Type::Unit),
-            ("process.Completed", "status") => Some(Type::named("process.ExitStatus")),
-            ("process.Completed", "success") => Some(Type::named("bool")),
-            ("process.Completed", "stdout") | ("process.Completed", "stderr") => {
-                Some(Type::named("str"))
-            }
-            ("process.Completed", "stdout_bytes") | ("process.Completed", "stderr_bytes") => {
-                Some(bytes_ty.clone())
-            }
-            ("process.Completed", "check") => Some(Type::Named(
-                "Result".to_string(),
-                vec![Type::Unit, Type::named("process.Error")],
-            )),
-            ("net.TcpListener", "accept") => Some(Type::Named(
-                "Result".to_string(),
-                vec![Type::named("net.TcpStream"), io_error_ty.clone()],
-            )),
-            ("net.TcpListener", "local_addr") => Some(Type::Named(
-                "Result".to_string(),
-                vec![Type::named("str"), io_error_ty.clone()],
-            )),
-            ("net.TcpListener", "close") => Some(Type::Unit),
-            ("net.TcpStream", "read_all")
-            | ("net.TcpStream", "local_addr")
-            | ("net.TcpStream", "peer_addr") => Some(Type::Named(
-                "Result".to_string(),
-                vec![Type::named("str"), io_error_ty.clone()],
-            )),
-            ("net.TcpStream", "read_line") => Some(Type::Named(
-                "Result".to_string(),
-                vec![optional_type(Type::named("str")), io_error_ty.clone()],
-            )),
-            ("net.TcpStream", "read_bytes") => Some(Type::Named(
-                "Result".to_string(),
-                vec![optional_type(bytes_ty.clone()), io_error_ty.clone()],
-            )),
-            ("net.TcpStream", "read_exact") => Some(Type::Named(
-                "Result".to_string(),
-                vec![bytes_ty.clone(), io_error_ty.clone()],
-            )),
-            ("net.TcpStream", "write_all")
-            | ("net.TcpStream", "write_bytes")
-            | ("net.TcpStream", "flush")
-            | ("net.TcpStream", "shutdown_read")
-            | ("net.TcpStream", "shutdown_write")
-            | ("net.TcpStream", "shutdown_both") => Some(Type::Named(
-                "Result".to_string(),
-                vec![Type::Unit, io_error_ty.clone()],
-            )),
-            ("net.TcpStream", "close") => Some(Type::Unit),
-            ("net.UdpSocket", "send_text") | ("net.UdpSocket", "send_bytes") => Some(Type::Named(
-                "Result".to_string(),
-                vec![Type::Unit, io_error_ty.clone()],
-            )),
-            ("net.UdpSocket", "recv") => Some(Type::Named(
-                "Result".to_string(),
-                vec![optional_type(bytes_ty.clone()), io_error_ty.clone()],
-            )),
-            ("net.UdpSocket", "recv_from") => Some(Type::Named(
-                "Result".to_string(),
-                vec![
-                    optional_type(Type::named("net.UdpDatagram")),
-                    io_error_ty.clone(),
-                ],
-            )),
-            ("net.UdpSocket", "local_addr") | ("net.UdpSocket", "peer_addr") => Some(Type::Named(
-                "Result".to_string(),
-                vec![Type::named("str"), io_error_ty.clone()],
-            )),
-            ("net.UdpSocket", "close") => Some(Type::Unit),
-            ("net.UdpDatagram", "address") => Some(Type::named("str")),
-            ("net.UdpDatagram", "bytes") => Some(bytes_ty.clone()),
-            ("net.UdpDatagram", "text") => Some(Type::Named(
-                "Result".to_string(),
-                vec![Type::named("str"), io_error_ty.clone()],
-            )),
-            ("net.HttpListener", "accept") => Some(Type::Named(
-                "Result".to_string(),
-                vec![Type::named("net.HttpExchange"), io_error_ty.clone()],
-            )),
-            ("net.HttpListener", "local_addr") => Some(Type::Named(
-                "Result".to_string(),
-                vec![Type::named("str"), io_error_ty.clone()],
-            )),
-            ("net.HttpListener", "close") => Some(Type::Unit),
-            ("net.HttpExchange", "method") | ("net.HttpExchange", "path") => {
-                Some(Type::named("str"))
-            }
-            ("net.HttpExchange", "headers") | ("net.HttpResponse", "headers") => Some(Type::Named(
-                "dict".to_string(),
-                vec![Type::named("str"), Type::named("str")],
-            )),
-            ("net.HttpExchange", "body_text") | ("net.HttpResponse", "text") => Some(Type::Named(
-                "Result".to_string(),
-                vec![Type::named("str"), io_error_ty.clone()],
-            )),
-            ("net.HttpExchange", "body_bytes") | ("net.HttpResponse", "bytes") => {
-                Some(bytes_ty.clone())
-            }
-            ("net.HttpExchange", "respond_text") | ("net.HttpExchange", "respond_bytes") => Some(
-                Type::Named("Result".to_string(), vec![Type::Unit, io_error_ty.clone()]),
-            ),
-            ("net.HttpExchange", "close") => Some(Type::Unit),
-            ("net.HttpResponse", "status") => Some(Type::named("int32")),
-            ("net.HttpResponse", "reason") => Some(Type::named("str")),
-            ("net.HttpResponse", "close") => Some(Type::Unit),
-            ("net.WebSocketListener", "accept") => Some(Type::Named(
-                "Result".to_string(),
-                vec![Type::named("net.WebSocket"), io_error_ty.clone()],
-            )),
-            ("net.WebSocketListener", "local_addr") => Some(Type::Named(
-                "Result".to_string(),
-                vec![Type::named("str"), io_error_ty.clone()],
-            )),
-            ("net.WebSocketListener", "close") => Some(Type::Unit),
-            ("net.WebSocket", "send_text") | ("net.WebSocket", "send_bytes") => Some(Type::Named(
-                "Result".to_string(),
-                vec![Type::Unit, io_error_ty.clone()],
-            )),
-            ("net.WebSocket", "recv_text") => Some(Type::Named(
-                "Result".to_string(),
-                vec![optional_type(Type::named("str")), io_error_ty.clone()],
-            )),
-            ("net.WebSocket", "recv_bytes") => Some(Type::Named(
-                "Result".to_string(),
-                vec![optional_type(bytes_ty.clone()), io_error_ty.clone()],
-            )),
-            ("net.WebSocket", "close") => Some(Type::Unit),
-            ("net.UnixListener", "accept") => Some(Type::Named(
-                "Result".to_string(),
-                vec![Type::named("net.UnixStream"), io_error_ty.clone()],
-            )),
-            ("net.UnixListener", "close") => Some(Type::Unit),
-            ("net.UnixStream", "read_line") => Some(Type::Named(
-                "Result".to_string(),
-                vec![optional_type(Type::named("str")), io_error_ty.clone()],
-            )),
-            ("net.UnixStream", "read_exact") => Some(Type::Named(
-                "Result".to_string(),
-                vec![bytes_ty.clone(), io_error_ty.clone()],
-            )),
-            ("net.UnixStream", "write_all") => Some(Type::Named(
-                "Result".to_string(),
-                vec![Type::Unit, io_error_ty.clone()],
-            )),
-            ("net.UnixStream", "close") => Some(Type::Unit),
-            ("net.TlsListener", "accept") => Some(Type::Named(
-                "Result".to_string(),
-                vec![Type::named("net.TlsStream"), io_error_ty.clone()],
-            )),
-            ("net.TlsListener", "local_addr") => Some(Type::Named(
-                "Result".to_string(),
-                vec![Type::named("str"), io_error_ty.clone()],
-            )),
-            ("net.TlsListener", "close") => Some(Type::Unit),
-            ("net.TlsStream", "read_line") => Some(Type::Named(
-                "Result".to_string(),
-                vec![optional_type(Type::named("str")), io_error_ty.clone()],
-            )),
-            ("net.TlsStream", "read_exact") => Some(Type::Named(
-                "Result".to_string(),
-                vec![bytes_ty, io_error_ty.clone()],
-            )),
-            ("net.TlsStream", "write_all") => Some(Type::Named(
-                "Result".to_string(),
-                vec![Type::Unit, io_error_ty],
-            )),
-            ("net.TlsStream", "close") => Some(Type::Unit),
-            ("process.Child", "stdin" | "stdout" | "stderr") => {
-                Some(optional_type(Type::named("process.Pipe")))
-            }
-            ("process.Child", "wait_or_none") => Some(Type::Named(
-                "Result".to_string(),
-                vec![
-                    optional_type(Type::named("process.ExitStatus")),
-                    crate::builtin_modules::process_error_type(),
-                ],
-            )),
-            ("process.Pipe", "read_line") => Some(Type::Named(
-                "Result".to_string(),
-                vec![
-                    optional_type(Type::named("str")),
-                    crate::builtin_modules::process_error_type(),
-                ],
-            )),
-            ("process.Pipe", "read_bytes") => Some(Type::Named(
-                "Result".to_string(),
-                vec![
-                    optional_type(Type::Named("list".to_string(), vec![Type::named("uint8")])),
-                    crate::builtin_modules::process_error_type(),
-                ],
-            )),
-            ("process.Supervisor", "wait_or_none") => Some(Type::Named(
-                "Result".to_string(),
-                vec![
-                    optional_type(Type::named("process.SupervisorEvent")),
-                    crate::builtin_modules::process_error_type(),
-                ],
-            )),
             _ => None,
         }
     }
@@ -26777,6 +26603,11 @@ mod type_param_calls;
 
 #[path = "mir_local_types.rs"]
 mod local_types;
+
+#[path = "mir_runtime_ops.rs"]
+mod runtime_ops;
+
+pub(crate) use runtime_ops::resolve_runtime_ops;
 
 pub(crate) use spans::span_member_mutates_receiver;
 

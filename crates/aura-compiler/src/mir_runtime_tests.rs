@@ -22922,3 +22922,185 @@ fn index_in_range_facts_are_checked_by_the_interpreter() {
         error.message
     );
 }
+
+#[test]
+fn step8d_interpreter_runs_resolved_runtime_ops_like_member_calls() {
+    use crate::runtime_ops::RuntimeOp;
+    let resolved = crate::lower_source_to_mir(
+        r#"
+import random
+
+def main():
+    mut rng = random.Rng(7)
+    first = rng.next_int(0, 1000)
+    mut again = random.Rng(7)
+    print(first == again.next_int(0, 1000))
+    value: int32 = 2147483647
+    print(value.wrapping_add(1))
+    print(value.saturating_add(1))
+    print(value.to_float())
+    print(value.to_string().len())
+    print(1500ms.to_ms())
+    print(16.0.sqrt())
+    name = "aura"
+    print(name.clone())
+"#,
+    )
+    .expect("resolved op fixture should lower");
+    let ops = resolved
+        .functions
+        .iter()
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Runtime { op, .. },
+                        ..
+                    },
+                ..
+            } => Some(*op),
+            _ => None,
+        })
+        .collect::<Vec<RuntimeOp>>();
+    assert!(
+        ops.len() >= 8,
+        "the fixture should lower runtime ops: {ops:?}"
+    );
+
+    // The same module with every op spelled as a member call, as hand-built
+    // or older MIR spells it.
+    let mut unresolved = resolved.clone();
+    for instruction in unresolved
+        .functions
+        .iter_mut()
+        .flat_map(|function| &mut function.blocks)
+        .flat_map(|block| &mut block.instructions)
+    {
+        let Instruction::Assign {
+            value: Rvalue::Call { callee, .. },
+            ..
+        } = instruction
+        else {
+            continue;
+        };
+        let CallTarget::Runtime {
+            op,
+            receiver: Some(receiver),
+            receiver_place,
+        } = callee
+        else {
+            continue;
+        };
+        *callee = CallTarget::Member {
+            object: receiver.clone(),
+            field: op.member_name().to_string(),
+            receiver_place: receiver_place.clone(),
+        };
+    }
+
+    let expected = "true\n-2147483648\n2147483647\n2147483647.0\n10\n1500.0\n4.0\naura\n";
+    let runtime = crate::run_mir(&resolved).expect("resolved ops should run");
+    assert_eq!(runtime.stdout, expected);
+    let member = crate::run_mir(&unresolved).expect("member calls should run");
+    assert_eq!(member.stdout, runtime.stdout);
+
+    // Loading serialized MIR resolves member spellings again.
+    let json = serde_json::to_vec(&unresolved).expect("MIR serializes");
+    let loaded = super::deserialize_runtime_module(&json).expect("MIR deserializes");
+    assert_eq!(
+        serde_json::to_value(&loaded).expect("MIR serializes"),
+        serde_json::to_value(&resolved).expect("MIR serializes")
+    );
+}
+
+#[test]
+fn step8d_script_saturating_math_runs_through_resolved_runtime_ops() {
+    // A script's top-level statements lower into the module's top-level
+    // function, so the runtime-op pass rewrites calls there too.
+    let source = r#"
+high: int32 = 2147483600
+low: int32 = -2147483600
+byte: uint8 = 200
+print(high.saturating_add(100))
+print(low.saturating_sub(100))
+print(high.saturating_sub(-100))
+print(high.saturating_mul(2))
+print(low.saturating_mul(2))
+print(byte.saturating_sub(250))
+print(byte.saturating_mul(2))
+print(byte.wrapping_mul(2))
+"#;
+    let module = crate::lower_source_to_mir(source).expect("the script should lower");
+    let top_level = module
+        .top_level
+        .as_ref()
+        .expect("a script lowers a top-level function");
+    let runtime_calls = top_level
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Call {
+                        callee: CallTarget::Runtime { .. },
+                        ..
+                    },
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(runtime_calls, 8, "every scalar member call resolves");
+
+    let output = crate::run_source(source).expect("the script should run");
+    assert_eq!(
+        output.stdout,
+        "2147483647\n-2147483648\n2147483647\n2147483647\n-2147483648\n0\n255\n144\n"
+    );
+}
+
+#[test]
+fn step8d_interpreter_rejects_a_runtime_op_without_a_receiver() {
+    // The shared validator refuses a receiverless op before a run starts;
+    // the interpreter keeps its own check for MIR handed to it directly.
+    let mut module = crate::lower_source_to_mir(
+        "import random\n\ndef main():\n    mut rng = random.Rng(7)\n    print(rng.next_int(0, 10))\n",
+    )
+    .expect("Rng fixture should lower");
+    let receiver = module
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "main")
+        .into_iter()
+        .flat_map(|function| &mut function.blocks)
+        .flat_map(|block| &mut block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Runtime { receiver, .. },
+                        ..
+                    },
+                ..
+            } => Some(receiver),
+            _ => None,
+        })
+        .expect("`next_int` lowers to a runtime op");
+    *receiver = None;
+    let mut runtime = MirRuntime::new(
+        module,
+        Arc::new(Mutex::new(String::new())),
+        CancellationContext::default(),
+    );
+    let error = runtime
+        .run_main()
+        .expect_err("a receiverless op cannot run");
+    assert_eq!(
+        error.message,
+        "MIR runtime operation `Rng.NextInt` has no receiver"
+    );
+}

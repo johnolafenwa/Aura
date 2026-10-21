@@ -4,6 +4,7 @@
 //! shared validator does refuse are asserted on both public boundaries so
 //! the file never records a backend-only containment as the whole story.
 
+use aura_compiler::runtime_ops::RuntimeOp;
 use aura_compiler::{emit_host_native_object, lower_source_to_mir, run_mir, MirModule};
 use serde_json::{json, Value};
 
@@ -31,12 +32,11 @@ fn instructions_mut(function: &mut Value) -> impl Iterator<Item = &mut Value> {
         .filter(|instruction| instruction.is_object())
 }
 
+/// The first call to member `field`, spelled as a `Member` call or as a
+/// resolved runtime operation.
 fn member_call_mut<'a>(function: &'a mut Value, field: &str) -> &'a mut Value {
-    let field = json!(field);
     instructions_mut(function)
-        .find(|instruction| {
-            instruction["Assign"]["value"]["Call"]["callee"]["Member"]["field"] == field
-        })
+        .find(|instruction| member_field(instruction).as_deref() == Some(field))
         .map(|instruction| &mut instruction["Assign"]["value"]["Call"])
         .unwrap_or_else(|| panic!("member call `{field}` not found"))
 }
@@ -76,27 +76,33 @@ fn path<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a Value> {
     keys.iter().try_fold(value, |value, key| value.get(key))
 }
 
-fn member_field(instruction: &Value) -> Option<&str> {
-    path(
-        instruction,
-        &["Assign", "value", "Call", "callee", "Member", "field"],
-    )
-    .and_then(Value::as_str)
+/// The callee variant of a member call: `Member`, or `Runtime` for a
+/// resolved runtime operation.
+fn member_callee_kind(instruction: &Value) -> Option<&'static str> {
+    let callee = path(instruction, &["Assign", "value", "Call", "callee"])?;
+    ["Member", "Runtime"]
+        .into_iter()
+        .find(|kind| callee.get(kind).is_some())
+}
+
+/// The source member a call names; a resolved runtime operation names the
+/// member it was resolved from.
+fn member_field(instruction: &Value) -> Option<String> {
+    let callee = &instruction["Assign"]["value"]["Call"]["callee"];
+    match member_callee_kind(instruction)? {
+        "Member" => callee["Member"]["field"].as_str().map(str::to_string),
+        _ => {
+            let op: RuntimeOp = serde_json::from_value(callee["Runtime"]["op"].clone())
+                .expect("a runtime callee names a runtime op");
+            Some(op.member_name().to_string())
+        }
+    }
 }
 
 fn member_has_receiver_place(instruction: &Value) -> bool {
-    path(
-        instruction,
-        &[
-            "Assign",
-            "value",
-            "Call",
-            "callee",
-            "Member",
-            "receiver_place",
-        ],
-    )
-    .is_some_and(Value::is_string)
+    member_callee_kind(instruction).is_some_and(|kind| {
+        instruction["Assign"]["value"]["Call"]["callee"][kind]["receiver_place"].is_string()
+    })
 }
 
 fn returned_view_type(pointee: Value) -> Value {
@@ -468,7 +474,7 @@ fn member_calls_without_receiver_places_are_refused_or_lowered_by_field_kind() {
         let mut encoded = encode(COLLECTIONS);
         for instruction in instructions_mut(function_mut(&mut encoded, "main")) {
             if member_has_receiver_place(instruction) {
-                fields.push(member_field(instruction).unwrap().to_string());
+                fields.push(member_field(instruction).unwrap());
             }
         }
     }
@@ -482,7 +488,8 @@ fn member_calls_without_receiver_places_are_refused_or_lowered_by_field_kind() {
         for instruction in instructions_mut(function_mut(&mut encoded, "main")) {
             if member_has_receiver_place(instruction) {
                 if seen == index {
-                    instruction["Assign"]["value"]["Call"]["callee"]["Member"]["receiver_place"] =
+                    let kind = member_callee_kind(instruction).expect("a member call");
+                    instruction["Assign"]["value"]["Call"]["callee"][kind]["receiver_place"] =
                         json!(null);
                 }
                 seen += 1;
@@ -543,7 +550,7 @@ fn native_backend_rejects_malformed_collection_member_arguments() {
     let main = function_mut(&mut encoded, "main");
     let mut seen = 0;
     for instruction in instructions_mut(main) {
-        if member_field(instruction) == Some("clear") {
+        if member_field(instruction).as_deref() == Some("clear") {
             seen += 1;
             if seen == 2 {
                 instruction["Assign"]["value"]["Call"]["args"] = json!([extra]);
@@ -825,4 +832,82 @@ fn native_backend_compiles_array_arithmetic_with_a_scalar_receiver() {
         "args": [{ "name": null, "value": { "Place": "values" }, "writeback_place": null }]
     }});
     assert_native_emits(encoded);
+}
+
+// ---------------------------------------------------------------------------
+// Resolved runtime operations (Batch 7 step 8d)
+// ---------------------------------------------------------------------------
+
+const SCALAR_RUNTIME_OPS: &str = "def main():\n    value: int32 = 5\n    print(value.wrapping_add(1))\n    print(value.to_float())\n    print(value.to_string())\n";
+
+/// `SCALAR_RUNTIME_OPS` with its call to `field` replaced by a member call
+/// on an integer literal. The shared validator records no type for a
+/// literal operand, so the runtime-op pass keeps the member call and the
+/// direct backend resolves the op from the literal's scalar type.
+fn literal_receiver_call(field: &str, args: Value) -> Value {
+    let mut encoded = encode(SCALAR_RUNTIME_OPS);
+    let call = member_call_mut(function_mut(&mut encoded, "main"), field);
+    *call = json!({
+        "callee": { "Member": { "object": { "Int": 7 }, "field": field, "receiver_place": null } },
+        "args": args,
+    });
+    encoded
+}
+
+#[test]
+fn runtime_op_on_a_receiver_of_unknown_type_is_rejected_on_both_boundaries() {
+    let mut encoded = encode(SCALAR_RUNTIME_OPS);
+    let call = member_call_mut(function_mut(&mut encoded, "main"), "wrapping_add");
+    assert!(
+        call["callee"]["Runtime"].is_object(),
+        "lowering resolves `wrapping_add` on an int32 local"
+    );
+    call["callee"]["Runtime"]["receiver"] = json!({ "Int": 5 });
+    assert_rejected_on_both_boundaries(
+        encoded,
+        "invalid MIR runtime operation `Scalar.WrappingAdd` in `main` has a receiver of unknown type",
+    );
+}
+
+#[test]
+fn native_backend_resolves_member_calls_on_integer_literal_receivers() {
+    let extra = json!([{ "name": null, "value": { "Int": 1 }, "writeback_place": null }]);
+    assert_native_emits(literal_receiver_call("to_float", json!([])));
+    assert_native_emits(literal_receiver_call("wrapping_add", extra.clone()));
+    assert_native_emits(literal_receiver_call("to_string", json!([])));
+    assert_native_rejects(
+        literal_receiver_call("to_float", extra.clone()),
+        "direct backend expected `to_float()` to take no arguments",
+    );
+    assert_native_rejects(
+        literal_receiver_call("to_string", extra),
+        "direct backend expected `to_string()` to take no arguments",
+    );
+}
+
+const BUILTIN_TRAIT_IMPL: &str = "trait Mix:\n    def mix(self, other: int32) -> int32\nimpl Mix for int32:\n    def mix(self, other: int32) -> int32:\n        return other\ndef main():\n    value: int32 = 5\n    print(value.wrapping_add(1))\n";
+
+#[test]
+fn builtin_runtime_op_shadows_a_forged_trait_method_of_the_same_name() {
+    // The checker refuses a trait method named like a built-in member, so
+    // only forged MIR can carry one. The built-in op still runs, and the
+    // validator checks the call's arguments against the trait method too.
+    let mut encoded = encode(BUILTIN_TRAIT_IMPL);
+    let trait_impls = encoded["trait_impls"].as_array_mut().unwrap();
+    assert_eq!(trait_impls.len(), 1, "{trait_impls:?}");
+    trait_impls[0]["methods"][0]["name"] = json!("wrapping_add");
+    assert_accepted_on_both_boundaries(encoded, "6\n");
+}
+
+#[test]
+fn native_backend_rejects_array_clone_with_arguments() {
+    let source = "def main():\n    values = Array[float64].from_list([1.0, 2.0], [2])\n    copied = values.clone()\n    print(copied.len())\n";
+    assert_source_emits(source);
+    let mut encoded = encode(source);
+    member_call_mut(function_mut(&mut encoded, "main"), "clone")["args"] =
+        json!([{ "name": null, "value": { "Int": 1 }, "writeback_place": null }]);
+    assert_native_rejects(
+        encoded,
+        "direct backend expected `clone()` to take no arguments",
+    );
 }
