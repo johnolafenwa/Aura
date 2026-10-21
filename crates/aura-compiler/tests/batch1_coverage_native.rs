@@ -833,3 +833,81 @@ fn native_backend_compiles_array_arithmetic_with_a_scalar_receiver() {
     }});
     assert_native_emits(encoded);
 }
+
+// ---------------------------------------------------------------------------
+// Resolved runtime operations (Batch 7 step 8d)
+// ---------------------------------------------------------------------------
+
+const SCALAR_RUNTIME_OPS: &str = "def main():\n    value: int32 = 5\n    print(value.wrapping_add(1))\n    print(value.to_float())\n    print(value.to_string())\n";
+
+/// `SCALAR_RUNTIME_OPS` with its call to `field` replaced by a member call
+/// on an integer literal. The shared validator records no type for a
+/// literal operand, so the runtime-op pass keeps the member call and the
+/// direct backend resolves the op from the literal's scalar type.
+fn literal_receiver_call(field: &str, args: Value) -> Value {
+    let mut encoded = encode(SCALAR_RUNTIME_OPS);
+    let call = member_call_mut(function_mut(&mut encoded, "main"), field);
+    *call = json!({
+        "callee": { "Member": { "object": { "Int": 7 }, "field": field, "receiver_place": null } },
+        "args": args,
+    });
+    encoded
+}
+
+#[test]
+fn runtime_op_on_a_receiver_of_unknown_type_is_rejected_on_both_boundaries() {
+    let mut encoded = encode(SCALAR_RUNTIME_OPS);
+    let call = member_call_mut(function_mut(&mut encoded, "main"), "wrapping_add");
+    assert!(
+        call["callee"]["Runtime"].is_object(),
+        "lowering resolves `wrapping_add` on an int32 local"
+    );
+    call["callee"]["Runtime"]["receiver"] = json!({ "Int": 5 });
+    assert_rejected_on_both_boundaries(
+        encoded,
+        "invalid MIR runtime operation `Scalar.WrappingAdd` in `main` has a receiver of unknown type",
+    );
+}
+
+#[test]
+fn native_backend_resolves_member_calls_on_integer_literal_receivers() {
+    let extra = json!([{ "name": null, "value": { "Int": 1 }, "writeback_place": null }]);
+    assert_native_emits(literal_receiver_call("to_float", json!([])));
+    assert_native_emits(literal_receiver_call("wrapping_add", extra.clone()));
+    assert_native_emits(literal_receiver_call("to_string", json!([])));
+    assert_native_rejects(
+        literal_receiver_call("to_float", extra.clone()),
+        "direct backend expected `to_float()` to take no arguments",
+    );
+    assert_native_rejects(
+        literal_receiver_call("to_string", extra),
+        "direct backend expected `to_string()` to take no arguments",
+    );
+}
+
+const BUILTIN_TRAIT_IMPL: &str = "trait Mix:\n    def mix(self, other: int32) -> int32\nimpl Mix for int32:\n    def mix(self, other: int32) -> int32:\n        return other\ndef main():\n    value: int32 = 5\n    print(value.wrapping_add(1))\n";
+
+#[test]
+fn builtin_runtime_op_shadows_a_forged_trait_method_of_the_same_name() {
+    // The checker refuses a trait method named like a built-in member, so
+    // only forged MIR can carry one. The built-in op still runs, and the
+    // validator checks the call's arguments against the trait method too.
+    let mut encoded = encode(BUILTIN_TRAIT_IMPL);
+    let trait_impls = encoded["trait_impls"].as_array_mut().unwrap();
+    assert_eq!(trait_impls.len(), 1, "{trait_impls:?}");
+    trait_impls[0]["methods"][0]["name"] = json!("wrapping_add");
+    assert_accepted_on_both_boundaries(encoded, "6\n");
+}
+
+#[test]
+fn native_backend_rejects_array_clone_with_arguments() {
+    let source = "def main():\n    values = Array[float64].from_list([1.0, 2.0], [2])\n    copied = values.clone()\n    print(copied.len())\n";
+    assert_source_emits(source);
+    let mut encoded = encode(source);
+    member_call_mut(function_mut(&mut encoded, "main"), "clone")["args"] =
+        json!([{ "name": null, "value": { "Int": 1 }, "writeback_place": null }]);
+    assert_native_rejects(
+        encoded,
+        "direct backend expected `clone()` to take no arguments",
+    );
+}

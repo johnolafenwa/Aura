@@ -33,8 +33,6 @@ use crate::sema::{substitute_type, FunctionParamContract, Type};
 
 use callables::{CallableShape, CallableShapeKey};
 
-const DIRECT_TO_FLOAT_ARITY_ERROR: &str =
-    "direct backend expected `to_float()` to take no arguments";
 const WIDE_INTEGER_BINARY_ERROR: &str =
     "direct backend does not support wide integer binary operation";
 const DIRECT_INTERNAL_SLICE_ARITY_ERROR: &str =
@@ -11558,13 +11556,8 @@ impl<'a> FunctionCompiler<'a> {
         let mut writeback = None;
         for (index, param) in params.iter().enumerate() {
             let Some(argument) = bound[index] else {
-                if param.required {
-                    return Err(format!(
-                        "direct backend expected `{}()` to receive `{}`",
-                        op.member_name(),
-                        param.name
-                    ));
-                }
+                // The shared validator binds every required parameter of a
+                // resolved op, so only an optional one is absent here.
                 let default = self.default_runtime_op_arg(op, param.name)?;
                 lowered.push(default);
                 continue;
@@ -11576,8 +11569,9 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 RuntimeOpArgLayout::BoxedWriteback => {
                     let loaded = self.load_operand(&argument.value)?;
-                    writeback = Some((index, argument));
-                    RuntimeOpArg::Boxed(self.ensure_opaque(loaded)?)
+                    let value = self.ensure_opaque(loaded)?;
+                    writeback = Some((value.clone(), argument));
+                    RuntimeOpArg::Boxed(value)
                 }
                 RuntimeOpArgLayout::BoxedInt32 => {
                     let loaded = self.load_operand(&argument.value)?;
@@ -11612,17 +11606,14 @@ impl<'a> FunctionCompiler<'a> {
         }
         self.push_runtime_call_words(call, &mut words);
         let results = self.runtime_call_results(self.runtime[call.function], &words);
-        if let Some((index, argument)) = writeback {
+        if let Some((value, argument)) = writeback {
             let Some(place) = &argument.writeback_place else {
                 return Err(format!(
                     "direct backend expected `{}()` to carry a mutable argument writeback place",
                     op.member_name()
                 ));
             };
-            let RuntimeOpArg::Boxed(value) = &lowered[index] else {
-                unreachable!("a writeback argument is boxed");
-            };
-            self.store_place(place, value.clone())?;
+            self.store_place(place, value)?;
             return Ok(unit_value(&mut self.builder));
         }
         let result_ty = op
@@ -11737,17 +11728,16 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         let runtime_op = RuntimeOp::Scalar(op);
         let call = runtime_op.runtime_call();
-        let no_arguments = || {
-            format!(
+        // The shared validator binds a resolved op's arguments; a member
+        // call on an integer literal reaches here unresolved.
+        if runtime_op.params().next().is_none() && !args.is_empty() {
+            return Err(format!(
                 "direct backend expected `{}()` to take no arguments",
                 runtime_op.member_name()
-            )
-        };
+            ));
+        }
         match op {
             ScalarOp::Sqrt => {
-                if !args.is_empty() {
-                    return Err(no_arguments());
-                }
                 let results =
                     self.runtime_call_results(self.runtime[call.function], &[object.values[0]]);
                 Ok(ValueRef {
@@ -11756,9 +11746,6 @@ impl<'a> FunctionCompiler<'a> {
                 })
             }
             ScalarOp::DurationToMilliseconds | ScalarOp::DurationToSeconds => {
-                if !args.is_empty() {
-                    return Err(no_arguments());
-                }
                 let mut words = vec![object.values[0]];
                 self.push_runtime_call_words(call, &mut words);
                 let results = self.runtime_call_results(self.runtime[call.function], &words);
@@ -11768,9 +11755,6 @@ impl<'a> FunctionCompiler<'a> {
                 })
             }
             ScalarOp::ToFloat => {
-                if !args.is_empty() {
-                    return Err(DIRECT_TO_FLOAT_ARITY_ERROR.to_string());
-                }
                 // A scalar integer converts inline; a boxed one calls the
                 // helper.
                 if let Some(kind) = object.ty.scalar_kind() {

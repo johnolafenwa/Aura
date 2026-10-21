@@ -23014,3 +23014,93 @@ def main():
         serde_json::to_value(&resolved).expect("MIR serializes")
     );
 }
+
+#[test]
+fn step8d_script_saturating_math_runs_through_resolved_runtime_ops() {
+    // A script's top-level statements lower into the module's top-level
+    // function, so the runtime-op pass rewrites calls there too.
+    let source = r#"
+high: int32 = 2147483600
+low: int32 = -2147483600
+byte: uint8 = 200
+print(high.saturating_add(100))
+print(low.saturating_sub(100))
+print(high.saturating_sub(-100))
+print(high.saturating_mul(2))
+print(low.saturating_mul(2))
+print(byte.saturating_sub(250))
+print(byte.saturating_mul(2))
+print(byte.wrapping_mul(2))
+"#;
+    let module = crate::lower_source_to_mir(source).expect("the script should lower");
+    let top_level = module
+        .top_level
+        .as_ref()
+        .expect("a script lowers a top-level function");
+    let runtime_calls = top_level
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Call {
+                        callee: CallTarget::Runtime { .. },
+                        ..
+                    },
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(runtime_calls, 8, "every scalar member call resolves");
+
+    let output = crate::run_source(source).expect("the script should run");
+    assert_eq!(
+        output.stdout,
+        "2147483647\n-2147483648\n2147483647\n2147483647\n-2147483648\n0\n255\n144\n"
+    );
+}
+
+#[test]
+fn step8d_interpreter_rejects_a_runtime_op_without_a_receiver() {
+    // The shared validator refuses a receiverless op before a run starts;
+    // the interpreter keeps its own check for MIR handed to it directly.
+    let mut module = crate::lower_source_to_mir(
+        "import random\n\ndef main():\n    mut rng = random.Rng(7)\n    print(rng.next_int(0, 10))\n",
+    )
+    .expect("Rng fixture should lower");
+    let receiver = module
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "main")
+        .into_iter()
+        .flat_map(|function| &mut function.blocks)
+        .flat_map(|block| &mut block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Runtime { receiver, .. },
+                        ..
+                    },
+                ..
+            } => Some(receiver),
+            _ => None,
+        })
+        .expect("`next_int` lowers to a runtime op");
+    *receiver = None;
+    let mut runtime = MirRuntime::new(
+        module,
+        Arc::new(Mutex::new(String::new())),
+        CancellationContext::default(),
+    );
+    let error = runtime
+        .run_main()
+        .expect_err("a receiverless op cannot run");
+    assert_eq!(
+        error.message,
+        "MIR runtime operation `Rng.NextInt` has no receiver"
+    );
+}

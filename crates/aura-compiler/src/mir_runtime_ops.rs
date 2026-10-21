@@ -39,28 +39,30 @@ pub(crate) fn resolve_runtime_ops(module: &mut MirModule) {
                 .as_mut()
                 .expect("a top-level rewrite has a top-level function"),
         };
-        let instruction = &mut function.blocks[rewrite.block].instructions[rewrite.instruction];
-        let (Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. }) =
-            instruction
-        else {
-            continue;
-        };
-        let Rvalue::Call { callee, .. } = value else {
-            continue;
-        };
-        let CallTarget::Member {
-            object,
-            receiver_place,
+        // `collect_rewrites` recorded only member calls, so each rewrite
+        // finds one.
+        if let Instruction::Assign {
+            value: Rvalue::Call { callee, .. },
             ..
-        } = callee
-        else {
-            continue;
-        };
-        *callee = CallTarget::Runtime {
-            op: rewrite.op,
-            receiver: Some(std::mem::replace(object, Operand::Unit)),
-            receiver_place: receiver_place.take(),
-        };
+        }
+        | Instruction::WriteLoan {
+            value: Rvalue::Call { callee, .. },
+            ..
+        } = &mut function.blocks[rewrite.block].instructions[rewrite.instruction]
+        {
+            if let CallTarget::Member {
+                object,
+                receiver_place,
+                ..
+            } = callee
+            {
+                *callee = CallTarget::Runtime {
+                    op: rewrite.op,
+                    receiver: Some(std::mem::replace(object, Operand::Unit)),
+                    receiver_place: receiver_place.take(),
+                };
+            }
+        }
     }
 }
 

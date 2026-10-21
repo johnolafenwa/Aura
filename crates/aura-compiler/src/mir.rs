@@ -7326,9 +7326,10 @@ fn validate_loan_rvalue(
         Rvalue::Binary { left, right, .. } => operands(&[left.clone(), right.clone()]),
         Rvalue::Call { callee, args } => {
             match callee {
-                CallTarget::Name(_) | CallTarget::Extern(_) => {}
+                CallTarget::Name(_)
+                | CallTarget::Extern(_)
+                | CallTarget::Runtime { receiver: None, .. } => {}
                 CallTarget::Value(value) => validate_loan_operand(function, value, context, state)?,
-                CallTarget::Runtime { receiver: None, .. } => {}
                 CallTarget::Member { .. }
                 | CallTarget::TraitMember { .. }
                 | CallTarget::Runtime { .. } => {

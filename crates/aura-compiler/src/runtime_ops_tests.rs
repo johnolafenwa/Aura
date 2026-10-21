@@ -183,3 +183,35 @@ fn runtime_ops_display_their_family() {
         assert_eq!(op.to_string(), expected);
     }
 }
+
+#[test]
+fn only_fixed_width_integer_ops_name_integer_width_words() {
+    for &op in ScalarOp::ALL {
+        let words = op.integer_width_words();
+        match op {
+            ScalarOp::ToFloat
+            | ScalarOp::Sqrt
+            | ScalarOp::DurationToMilliseconds
+            | ScalarOp::DurationToSeconds => {
+                assert_eq!(words, None, "{op:?} is not a fixed-width integer op");
+            }
+            _ => {
+                let words = words.unwrap_or_else(|| panic!("{op:?} names its words"));
+                assert_eq!(words.len(), 2, "{op:?} names an operation and a mode");
+                assert_eq!(
+                    RuntimeOp::Scalar(op).runtime_call().immediates,
+                    words,
+                    "{op:?} passes its words to the helper"
+                );
+            }
+        }
+    }
+    assert_eq!(
+        ScalarOp::SaturatingMul.integer_width_words(),
+        Some(&[2, 2][..])
+    );
+    assert_eq!(
+        ScalarOp::WrappingShr.integer_width_words(),
+        Some(&[4, 1][..])
+    );
+}
