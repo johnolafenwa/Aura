@@ -7,9 +7,11 @@ Last updated: 2026-10-21
 - Target: move the direct emitter's semantic decisions into MIR before the
   LLVM emitter, as John chose on 2026-10-21. Value layout stays in the
   backend. The sub-steps are in the checkpoint's Step 8 section.
-- In progress: 8a, repeatable native builds. Details are in
+- Done: 8a, repeatable native builds, merged in PR #101. Details are in
   `2026-10-21-batch-7-step-8a-repeatable-builds.md`.
-- Next: 8b, one runtime ABI table.
+- In progress: 8b, one runtime ABI table. Details are in
+  `2026-10-21-batch-7-step-8b-runtime-abi-table.md`.
+- Next: 8c, complete local types in MIR.
 
 ## Aura 0.6.0 preview release (complete)
 

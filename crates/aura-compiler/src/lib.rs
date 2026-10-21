@@ -15,6 +15,7 @@ pub mod mir;
 mod mir_copies;
 pub mod mir_runtime;
 mod native_codegen;
+mod runtime_abi;
 use aura_runtime::native_runtime;
 mod package;
 pub mod parser;
