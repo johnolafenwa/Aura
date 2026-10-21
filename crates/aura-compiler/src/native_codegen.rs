@@ -26,6 +26,7 @@ use crate::mir::{
 use crate::native_runtime::{
     encode_direct_ffi_call_spec, DirectFfiCallSpec, DirectFfiParam, DirectFfiType,
 };
+use crate::runtime_abi::{AbiType, RuntimeFn, RuntimeTable};
 use crate::sema::{lookup_type, optional_type, text_convenience_result_type};
 use crate::sema::{substitute_type, FunctionParamContract, Type};
 
@@ -610,401 +611,8 @@ struct NativeCodegen<'a> {
     function_param_passing: HashMap<String, Vec<MirReceiverKind>>,
     function_writeback_types: HashMap<String, Vec<DirectType>>,
     call_conv: CallConv,
-    runtime_init: FuncId,
-    check_list_layout: FuncId,
-    run_root: FuncId,
-    enter_call: FuncId,
-    exit_call: FuncId,
-    set_returned_view_projection: FuncId,
-    take_returned_view_projection: FuncId,
-    push_returned_view_selector: FuncId,
-    take_returned_view_selector: FuncId,
-    print_i64: FuncId,
-    print_u64: FuncId,
-    print_f32: FuncId,
-    print_f64: FuncId,
-    print_bool: FuncId,
-    print_value: FuncId,
-    sqrt_f64: FuncId,
-    assert_fail: FuncId,
-    assert_fail_detailed: FuncId,
-    fail_division_by_zero: FuncId,
-    record_manager_exit_failure: FuncId,
-    fail_erased_union_mutable_receiver: FuncId,
-    fail_int32_overflow: FuncId,
-    fail_integer_overflow: FuncId,
-    register_cleanup: FuncId,
-    unregister_cleanup: FuncId,
-    refresh_cleanup: FuncId,
-    set_next_mutable_sinks: FuncId,
-    set_next_indirect_mutable_sinks: FuncId,
-    claim_indirect_mutable_sinks: FuncId,
-    current_mutable_sink: FuncId,
-    mutable_sink_new: FuncId,
-    mutable_sink_project: FuncId,
-    mutable_sink_store_owned: FuncId,
-    mutable_sink_release: FuncId,
-    close_value: FuncId,
-    tag_value_type: FuncId,
-    box_i32: FuncId,
-    box_i64: FuncId,
-    box_u64: FuncId,
-    box_uint_literal: FuncId,
-    box_f64: FuncId,
-    box_bool: FuncId,
-    function_value: FuncId,
-    module_constant: FuncId,
-    closure_value: FuncId,
-    function_call: FuncId,
-    function_bind_defaults: FuncId,
-    box_unit: FuncId,
-    string_literal: FuncId,
-    string_len: FuncId,
-    string_byte_len: FuncId,
-    string_slice: FuncId,
-    string_contains: FuncId,
-    string_starts_with: FuncId,
-    string_ends_with: FuncId,
-    string_split: FuncId,
-    string_replace: FuncId,
-    string_to_lower: FuncId,
-    string_to_upper: FuncId,
-    string_strip_prefix: FuncId,
-    string_strip_suffix: FuncId,
-    string_trim: FuncId,
-    string_join: FuncId,
-    string_text_method: FuncId,
-    stringify_value: FuncId,
-    register_display: FuncId,
-    format_begin: FuncId,
-    format_push_str: FuncId,
-    format_push_i64: FuncId,
-    format_push_value: FuncId,
-    format_push_formatted: FuncId,
-    abs_value: FuncId,
-    min_value: FuncId,
-    max_value: FuncId,
-    sqrt_value: FuncId,
-    round_value: FuncId,
-    divmod_value: FuncId,
-    parse_int32: FuncId,
-    parse_int64: FuncId,
-    parse_float64: FuncId,
-    duration_literal: FuncId,
-    duration_from_i64: FuncId,
-    duration_to_float: FuncId,
-    rng_new: FuncId,
-    rng_next_int: FuncId,
-    rng_next_float: FuncId,
-    rng_shuffle: FuncId,
-    random_secure_int: FuncId,
-    random_secure_bytes: FuncId,
-    range_new: FuncId,
-    range_current: FuncId,
-    range_end: FuncId,
-    range_advance: FuncId,
-    vec_empty: FuncId,
-    vec_len: FuncId,
-    vec_is_empty: FuncId,
-    vec_push_in_place: FuncId,
-    vec_pop_in_place: FuncId,
-    vec_get: FuncId,
-    vec_set_in_place: FuncId,
-    vec_remove_in_place: FuncId,
-    vec_swap_in_place: FuncId,
-    vec_contains: FuncId,
-    vec_extend_in_place: FuncId,
-    vec_insert_in_place: FuncId,
-    vec_clear_in_place: FuncId,
-    vec_reverse_in_place: FuncId,
-    collection_operation: FuncId,
-    vec_index: FuncId,
-    vec_slice: FuncId,
-    vec_index_option: FuncId,
-    vec_index_scalar: FuncId,
-    vec_check_index: FuncId,
-    compare_str_literal_at: FuncId,
-    compare_values_at: FuncId,
-    vec_element_len: FuncId,
-    vec_element_map_get: FuncId,
-    vec_element_map_get_str: FuncId,
-    vec_push_scalar: FuncId,
-    vec_span: FuncId,
-    vec_take_index_in_place: FuncId,
-    vec_set_index_in_place: FuncId,
-    element_path_load: FuncId,
-    element_path_store: FuncId,
-    element_path_take: FuncId,
-    element_path_probe: FuncId,
-    array_zeros: FuncId,
-    array_full: FuncId,
-    array_from_vec: FuncId,
-    array_clone: FuncId,
-    array_shape: FuncId,
-    array_len: FuncId,
-    array_get: FuncId,
-    array_set_in_place: FuncId,
-    array_fill_in_place: FuncId,
-    array_index: FuncId,
-    array_set_index_in_place: FuncId,
-    array_slice: FuncId,
-    array_binary: FuncId,
-    array_map: FuncId,
-    array_reduce: FuncId,
-    map_empty: FuncId,
-    map_len: FuncId,
-    map_is_empty: FuncId,
-    map_get: FuncId,
-    map_get_str: FuncId,
-    map_set_in_place: FuncId,
-    map_remove_in_place: FuncId,
-    map_contains_key: FuncId,
-    map_keys: FuncId,
-    map_values: FuncId,
-    map_items: FuncId,
-    map_clear_in_place: FuncId,
-    map_extend_in_place: FuncId,
-    map_index: FuncId,
-    map_set_index_in_place: FuncId,
-    set_empty: FuncId,
-    set_len: FuncId,
-    set_is_empty: FuncId,
-    set_contains: FuncId,
-    set_contains_int64: FuncId,
-    set_insert_in_place: FuncId,
-    set_remove_in_place: FuncId,
-    set_index_option: FuncId,
-    set_take_index_in_place: FuncId,
-    retain_value: FuncId,
-    release_value: FuncId,
-    clone_value: FuncId,
-    unbox_i64: FuncId,
-    unbox_int64: FuncId,
-    integer_to_float: FuncId,
-    integer_width_binary: FuncId,
-    unbox_u64: FuncId,
-    unbox_f64: FuncId,
-    unbox_bool: FuncId,
-    value_as_condition: FuncId,
-    unary_value: FuncId,
-    binary_value: FuncId,
-    compare_values: FuncId,
-    compare_str_literal: FuncId,
-    cast_value: FuncId,
-    cast_integer_to_integer: FuncId,
-    cast_integer_to_float: FuncId,
-    cast_float_to_integer: FuncId,
-    value_type_matches: FuncId,
-    value_has_runtime_type: FuncId,
-    tuple_new: FuncId,
-    tuple_element: FuncId,
-    tuple_take_element: FuncId,
-    union_inject: FuncId,
-    union_inject_copy: FuncId,
-    union_tag_test: FuncId,
-    union_tag: FuncId,
-    union_payload_copy: FuncId,
-    callable_env_alloc: FuncId,
-    callable_env_free: FuncId,
-    callable_env_retain: FuncId,
-    callable_env_release: FuncId,
-    none_test: FuncId,
-    value_is_union: FuncId,
-    union_active_payload: FuncId,
-    union_take_payload: FuncId,
-    enum_variant: FuncId,
-    variant_matches: FuncId,
-    variant_payload: FuncId,
-    variant_take_payload: FuncId,
-    instance_empty: FuncId,
-    instance_get_field: FuncId,
-    instance_take_field: FuncId,
-    instance_set_field_owned: FuncId,
-    arg_buffer_new: FuncId,
-    arg_buffer_store: FuncId,
-    arg_buffer_store_owned: FuncId,
-    task_arg_buffer_guard: FuncId,
-    task_arg_buffer_disarm: FuncId,
-    ffi_call: FuncId,
-    monotonic_time_ms: FuncId,
-    channel_new: FuncId,
-    channel_send: FuncId,
-    channel_send_timeout_value: FuncId,
-    channel_try_send: FuncId,
-    channel_recv: FuncId,
-    channel_recv_in_task_group: FuncId,
-    channel_recv_with_registered_producers: FuncId,
-    channel_recv_timeout_value: FuncId,
-    channel_recv_or_none: FuncId,
-    channel_recv_or_none_timeout_value: FuncId,
-    channel_recv_or_value: FuncId,
-    channel_recv_or_value_timeout_value: FuncId,
-    channel_close: FuncId,
-    task_group_new: FuncId,
-    task_group_cancel: FuncId,
-    task_group_close: FuncId,
-    task_join: FuncId,
-    task_join_timeout_value: FuncId,
-    task_join_or_none: FuncId,
-    task_join_or_none_timeout_value: FuncId,
-    task_join_or_value: FuncId,
-    task_join_or_value_timeout_value: FuncId,
-    wait_any: FuncId,
-    wait_any_timeout_value: FuncId,
-    wait_all: FuncId,
-    wait_all_timeout_value: FuncId,
-    select: FuncId,
-    io_write: FuncId,
-    io_flush: FuncId,
-    io_read_line: FuncId,
-    fs_exists: FuncId,
-    fs_read_to_string: FuncId,
-    fs_read_bytes: FuncId,
-    fs_write_string: FuncId,
-    fs_write_bytes: FuncId,
-    fs_append_string: FuncId,
-    fs_append_bytes: FuncId,
-    fs_create_dir: FuncId,
-    fs_read_dir: FuncId,
-    fs_remove_file: FuncId,
-    fs_rename: FuncId,
-    fs_open: FuncId,
-    fs_create: FuncId,
-    fs_append: FuncId,
-    file_read_all: FuncId,
-    file_read_bytes: FuncId,
-    file_write_all: FuncId,
-    file_write_bytes: FuncId,
-    file_flush: FuncId,
-    file_sync: FuncId,
-    file_close: FuncId,
-    process_inherit: FuncId,
-    process_null: FuncId,
-    process_pipe: FuncId,
-    process_supervisor: FuncId,
-    process_start: FuncId,
-    process_run: FuncId,
-    process_child_stdin: FuncId,
-    process_child_stdout: FuncId,
-    process_child_stderr: FuncId,
-    process_child_wait: FuncId,
-    process_child_wait_or_none: FuncId,
-    process_child_wait_ok: FuncId,
-    process_child_kill: FuncId,
-    process_child_terminate: FuncId,
-    process_child_close: FuncId,
-    process_pipe_read_all: FuncId,
-    process_pipe_read_line: FuncId,
-    process_pipe_read_bytes: FuncId,
-    process_pipe_write_all: FuncId,
-    process_pipe_write_bytes: FuncId,
-    process_pipe_flush: FuncId,
-    process_pipe_close: FuncId,
-    process_completed_status: FuncId,
-    process_completed_success: FuncId,
-    process_completed_stdout: FuncId,
-    process_completed_stderr: FuncId,
-    process_completed_stdout_bytes: FuncId,
-    process_completed_stderr_bytes: FuncId,
-    process_completed_check: FuncId,
-    process_supervisor_start: FuncId,
-    process_supervisor_wait: FuncId,
-    process_supervisor_wait_or_none: FuncId,
-    process_supervisor_stop: FuncId,
-    process_supervisor_is_empty: FuncId,
-    process_supervisor_close: FuncId,
-    net_connect: FuncId,
-    net_connect_timeout: FuncId,
-    net_listen: FuncId,
-    net_udp_bind: FuncId,
-    net_unix_listen: FuncId,
-    net_unix_connect: FuncId,
-    net_unix_connect_timeout: FuncId,
-    net_tls_listen: FuncId,
-    net_tls_connect: FuncId,
-    net_tls_connect_timeout: FuncId,
-    net_http_listen: FuncId,
-    net_http_request_text: FuncId,
-    net_http_request_text_timeout: FuncId,
-    net_http_request_bytes: FuncId,
-    net_http_request_bytes_timeout: FuncId,
-    net_websocket_listen: FuncId,
-    net_websocket_connect: FuncId,
-    net_websocket_connect_timeout: FuncId,
-    tcp_listener_accept: FuncId,
-    tcp_listener_local_addr: FuncId,
-    tcp_listener_close: FuncId,
-    tcp_stream_read_all: FuncId,
-    tcp_stream_read_line: FuncId,
-    tcp_stream_read_bytes: FuncId,
-    tcp_stream_read_exact: FuncId,
-    tcp_stream_write_all: FuncId,
-    tcp_stream_write_bytes: FuncId,
-    tcp_stream_flush: FuncId,
-    tcp_stream_local_addr: FuncId,
-    tcp_stream_peer_addr: FuncId,
-    tcp_stream_shutdown_read: FuncId,
-    tcp_stream_shutdown_write: FuncId,
-    tcp_stream_shutdown_both: FuncId,
-    tcp_stream_close: FuncId,
-    udp_socket_send_text: FuncId,
-    udp_socket_send_bytes: FuncId,
-    udp_socket_recv: FuncId,
-    udp_socket_recv_from: FuncId,
-    udp_socket_local_addr: FuncId,
-    udp_socket_peer_addr: FuncId,
-    udp_socket_close: FuncId,
-    udp_datagram_address: FuncId,
-    udp_datagram_bytes: FuncId,
-    udp_datagram_text: FuncId,
-    http_listener_accept: FuncId,
-    http_listener_local_addr: FuncId,
-    http_listener_close: FuncId,
-    http_exchange_method: FuncId,
-    http_exchange_path: FuncId,
-    http_exchange_headers: FuncId,
-    http_exchange_body_text: FuncId,
-    http_exchange_body_bytes: FuncId,
-    http_exchange_respond_text: FuncId,
-    http_exchange_respond_bytes: FuncId,
-    http_response_status: FuncId,
-    http_response_reason: FuncId,
-    http_response_headers: FuncId,
-    http_response_text: FuncId,
-    http_response_bytes: FuncId,
-    websocket_listener_accept: FuncId,
-    websocket_listener_local_addr: FuncId,
-    websocket_send_text: FuncId,
-    websocket_send_bytes: FuncId,
-    websocket_recv_text: FuncId,
-    websocket_recv_bytes: FuncId,
-    websocket_close: FuncId,
-    unix_listener_accept: FuncId,
-    unix_listener_close: FuncId,
-    unix_stream_read_line: FuncId,
-    unix_stream_read_exact: FuncId,
-    unix_stream_write_all: FuncId,
-    unix_stream_close: FuncId,
-    tls_listener_accept: FuncId,
-    tls_listener_local_addr: FuncId,
-    tls_listener_close: FuncId,
-    tls_stream_read_line: FuncId,
-    tls_stream_read_exact: FuncId,
-    tls_stream_write_all: FuncId,
-    tls_stream_close: FuncId,
-    cancelled: FuncId,
-    yield_now: FuncId,
-    sleep_value_void: FuncId,
-    start_task_call: FuncId,
+    runtime: RuntimeTable<FuncId>,
     string_data: HashMap<Vec<u8>, DataId>,
-}
-
-macro_rules! declare_runtime_functions {
-    ($object:expr, $( $var:ident => ($name:literal, [$($param:expr),* $(,)?], $ret:expr) ),+ $(,)?) => {
-        $(
-            let $var = declare_runtime_function($object, $name, &[$($param),*], $ret)?;
-        )+
-    };
 }
 
 macro_rules! try_or_string_error {
@@ -1175,395 +783,8 @@ impl<'a> NativeCodegen<'a> {
         builder.per_function_section(true);
         let mut object = ObjectModule::new(builder);
 
-        declare_runtime_functions!(
-            &mut object,
-            runtime_init => ("aura_direct_runtime_init", [types::I64, types::I64, types::I64, types::I64], None),
-            check_list_layout => ("aura_direct_check_list_layout", [types::I64], None),
-            run_root => ("aura_direct_run_root", [types::I64], Some(types::I32)),
-            enter_call => ("aura_direct_enter_frame", [types::I64], None),
-            exit_call => ("aura_direct_exit_call", [], None),
-            set_returned_view_projection => ("aura_direct_set_returned_view_projection", [types::I64, types::I64], None),
-            take_returned_view_projection => ("aura_direct_take_returned_view_projection", [types::I64, types::I64], Some(types::I64)),
-            push_returned_view_selector => ("aura_direct_push_returned_view_selector", [types::I64], None),
-            take_returned_view_selector => ("aura_direct_take_returned_view_selector", [types::I64], Some(types::I64)),
-            print_i64 => ("aura_direct_print_i64", [types::I64], None),
-            print_u64 => ("aura_direct_print_u64", [types::I64], None),
-            print_f32 => ("aura_direct_print_f32", [types::F64], None),
-            print_f64 => ("aura_direct_print_f64", [types::F64], None),
-            print_bool => ("aura_direct_print_bool", [types::I64], None),
-            print_value => ("aura_direct_print_value", [types::I64], None),
-            sqrt_f64 => ("aura_direct_sqrt_f64", [types::F64], Some(types::F64)),
-            assert_fail => ("aura_direct_assert_fail", [types::I64, types::I64, types::I64], None),
-            assert_fail_detailed => ("aura_direct_assert_fail_detailed", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], None),
-            fail_division_by_zero => ("aura_direct_fail_division_by_zero", [types::I64, types::I64], None),
-            record_manager_exit_failure => ("aura_direct_record_manager_exit_failure", [types::I64, types::I64, types::I64], None),
-            fail_erased_union_mutable_receiver => ("aura_direct_fail_erased_union_mutable_receiver", [types::I64, types::I64], None),
-            fail_int32_overflow => ("aura_direct_fail_int32_overflow", [types::I64, types::I64, types::I64], None),
-            fail_integer_overflow => ("aura_direct_fail_integer_overflow", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], None),
-            register_cleanup => ("aura_direct_register_cleanup", [types::I64, types::I64, types::I64], Some(types::I64)),
-            unregister_cleanup => ("aura_direct_unregister_cleanup", [types::I64], None),
-            refresh_cleanup => ("aura_direct_refresh_cleanup", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            set_next_mutable_sinks => ("aura_direct_set_next_mutable_sinks", [types::I64, types::I64], None),
-            set_next_indirect_mutable_sinks => ("aura_direct_set_next_indirect_mutable_sinks", [types::I64, types::I64, types::I64, types::I64, types::I64], None),
-            claim_indirect_mutable_sinks => ("aura_direct_claim_indirect_mutable_sinks", [types::I64], None),
-            current_mutable_sink => ("aura_direct_current_mutable_sink", [types::I64], Some(types::I64)),
-            mutable_sink_new => ("aura_direct_mutable_sink_new", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            mutable_sink_project => ("aura_direct_mutable_sink_project", [types::I64, types::I64, types::I64], Some(types::I64)),
-            mutable_sink_store_owned => ("aura_direct_mutable_sink_store_owned", [types::I64, types::I64], None),
-            mutable_sink_release => ("aura_direct_mutable_sink_release", [types::I64], None),
-            close_value => ("aura_direct_close_value", [types::I64, types::I64], Some(types::I64)),
-            tag_value_type => ("aura_direct_tag_value_type", [types::I64, types::I64, types::I64], None),
-            box_i32 => ("aura_direct_box_i32", [types::I64], Some(types::I64)),
-            box_i64 => ("aura_direct_box_i64", [types::I64], Some(types::I64)),
-            box_u64 => ("aura_direct_box_u64", [types::I64], Some(types::I64)),
-            box_uint_literal => ("aura_direct_box_uint_literal", [types::I64, types::I64], Some(types::I64)),
-            box_f64 => ("aura_direct_box_f64", [types::F64], Some(types::I64)),
-            box_bool => ("aura_direct_box_bool", [types::I64], Some(types::I64)),
-            function_value => ("aura_direct_function_value", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            module_constant => ("aura_direct_module_constant", [types::I64, types::I64, types::I64], Some(types::I64)),
-            closure_value => ("aura_direct_closure_value", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            function_call => ("aura_direct_function_call", [types::I64, types::I64, types::I64], Some(types::I64)),
-            function_bind_defaults => ("aura_direct_function_bind_defaults", [types::I64, types::I64, types::I64, types::I64], None),
-            box_unit => ("aura_direct_box_unit", [], Some(types::I64)),
-            string_literal => ("aura_direct_string_literal", [types::I64, types::I64], Some(types::I64)),
-            string_len => ("aura_direct_string_len", [types::I64], Some(types::I64)),
-            string_byte_len => ("aura_direct_string_byte_len", [types::I64], Some(types::I64)),
-            string_slice => ("aura_direct_string_slice", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            string_contains => ("aura_direct_string_contains", [types::I64, types::I64], Some(types::I64)),
-            string_starts_with => ("aura_direct_string_starts_with", [types::I64, types::I64], Some(types::I64)),
-            string_ends_with => ("aura_direct_string_ends_with", [types::I64, types::I64], Some(types::I64)),
-            string_split => ("aura_direct_string_split", [types::I64, types::I64], Some(types::I64)),
-            string_replace => ("aura_direct_string_replace", [types::I64, types::I64, types::I64], Some(types::I64)),
-            string_to_lower => ("aura_direct_string_to_lower", [types::I64], Some(types::I64)),
-            string_to_upper => ("aura_direct_string_to_upper", [types::I64], Some(types::I64)),
-            string_strip_prefix => ("aura_direct_string_strip_prefix", [types::I64, types::I64], Some(types::I64)),
-            string_strip_suffix => ("aura_direct_string_strip_suffix", [types::I64, types::I64], Some(types::I64)),
-            string_trim => ("aura_direct_string_trim", [types::I64], Some(types::I64)),
-            string_join => ("aura_direct_string_join", [types::I64, types::I64], Some(types::I64)),
-            string_text_method => ("aura_direct_string_text_method", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            stringify_value => ("aura_direct_stringify_value", [types::I64], Some(types::I64)),
-            register_display => ("aura_direct_register_display", [types::I64, types::I64, types::I64], None),
-            format_begin => ("aura_direct_format_begin", [types::I64, types::I64], Some(types::I64)),
-            format_push_str => ("aura_direct_format_push_str", [types::I64, types::I64, types::I64], None),
-            format_push_i64 => ("aura_direct_format_push_i64", [types::I64, types::I64], None),
-            format_push_value => ("aura_direct_format_push_value", [types::I64, types::I64], None),
-            format_push_formatted => ("aura_direct_format_push_formatted", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], None),
-            abs_value => ("aura_direct_abs", [types::I64], Some(types::I64)),
-            min_value => ("aura_direct_min", [types::I64, types::I64], Some(types::I64)),
-            max_value => ("aura_direct_max", [types::I64, types::I64], Some(types::I64)),
-            sqrt_value => ("aura_direct_sqrt", [types::I64], Some(types::I64)),
-            round_value => ("aura_direct_round", [types::I64], Some(types::I64)),
-            divmod_value => ("aura_direct_divmod", [types::I64, types::I64], Some(types::I64)),
-            parse_int32 => ("aura_direct_parse_int32", [types::I64], Some(types::I64)),
-            parse_int64 => ("aura_direct_parse_int64", [types::I64], Some(types::I64)),
-            parse_float64 => ("aura_direct_parse_float64", [types::I64], Some(types::I64)),
-            duration_literal => ("aura_direct_duration_literal", [types::I64, types::I64], Some(types::I64)),
-            duration_from_i64 => ("aura_direct_duration_from_i64", [types::I64, types::I64], Some(types::I64)),
-            duration_to_float => ("aura_direct_duration_to_float", [types::I64, types::I64], Some(types::F64)),
-            rng_new => ("aura_direct_rng_new", [types::I64], Some(types::I64)),
-            rng_next_int => ("aura_direct_rng_next_int", [types::I64, types::I64, types::I64], Some(types::I64)),
-            rng_next_float => ("aura_direct_rng_next_float", [types::I64], Some(types::F64)),
-            rng_shuffle => ("aura_direct_rng_shuffle", [types::I64, types::I64], None),
-            random_secure_int => ("aura_direct_random_secure_int", [types::I64, types::I64], Some(types::I64)),
-            random_secure_bytes => ("aura_direct_random_secure_bytes", [types::I64], Some(types::I64)),
-            range_new => ("aura_direct_range_new", [types::I64, types::I64], Some(types::I64)),
-            range_current => ("aura_direct_range_current", [types::I64], Some(types::I64)),
-            range_end => ("aura_direct_range_end", [types::I64], Some(types::I64)),
-            range_advance => ("aura_direct_range_advance", [types::I64], Some(types::I64)),
-            vec_empty => ("aura_direct_vec_empty", [], Some(types::I64)),
-            vec_len => ("aura_direct_vec_len", [types::I64], Some(types::I64)),
-            vec_is_empty => ("aura_direct_vec_is_empty", [types::I64], Some(types::I64)),
-            vec_push_in_place => ("aura_direct_vec_push_in_place", [types::I64, types::I64], Some(types::I64)),
-            vec_pop_in_place => ("aura_direct_vec_pop_in_place", [types::I64], Some(types::I64)),
-            vec_get => ("aura_direct_vec_get", [types::I64, types::I64], Some(types::I64)),
-            vec_set_in_place => ("aura_direct_vec_set_in_place", [types::I64, types::I64, types::I64], Some(types::I64)),
-            vec_remove_in_place => ("aura_direct_vec_remove_in_place", [types::I64, types::I64], Some(types::I64)),
-            vec_swap_in_place => ("aura_direct_vec_swap_in_place", [types::I64, types::I64, types::I64], Some(types::I64)),
-            vec_contains => ("aura_direct_vec_contains", [types::I64, types::I64], Some(types::I64)),
-            vec_extend_in_place => ("aura_direct_vec_extend_in_place", [types::I64, types::I64], Some(types::I64)),
-            vec_insert_in_place => ("aura_direct_vec_insert_in_place", [types::I64, types::I64, types::I64], Some(types::I64)),
-            vec_clear_in_place => ("aura_direct_vec_clear_in_place", [types::I64], Some(types::I64)),
-            vec_reverse_in_place => ("aura_direct_vec_reverse_in_place", [types::I64], Some(types::I64)),
-            collection_operation => ("aura_direct_collection_operation", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            vec_index => ("aura_direct_vec_index", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            vec_slice => ("aura_direct_vec_slice", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            vec_index_option => ("aura_direct_vec_index_option", [types::I64, types::I64], Some(types::I64)),
-            vec_index_scalar => ("aura_direct_vec_index_scalar", [types::I64, types::I64, types::I64], Some(types::I64)),
-            vec_check_index => ("aura_direct_vec_check_index", [types::I64, types::I64, types::I64, types::I64], None),
-            compare_str_literal_at => ("aura_direct_compare_str_literal_at", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            compare_values_at => ("aura_direct_compare_values_at", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            vec_element_len => ("aura_direct_vec_element_len", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            vec_element_map_get => ("aura_direct_vec_element_map_get", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            vec_element_map_get_str => ("aura_direct_vec_element_map_get_str", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            vec_push_scalar => ("aura_direct_vec_push_scalar", [types::I64, types::I64, types::I64], None),
-            vec_span => ("aura_direct_vec_span", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            vec_take_index_in_place => ("aura_direct_vec_take_index_in_place", [types::I64, types::I64], Some(types::I64)),
-            vec_set_index_in_place => ("aura_direct_vec_set_index_in_place", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            element_path_load => ("aura_direct_element_path_load", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            element_path_store => ("aura_direct_element_path_store", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            element_path_take => ("aura_direct_element_path_take", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            element_path_probe => ("aura_direct_element_path_probe", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            array_zeros => ("aura_direct_array_zeros", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            array_full => ("aura_direct_array_full", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            array_from_vec => ("aura_direct_array_from_vec", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            array_clone => ("aura_direct_array_clone", [types::I64, types::I64, types::I64], Some(types::I64)),
-            array_shape => ("aura_direct_array_shape", [types::I64], Some(types::I64)),
-            array_len => ("aura_direct_array_len", [types::I64], Some(types::I64)),
-            array_get => ("aura_direct_array_get", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            array_set_in_place => ("aura_direct_array_set_in_place", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            array_fill_in_place => ("aura_direct_array_fill_in_place", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            array_index => ("aura_direct_array_index", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            array_set_index_in_place => ("aura_direct_array_set_index_in_place", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            array_slice => ("aura_direct_array_slice", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            array_binary => ("aura_direct_array_binary", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            array_map => ("aura_direct_array_map", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            array_reduce => ("aura_direct_array_reduce", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            map_empty => ("aura_direct_map_empty", [], Some(types::I64)),
-            map_len => ("aura_direct_map_len", [types::I64], Some(types::I64)),
-            map_is_empty => ("aura_direct_map_is_empty", [types::I64], Some(types::I64)),
-            map_get => ("aura_direct_map_get", [types::I64, types::I64], Some(types::I64)),
-            map_get_str => ("aura_direct_map_get_str", [types::I64, types::I64, types::I64], Some(types::I64)),
-            map_set_in_place => ("aura_direct_map_set_in_place", [types::I64, types::I64, types::I64], Some(types::I64)),
-            map_remove_in_place => ("aura_direct_map_remove_in_place", [types::I64, types::I64], Some(types::I64)),
-            map_contains_key => ("aura_direct_map_contains_key", [types::I64, types::I64], Some(types::I64)),
-            map_keys => ("aura_direct_map_keys", [types::I64], Some(types::I64)),
-            map_values => ("aura_direct_map_values", [types::I64], Some(types::I64)),
-            map_items => ("aura_direct_map_items", [types::I64], Some(types::I64)),
-            map_clear_in_place => ("aura_direct_map_clear_in_place", [types::I64], Some(types::I64)),
-            map_extend_in_place => ("aura_direct_map_extend_in_place", [types::I64, types::I64], Some(types::I64)),
-            map_index => ("aura_direct_map_index", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            map_set_index_in_place => ("aura_direct_map_set_index_in_place", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            set_empty => ("aura_direct_set_empty", [], Some(types::I64)),
-            set_len => ("aura_direct_set_len", [types::I64], Some(types::I64)),
-            set_is_empty => ("aura_direct_set_is_empty", [types::I64], Some(types::I64)),
-            set_contains => ("aura_direct_set_contains", [types::I64, types::I64], Some(types::I64)),
-            set_contains_int64 => ("aura_direct_set_contains_int64", [types::I64, types::I64], Some(types::I64)),
-            set_insert_in_place => ("aura_direct_set_insert_in_place", [types::I64, types::I64], Some(types::I64)),
-            set_remove_in_place => ("aura_direct_set_remove_in_place", [types::I64, types::I64], Some(types::I64)),
-            set_index_option => ("aura_direct_set_index_option", [types::I64, types::I64], Some(types::I64)),
-            set_take_index_in_place => ("aura_direct_set_take_index_in_place", [types::I64, types::I64], Some(types::I64)),
-            retain_value => ("aura_direct_retain_value", [types::I64], Some(types::I64)),
-            release_value => ("aura_direct_release_value", [types::I64], None),
-            clone_value => ("aura_direct_clone_value", [types::I64], Some(types::I64)),
-            unbox_i64 => ("aura_direct_unbox_i64", [types::I64], Some(types::I64)),
-            unbox_int64 => ("aura_direct_unbox_int64", [types::I64], Some(types::I64)),
-            integer_to_float => ("aura_direct_integer_to_float", [types::I64], Some(types::F64)),
-            integer_width_binary => ("aura_direct_integer_width_binary", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            unbox_u64 => ("aura_direct_unbox_u64", [types::I64], Some(types::I64)),
-            unbox_f64 => ("aura_direct_unbox_f64", [types::I64], Some(types::F64)),
-            unbox_bool => ("aura_direct_unbox_bool", [types::I64], Some(types::I64)),
-            value_as_condition => ("aura_direct_value_as_condition", [types::I64], Some(types::I64)),
-            unary_value => ("aura_direct_unary_value_at", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            binary_value => ("aura_direct_binary_value_at", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            compare_values => ("aura_direct_compare_values", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            compare_str_literal => ("aura_direct_compare_str_literal", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            cast_value => ("aura_direct_cast_value_at", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            cast_integer_to_integer => ("aura_direct_cast_integer_to_integer", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            cast_integer_to_float => ("aura_direct_cast_integer_to_float", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::F64)),
-            cast_float_to_integer => ("aura_direct_cast_float_to_integer", [types::F64, types::I64, types::I64, types::I64], Some(types::I64)),
-            value_type_matches => ("aura_direct_value_type_matches", [types::I64, types::I64, types::I64], Some(types::I64)),
-            value_has_runtime_type => ("aura_direct_value_has_runtime_type", [types::I64], Some(types::I64)),
-            tuple_new => ("aura_direct_tuple_new", [types::I64, types::I64], Some(types::I64)),
-            tuple_element => ("aura_direct_tuple_element", [types::I64, types::I64], Some(types::I64)),
-            tuple_take_element => ("aura_direct_tuple_take_element", [types::I64, types::I64], Some(types::I64)),
-            union_inject => ("aura_direct_union_inject", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            union_inject_copy => ("aura_direct_union_inject_copy", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            union_tag_test => ("aura_direct_union_tag_test", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            union_tag => ("aura_direct_union_tag", [types::I64], Some(types::I64)),
-            union_payload_copy => ("aura_direct_union_payload_copy", [types::I64, types::I64], Some(types::I64)),
-            callable_env_alloc => ("aura_direct_callable_env_alloc", [types::I64], Some(types::I64)),
-            callable_env_free => ("aura_direct_callable_env_free", [types::I64], None),
-            callable_env_retain => ("aura_direct_callable_env_retain", [types::I64], None),
-            callable_env_release => ("aura_direct_callable_env_release", [types::I64], Some(types::I64)),
-            none_test => ("aura_direct_none_test", [types::I64], Some(types::I64)),
-            value_is_union => ("aura_direct_value_is_union", [types::I64], Some(types::I64)),
-            union_active_payload => ("aura_direct_union_active_payload", [types::I64, types::I64], Some(types::I64)),
-            union_take_payload => ("aura_direct_union_take_payload", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            enum_variant => ("aura_direct_enum_variant", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            variant_matches => ("aura_direct_variant_matches", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            variant_payload => ("aura_direct_variant_payload", [types::I64, types::I64], Some(types::I64)),
-            variant_take_payload => ("aura_direct_variant_take_payload", [types::I64, types::I64], Some(types::I64)),
-            instance_empty => ("aura_direct_instance_empty", [types::I64, types::I64], Some(types::I64)),
-            instance_get_field => ("aura_direct_instance_get_field", [types::I64, types::I64, types::I64], Some(types::I64)),
-            instance_take_field => ("aura_direct_instance_take_field", [types::I64, types::I64, types::I64], Some(types::I64)),
-            instance_set_field_owned => ("aura_direct_instance_set_field_owned", [types::I64, types::I64, types::I64, types::I64], None),
-            arg_buffer_new => ("aura_direct_arg_buffer_new", [types::I64], Some(types::I64)),
-            arg_buffer_store => ("aura_direct_arg_buffer_store", [types::I64, types::I64, types::I64], None),
-            arg_buffer_store_owned => ("aura_direct_arg_buffer_store_owned", [types::I64, types::I64, types::I64], None),
-            task_arg_buffer_guard => ("aura_direct_task_arg_buffer_guard", [types::I64, types::I64], Some(types::I64)),
-            task_arg_buffer_disarm => ("aura_direct_task_arg_buffer_disarm", [types::I64], None),
-            ffi_call => ("aura_direct_ffi_call", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            monotonic_time_ms => ("aura_direct_monotonic_time_ms", [], Some(types::I64)),
-            channel_new => ("aura_direct_channel_new", [types::I64], Some(types::I64)),
-            channel_send => ("aura_direct_channel_send", [types::I64, types::I64], Some(types::I64)),
-            channel_send_timeout_value => ("aura_direct_channel_send_timeout_value", [types::I64, types::I64, types::I64], Some(types::I64)),
-            channel_try_send => ("aura_direct_channel_try_send", [types::I64, types::I64], Some(types::I64)),
-            channel_recv => ("aura_direct_channel_recv", [types::I64], Some(types::I64)),
-            channel_recv_in_task_group => ("aura_direct_channel_recv_in_task_group", [types::I64, types::I64], Some(types::I64)),
-            channel_recv_with_registered_producers => ("aura_direct_channel_recv_with_registered_producers", [types::I64], Some(types::I64)),
-            channel_recv_timeout_value => ("aura_direct_channel_recv_timeout_value", [types::I64, types::I64], Some(types::I64)),
-            channel_recv_or_none => ("aura_direct_channel_recv_or_none", [types::I64], Some(types::I64)),
-            channel_recv_or_none_timeout_value => ("aura_direct_channel_recv_or_none_timeout_value", [types::I64, types::I64], Some(types::I64)),
-            channel_recv_or_value => ("aura_direct_channel_recv_or_value", [types::I64, types::I64], Some(types::I64)),
-            channel_recv_or_value_timeout_value => ("aura_direct_channel_recv_or_value_timeout_value", [types::I64, types::I64, types::I64], Some(types::I64)),
-            channel_close => ("aura_direct_channel_close", [types::I64], Some(types::I64)),
-            task_group_new => ("aura_direct_task_group_new", [], Some(types::I64)),
-            task_group_cancel => ("aura_direct_task_group_cancel", [types::I64], Some(types::I64)),
-            task_group_close => ("aura_direct_task_group_close", [types::I64, types::I64], Some(types::I64)),
-            task_join => ("aura_direct_task_join", [types::I64], Some(types::I64)),
-            task_join_timeout_value => ("aura_direct_task_join_timeout_value", [types::I64, types::I64], Some(types::I64)),
-            task_join_or_none => ("aura_direct_task_join_or_none", [types::I64], Some(types::I64)),
-            task_join_or_none_timeout_value => ("aura_direct_task_join_or_none_timeout_value", [types::I64, types::I64], Some(types::I64)),
-            task_join_or_value => ("aura_direct_task_join_or_value", [types::I64, types::I64], Some(types::I64)),
-            task_join_or_value_timeout_value => ("aura_direct_task_join_or_value_timeout_value", [types::I64, types::I64, types::I64], Some(types::I64)),
-            wait_any => ("aura_direct_wait_any", [types::I64], Some(types::I64)),
-            wait_any_timeout_value => ("aura_direct_wait_any_timeout_value", [types::I64, types::I64], Some(types::I64)),
-            wait_all => ("aura_direct_wait_all", [types::I64], Some(types::I64)),
-            wait_all_timeout_value => ("aura_direct_wait_all_timeout_value", [types::I64, types::I64], Some(types::I64)),
-            select => ("aura_direct_select", [types::I64], Some(types::I64)),
-            io_write => ("aura_direct_io_write", [types::I64], Some(types::I64)),
-            io_flush => ("aura_direct_io_flush", [], Some(types::I64)),
-            io_read_line => ("aura_direct_io_read_line", [], Some(types::I64)),
-            fs_exists => ("aura_direct_fs_exists", [types::I64], Some(types::I64)),
-            fs_read_to_string => ("aura_direct_fs_read_to_string", [types::I64], Some(types::I64)),
-            fs_read_bytes => ("aura_direct_fs_read_bytes", [types::I64], Some(types::I64)),
-            fs_write_string => ("aura_direct_fs_write_string", [types::I64, types::I64], Some(types::I64)),
-            fs_write_bytes => ("aura_direct_fs_write_bytes", [types::I64, types::I64], Some(types::I64)),
-            fs_append_string => ("aura_direct_fs_append_string", [types::I64, types::I64], Some(types::I64)),
-            fs_append_bytes => ("aura_direct_fs_append_bytes", [types::I64, types::I64], Some(types::I64)),
-            fs_create_dir => ("aura_direct_fs_create_dir", [types::I64], Some(types::I64)),
-            fs_read_dir => ("aura_direct_fs_read_dir", [types::I64], Some(types::I64)),
-            fs_remove_file => ("aura_direct_fs_remove_file", [types::I64], Some(types::I64)),
-            fs_rename => ("aura_direct_fs_rename", [types::I64, types::I64], Some(types::I64)),
-            fs_open => ("aura_direct_fs_open", [types::I64], Some(types::I64)),
-            fs_create => ("aura_direct_fs_create", [types::I64], Some(types::I64)),
-            fs_append => ("aura_direct_fs_append", [types::I64], Some(types::I64)),
-            file_read_all => ("aura_direct_file_read_all", [types::I64], Some(types::I64)),
-            file_read_bytes => ("aura_direct_file_read_bytes", [types::I64], Some(types::I64)),
-            file_write_all => ("aura_direct_file_write_all", [types::I64, types::I64], Some(types::I64)),
-            file_write_bytes => ("aura_direct_file_write_bytes", [types::I64, types::I64], Some(types::I64)),
-            file_flush => ("aura_direct_file_flush", [types::I64], Some(types::I64)),
-            file_sync => ("aura_direct_file_sync", [types::I64], Some(types::I64)),
-            file_close => ("aura_direct_file_close", [types::I64], Some(types::I64)),
-            process_inherit => ("aura_direct_process_inherit", [], Some(types::I64)),
-            process_null => ("aura_direct_process_null", [], Some(types::I64)),
-            process_pipe => ("aura_direct_process_pipe", [], Some(types::I64)),
-            process_supervisor => ("aura_direct_process_supervisor", [], Some(types::I64)),
-            process_start => ("aura_direct_process_start", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            process_run => ("aura_direct_process_run", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            process_child_stdin => ("aura_direct_process_child_stdin", [types::I64], Some(types::I64)),
-            process_child_stdout => ("aura_direct_process_child_stdout", [types::I64], Some(types::I64)),
-            process_child_stderr => ("aura_direct_process_child_stderr", [types::I64], Some(types::I64)),
-            process_child_wait => ("aura_direct_process_child_wait", [types::I64, types::I64], Some(types::I64)),
-            process_child_wait_or_none => ("aura_direct_process_child_wait_or_none", [types::I64, types::I64], Some(types::I64)),
-            process_child_wait_ok => ("aura_direct_process_child_wait_ok", [types::I64, types::I64], Some(types::I64)),
-            process_child_kill => ("aura_direct_process_child_kill", [types::I64], Some(types::I64)),
-            process_child_terminate => ("aura_direct_process_child_terminate", [types::I64], Some(types::I64)),
-            process_child_close => ("aura_direct_process_child_close", [types::I64], Some(types::I64)),
-            process_pipe_read_all => ("aura_direct_process_pipe_read_all", [types::I64], Some(types::I64)),
-            process_pipe_read_line => ("aura_direct_process_pipe_read_line", [types::I64, types::I64], Some(types::I64)),
-            process_pipe_read_bytes => ("aura_direct_process_pipe_read_bytes", [types::I64, types::I64, types::I64], Some(types::I64)),
-            process_pipe_write_all => ("aura_direct_process_pipe_write_all", [types::I64, types::I64, types::I64], Some(types::I64)),
-            process_pipe_write_bytes => ("aura_direct_process_pipe_write_bytes", [types::I64, types::I64, types::I64], Some(types::I64)),
-            process_pipe_flush => ("aura_direct_process_pipe_flush", [types::I64], Some(types::I64)),
-            process_pipe_close => ("aura_direct_process_pipe_close", [types::I64], Some(types::I64)),
-            process_completed_status => ("aura_direct_process_completed_status", [types::I64], Some(types::I64)),
-            process_completed_success => ("aura_direct_process_completed_success", [types::I64], Some(types::I64)),
-            process_completed_stdout => ("aura_direct_process_completed_stdout", [types::I64], Some(types::I64)),
-            process_completed_stderr => ("aura_direct_process_completed_stderr", [types::I64], Some(types::I64)),
-            process_completed_stdout_bytes => ("aura_direct_process_completed_stdout_bytes", [types::I64], Some(types::I64)),
-            process_completed_stderr_bytes => ("aura_direct_process_completed_stderr_bytes", [types::I64], Some(types::I64)),
-            process_completed_check => ("aura_direct_process_completed_check", [types::I64], Some(types::I64)),
-            process_supervisor_start => ("aura_direct_process_supervisor_start", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            process_supervisor_wait => ("aura_direct_process_supervisor_wait", [types::I64, types::I64], Some(types::I64)),
-            process_supervisor_wait_or_none => ("aura_direct_process_supervisor_wait_or_none", [types::I64, types::I64], Some(types::I64)),
-            process_supervisor_stop => ("aura_direct_process_supervisor_stop", [types::I64], Some(types::I64)),
-            process_supervisor_is_empty => ("aura_direct_process_supervisor_is_empty", [types::I64], Some(types::I64)),
-            process_supervisor_close => ("aura_direct_process_supervisor_close", [types::I64], Some(types::I64)),
-            net_connect => ("aura_direct_net_connect", [types::I64], Some(types::I64)),
-            net_connect_timeout => ("aura_direct_net_connect_timeout", [types::I64, types::I64], Some(types::I64)),
-            net_listen => ("aura_direct_net_listen", [types::I64], Some(types::I64)),
-            net_udp_bind => ("aura_direct_net_udp_bind", [types::I64], Some(types::I64)),
-            net_unix_listen => ("aura_direct_net_unix_listen", [types::I64], Some(types::I64)),
-            net_unix_connect => ("aura_direct_net_unix_connect", [types::I64], Some(types::I64)),
-            net_unix_connect_timeout => ("aura_direct_net_unix_connect_timeout", [types::I64, types::I64], Some(types::I64)),
-            net_tls_listen => ("aura_direct_net_tls_listen", [types::I64, types::I64, types::I64], Some(types::I64)),
-            net_tls_connect => ("aura_direct_net_tls_connect", [types::I64, types::I64, types::I64], Some(types::I64)),
-            net_tls_connect_timeout => ("aura_direct_net_tls_connect_timeout", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            net_http_listen => ("aura_direct_net_http_listen", [types::I64], Some(types::I64)),
-            net_http_request_text => ("aura_direct_net_http_request_text", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            net_http_request_text_timeout => ("aura_direct_net_http_request_text_timeout", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            net_http_request_bytes => ("aura_direct_net_http_request_bytes", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            net_http_request_bytes_timeout => ("aura_direct_net_http_request_bytes_timeout", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            net_websocket_listen => ("aura_direct_net_websocket_listen", [types::I64], Some(types::I64)),
-            net_websocket_connect => ("aura_direct_net_websocket_connect", [types::I64], Some(types::I64)),
-            net_websocket_connect_timeout => ("aura_direct_net_websocket_connect_timeout", [types::I64, types::I64], Some(types::I64)),
-            tcp_listener_accept => ("aura_direct_tcp_listener_accept", [types::I64, types::I64], Some(types::I64)),
-            tcp_listener_local_addr => ("aura_direct_tcp_listener_local_addr", [types::I64], Some(types::I64)),
-            tcp_listener_close => ("aura_direct_tcp_listener_close", [types::I64], Some(types::I64)),
-            tcp_stream_read_all => ("aura_direct_tcp_stream_read_all", [types::I64, types::I64], Some(types::I64)),
-            tcp_stream_read_line => ("aura_direct_tcp_stream_read_line", [types::I64, types::I64], Some(types::I64)),
-            tcp_stream_read_bytes => ("aura_direct_tcp_stream_read_bytes", [types::I64, types::I64, types::I64], Some(types::I64)),
-            tcp_stream_read_exact => ("aura_direct_tcp_stream_read_exact", [types::I64, types::I64, types::I64], Some(types::I64)),
-            tcp_stream_write_all => ("aura_direct_tcp_stream_write_all", [types::I64, types::I64, types::I64], Some(types::I64)),
-            tcp_stream_write_bytes => ("aura_direct_tcp_stream_write_bytes", [types::I64, types::I64, types::I64], Some(types::I64)),
-            tcp_stream_flush => ("aura_direct_tcp_stream_flush", [types::I64], Some(types::I64)),
-            tcp_stream_local_addr => ("aura_direct_tcp_stream_local_addr", [types::I64], Some(types::I64)),
-            tcp_stream_peer_addr => ("aura_direct_tcp_stream_peer_addr", [types::I64], Some(types::I64)),
-            tcp_stream_shutdown_read => ("aura_direct_tcp_stream_shutdown_read", [types::I64], Some(types::I64)),
-            tcp_stream_shutdown_write => ("aura_direct_tcp_stream_shutdown_write", [types::I64], Some(types::I64)),
-            tcp_stream_shutdown_both => ("aura_direct_tcp_stream_shutdown_both", [types::I64], Some(types::I64)),
-            tcp_stream_close => ("aura_direct_tcp_stream_close", [types::I64], Some(types::I64)),
-            udp_socket_send_text => ("aura_direct_udp_socket_send_text", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            udp_socket_send_bytes => ("aura_direct_udp_socket_send_bytes", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            udp_socket_recv => ("aura_direct_udp_socket_recv", [types::I64, types::I64, types::I64], Some(types::I64)),
-            udp_socket_recv_from => ("aura_direct_udp_socket_recv_from", [types::I64, types::I64, types::I64], Some(types::I64)),
-            udp_socket_local_addr => ("aura_direct_udp_socket_local_addr", [types::I64], Some(types::I64)),
-            udp_socket_peer_addr => ("aura_direct_udp_socket_peer_addr", [types::I64], Some(types::I64)),
-            udp_socket_close => ("aura_direct_udp_socket_close", [types::I64], Some(types::I64)),
-            udp_datagram_address => ("aura_direct_udp_datagram_address", [types::I64], Some(types::I64)),
-            udp_datagram_bytes => ("aura_direct_udp_datagram_bytes", [types::I64], Some(types::I64)),
-            udp_datagram_text => ("aura_direct_udp_datagram_text", [types::I64], Some(types::I64)),
-            http_listener_accept => ("aura_direct_http_listener_accept", [types::I64, types::I64], Some(types::I64)),
-            http_listener_local_addr => ("aura_direct_http_listener_local_addr", [types::I64], Some(types::I64)),
-            http_listener_close => ("aura_direct_http_listener_close", [types::I64], Some(types::I64)),
-            http_exchange_method => ("aura_direct_http_exchange_method", [types::I64], Some(types::I64)),
-            http_exchange_path => ("aura_direct_http_exchange_path", [types::I64], Some(types::I64)),
-            http_exchange_headers => ("aura_direct_http_exchange_headers", [types::I64], Some(types::I64)),
-            http_exchange_body_text => ("aura_direct_http_exchange_body_text", [types::I64], Some(types::I64)),
-            http_exchange_body_bytes => ("aura_direct_http_exchange_body_bytes", [types::I64], Some(types::I64)),
-            http_exchange_respond_text => ("aura_direct_http_exchange_respond_text", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            http_exchange_respond_bytes => ("aura_direct_http_exchange_respond_bytes", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-            http_response_status => ("aura_direct_http_response_status", [types::I64], Some(types::I64)),
-            http_response_reason => ("aura_direct_http_response_reason", [types::I64], Some(types::I64)),
-            http_response_headers => ("aura_direct_http_response_headers", [types::I64], Some(types::I64)),
-            http_response_text => ("aura_direct_http_response_text", [types::I64], Some(types::I64)),
-            http_response_bytes => ("aura_direct_http_response_bytes", [types::I64], Some(types::I64)),
-            websocket_listener_accept => ("aura_direct_websocket_listener_accept", [types::I64, types::I64], Some(types::I64)),
-            websocket_listener_local_addr => ("aura_direct_websocket_listener_local_addr", [types::I64], Some(types::I64)),
-            websocket_send_text => ("aura_direct_websocket_send_text", [types::I64, types::I64, types::I64], Some(types::I64)),
-            websocket_send_bytes => ("aura_direct_websocket_send_bytes", [types::I64, types::I64, types::I64], Some(types::I64)),
-            websocket_recv_text => ("aura_direct_websocket_recv_text", [types::I64, types::I64], Some(types::I64)),
-            websocket_recv_bytes => ("aura_direct_websocket_recv_bytes", [types::I64, types::I64], Some(types::I64)),
-            websocket_close => ("aura_direct_websocket_close", [types::I64], Some(types::I64)),
-            unix_listener_accept => ("aura_direct_unix_listener_accept", [types::I64, types::I64], Some(types::I64)),
-            unix_listener_close => ("aura_direct_unix_listener_close", [types::I64], Some(types::I64)),
-            unix_stream_read_line => ("aura_direct_unix_stream_read_line", [types::I64, types::I64], Some(types::I64)),
-            unix_stream_read_exact => ("aura_direct_unix_stream_read_exact", [types::I64, types::I64, types::I64], Some(types::I64)),
-            unix_stream_write_all => ("aura_direct_unix_stream_write_all", [types::I64, types::I64, types::I64], Some(types::I64)),
-            unix_stream_close => ("aura_direct_unix_stream_close", [types::I64], Some(types::I64)),
-            tls_listener_accept => ("aura_direct_tls_listener_accept", [types::I64, types::I64], Some(types::I64)),
-            tls_listener_local_addr => ("aura_direct_tls_listener_local_addr", [types::I64], Some(types::I64)),
-            tls_listener_close => ("aura_direct_tls_listener_close", [types::I64], Some(types::I64)),
-            tls_stream_read_line => ("aura_direct_tls_stream_read_line", [types::I64, types::I64], Some(types::I64)),
-            tls_stream_read_exact => ("aura_direct_tls_stream_read_exact", [types::I64, types::I64, types::I64], Some(types::I64)),
-            tls_stream_write_all => ("aura_direct_tls_stream_write_all", [types::I64, types::I64, types::I64], Some(types::I64)),
-            tls_stream_close => ("aura_direct_tls_stream_close", [types::I64], Some(types::I64)),
-            cancelled => ("aura_direct_cancelled", [], Some(types::I64)),
-            yield_now => ("aura_direct_yield_now", [], None),
-            sleep_value_void => ("aura_direct_sleep_value_void", [types::I64], None),
-            start_task_call => ("aura_direct_start_task_function_with_frames", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
-        );
+        let runtime =
+            RuntimeTable::try_build(|function| declare_runtime_helper(&mut object, function))?;
 
         let mut functions = HashMap::new();
         let mut function_thunks = HashMap::new();
@@ -1710,392 +931,7 @@ impl<'a> NativeCodegen<'a> {
             function_param_passing,
             function_writeback_types,
             call_conv,
-            runtime_init,
-            check_list_layout,
-            run_root,
-            enter_call,
-            exit_call,
-            set_returned_view_projection,
-            take_returned_view_projection,
-            push_returned_view_selector,
-            take_returned_view_selector,
-            print_i64,
-            print_u64,
-            print_f32,
-            print_f64,
-            print_bool,
-            print_value,
-            sqrt_f64,
-            assert_fail,
-            assert_fail_detailed,
-            fail_division_by_zero,
-            record_manager_exit_failure,
-            fail_erased_union_mutable_receiver,
-            fail_int32_overflow,
-            fail_integer_overflow,
-            register_cleanup,
-            unregister_cleanup,
-            refresh_cleanup,
-            set_next_mutable_sinks,
-            set_next_indirect_mutable_sinks,
-            claim_indirect_mutable_sinks,
-            current_mutable_sink,
-            mutable_sink_new,
-            mutable_sink_project,
-            mutable_sink_store_owned,
-            mutable_sink_release,
-            close_value,
-            tag_value_type,
-            box_i32,
-            box_i64,
-            box_u64,
-            box_uint_literal,
-            box_f64,
-            box_bool,
-            function_value,
-            module_constant,
-            closure_value,
-            function_call,
-            function_bind_defaults,
-            box_unit,
-            string_literal,
-            string_len,
-            string_byte_len,
-            string_slice,
-            string_contains,
-            string_starts_with,
-            string_ends_with,
-            string_split,
-            string_replace,
-            string_to_lower,
-            string_to_upper,
-            string_strip_prefix,
-            string_strip_suffix,
-            string_trim,
-            string_join,
-            string_text_method,
-            stringify_value,
-            register_display,
-            format_begin,
-            format_push_str,
-            format_push_i64,
-            format_push_value,
-            format_push_formatted,
-            abs_value,
-            min_value,
-            max_value,
-            sqrt_value,
-            round_value,
-            divmod_value,
-            parse_int32,
-            parse_int64,
-            parse_float64,
-            duration_literal,
-            duration_from_i64,
-            duration_to_float,
-            rng_new,
-            rng_next_int,
-            rng_next_float,
-            rng_shuffle,
-            random_secure_int,
-            random_secure_bytes,
-            range_new,
-            range_current,
-            range_end,
-            range_advance,
-            vec_empty,
-            vec_len,
-            vec_is_empty,
-            vec_push_in_place,
-            vec_pop_in_place,
-            vec_get,
-            vec_set_in_place,
-            vec_remove_in_place,
-            vec_swap_in_place,
-            vec_contains,
-            vec_extend_in_place,
-            vec_insert_in_place,
-            vec_clear_in_place,
-            vec_reverse_in_place,
-            collection_operation,
-            vec_index,
-            vec_slice,
-            vec_index_option,
-            vec_index_scalar,
-            vec_check_index,
-            compare_str_literal_at,
-            compare_values_at,
-            vec_element_len,
-            vec_element_map_get,
-            vec_element_map_get_str,
-            vec_push_scalar,
-            vec_span,
-            vec_take_index_in_place,
-            vec_set_index_in_place,
-            element_path_load,
-            element_path_store,
-            element_path_take,
-            element_path_probe,
-            array_zeros,
-            array_full,
-            array_from_vec,
-            array_clone,
-            array_shape,
-            array_len,
-            array_get,
-            array_set_in_place,
-            array_fill_in_place,
-            array_index,
-            array_set_index_in_place,
-            array_slice,
-            array_binary,
-            array_map,
-            array_reduce,
-            map_empty,
-            map_len,
-            map_is_empty,
-            map_get,
-            map_get_str,
-            map_set_in_place,
-            map_remove_in_place,
-            map_contains_key,
-            map_keys,
-            map_values,
-            map_items,
-            map_clear_in_place,
-            map_extend_in_place,
-            map_index,
-            map_set_index_in_place,
-            set_empty,
-            set_len,
-            set_is_empty,
-            set_contains,
-            set_contains_int64,
-            set_insert_in_place,
-            set_remove_in_place,
-            set_index_option,
-            set_take_index_in_place,
-            retain_value,
-            release_value,
-            clone_value,
-            unbox_i64,
-            unbox_int64,
-            integer_to_float,
-            integer_width_binary,
-            unbox_u64,
-            unbox_f64,
-            unbox_bool,
-            value_as_condition,
-            unary_value,
-            binary_value,
-            compare_values,
-            compare_str_literal,
-            cast_value,
-            cast_integer_to_integer,
-            cast_integer_to_float,
-            cast_float_to_integer,
-            value_type_matches,
-            value_has_runtime_type,
-            tuple_new,
-            tuple_element,
-            tuple_take_element,
-            union_inject,
-            union_inject_copy,
-            union_tag_test,
-            union_tag,
-            union_payload_copy,
-            callable_env_alloc,
-            callable_env_free,
-            callable_env_retain,
-            callable_env_release,
-            none_test,
-            value_is_union,
-            union_active_payload,
-            union_take_payload,
-            enum_variant,
-            variant_matches,
-            variant_payload,
-            variant_take_payload,
-            instance_empty,
-            instance_get_field,
-            instance_take_field,
-            instance_set_field_owned,
-            arg_buffer_new,
-            arg_buffer_store,
-            arg_buffer_store_owned,
-            task_arg_buffer_guard,
-            task_arg_buffer_disarm,
-            ffi_call,
-            monotonic_time_ms,
-            channel_new,
-            channel_send,
-            channel_send_timeout_value,
-            channel_try_send,
-            channel_recv,
-            channel_recv_in_task_group,
-            channel_recv_with_registered_producers,
-            channel_recv_timeout_value,
-            channel_recv_or_none,
-            channel_recv_or_none_timeout_value,
-            channel_recv_or_value,
-            channel_recv_or_value_timeout_value,
-            channel_close,
-            task_group_new,
-            task_group_cancel,
-            task_group_close,
-            task_join,
-            task_join_timeout_value,
-            task_join_or_none,
-            task_join_or_none_timeout_value,
-            task_join_or_value,
-            task_join_or_value_timeout_value,
-            wait_any,
-            wait_any_timeout_value,
-            wait_all,
-            wait_all_timeout_value,
-            select,
-            io_write,
-            io_flush,
-            io_read_line,
-            fs_exists,
-            fs_read_to_string,
-            fs_read_bytes,
-            fs_write_string,
-            fs_write_bytes,
-            fs_append_string,
-            fs_append_bytes,
-            fs_create_dir,
-            fs_read_dir,
-            fs_remove_file,
-            fs_rename,
-            fs_open,
-            fs_create,
-            fs_append,
-            file_read_all,
-            file_read_bytes,
-            file_write_all,
-            file_write_bytes,
-            file_flush,
-            file_sync,
-            file_close,
-            process_inherit,
-            process_null,
-            process_pipe,
-            process_supervisor,
-            process_start,
-            process_run,
-            process_child_stdin,
-            process_child_stdout,
-            process_child_stderr,
-            process_child_wait,
-            process_child_wait_or_none,
-            process_child_wait_ok,
-            process_child_kill,
-            process_child_terminate,
-            process_child_close,
-            process_pipe_read_all,
-            process_pipe_read_line,
-            process_pipe_read_bytes,
-            process_pipe_write_all,
-            process_pipe_write_bytes,
-            process_pipe_flush,
-            process_pipe_close,
-            process_completed_status,
-            process_completed_success,
-            process_completed_stdout,
-            process_completed_stderr,
-            process_completed_stdout_bytes,
-            process_completed_stderr_bytes,
-            process_completed_check,
-            process_supervisor_start,
-            process_supervisor_wait,
-            process_supervisor_wait_or_none,
-            process_supervisor_stop,
-            process_supervisor_is_empty,
-            process_supervisor_close,
-            net_connect,
-            net_connect_timeout,
-            net_listen,
-            net_udp_bind,
-            net_unix_listen,
-            net_unix_connect,
-            net_unix_connect_timeout,
-            net_tls_listen,
-            net_tls_connect,
-            net_tls_connect_timeout,
-            net_http_listen,
-            net_http_request_text,
-            net_http_request_text_timeout,
-            net_http_request_bytes,
-            net_http_request_bytes_timeout,
-            net_websocket_listen,
-            net_websocket_connect,
-            net_websocket_connect_timeout,
-            tcp_listener_accept,
-            tcp_listener_local_addr,
-            tcp_listener_close,
-            tcp_stream_read_all,
-            tcp_stream_read_line,
-            tcp_stream_read_bytes,
-            tcp_stream_read_exact,
-            tcp_stream_write_all,
-            tcp_stream_write_bytes,
-            tcp_stream_flush,
-            tcp_stream_local_addr,
-            tcp_stream_peer_addr,
-            tcp_stream_shutdown_read,
-            tcp_stream_shutdown_write,
-            tcp_stream_shutdown_both,
-            tcp_stream_close,
-            udp_socket_send_text,
-            udp_socket_send_bytes,
-            udp_socket_recv,
-            udp_socket_recv_from,
-            udp_socket_local_addr,
-            udp_socket_peer_addr,
-            udp_socket_close,
-            udp_datagram_address,
-            udp_datagram_bytes,
-            udp_datagram_text,
-            http_listener_accept,
-            http_listener_local_addr,
-            http_listener_close,
-            http_exchange_method,
-            http_exchange_path,
-            http_exchange_headers,
-            http_exchange_body_text,
-            http_exchange_body_bytes,
-            http_exchange_respond_text,
-            http_exchange_respond_bytes,
-            http_response_status,
-            http_response_reason,
-            http_response_headers,
-            http_response_text,
-            http_response_bytes,
-            websocket_listener_accept,
-            websocket_listener_local_addr,
-            websocket_send_text,
-            websocket_send_bytes,
-            websocket_recv_text,
-            websocket_recv_bytes,
-            websocket_close,
-            unix_listener_accept,
-            unix_listener_close,
-            unix_stream_read_line,
-            unix_stream_read_exact,
-            unix_stream_write_all,
-            unix_stream_close,
-            tls_listener_accept,
-            tls_listener_local_addr,
-            tls_listener_close,
-            tls_stream_read_line,
-            tls_stream_read_exact,
-            tls_stream_write_all,
-            tls_stream_close,
-            cancelled,
-            yield_now,
-            sleep_value_void,
-            start_task_call,
+            runtime,
             string_data: HashMap::new(),
         })
     }
@@ -2169,24 +1005,9 @@ impl<'a> NativeCodegen<'a> {
         };
         builder.append_block_params_for_function_params(entry);
         builder.switch_to_block(entry);
-        let enter_call = self
-            .object
-            .declare_func_in_func(self.enter_call, builder.func);
-        let exit_call = self
-            .object
-            .declare_func_in_func(self.exit_call, builder.func);
-        let set_returned_view_projection = self
-            .object
-            .declare_func_in_func(self.set_returned_view_projection, builder.func);
-        let take_returned_view_projection = self
-            .object
-            .declare_func_in_func(self.take_returned_view_projection, builder.func);
-        let push_returned_view_selector = self
-            .object
-            .declare_func_in_func(self.push_returned_view_selector, builder.func);
-        let take_returned_view_selector = self
-            .object
-            .declare_func_in_func(self.take_returned_view_selector, builder.func);
+        let runtime_refs = self
+            .runtime
+            .map(|id| self.object.declare_func_in_func(*id, builder.func));
         let public_function_name = public_direct_function_name(&function.name);
         let function_path = function
             .source_path
@@ -2202,7 +1023,9 @@ impl<'a> NativeCodegen<'a> {
         )?;
         let descriptor = self.object.declare_data_in_func(descriptor, builder.func);
         let descriptor = builder.ins().symbol_value(types::I64, descriptor);
-        builder.ins().call(enter_call, &[descriptor]);
+        builder
+            .ins()
+            .call(runtime_refs[RuntimeFn::EnterCall], &[descriptor]);
 
         let mut variable_index = 0usize;
         let mut variables = HashMap::new();
@@ -2495,1086 +1318,6 @@ impl<'a> NativeCodegen<'a> {
             }
         }
 
-        let print_i64 = self
-            .object
-            .declare_func_in_func(self.print_i64, builder.func);
-        let print_u64 = self
-            .object
-            .declare_func_in_func(self.print_u64, builder.func);
-        let print_f32 = self
-            .object
-            .declare_func_in_func(self.print_f32, builder.func);
-        let print_f64 = self
-            .object
-            .declare_func_in_func(self.print_f64, builder.func);
-        let print_bool = self
-            .object
-            .declare_func_in_func(self.print_bool, builder.func);
-        let print_value = self
-            .object
-            .declare_func_in_func(self.print_value, builder.func);
-        let sqrt_f64 = self
-            .object
-            .declare_func_in_func(self.sqrt_f64, builder.func);
-        let assert_fail = self
-            .object
-            .declare_func_in_func(self.assert_fail, builder.func);
-        let assert_fail_detailed = self
-            .object
-            .declare_func_in_func(self.assert_fail_detailed, builder.func);
-        let fail_division_by_zero = self
-            .object
-            .declare_func_in_func(self.fail_division_by_zero, builder.func);
-        let record_manager_exit_failure = self
-            .object
-            .declare_func_in_func(self.record_manager_exit_failure, builder.func);
-        let fail_erased_union_mutable_receiver = self
-            .object
-            .declare_func_in_func(self.fail_erased_union_mutable_receiver, builder.func);
-        let fail_int32_overflow = self
-            .object
-            .declare_func_in_func(self.fail_int32_overflow, builder.func);
-        let fail_integer_overflow = self
-            .object
-            .declare_func_in_func(self.fail_integer_overflow, builder.func);
-        let register_cleanup = self
-            .object
-            .declare_func_in_func(self.register_cleanup, builder.func);
-        let unregister_cleanup = self
-            .object
-            .declare_func_in_func(self.unregister_cleanup, builder.func);
-        let refresh_cleanup = self
-            .object
-            .declare_func_in_func(self.refresh_cleanup, builder.func);
-        let set_next_mutable_sinks = self
-            .object
-            .declare_func_in_func(self.set_next_mutable_sinks, builder.func);
-        let set_next_indirect_mutable_sinks = self
-            .object
-            .declare_func_in_func(self.set_next_indirect_mutable_sinks, builder.func);
-        let current_mutable_sink = self
-            .object
-            .declare_func_in_func(self.current_mutable_sink, builder.func);
-        let mutable_sink_new = self
-            .object
-            .declare_func_in_func(self.mutable_sink_new, builder.func);
-        let mutable_sink_project = self
-            .object
-            .declare_func_in_func(self.mutable_sink_project, builder.func);
-        let mutable_sink_store_owned = self
-            .object
-            .declare_func_in_func(self.mutable_sink_store_owned, builder.func);
-        let mutable_sink_release = self
-            .object
-            .declare_func_in_func(self.mutable_sink_release, builder.func);
-        let tag_value_type = self
-            .object
-            .declare_func_in_func(self.tag_value_type, builder.func);
-        let box_i32 = self.object.declare_func_in_func(self.box_i32, builder.func);
-        let box_i64 = self.object.declare_func_in_func(self.box_i64, builder.func);
-        let box_u64 = self.object.declare_func_in_func(self.box_u64, builder.func);
-        let box_uint_literal = self
-            .object
-            .declare_func_in_func(self.box_uint_literal, builder.func);
-        let box_f64 = self.object.declare_func_in_func(self.box_f64, builder.func);
-        let box_bool = self
-            .object
-            .declare_func_in_func(self.box_bool, builder.func);
-        let module_constant = self
-            .object
-            .declare_func_in_func(self.module_constant, builder.func);
-        let function_bind_defaults = self
-            .object
-            .declare_func_in_func(self.function_bind_defaults, builder.func);
-        let box_unit = self
-            .object
-            .declare_func_in_func(self.box_unit, builder.func);
-        let string_literal = self
-            .object
-            .declare_func_in_func(self.string_literal, builder.func);
-        let string_len = self
-            .object
-            .declare_func_in_func(self.string_len, builder.func);
-        let string_byte_len = self
-            .object
-            .declare_func_in_func(self.string_byte_len, builder.func);
-        let string_slice = self
-            .object
-            .declare_func_in_func(self.string_slice, builder.func);
-        let string_contains = self
-            .object
-            .declare_func_in_func(self.string_contains, builder.func);
-        let string_starts_with = self
-            .object
-            .declare_func_in_func(self.string_starts_with, builder.func);
-        let string_ends_with = self
-            .object
-            .declare_func_in_func(self.string_ends_with, builder.func);
-        let string_split = self
-            .object
-            .declare_func_in_func(self.string_split, builder.func);
-        let string_replace = self
-            .object
-            .declare_func_in_func(self.string_replace, builder.func);
-        let string_to_lower = self
-            .object
-            .declare_func_in_func(self.string_to_lower, builder.func);
-        let string_to_upper = self
-            .object
-            .declare_func_in_func(self.string_to_upper, builder.func);
-        let string_strip_prefix = self
-            .object
-            .declare_func_in_func(self.string_strip_prefix, builder.func);
-        let string_strip_suffix = self
-            .object
-            .declare_func_in_func(self.string_strip_suffix, builder.func);
-        let string_trim = self
-            .object
-            .declare_func_in_func(self.string_trim, builder.func);
-        let string_join = self
-            .object
-            .declare_func_in_func(self.string_join, builder.func);
-        let string_text_method = self
-            .object
-            .declare_func_in_func(self.string_text_method, builder.func);
-        let stringify_value = self
-            .object
-            .declare_func_in_func(self.stringify_value, builder.func);
-        let format_begin = self
-            .object
-            .declare_func_in_func(self.format_begin, builder.func);
-        let format_push_str = self
-            .object
-            .declare_func_in_func(self.format_push_str, builder.func);
-        let format_push_i64 = self
-            .object
-            .declare_func_in_func(self.format_push_i64, builder.func);
-        let format_push_value = self
-            .object
-            .declare_func_in_func(self.format_push_value, builder.func);
-        let format_push_formatted = self
-            .object
-            .declare_func_in_func(self.format_push_formatted, builder.func);
-        let abs_value = self
-            .object
-            .declare_func_in_func(self.abs_value, builder.func);
-        let min_value = self
-            .object
-            .declare_func_in_func(self.min_value, builder.func);
-        let max_value = self
-            .object
-            .declare_func_in_func(self.max_value, builder.func);
-        let sqrt_value = self
-            .object
-            .declare_func_in_func(self.sqrt_value, builder.func);
-        let round_value = self
-            .object
-            .declare_func_in_func(self.round_value, builder.func);
-        let divmod_value = self
-            .object
-            .declare_func_in_func(self.divmod_value, builder.func);
-        let parse_int32 = self
-            .object
-            .declare_func_in_func(self.parse_int32, builder.func);
-        let parse_int64 = self
-            .object
-            .declare_func_in_func(self.parse_int64, builder.func);
-        let parse_float64 = self
-            .object
-            .declare_func_in_func(self.parse_float64, builder.func);
-        let duration_literal = self
-            .object
-            .declare_func_in_func(self.duration_literal, builder.func);
-        let duration_from_i64 = self
-            .object
-            .declare_func_in_func(self.duration_from_i64, builder.func);
-        let duration_to_float = self
-            .object
-            .declare_func_in_func(self.duration_to_float, builder.func);
-        let rng_new = self.object.declare_func_in_func(self.rng_new, builder.func);
-        let rng_next_int = self
-            .object
-            .declare_func_in_func(self.rng_next_int, builder.func);
-        let rng_next_float = self
-            .object
-            .declare_func_in_func(self.rng_next_float, builder.func);
-        let rng_shuffle = self
-            .object
-            .declare_func_in_func(self.rng_shuffle, builder.func);
-        let random_secure_int = self
-            .object
-            .declare_func_in_func(self.random_secure_int, builder.func);
-        let random_secure_bytes = self
-            .object
-            .declare_func_in_func(self.random_secure_bytes, builder.func);
-        let range_new = self
-            .object
-            .declare_func_in_func(self.range_new, builder.func);
-        let range_current = self
-            .object
-            .declare_func_in_func(self.range_current, builder.func);
-        let range_end = self
-            .object
-            .declare_func_in_func(self.range_end, builder.func);
-        let range_advance = self
-            .object
-            .declare_func_in_func(self.range_advance, builder.func);
-        let vec_empty = self
-            .object
-            .declare_func_in_func(self.vec_empty, builder.func);
-        let vec_len = self.object.declare_func_in_func(self.vec_len, builder.func);
-        let vec_is_empty = self
-            .object
-            .declare_func_in_func(self.vec_is_empty, builder.func);
-        let vec_push_in_place = self
-            .object
-            .declare_func_in_func(self.vec_push_in_place, builder.func);
-        let vec_pop_in_place = self
-            .object
-            .declare_func_in_func(self.vec_pop_in_place, builder.func);
-        let vec_get = self.object.declare_func_in_func(self.vec_get, builder.func);
-        let vec_set_in_place = self
-            .object
-            .declare_func_in_func(self.vec_set_in_place, builder.func);
-        let vec_remove_in_place = self
-            .object
-            .declare_func_in_func(self.vec_remove_in_place, builder.func);
-        let vec_swap_in_place = self
-            .object
-            .declare_func_in_func(self.vec_swap_in_place, builder.func);
-        let vec_contains = self
-            .object
-            .declare_func_in_func(self.vec_contains, builder.func);
-        let vec_extend_in_place = self
-            .object
-            .declare_func_in_func(self.vec_extend_in_place, builder.func);
-        let vec_insert_in_place = self
-            .object
-            .declare_func_in_func(self.vec_insert_in_place, builder.func);
-        let vec_clear_in_place = self
-            .object
-            .declare_func_in_func(self.vec_clear_in_place, builder.func);
-        let vec_reverse_in_place = self
-            .object
-            .declare_func_in_func(self.vec_reverse_in_place, builder.func);
-        let collection_operation = self
-            .object
-            .declare_func_in_func(self.collection_operation, builder.func);
-        let vec_index = self
-            .object
-            .declare_func_in_func(self.vec_index, builder.func);
-        let vec_slice = self
-            .object
-            .declare_func_in_func(self.vec_slice, builder.func);
-        let vec_index_option = self
-            .object
-            .declare_func_in_func(self.vec_index_option, builder.func);
-        let vec_index_scalar = self
-            .object
-            .declare_func_in_func(self.vec_index_scalar, builder.func);
-        let vec_check_index = self
-            .object
-            .declare_func_in_func(self.vec_check_index, builder.func);
-        let compare_str_literal_at = self
-            .object
-            .declare_func_in_func(self.compare_str_literal_at, builder.func);
-        let compare_values_at = self
-            .object
-            .declare_func_in_func(self.compare_values_at, builder.func);
-        let vec_element_len = self
-            .object
-            .declare_func_in_func(self.vec_element_len, builder.func);
-        let vec_element_map_get_str = self
-            .object
-            .declare_func_in_func(self.vec_element_map_get_str, builder.func);
-        let vec_element_map_get = self
-            .object
-            .declare_func_in_func(self.vec_element_map_get, builder.func);
-        let vec_push_scalar = self
-            .object
-            .declare_func_in_func(self.vec_push_scalar, builder.func);
-        let vec_span = self
-            .object
-            .declare_func_in_func(self.vec_span, builder.func);
-        let vec_take_index_in_place = self
-            .object
-            .declare_func_in_func(self.vec_take_index_in_place, builder.func);
-        let vec_set_index_in_place = self
-            .object
-            .declare_func_in_func(self.vec_set_index_in_place, builder.func);
-        let element_path_load = self
-            .object
-            .declare_func_in_func(self.element_path_load, builder.func);
-        let element_path_store = self
-            .object
-            .declare_func_in_func(self.element_path_store, builder.func);
-        let element_path_take = self
-            .object
-            .declare_func_in_func(self.element_path_take, builder.func);
-        let element_path_probe = self
-            .object
-            .declare_func_in_func(self.element_path_probe, builder.func);
-        let array_zeros = self
-            .object
-            .declare_func_in_func(self.array_zeros, builder.func);
-        let array_full = self
-            .object
-            .declare_func_in_func(self.array_full, builder.func);
-        let array_from_vec = self
-            .object
-            .declare_func_in_func(self.array_from_vec, builder.func);
-        let array_clone = self
-            .object
-            .declare_func_in_func(self.array_clone, builder.func);
-        let array_shape = self
-            .object
-            .declare_func_in_func(self.array_shape, builder.func);
-        let array_len = self
-            .object
-            .declare_func_in_func(self.array_len, builder.func);
-        let array_get = self
-            .object
-            .declare_func_in_func(self.array_get, builder.func);
-        let array_set_in_place = self
-            .object
-            .declare_func_in_func(self.array_set_in_place, builder.func);
-        let array_fill_in_place = self
-            .object
-            .declare_func_in_func(self.array_fill_in_place, builder.func);
-        let array_index = self
-            .object
-            .declare_func_in_func(self.array_index, builder.func);
-        let array_set_index_in_place = self
-            .object
-            .declare_func_in_func(self.array_set_index_in_place, builder.func);
-        let array_slice = self
-            .object
-            .declare_func_in_func(self.array_slice, builder.func);
-        let array_binary = self
-            .object
-            .declare_func_in_func(self.array_binary, builder.func);
-        let array_map = self
-            .object
-            .declare_func_in_func(self.array_map, builder.func);
-        let array_reduce = self
-            .object
-            .declare_func_in_func(self.array_reduce, builder.func);
-        let map_empty = self
-            .object
-            .declare_func_in_func(self.map_empty, builder.func);
-        let map_len = self.object.declare_func_in_func(self.map_len, builder.func);
-        let map_is_empty = self
-            .object
-            .declare_func_in_func(self.map_is_empty, builder.func);
-        let map_get = self.object.declare_func_in_func(self.map_get, builder.func);
-        let map_get_str = self
-            .object
-            .declare_func_in_func(self.map_get_str, builder.func);
-        let map_set_in_place = self
-            .object
-            .declare_func_in_func(self.map_set_in_place, builder.func);
-        let map_remove_in_place = self
-            .object
-            .declare_func_in_func(self.map_remove_in_place, builder.func);
-        let map_contains_key = self
-            .object
-            .declare_func_in_func(self.map_contains_key, builder.func);
-        let map_keys = self
-            .object
-            .declare_func_in_func(self.map_keys, builder.func);
-        let map_values = self
-            .object
-            .declare_func_in_func(self.map_values, builder.func);
-        let map_items = self
-            .object
-            .declare_func_in_func(self.map_items, builder.func);
-        let map_clear_in_place = self
-            .object
-            .declare_func_in_func(self.map_clear_in_place, builder.func);
-        let map_extend_in_place = self
-            .object
-            .declare_func_in_func(self.map_extend_in_place, builder.func);
-        let map_index = self
-            .object
-            .declare_func_in_func(self.map_index, builder.func);
-        let map_set_index_in_place = self
-            .object
-            .declare_func_in_func(self.map_set_index_in_place, builder.func);
-        let set_empty = self
-            .object
-            .declare_func_in_func(self.set_empty, builder.func);
-        let set_len = self.object.declare_func_in_func(self.set_len, builder.func);
-        let set_is_empty = self
-            .object
-            .declare_func_in_func(self.set_is_empty, builder.func);
-        let set_contains = self
-            .object
-            .declare_func_in_func(self.set_contains, builder.func);
-        let set_contains_int64 = self
-            .object
-            .declare_func_in_func(self.set_contains_int64, builder.func);
-        let set_insert_in_place = self
-            .object
-            .declare_func_in_func(self.set_insert_in_place, builder.func);
-        let set_remove_in_place = self
-            .object
-            .declare_func_in_func(self.set_remove_in_place, builder.func);
-        let set_index_option = self
-            .object
-            .declare_func_in_func(self.set_index_option, builder.func);
-        let set_take_index_in_place = self
-            .object
-            .declare_func_in_func(self.set_take_index_in_place, builder.func);
-        let retain_value = self
-            .object
-            .declare_func_in_func(self.retain_value, builder.func);
-        let release_value = self
-            .object
-            .declare_func_in_func(self.release_value, builder.func);
-        let clone_value = self
-            .object
-            .declare_func_in_func(self.clone_value, builder.func);
-        let unbox_i64 = self
-            .object
-            .declare_func_in_func(self.unbox_i64, builder.func);
-        let unbox_int64 = self
-            .object
-            .declare_func_in_func(self.unbox_int64, builder.func);
-        let integer_to_float = self
-            .object
-            .declare_func_in_func(self.integer_to_float, builder.func);
-        let integer_width_binary = self
-            .object
-            .declare_func_in_func(self.integer_width_binary, builder.func);
-        let unbox_u64 = self
-            .object
-            .declare_func_in_func(self.unbox_u64, builder.func);
-        let unbox_f64 = self
-            .object
-            .declare_func_in_func(self.unbox_f64, builder.func);
-        let unbox_bool = self
-            .object
-            .declare_func_in_func(self.unbox_bool, builder.func);
-        let value_as_condition = self
-            .object
-            .declare_func_in_func(self.value_as_condition, builder.func);
-        let unary_value = self
-            .object
-            .declare_func_in_func(self.unary_value, builder.func);
-        let binary_value = self
-            .object
-            .declare_func_in_func(self.binary_value, builder.func);
-        let compare_values = self
-            .object
-            .declare_func_in_func(self.compare_values, builder.func);
-        let compare_str_literal = self
-            .object
-            .declare_func_in_func(self.compare_str_literal, builder.func);
-        let cast_value = self
-            .object
-            .declare_func_in_func(self.cast_value, builder.func);
-        let cast_integer_to_integer = self
-            .object
-            .declare_func_in_func(self.cast_integer_to_integer, builder.func);
-        let cast_integer_to_float = self
-            .object
-            .declare_func_in_func(self.cast_integer_to_float, builder.func);
-        let cast_float_to_integer = self
-            .object
-            .declare_func_in_func(self.cast_float_to_integer, builder.func);
-        let value_type_matches = self
-            .object
-            .declare_func_in_func(self.value_type_matches, builder.func);
-        let value_has_runtime_type = self
-            .object
-            .declare_func_in_func(self.value_has_runtime_type, builder.func);
-        let tuple_new = self
-            .object
-            .declare_func_in_func(self.tuple_new, builder.func);
-        let tuple_element = self
-            .object
-            .declare_func_in_func(self.tuple_element, builder.func);
-        let tuple_take_element = self
-            .object
-            .declare_func_in_func(self.tuple_take_element, builder.func);
-        let union_inject = self
-            .object
-            .declare_func_in_func(self.union_inject, builder.func);
-        let union_inject_copy = self
-            .object
-            .declare_func_in_func(self.union_inject_copy, builder.func);
-        let union_tag_test = self
-            .object
-            .declare_func_in_func(self.union_tag_test, builder.func);
-        let union_tag = self
-            .object
-            .declare_func_in_func(self.union_tag, builder.func);
-        let union_payload_copy = self
-            .object
-            .declare_func_in_func(self.union_payload_copy, builder.func);
-        let callable_env_alloc = self
-            .object
-            .declare_func_in_func(self.callable_env_alloc, builder.func);
-        let none_test = self
-            .object
-            .declare_func_in_func(self.none_test, builder.func);
-        let value_is_union = self
-            .object
-            .declare_func_in_func(self.value_is_union, builder.func);
-        let union_active_payload = self
-            .object
-            .declare_func_in_func(self.union_active_payload, builder.func);
-        let union_take_payload = self
-            .object
-            .declare_func_in_func(self.union_take_payload, builder.func);
-        let enum_variant = self
-            .object
-            .declare_func_in_func(self.enum_variant, builder.func);
-        let variant_matches = self
-            .object
-            .declare_func_in_func(self.variant_matches, builder.func);
-        let variant_payload = self
-            .object
-            .declare_func_in_func(self.variant_payload, builder.func);
-        let variant_take_payload = self
-            .object
-            .declare_func_in_func(self.variant_take_payload, builder.func);
-        let instance_empty = self
-            .object
-            .declare_func_in_func(self.instance_empty, builder.func);
-        let instance_get_field = self
-            .object
-            .declare_func_in_func(self.instance_get_field, builder.func);
-        let instance_take_field = self
-            .object
-            .declare_func_in_func(self.instance_take_field, builder.func);
-        let instance_set_field_owned = self
-            .object
-            .declare_func_in_func(self.instance_set_field_owned, builder.func);
-        let arg_buffer_new = self
-            .object
-            .declare_func_in_func(self.arg_buffer_new, builder.func);
-        let arg_buffer_store = self
-            .object
-            .declare_func_in_func(self.arg_buffer_store, builder.func);
-        let arg_buffer_store_owned = self
-            .object
-            .declare_func_in_func(self.arg_buffer_store_owned, builder.func);
-        let task_arg_buffer_guard = self
-            .object
-            .declare_func_in_func(self.task_arg_buffer_guard, builder.func);
-        let task_arg_buffer_disarm = self
-            .object
-            .declare_func_in_func(self.task_arg_buffer_disarm, builder.func);
-        let ffi_call = self
-            .object
-            .declare_func_in_func(self.ffi_call, builder.func);
-        let monotonic_time_ms = self
-            .object
-            .declare_func_in_func(self.monotonic_time_ms, builder.func);
-        let channel_new = self
-            .object
-            .declare_func_in_func(self.channel_new, builder.func);
-        let channel_send = self
-            .object
-            .declare_func_in_func(self.channel_send, builder.func);
-        let channel_send_timeout_value = self
-            .object
-            .declare_func_in_func(self.channel_send_timeout_value, builder.func);
-        let channel_try_send = self
-            .object
-            .declare_func_in_func(self.channel_try_send, builder.func);
-        let channel_recv = self
-            .object
-            .declare_func_in_func(self.channel_recv, builder.func);
-        let channel_recv_in_task_group = self
-            .object
-            .declare_func_in_func(self.channel_recv_in_task_group, builder.func);
-        let channel_recv_with_registered_producers = self
-            .object
-            .declare_func_in_func(self.channel_recv_with_registered_producers, builder.func);
-        let channel_recv_timeout_value = self
-            .object
-            .declare_func_in_func(self.channel_recv_timeout_value, builder.func);
-        let channel_recv_or_none = self
-            .object
-            .declare_func_in_func(self.channel_recv_or_none, builder.func);
-        let channel_recv_or_none_timeout_value = self
-            .object
-            .declare_func_in_func(self.channel_recv_or_none_timeout_value, builder.func);
-        let channel_recv_or_value = self
-            .object
-            .declare_func_in_func(self.channel_recv_or_value, builder.func);
-        let channel_recv_or_value_timeout_value = self
-            .object
-            .declare_func_in_func(self.channel_recv_or_value_timeout_value, builder.func);
-        let channel_close = self
-            .object
-            .declare_func_in_func(self.channel_close, builder.func);
-        let task_group_new = self
-            .object
-            .declare_func_in_func(self.task_group_new, builder.func);
-        let task_group_cancel = self
-            .object
-            .declare_func_in_func(self.task_group_cancel, builder.func);
-        let task_group_close = self
-            .object
-            .declare_func_in_func(self.task_group_close, builder.func);
-        let task_join = self
-            .object
-            .declare_func_in_func(self.task_join, builder.func);
-        let task_join_timeout_value = self
-            .object
-            .declare_func_in_func(self.task_join_timeout_value, builder.func);
-        let task_join_or_none = self
-            .object
-            .declare_func_in_func(self.task_join_or_none, builder.func);
-        let task_join_or_none_timeout_value = self
-            .object
-            .declare_func_in_func(self.task_join_or_none_timeout_value, builder.func);
-        let task_join_or_value = self
-            .object
-            .declare_func_in_func(self.task_join_or_value, builder.func);
-        let task_join_or_value_timeout_value = self
-            .object
-            .declare_func_in_func(self.task_join_or_value_timeout_value, builder.func);
-        let wait_any = self
-            .object
-            .declare_func_in_func(self.wait_any, builder.func);
-        let wait_any_timeout_value = self
-            .object
-            .declare_func_in_func(self.wait_any_timeout_value, builder.func);
-        let wait_all = self
-            .object
-            .declare_func_in_func(self.wait_all, builder.func);
-        let wait_all_timeout_value = self
-            .object
-            .declare_func_in_func(self.wait_all_timeout_value, builder.func);
-        let select = self.object.declare_func_in_func(self.select, builder.func);
-        let io_write = self
-            .object
-            .declare_func_in_func(self.io_write, builder.func);
-        let io_flush = self
-            .object
-            .declare_func_in_func(self.io_flush, builder.func);
-        let io_read_line = self
-            .object
-            .declare_func_in_func(self.io_read_line, builder.func);
-        let fs_exists = self
-            .object
-            .declare_func_in_func(self.fs_exists, builder.func);
-        let fs_read_to_string = self
-            .object
-            .declare_func_in_func(self.fs_read_to_string, builder.func);
-        let fs_read_bytes = self
-            .object
-            .declare_func_in_func(self.fs_read_bytes, builder.func);
-        let fs_write_string = self
-            .object
-            .declare_func_in_func(self.fs_write_string, builder.func);
-        let fs_write_bytes = self
-            .object
-            .declare_func_in_func(self.fs_write_bytes, builder.func);
-        let fs_append_string = self
-            .object
-            .declare_func_in_func(self.fs_append_string, builder.func);
-        let fs_append_bytes = self
-            .object
-            .declare_func_in_func(self.fs_append_bytes, builder.func);
-        let fs_create_dir = self
-            .object
-            .declare_func_in_func(self.fs_create_dir, builder.func);
-        let fs_read_dir = self
-            .object
-            .declare_func_in_func(self.fs_read_dir, builder.func);
-        let fs_remove_file = self
-            .object
-            .declare_func_in_func(self.fs_remove_file, builder.func);
-        let fs_rename = self
-            .object
-            .declare_func_in_func(self.fs_rename, builder.func);
-        let fs_open = self.object.declare_func_in_func(self.fs_open, builder.func);
-        let fs_create = self
-            .object
-            .declare_func_in_func(self.fs_create, builder.func);
-        let fs_append = self
-            .object
-            .declare_func_in_func(self.fs_append, builder.func);
-        let file_read_all = self
-            .object
-            .declare_func_in_func(self.file_read_all, builder.func);
-        let file_read_bytes = self
-            .object
-            .declare_func_in_func(self.file_read_bytes, builder.func);
-        let file_write_all = self
-            .object
-            .declare_func_in_func(self.file_write_all, builder.func);
-        let file_write_bytes = self
-            .object
-            .declare_func_in_func(self.file_write_bytes, builder.func);
-        let file_flush = self
-            .object
-            .declare_func_in_func(self.file_flush, builder.func);
-        let file_sync = self
-            .object
-            .declare_func_in_func(self.file_sync, builder.func);
-        let file_close = self
-            .object
-            .declare_func_in_func(self.file_close, builder.func);
-        let process_inherit = self
-            .object
-            .declare_func_in_func(self.process_inherit, builder.func);
-        let process_null = self
-            .object
-            .declare_func_in_func(self.process_null, builder.func);
-        let process_pipe = self
-            .object
-            .declare_func_in_func(self.process_pipe, builder.func);
-        let process_supervisor = self
-            .object
-            .declare_func_in_func(self.process_supervisor, builder.func);
-        let process_start = self
-            .object
-            .declare_func_in_func(self.process_start, builder.func);
-        let process_run = self
-            .object
-            .declare_func_in_func(self.process_run, builder.func);
-        let process_child_stdin = self
-            .object
-            .declare_func_in_func(self.process_child_stdin, builder.func);
-        let process_child_stdout = self
-            .object
-            .declare_func_in_func(self.process_child_stdout, builder.func);
-        let process_child_stderr = self
-            .object
-            .declare_func_in_func(self.process_child_stderr, builder.func);
-        let process_child_wait = self
-            .object
-            .declare_func_in_func(self.process_child_wait, builder.func);
-        let process_child_wait_or_none = self
-            .object
-            .declare_func_in_func(self.process_child_wait_or_none, builder.func);
-        let process_child_wait_ok = self
-            .object
-            .declare_func_in_func(self.process_child_wait_ok, builder.func);
-        let process_child_kill = self
-            .object
-            .declare_func_in_func(self.process_child_kill, builder.func);
-        let process_child_terminate = self
-            .object
-            .declare_func_in_func(self.process_child_terminate, builder.func);
-        let process_child_close = self
-            .object
-            .declare_func_in_func(self.process_child_close, builder.func);
-        let process_pipe_read_all = self
-            .object
-            .declare_func_in_func(self.process_pipe_read_all, builder.func);
-        let process_pipe_read_line = self
-            .object
-            .declare_func_in_func(self.process_pipe_read_line, builder.func);
-        let process_pipe_read_bytes = self
-            .object
-            .declare_func_in_func(self.process_pipe_read_bytes, builder.func);
-        let process_pipe_write_all = self
-            .object
-            .declare_func_in_func(self.process_pipe_write_all, builder.func);
-        let process_pipe_write_bytes = self
-            .object
-            .declare_func_in_func(self.process_pipe_write_bytes, builder.func);
-        let process_pipe_flush = self
-            .object
-            .declare_func_in_func(self.process_pipe_flush, builder.func);
-        let process_pipe_close = self
-            .object
-            .declare_func_in_func(self.process_pipe_close, builder.func);
-        let process_completed_status = self
-            .object
-            .declare_func_in_func(self.process_completed_status, builder.func);
-        let process_completed_success = self
-            .object
-            .declare_func_in_func(self.process_completed_success, builder.func);
-        let process_completed_stdout = self
-            .object
-            .declare_func_in_func(self.process_completed_stdout, builder.func);
-        let process_completed_stderr = self
-            .object
-            .declare_func_in_func(self.process_completed_stderr, builder.func);
-        let process_completed_stdout_bytes = self
-            .object
-            .declare_func_in_func(self.process_completed_stdout_bytes, builder.func);
-        let process_completed_stderr_bytes = self
-            .object
-            .declare_func_in_func(self.process_completed_stderr_bytes, builder.func);
-        let process_completed_check = self
-            .object
-            .declare_func_in_func(self.process_completed_check, builder.func);
-        let process_supervisor_start = self
-            .object
-            .declare_func_in_func(self.process_supervisor_start, builder.func);
-        let process_supervisor_wait = self
-            .object
-            .declare_func_in_func(self.process_supervisor_wait, builder.func);
-        let process_supervisor_wait_or_none = self
-            .object
-            .declare_func_in_func(self.process_supervisor_wait_or_none, builder.func);
-        let process_supervisor_stop = self
-            .object
-            .declare_func_in_func(self.process_supervisor_stop, builder.func);
-        let process_supervisor_is_empty = self
-            .object
-            .declare_func_in_func(self.process_supervisor_is_empty, builder.func);
-        let process_supervisor_close = self
-            .object
-            .declare_func_in_func(self.process_supervisor_close, builder.func);
-        let net_connect = self
-            .object
-            .declare_func_in_func(self.net_connect, builder.func);
-        let net_connect_timeout = self
-            .object
-            .declare_func_in_func(self.net_connect_timeout, builder.func);
-        let net_listen = self
-            .object
-            .declare_func_in_func(self.net_listen, builder.func);
-        let net_udp_bind = self
-            .object
-            .declare_func_in_func(self.net_udp_bind, builder.func);
-        let net_unix_listen = self
-            .object
-            .declare_func_in_func(self.net_unix_listen, builder.func);
-        let net_unix_connect = self
-            .object
-            .declare_func_in_func(self.net_unix_connect, builder.func);
-        let net_unix_connect_timeout = self
-            .object
-            .declare_func_in_func(self.net_unix_connect_timeout, builder.func);
-        let net_tls_listen = self
-            .object
-            .declare_func_in_func(self.net_tls_listen, builder.func);
-        let net_tls_connect = self
-            .object
-            .declare_func_in_func(self.net_tls_connect, builder.func);
-        let net_tls_connect_timeout = self
-            .object
-            .declare_func_in_func(self.net_tls_connect_timeout, builder.func);
-        let net_http_listen = self
-            .object
-            .declare_func_in_func(self.net_http_listen, builder.func);
-        let net_http_request_text = self
-            .object
-            .declare_func_in_func(self.net_http_request_text, builder.func);
-        let net_http_request_text_timeout = self
-            .object
-            .declare_func_in_func(self.net_http_request_text_timeout, builder.func);
-        let net_http_request_bytes = self
-            .object
-            .declare_func_in_func(self.net_http_request_bytes, builder.func);
-        let net_http_request_bytes_timeout = self
-            .object
-            .declare_func_in_func(self.net_http_request_bytes_timeout, builder.func);
-        let net_websocket_listen = self
-            .object
-            .declare_func_in_func(self.net_websocket_listen, builder.func);
-        let net_websocket_connect = self
-            .object
-            .declare_func_in_func(self.net_websocket_connect, builder.func);
-        let net_websocket_connect_timeout = self
-            .object
-            .declare_func_in_func(self.net_websocket_connect_timeout, builder.func);
-        let tcp_listener_accept = self
-            .object
-            .declare_func_in_func(self.tcp_listener_accept, builder.func);
-        let tcp_listener_local_addr = self
-            .object
-            .declare_func_in_func(self.tcp_listener_local_addr, builder.func);
-        let tcp_listener_close = self
-            .object
-            .declare_func_in_func(self.tcp_listener_close, builder.func);
-        let tcp_stream_read_all = self
-            .object
-            .declare_func_in_func(self.tcp_stream_read_all, builder.func);
-        let tcp_stream_read_line = self
-            .object
-            .declare_func_in_func(self.tcp_stream_read_line, builder.func);
-        let tcp_stream_read_bytes = self
-            .object
-            .declare_func_in_func(self.tcp_stream_read_bytes, builder.func);
-        let tcp_stream_read_exact = self
-            .object
-            .declare_func_in_func(self.tcp_stream_read_exact, builder.func);
-        let tcp_stream_write_all = self
-            .object
-            .declare_func_in_func(self.tcp_stream_write_all, builder.func);
-        let tcp_stream_write_bytes = self
-            .object
-            .declare_func_in_func(self.tcp_stream_write_bytes, builder.func);
-        let tcp_stream_flush = self
-            .object
-            .declare_func_in_func(self.tcp_stream_flush, builder.func);
-        let tcp_stream_local_addr = self
-            .object
-            .declare_func_in_func(self.tcp_stream_local_addr, builder.func);
-        let tcp_stream_peer_addr = self
-            .object
-            .declare_func_in_func(self.tcp_stream_peer_addr, builder.func);
-        let tcp_stream_shutdown_read = self
-            .object
-            .declare_func_in_func(self.tcp_stream_shutdown_read, builder.func);
-        let tcp_stream_shutdown_write = self
-            .object
-            .declare_func_in_func(self.tcp_stream_shutdown_write, builder.func);
-        let tcp_stream_shutdown_both = self
-            .object
-            .declare_func_in_func(self.tcp_stream_shutdown_both, builder.func);
-        let tcp_stream_close = self
-            .object
-            .declare_func_in_func(self.tcp_stream_close, builder.func);
-        let udp_socket_send_text = self
-            .object
-            .declare_func_in_func(self.udp_socket_send_text, builder.func);
-        let udp_socket_send_bytes = self
-            .object
-            .declare_func_in_func(self.udp_socket_send_bytes, builder.func);
-        let udp_socket_recv = self
-            .object
-            .declare_func_in_func(self.udp_socket_recv, builder.func);
-        let udp_socket_recv_from = self
-            .object
-            .declare_func_in_func(self.udp_socket_recv_from, builder.func);
-        let udp_socket_local_addr = self
-            .object
-            .declare_func_in_func(self.udp_socket_local_addr, builder.func);
-        let udp_socket_peer_addr = self
-            .object
-            .declare_func_in_func(self.udp_socket_peer_addr, builder.func);
-        let udp_socket_close = self
-            .object
-            .declare_func_in_func(self.udp_socket_close, builder.func);
-        let udp_datagram_address = self
-            .object
-            .declare_func_in_func(self.udp_datagram_address, builder.func);
-        let udp_datagram_bytes = self
-            .object
-            .declare_func_in_func(self.udp_datagram_bytes, builder.func);
-        let udp_datagram_text = self
-            .object
-            .declare_func_in_func(self.udp_datagram_text, builder.func);
-        let http_listener_accept = self
-            .object
-            .declare_func_in_func(self.http_listener_accept, builder.func);
-        let http_listener_local_addr = self
-            .object
-            .declare_func_in_func(self.http_listener_local_addr, builder.func);
-        let http_listener_close = self
-            .object
-            .declare_func_in_func(self.http_listener_close, builder.func);
-        let http_exchange_method = self
-            .object
-            .declare_func_in_func(self.http_exchange_method, builder.func);
-        let http_exchange_path = self
-            .object
-            .declare_func_in_func(self.http_exchange_path, builder.func);
-        let http_exchange_headers = self
-            .object
-            .declare_func_in_func(self.http_exchange_headers, builder.func);
-        let http_exchange_body_text = self
-            .object
-            .declare_func_in_func(self.http_exchange_body_text, builder.func);
-        let http_exchange_body_bytes = self
-            .object
-            .declare_func_in_func(self.http_exchange_body_bytes, builder.func);
-        let http_exchange_respond_text = self
-            .object
-            .declare_func_in_func(self.http_exchange_respond_text, builder.func);
-        let http_exchange_respond_bytes = self
-            .object
-            .declare_func_in_func(self.http_exchange_respond_bytes, builder.func);
-        let http_response_status = self
-            .object
-            .declare_func_in_func(self.http_response_status, builder.func);
-        let http_response_reason = self
-            .object
-            .declare_func_in_func(self.http_response_reason, builder.func);
-        let http_response_headers = self
-            .object
-            .declare_func_in_func(self.http_response_headers, builder.func);
-        let http_response_text = self
-            .object
-            .declare_func_in_func(self.http_response_text, builder.func);
-        let http_response_bytes = self
-            .object
-            .declare_func_in_func(self.http_response_bytes, builder.func);
-        let websocket_listener_accept = self
-            .object
-            .declare_func_in_func(self.websocket_listener_accept, builder.func);
-        let websocket_listener_local_addr = self
-            .object
-            .declare_func_in_func(self.websocket_listener_local_addr, builder.func);
-        let websocket_send_text = self
-            .object
-            .declare_func_in_func(self.websocket_send_text, builder.func);
-        let websocket_send_bytes = self
-            .object
-            .declare_func_in_func(self.websocket_send_bytes, builder.func);
-        let websocket_recv_text = self
-            .object
-            .declare_func_in_func(self.websocket_recv_text, builder.func);
-        let websocket_recv_bytes = self
-            .object
-            .declare_func_in_func(self.websocket_recv_bytes, builder.func);
-        let websocket_close = self
-            .object
-            .declare_func_in_func(self.websocket_close, builder.func);
-        let unix_listener_accept = self
-            .object
-            .declare_func_in_func(self.unix_listener_accept, builder.func);
-        let unix_listener_close = self
-            .object
-            .declare_func_in_func(self.unix_listener_close, builder.func);
-        let unix_stream_read_line = self
-            .object
-            .declare_func_in_func(self.unix_stream_read_line, builder.func);
-        let unix_stream_read_exact = self
-            .object
-            .declare_func_in_func(self.unix_stream_read_exact, builder.func);
-        let unix_stream_write_all = self
-            .object
-            .declare_func_in_func(self.unix_stream_write_all, builder.func);
-        let unix_stream_close = self
-            .object
-            .declare_func_in_func(self.unix_stream_close, builder.func);
-        let tls_listener_accept = self
-            .object
-            .declare_func_in_func(self.tls_listener_accept, builder.func);
-        let tls_listener_local_addr = self
-            .object
-            .declare_func_in_func(self.tls_listener_local_addr, builder.func);
-        let tls_listener_close = self
-            .object
-            .declare_func_in_func(self.tls_listener_close, builder.func);
-        let tls_stream_read_line = self
-            .object
-            .declare_func_in_func(self.tls_stream_read_line, builder.func);
-        let tls_stream_read_exact = self
-            .object
-            .declare_func_in_func(self.tls_stream_read_exact, builder.func);
-        let tls_stream_write_all = self
-            .object
-            .declare_func_in_func(self.tls_stream_write_all, builder.func);
-        let tls_stream_close = self
-            .object
-            .declare_func_in_func(self.tls_stream_close, builder.func);
-        let cancelled = self
-            .object
-            .declare_func_in_func(self.cancelled, builder.func);
-        let yield_now = self
-            .object
-            .declare_func_in_func(self.yield_now, builder.func);
-        let sleep_value_void = self
-            .object
-            .declare_func_in_func(self.sleep_value_void, builder.func);
-        let start_task_call = self
-            .object
-            .declare_func_in_func(self.start_task_call, builder.func);
         let current_function_name = public_direct_function_name(&function.name);
         let current_function_path = function
             .source_path
@@ -3624,379 +1367,7 @@ impl<'a> NativeCodegen<'a> {
             cleanup_active_vars,
             cleanup_registration_vars,
             safepoint_fuel,
-            exit_call,
-            set_returned_view_projection,
-            take_returned_view_projection,
-            push_returned_view_selector,
-            take_returned_view_selector,
-            print_i64,
-            print_u64,
-            print_f32,
-            print_f64,
-            print_bool,
-            print_value,
-            sqrt_f64,
-            assert_fail,
-            assert_fail_detailed,
-            fail_division_by_zero,
-            record_manager_exit_failure,
-            fail_erased_union_mutable_receiver,
-            fail_int32_overflow,
-            fail_integer_overflow,
-            register_cleanup,
-            unregister_cleanup,
-            refresh_cleanup,
-            set_next_mutable_sinks,
-            set_next_indirect_mutable_sinks,
-            current_mutable_sink,
-            mutable_sink_new,
-            mutable_sink_project,
-            mutable_sink_store_owned,
-            mutable_sink_release,
-            tag_value_type,
-            box_i32,
-            box_i64,
-            box_u64,
-            box_uint_literal,
-            box_f64,
-            box_bool,
-            module_constant,
-            function_bind_defaults,
-            box_unit,
-            string_literal,
-            string_len,
-            string_byte_len,
-            string_slice,
-            string_contains,
-            string_starts_with,
-            string_ends_with,
-            string_split,
-            string_replace,
-            string_to_lower,
-            string_to_upper,
-            string_strip_prefix,
-            string_strip_suffix,
-            string_trim,
-            string_join,
-            string_text_method,
-            stringify_value,
-            format_begin,
-            format_push_str,
-            format_push_i64,
-            format_push_value,
-            format_push_formatted,
-            abs_value,
-            min_value,
-            max_value,
-            sqrt_value,
-            round_value,
-            divmod_value,
-            parse_int32,
-            parse_int64,
-            parse_float64,
-            duration_literal,
-            duration_from_i64,
-            duration_to_float,
-            rng_new,
-            rng_next_int,
-            rng_next_float,
-            rng_shuffle,
-            random_secure_int,
-            random_secure_bytes,
-            range_new,
-            range_current,
-            range_end,
-            range_advance,
-            vec_empty,
-            vec_len,
-            vec_is_empty,
-            vec_push_in_place,
-            vec_pop_in_place,
-            vec_get,
-            vec_set_in_place,
-            vec_remove_in_place,
-            vec_swap_in_place,
-            vec_contains,
-            vec_extend_in_place,
-            vec_insert_in_place,
-            vec_clear_in_place,
-            vec_reverse_in_place,
-            collection_operation,
-            vec_index,
-            vec_slice,
-            vec_index_option,
-            vec_index_scalar,
-            vec_check_index,
-            compare_str_literal_at,
-            compare_values_at,
-            vec_element_len,
-            vec_element_map_get,
-            vec_element_map_get_str,
-            vec_push_scalar,
-            vec_span,
-            vec_take_index_in_place,
-            vec_set_index_in_place,
-            element_path_load,
-            element_path_store,
-            element_path_take,
-            element_path_probe,
-            array_zeros,
-            array_full,
-            array_from_vec,
-            array_clone,
-            array_shape,
-            array_len,
-            array_get,
-            array_set_in_place,
-            array_fill_in_place,
-            array_index,
-            array_set_index_in_place,
-            array_slice,
-            array_binary,
-            array_map,
-            array_reduce,
-            map_empty,
-            map_len,
-            map_is_empty,
-            map_get,
-            map_get_str,
-            map_set_in_place,
-            map_remove_in_place,
-            map_contains_key,
-            map_keys,
-            map_values,
-            map_items,
-            map_clear_in_place,
-            map_extend_in_place,
-            map_index,
-            map_set_index_in_place,
-            set_empty,
-            set_len,
-            set_is_empty,
-            set_contains,
-            set_contains_int64,
-            set_insert_in_place,
-            set_remove_in_place,
-            set_index_option,
-            set_take_index_in_place,
-            retain_value,
-            release_value,
-            clone_value,
-            unbox_i64,
-            unbox_int64,
-            integer_to_float,
-            integer_width_binary,
-            unbox_u64,
-            unbox_f64,
-            unbox_bool,
-            value_as_condition,
-            unary_value,
-            binary_value,
-            compare_values,
-            compare_str_literal,
-            cast_value,
-            cast_integer_to_integer,
-            cast_integer_to_float,
-            cast_float_to_integer,
-            value_type_matches,
-            value_has_runtime_type,
-            tuple_new,
-            tuple_element,
-            tuple_take_element,
-            union_inject,
-            union_inject_copy,
-            union_tag_test,
-            union_tag,
-            union_payload_copy,
-            callable_env_alloc,
-            none_test,
-            value_is_union,
-            union_active_payload,
-            union_take_payload,
-            enum_variant,
-            variant_matches,
-            variant_payload,
-            variant_take_payload,
-            instance_empty,
-            instance_get_field,
-            instance_take_field,
-            instance_set_field_owned,
-            arg_buffer_new,
-            arg_buffer_store,
-            arg_buffer_store_owned,
-            task_arg_buffer_guard,
-            task_arg_buffer_disarm,
-            ffi_call,
-            monotonic_time_ms,
-            channel_new,
-            channel_send,
-            channel_send_timeout_value,
-            channel_try_send,
-            channel_recv,
-            channel_recv_in_task_group,
-            channel_recv_with_registered_producers,
-            channel_recv_timeout_value,
-            channel_recv_or_none,
-            channel_recv_or_none_timeout_value,
-            channel_recv_or_value,
-            channel_recv_or_value_timeout_value,
-            channel_close,
-            task_group_new,
-            task_group_cancel,
-            task_group_close,
-            task_join,
-            task_join_timeout_value,
-            task_join_or_none,
-            task_join_or_none_timeout_value,
-            task_join_or_value,
-            task_join_or_value_timeout_value,
-            wait_any,
-            wait_any_timeout_value,
-            wait_all,
-            wait_all_timeout_value,
-            select,
-            io_write,
-            io_flush,
-            io_read_line,
-            fs_exists,
-            fs_read_to_string,
-            fs_read_bytes,
-            fs_write_string,
-            fs_write_bytes,
-            fs_append_string,
-            fs_append_bytes,
-            fs_create_dir,
-            fs_read_dir,
-            fs_remove_file,
-            fs_rename,
-            fs_open,
-            fs_create,
-            fs_append,
-            file_read_all,
-            file_read_bytes,
-            file_write_all,
-            file_write_bytes,
-            file_flush,
-            file_sync,
-            file_close,
-            process_inherit,
-            process_null,
-            process_pipe,
-            process_supervisor,
-            process_start,
-            process_run,
-            process_child_stdin,
-            process_child_stdout,
-            process_child_stderr,
-            process_child_wait,
-            process_child_wait_or_none,
-            process_child_wait_ok,
-            process_child_kill,
-            process_child_terminate,
-            process_child_close,
-            process_pipe_read_all,
-            process_pipe_read_line,
-            process_pipe_read_bytes,
-            process_pipe_write_all,
-            process_pipe_write_bytes,
-            process_pipe_flush,
-            process_pipe_close,
-            process_completed_status,
-            process_completed_success,
-            process_completed_stdout,
-            process_completed_stderr,
-            process_completed_stdout_bytes,
-            process_completed_stderr_bytes,
-            process_completed_check,
-            process_supervisor_start,
-            process_supervisor_wait,
-            process_supervisor_wait_or_none,
-            process_supervisor_stop,
-            process_supervisor_is_empty,
-            process_supervisor_close,
-            net_connect,
-            net_connect_timeout,
-            net_listen,
-            net_udp_bind,
-            net_unix_listen,
-            net_unix_connect,
-            net_unix_connect_timeout,
-            net_tls_listen,
-            net_tls_connect,
-            net_tls_connect_timeout,
-            net_http_listen,
-            net_http_request_text,
-            net_http_request_text_timeout,
-            net_http_request_bytes,
-            net_http_request_bytes_timeout,
-            net_websocket_listen,
-            net_websocket_connect,
-            net_websocket_connect_timeout,
-            tcp_listener_accept,
-            tcp_listener_local_addr,
-            tcp_listener_close,
-            tcp_stream_read_all,
-            tcp_stream_read_line,
-            tcp_stream_read_bytes,
-            tcp_stream_read_exact,
-            tcp_stream_write_all,
-            tcp_stream_write_bytes,
-            tcp_stream_flush,
-            tcp_stream_local_addr,
-            tcp_stream_peer_addr,
-            tcp_stream_shutdown_read,
-            tcp_stream_shutdown_write,
-            tcp_stream_shutdown_both,
-            tcp_stream_close,
-            udp_socket_send_text,
-            udp_socket_send_bytes,
-            udp_socket_recv,
-            udp_socket_recv_from,
-            udp_socket_local_addr,
-            udp_socket_peer_addr,
-            udp_socket_close,
-            udp_datagram_address,
-            udp_datagram_bytes,
-            udp_datagram_text,
-            http_listener_accept,
-            http_listener_local_addr,
-            http_listener_close,
-            http_exchange_method,
-            http_exchange_path,
-            http_exchange_headers,
-            http_exchange_body_text,
-            http_exchange_body_bytes,
-            http_exchange_respond_text,
-            http_exchange_respond_bytes,
-            http_response_status,
-            http_response_reason,
-            http_response_headers,
-            http_response_text,
-            http_response_bytes,
-            websocket_listener_accept,
-            websocket_listener_local_addr,
-            websocket_send_text,
-            websocket_send_bytes,
-            websocket_recv_text,
-            websocket_recv_bytes,
-            websocket_close,
-            unix_listener_accept,
-            unix_listener_close,
-            unix_stream_read_line,
-            unix_stream_read_exact,
-            unix_stream_write_all,
-            unix_stream_close,
-            tls_listener_accept,
-            tls_listener_local_addr,
-            tls_listener_close,
-            tls_stream_read_line,
-            tls_stream_read_exact,
-            tls_stream_write_all,
-            tls_stream_close,
-            cancelled,
-            yield_now,
-            sleep_value_void,
-            start_task_call,
+            runtime: runtime_refs,
         };
 
         let return_ty = ensure_direct_type(
@@ -4047,27 +1418,27 @@ impl<'a> NativeCodegen<'a> {
         let target_ref = self.object.declare_func_in_func(target_id, builder.func);
         let unbox_i64 = self
             .object
-            .declare_func_in_func(self.unbox_i64, builder.func);
+            .declare_func_in_func(self.runtime[RuntimeFn::UnboxI64], builder.func);
         let unbox_int64 = self
             .object
-            .declare_func_in_func(self.unbox_int64, builder.func);
+            .declare_func_in_func(self.runtime[RuntimeFn::UnboxInt64], builder.func);
         let unbox_u64 = self
             .object
-            .declare_func_in_func(self.unbox_u64, builder.func);
+            .declare_func_in_func(self.runtime[RuntimeFn::UnboxU64], builder.func);
         let unbox_f64 = self
             .object
-            .declare_func_in_func(self.unbox_f64, builder.func);
+            .declare_func_in_func(self.runtime[RuntimeFn::UnboxF64], builder.func);
         let unbox_bool = self
             .object
-            .declare_func_in_func(self.unbox_bool, builder.func);
+            .declare_func_in_func(self.runtime[RuntimeFn::UnboxBool], builder.func);
         let release_value = self
             .object
-            .declare_func_in_func(self.release_value, builder.func);
+            .declare_func_in_func(self.runtime[RuntimeFn::ReleaseValue], builder.func);
 
         if matches!(function.name.as_str(), "main" | "__script") {
             let module_constant = self
                 .object
-                .declare_func_in_func(self.module_constant, builder.func);
+                .declare_func_in_func(self.runtime[RuntimeFn::ModuleConstant], builder.func);
             for constant in &self.module.constants {
                 let initializer =
                     self.function_thunks
@@ -4230,7 +1601,7 @@ impl<'a> NativeCodegen<'a> {
         let transfer_defaults = builder.block_params(entry)[2];
         let store_owned = self
             .object
-            .declare_func_in_func(self.arg_buffer_store_owned, builder.func);
+            .declare_func_in_func(self.runtime[RuntimeFn::ArgBufferStoreOwned], builder.func);
         let param_types = self
             .function_param_types
             .get(&function.name)
@@ -4431,7 +1802,7 @@ impl<'a> NativeCodegen<'a> {
                     let target_ref = self.object.declare_func_in_func(target_id, builder.func);
                     let retain_value = self
                         .object
-                        .declare_func_in_func(self.retain_value, builder.func);
+                        .declare_func_in_func(self.runtime[RuntimeFn::RetainValue], builder.func);
                     let retained = builder.ins().call(retain_value, &[raw]);
                     let retained = builder.inst_results(retained)[0];
                     let inst = builder.ins().call(target_ref, &[retained]);
@@ -4470,7 +1841,7 @@ impl<'a> NativeCodegen<'a> {
                             &[types::I64, types::I64],
                             Some(types::I64),
                         )?,
-                        None => self.close_value,
+                        None => self.runtime[RuntimeFn::CloseValue],
                     };
                     let close_value = self.object.declare_func_in_func(close_id, builder.func);
                     let cancel_before = builder.ins().iconst(types::I64, 1);
@@ -4530,10 +1901,10 @@ impl<'a> NativeCodegen<'a> {
 
         let runtime_init = self
             .object
-            .declare_func_in_func(self.runtime_init, builder.func);
+            .declare_func_in_func(self.runtime[RuntimeFn::RuntimeInit], builder.func);
         let run_root = self
             .object
-            .declare_func_in_func(self.run_root, builder.func);
+            .declare_func_in_func(self.runtime[RuntimeFn::RunRoot], builder.func);
         let entry_thunk_ref = self
             .object
             .declare_func_in_func(entry_thunk_id, builder.func);
@@ -4556,7 +1927,7 @@ impl<'a> NativeCodegen<'a> {
         // built with another layout stops here instead of misreading them.
         let check_list_layout = self
             .object
-            .declare_func_in_func(self.check_list_layout, builder.func);
+            .declare_func_in_func(self.runtime[RuntimeFn::CheckListLayout], builder.func);
         let fingerprint = builder.ins().iconst(
             types::I64,
             aura_runtime::native_runtime::direct_list_layout().fingerprint(),
@@ -4574,7 +1945,7 @@ impl<'a> NativeCodegen<'a> {
         if !display_wrappers.is_empty() {
             let register_display = self
                 .object
-                .declare_func_in_func(self.register_display, builder.func);
+                .declare_func_in_func(self.runtime[RuntimeFn::RegisterDisplay], builder.func);
             for (type_name, function_name) in display_wrappers {
                 let thunk_id = self.function_thunks[&function_name];
                 let thunk_ref = self.object.declare_func_in_func(thunk_id, builder.func);
@@ -5115,382 +2486,7 @@ struct FunctionCompiler<'a> {
     cleanup_active_vars: HashMap<String, Variable>,
     cleanup_registration_vars: HashMap<String, Variable>,
     safepoint_fuel: Option<Variable>,
-    exit_call: cranelift_codegen::ir::FuncRef,
-    set_returned_view_projection: cranelift_codegen::ir::FuncRef,
-    take_returned_view_projection: cranelift_codegen::ir::FuncRef,
-    push_returned_view_selector: cranelift_codegen::ir::FuncRef,
-    take_returned_view_selector: cranelift_codegen::ir::FuncRef,
-    print_i64: cranelift_codegen::ir::FuncRef,
-    print_u64: cranelift_codegen::ir::FuncRef,
-    print_f32: cranelift_codegen::ir::FuncRef,
-    print_f64: cranelift_codegen::ir::FuncRef,
-    print_bool: cranelift_codegen::ir::FuncRef,
-    print_value: cranelift_codegen::ir::FuncRef,
-    sqrt_f64: cranelift_codegen::ir::FuncRef,
-    assert_fail: cranelift_codegen::ir::FuncRef,
-    assert_fail_detailed: cranelift_codegen::ir::FuncRef,
-    fail_division_by_zero: cranelift_codegen::ir::FuncRef,
-    record_manager_exit_failure: cranelift_codegen::ir::FuncRef,
-    fail_erased_union_mutable_receiver: cranelift_codegen::ir::FuncRef,
-    fail_int32_overflow: cranelift_codegen::ir::FuncRef,
-    fail_integer_overflow: cranelift_codegen::ir::FuncRef,
-    register_cleanup: cranelift_codegen::ir::FuncRef,
-    unregister_cleanup: cranelift_codegen::ir::FuncRef,
-    refresh_cleanup: cranelift_codegen::ir::FuncRef,
-    set_next_mutable_sinks: cranelift_codegen::ir::FuncRef,
-    set_next_indirect_mutable_sinks: cranelift_codegen::ir::FuncRef,
-    current_mutable_sink: cranelift_codegen::ir::FuncRef,
-    mutable_sink_new: cranelift_codegen::ir::FuncRef,
-    mutable_sink_project: cranelift_codegen::ir::FuncRef,
-    mutable_sink_store_owned: cranelift_codegen::ir::FuncRef,
-    mutable_sink_release: cranelift_codegen::ir::FuncRef,
-    tag_value_type: cranelift_codegen::ir::FuncRef,
-    box_i32: cranelift_codegen::ir::FuncRef,
-    box_i64: cranelift_codegen::ir::FuncRef,
-    box_u64: cranelift_codegen::ir::FuncRef,
-    box_uint_literal: cranelift_codegen::ir::FuncRef,
-    box_f64: cranelift_codegen::ir::FuncRef,
-    box_bool: cranelift_codegen::ir::FuncRef,
-    module_constant: cranelift_codegen::ir::FuncRef,
-    function_bind_defaults: cranelift_codegen::ir::FuncRef,
-    box_unit: cranelift_codegen::ir::FuncRef,
-    string_literal: cranelift_codegen::ir::FuncRef,
-    string_len: cranelift_codegen::ir::FuncRef,
-    string_byte_len: cranelift_codegen::ir::FuncRef,
-    string_slice: cranelift_codegen::ir::FuncRef,
-    string_contains: cranelift_codegen::ir::FuncRef,
-    string_starts_with: cranelift_codegen::ir::FuncRef,
-    string_ends_with: cranelift_codegen::ir::FuncRef,
-    string_split: cranelift_codegen::ir::FuncRef,
-    string_replace: cranelift_codegen::ir::FuncRef,
-    string_to_lower: cranelift_codegen::ir::FuncRef,
-    string_to_upper: cranelift_codegen::ir::FuncRef,
-    string_strip_prefix: cranelift_codegen::ir::FuncRef,
-    string_strip_suffix: cranelift_codegen::ir::FuncRef,
-    string_trim: cranelift_codegen::ir::FuncRef,
-    string_join: cranelift_codegen::ir::FuncRef,
-    string_text_method: cranelift_codegen::ir::FuncRef,
-    stringify_value: cranelift_codegen::ir::FuncRef,
-    format_begin: cranelift_codegen::ir::FuncRef,
-    format_push_str: cranelift_codegen::ir::FuncRef,
-    format_push_i64: cranelift_codegen::ir::FuncRef,
-    format_push_value: cranelift_codegen::ir::FuncRef,
-    format_push_formatted: cranelift_codegen::ir::FuncRef,
-    abs_value: cranelift_codegen::ir::FuncRef,
-    min_value: cranelift_codegen::ir::FuncRef,
-    max_value: cranelift_codegen::ir::FuncRef,
-    sqrt_value: cranelift_codegen::ir::FuncRef,
-    round_value: cranelift_codegen::ir::FuncRef,
-    divmod_value: cranelift_codegen::ir::FuncRef,
-    parse_int32: cranelift_codegen::ir::FuncRef,
-    parse_int64: cranelift_codegen::ir::FuncRef,
-    parse_float64: cranelift_codegen::ir::FuncRef,
-    duration_literal: cranelift_codegen::ir::FuncRef,
-    duration_from_i64: cranelift_codegen::ir::FuncRef,
-    duration_to_float: cranelift_codegen::ir::FuncRef,
-    rng_new: cranelift_codegen::ir::FuncRef,
-    rng_next_int: cranelift_codegen::ir::FuncRef,
-    rng_next_float: cranelift_codegen::ir::FuncRef,
-    rng_shuffle: cranelift_codegen::ir::FuncRef,
-    random_secure_int: cranelift_codegen::ir::FuncRef,
-    random_secure_bytes: cranelift_codegen::ir::FuncRef,
-    range_new: cranelift_codegen::ir::FuncRef,
-    range_current: cranelift_codegen::ir::FuncRef,
-    range_end: cranelift_codegen::ir::FuncRef,
-    range_advance: cranelift_codegen::ir::FuncRef,
-    vec_empty: cranelift_codegen::ir::FuncRef,
-    vec_len: cranelift_codegen::ir::FuncRef,
-    vec_is_empty: cranelift_codegen::ir::FuncRef,
-    vec_push_in_place: cranelift_codegen::ir::FuncRef,
-    #[allow(dead_code)]
-    vec_pop_in_place: cranelift_codegen::ir::FuncRef,
-    vec_get: cranelift_codegen::ir::FuncRef,
-    vec_set_in_place: cranelift_codegen::ir::FuncRef,
-    #[allow(dead_code)]
-    vec_remove_in_place: cranelift_codegen::ir::FuncRef,
-    vec_swap_in_place: cranelift_codegen::ir::FuncRef,
-    vec_contains: cranelift_codegen::ir::FuncRef,
-    vec_extend_in_place: cranelift_codegen::ir::FuncRef,
-    vec_insert_in_place: cranelift_codegen::ir::FuncRef,
-    vec_clear_in_place: cranelift_codegen::ir::FuncRef,
-    vec_reverse_in_place: cranelift_codegen::ir::FuncRef,
-    collection_operation: cranelift_codegen::ir::FuncRef,
-    vec_index: cranelift_codegen::ir::FuncRef,
-    vec_slice: cranelift_codegen::ir::FuncRef,
-    vec_index_option: cranelift_codegen::ir::FuncRef,
-    vec_index_scalar: cranelift_codegen::ir::FuncRef,
-    vec_check_index: cranelift_codegen::ir::FuncRef,
-    compare_str_literal_at: cranelift_codegen::ir::FuncRef,
-    compare_values_at: cranelift_codegen::ir::FuncRef,
-    vec_element_len: cranelift_codegen::ir::FuncRef,
-    vec_element_map_get: cranelift_codegen::ir::FuncRef,
-    vec_element_map_get_str: cranelift_codegen::ir::FuncRef,
-    vec_push_scalar: cranelift_codegen::ir::FuncRef,
-    vec_span: cranelift_codegen::ir::FuncRef,
-    vec_take_index_in_place: cranelift_codegen::ir::FuncRef,
-    vec_set_index_in_place: cranelift_codegen::ir::FuncRef,
-    element_path_load: cranelift_codegen::ir::FuncRef,
-    element_path_store: cranelift_codegen::ir::FuncRef,
-    element_path_take: cranelift_codegen::ir::FuncRef,
-    element_path_probe: cranelift_codegen::ir::FuncRef,
-    array_zeros: cranelift_codegen::ir::FuncRef,
-    array_full: cranelift_codegen::ir::FuncRef,
-    array_from_vec: cranelift_codegen::ir::FuncRef,
-    array_clone: cranelift_codegen::ir::FuncRef,
-    array_shape: cranelift_codegen::ir::FuncRef,
-    array_len: cranelift_codegen::ir::FuncRef,
-    array_get: cranelift_codegen::ir::FuncRef,
-    array_set_in_place: cranelift_codegen::ir::FuncRef,
-    array_fill_in_place: cranelift_codegen::ir::FuncRef,
-    array_index: cranelift_codegen::ir::FuncRef,
-    array_set_index_in_place: cranelift_codegen::ir::FuncRef,
-    array_slice: cranelift_codegen::ir::FuncRef,
-    array_binary: cranelift_codegen::ir::FuncRef,
-    array_map: cranelift_codegen::ir::FuncRef,
-    array_reduce: cranelift_codegen::ir::FuncRef,
-    map_empty: cranelift_codegen::ir::FuncRef,
-    map_len: cranelift_codegen::ir::FuncRef,
-    map_is_empty: cranelift_codegen::ir::FuncRef,
-    map_get: cranelift_codegen::ir::FuncRef,
-    map_get_str: cranelift_codegen::ir::FuncRef,
-    map_set_in_place: cranelift_codegen::ir::FuncRef,
-    map_remove_in_place: cranelift_codegen::ir::FuncRef,
-    map_contains_key: cranelift_codegen::ir::FuncRef,
-    map_keys: cranelift_codegen::ir::FuncRef,
-    map_values: cranelift_codegen::ir::FuncRef,
-    map_items: cranelift_codegen::ir::FuncRef,
-    map_clear_in_place: cranelift_codegen::ir::FuncRef,
-    map_extend_in_place: cranelift_codegen::ir::FuncRef,
-    map_index: cranelift_codegen::ir::FuncRef,
-    map_set_index_in_place: cranelift_codegen::ir::FuncRef,
-    set_empty: cranelift_codegen::ir::FuncRef,
-    set_len: cranelift_codegen::ir::FuncRef,
-    set_is_empty: cranelift_codegen::ir::FuncRef,
-    set_contains: cranelift_codegen::ir::FuncRef,
-    set_contains_int64: cranelift_codegen::ir::FuncRef,
-    set_insert_in_place: cranelift_codegen::ir::FuncRef,
-    #[allow(dead_code)]
-    set_remove_in_place: cranelift_codegen::ir::FuncRef,
-    set_index_option: cranelift_codegen::ir::FuncRef,
-    set_take_index_in_place: cranelift_codegen::ir::FuncRef,
-    retain_value: cranelift_codegen::ir::FuncRef,
-    release_value: cranelift_codegen::ir::FuncRef,
-    clone_value: cranelift_codegen::ir::FuncRef,
-    unbox_i64: cranelift_codegen::ir::FuncRef,
-    unbox_int64: cranelift_codegen::ir::FuncRef,
-    integer_to_float: cranelift_codegen::ir::FuncRef,
-    integer_width_binary: cranelift_codegen::ir::FuncRef,
-    unbox_u64: cranelift_codegen::ir::FuncRef,
-    unbox_f64: cranelift_codegen::ir::FuncRef,
-    unbox_bool: cranelift_codegen::ir::FuncRef,
-    value_as_condition: cranelift_codegen::ir::FuncRef,
-    unary_value: cranelift_codegen::ir::FuncRef,
-    binary_value: cranelift_codegen::ir::FuncRef,
-    compare_values: cranelift_codegen::ir::FuncRef,
-    compare_str_literal: cranelift_codegen::ir::FuncRef,
-    cast_value: cranelift_codegen::ir::FuncRef,
-    cast_integer_to_integer: cranelift_codegen::ir::FuncRef,
-    cast_integer_to_float: cranelift_codegen::ir::FuncRef,
-    cast_float_to_integer: cranelift_codegen::ir::FuncRef,
-    value_type_matches: cranelift_codegen::ir::FuncRef,
-    value_has_runtime_type: cranelift_codegen::ir::FuncRef,
-    tuple_new: cranelift_codegen::ir::FuncRef,
-    tuple_element: cranelift_codegen::ir::FuncRef,
-    tuple_take_element: cranelift_codegen::ir::FuncRef,
-    union_inject: cranelift_codegen::ir::FuncRef,
-    union_inject_copy: cranelift_codegen::ir::FuncRef,
-    union_tag_test: cranelift_codegen::ir::FuncRef,
-    union_tag: cranelift_codegen::ir::FuncRef,
-    union_payload_copy: cranelift_codegen::ir::FuncRef,
-    callable_env_alloc: cranelift_codegen::ir::FuncRef,
-    none_test: cranelift_codegen::ir::FuncRef,
-    value_is_union: cranelift_codegen::ir::FuncRef,
-    union_active_payload: cranelift_codegen::ir::FuncRef,
-    union_take_payload: cranelift_codegen::ir::FuncRef,
-    enum_variant: cranelift_codegen::ir::FuncRef,
-    variant_matches: cranelift_codegen::ir::FuncRef,
-    variant_payload: cranelift_codegen::ir::FuncRef,
-    variant_take_payload: cranelift_codegen::ir::FuncRef,
-    instance_empty: cranelift_codegen::ir::FuncRef,
-    instance_get_field: cranelift_codegen::ir::FuncRef,
-    instance_take_field: cranelift_codegen::ir::FuncRef,
-    instance_set_field_owned: cranelift_codegen::ir::FuncRef,
-    arg_buffer_new: cranelift_codegen::ir::FuncRef,
-    arg_buffer_store: cranelift_codegen::ir::FuncRef,
-    arg_buffer_store_owned: cranelift_codegen::ir::FuncRef,
-    task_arg_buffer_guard: cranelift_codegen::ir::FuncRef,
-    task_arg_buffer_disarm: cranelift_codegen::ir::FuncRef,
-    ffi_call: cranelift_codegen::ir::FuncRef,
-    monotonic_time_ms: cranelift_codegen::ir::FuncRef,
-    channel_new: cranelift_codegen::ir::FuncRef,
-    channel_send: cranelift_codegen::ir::FuncRef,
-    channel_send_timeout_value: cranelift_codegen::ir::FuncRef,
-    channel_try_send: cranelift_codegen::ir::FuncRef,
-    channel_recv: cranelift_codegen::ir::FuncRef,
-    channel_recv_in_task_group: cranelift_codegen::ir::FuncRef,
-    channel_recv_with_registered_producers: cranelift_codegen::ir::FuncRef,
-    channel_recv_timeout_value: cranelift_codegen::ir::FuncRef,
-    channel_recv_or_none: cranelift_codegen::ir::FuncRef,
-    channel_recv_or_none_timeout_value: cranelift_codegen::ir::FuncRef,
-    channel_recv_or_value: cranelift_codegen::ir::FuncRef,
-    channel_recv_or_value_timeout_value: cranelift_codegen::ir::FuncRef,
-    channel_close: cranelift_codegen::ir::FuncRef,
-    task_group_new: cranelift_codegen::ir::FuncRef,
-    task_group_cancel: cranelift_codegen::ir::FuncRef,
-    task_group_close: cranelift_codegen::ir::FuncRef,
-    task_join: cranelift_codegen::ir::FuncRef,
-    task_join_timeout_value: cranelift_codegen::ir::FuncRef,
-    task_join_or_none: cranelift_codegen::ir::FuncRef,
-    task_join_or_none_timeout_value: cranelift_codegen::ir::FuncRef,
-    task_join_or_value: cranelift_codegen::ir::FuncRef,
-    task_join_or_value_timeout_value: cranelift_codegen::ir::FuncRef,
-    wait_any: cranelift_codegen::ir::FuncRef,
-    wait_any_timeout_value: cranelift_codegen::ir::FuncRef,
-    wait_all: cranelift_codegen::ir::FuncRef,
-    wait_all_timeout_value: cranelift_codegen::ir::FuncRef,
-    select: cranelift_codegen::ir::FuncRef,
-    io_write: cranelift_codegen::ir::FuncRef,
-    io_flush: cranelift_codegen::ir::FuncRef,
-    io_read_line: cranelift_codegen::ir::FuncRef,
-    fs_exists: cranelift_codegen::ir::FuncRef,
-    fs_read_to_string: cranelift_codegen::ir::FuncRef,
-    fs_read_bytes: cranelift_codegen::ir::FuncRef,
-    fs_write_string: cranelift_codegen::ir::FuncRef,
-    fs_write_bytes: cranelift_codegen::ir::FuncRef,
-    fs_append_string: cranelift_codegen::ir::FuncRef,
-    fs_append_bytes: cranelift_codegen::ir::FuncRef,
-    fs_create_dir: cranelift_codegen::ir::FuncRef,
-    fs_read_dir: cranelift_codegen::ir::FuncRef,
-    fs_remove_file: cranelift_codegen::ir::FuncRef,
-    fs_rename: cranelift_codegen::ir::FuncRef,
-    fs_open: cranelift_codegen::ir::FuncRef,
-    fs_create: cranelift_codegen::ir::FuncRef,
-    fs_append: cranelift_codegen::ir::FuncRef,
-    file_read_all: cranelift_codegen::ir::FuncRef,
-    file_read_bytes: cranelift_codegen::ir::FuncRef,
-    file_write_all: cranelift_codegen::ir::FuncRef,
-    file_write_bytes: cranelift_codegen::ir::FuncRef,
-    file_flush: cranelift_codegen::ir::FuncRef,
-    file_sync: cranelift_codegen::ir::FuncRef,
-    file_close: cranelift_codegen::ir::FuncRef,
-    process_inherit: cranelift_codegen::ir::FuncRef,
-    process_null: cranelift_codegen::ir::FuncRef,
-    process_pipe: cranelift_codegen::ir::FuncRef,
-    process_supervisor: cranelift_codegen::ir::FuncRef,
-    process_start: cranelift_codegen::ir::FuncRef,
-    process_run: cranelift_codegen::ir::FuncRef,
-    process_child_stdin: cranelift_codegen::ir::FuncRef,
-    process_child_stdout: cranelift_codegen::ir::FuncRef,
-    process_child_stderr: cranelift_codegen::ir::FuncRef,
-    process_child_wait: cranelift_codegen::ir::FuncRef,
-    process_child_wait_or_none: cranelift_codegen::ir::FuncRef,
-    process_child_wait_ok: cranelift_codegen::ir::FuncRef,
-    process_child_kill: cranelift_codegen::ir::FuncRef,
-    process_child_terminate: cranelift_codegen::ir::FuncRef,
-    process_child_close: cranelift_codegen::ir::FuncRef,
-    process_pipe_read_all: cranelift_codegen::ir::FuncRef,
-    process_pipe_read_line: cranelift_codegen::ir::FuncRef,
-    process_pipe_read_bytes: cranelift_codegen::ir::FuncRef,
-    process_pipe_write_all: cranelift_codegen::ir::FuncRef,
-    process_pipe_write_bytes: cranelift_codegen::ir::FuncRef,
-    process_pipe_flush: cranelift_codegen::ir::FuncRef,
-    process_pipe_close: cranelift_codegen::ir::FuncRef,
-    process_completed_status: cranelift_codegen::ir::FuncRef,
-    process_completed_success: cranelift_codegen::ir::FuncRef,
-    process_completed_stdout: cranelift_codegen::ir::FuncRef,
-    process_completed_stderr: cranelift_codegen::ir::FuncRef,
-    process_completed_stdout_bytes: cranelift_codegen::ir::FuncRef,
-    process_completed_stderr_bytes: cranelift_codegen::ir::FuncRef,
-    process_completed_check: cranelift_codegen::ir::FuncRef,
-    process_supervisor_start: cranelift_codegen::ir::FuncRef,
-    process_supervisor_wait: cranelift_codegen::ir::FuncRef,
-    process_supervisor_wait_or_none: cranelift_codegen::ir::FuncRef,
-    process_supervisor_stop: cranelift_codegen::ir::FuncRef,
-    process_supervisor_is_empty: cranelift_codegen::ir::FuncRef,
-    process_supervisor_close: cranelift_codegen::ir::FuncRef,
-    net_connect: cranelift_codegen::ir::FuncRef,
-    net_connect_timeout: cranelift_codegen::ir::FuncRef,
-    net_listen: cranelift_codegen::ir::FuncRef,
-    net_udp_bind: cranelift_codegen::ir::FuncRef,
-    net_unix_listen: cranelift_codegen::ir::FuncRef,
-    net_unix_connect: cranelift_codegen::ir::FuncRef,
-    net_unix_connect_timeout: cranelift_codegen::ir::FuncRef,
-    net_tls_listen: cranelift_codegen::ir::FuncRef,
-    net_tls_connect: cranelift_codegen::ir::FuncRef,
-    net_tls_connect_timeout: cranelift_codegen::ir::FuncRef,
-    net_http_listen: cranelift_codegen::ir::FuncRef,
-    net_http_request_text: cranelift_codegen::ir::FuncRef,
-    net_http_request_text_timeout: cranelift_codegen::ir::FuncRef,
-    net_http_request_bytes: cranelift_codegen::ir::FuncRef,
-    net_http_request_bytes_timeout: cranelift_codegen::ir::FuncRef,
-    net_websocket_listen: cranelift_codegen::ir::FuncRef,
-    net_websocket_connect: cranelift_codegen::ir::FuncRef,
-    net_websocket_connect_timeout: cranelift_codegen::ir::FuncRef,
-    tcp_listener_accept: cranelift_codegen::ir::FuncRef,
-    tcp_listener_local_addr: cranelift_codegen::ir::FuncRef,
-    tcp_listener_close: cranelift_codegen::ir::FuncRef,
-    tcp_stream_read_all: cranelift_codegen::ir::FuncRef,
-    tcp_stream_read_line: cranelift_codegen::ir::FuncRef,
-    tcp_stream_read_bytes: cranelift_codegen::ir::FuncRef,
-    tcp_stream_read_exact: cranelift_codegen::ir::FuncRef,
-    tcp_stream_write_all: cranelift_codegen::ir::FuncRef,
-    tcp_stream_write_bytes: cranelift_codegen::ir::FuncRef,
-    tcp_stream_flush: cranelift_codegen::ir::FuncRef,
-    tcp_stream_local_addr: cranelift_codegen::ir::FuncRef,
-    tcp_stream_peer_addr: cranelift_codegen::ir::FuncRef,
-    tcp_stream_shutdown_read: cranelift_codegen::ir::FuncRef,
-    tcp_stream_shutdown_write: cranelift_codegen::ir::FuncRef,
-    tcp_stream_shutdown_both: cranelift_codegen::ir::FuncRef,
-    tcp_stream_close: cranelift_codegen::ir::FuncRef,
-    udp_socket_send_text: cranelift_codegen::ir::FuncRef,
-    udp_socket_send_bytes: cranelift_codegen::ir::FuncRef,
-    udp_socket_recv: cranelift_codegen::ir::FuncRef,
-    udp_socket_recv_from: cranelift_codegen::ir::FuncRef,
-    udp_socket_local_addr: cranelift_codegen::ir::FuncRef,
-    udp_socket_peer_addr: cranelift_codegen::ir::FuncRef,
-    udp_socket_close: cranelift_codegen::ir::FuncRef,
-    udp_datagram_address: cranelift_codegen::ir::FuncRef,
-    udp_datagram_bytes: cranelift_codegen::ir::FuncRef,
-    udp_datagram_text: cranelift_codegen::ir::FuncRef,
-    http_listener_accept: cranelift_codegen::ir::FuncRef,
-    http_listener_local_addr: cranelift_codegen::ir::FuncRef,
-    http_listener_close: cranelift_codegen::ir::FuncRef,
-    http_exchange_method: cranelift_codegen::ir::FuncRef,
-    http_exchange_path: cranelift_codegen::ir::FuncRef,
-    http_exchange_headers: cranelift_codegen::ir::FuncRef,
-    http_exchange_body_text: cranelift_codegen::ir::FuncRef,
-    http_exchange_body_bytes: cranelift_codegen::ir::FuncRef,
-    http_exchange_respond_text: cranelift_codegen::ir::FuncRef,
-    http_exchange_respond_bytes: cranelift_codegen::ir::FuncRef,
-    http_response_status: cranelift_codegen::ir::FuncRef,
-    http_response_reason: cranelift_codegen::ir::FuncRef,
-    http_response_headers: cranelift_codegen::ir::FuncRef,
-    http_response_text: cranelift_codegen::ir::FuncRef,
-    http_response_bytes: cranelift_codegen::ir::FuncRef,
-    websocket_listener_accept: cranelift_codegen::ir::FuncRef,
-    websocket_listener_local_addr: cranelift_codegen::ir::FuncRef,
-    websocket_send_text: cranelift_codegen::ir::FuncRef,
-    websocket_send_bytes: cranelift_codegen::ir::FuncRef,
-    websocket_recv_text: cranelift_codegen::ir::FuncRef,
-    websocket_recv_bytes: cranelift_codegen::ir::FuncRef,
-    websocket_close: cranelift_codegen::ir::FuncRef,
-    unix_listener_accept: cranelift_codegen::ir::FuncRef,
-    unix_listener_close: cranelift_codegen::ir::FuncRef,
-    unix_stream_read_line: cranelift_codegen::ir::FuncRef,
-    unix_stream_read_exact: cranelift_codegen::ir::FuncRef,
-    unix_stream_write_all: cranelift_codegen::ir::FuncRef,
-    unix_stream_close: cranelift_codegen::ir::FuncRef,
-    tls_listener_accept: cranelift_codegen::ir::FuncRef,
-    tls_listener_local_addr: cranelift_codegen::ir::FuncRef,
-    tls_listener_close: cranelift_codegen::ir::FuncRef,
-    tls_stream_read_line: cranelift_codegen::ir::FuncRef,
-    tls_stream_read_exact: cranelift_codegen::ir::FuncRef,
-    tls_stream_write_all: cranelift_codegen::ir::FuncRef,
-    tls_stream_close: cranelift_codegen::ir::FuncRef,
-    cancelled: cranelift_codegen::ir::FuncRef,
-    yield_now: cranelift_codegen::ir::FuncRef,
-    sleep_value_void: cranelift_codegen::ir::FuncRef,
-    start_task_call: cranelift_codegen::ir::FuncRef,
+    runtime: RuntimeTable<cranelift_codegen::ir::FuncRef>,
 }
 
 impl<'a> FunctionCompiler<'a> {
@@ -5570,12 +2566,18 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn retain_opaque_handle(&mut self, value: Value) -> Value {
-        let inst = self.builder.ins().call(self.retain_value, &[value]);
+        let inst = self
+            .builder
+            .ins()
+            .call(self.runtime[RuntimeFn::RetainValue], &[value]);
         self.builder.inst_results(inst)[0]
     }
 
     fn release_opaque_handle(&mut self, value: Value) {
-        let _ = self.builder.ins().call(self.release_value, &[value]);
+        let _ = self
+            .builder
+            .ins()
+            .call(self.runtime[RuntimeFn::ReleaseValue], &[value]);
     }
 
     fn release_all_temporary_owned(&mut self) {
@@ -5940,7 +2942,7 @@ impl<'a> FunctionCompiler<'a> {
             let inst = self
                 .builder
                 .ins()
-                .call(self.clone_value, &[value.values[0]]);
+                .call(self.runtime[RuntimeFn::CloneValue], &[value.values[0]]);
             self.builder.inst_results(inst)[0]
         }
     }
@@ -6144,7 +3146,9 @@ impl<'a> FunctionCompiler<'a> {
                     .ins()
                     .iconst(types::I64, NATIVE_LOOP_SAFEPOINT_INTERVAL as i64);
                 self.builder.def_var(fuel_variable, reset);
-                self.builder.ins().call(self.yield_now, &[]);
+                self.builder
+                    .ins()
+                    .call(self.runtime[RuntimeFn::YieldNow], &[]);
                 self.builder.ins().jump(continue_block, &[]);
 
                 self.builder.switch_to_block(continue_block);
@@ -6186,7 +3190,7 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 let (projections_ptr, projections_len) = self.string_constant(&encoded)?;
                 let selected = self.builder.ins().call(
-                    self.take_returned_view_projection,
+                    self.runtime[RuntimeFn::TakeReturnedViewProjection],
                     &[projections_ptr, projections_len],
                 );
                 let selected = self.builder.inst_results(selected)[0];
@@ -6242,7 +3246,7 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = self
                             .builder
                             .ins()
-                            .call(self.take_returned_view_selector, &[index]);
+                            .call(self.runtime[RuntimeFn::TakeReturnedViewSelector], &[index]);
                         self.builder.inst_results(inst)[0]
                     })
                     .collect::<Vec<_>>();
@@ -6614,7 +3618,7 @@ impl<'a> FunctionCompiler<'a> {
                     [] => {
                         self.builder
                             .ins()
-                            .call(self.assert_fail, &[message, line, column]);
+                            .call(self.runtime[RuntimeFn::AssertFail], &[message, line, column]);
                     }
                     [left, right] => {
                         let left_label = self.string_value(&left.label)?.values[0];
@@ -6624,7 +3628,7 @@ impl<'a> FunctionCompiler<'a> {
                         let right_type = self.string_value(&right.ty.to_string())?.values[0];
                         let right_value = self.load_assertion_capture_value(&right.value)?;
                         self.builder.ins().call(
-                            self.assert_fail_detailed,
+                            self.runtime[RuntimeFn::AssertFailDetailed],
                             &[
                                 message,
                                 line,
@@ -6678,7 +3682,9 @@ impl<'a> FunctionCompiler<'a> {
         self.append_writeback_return_values(&mut return_values)?;
         self.release_all_temporary_owned();
         self.release_all_opaque_roots()?;
-        self.builder.ins().call(self.exit_call, &[]);
+        self.builder
+            .ins()
+            .call(self.runtime[RuntimeFn::ExitCall], &[]);
         self.builder.ins().return_(&return_values);
         Ok(())
     }
@@ -6698,7 +3704,10 @@ impl<'a> FunctionCompiler<'a> {
                 // `UnionTagTest`; this dynamic form only reaches runtime values.
                 let loaded = self.load_operand(value)?;
                 let loaded = self.ensure_opaque(loaded)?;
-                let call = self.builder.ins().call(self.none_test, &[loaded.values[0]]);
+                let call = self
+                    .builder
+                    .ins()
+                    .call(self.runtime[RuntimeFn::NoneTest], &[loaded.values[0]]);
                 Ok(ValueRef {
                     values: self.builder.inst_results(call).to_vec(),
                     ty: DirectType::Scalar(ScalarKind::Bool),
@@ -6712,10 +3721,10 @@ impl<'a> FunctionCompiler<'a> {
                 })?;
                 let thunk_ptr = self.builder.ins().func_addr(types::I64, thunk);
                 let (key_ptr, key_len) = self.string_constant(key.as_bytes())?;
-                let call = self
-                    .builder
-                    .ins()
-                    .call(self.module_constant, &[key_ptr, key_len, thunk_ptr]);
+                let call = self.builder.ins().call(
+                    self.runtime[RuntimeFn::ModuleConstant],
+                    &[key_ptr, key_len, thunk_ptr],
+                );
                 let value = self.owned_opaque_result(
                     self.builder.inst_results(call).to_vec(),
                     Type::named("Unknown"),
@@ -6852,10 +3861,10 @@ impl<'a> FunctionCompiler<'a> {
                 let encoded = crate::native_runtime::canonical_runtime_type_name(union_type);
                 let (ptr, len) = self.string_constant(encoded.as_bytes())?;
                 let index = self.builder.ins().iconst(types::I64, *member_index as i64);
-                let call = self
-                    .builder
-                    .ins()
-                    .call(self.union_tag_test, &[value.values[0], ptr, len, index]);
+                let call = self.builder.ins().call(
+                    self.runtime[RuntimeFn::UnionTagTest],
+                    &[value.values[0], ptr, len, index],
+                );
                 Ok(ValueRef {
                     values: self.builder.inst_results(call).to_vec(),
                     ty: DirectType::Scalar(ScalarKind::Bool),
@@ -6875,10 +3884,10 @@ impl<'a> FunctionCompiler<'a> {
                 let encoded = crate::native_runtime::canonical_runtime_type_name(union_type);
                 let (ptr, len) = self.string_constant(encoded.as_bytes())?;
                 let index = self.builder.ins().iconst(types::I64, *member_index as i64);
-                let call = self
-                    .builder
-                    .ins()
-                    .call(self.union_take_payload, &[value.values[0], ptr, len, index]);
+                let call = self.builder.ins().call(
+                    self.runtime[RuntimeFn::UnionTakePayload],
+                    &[value.values[0], ptr, len, index],
+                );
                 let payload = self.owned_opaque_result(
                     self.builder.inst_results(call).to_vec(),
                     member_type.clone(),
@@ -6910,10 +3919,10 @@ impl<'a> FunctionCompiler<'a> {
                 let encoded = crate::native_runtime::canonical_runtime_type_name(union_type);
                 let (ptr, len) = self.string_constant(encoded.as_bytes())?;
                 let tag = self.builder.ins().iconst(types::I64, *member_index as i64);
-                let call = self
-                    .builder
-                    .ins()
-                    .call(self.union_inject, &[ptr, len, tag, transferred]);
+                let call = self.builder.ins().call(
+                    self.runtime[RuntimeFn::UnionInject],
+                    &[ptr, len, tag, transferred],
+                );
                 Ok(self.owned_opaque_result(
                     self.builder.inst_results(call).to_vec(),
                     union_type.clone(),
@@ -7015,7 +4024,10 @@ impl<'a> FunctionCompiler<'a> {
                 .builder
                 .ins()
                 .iconst(types::I64, shape.env_words as i64);
-            let call = self.builder.ins().call(self.callable_env_alloc, &[size]);
+            let call = self
+                .builder
+                .ins()
+                .call(self.runtime[RuntimeFn::CallableEnvAlloc], &[size]);
             let block = self.builder.inst_results(call)[0];
             for (index, word) in words.iter().enumerate() {
                 self.builder
@@ -7050,7 +4062,10 @@ impl<'a> FunctionCompiler<'a> {
         };
         let element_direct_ty =
             ensure_direct_type(&resolved_element_type, &self.classes, "Vec element")?;
-        let init = self.builder.ins().call(self.vec_empty, &[]);
+        let init = self
+            .builder
+            .ins()
+            .call(self.runtime[RuntimeFn::VecEmpty], &[]);
         let vector = self.owned_opaque_result(
             self.builder.inst_results(init).to_vec(),
             Type::Named("list".to_string(), vec![resolved_element_type]),
@@ -7058,10 +4073,10 @@ impl<'a> FunctionCompiler<'a> {
         for element in elements {
             let value = self.load_operand_as_opaque_direct(element, &element_direct_ty)?;
             let value = self.transfer_owned_opaque_value(&value);
-            let result = self
-                .builder
-                .ins()
-                .call(self.vec_push_in_place, &[vector.values[0], value]);
+            let result = self.builder.ins().call(
+                self.runtime[RuntimeFn::VecPushInPlace],
+                &[vector.values[0], value],
+            );
             self.release_opaque_handle(self.builder.inst_results(result)[0]);
         }
         Ok(vector)
@@ -7084,7 +4099,10 @@ impl<'a> FunctionCompiler<'a> {
         };
         let key_direct_ty = ensure_direct_type(&resolved_key_type, &self.classes, "dict key")?;
         let value_direct_ty = ensure_direct_type(&resolved_value_type, &self.classes, "Map value")?;
-        let init = self.builder.ins().call(self.map_empty, &[]);
+        let init = self
+            .builder
+            .ins()
+            .call(self.runtime[RuntimeFn::MapEmpty], &[]);
         let map = self.owned_opaque_result(
             self.builder.inst_results(init).to_vec(),
             Type::Named(
@@ -7097,10 +4115,10 @@ impl<'a> FunctionCompiler<'a> {
             let value = self.load_operand_as_opaque_direct(&entry.value, &value_direct_ty)?;
             let key = self.transfer_owned_opaque_value(&key);
             let value = self.transfer_owned_opaque_value(&value);
-            let result = self
-                .builder
-                .ins()
-                .call(self.map_set_in_place, &[map.values[0], key, value]);
+            let result = self.builder.ins().call(
+                self.runtime[RuntimeFn::MapSetInPlace],
+                &[map.values[0], key, value],
+            );
             self.release_opaque_handle(self.builder.inst_results(result)[0]);
         }
         Ok(map)
@@ -7122,7 +4140,10 @@ impl<'a> FunctionCompiler<'a> {
         };
         let element_direct_ty =
             ensure_direct_type(&resolved_element_type, &self.classes, "set element")?;
-        let init = self.builder.ins().call(self.set_empty, &[]);
+        let init = self
+            .builder
+            .ins()
+            .call(self.runtime[RuntimeFn::SetEmpty], &[]);
         let set = self.owned_opaque_result(
             self.builder.inst_results(init).to_vec(),
             Type::Named("set".to_string(), vec![resolved_element_type]),
@@ -7130,10 +4151,10 @@ impl<'a> FunctionCompiler<'a> {
         for element in elements {
             let value = self.load_operand_as_opaque_direct(element, &element_direct_ty)?;
             let value = self.transfer_owned_opaque_value(&value);
-            let _ = self
-                .builder
-                .ins()
-                .call(self.set_insert_in_place, &[set.values[0], value]);
+            let _ = self.builder.ins().call(
+                self.runtime[RuntimeFn::SetInsertInPlace],
+                &[set.values[0], value],
+            );
         }
         Ok(set)
     }
@@ -7154,10 +4175,10 @@ impl<'a> FunctionCompiler<'a> {
             };
             let opcode = self.builder.ins().iconst(types::I64, opcode);
             let (line, column) = self.span_values(span);
-            let inst = self
-                .builder
-                .ins()
-                .call(self.unary_value, &[opcode, value.values[0], line, column]);
+            let inst = self.builder.ins().call(
+                self.runtime[RuntimeFn::UnaryValue],
+                &[opcode, value.values[0], line, column],
+            );
             let result = self.owned_opaque_result(
                 self.builder.inst_results(inst).to_vec(),
                 Type::named("Unknown"),
@@ -7240,7 +4261,7 @@ impl<'a> FunctionCompiler<'a> {
             let (target_ptr, target_len) = self.string_constant(target.to_string().as_bytes())?;
             let (line, column) = self.span_values(span);
             let inst = self.builder.ins().call(
-                self.cast_value,
+                self.runtime[RuntimeFn::CastValue],
                 &[boxed.values[0], target_ptr, target_len, line, column],
             );
             let boxed =
@@ -7283,7 +4304,7 @@ impl<'a> FunctionCompiler<'a> {
                 );
                 let (line, column) = self.span_values(span);
                 let inst = self.builder.ins().call(
-                    self.cast_integer_to_integer,
+                    self.runtime[RuntimeFn::CastIntegerToInteger],
                     &[source, source_code, target_code, line, column],
                 );
                 self.builder.inst_results(inst)[0]
@@ -7307,7 +4328,7 @@ impl<'a> FunctionCompiler<'a> {
                 );
                 let (line, column) = self.span_values(span);
                 let inst = self.builder.ins().call(
-                    self.cast_integer_to_float,
+                    self.runtime[RuntimeFn::CastIntegerToFloat],
                     &[source, source_code, target_code, line, column],
                 );
                 self.builder.inst_results(inst)[0]
@@ -7324,7 +4345,7 @@ impl<'a> FunctionCompiler<'a> {
                 );
                 let (line, column) = self.span_values(span);
                 let inst = self.builder.ins().call(
-                    self.cast_float_to_integer,
+                    self.runtime[RuntimeFn::CastFloatToInteger],
                     &[source, target_code, line, column],
                 );
                 self.builder.inst_results(inst)[0]
@@ -7443,7 +4464,7 @@ impl<'a> FunctionCompiler<'a> {
                 let (literal_ptr, literal_len) = self.string_constant(literal.as_bytes())?;
                 let literal_on_left = self.builder.ins().iconst(types::I64, 1 - element_on_left);
                 self.builder.ins().call(
-                    self.compare_str_literal_at,
+                    self.runtime[RuntimeFn::CompareStrLiteralAt],
                     &[
                         opcode,
                         list,
@@ -7462,7 +4483,7 @@ impl<'a> FunctionCompiler<'a> {
                 let (list, index) = self.load_borrowed_list_element(&selection)?;
                 let element_on_left = self.builder.ins().iconst(types::I64, element_on_left);
                 self.builder.ins().call(
-                    self.compare_values_at,
+                    self.runtime[RuntimeFn::CompareValuesAt],
                     &[
                         opcode,
                         list,
@@ -7514,7 +4535,7 @@ impl<'a> FunctionCompiler<'a> {
         let literal_on_left = self.builder.ins().iconst(types::I64, literal_on_left);
         let (line, column) = self.span_values(Some(span));
         let inst = self.builder.ins().call(
-            self.compare_str_literal,
+            self.runtime[RuntimeFn::CompareStrLiteral],
             &[
                 opcode,
                 loaded.values[0],
@@ -7576,7 +4597,7 @@ impl<'a> FunctionCompiler<'a> {
             let float_width = self.builder.ins().iconst(types::I64, float_width);
             let (line, column) = self.span_values(span);
             let inst = self.builder.ins().call(
-                self.binary_value,
+                self.runtime[RuntimeFn::BinaryValue],
                 &[
                     opcode,
                     left.values[0],
@@ -7631,7 +4652,7 @@ impl<'a> FunctionCompiler<'a> {
             let checked_mode = self.builder.ins().iconst(types::I64, 0);
             let (line, column) = self.span_values(span);
             let inst = self.builder.ins().call(
-                self.array_binary,
+                self.runtime[RuntimeFn::ArrayBinary],
                 &[
                     left.values[0],
                     right.values[0],
@@ -7653,7 +4674,7 @@ impl<'a> FunctionCompiler<'a> {
                 // The result is a machine `bool`, so no box is built for it.
                 let (line, column) = self.span_values(span);
                 let inst = self.builder.ins().call(
-                    self.compare_values,
+                    self.runtime[RuntimeFn::CompareValues],
                     &[opcode, left.values[0], right.values[0], line, column],
                 );
                 return Ok(ValueRef {
@@ -7664,7 +4685,7 @@ impl<'a> FunctionCompiler<'a> {
             let float_width = self.builder.ins().iconst(types::I64, 0);
             let (line, column) = self.span_values(span);
             let inst = self.builder.ins().call(
-                self.binary_value,
+                self.runtime[RuntimeFn::BinaryValue],
                 &[
                     opcode,
                     left.values[0],
@@ -7994,21 +5015,30 @@ impl<'a> FunctionCompiler<'a> {
             }
             BinaryOp::FloorDiv | BinaryOp::Mod => {
                 let opcode_value = Self::binary_opcode(op);
-                let left_box = self.builder.ins().call(self.box_f64, &[left]);
-                let right_box = self.builder.ins().call(self.box_f64, &[right]);
+                let left_box = self
+                    .builder
+                    .ins()
+                    .call(self.runtime[RuntimeFn::BoxF64], &[left]);
+                let right_box = self
+                    .builder
+                    .ins()
+                    .call(self.runtime[RuntimeFn::BoxF64], &[right]);
                 let left_boxed = self.builder.inst_results(left_box)[0];
                 let right_boxed = self.builder.inst_results(right_box)[0];
                 let opcode = self.builder.ins().iconst(types::I64, opcode_value);
                 let float_width = self.builder.ins().iconst(types::I64, 0);
                 let (line, column) = self.span_values(span);
                 let result = self.builder.ins().call(
-                    self.binary_value,
+                    self.runtime[RuntimeFn::BinaryValue],
                     &[opcode, left_boxed, right_boxed, float_width, line, column],
                 );
                 let result_boxed = self.builder.inst_results(result)[0];
                 self.release_opaque_handle(left_boxed);
                 self.release_opaque_handle(right_boxed);
-                let unboxed = self.builder.ins().call(self.unbox_f64, &[result_boxed]);
+                let unboxed = self
+                    .builder
+                    .ins()
+                    .call(self.runtime[RuntimeFn::UnboxF64], &[result_boxed]);
                 let value = self.builder.inst_results(unboxed)[0];
                 self.release_opaque_handle(result_boxed);
                 Ok(ValueRef {
@@ -8101,7 +5131,7 @@ impl<'a> FunctionCompiler<'a> {
         let op_code = self.builder.ins().iconst(types::I64, op as i64);
         let (line, column) = self.span_values(span);
         self.builder.ins().call(
-            self.fail_integer_overflow,
+            self.runtime[RuntimeFn::FailIntegerOverflow],
             &[kind_code, op_code, left, right, line, column],
         );
         self.builder.ins().trap(TrapCode::INTEGER_OVERFLOW);
@@ -8136,7 +5166,7 @@ impl<'a> FunctionCompiler<'a> {
         let (line, column) = self.span_values(span);
         self.builder
             .ins()
-            .call(self.fail_division_by_zero, &[line, column]);
+            .call(self.runtime[RuntimeFn::FailDivisionByZero], &[line, column]);
         self.builder.ins().trap(TrapCode::INTEGER_DIVISION_BY_ZERO);
         self.builder.seal_block(fail_block);
         self.builder.switch_to_block(continue_block);
@@ -8266,10 +5296,10 @@ impl<'a> FunctionCompiler<'a> {
             .builder
             .ins()
             .iconst(types::I64, call.params.len() as i64);
-        let invocation = self
-            .builder
-            .ins()
-            .call(self.ffi_call, &[spec_ptr, spec_len, buffer, count]);
+        let invocation = self.builder.ins().call(
+            self.runtime[RuntimeFn::FfiCall],
+            &[spec_ptr, spec_len, buffer, count],
+        );
         let raw_result = self.builder.inst_results(invocation)[0];
 
         for (place, boxed, expected) in writebacks {
@@ -8545,39 +5575,39 @@ impl<'a> FunctionCompiler<'a> {
             Some(ScalarKind::Int32) | Some(ScalarKind::Int64) => {
                 self.builder
                     .ins()
-                    .call(self.print_i64, &[argument.values[0]]);
+                    .call(self.runtime[RuntimeFn::PrintI64], &[argument.values[0]]);
             }
             Some(ScalarKind::Uint64) => {
                 self.builder
                     .ins()
-                    .call(self.print_u64, &[argument.values[0]]);
+                    .call(self.runtime[RuntimeFn::PrintU64], &[argument.values[0]]);
             }
             Some(ScalarKind::Float32) => {
                 self.builder
                     .ins()
-                    .call(self.print_f32, &[argument.values[0]]);
+                    .call(self.runtime[RuntimeFn::PrintF32], &[argument.values[0]]);
             }
             Some(ScalarKind::Float64) => {
                 self.builder
                     .ins()
-                    .call(self.print_f64, &[argument.values[0]]);
+                    .call(self.runtime[RuntimeFn::PrintF64], &[argument.values[0]]);
             }
             Some(ScalarKind::Bool) => {
                 self.builder
                     .ins()
-                    .call(self.print_bool, &[argument.values[0]]);
+                    .call(self.runtime[RuntimeFn::PrintBool], &[argument.values[0]]);
             }
             Some(ScalarKind::Unit) => {
                 let argument = self.ensure_opaque(argument)?;
                 self.builder
                     .ins()
-                    .call(self.print_value, &[argument.values[0]]);
+                    .call(self.runtime[RuntimeFn::PrintValue], &[argument.values[0]]);
             }
             None => {
                 let argument = self.ensure_opaque(argument)?;
                 self.builder
                     .ins()
-                    .call(self.print_value, &[argument.values[0]]);
+                    .call(self.runtime[RuntimeFn::PrintValue], &[argument.values[0]]);
             }
         }
         Ok(unit_value(&mut self.builder))
@@ -8595,7 +5625,10 @@ impl<'a> FunctionCompiler<'a> {
             _ => ("", parts),
         };
         let (ptr, len) = self.string_constant(leading.as_bytes())?;
-        let call = self.builder.ins().call(self.format_begin, &[ptr, len]);
+        let call = self
+            .builder
+            .ins()
+            .call(self.runtime[RuntimeFn::FormatBegin], &[ptr, len]);
         let builder =
             self.owned_opaque_result(self.builder.inst_results(call).to_vec(), Type::named("str"));
         let handle = builder.values[0];
@@ -8605,19 +5638,21 @@ impl<'a> FunctionCompiler<'a> {
                     let (ptr, len) = self.string_constant(text.as_bytes())?;
                     self.builder
                         .ins()
-                        .call(self.format_push_str, &[handle, ptr, len]);
+                        .call(self.runtime[RuntimeFn::FormatPushStr], &[handle, ptr, len]);
                 }
                 MirFormatPart::Value(value) => {
                     let value = self.load_operand(value)?;
                     if value.ty == DirectType::Scalar(ScalarKind::Int64) {
-                        self.builder
-                            .ins()
-                            .call(self.format_push_i64, &[handle, value.values[0]]);
+                        self.builder.ins().call(
+                            self.runtime[RuntimeFn::FormatPushI64],
+                            &[handle, value.values[0]],
+                        );
                     } else {
                         let value = self.ensure_opaque(value)?;
-                        self.builder
-                            .ins()
-                            .call(self.format_push_value, &[handle, value.values[0]]);
+                        self.builder.ins().call(
+                            self.runtime[RuntimeFn::FormatPushValue],
+                            &[handle, value.values[0]],
+                        );
                     }
                 }
                 MirFormatPart::Formatted {
@@ -8631,7 +5666,7 @@ impl<'a> FunctionCompiler<'a> {
                     let type_name = value_type.to_string();
                     let (type_ptr, type_len) = self.string_constant(type_name.as_bytes())?;
                     self.builder.ins().call(
-                        self.format_push_formatted,
+                        self.runtime[RuntimeFn::FormatPushFormatted],
                         &[
                             handle,
                             value.values[0],
@@ -8649,7 +5684,10 @@ impl<'a> FunctionCompiler<'a> {
 
     fn string_value(&mut self, text: &str) -> std::result::Result<ValueRef, String> {
         let (ptr, len) = self.string_constant(text.as_bytes())?;
-        let call = self.builder.ins().call(self.string_literal, &[ptr, len]);
+        let call = self
+            .builder
+            .ins()
+            .call(self.runtime[RuntimeFn::StringLiteral], &[ptr, len]);
         Ok(self.owned_opaque_result(self.builder.inst_results(call).to_vec(), Type::named("str")))
     }
 
@@ -8665,7 +5703,10 @@ impl<'a> FunctionCompiler<'a> {
             let seed =
                 self.load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
             let seed = self.coerce_value(seed, &DirectType::Scalar(ScalarKind::Int64))?;
-            let inst = self.builder.ins().call(self.rng_new, &[seed.values[0]]);
+            let inst = self
+                .builder
+                .ins()
+                .call(self.runtime[RuntimeFn::RngNew], &[seed.values[0]]);
             return Ok(self.owned_opaque_result(
                 self.builder.inst_results(inst).to_vec(),
                 Type::named("random.Rng"),
@@ -8679,10 +5720,10 @@ impl<'a> FunctionCompiler<'a> {
             let hi =
                 self.load_operand_with_integer_hint(&ordered[1].value, Some(ScalarKind::Int64))?;
             let hi = self.coerce_value(hi, &DirectType::Scalar(ScalarKind::Int64))?;
-            let inst = self
-                .builder
-                .ins()
-                .call(self.random_secure_int, &[lo.values[0], hi.values[0]]);
+            let inst = self.builder.ins().call(
+                self.runtime[RuntimeFn::RandomSecureInt],
+                &[lo.values[0], hi.values[0]],
+            );
             return Ok(ValueRef {
                 values: self.builder.inst_results(inst).to_vec(),
                 ty: DirectType::Scalar(ScalarKind::Int64),
@@ -8694,10 +5735,10 @@ impl<'a> FunctionCompiler<'a> {
             let count =
                 self.load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
             let count = self.coerce_value(count, &DirectType::Scalar(ScalarKind::Int64))?;
-            let inst = self
-                .builder
-                .ins()
-                .call(self.random_secure_bytes, &[count.values[0]]);
+            let inst = self.builder.ins().call(
+                self.runtime[RuntimeFn::RandomSecureBytes],
+                &[count.values[0]],
+            );
             return Ok(self.owned_opaque_result(
                 self.builder.inst_results(inst).to_vec(),
                 Type::Named("list".to_string(), vec![Type::named("uint8")]),
@@ -8731,9 +5772,10 @@ impl<'a> FunctionCompiler<'a> {
                 let ordered = ordered_named_args(&["shape"], args)?;
                 let shape = self.load_operand_for_target(&ordered[0].value, &shape_ty)?;
                 let shape = self.ensure_opaque(shape)?;
-                self.builder
-                    .ins()
-                    .call(self.array_zeros, &[dtype, shape.values[0], zero, zero])
+                self.builder.ins().call(
+                    self.runtime[RuntimeFn::ArrayZeros],
+                    &[dtype, shape.values[0], zero, zero],
+                )
             } else if associated == BuiltinAssociatedFunction::ArrayFull {
                 let ordered = ordered_named_args(&["shape", "value"], args)?;
                 let shape = self.load_operand_for_target(&ordered[0].value, &shape_ty)?;
@@ -8743,7 +5785,7 @@ impl<'a> FunctionCompiler<'a> {
                 let value =
                     self.load_operand_as_opaque_direct(&ordered[1].value, &element_direct)?;
                 self.builder.ins().call(
-                    self.array_full,
+                    self.runtime[RuntimeFn::ArrayFull],
                     &[dtype, shape.values[0], value.values[0], zero, zero],
                 )
             } else {
@@ -8756,7 +5798,7 @@ impl<'a> FunctionCompiler<'a> {
                 let shape = self.load_operand_for_target(&ordered[1].value, &shape_ty)?;
                 let shape = self.ensure_opaque(shape)?;
                 self.builder.ins().call(
-                    self.array_from_vec,
+                    self.runtime[RuntimeFn::ArrayFromVec],
                     &[dtype, values.values[0], shape.values[0], zero, zero],
                 )
             };
@@ -8791,10 +5833,10 @@ impl<'a> FunctionCompiler<'a> {
                 .builder
                 .ins()
                 .iconst(types::I64, unit_nanoseconds as i64);
-            let inst = self
-                .builder
-                .ins()
-                .call(self.duration_from_i64, &[value.values[0], unit_nanoseconds]);
+            let inst = self.builder.ins().call(
+                self.runtime[RuntimeFn::DurationFromI64],
+                &[value.values[0], unit_nanoseconds],
+            );
             return Ok(self.owned_opaque_result(
                 self.builder.inst_results(inst).to_vec(),
                 Type::named("Duration"),
@@ -8825,7 +5867,10 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 _ => unreachable!(),
             };
-            let inst = self.builder.ins().call(self.channel_new, &[capacity]);
+            let inst = self
+                .builder
+                .ins()
+                .call(self.runtime[RuntimeFn::ChannelNew], &[capacity]);
             return Ok(self.owned_opaque_result(
                 self.builder.inst_results(inst).to_vec(),
                 Type::Named("Queue".to_string(), vec![Type::named("Unknown")]),
@@ -8838,7 +5883,10 @@ impl<'a> FunctionCompiler<'a> {
                     name
                 ));
             }
-            let inst = self.builder.ins().call(self.task_group_new, &[]);
+            let inst = self
+                .builder
+                .ins()
+                .call(self.runtime[RuntimeFn::TaskGroupNew], &[]);
             return Ok(self.owned_opaque_result(
                 self.builder.inst_results(inst).to_vec(),
                 Type::named("TaskGroup"),
@@ -8850,7 +5898,10 @@ impl<'a> FunctionCompiler<'a> {
                     "direct backend expected `cancelled()` to take no arguments".to_string()
                 );
             }
-            let inst = self.builder.ins().call(self.cancelled, &[]);
+            let inst = self
+                .builder
+                .ins()
+                .call(self.runtime[RuntimeFn::Cancelled], &[]);
             return Ok(ValueRef {
                 values: self.builder.inst_results(inst).to_vec(),
                 ty: DirectType::Scalar(ScalarKind::Bool),
@@ -8862,7 +5913,9 @@ impl<'a> FunctionCompiler<'a> {
                     "direct backend expected `yield_now()` to take no arguments".to_string()
                 );
             }
-            self.builder.ins().call(self.yield_now, &[]);
+            self.builder
+                .ins()
+                .call(self.runtime[RuntimeFn::YieldNow], &[]);
             return Ok(unit_value(&mut self.builder));
         }
         if name == "sleep" {
@@ -8874,9 +5927,10 @@ impl<'a> FunctionCompiler<'a> {
             };
             let duration = self.load_operand(&argument.value)?;
             let duration = self.ensure_opaque(duration)?;
-            self.builder
-                .ins()
-                .call(self.sleep_value_void, &[duration.values[0]]);
+            self.builder.ins().call(
+                self.runtime[RuntimeFn::SleepValueVoid],
+                &[duration.values[0]],
+            );
             return Ok(unit_value(&mut self.builder));
         }
         if name == "select" {
@@ -8950,7 +6004,10 @@ impl<'a> FunctionCompiler<'a> {
             let tuple_type = Type::Tuple(element_types.clone());
             let tuple = self.compile_tuple_literal(&operands, &element_types, tuple_type)?;
             let tuple = self.transfer_opaque_arg(&tuple);
-            let inst = self.builder.ins().call(self.select, &[tuple]);
+            let inst = self
+                .builder
+                .ins()
+                .call(self.runtime[RuntimeFn::Select], &[tuple]);
             let inferred_result_type = Type::Named(
                 "SelectOutcome".to_string(),
                 vec![
@@ -9022,18 +6079,18 @@ impl<'a> FunctionCompiler<'a> {
                 let timeout = self.load_operand(&timeout_arg.value)?;
                 let timeout = self.ensure_opaque(timeout)?;
                 let callee = if name == "wait_any" {
-                    self.wait_any_timeout_value
+                    self.runtime[RuntimeFn::WaitAnyTimeoutValue]
                 } else {
-                    self.wait_all_timeout_value
+                    self.runtime[RuntimeFn::WaitAllTimeoutValue]
                 };
                 self.builder
                     .ins()
                     .call(callee, &[tasks.values[0], timeout.values[0]])
             } else {
                 let callee = if name == "wait_any" {
-                    self.wait_any
+                    self.runtime[RuntimeFn::WaitAny]
                 } else {
-                    self.wait_all
+                    self.runtime[RuntimeFn::WaitAll]
                 };
                 self.builder.ins().call(callee, &[tasks.values[0]])
             };
@@ -9103,7 +6160,10 @@ impl<'a> FunctionCompiler<'a> {
             let loaded = self.load_operand(&argument.value)?;
             let return_ty = loaded.ty.clone();
             let value = self.ensure_opaque(loaded)?;
-            let inst = self.builder.ins().call(self.abs_value, &[value.values[0]]);
+            let inst = self
+                .builder
+                .ins()
+                .call(self.runtime[RuntimeFn::AbsValue], &[value.values[0]]);
             let result = self.owned_opaque_result(
                 self.builder.inst_results(inst).to_vec(),
                 Type::named("Unknown"),
@@ -9120,9 +6180,9 @@ impl<'a> FunctionCompiler<'a> {
             let loaded = self.load_operand(&argument.value)?;
             let value = self.ensure_opaque(loaded)?;
             let func = match name {
-                "parse_int32" => self.parse_int32,
-                "parse_int64" => self.parse_int64,
-                "parse_float64" => self.parse_float64,
+                "parse_int32" => self.runtime[RuntimeFn::ParseInt32],
+                "parse_int64" => self.runtime[RuntimeFn::ParseInt64],
+                "parse_float64" => self.runtime[RuntimeFn::ParseFloat64],
                 _ => unreachable!(),
             };
             let inst = self.builder.ins().call(func, &[value.values[0]]);
@@ -9158,9 +6218,9 @@ impl<'a> FunctionCompiler<'a> {
             let right = self.load_operand(&right_arg.value)?;
             let right = self.ensure_opaque(right)?;
             let func = if name == "min" {
-                self.min_value
+                self.runtime[RuntimeFn::MinValue]
             } else {
-                self.max_value
+                self.runtime[RuntimeFn::MaxValue]
             };
             let inst = self
                 .builder
@@ -9179,7 +6239,10 @@ impl<'a> FunctionCompiler<'a> {
             let loaded = self.load_operand(&argument.value)?;
             let return_ty = loaded.ty.clone();
             let value = self.ensure_opaque(loaded)?;
-            let inst = self.builder.ins().call(self.sqrt_value, &[value.values[0]]);
+            let inst = self
+                .builder
+                .ins()
+                .call(self.runtime[RuntimeFn::SqrtValue], &[value.values[0]]);
             let result = self.owned_opaque_result(
                 self.builder.inst_results(inst).to_vec(),
                 Type::named("Unknown"),
@@ -9200,7 +6263,7 @@ impl<'a> FunctionCompiler<'a> {
             let inst = self
                 .builder
                 .ins()
-                .call(self.round_value, &[value.values[0]]);
+                .call(self.runtime[RuntimeFn::RoundValue], &[value.values[0]]);
             let result = self.owned_opaque_result(
                 self.builder.inst_results(inst).to_vec(),
                 Type::named("Unknown"),
@@ -9215,10 +6278,10 @@ impl<'a> FunctionCompiler<'a> {
             self.tag_opaque_runtime_type(&left, &operand_ty)?;
             let right = self.load_operand(&ordered[1].value)?;
             let right = self.ensure_opaque(right)?;
-            let inst = self
-                .builder
-                .ins()
-                .call(self.divmod_value, &[left.values[0], right.values[0]]);
+            let inst = self.builder.ins().call(
+                self.runtime[RuntimeFn::DivmodValue],
+                &[left.values[0], right.values[0]],
+            );
             let result_ty = Type::Tuple(vec![operand_ty.clone(), operand_ty]);
             return Ok(
                 self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), result_ty)
@@ -9231,9 +6294,9 @@ impl<'a> FunctionCompiler<'a> {
                     .load_operand_with_integer_hint(&ordered[0].value, Some(ScalarKind::Int64))?;
                 let minimum = self.coerce_value(minimum, &DirectType::Scalar(ScalarKind::Int64))?;
                 let empty = match type_name {
-                    "list" => self.vec_empty,
-                    "set" => self.set_empty,
-                    "dict" => self.map_empty,
+                    "list" => self.runtime[RuntimeFn::VecEmpty],
+                    "set" => self.runtime[RuntimeFn::SetEmpty],
+                    "dict" => self.runtime[RuntimeFn::MapEmpty],
                     _ => unreachable!(),
                 };
                 let empty_call = self.builder.ins().call(empty, &[]);
@@ -9241,7 +6304,7 @@ impl<'a> FunctionCompiler<'a> {
                 let zero = self.builder.ins().iconst(types::I64, 0);
                 let opcode = self.builder.ins().iconst(types::I64, 4);
                 let reserve = self.builder.ins().call(
-                    self.collection_operation,
+                    self.runtime[RuntimeFn::CollectionOperation],
                     &[collection, zero, minimum.values[0], opcode],
                 );
                 self.release_opaque_handle(self.builder.inst_results(reserve)[0]);
@@ -9257,9 +6320,9 @@ impl<'a> FunctionCompiler<'a> {
                 ));
             }
             let func = match name {
-                "list" => self.vec_empty,
-                "set" => self.set_empty,
-                "dict" => self.map_empty,
+                "list" => self.runtime[RuntimeFn::VecEmpty],
+                "set" => self.runtime[RuntimeFn::SetEmpty],
+                "dict" => self.runtime[RuntimeFn::MapEmpty],
                 _ => unreachable!(),
             };
             let inst = self.builder.ins().call(func, &[]);
@@ -9506,7 +6569,7 @@ impl<'a> FunctionCompiler<'a> {
         };
         let opcode = self.builder.ins().iconst(types::I64, opcode);
         let inst = self.builder.ins().call(
-            self.string_text_method,
+            self.runtime[RuntimeFn::StringTextMethod],
             &[opcode, receiver, argument, count],
         );
         let semantic_type = text_convenience_result_type(field)
@@ -9538,7 +6601,10 @@ impl<'a> FunctionCompiler<'a> {
                 ));
             }
             debug_assert!(metadata.params.is_empty());
-            let call = self.builder.ins().call(self.monotonic_time_ms, &[]);
+            let call = self
+                .builder
+                .ins()
+                .call(self.runtime[RuntimeFn::MonotonicTimeMs], &[]);
             return Ok(ValueRef {
                 values: self.builder.inst_results(call).to_vec(),
                 ty: DirectType::Scalar(ScalarKind::Int64),
@@ -9604,13 +6670,17 @@ impl<'a> FunctionCompiler<'a> {
             ));
         }
         let count = self.builder.ins().iconst(types::I64, args.len() as i64);
-        let buffer_call = self.builder.ins().call(self.arg_buffer_new, &[count]);
+        let buffer_call = self
+            .builder
+            .ins()
+            .call(self.runtime[RuntimeFn::ArgBufferNew], &[count]);
         let buffer = self.builder.inst_results(buffer_call)[0];
         for (index, loaded) in args.iter().enumerate() {
             let index = self.builder.ins().iconst(types::I64, index as i64);
-            self.builder
-                .ins()
-                .call(self.arg_buffer_store, &[buffer, index, loaded.values[0]]);
+            self.builder.ins().call(
+                self.runtime[RuntimeFn::ArgBufferStore],
+                &[buffer, index, loaded.values[0]],
+            );
         }
         let entry = self.host_builtin_ref(name)?;
         let call = self.builder.ins().call(entry, &[buffer, count]);
@@ -9688,10 +6758,10 @@ impl<'a> FunctionCompiler<'a> {
         )?;
         let stop = self.load_operand(&stop_arg.value)?;
         let stop = self.coerce_value(stop, &int_ty)?;
-        let inst = self
-            .builder
-            .ins()
-            .call(self.range_new, &[start.values[0], stop.values[0]]);
+        let inst = self.builder.ins().call(
+            self.runtime[RuntimeFn::RangeNew],
+            &[start.values[0], stop.values[0]],
+        );
         Ok(self.owned_opaque_result(
             self.builder.inst_results(inst).to_vec(),
             Type::named("Range"),
@@ -9756,47 +6826,49 @@ impl<'a> FunctionCompiler<'a> {
             }
         };
         let func = match name {
-            "io::write" => self.io_write,
-            "io::flush" => self.io_flush,
-            "io::read_line" => self.io_read_line,
-            "fs::exists" => self.fs_exists,
-            "fs::read_to_string" => self.fs_read_to_string,
-            "fs::read_bytes" => self.fs_read_bytes,
-            "fs::write_string" => self.fs_write_string,
-            "fs::write_bytes" => self.fs_write_bytes,
-            "fs::append_string" => self.fs_append_string,
-            "fs::append_bytes" => self.fs_append_bytes,
-            "fs::create_dir" => self.fs_create_dir,
-            "fs::read_dir" => self.fs_read_dir,
-            "fs::remove_file" => self.fs_remove_file,
-            "fs::rename" => self.fs_rename,
-            "fs::open" => self.fs_open,
-            "fs::create" => self.fs_create,
-            "fs::append" => self.fs_append,
-            "process::inherit" => self.process_inherit,
-            "process::null" => self.process_null,
-            "process::pipe" => self.process_pipe,
-            "process::supervisor" => self.process_supervisor,
-            "process::start" => self.process_start,
-            "process::run" => self.process_run,
-            "net::connect" => self.net_connect,
-            "net::connect_timeout" => self.net_connect_timeout,
-            "net::listen" => self.net_listen,
-            "net::udp_bind" => self.net_udp_bind,
-            "net::unix_listen" => self.net_unix_listen,
-            "net::unix_connect" => self.net_unix_connect,
-            "net::unix_connect_timeout" => self.net_unix_connect_timeout,
-            "net::tls_listen" => self.net_tls_listen,
-            "net::tls_connect" => self.net_tls_connect,
-            "net::tls_connect_timeout" => self.net_tls_connect_timeout,
-            "net::http_listen" => self.net_http_listen,
-            "net::http_request_text" => self.net_http_request_text,
-            "net::http_request_text_timeout" => self.net_http_request_text_timeout,
-            "net::http_request_bytes" => self.net_http_request_bytes,
-            "net::http_request_bytes_timeout" => self.net_http_request_bytes_timeout,
-            "net::websocket_listen" => self.net_websocket_listen,
-            "net::websocket_connect" => self.net_websocket_connect,
-            "net::websocket_connect_timeout" => self.net_websocket_connect_timeout,
+            "io::write" => self.runtime[RuntimeFn::IoWrite],
+            "io::flush" => self.runtime[RuntimeFn::IoFlush],
+            "io::read_line" => self.runtime[RuntimeFn::IoReadLine],
+            "fs::exists" => self.runtime[RuntimeFn::FsExists],
+            "fs::read_to_string" => self.runtime[RuntimeFn::FsReadToString],
+            "fs::read_bytes" => self.runtime[RuntimeFn::FsReadBytes],
+            "fs::write_string" => self.runtime[RuntimeFn::FsWriteString],
+            "fs::write_bytes" => self.runtime[RuntimeFn::FsWriteBytes],
+            "fs::append_string" => self.runtime[RuntimeFn::FsAppendString],
+            "fs::append_bytes" => self.runtime[RuntimeFn::FsAppendBytes],
+            "fs::create_dir" => self.runtime[RuntimeFn::FsCreateDir],
+            "fs::read_dir" => self.runtime[RuntimeFn::FsReadDir],
+            "fs::remove_file" => self.runtime[RuntimeFn::FsRemoveFile],
+            "fs::rename" => self.runtime[RuntimeFn::FsRename],
+            "fs::open" => self.runtime[RuntimeFn::FsOpen],
+            "fs::create" => self.runtime[RuntimeFn::FsCreate],
+            "fs::append" => self.runtime[RuntimeFn::FsAppend],
+            "process::inherit" => self.runtime[RuntimeFn::ProcessInherit],
+            "process::null" => self.runtime[RuntimeFn::ProcessNull],
+            "process::pipe" => self.runtime[RuntimeFn::ProcessPipe],
+            "process::supervisor" => self.runtime[RuntimeFn::ProcessSupervisor],
+            "process::start" => self.runtime[RuntimeFn::ProcessStart],
+            "process::run" => self.runtime[RuntimeFn::ProcessRun],
+            "net::connect" => self.runtime[RuntimeFn::NetConnect],
+            "net::connect_timeout" => self.runtime[RuntimeFn::NetConnectTimeout],
+            "net::listen" => self.runtime[RuntimeFn::NetListen],
+            "net::udp_bind" => self.runtime[RuntimeFn::NetUdpBind],
+            "net::unix_listen" => self.runtime[RuntimeFn::NetUnixListen],
+            "net::unix_connect" => self.runtime[RuntimeFn::NetUnixConnect],
+            "net::unix_connect_timeout" => self.runtime[RuntimeFn::NetUnixConnectTimeout],
+            "net::tls_listen" => self.runtime[RuntimeFn::NetTlsListen],
+            "net::tls_connect" => self.runtime[RuntimeFn::NetTlsConnect],
+            "net::tls_connect_timeout" => self.runtime[RuntimeFn::NetTlsConnectTimeout],
+            "net::http_listen" => self.runtime[RuntimeFn::NetHttpListen],
+            "net::http_request_text" => self.runtime[RuntimeFn::NetHttpRequestText],
+            "net::http_request_text_timeout" => self.runtime[RuntimeFn::NetHttpRequestTextTimeout],
+            "net::http_request_bytes" => self.runtime[RuntimeFn::NetHttpRequestBytes],
+            "net::http_request_bytes_timeout" => {
+                self.runtime[RuntimeFn::NetHttpRequestBytesTimeout]
+            }
+            "net::websocket_listen" => self.runtime[RuntimeFn::NetWebsocketListen],
+            "net::websocket_connect" => self.runtime[RuntimeFn::NetWebsocketConnect],
+            "net::websocket_connect_timeout" => self.runtime[RuntimeFn::NetWebsocketConnectTimeout],
             _ => unreachable!(),
         };
         let bound = ordered_optional_named_args(expected_names, args)?;
@@ -10053,9 +7125,12 @@ impl<'a> FunctionCompiler<'a> {
         let current_inst = self
             .builder
             .ins()
-            .call(self.range_current, &[range.values[0]]);
+            .call(self.runtime[RuntimeFn::RangeCurrent], &[range.values[0]]);
         let current = self.builder.inst_results(current_inst)[0];
-        let end_inst = self.builder.ins().call(self.range_end, &[range.values[0]]);
+        let end_inst = self
+            .builder
+            .ins()
+            .call(self.runtime[RuntimeFn::RangeEnd], &[range.values[0]]);
         let end = self.builder.inst_results(end_inst)[0];
         let has_next = self.builder.ins().icmp(IntCC::SignedLessThan, current, end);
 
@@ -10078,7 +7153,7 @@ impl<'a> FunctionCompiler<'a> {
         let advanced_inst = self
             .builder
             .ins()
-            .call(self.range_advance, &[range.values[0]]);
+            .call(self.runtime[RuntimeFn::RangeAdvance], &[range.values[0]]);
         let advanced = self.owned_opaque_result(
             self.builder.inst_results(advanced_inst).to_vec(),
             Type::named("Range"),
@@ -10237,7 +7312,7 @@ impl<'a> FunctionCompiler<'a> {
                     let (key_ptr, key_len) = self.string_constant(text.as_bytes())?;
                     let (list, index) = self.load_borrowed_list_element(&selection)?;
                     self.builder.ins().call(
-                        self.vec_element_map_get_str,
+                        self.runtime[RuntimeFn::VecElementMapGetStr],
                         &[list, index, key_ptr, key_len, line, column],
                     )
                 } else {
@@ -10246,7 +7321,7 @@ impl<'a> FunctionCompiler<'a> {
                     let key = self.load_operand_as_opaque_direct(&key.value, &key_direct_ty)?;
                     let (list, index) = self.load_borrowed_list_element(&selection)?;
                     self.builder.ins().call(
-                        self.vec_element_map_get,
+                        self.runtime[RuntimeFn::VecElementMapGet],
                         &[list, index, key.values[0], line, column],
                     )
                 };
@@ -10257,10 +7332,10 @@ impl<'a> FunctionCompiler<'a> {
             }
             _ => {
                 let (list, index) = self.load_borrowed_list_element(&selection)?;
-                let inst = self
-                    .builder
-                    .ins()
-                    .call(self.vec_element_len, &[list, index, line, column]);
+                let inst = self.builder.ins().call(
+                    self.runtime[RuntimeFn::VecElementLen],
+                    &[list, index, line, column],
+                );
                 Ok(Some(ValueRef {
                     values: vec![self.builder.inst_results(inst)[0]],
                     ty: DirectType::Scalar(ScalarKind::Int64),
@@ -10416,7 +7491,7 @@ impl<'a> FunctionCompiler<'a> {
         let (collection, projection) = self.load_element_path_root(&lent.alternative.place)?;
         let path = self.element_path_operands(&projection, &lent.alternative.elements)?;
         let inst = self.builder.ins().call(
-            self.element_path_take,
+            self.runtime[RuntimeFn::ElementPathTake],
             &[
                 collection.values[0],
                 path.path_ptr,
@@ -10488,7 +7563,7 @@ impl<'a> FunctionCompiler<'a> {
                     .ins()
                     .iconst(types::I64, unit_nanoseconds as i64);
                 let inst = self.builder.ins().call(
-                    self.duration_to_float,
+                    self.runtime[RuntimeFn::DurationToFloat],
                     &[object.values[0], unit_nanoseconds],
                 );
                 return Ok(ValueRef {
@@ -10502,7 +7577,10 @@ impl<'a> FunctionCompiler<'a> {
             if !args.is_empty() {
                 return Err("direct backend expected `sqrt()` to take no arguments".to_string());
             }
-            let inst = self.builder.ins().call(self.sqrt_f64, &[object.values[0]]);
+            let inst = self
+                .builder
+                .ins()
+                .call(self.runtime[RuntimeFn::SqrtF64], &[object.values[0]]);
             return Ok(ValueRef {
                 values: self.builder.inst_results(inst).to_vec(),
                 ty: object.ty,
@@ -10534,7 +7612,7 @@ impl<'a> FunctionCompiler<'a> {
                 let checked_mode = self.builder.ins().iconst(types::I64, 0);
                 let zero = self.builder.ins().iconst(types::I64, 0);
                 let inst = self.builder.ins().call(
-                    self.array_binary,
+                    self.runtime[RuntimeFn::ArrayBinary],
                     &[
                         left.values[0],
                         right.values[0],
@@ -10626,7 +7704,7 @@ impl<'a> FunctionCompiler<'a> {
                     let arithmetic_mode = self.builder.ins().iconst(types::I64, arithmetic_mode);
                     let zero = self.builder.ins().iconst(types::I64, 0);
                     let inst = self.builder.ins().call(
-                        self.integer_width_binary,
+                        self.runtime[RuntimeFn::IntegerWidthBinary],
                         &[
                             left.values[0],
                             right.values[0],
@@ -10671,7 +7749,7 @@ impl<'a> FunctionCompiler<'a> {
                     let inst = self
                         .builder
                         .ins()
-                        .call(self.stringify_value, &[object.values[0]]);
+                        .call(self.runtime[RuntimeFn::StringifyValue], &[object.values[0]]);
                     return Ok(self.owned_opaque_result(
                         self.builder.inst_results(inst).to_vec(),
                         Type::named("str"),
@@ -10903,7 +7981,10 @@ impl<'a> FunctionCompiler<'a> {
                     });
                 }
                 let (ptr, len) = self.string_constant(value.to_string().as_bytes())?;
-                let inst = self.builder.ins().call(self.box_uint_literal, &[ptr, len]);
+                let inst = self
+                    .builder
+                    .ins()
+                    .call(self.runtime[RuntimeFn::BoxUintLiteral], &[ptr, len]);
                 Ok(self.owned_opaque_result(
                     self.builder.inst_results(inst).to_vec(),
                     Type::named("Unknown"),
@@ -10915,7 +7996,10 @@ impl<'a> FunctionCompiler<'a> {
             }),
             Operand::String(value) => {
                 let (ptr, len) = self.string_constant(value.as_bytes())?;
-                let inst = self.builder.ins().call(self.string_literal, &[ptr, len]);
+                let inst = self
+                    .builder
+                    .ins()
+                    .call(self.runtime[RuntimeFn::StringLiteral], &[ptr, len]);
                 Ok(self.owned_opaque_result(
                     self.builder.inst_results(inst).to_vec(),
                     Type::named("str"),
@@ -10924,7 +8008,10 @@ impl<'a> FunctionCompiler<'a> {
             Operand::Duration(value) => {
                 let low = self.builder.ins().iconst(types::I64, *value as i64);
                 let high = self.builder.ins().iconst(types::I64, (*value >> 64) as i64);
-                let inst = self.builder.ins().call(self.duration_literal, &[low, high]);
+                let inst = self
+                    .builder
+                    .ins()
+                    .call(self.runtime[RuntimeFn::DurationLiteral], &[low, high]);
                 Ok(self.owned_opaque_result(
                     self.builder.inst_results(inst).to_vec(),
                     Type::named("Duration"),
@@ -11074,9 +8161,10 @@ impl<'a> FunctionCompiler<'a> {
             }
             let (list, index) = self.load_borrowed_list_element(&selection)?;
             let (line, column) = self.span_operands(selection.span);
-            self.builder
-                .ins()
-                .call(self.vec_check_index, &[list, index, line, column]);
+            self.builder.ins().call(
+                self.runtime[RuntimeFn::VecCheckIndex],
+                &[list, index, line, column],
+            );
             return Ok(());
         }
         let resolved = self.resolve_view_place(loan)?;
@@ -11085,7 +8173,7 @@ impl<'a> FunctionCompiler<'a> {
                 let (collection, projection) = self.load_element_path_root(&alternative.place)?;
                 let path = self.element_path_operands(&projection, &alternative.elements)?;
                 let inst = self.builder.ins().call(
-                    self.element_path_probe,
+                    self.runtime[RuntimeFn::ElementPathProbe],
                     &[
                         collection.values[0],
                         path.path_ptr,
@@ -11129,7 +8217,7 @@ impl<'a> FunctionCompiler<'a> {
         let (collection, projection) = self.load_element_path_root(&alternative.place)?;
         let path = self.element_path_operands(&projection, &alternative.elements)?;
         let inst = self.builder.ins().call(
-            self.element_path_load,
+            self.runtime[RuntimeFn::ElementPathLoad],
             &[
                 collection.values[0],
                 path.path_ptr,
@@ -11159,7 +8247,7 @@ impl<'a> FunctionCompiler<'a> {
         let stored = self.ensure_opaque(value)?;
         let stored = self.transfer_owned_opaque_value(&stored);
         let result = self.builder.ins().call(
-            self.element_path_store,
+            self.runtime[RuntimeFn::ElementPathStore],
             &[
                 collection.values[0],
                 path.path_ptr,
@@ -11419,7 +8507,7 @@ impl<'a> FunctionCompiler<'a> {
             }
             self.builder
                 .ins()
-                .call(self.push_returned_view_selector, &[word]);
+                .call(self.runtime[RuntimeFn::PushReturnedViewSelector], &[word]);
         }
     }
 
@@ -11544,7 +8632,7 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<(), String> {
         let (projection_ptr, projection_len) = self.string_constant(projection.as_bytes())?;
         self.builder.ins().call(
-            self.set_returned_view_projection,
+            self.runtime[RuntimeFn::SetReturnedViewProjection],
             &[projection_ptr, projection_len],
         );
         Ok(())
@@ -11660,7 +8748,7 @@ impl<'a> FunctionCompiler<'a> {
             let path = segments[1..].join(".");
             let (field_ptr, field_len) = self.string_constant(path.as_bytes())?;
             let inst = self.builder.ins().call(
-                self.instance_take_field,
+                self.runtime[RuntimeFn::InstanceTakeField],
                 &[root_value.values[0], field_ptr, field_len],
             );
             let moved = ValueRef {
@@ -11746,10 +8834,10 @@ impl<'a> FunctionCompiler<'a> {
                     )
                 })?;
                 let index_value = self.builder.ins().iconst(types::I64, index as i64);
-                let inst = self
-                    .builder
-                    .ins()
-                    .call(self.tuple_element, &[object.values[0], index_value]);
+                let inst = self.builder.ins().call(
+                    self.runtime[RuntimeFn::TupleElement],
+                    &[object.values[0], index_value],
+                );
                 let element = self.owned_opaque_result(
                     self.builder.inst_results(inst).to_vec(),
                     element_type.clone(),
@@ -11761,7 +8849,7 @@ impl<'a> FunctionCompiler<'a> {
             DirectType::Opaque(_) => {
                 let (field_ptr, field_len) = self.string_constant(field.as_bytes())?;
                 let inst = self.builder.ins().call(
-                    self.instance_get_field,
+                    self.runtime[RuntimeFn::InstanceGetField],
                     &[object.values[0], field_ptr, field_len],
                 );
                 let loaded = ValueRef {
@@ -11919,7 +9007,7 @@ impl<'a> FunctionCompiler<'a> {
                     self.string_constant(target_ty.to_string().as_bytes())?;
                 let (line, column) = self.span_values(span);
                 let inst = self.builder.ins().call(
-                    self.cast_value,
+                    self.runtime[RuntimeFn::CastValue],
                     &[boxed.values[0], target_ptr, target_len, line, column],
                 );
                 let casted = self.owned_opaque_result(
@@ -11948,7 +9036,10 @@ impl<'a> FunctionCompiler<'a> {
                     return Ok(lifted);
                 }
                 DirectType::Scalar(ScalarKind::Int32) => {
-                    let inst = self.builder.ins().call(self.unbox_i64, &[value.values[0]]);
+                    let inst = self
+                        .builder
+                        .ins()
+                        .call(self.runtime[RuntimeFn::UnboxI64], &[value.values[0]]);
                     ValueRef {
                         values: self.builder.inst_results(inst).to_vec(),
                         ty: target.clone(),
@@ -11958,14 +9049,17 @@ impl<'a> FunctionCompiler<'a> {
                     let inst = self
                         .builder
                         .ins()
-                        .call(self.unbox_int64, &[value.values[0]]);
+                        .call(self.runtime[RuntimeFn::UnboxInt64], &[value.values[0]]);
                     ValueRef {
                         values: self.builder.inst_results(inst).to_vec(),
                         ty: target.clone(),
                     }
                 }
                 DirectType::Scalar(ScalarKind::Uint64) => {
-                    let inst = self.builder.ins().call(self.unbox_u64, &[value.values[0]]);
+                    let inst = self
+                        .builder
+                        .ins()
+                        .call(self.runtime[RuntimeFn::UnboxU64], &[value.values[0]]);
                     ValueRef {
                         values: self.builder.inst_results(inst).to_vec(),
                         ty: target.clone(),
@@ -11973,14 +9067,20 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 DirectType::Scalar(ScalarKind::Float32)
                 | DirectType::Scalar(ScalarKind::Float64) => {
-                    let inst = self.builder.ins().call(self.unbox_f64, &[value.values[0]]);
+                    let inst = self
+                        .builder
+                        .ins()
+                        .call(self.runtime[RuntimeFn::UnboxF64], &[value.values[0]]);
                     self.normalize_scalar_value(ValueRef {
                         values: self.builder.inst_results(inst).to_vec(),
                         ty: target.clone(),
                     })?
                 }
                 DirectType::Scalar(ScalarKind::Bool) => {
-                    let inst = self.builder.ins().call(self.unbox_bool, &[value.values[0]]);
+                    let inst = self
+                        .builder
+                        .ins()
+                        .call(self.runtime[RuntimeFn::UnboxBool], &[value.values[0]]);
                     ValueRef {
                         values: self.builder.inst_results(inst).to_vec(),
                         ty: target.clone(),
@@ -11996,7 +9096,7 @@ impl<'a> FunctionCompiler<'a> {
                     for field in &class.fields {
                         let (field_ptr, field_len) = self.string_constant(field.name.as_bytes())?;
                         let inst = self.builder.ins().call(
-                            self.instance_get_field,
+                            self.runtime[RuntimeFn::InstanceGetField],
                             &[value.values[0], field_ptr, field_len],
                         );
                         let field_value = ValueRef {
@@ -12098,10 +9198,10 @@ impl<'a> FunctionCompiler<'a> {
             }
         }
         let (type_ptr, type_len) = self.string_constant(encoded.as_bytes())?;
-        let inst = self
-            .builder
-            .ins()
-            .call(self.tag_value_type, &[raw, type_ptr, type_len]);
+        let inst = self.builder.ins().call(
+            self.runtime[RuntimeFn::TagValueType],
+            &[raw, type_ptr, type_len],
+        );
         self.last_runtime_type_tag = Some((inst, raw, encoded));
         Ok(())
     }
@@ -12125,7 +9225,8 @@ impl<'a> FunctionCompiler<'a> {
             }
             match func.dfg.insts[current] {
                 cranelift_codegen::ir::InstructionData::Call { func_ref, .. }
-                    if func_ref == self.retain_value || func_ref == self.release_value => {}
+                    if func_ref == self.runtime[RuntimeFn::RetainValue]
+                        || func_ref == self.runtime[RuntimeFn::ReleaseValue] => {}
                 ref data if data.opcode().is_call() => return false,
                 _ => {}
             }
@@ -12192,9 +9293,10 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(fail_block);
         self.emit_pending_cleanups(true)?;
         let (line, column) = self.span_values(span);
-        self.builder
-            .ins()
-            .call(self.fail_int32_overflow, &[value, line, column]);
+        self.builder.ins().call(
+            self.runtime[RuntimeFn::FailInt32Overflow],
+            &[value, line, column],
+        );
         self.builder.ins().trap(TrapCode::INTEGER_OVERFLOW);
         self.builder.seal_block(fail_block);
         self.builder.switch_to_block(continue_block);
@@ -12235,7 +9337,10 @@ impl<'a> FunctionCompiler<'a> {
 
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
-        let inst = self.builder.ins().call(self.vec_len, &[list]);
+        let inst = self
+            .builder
+            .ins()
+            .call(self.runtime[RuntimeFn::VecLen], &[list]);
         let len = self.builder.inst_results(inst)[0];
         self.builder.ins().jump(join_block, &[len]);
 
@@ -12334,7 +9439,7 @@ impl<'a> FunctionCompiler<'a> {
         let caller_owned = self.owned_opaque_temporaries.clone();
         let coordinates = self.ensure_opaque(coordinate)?;
         let inst = self.builder.ins().call(
-            self.array_index,
+            self.runtime[RuntimeFn::ArrayIndex],
             &[array, coordinates.values[0], line, column],
         );
         let result = self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), element_ty);
@@ -12406,10 +9511,10 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(slow_block);
         let normalized = self.emit_vec_index_failure_guard(list, index, line, column)?;
         let kind = self.builder.ins().iconst(types::I64, kind);
-        let inst = self
-            .builder
-            .ins()
-            .call(self.vec_index_scalar, &[list, normalized, kind]);
+        let inst = self.builder.ins().call(
+            self.runtime[RuntimeFn::VecIndexScalar],
+            &[list, normalized, kind],
+        );
         let bits = self.builder.inst_results(inst)[0];
         self.builder.ins().jump(join_block, &[bits]);
 
@@ -12457,7 +9562,10 @@ impl<'a> FunctionCompiler<'a> {
         line: Value,
         column: Value,
     ) -> std::result::Result<Value, String> {
-        let len_inst = self.builder.ins().call(self.vec_len, &[object]);
+        let len_inst = self
+            .builder
+            .ins()
+            .call(self.runtime[RuntimeFn::VecLen], &[object]);
         let len = self.builder.inst_results(len_inst)[0];
         let zero = self.builder.ins().iconst(types::I64, 0);
         let negative = self.builder.ins().icmp(IntCC::SignedLessThan, index, zero);
@@ -12479,9 +9587,10 @@ impl<'a> FunctionCompiler<'a> {
             .brif(out_of_bounds, fail_block, &[], continue_block, &[]);
         self.builder.switch_to_block(fail_block);
         self.emit_pending_cleanups(true)?;
-        self.builder
-            .ins()
-            .call(self.vec_index, &[object, index, line, column]);
+        self.builder.ins().call(
+            self.runtime[RuntimeFn::VecIndex],
+            &[object, index, line, column],
+        );
         self.builder.ins().trap(TrapCode::unwrap_user(2));
         self.builder.seal_block(fail_block);
         self.builder.switch_to_block(continue_block);
@@ -12499,10 +9608,10 @@ impl<'a> FunctionCompiler<'a> {
                     .icmp(IntCC::NotEqual, value.values[0], zero))
             }
             None if matches!(value.ty, DirectType::Opaque(_)) => {
-                let inst = self
-                    .builder
-                    .ins()
-                    .call(self.value_as_condition, &[value.values[0]]);
+                let inst = self.builder.ins().call(
+                    self.runtime[RuntimeFn::ValueAsCondition],
+                    &[value.values[0]],
+                );
                 Ok(self.builder.inst_results(inst)[0])
             }
             other => Err(format!(
@@ -12563,7 +9672,7 @@ impl<'a> FunctionCompiler<'a> {
             let field_path = segments.join(".");
             let (field_ptr, field_len) = self.string_constant(field_path.as_bytes())?;
             self.builder.ins().call(
-                self.instance_set_field_owned,
+                self.runtime[RuntimeFn::InstanceSetFieldOwned],
                 &[current.values[0], field_ptr, field_len, updated_value],
             );
             Ok(())
@@ -12642,7 +9751,7 @@ impl<'a> FunctionCompiler<'a> {
                 let field_path = rest.join(".");
                 let (field_ptr, field_len) = self.string_constant(field_path.as_bytes())?;
                 self.builder.ins().call(
-                    self.instance_set_field_owned,
+                    self.runtime[RuntimeFn::InstanceSetFieldOwned],
                     &[member.values[0], field_ptr, field_len, updated_value],
                 );
                 return Ok(current);
@@ -12791,7 +9900,7 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = codegen
                             .builder
                             .ins()
-                            .call(codegen.clone_value, &[member.values[0]]);
+                            .call(codegen.runtime[RuntimeFn::CloneValue], &[member.values[0]]);
                         ValueRef {
                             values: codegen.builder.inst_results(inst).to_vec(),
                             ty: member.ty.clone(),
@@ -13069,7 +10178,10 @@ impl<'a> FunctionCompiler<'a> {
         let value_operand =
             value_operand.unwrap_or_else(|| self.builder.ins().iconst(types::I64, 0));
         call_args.push(value_operand);
-        let inst = self.builder.ins().call(self.vec_span, &call_args);
+        let inst = self
+            .builder
+            .ins()
+            .call(self.runtime[RuntimeFn::VecSpan], &call_args);
         let result = self.builder.inst_results(inst).to_vec();
         if crate::mir::span_member_mutates_receiver(field) {
             if let Some(place) = receiver_place {
@@ -13126,13 +10238,13 @@ impl<'a> FunctionCompiler<'a> {
                 let payload = codegen.ensure_opaque(member)?;
                 let (inject, transferred) = if borrowed_handle {
                     (
-                        codegen.union_inject_copy,
+                        codegen.runtime[RuntimeFn::UnionInjectCopy],
                         codegen.retain_opaque_handle(payload.values[0]),
                     )
                 } else {
                     codegen.mark_temporary_opaque_owned(&payload);
                     (
-                        codegen.union_inject,
+                        codegen.runtime[RuntimeFn::UnionInject],
                         codegen.transfer_owned_opaque_value(&payload),
                     )
                 };
@@ -13156,7 +10268,10 @@ impl<'a> FunctionCompiler<'a> {
         union: &DirectUnionType,
         handle: Value,
     ) -> std::result::Result<ValueRef, String> {
-        let tag_call = self.builder.ins().call(self.union_tag, &[handle]);
+        let tag_call = self
+            .builder
+            .ins()
+            .call(self.runtime[RuntimeFn::UnionTag], &[handle]);
         let tag = self.builder.inst_results(tag_call)[0];
         let mut probe = vec![tag];
         for _ in 0..union.payload_words {
@@ -13167,10 +10282,10 @@ impl<'a> FunctionCompiler<'a> {
             self.switch_on_union_tag(union, &probe, &result_ty, |codegen, index, _| {
                 let member_ty = union.member(index)?.clone();
                 let index_value = codegen.builder.ins().iconst(types::I64, index as i64);
-                let call = codegen
-                    .builder
-                    .ins()
-                    .call(codegen.union_payload_copy, &[handle, index_value]);
+                let call = codegen.builder.ins().call(
+                    codegen.runtime[RuntimeFn::UnionPayloadCopy],
+                    &[handle, index_value],
+                );
                 let payload = codegen.owned_opaque_result(
                     codegen.builder.inst_results(call).to_vec(),
                     direct_type_to_type(&member_ty),
@@ -13209,7 +10324,10 @@ impl<'a> FunctionCompiler<'a> {
                 self.box_inline_union(&union, &value.values)
             }
             DirectType::Scalar(ScalarKind::Int32) => {
-                let inst = self.builder.ins().call(self.box_i32, &[value.values[0]]);
+                let inst = self
+                    .builder
+                    .ins()
+                    .call(self.runtime[RuntimeFn::BoxI32], &[value.values[0]]);
                 let boxed = ValueRef {
                     values: self.builder.inst_results(inst).to_vec(),
                     ty: DirectType::Opaque(Type::named("int32")),
@@ -13218,7 +10336,10 @@ impl<'a> FunctionCompiler<'a> {
                 Ok(boxed)
             }
             DirectType::Scalar(ScalarKind::Int64) => {
-                let inst = self.builder.ins().call(self.box_i64, &[value.values[0]]);
+                let inst = self
+                    .builder
+                    .ins()
+                    .call(self.runtime[RuntimeFn::BoxI64], &[value.values[0]]);
                 let boxed = ValueRef {
                     values: self.builder.inst_results(inst).to_vec(),
                     ty: DirectType::Opaque(Type::named("int64")),
@@ -13227,7 +10348,10 @@ impl<'a> FunctionCompiler<'a> {
                 Ok(boxed)
             }
             DirectType::Scalar(ScalarKind::Uint64) => {
-                let inst = self.builder.ins().call(self.box_u64, &[value.values[0]]);
+                let inst = self
+                    .builder
+                    .ins()
+                    .call(self.runtime[RuntimeFn::BoxU64], &[value.values[0]]);
                 let boxed = ValueRef {
                     values: self.builder.inst_results(inst).to_vec(),
                     ty: DirectType::Opaque(Type::named("uint64")),
@@ -13236,7 +10360,10 @@ impl<'a> FunctionCompiler<'a> {
                 Ok(boxed)
             }
             DirectType::Scalar(ScalarKind::Float32) | DirectType::Scalar(ScalarKind::Float64) => {
-                let inst = self.builder.ins().call(self.box_f64, &[value.values[0]]);
+                let inst = self
+                    .builder
+                    .ins()
+                    .call(self.runtime[RuntimeFn::BoxF64], &[value.values[0]]);
                 let boxed = ValueRef {
                     values: self.builder.inst_results(inst).to_vec(),
                     ty: DirectType::Opaque(Type::named("float64")),
@@ -13245,7 +10372,10 @@ impl<'a> FunctionCompiler<'a> {
                 Ok(boxed)
             }
             DirectType::Scalar(ScalarKind::Bool) => {
-                let inst = self.builder.ins().call(self.box_bool, &[value.values[0]]);
+                let inst = self
+                    .builder
+                    .ins()
+                    .call(self.runtime[RuntimeFn::BoxBool], &[value.values[0]]);
                 let boxed = ValueRef {
                     values: self.builder.inst_results(inst).to_vec(),
                     ty: DirectType::Opaque(Type::named("bool")),
@@ -13254,7 +10384,10 @@ impl<'a> FunctionCompiler<'a> {
                 Ok(boxed)
             }
             DirectType::Scalar(ScalarKind::Unit) => {
-                let inst = self.builder.ins().call(self.box_unit, &[]);
+                let inst = self
+                    .builder
+                    .ins()
+                    .call(self.runtime[RuntimeFn::BoxUnit], &[]);
                 let boxed = ValueRef {
                     values: self.builder.inst_results(inst).to_vec(),
                     ty: DirectType::Opaque(Type::Unit),
@@ -13264,10 +10397,10 @@ impl<'a> FunctionCompiler<'a> {
             }
             DirectType::PlainClass(class) => {
                 let (class_ptr, class_len) = self.string_constant(class.class_name.as_bytes())?;
-                let init = self
-                    .builder
-                    .ins()
-                    .call(self.instance_empty, &[class_ptr, class_len]);
+                let init = self.builder.ins().call(
+                    self.runtime[RuntimeFn::InstanceEmpty],
+                    &[class_ptr, class_len],
+                );
                 let current = self.builder.inst_results(init)[0];
                 let mut start = 0usize;
                 for field in &class.fields {
@@ -13280,7 +10413,7 @@ impl<'a> FunctionCompiler<'a> {
                     let field_value = self.transfer_owned_opaque_value(&field_value);
                     let (field_ptr, field_len) = self.string_constant(field.name.as_bytes())?;
                     self.builder.ins().call(
-                        self.instance_set_field_owned,
+                        self.runtime[RuntimeFn::InstanceSetFieldOwned],
                         &[current, field_ptr, field_len, field_value],
                     );
                     start = end;
@@ -13343,7 +10476,10 @@ impl<'a> FunctionCompiler<'a> {
         let buffer = if elements.is_empty() {
             self.builder.ins().iconst(types::I64, 0)
         } else {
-            let buffer_inst = self.builder.ins().call(self.arg_buffer_new, &[count]);
+            let buffer_inst = self
+                .builder
+                .ins()
+                .call(self.runtime[RuntimeFn::ArgBufferNew], &[count]);
             let buffer = self.builder.inst_results(buffer_inst)[0];
             for (index, (element, element_type)) in elements.iter().zip(element_types).enumerate() {
                 let direct_type = ensure_direct_type(element_type, &self.classes, "tuple element")?;
@@ -13352,13 +10488,17 @@ impl<'a> FunctionCompiler<'a> {
                 let value = self.ensure_opaque(value)?;
                 let transferred = self.transfer_owned_opaque_value(&value);
                 let index = self.builder.ins().iconst(types::I64, index as i64);
-                self.builder
-                    .ins()
-                    .call(self.arg_buffer_store_owned, &[buffer, index, transferred]);
+                self.builder.ins().call(
+                    self.runtime[RuntimeFn::ArgBufferStoreOwned],
+                    &[buffer, index, transferred],
+                );
             }
             buffer
         };
-        let inst = self.builder.ins().call(self.tuple_new, &[buffer, count]);
+        let inst = self
+            .builder
+            .ins()
+            .call(self.runtime[RuntimeFn::TupleNew], &[buffer, count]);
         let tuple =
             self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), tuple_type.clone());
         self.tag_opaque_runtime_type(&tuple, &tuple_type)?;
@@ -13380,10 +10520,10 @@ impl<'a> FunctionCompiler<'a> {
         let tuple = self.load_operand(tuple)?;
         let tuple = self.ensure_opaque(tuple)?;
         let index = self.builder.ins().iconst(types::I64, index as i64);
-        let inst = self
-            .builder
-            .ins()
-            .call(self.tuple_element, &[tuple.values[0], index]);
+        let inst = self.builder.ins().call(
+            self.runtime[RuntimeFn::TupleElement],
+            &[tuple.values[0], index],
+        );
         let element = self.owned_opaque_result(
             self.builder.inst_results(inst).to_vec(),
             element_type.clone(),
@@ -13407,10 +10547,10 @@ impl<'a> FunctionCompiler<'a> {
         let tuple = self.load_place(place)?;
         let tuple = self.ensure_opaque(tuple)?;
         let index = self.builder.ins().iconst(types::I64, index as i64);
-        let inst = self
-            .builder
-            .ins()
-            .call(self.tuple_take_element, &[tuple.values[0], index]);
+        let inst = self.builder.ins().call(
+            self.runtime[RuntimeFn::TupleTakeElement],
+            &[tuple.values[0], index],
+        );
         let element = self.owned_opaque_result(
             self.builder.inst_results(inst).to_vec(),
             element_type.clone(),
@@ -13435,7 +10575,10 @@ impl<'a> FunctionCompiler<'a> {
             self.builder.ins().iconst(types::I64, 0)
         } else {
             let count = self.builder.ins().iconst(types::I64, payloads.len() as i64);
-            let buffer_inst = self.builder.ins().call(self.arg_buffer_new, &[count]);
+            let buffer_inst = self
+                .builder
+                .ins()
+                .call(self.runtime[RuntimeFn::ArgBufferNew], &[count]);
             let buffer = self.builder.inst_results(buffer_inst)[0];
             for (index, payload) in payloads.iter().enumerate() {
                 let loaded = if let Some(expected_ty) = expected_payload_types
@@ -13459,7 +10602,7 @@ impl<'a> FunctionCompiler<'a> {
                 let transferred = self.transfer_owned_opaque_value(&payload);
                 let index_value = self.builder.ins().iconst(types::I64, index as i64);
                 self.builder.ins().call(
-                    self.arg_buffer_store_owned,
+                    self.runtime[RuntimeFn::ArgBufferStoreOwned],
                     &[buffer, index_value, transferred],
                 );
             }
@@ -13467,7 +10610,7 @@ impl<'a> FunctionCompiler<'a> {
         };
         let payload_count = self.builder.ins().iconst(types::I64, payloads.len() as i64);
         let inst = self.builder.ins().call(
-            self.enum_variant,
+            self.runtime[RuntimeFn::EnumVariant],
             &[
                 enum_ptr,
                 enum_len,
@@ -13498,20 +10641,24 @@ impl<'a> FunctionCompiler<'a> {
         let buffer = if payloads.is_empty() {
             self.builder.ins().iconst(types::I64, 0)
         } else {
-            let buffer_inst = self.builder.ins().call(self.arg_buffer_new, &[count]);
+            let buffer_inst = self
+                .builder
+                .ins()
+                .call(self.runtime[RuntimeFn::ArgBufferNew], &[count]);
             let buffer = self.builder.inst_results(buffer_inst)[0];
             for (index, payload) in payloads.into_iter().enumerate() {
                 let payload = self.ensure_opaque(payload)?;
                 let transferred = self.transfer_owned_opaque_value(&payload);
                 let index = self.builder.ins().iconst(types::I64, index as i64);
-                self.builder
-                    .ins()
-                    .call(self.arg_buffer_store_owned, &[buffer, index, transferred]);
+                self.builder.ins().call(
+                    self.runtime[RuntimeFn::ArgBufferStoreOwned],
+                    &[buffer, index, transferred],
+                );
             }
             buffer
         };
         let inst = self.builder.ins().call(
-            self.enum_variant,
+            self.runtime[RuntimeFn::EnumVariant],
             &[enum_ptr, enum_len, variant_ptr, variant_len, buffer, count],
         );
         Ok(self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), target))
@@ -13526,7 +10673,7 @@ impl<'a> FunctionCompiler<'a> {
         let (enum_ptr, enum_len) = self.string_constant(enum_name.as_bytes())?;
         let (variant_ptr, variant_len) = self.string_constant(variant_name.as_bytes())?;
         let inst = self.builder.ins().call(
-            self.variant_matches,
+            self.runtime[RuntimeFn::VariantMatches],
             &[value, enum_ptr, enum_len, variant_ptr, variant_len],
         );
         Ok(self.builder.inst_results(inst)[0])
@@ -13539,10 +10686,10 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         let scrutinee = self.ensure_opaque(scrutinee)?;
         let index = self.builder.ins().iconst(types::I64, index as i64);
-        let inst = self
-            .builder
-            .ins()
-            .call(self.variant_payload, &[scrutinee.values[0], index]);
+        let inst = self.builder.ins().call(
+            self.runtime[RuntimeFn::VariantPayload],
+            &[scrutinee.values[0], index],
+        );
         let payload = ValueRef {
             values: self.builder.inst_results(inst).to_vec(),
             ty: DirectType::Opaque(Type::named("Unknown")),
@@ -13567,10 +10714,10 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         let scrutinee = self.ensure_opaque(scrutinee)?;
         let index = self.builder.ins().iconst(types::I64, index as i64);
-        let inst = self
-            .builder
-            .ins()
-            .call(self.variant_take_payload, &[scrutinee.values[0], index]);
+        let inst = self.builder.ins().call(
+            self.runtime[RuntimeFn::VariantTakePayload],
+            &[scrutinee.values[0], index],
+        );
         Ok(self.owned_opaque_result(
             self.builder.inst_results(inst).to_vec(),
             Type::named("Unknown"),
@@ -13751,11 +10898,14 @@ impl<'a> FunctionCompiler<'a> {
         let (root, projection) = place.split_once('.').unwrap_or((place, ""));
         if let Some(index) = self.mutable_param_indices.get(root).copied() {
             let index = self.builder.ins().iconst(types::I64, index as i64);
-            let current = self.builder.ins().call(self.current_mutable_sink, &[index]);
+            let current = self
+                .builder
+                .ins()
+                .call(self.runtime[RuntimeFn::CurrentMutableSink], &[index]);
             let parent = self.builder.inst_results(current)[0];
             let (projection_ptr, projection_len) = self.string_constant(projection.as_bytes())?;
             let projected = self.builder.ins().call(
-                self.mutable_sink_project,
+                self.runtime[RuntimeFn::MutableSinkProject],
                 &[parent, projection_ptr, projection_len],
             );
             return Ok(self.builder.inst_results(projected)[0]);
@@ -13790,7 +10940,7 @@ impl<'a> FunctionCompiler<'a> {
         let root = self.transfer_owned_opaque_value(&root);
         let (projection_ptr, projection_len) = self.string_constant(projection.as_bytes())?;
         let sink = self.builder.ins().call(
-            self.mutable_sink_new,
+            self.runtime[RuntimeFn::MutableSinkNew],
             &[registration_id, root, projection_ptr, projection_len],
         );
         Ok(self.builder.inst_results(sink)[0])
@@ -13871,9 +11021,10 @@ impl<'a> FunctionCompiler<'a> {
             }
             pointer
         };
-        self.builder
-            .ins()
-            .call(self.set_next_mutable_sinks, &[pointer, count]);
+        self.builder.ins().call(
+            self.runtime[RuntimeFn::SetNextMutableSinks],
+            &[pointer, count],
+        );
         Ok(())
     }
 
@@ -13929,7 +11080,7 @@ impl<'a> FunctionCompiler<'a> {
             .ins()
             .iconst(types::I64, capture_sinks.len() as i64);
         self.builder.ins().call(
-            self.set_next_indirect_mutable_sinks,
+            self.runtime[RuntimeFn::SetNextIndirectMutableSinks],
             &[
                 public_ptr,
                 public_count,
@@ -13943,7 +11094,9 @@ impl<'a> FunctionCompiler<'a> {
 
     fn release_mutable_sinks(&mut self, sinks: impl IntoIterator<Item = Value>) {
         for sink in sinks {
-            self.builder.ins().call(self.mutable_sink_release, &[sink]);
+            self.builder
+                .ins()
+                .call(self.runtime[RuntimeFn::MutableSinkRelease], &[sink]);
         }
     }
 
@@ -13955,7 +11108,10 @@ impl<'a> FunctionCompiler<'a> {
             return Ok(());
         };
         let index = self.builder.ins().iconst(types::I64, index as i64);
-        let sink = self.builder.ins().call(self.current_mutable_sink, &[index]);
+        let sink = self
+            .builder
+            .ins()
+            .call(self.runtime[RuntimeFn::CurrentMutableSink], &[index]);
         let sink = self.builder.inst_results(sink)[0];
         let zero = self.builder.ins().iconst(types::I64, 0);
         let active = self.builder.ins().icmp(IntCC::NotEqual, sink, zero);
@@ -13966,9 +11122,10 @@ impl<'a> FunctionCompiler<'a> {
         let current = self.load_root(root)?;
         let current = self.ensure_opaque(current)?;
         let current = self.transfer_owned_opaque_value(&current);
-        self.builder
-            .ins()
-            .call(self.mutable_sink_store_owned, &[sink, current]);
+        self.builder.ins().call(
+            self.runtime[RuntimeFn::MutableSinkStoreOwned],
+            &[sink, current],
+        );
         self.builder.ins().jump(done, &[]);
         self.builder.seal_block(publish);
         self.builder.switch_to_block(done);
@@ -14008,21 +11165,25 @@ impl<'a> FunctionCompiler<'a> {
         let loaded = self.load_place(place)?;
         let boxed = self.ensure_opaque(loaded)?;
         let count = self.builder.ins().iconst(types::I64, 1);
-        let buffer = self.builder.ins().call(self.arg_buffer_new, &[count]);
+        let buffer = self
+            .builder
+            .ins()
+            .call(self.runtime[RuntimeFn::ArgBufferNew], &[count]);
         let buffer = self.builder.inst_results(buffer)[0];
         let zero = self.builder.ins().iconst(types::I64, 0);
-        self.builder
-            .ins()
-            .call(self.arg_buffer_store, &[buffer, zero, boxed.values[0]]);
+        self.builder.ins().call(
+            self.runtime[RuntimeFn::ArgBufferStore],
+            &[buffer, zero, boxed.values[0]],
+        );
         if self.temporary_owns_opaque(&boxed) {
             self.clear_temporary_opaque_owned(&boxed);
             self.release_opaque_handle(boxed.values[0]);
         }
         let thunk_ptr = self.builder.ins().func_addr(types::I64, thunk_ref);
-        let registration = self
-            .builder
-            .ins()
-            .call(self.register_cleanup, &[thunk_ptr, buffer, count]);
+        let registration = self.builder.ins().call(
+            self.runtime[RuntimeFn::RegisterCleanup],
+            &[thunk_ptr, buffer, count],
+        );
         let registration_id = self.builder.inst_results(registration)[0];
         self.builder.def_var(registration_variable, registration_id);
         Ok(())
@@ -14036,9 +11197,10 @@ impl<'a> FunctionCompiler<'a> {
             ));
         };
         let registration_id = self.builder.use_var(variable);
-        self.builder
-            .ins()
-            .call(self.unregister_cleanup, &[registration_id]);
+        self.builder.ins().call(
+            self.runtime[RuntimeFn::UnregisterCleanup],
+            &[registration_id],
+        );
         let zero = self.builder.ins().iconst(types::I64, 0);
         self.builder.def_var(variable, zero);
         Ok(())
@@ -14070,12 +11232,16 @@ impl<'a> FunctionCompiler<'a> {
         let loaded = self.load_place(place)?;
         let boxed = self.ensure_opaque(loaded)?;
         let count = self.builder.ins().iconst(types::I64, 1);
-        let buffer = self.builder.ins().call(self.arg_buffer_new, &[count]);
+        let buffer = self
+            .builder
+            .ins()
+            .call(self.runtime[RuntimeFn::ArgBufferNew], &[count]);
         let buffer = self.builder.inst_results(buffer)[0];
         let zero = self.builder.ins().iconst(types::I64, 0);
-        self.builder
-            .ins()
-            .call(self.arg_buffer_store, &[buffer, zero, boxed.values[0]]);
+        self.builder.ins().call(
+            self.runtime[RuntimeFn::ArgBufferStore],
+            &[buffer, zero, boxed.values[0]],
+        );
         if self.temporary_owns_opaque(&boxed) {
             self.clear_temporary_opaque_owned(&boxed);
             self.release_opaque_handle(boxed.values[0]);
@@ -14084,7 +11250,7 @@ impl<'a> FunctionCompiler<'a> {
         let registration_id = self.builder.use_var(registration_variable);
         let thunk_ptr = self.builder.ins().func_addr(types::I64, thunk_ref);
         let refreshed = self.builder.ins().call(
-            self.refresh_cleanup,
+            self.runtime[RuntimeFn::RefreshCleanup],
             &[active, registration_id, thunk_ptr, buffer, count],
         );
         let refreshed_id = self.builder.inst_results(refreshed)[0];
@@ -14303,10 +11469,10 @@ impl<'a> FunctionCompiler<'a> {
                         .builder
                         .ins()
                         .iconst(types::I64, if cancel_before_cleanup { 1 } else { 0 });
-                    let result = self
-                        .builder
-                        .ins()
-                        .call(self.task_group_close, &[loaded.values[0], cancel_before]);
+                    let result = self.builder.ins().call(
+                        self.runtime[RuntimeFn::TaskGroupClose],
+                        &[loaded.values[0], cancel_before],
+                    );
                     self.release_opaque_handle(self.builder.inst_results(result)[0]);
                     return Ok(());
                 }
@@ -14334,7 +11500,7 @@ impl<'a> FunctionCompiler<'a> {
         let boxed = self.ensure_opaque(result)?;
         let (class_ptr, class_len) = self.string_constant(class_name.as_bytes())?;
         self.builder.ins().call(
-            self.record_manager_exit_failure,
+            self.runtime[RuntimeFn::RecordManagerExitFailure],
             &[boxed.values[0], class_ptr, class_len],
         );
         Ok(())
@@ -14522,7 +11688,7 @@ impl<'a> FunctionCompiler<'a> {
             let arithmetic_mode = self.builder.ins().iconst(types::I64, arithmetic_mode);
             let zero = self.builder.ins().iconst(types::I64, 0);
             let inst = self.builder.ins().call(
-                self.integer_width_binary,
+                self.runtime[RuntimeFn::IntegerWidthBinary],
                 &[
                     left.values[0],
                     right.values[0],
@@ -14544,7 +11710,7 @@ impl<'a> FunctionCompiler<'a> {
             let inst = self
                 .builder
                 .ins()
-                .call(self.integer_to_float, &[object.values[0]]);
+                .call(self.runtime[RuntimeFn::IntegerToFloat], &[object.values[0]]);
             return Ok(ValueRef {
                 values: self.builder.inst_results(inst).to_vec(),
                 ty: DirectType::Scalar(ScalarKind::Float64),
@@ -14560,7 +11726,7 @@ impl<'a> FunctionCompiler<'a> {
             let inst = self
                 .builder
                 .ins()
-                .call(self.stringify_value, &[object.values[0]]);
+                .call(self.runtime[RuntimeFn::StringifyValue], &[object.values[0]]);
             return Ok(self.owned_opaque_result(
                 self.builder.inst_results(inst).to_vec(),
                 Type::named("str"),
@@ -14582,10 +11748,10 @@ impl<'a> FunctionCompiler<'a> {
             if matches!(object_ty, Type::Named(name, arguments) if name == "Array" && arguments.len() == 1)
             {
                 let zero = self.builder.ins().iconst(types::I64, 0);
-                let inst = self
-                    .builder
-                    .ins()
-                    .call(self.array_clone, &[object.values[0], zero, zero]);
+                let inst = self.builder.ins().call(
+                    self.runtime[RuntimeFn::ArrayClone],
+                    &[object.values[0], zero, zero],
+                );
                 return Ok(self.owned_opaque_result(
                     self.builder.inst_results(inst).to_vec(),
                     object_ty.clone(),
@@ -14594,7 +11760,7 @@ impl<'a> FunctionCompiler<'a> {
             let inst = self
                 .builder
                 .ins()
-                .call(self.clone_value, &[object.values[0]]);
+                .call(self.runtime[RuntimeFn::CloneValue], &[object.values[0]]);
             return Ok(self
                 .owned_opaque_result(self.builder.inst_results(inst).to_vec(), object_ty.clone()));
         }
@@ -14635,7 +11801,7 @@ impl<'a> FunctionCompiler<'a> {
                         let column =
                             self.coerce_value(column, &DirectType::Scalar(ScalarKind::Int32))?;
                         let inst = self.builder.ins().call(
-                            self.string_slice,
+                            self.runtime[RuntimeFn::StringSlice],
                             &[
                                 object.values[0],
                                 start.values[0],
@@ -14658,8 +11824,8 @@ impl<'a> FunctionCompiler<'a> {
                             ));
                         }
                         let function = match field {
-                            "len" => self.string_len,
-                            "byte_len" => self.string_byte_len,
+                            "len" => self.runtime[RuntimeFn::StringLen],
+                            "byte_len" => self.runtime[RuntimeFn::StringByteLen],
                             _ => unreachable!(),
                         };
                         let inst = self.builder.ins().call(function, &[object.values[0]]);
@@ -14679,9 +11845,9 @@ impl<'a> FunctionCompiler<'a> {
                         let loaded_value = self.load_operand(&argument.value)?;
                         let value = self.ensure_opaque(loaded_value)?;
                         let func = match field {
-                            "contains" => self.string_contains,
-                            "starts_with" => self.string_starts_with,
-                            "ends_with" => self.string_ends_with,
+                            "contains" => self.runtime[RuntimeFn::StringContains],
+                            "starts_with" => self.runtime[RuntimeFn::StringStartsWith],
+                            "ends_with" => self.runtime[RuntimeFn::StringEndsWith],
                             _ => unreachable!(),
                         };
                         let inst = self
@@ -14702,10 +11868,10 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let loaded_value = self.load_operand(&argument.value)?;
                         let value = self.ensure_opaque(loaded_value)?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.string_split, &[object.values[0], value.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::StringSplit],
+                            &[object.values[0], value.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named("list".to_string(), vec![Type::named("str")]),
@@ -14723,7 +11889,7 @@ impl<'a> FunctionCompiler<'a> {
                         let loaded_to = self.load_operand(&to_arg.value)?;
                         let to = self.ensure_opaque(loaded_to)?;
                         let inst = self.builder.ins().call(
-                            self.string_replace,
+                            self.runtime[RuntimeFn::StringReplace],
                             &[object.values[0], from.values[0], to.values[0]],
                         );
                         Ok(self.owned_opaque_result(
@@ -14744,7 +11910,7 @@ impl<'a> FunctionCompiler<'a> {
                         let opcode = self.builder.ins().iconst(types::I64, binary_opcode);
                         let zero = self.builder.ins().iconst(types::I64, 0);
                         let inst = self.builder.ins().call(
-                            self.binary_value,
+                            self.runtime[RuntimeFn::BinaryValue],
                             &[opcode, object.values[0], value.values[0], zero, zero, zero],
                         );
                         Ok(self.owned_opaque_result(
@@ -14762,7 +11928,7 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = self
                             .builder
                             .ins()
-                            .call(self.string_to_lower, &[object.values[0]]);
+                            .call(self.runtime[RuntimeFn::StringToLower], &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::named("str"),
@@ -14778,7 +11944,7 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = self
                             .builder
                             .ins()
-                            .call(self.string_to_upper, &[object.values[0]]);
+                            .call(self.runtime[RuntimeFn::StringToUpper], &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::named("str"),
@@ -14793,10 +11959,10 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let loaded_value = self.load_operand(&argument.value)?;
                         let value = self.ensure_opaque(loaded_value)?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.string_join, &[object.values[0], value.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::StringJoin],
+                            &[object.values[0], value.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::named("str"),
@@ -14812,8 +11978,8 @@ impl<'a> FunctionCompiler<'a> {
                         let loaded_value = self.load_operand(&argument.value)?;
                         let value = self.ensure_opaque(loaded_value)?;
                         let func = match field {
-                            "strip_prefix" => self.string_strip_prefix,
-                            "strip_suffix" => self.string_strip_suffix,
+                            "strip_prefix" => self.runtime[RuntimeFn::StringStripPrefix],
+                            "strip_suffix" => self.runtime[RuntimeFn::StringStripSuffix],
                             _ => unreachable!(),
                         };
                         let inst = self
@@ -14838,7 +12004,7 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = self
                             .builder
                             .ins()
-                            .call(self.string_trim, &[object.values[0]]);
+                            .call(self.runtime[RuntimeFn::StringTrim], &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::named("str"),
@@ -14868,7 +12034,7 @@ impl<'a> FunctionCompiler<'a> {
                         )?;
                         let hi = self.coerce_value(hi, &DirectType::Scalar(ScalarKind::Int64))?;
                         let inst = self.builder.ins().call(
-                            self.rng_next_int,
+                            self.runtime[RuntimeFn::RngNextInt],
                             &[object.values[0], lo.values[0], hi.values[0]],
                         );
                         Ok(ValueRef {
@@ -14881,7 +12047,7 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = self
                             .builder
                             .ins()
-                            .call(self.rng_next_float, &[object.values[0]]);
+                            .call(self.runtime[RuntimeFn::RngNextFloat], &[object.values[0]]);
                         Ok(ValueRef {
                             values: self.builder.inst_results(inst).to_vec(),
                             ty: DirectType::Scalar(ScalarKind::Float64),
@@ -14892,10 +12058,10 @@ impl<'a> FunctionCompiler<'a> {
                         let argument = ordered[0];
                         let vector = self.load_operand(&argument.value)?;
                         let vector = self.ensure_opaque(vector)?;
-                        let _ = self
-                            .builder
-                            .ins()
-                            .call(self.rng_shuffle, &[object.values[0], vector.values[0]]);
+                        let _ = self.builder.ins().call(
+                            self.runtime[RuntimeFn::RngShuffle],
+                            &[object.values[0], vector.values[0]],
+                        );
                         let Some(place) = &argument.writeback_place else {
                             return Err(
                                 "direct backend expected `shuffle()` to carry a mutable argument writeback place"
@@ -14952,7 +12118,7 @@ impl<'a> FunctionCompiler<'a> {
                         let column =
                             self.coerce_value(column, &DirectType::Scalar(ScalarKind::Int32))?;
                         let inst = self.builder.ins().call(
-                            self.array_slice,
+                            self.runtime[RuntimeFn::ArraySlice],
                             &[
                                 object.values[0],
                                 start.values[0],
@@ -14973,7 +12139,7 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = self
                             .builder
                             .ins()
-                            .call(self.array_shape, &[object.values[0]]);
+                            .call(self.runtime[RuntimeFn::ArrayShape], &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named("list".to_string(), vec![Type::named("int64")]),
@@ -14981,7 +12147,10 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "len" => {
                         ordered_named_args(&[], args)?;
-                        let inst = self.builder.ins().call(self.array_len, &[object.values[0]]);
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.runtime[RuntimeFn::ArrayLen], &[object.values[0]]);
                         Ok(ValueRef {
                             values: self.builder.inst_results(inst).to_vec(),
                             ty: DirectType::Scalar(ScalarKind::Int64),
@@ -14992,7 +12161,7 @@ impl<'a> FunctionCompiler<'a> {
                         let coordinates = self.load_operand(&ordered[0].value)?;
                         let coordinates = self.ensure_opaque(coordinates)?;
                         let inst = self.builder.ins().call(
-                            self.array_get,
+                            self.runtime[RuntimeFn::ArrayGet],
                             &[object.values[0], coordinates.values[0], zero, zero],
                         );
                         Ok(self.owned_opaque_result(
@@ -15007,7 +12176,7 @@ impl<'a> FunctionCompiler<'a> {
                         let value = self
                             .load_operand_as_opaque_direct(&ordered[1].value, &element_direct_ty)?;
                         let inst = self.builder.ins().call(
-                            self.array_set_in_place,
+                            self.runtime[RuntimeFn::ArraySetInPlace],
                             &[
                                 object.values[0],
                                 coordinates.values[0],
@@ -15029,7 +12198,7 @@ impl<'a> FunctionCompiler<'a> {
                         let value = self
                             .load_operand_as_opaque_direct(&ordered[0].value, &element_direct_ty)?;
                         let inst = self.builder.ins().call(
-                            self.array_fill_in_place,
+                            self.runtime[RuntimeFn::ArrayFillInPlace],
                             &[object.values[0], value.values[0], zero, zero],
                         );
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
@@ -15065,7 +12234,7 @@ impl<'a> FunctionCompiler<'a> {
                         }
                         let coordinates = self.ensure_opaque(coordinates)?;
                         let inst = self.builder.ins().call(
-                            self.array_index,
+                            self.runtime[RuntimeFn::ArrayIndex],
                             &[
                                 object.values[0],
                                 coordinates.values[0],
@@ -15098,7 +12267,7 @@ impl<'a> FunctionCompiler<'a> {
                         let column =
                             self.coerce_value(column, &DirectType::Scalar(ScalarKind::Int32))?;
                         let inst = self.builder.ins().call(
-                            self.array_set_index_in_place,
+                            self.runtime[RuntimeFn::ArraySetIndexInPlace],
                             &[
                                 object.values[0],
                                 coordinates.values[0],
@@ -15132,7 +12301,7 @@ impl<'a> FunctionCompiler<'a> {
                             .iconst(types::I64, direct_array_dtype_code(&result_type)?);
                         let callback = self.ensure_opaque(callback)?;
                         let inst = self.builder.ins().call(
-                            self.array_map,
+                            self.runtime[RuntimeFn::ArrayMap],
                             &[
                                 object.values[0],
                                 callback.values[0],
@@ -15159,7 +12328,7 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let reduction = self.builder.ins().iconst(types::I64, reduction_code);
                         let inst = self.builder.ins().call(
-                            self.array_reduce,
+                            self.runtime[RuntimeFn::ArrayReduce],
                             &[object.values[0], reduction, zero, zero],
                         );
                         let target = if field == "mean" {
@@ -15196,7 +12365,7 @@ impl<'a> FunctionCompiler<'a> {
                         let arithmetic_mode =
                             self.builder.ins().iconst(types::I64, arithmetic_mode);
                         let inst = self.builder.ins().call(
-                            self.array_binary,
+                            self.runtime[RuntimeFn::ArrayBinary],
                             &[
                                 object.values[0],
                                 rhs.values[0],
@@ -15269,7 +12438,7 @@ impl<'a> FunctionCompiler<'a> {
                         let column =
                             self.coerce_value(column, &DirectType::Scalar(ScalarKind::Int32))?;
                         let inst = self.builder.ins().call(
-                            self.vec_slice,
+                            self.runtime[RuntimeFn::VecSlice],
                             &[
                                 object.values[0],
                                 start.values[0],
@@ -15307,7 +12476,7 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = self
                             .builder
                             .ins()
-                            .call(self.vec_is_empty, &[object.values[0]]);
+                            .call(self.runtime[RuntimeFn::VecIsEmpty], &[object.values[0]]);
                         Ok(ValueRef {
                             values: self.builder.inst_results(inst).to_vec(),
                             ty: DirectType::Scalar(ScalarKind::Bool),
@@ -15341,9 +12510,10 @@ impl<'a> FunctionCompiler<'a> {
                                 value
                             };
                             let kind = self.builder.ins().iconst(types::I64, kind);
-                            self.builder
-                                .ins()
-                                .call(self.vec_push_scalar, &[object.values[0], bits, kind]);
+                            self.builder.ins().call(
+                                self.runtime[RuntimeFn::VecPushScalar],
+                                &[object.values[0], bits, kind],
+                            );
                             if let Some(place) = receiver_place {
                                 if !self.receiver_store_is_redundant(place) {
                                     self.store_place(place, object.clone())?;
@@ -15354,10 +12524,10 @@ impl<'a> FunctionCompiler<'a> {
                         let value = self
                             .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
                         let value = self.transfer_owned_opaque_value(&value);
-                        let result = self
-                            .builder
-                            .ins()
-                            .call(self.vec_push_in_place, &[object.values[0], value]);
+                        let result = self.builder.ins().call(
+                            self.runtime[RuntimeFn::VecPushInPlace],
+                            &[object.values[0], value],
+                        );
                         self.release_opaque_handle(self.builder.inst_results(result)[0]);
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
@@ -15385,7 +12555,7 @@ impl<'a> FunctionCompiler<'a> {
                         let zero = self.builder.ins().iconst(types::I64, 0);
                         let opcode = self.builder.ins().iconst(types::I64, 0);
                         let inst = self.builder.ins().call(
-                            self.collection_operation,
+                            self.runtime[RuntimeFn::CollectionOperation],
                             &[object.values[0], zero, index, opcode],
                         );
                         if let Some(place) = receiver_place {
@@ -15406,10 +12576,10 @@ impl<'a> FunctionCompiler<'a> {
                         let loaded_index = self.load_operand(&argument.value)?;
                         let index = self
                             .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.vec_get, &[object.values[0], index.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::VecGet],
+                            &[object.values[0], index.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             class_args
@@ -15428,10 +12598,10 @@ impl<'a> FunctionCompiler<'a> {
                         let loaded_index = self.load_operand(&argument.value)?;
                         let index = self
                             .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.vec_index_option, &[object.values[0], index.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::VecIndexOption],
+                            &[object.values[0], index.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             element_ty.clone(),
@@ -15454,7 +12624,7 @@ impl<'a> FunctionCompiler<'a> {
                         let index = self
                             .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
                         let inst = self.builder.ins().call(
-                            self.vec_take_index_in_place,
+                            self.runtime[RuntimeFn::VecTakeIndexInPlace],
                             &[object.values[0], index.values[0]],
                         );
                         self.store_place(receiver_place, object.clone())?;
@@ -15519,7 +12689,7 @@ impl<'a> FunctionCompiler<'a> {
                             )?
                         };
                         let inst = self.builder.ins().call(
-                            self.vec_index,
+                            self.runtime[RuntimeFn::VecIndex],
                             &[
                                 object.values[0],
                                 normalized_index,
@@ -15547,7 +12717,7 @@ impl<'a> FunctionCompiler<'a> {
                             .load_operand_as_opaque_direct(&value_arg.value, &element_direct_ty)?;
                         let value = self.transfer_owned_opaque_value(&value);
                         let inst = self.builder.ins().call(
-                            self.vec_set_in_place,
+                            self.runtime[RuntimeFn::VecSetInPlace],
                             &[object.values[0], index.values[0], value],
                         );
                         if let Some(place) = receiver_place {
@@ -15589,7 +12759,7 @@ impl<'a> FunctionCompiler<'a> {
                         )?;
                         let value = self.transfer_owned_opaque_value(&value);
                         let result = self.builder.ins().call(
-                            self.vec_set_index_in_place,
+                            self.runtime[RuntimeFn::VecSetIndexInPlace],
                             &[
                                 object.values[0],
                                 normalized_index,
@@ -15616,7 +12786,7 @@ impl<'a> FunctionCompiler<'a> {
                         let opcode = self.builder.ins().iconst(types::I64, 1);
                         let zero = self.builder.ins().iconst(types::I64, 0);
                         let inst = self.builder.ins().call(
-                            self.collection_operation,
+                            self.runtime[RuntimeFn::CollectionOperation],
                             &[object.values[0], value.values[0], zero, opcode],
                         );
                         if let Some(place) = receiver_place {
@@ -15639,7 +12809,7 @@ impl<'a> FunctionCompiler<'a> {
                             .iconst(types::I64, if field == "index" { 2 } else { 3 });
                         let zero = self.builder.ins().iconst(types::I64, 0);
                         let inst = self.builder.ins().call(
-                            self.collection_operation,
+                            self.runtime[RuntimeFn::CollectionOperation],
                             &[object.values[0], value.values[0], zero, opcode],
                         );
                         let boxed = self.owned_opaque_result(
@@ -15662,7 +12832,7 @@ impl<'a> FunctionCompiler<'a> {
                         let second = self
                             .coerce_value(loaded_second, &DirectType::Scalar(ScalarKind::Int64))?;
                         let inst = self.builder.ins().call(
-                            self.vec_swap_in_place,
+                            self.runtime[RuntimeFn::VecSwapInPlace],
                             &[object.values[0], first.values[0], second.values[0]],
                         );
                         if let Some(place) = receiver_place {
@@ -15680,10 +12850,10 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let value = self
                             .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.vec_contains, &[object.values[0], value.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::VecContains],
+                            &[object.values[0], value.values[0]],
+                        );
                         Ok(ValueRef {
                             values: self.builder.inst_results(inst).to_vec(),
                             ty: DirectType::Scalar(ScalarKind::Bool),
@@ -15703,7 +12873,7 @@ impl<'a> FunctionCompiler<'a> {
                             .load_operand_as_opaque_direct(&value_arg.value, &element_direct_ty)?;
                         let value = self.transfer_owned_opaque_value(&value);
                         let inst = self.builder.ins().call(
-                            self.vec_insert_in_place,
+                            self.runtime[RuntimeFn::VecInsertInPlace],
                             &[object.values[0], index.values[0], value],
                         );
                         if let Some(place) = receiver_place {
@@ -15717,10 +12887,10 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `clear()` to take no arguments"
                                 .to_string());
                         }
-                        let result = self
-                            .builder
-                            .ins()
-                            .call(self.vec_clear_in_place, &[object.values[0]]);
+                        let result = self.builder.ins().call(
+                            self.runtime[RuntimeFn::VecClearInPlace],
+                            &[object.values[0]],
+                        );
                         self.release_opaque_handle(self.builder.inst_results(result)[0]);
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
@@ -15732,10 +12902,10 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `reverse()` to take no arguments"
                                 .to_string());
                         }
-                        let result = self
-                            .builder
-                            .ins()
-                            .call(self.vec_reverse_in_place, &[object.values[0]]);
+                        let result = self.builder.ins().call(
+                            self.runtime[RuntimeFn::VecReverseInPlace],
+                            &[object.values[0]],
+                        );
                         self.release_opaque_handle(self.builder.inst_results(result)[0]);
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
@@ -15752,10 +12922,10 @@ impl<'a> FunctionCompiler<'a> {
                         let loaded_value = self.load_operand(&argument.value)?;
                         let value = self.ensure_opaque(loaded_value)?;
                         let value = self.transfer_owned_opaque_value(&value);
-                        let result = self
-                            .builder
-                            .ins()
-                            .call(self.vec_extend_in_place, &[object.values[0], value]);
+                        let result = self.builder.ins().call(
+                            self.runtime[RuntimeFn::VecExtendInPlace],
+                            &[object.values[0], value],
+                        );
                         self.release_opaque_handle(self.builder.inst_results(result)[0]);
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
@@ -15778,7 +12948,7 @@ impl<'a> FunctionCompiler<'a> {
                         let zero = self.builder.ins().iconst(types::I64, 0);
                         let opcode = self.builder.ins().iconst(types::I64, 4);
                         let inst = self.builder.ins().call(
-                            self.collection_operation,
+                            self.runtime[RuntimeFn::CollectionOperation],
                             &[object.values[0], zero, additional.values[0], opcode],
                         );
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
@@ -15809,7 +12979,10 @@ impl<'a> FunctionCompiler<'a> {
                                 "direct backend expected `len()` to take no arguments".to_string()
                             );
                         }
-                        let inst = self.builder.ins().call(self.map_len, &[object.values[0]]);
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.runtime[RuntimeFn::MapLen], &[object.values[0]]);
                         let len = self.builder.inst_results(inst)[0];
                         Ok(ValueRef {
                             values: vec![len],
@@ -15826,7 +12999,7 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = self
                             .builder
                             .ins()
-                            .call(self.map_is_empty, &[object.values[0]]);
+                            .call(self.runtime[RuntimeFn::MapIsEmpty], &[object.values[0]]);
                         Ok(ValueRef {
                             values: self.builder.inst_results(inst).to_vec(),
                             ty: DirectType::Scalar(ScalarKind::Bool),
@@ -15842,15 +13015,17 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = if let Some(text) = str_literal_key(&argument.value, &key_ty) {
                             // A literal `str` key is looked up without a box.
                             let (key_ptr, key_len) = self.string_constant(text.as_bytes())?;
-                            self.builder
-                                .ins()
-                                .call(self.map_get_str, &[object.values[0], key_ptr, key_len])
+                            self.builder.ins().call(
+                                self.runtime[RuntimeFn::MapGetStr],
+                                &[object.values[0], key_ptr, key_len],
+                            )
                         } else {
                             let key = self
                                 .load_operand_as_opaque_direct(&argument.value, &key_direct_ty)?;
-                            self.builder
-                                .ins()
-                                .call(self.map_get, &[object.values[0], key.values[0]])
+                            self.builder.ins().call(
+                                self.runtime[RuntimeFn::MapGet],
+                                &[object.values[0], key.values[0]],
+                            )
                         };
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
@@ -15873,7 +13048,7 @@ impl<'a> FunctionCompiler<'a> {
                         let column = self
                             .coerce_value(loaded_column, &DirectType::Scalar(ScalarKind::Int32))?;
                         let inst = self.builder.ins().call(
-                            self.map_index,
+                            self.runtime[RuntimeFn::MapIndex],
                             &[
                                 object.values[0],
                                 key.values[0],
@@ -15898,10 +13073,10 @@ impl<'a> FunctionCompiler<'a> {
                             self.load_operand_as_opaque_direct(&value_arg.value, &value_direct_ty)?;
                         let key = self.transfer_owned_opaque_value(&key);
                         let value = self.transfer_owned_opaque_value(&value);
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.map_set_in_place, &[object.values[0], key, value]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::MapSetInPlace],
+                            &[object.values[0], key, value],
+                        );
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
                         }
@@ -15930,7 +13105,7 @@ impl<'a> FunctionCompiler<'a> {
                         let key = self.transfer_owned_opaque_value(&key);
                         let value = self.transfer_owned_opaque_value(&value);
                         let result = self.builder.ins().call(
-                            self.map_set_index_in_place,
+                            self.runtime[RuntimeFn::MapSetIndexInPlace],
                             &[
                                 object.values[0],
                                 key,
@@ -15954,10 +13129,10 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let key =
                             self.load_operand_as_opaque_direct(&argument.value, &key_direct_ty)?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.map_remove_in_place, &[object.values[0], key.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::MapRemoveInPlace],
+                            &[object.values[0], key.values[0]],
+                        );
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
                         }
@@ -15975,10 +13150,10 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let key =
                             self.load_operand_as_opaque_direct(&argument.value, &key_direct_ty)?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.map_contains_key, &[object.values[0], key.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::MapContainsKey],
+                            &[object.values[0], key.values[0]],
+                        );
                         Ok(ValueRef {
                             values: self.builder.inst_results(inst).to_vec(),
                             ty: DirectType::Scalar(ScalarKind::Bool),
@@ -15990,7 +13165,10 @@ impl<'a> FunctionCompiler<'a> {
                                 "direct backend expected `keys()` to take no arguments".to_string()
                             );
                         }
-                        let inst = self.builder.ins().call(self.map_keys, &[object.values[0]]);
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.runtime[RuntimeFn::MapKeys], &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named("list".to_string(), vec![key_ty.clone()]),
@@ -16004,7 +13182,7 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = self
                             .builder
                             .ins()
-                            .call(self.map_values, &[object.values[0]]);
+                            .call(self.runtime[RuntimeFn::MapValues], &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named("list".to_string(), vec![value_ty.clone()]),
@@ -16015,7 +13193,10 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `items()` to take no arguments"
                                 .to_string());
                         }
-                        let inst = self.builder.ins().call(self.map_items, &[object.values[0]]);
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.runtime[RuntimeFn::MapItems], &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -16029,10 +13210,10 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `clear()` to take no arguments"
                                 .to_string());
                         }
-                        let result = self
-                            .builder
-                            .ins()
-                            .call(self.map_clear_in_place, &[object.values[0]]);
+                        let result = self.builder.ins().call(
+                            self.runtime[RuntimeFn::MapClearInPlace],
+                            &[object.values[0]],
+                        );
                         self.release_opaque_handle(self.builder.inst_results(result)[0]);
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
@@ -16049,10 +13230,10 @@ impl<'a> FunctionCompiler<'a> {
                         let loaded_value = self.load_operand(&argument.value)?;
                         let value = self.ensure_opaque(loaded_value)?;
                         let value = self.transfer_owned_opaque_value(&value);
-                        let result = self
-                            .builder
-                            .ins()
-                            .call(self.map_extend_in_place, &[object.values[0], value]);
+                        let result = self.builder.ins().call(
+                            self.runtime[RuntimeFn::MapExtendInPlace],
+                            &[object.values[0], value],
+                        );
                         self.release_opaque_handle(self.builder.inst_results(result)[0]);
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
@@ -16075,7 +13256,7 @@ impl<'a> FunctionCompiler<'a> {
                         let zero = self.builder.ins().iconst(types::I64, 0);
                         let opcode = self.builder.ins().iconst(types::I64, 4);
                         let inst = self.builder.ins().call(
-                            self.collection_operation,
+                            self.runtime[RuntimeFn::CollectionOperation],
                             &[object.values[0], zero, additional.values[0], opcode],
                         );
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
@@ -16105,7 +13286,10 @@ impl<'a> FunctionCompiler<'a> {
                                 "direct backend expected `len()` to take no arguments".to_string()
                             );
                         }
-                        let inst = self.builder.ins().call(self.set_len, &[object.values[0]]);
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.runtime[RuntimeFn::SetLen], &[object.values[0]]);
                         let len = self.builder.inst_results(inst)[0];
                         Ok(ValueRef {
                             values: vec![len],
@@ -16122,7 +13306,7 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = self
                             .builder
                             .ins()
-                            .call(self.set_is_empty, &[object.values[0]]);
+                            .call(self.runtime[RuntimeFn::SetIsEmpty], &[object.values[0]]);
                         Ok(ValueRef {
                             values: self.builder.inst_results(inst).to_vec(),
                             ty: DirectType::Scalar(ScalarKind::Bool),
@@ -16141,14 +13325,15 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = if value.ty == DirectType::Scalar(ScalarKind::Int64) {
                             // An `int64` needle is compared without a box.
                             self.builder.ins().call(
-                                self.set_contains_int64,
+                                self.runtime[RuntimeFn::SetContainsInt64],
                                 &[object.values[0], value.values[0]],
                             )
                         } else {
                             let value = self.ensure_opaque(value)?;
-                            self.builder
-                                .ins()
-                                .call(self.set_contains, &[object.values[0], value.values[0]])
+                            self.builder.ins().call(
+                                self.runtime[RuntimeFn::SetContains],
+                                &[object.values[0], value.values[0]],
+                            )
                         };
                         Ok(ValueRef {
                             values: self.builder.inst_results(inst).to_vec(),
@@ -16165,9 +13350,10 @@ impl<'a> FunctionCompiler<'a> {
                         let value = self
                             .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
                         let value = self.transfer_owned_opaque_value(&value);
-                        self.builder
-                            .ins()
-                            .call(self.set_insert_in_place, &[object.values[0], value]);
+                        self.builder.ins().call(
+                            self.runtime[RuntimeFn::SetInsertInPlace],
+                            &[object.values[0], value],
+                        );
                         if let Some(place) = receiver_place {
                             self.store_place(place, object.clone())?;
                         }
@@ -16187,7 +13373,7 @@ impl<'a> FunctionCompiler<'a> {
                             .ins()
                             .iconst(types::I64, if field == "remove" { 5 } else { 6 });
                         let inst = self.builder.ins().call(
-                            self.collection_operation,
+                            self.runtime[RuntimeFn::CollectionOperation],
                             &[object.values[0], value.values[0], zero, opcode],
                         );
                         if let Some(place) = receiver_place {
@@ -16204,7 +13390,7 @@ impl<'a> FunctionCompiler<'a> {
                         let zero = self.builder.ins().iconst(types::I64, 0);
                         let opcode = self.builder.ins().iconst(types::I64, 7);
                         let inst = self.builder.ins().call(
-                            self.collection_operation,
+                            self.runtime[RuntimeFn::CollectionOperation],
                             &[object.values[0], zero, zero, opcode],
                         );
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
@@ -16229,7 +13415,7 @@ impl<'a> FunctionCompiler<'a> {
                         let zero = self.builder.ins().iconst(types::I64, 0);
                         let opcode = self.builder.ins().iconst(types::I64, 4);
                         let inst = self.builder.ins().call(
-                            self.collection_operation,
+                            self.runtime[RuntimeFn::CollectionOperation],
                             &[object.values[0], zero, additional.values[0], opcode],
                         );
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
@@ -16248,10 +13434,10 @@ impl<'a> FunctionCompiler<'a> {
                         let loaded_index = self.load_operand(&argument.value)?;
                         let index = self
                             .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.set_index_option, &[object.values[0], index.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::SetIndexOption],
+                            &[object.values[0], index.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             optional_type(element_ty),
@@ -16274,7 +13460,7 @@ impl<'a> FunctionCompiler<'a> {
                         let index = self
                             .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
                         let inst = self.builder.ins().call(
-                            self.set_take_index_in_place,
+                            self.runtime[RuntimeFn::SetTakeIndexInPlace],
                             &[object.values[0], index.values[0]],
                         );
                         self.store_place(receiver_place, object.clone())?;
@@ -16302,7 +13488,7 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = self
                             .builder
                             .ins()
-                            .call(self.file_read_all, &[object.values[0]]);
+                            .call(self.runtime[RuntimeFn::FileReadAll], &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -16324,7 +13510,7 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = self
                             .builder
                             .ins()
-                            .call(self.file_read_bytes, &[object.values[0]]);
+                            .call(self.runtime[RuntimeFn::FileReadBytes], &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -16345,10 +13531,10 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let loaded = self.load_operand(&argument.value)?;
                         let text = self.ensure_opaque(loaded)?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.file_write_all, &[object.values[0], text.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::FileWriteAll],
+                            &[object.values[0], text.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -16366,10 +13552,10 @@ impl<'a> FunctionCompiler<'a> {
                         };
                         let loaded = self.load_operand(&argument.value)?;
                         let bytes = self.ensure_opaque(loaded)?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.file_write_bytes, &[object.values[0], bytes.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::FileWriteBytes],
+                            &[object.values[0], bytes.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -16386,7 +13572,7 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = self
                             .builder
                             .ins()
-                            .call(self.file_flush, &[object.values[0]]);
+                            .call(self.runtime[RuntimeFn::FileFlush], &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -16401,7 +13587,10 @@ impl<'a> FunctionCompiler<'a> {
                                 "direct backend expected `sync()` to take no arguments".to_string()
                             );
                         }
-                        let inst = self.builder.ins().call(self.file_sync, &[object.values[0]]);
+                        let inst = self
+                            .builder
+                            .ins()
+                            .call(self.runtime[RuntimeFn::FileSync], &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -16418,7 +13607,7 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = self
                             .builder
                             .ins()
-                            .call(self.file_close, &[object.values[0]]);
+                            .call(self.runtime[RuntimeFn::FileClose], &[object.values[0]]);
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         Ok(unit_value(&mut self.builder))
                     }
@@ -16436,10 +13625,10 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `stdin()` to take no arguments"
                                 .to_string());
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_child_stdin, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessChildStdin],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             optional_type(Type::Named("process.Pipe".to_string(), Vec::new())),
@@ -16450,10 +13639,10 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `stdout()` to take no arguments"
                                 .to_string());
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_child_stdout, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessChildStdout],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             optional_type(Type::Named("process.Pipe".to_string(), Vec::new())),
@@ -16464,10 +13653,10 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `stderr()` to take no arguments"
                                 .to_string());
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_child_stderr, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessChildStderr],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             optional_type(Type::Named("process.Pipe".to_string(), Vec::new())),
@@ -16476,10 +13665,10 @@ impl<'a> FunctionCompiler<'a> {
                     "wait" => {
                         let bound = ordered_optional_named_args(&["timeout"], args)?;
                         let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_child_wait, &[object.values[0], timeout]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessChildWait],
+                            &[object.values[0], timeout],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named("process.Wait".to_string(), Vec::new()),
@@ -16489,7 +13678,7 @@ impl<'a> FunctionCompiler<'a> {
                         let bound = ordered_optional_named_args(&["timeout"], args)?;
                         let timeout = self.lower_optional_opaque_arg(bound[0])?;
                         let inst = self.builder.ins().call(
-                            self.process_child_wait_or_none,
+                            self.runtime[RuntimeFn::ProcessChildWaitOrNone],
                             &[object.values[0], timeout],
                         );
                         Ok(self.owned_opaque_result(
@@ -16509,10 +13698,10 @@ impl<'a> FunctionCompiler<'a> {
                     "wait_ok" => {
                         let bound = ordered_optional_named_args(&["timeout"], args)?;
                         let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_child_wait_ok, &[object.values[0], timeout]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessChildWaitOk],
+                            &[object.values[0], timeout],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -16530,10 +13719,10 @@ impl<'a> FunctionCompiler<'a> {
                                 "direct backend expected `kill()` to take no arguments".to_string()
                             );
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_child_kill, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessChildKill],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -16552,10 +13741,10 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_child_terminate, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessChildTerminate],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -16572,10 +13761,10 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `close()` to take no arguments"
                                 .to_string());
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_child_close, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessChildClose],
+                            &[object.values[0]],
+                        );
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         Ok(unit_value(&mut self.builder))
                     }
@@ -16595,10 +13784,10 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_pipe_read_all, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessPipeReadAll],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -16613,10 +13802,10 @@ impl<'a> FunctionCompiler<'a> {
                     "read_line" => {
                         let bound = ordered_optional_named_args(&["timeout"], args)?;
                         let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_pipe_read_line, &[object.values[0], timeout]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessPipeReadLine],
+                            &[object.values[0], timeout],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -16640,7 +13829,7 @@ impl<'a> FunctionCompiler<'a> {
                         let count = self.ensure_opaque(count)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
                         let inst = self.builder.ins().call(
-                            self.process_pipe_read_bytes,
+                            self.runtime[RuntimeFn::ProcessPipeReadBytes],
                             &[object.values[0], count.values[0], timeout],
                         );
                         Ok(self.owned_opaque_result(
@@ -16667,7 +13856,7 @@ impl<'a> FunctionCompiler<'a> {
                         let text = self.ensure_opaque(loaded)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
                         let inst = self.builder.ins().call(
-                            self.process_pipe_write_all,
+                            self.runtime[RuntimeFn::ProcessPipeWriteAll],
                             &[object.values[0], text.values[0], timeout],
                         );
                         Ok(self.owned_opaque_result(
@@ -16691,7 +13880,7 @@ impl<'a> FunctionCompiler<'a> {
                         let bytes = self.ensure_opaque(loaded)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
                         let inst = self.builder.ins().call(
-                            self.process_pipe_write_bytes,
+                            self.runtime[RuntimeFn::ProcessPipeWriteBytes],
                             &[object.values[0], bytes.values[0], timeout],
                         );
                         Ok(self.owned_opaque_result(
@@ -16710,10 +13899,10 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `flush()` to take no arguments"
                                 .to_string());
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_pipe_flush, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessPipeFlush],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -16730,10 +13919,10 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `close()` to take no arguments"
                                 .to_string());
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_pipe_close, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessPipeClose],
+                            &[object.values[0]],
+                        );
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         Ok(unit_value(&mut self.builder))
                     }
@@ -16751,10 +13940,10 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `status()` to take no arguments"
                                 .to_string());
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_completed_status, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessCompletedStatus],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named("process.ExitStatus".to_string(), Vec::new()),
@@ -16765,10 +13954,10 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `success()` to take no arguments"
                                 .to_string());
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_completed_success, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessCompletedSuccess],
+                            &[object.values[0]],
+                        );
                         Ok(ValueRef {
                             values: self.builder.inst_results(inst).to_vec(),
                             ty: DirectType::Scalar(ScalarKind::Bool),
@@ -16779,10 +13968,10 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `stdout()` to take no arguments"
                                 .to_string());
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_completed_stdout, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessCompletedStdout],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::named("str"),
@@ -16793,10 +13982,10 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `stderr()` to take no arguments"
                                 .to_string());
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_completed_stderr, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessCompletedStderr],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::named("str"),
@@ -16809,10 +13998,10 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_completed_stdout_bytes, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessCompletedStdoutBytes],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named("list".to_string(), vec![Type::named("uint8")]),
@@ -16825,10 +14014,10 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_completed_stderr_bytes, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessCompletedStderrBytes],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named("list".to_string(), vec![Type::named("uint8")]),
@@ -16839,10 +14028,10 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `check()` to take no arguments"
                                 .to_string());
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_completed_check, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessCompletedCheck],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -16904,7 +14093,10 @@ impl<'a> FunctionCompiler<'a> {
                             let loaded = self.load_operand(&argument.value)?;
                             self.ensure_opaque(loaded)?
                         } else {
-                            let init = self.builder.ins().call(self.map_empty, &[]);
+                            let init = self
+                                .builder
+                                .ins()
+                                .call(self.runtime[RuntimeFn::MapEmpty], &[]);
                             self.owned_opaque_result(
                                 self.builder.inst_results(init).to_vec(),
                                 Type::Named(
@@ -16917,7 +14109,10 @@ impl<'a> FunctionCompiler<'a> {
                             let loaded = self.load_operand(&argument.value)?;
                             self.ensure_opaque(loaded)?
                         } else {
-                            let inst = self.builder.ins().call(self.process_null, &[]);
+                            let inst = self
+                                .builder
+                                .ins()
+                                .call(self.runtime[RuntimeFn::ProcessNull], &[]);
                             self.owned_opaque_result(
                                 self.builder.inst_results(inst).to_vec(),
                                 Type::Named("process.Stdio".to_string(), Vec::new()),
@@ -16927,7 +14122,10 @@ impl<'a> FunctionCompiler<'a> {
                             let loaded = self.load_operand(&argument.value)?;
                             self.ensure_opaque(loaded)?
                         } else {
-                            let inst = self.builder.ins().call(self.process_inherit, &[]);
+                            let inst = self
+                                .builder
+                                .ins()
+                                .call(self.runtime[RuntimeFn::ProcessInherit], &[]);
                             self.owned_opaque_result(
                                 self.builder.inst_results(inst).to_vec(),
                                 Type::Named("process.Stdio".to_string(), Vec::new()),
@@ -16937,7 +14135,10 @@ impl<'a> FunctionCompiler<'a> {
                             let loaded = self.load_operand(&argument.value)?;
                             self.ensure_opaque(loaded)?
                         } else {
-                            let inst = self.builder.ins().call(self.process_inherit, &[]);
+                            let inst = self
+                                .builder
+                                .ins()
+                                .call(self.runtime[RuntimeFn::ProcessInherit], &[]);
                             self.owned_opaque_result(
                                 self.builder.inst_results(inst).to_vec(),
                                 Type::Named("process.Stdio".to_string(), Vec::new()),
@@ -16963,10 +14164,10 @@ impl<'a> FunctionCompiler<'a> {
                                 types::I64,
                                 crate::runtime_value::NANOS_PER_MILLISECOND as i64,
                             );
-                            let inst = self
-                                .builder
-                                .ins()
-                                .call(self.duration_from_i64, &[milliseconds, unit_nanoseconds]);
+                            let inst = self.builder.ins().call(
+                                self.runtime[RuntimeFn::DurationFromI64],
+                                &[milliseconds, unit_nanoseconds],
+                            );
                             self.owned_opaque_result(
                                 self.builder.inst_results(inst).to_vec(),
                                 Type::named("Duration"),
@@ -17004,7 +14205,7 @@ impl<'a> FunctionCompiler<'a> {
                         let max_restarts = self.transfer_owned_opaque_value(&max_restarts);
                         let group = self.transfer_owned_opaque_value(&group);
                         let inst = self.builder.ins().call(
-                            self.process_supervisor_start,
+                            self.runtime[RuntimeFn::ProcessSupervisorStart],
                             &[
                                 object.values[0],
                                 name,
@@ -17034,10 +14235,10 @@ impl<'a> FunctionCompiler<'a> {
                     "wait" => {
                         let bound = ordered_optional_named_args(&["timeout"], args)?;
                         let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_supervisor_wait, &[object.values[0], timeout]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessSupervisorWait],
+                            &[object.values[0], timeout],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named("process.SupervisorWait".to_string(), Vec::new()),
@@ -17047,7 +14248,7 @@ impl<'a> FunctionCompiler<'a> {
                         let bound = ordered_optional_named_args(&["timeout"], args)?;
                         let timeout = self.lower_optional_opaque_arg(bound[0])?;
                         let inst = self.builder.ins().call(
-                            self.process_supervisor_wait_or_none,
+                            self.runtime[RuntimeFn::ProcessSupervisorWaitOrNone],
                             &[object.values[0], timeout],
                         );
                         Ok(self.owned_opaque_result(
@@ -17070,10 +14271,10 @@ impl<'a> FunctionCompiler<'a> {
                                 "direct backend expected `stop()` to take no arguments".to_string()
                             );
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_supervisor_stop, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessSupervisorStop],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -17092,10 +14293,10 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_supervisor_is_empty, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessSupervisorIsEmpty],
+                            &[object.values[0]],
+                        );
                         Ok(ValueRef {
                             values: self.builder.inst_results(inst).to_vec(),
                             ty: DirectType::Scalar(ScalarKind::Bool),
@@ -17106,10 +14307,10 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `close()` to take no arguments"
                                 .to_string());
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.process_supervisor_close, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ProcessSupervisorClose],
+                            &[object.values[0]],
+                        );
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         Ok(unit_value(&mut self.builder))
                     }
@@ -17125,10 +14326,10 @@ impl<'a> FunctionCompiler<'a> {
                     "accept" => {
                         let bound = ordered_optional_named_args(&["timeout"], args)?;
                         let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.tcp_listener_accept, &[object.values[0], timeout]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::TcpListenerAccept],
+                            &[object.values[0], timeout],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -17147,10 +14348,10 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.tcp_listener_local_addr, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::TcpListenerLocalAddr],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -17167,10 +14368,10 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `close()` to take no arguments"
                                 .to_string());
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.tcp_listener_close, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::TcpListenerClose],
+                            &[object.values[0]],
+                        );
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         Ok(unit_value(&mut self.builder))
                     }
@@ -17186,10 +14387,10 @@ impl<'a> FunctionCompiler<'a> {
                     "read_all" => {
                         let bound = ordered_optional_named_args(&["timeout"], args)?;
                         let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.tcp_stream_read_all, &[object.values[0], timeout]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::TcpStreamReadAll],
+                            &[object.values[0], timeout],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -17204,10 +14405,10 @@ impl<'a> FunctionCompiler<'a> {
                     "read_line" => {
                         let bound = ordered_optional_named_args(&["timeout"], args)?;
                         let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.tcp_stream_read_line, &[object.values[0], timeout]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::TcpStreamReadLine],
+                            &[object.values[0], timeout],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -17231,7 +14432,7 @@ impl<'a> FunctionCompiler<'a> {
                         let count = self.ensure_opaque(count)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
                         let inst = self.builder.ins().call(
-                            self.tcp_stream_read_bytes,
+                            self.runtime[RuntimeFn::TcpStreamReadBytes],
                             &[object.values[0], count.values[0], timeout],
                         );
                         Ok(self.owned_opaque_result(
@@ -17260,7 +14461,7 @@ impl<'a> FunctionCompiler<'a> {
                         let count = self.ensure_opaque(count)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
                         let inst = self.builder.ins().call(
-                            self.tcp_stream_read_exact,
+                            self.runtime[RuntimeFn::TcpStreamReadExact],
                             &[object.values[0], count.values[0], timeout],
                         );
                         Ok(self.owned_opaque_result(
@@ -17284,7 +14485,7 @@ impl<'a> FunctionCompiler<'a> {
                         let text = self.ensure_opaque(loaded)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
                         let inst = self.builder.ins().call(
-                            self.tcp_stream_write_all,
+                            self.runtime[RuntimeFn::TcpStreamWriteAll],
                             &[object.values[0], text.values[0], timeout],
                         );
                         Ok(self.owned_opaque_result(
@@ -17305,7 +14506,7 @@ impl<'a> FunctionCompiler<'a> {
                         let bytes = self.ensure_opaque(loaded)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
                         let inst = self.builder.ins().call(
-                            self.tcp_stream_write_bytes,
+                            self.runtime[RuntimeFn::TcpStreamWriteBytes],
                             &[object.values[0], bytes.values[0], timeout],
                         );
                         Ok(self.owned_opaque_result(
@@ -17324,7 +14525,7 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = self
                             .builder
                             .ins()
-                            .call(self.tcp_stream_flush, &[object.values[0]]);
+                            .call(self.runtime[RuntimeFn::TcpStreamFlush], &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -17340,10 +14541,10 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.tcp_stream_local_addr, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::TcpStreamLocalAddr],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -17362,10 +14563,10 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.tcp_stream_peer_addr, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::TcpStreamPeerAddr],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -17384,10 +14585,10 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.tcp_stream_shutdown_read, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::TcpStreamShutdownRead],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -17403,10 +14604,10 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.tcp_stream_shutdown_write, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::TcpStreamShutdownWrite],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -17422,10 +14623,10 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.tcp_stream_shutdown_both, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::TcpStreamShutdownBoth],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -17442,7 +14643,7 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = self
                             .builder
                             .ins()
-                            .call(self.tcp_stream_close, &[object.values[0]]);
+                            .call(self.runtime[RuntimeFn::TcpStreamClose], &[object.values[0]]);
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         Ok(unit_value(&mut self.builder))
                     }
@@ -17472,7 +14673,7 @@ impl<'a> FunctionCompiler<'a> {
                         let text = self.ensure_opaque(loaded_text)?;
                         let timeout = self.lower_optional_opaque_arg(bound[2])?;
                         let inst = self.builder.ins().call(
-                            self.udp_socket_send_text,
+                            self.runtime[RuntimeFn::UdpSocketSendText],
                             &[object.values[0], address.values[0], text.values[0], timeout],
                         );
                         Ok(self.owned_opaque_result(
@@ -17500,7 +14701,7 @@ impl<'a> FunctionCompiler<'a> {
                         let bytes = self.ensure_opaque(loaded_bytes)?;
                         let timeout = self.lower_optional_opaque_arg(bound[2])?;
                         let inst = self.builder.ins().call(
-                            self.udp_socket_send_bytes,
+                            self.runtime[RuntimeFn::UdpSocketSendBytes],
                             &[
                                 object.values[0],
                                 address.values[0],
@@ -17528,7 +14729,7 @@ impl<'a> FunctionCompiler<'a> {
                         let count = self.ensure_opaque(count)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
                         let inst = self.builder.ins().call(
-                            self.udp_socket_recv,
+                            self.runtime[RuntimeFn::UdpSocketRecv],
                             &[object.values[0], count.values[0], timeout],
                         );
                         Ok(self.owned_opaque_result(
@@ -17557,7 +14758,7 @@ impl<'a> FunctionCompiler<'a> {
                         let count = self.ensure_opaque(count)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
                         let inst = self.builder.ins().call(
-                            self.udp_socket_recv_from,
+                            self.runtime[RuntimeFn::UdpSocketRecvFrom],
                             &[object.values[0], count.values[0], timeout],
                         );
                         Ok(self.owned_opaque_result(
@@ -17575,10 +14776,10 @@ impl<'a> FunctionCompiler<'a> {
                         ))
                     }
                     "local_addr" => {
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.udp_socket_local_addr, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::UdpSocketLocalAddr],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -17591,10 +14792,10 @@ impl<'a> FunctionCompiler<'a> {
                         ))
                     }
                     "peer_addr" => {
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.udp_socket_peer_addr, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::UdpSocketPeerAddr],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -17610,7 +14811,7 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = self
                             .builder
                             .ins()
-                            .call(self.udp_socket_close, &[object.values[0]]);
+                            .call(self.runtime[RuntimeFn::UdpSocketClose], &[object.values[0]]);
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         Ok(unit_value(&mut self.builder))
                     }
@@ -17624,21 +14825,27 @@ impl<'a> FunctionCompiler<'a> {
                 let object = self.ensure_opaque(object)?;
                 return match field {
                     "address" => {
-                        let results = self
-                            .runtime_call_results(self.udp_datagram_address, &[object.values[0]]);
+                        let results = self.runtime_call_results(
+                            self.runtime[RuntimeFn::UdpDatagramAddress],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(results, Type::named("str")))
                     }
                     "bytes" => {
-                        let results =
-                            self.runtime_call_results(self.udp_datagram_bytes, &[object.values[0]]);
+                        let results = self.runtime_call_results(
+                            self.runtime[RuntimeFn::UdpDatagramBytes],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             results,
                             Type::Named("list".to_string(), vec![Type::named("uint8")]),
                         ))
                     }
                     "text" => {
-                        let results =
-                            self.runtime_call_results(self.udp_datagram_text, &[object.values[0]]);
+                        let results = self.runtime_call_results(
+                            self.runtime[RuntimeFn::UdpDatagramText],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             results,
                             Type::Named(
@@ -17662,10 +14869,10 @@ impl<'a> FunctionCompiler<'a> {
                     "accept" => {
                         let bound = ordered_optional_named_args(&["timeout"], args)?;
                         let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.http_listener_accept, &[object.values[0], timeout]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::HttpListenerAccept],
+                            &[object.values[0], timeout],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -17679,7 +14886,7 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "local_addr" => {
                         let results = self.runtime_call_results(
-                            self.http_listener_local_addr,
+                            self.runtime[RuntimeFn::HttpListenerLocalAddr],
                             &[object.values[0]],
                         );
                         Ok(self.owned_opaque_result(
@@ -17694,10 +14901,10 @@ impl<'a> FunctionCompiler<'a> {
                         ))
                     }
                     "close" => {
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.http_listener_close, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::HttpListenerClose],
+                            &[object.values[0]],
+                        );
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         Ok(unit_value(&mut self.builder))
                     }
@@ -17711,18 +14918,24 @@ impl<'a> FunctionCompiler<'a> {
                 let object = self.ensure_opaque(object)?;
                 return match field {
                     "method" => {
-                        let results = self
-                            .runtime_call_results(self.http_exchange_method, &[object.values[0]]);
+                        let results = self.runtime_call_results(
+                            self.runtime[RuntimeFn::HttpExchangeMethod],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(results, Type::named("str")))
                     }
                     "path" => {
-                        let results =
-                            self.runtime_call_results(self.http_exchange_path, &[object.values[0]]);
+                        let results = self.runtime_call_results(
+                            self.runtime[RuntimeFn::HttpExchangePath],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(results, Type::named("str")))
                     }
                     "headers" => {
-                        let results = self
-                            .runtime_call_results(self.http_exchange_headers, &[object.values[0]]);
+                        let results = self.runtime_call_results(
+                            self.runtime[RuntimeFn::HttpExchangeHeaders],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             results,
                             Type::Named(
@@ -17733,7 +14946,7 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "body_text" => {
                         let results = self.runtime_call_results(
-                            self.http_exchange_body_text,
+                            self.runtime[RuntimeFn::HttpExchangeBodyText],
                             &[object.values[0]],
                         );
                         Ok(self.owned_opaque_result(
@@ -17749,7 +14962,7 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "body_bytes" => {
                         let results = self.runtime_call_results(
-                            self.http_exchange_body_bytes,
+                            self.runtime[RuntimeFn::HttpExchangeBodyBytes],
                             &[object.values[0]],
                         );
                         Ok(self.owned_opaque_result(
@@ -17770,7 +14983,7 @@ impl<'a> FunctionCompiler<'a> {
                         let text = self.transfer_owned_opaque_value(&text);
                         let headers = self.transfer_owned_opaque_value(&headers);
                         let inst = self.builder.ins().call(
-                            self.http_exchange_respond_text,
+                            self.runtime[RuntimeFn::HttpExchangeRespondText],
                             &[object.values[0], status.values[0], text, headers],
                         );
                         Ok(self.owned_opaque_result(
@@ -17794,7 +15007,7 @@ impl<'a> FunctionCompiler<'a> {
                         let bytes = self.transfer_owned_opaque_value(&bytes);
                         let headers = self.transfer_owned_opaque_value(&headers);
                         let inst = self.builder.ins().call(
-                            self.http_exchange_respond_bytes,
+                            self.runtime[RuntimeFn::HttpExchangeRespondBytes],
                             &[object.values[0], status.values[0], bytes, headers],
                         );
                         Ok(self.owned_opaque_result(
@@ -17816,10 +15029,10 @@ impl<'a> FunctionCompiler<'a> {
                 let object = self.ensure_opaque(object)?;
                 return match field {
                     "status" => {
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.http_response_status, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::HttpResponseStatus],
+                            &[object.values[0]],
+                        );
                         let status = self.builder.inst_results(inst)[0];
                         self.emit_int32_bounds_check(status, None)?;
                         Ok(ValueRef {
@@ -17828,13 +15041,17 @@ impl<'a> FunctionCompiler<'a> {
                         })
                     }
                     "reason" => {
-                        let results = self
-                            .runtime_call_results(self.http_response_reason, &[object.values[0]]);
+                        let results = self.runtime_call_results(
+                            self.runtime[RuntimeFn::HttpResponseReason],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(results, Type::named("str")))
                     }
                     "headers" => {
-                        let results = self
-                            .runtime_call_results(self.http_response_headers, &[object.values[0]]);
+                        let results = self.runtime_call_results(
+                            self.runtime[RuntimeFn::HttpResponseHeaders],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             results,
                             Type::Named(
@@ -17844,8 +15061,10 @@ impl<'a> FunctionCompiler<'a> {
                         ))
                     }
                     "text" => {
-                        let results =
-                            self.runtime_call_results(self.http_response_text, &[object.values[0]]);
+                        let results = self.runtime_call_results(
+                            self.runtime[RuntimeFn::HttpResponseText],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             results,
                             Type::Named(
@@ -17858,8 +15077,10 @@ impl<'a> FunctionCompiler<'a> {
                         ))
                     }
                     "bytes" => {
-                        let results = self
-                            .runtime_call_results(self.http_response_bytes, &[object.values[0]]);
+                        let results = self.runtime_call_results(
+                            self.runtime[RuntimeFn::HttpResponseBytes],
+                            &[object.values[0]],
+                        );
                         Ok(self.owned_opaque_result(
                             results,
                             Type::Named("list".to_string(), vec![Type::named("uint8")]),
@@ -17878,10 +15099,10 @@ impl<'a> FunctionCompiler<'a> {
                     "accept" => {
                         let bound = ordered_optional_named_args(&["timeout"], args)?;
                         let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.websocket_listener_accept, &[object.values[0], timeout]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::WebsocketListenerAccept],
+                            &[object.values[0], timeout],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -17895,7 +15116,7 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "local_addr" => {
                         let results = self.runtime_call_results(
-                            self.websocket_listener_local_addr,
+                            self.runtime[RuntimeFn::WebsocketListenerLocalAddr],
                             &[object.values[0]],
                         );
                         Ok(self.owned_opaque_result(
@@ -17929,7 +15150,7 @@ impl<'a> FunctionCompiler<'a> {
                         let text = self.ensure_opaque(loaded_text)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
                         let inst = self.builder.ins().call(
-                            self.websocket_send_text,
+                            self.runtime[RuntimeFn::WebsocketSendText],
                             &[object.values[0], text.values[0], timeout],
                         );
                         Ok(self.owned_opaque_result(
@@ -17950,7 +15171,7 @@ impl<'a> FunctionCompiler<'a> {
                         let bytes = self.ensure_opaque(loaded_bytes)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
                         let inst = self.builder.ins().call(
-                            self.websocket_send_bytes,
+                            self.runtime[RuntimeFn::WebsocketSendBytes],
                             &[object.values[0], bytes.values[0], timeout],
                         );
                         Ok(self.owned_opaque_result(
@@ -17964,10 +15185,10 @@ impl<'a> FunctionCompiler<'a> {
                     "recv_text" => {
                         let bound = ordered_optional_named_args(&["timeout"], args)?;
                         let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.websocket_recv_text, &[object.values[0], timeout]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::WebsocketRecvText],
+                            &[object.values[0], timeout],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -17982,10 +15203,10 @@ impl<'a> FunctionCompiler<'a> {
                     "recv_bytes" => {
                         let bound = ordered_optional_named_args(&["timeout"], args)?;
                         let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.websocket_recv_bytes, &[object.values[0], timeout]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::WebsocketRecvBytes],
+                            &[object.values[0], timeout],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -18004,7 +15225,7 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = self
                             .builder
                             .ins()
-                            .call(self.websocket_close, &[object.values[0]]);
+                            .call(self.runtime[RuntimeFn::WebsocketClose], &[object.values[0]]);
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         Ok(unit_value(&mut self.builder))
                     }
@@ -18020,10 +15241,10 @@ impl<'a> FunctionCompiler<'a> {
                     "accept" => {
                         let bound = ordered_optional_named_args(&["timeout"], args)?;
                         let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.unix_listener_accept, &[object.values[0], timeout]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::UnixListenerAccept],
+                            &[object.values[0], timeout],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -18036,10 +15257,10 @@ impl<'a> FunctionCompiler<'a> {
                         ))
                     }
                     "close" => {
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.unix_listener_close, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::UnixListenerClose],
+                            &[object.values[0]],
+                        );
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         Ok(unit_value(&mut self.builder))
                     }
@@ -18055,10 +15276,10 @@ impl<'a> FunctionCompiler<'a> {
                     "read_line" => {
                         let bound = ordered_optional_named_args(&["timeout"], args)?;
                         let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.unix_stream_read_line, &[object.values[0], timeout]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::UnixStreamReadLine],
+                            &[object.values[0], timeout],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -18082,7 +15303,7 @@ impl<'a> FunctionCompiler<'a> {
                         let count = self.ensure_opaque(count)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
                         let inst = self.builder.ins().call(
-                            self.unix_stream_read_exact,
+                            self.runtime[RuntimeFn::UnixStreamReadExact],
                             &[object.values[0], count.values[0], timeout],
                         );
                         Ok(self.owned_opaque_result(
@@ -18106,7 +15327,7 @@ impl<'a> FunctionCompiler<'a> {
                         let text = self.ensure_opaque(loaded_text)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
                         let inst = self.builder.ins().call(
-                            self.unix_stream_write_all,
+                            self.runtime[RuntimeFn::UnixStreamWriteAll],
                             &[object.values[0], text.values[0], timeout],
                         );
                         Ok(self.owned_opaque_result(
@@ -18118,10 +15339,10 @@ impl<'a> FunctionCompiler<'a> {
                         ))
                     }
                     "close" => {
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.unix_stream_close, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::UnixStreamClose],
+                            &[object.values[0]],
+                        );
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         Ok(unit_value(&mut self.builder))
                     }
@@ -18137,10 +15358,10 @@ impl<'a> FunctionCompiler<'a> {
                     "accept" => {
                         let bound = ordered_optional_named_args(&["timeout"], args)?;
                         let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.tls_listener_accept, &[object.values[0], timeout]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::TlsListenerAccept],
+                            &[object.values[0], timeout],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -18154,7 +15375,7 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "local_addr" => {
                         let results = self.runtime_call_results(
-                            self.tls_listener_local_addr,
+                            self.runtime[RuntimeFn::TlsListenerLocalAddr],
                             &[object.values[0]],
                         );
                         Ok(self.owned_opaque_result(
@@ -18169,10 +15390,10 @@ impl<'a> FunctionCompiler<'a> {
                         ))
                     }
                     "close" => {
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.tls_listener_close, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::TlsListenerClose],
+                            &[object.values[0]],
+                        );
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         Ok(unit_value(&mut self.builder))
                     }
@@ -18188,10 +15409,10 @@ impl<'a> FunctionCompiler<'a> {
                     "read_line" => {
                         let bound = ordered_optional_named_args(&["timeout"], args)?;
                         let timeout = self.lower_optional_opaque_arg(bound[0])?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.tls_stream_read_line, &[object.values[0], timeout]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::TlsStreamReadLine],
+                            &[object.values[0], timeout],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -18215,7 +15436,7 @@ impl<'a> FunctionCompiler<'a> {
                         let count = self.ensure_opaque(count)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
                         let inst = self.builder.ins().call(
-                            self.tls_stream_read_exact,
+                            self.runtime[RuntimeFn::TlsStreamReadExact],
                             &[object.values[0], count.values[0], timeout],
                         );
                         Ok(self.owned_opaque_result(
@@ -18239,7 +15460,7 @@ impl<'a> FunctionCompiler<'a> {
                         let text = self.ensure_opaque(loaded_text)?;
                         let timeout = self.lower_optional_opaque_arg(bound[1])?;
                         let inst = self.builder.ins().call(
-                            self.tls_stream_write_all,
+                            self.runtime[RuntimeFn::TlsStreamWriteAll],
                             &[object.values[0], text.values[0], timeout],
                         );
                         Ok(self.owned_opaque_result(
@@ -18254,7 +15475,7 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = self
                             .builder
                             .ins()
-                            .call(self.tls_stream_close, &[object.values[0]]);
+                            .call(self.runtime[RuntimeFn::TlsStreamClose], &[object.values[0]]);
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         Ok(unit_value(&mut self.builder))
                     }
@@ -18324,14 +15545,15 @@ impl<'a> FunctionCompiler<'a> {
                             let timeout = self.ensure_opaque(timeout)?;
                             let value = self.transfer_owned_opaque_value(&value);
                             self.builder.ins().call(
-                                self.channel_send_timeout_value,
+                                self.runtime[RuntimeFn::ChannelSendTimeoutValue],
                                 &[object.values[0], value, timeout.values[0]],
                             )
                         } else {
                             let value = self.transfer_owned_opaque_value(&value);
-                            self.builder
-                                .ins()
-                                .call(self.channel_send, &[object.values[0], value])
+                            self.builder.ins().call(
+                                self.runtime[RuntimeFn::ChannelSend],
+                                &[object.values[0], value],
+                            )
                         };
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
@@ -18360,10 +15582,10 @@ impl<'a> FunctionCompiler<'a> {
                         let value = self
                             .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
                         let value = self.transfer_owned_opaque_value(&value);
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.channel_try_send, &[object.values[0], value]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::ChannelTrySend],
+                            &[object.values[0], value],
+                        );
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::Named(
@@ -18380,7 +15602,7 @@ impl<'a> FunctionCompiler<'a> {
                             [] => self
                                 .builder
                                 .ins()
-                                .call(self.channel_recv, &[object.values[0]]),
+                                .call(self.runtime[RuntimeFn::ChannelRecv], &[object.values[0]]),
                             [argument] => {
                                 if argument.name.as_deref() != Some("timeout")
                                     && argument.name.is_some()
@@ -18393,7 +15615,7 @@ impl<'a> FunctionCompiler<'a> {
                                 let timeout = self.load_operand(&argument.value)?;
                                 let timeout = self.ensure_opaque(timeout)?;
                                 self.builder.ins().call(
-                                    self.channel_recv_timeout_value,
+                                    self.runtime[RuntimeFn::ChannelRecvTimeoutValue],
                                     &[object.values[0], timeout.values[0]],
                                 )
                             }
@@ -18423,7 +15645,7 @@ impl<'a> FunctionCompiler<'a> {
                         let task_group = self.load_operand(&task_group.value)?;
                         let task_group = self.ensure_opaque(task_group)?;
                         let inst = self.builder.ins().call(
-                            self.channel_recv_in_task_group,
+                            self.runtime[RuntimeFn::ChannelRecvInTaskGroup],
                             &[object.values[0], task_group.values[0]],
                         );
                         Ok(self.owned_opaque_result(
@@ -18445,7 +15667,7 @@ impl<'a> FunctionCompiler<'a> {
                             );
                         }
                         let inst = self.builder.ins().call(
-                            self.channel_recv_with_registered_producers,
+                            self.runtime[RuntimeFn::ChannelRecvWithRegisteredProducers],
                             &[object.values[0]],
                         );
                         Ok(self.owned_opaque_result(
@@ -18461,10 +15683,10 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     "poll" => {
                         let inst = match args {
-                            [] => self
-                                .builder
-                                .ins()
-                                .call(self.channel_recv_or_none, &[object.values[0]]),
+                            [] => self.builder.ins().call(
+                                self.runtime[RuntimeFn::ChannelRecvOrNone],
+                                &[object.values[0]],
+                            ),
                             [argument] => {
                                 if argument.name.as_deref() != Some("timeout")
                                     && argument.name.is_some()
@@ -18477,7 +15699,7 @@ impl<'a> FunctionCompiler<'a> {
                                 let timeout = self.load_operand(&argument.value)?;
                                 let timeout = self.ensure_opaque(timeout)?;
                                 self.builder.ins().call(
-                                    self.channel_recv_or_none_timeout_value,
+                                    self.runtime[RuntimeFn::ChannelRecvOrNoneTimeoutValue],
                                     &[object.values[0], timeout.values[0]],
                                 )
                             }
@@ -18507,15 +15729,16 @@ impl<'a> FunctionCompiler<'a> {
                                 let timeout = self.ensure_opaque(timeout)?;
                                 let default = self.transfer_owned_opaque_value(&loaded);
                                 self.builder.ins().call(
-                                    self.channel_recv_or_value_timeout_value,
+                                    self.runtime[RuntimeFn::ChannelRecvOrValueTimeoutValue],
                                     &[object.values[0], default, timeout.values[0]],
                                 )
                             }
                             None => {
                                 let default = self.transfer_owned_opaque_value(&loaded);
-                                self.builder
-                                    .ins()
-                                    .call(self.channel_recv_or_value, &[object.values[0], default])
+                                self.builder.ins().call(
+                                    self.runtime[RuntimeFn::ChannelRecvOrValue],
+                                    &[object.values[0], default],
+                                )
                             }
                         };
                         Ok(self.owned_opaque_result(
@@ -18534,7 +15757,7 @@ impl<'a> FunctionCompiler<'a> {
                         let inst = self
                             .builder
                             .ins()
-                            .call(self.channel_close, &[object.values[0]]);
+                            .call(self.runtime[RuntimeFn::ChannelClose], &[object.values[0]]);
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         Ok(unit_value(&mut self.builder))
                     }
@@ -18549,7 +15772,10 @@ impl<'a> FunctionCompiler<'a> {
                 return match field {
                     "result" => {
                         let inst = match args {
-                            [] => self.builder.ins().call(self.task_join, &[object.values[0]]),
+                            [] => self
+                                .builder
+                                .ins()
+                                .call(self.runtime[RuntimeFn::TaskJoin], &[object.values[0]]),
                             [argument] => {
                                 if argument.name.as_deref() != Some("timeout")
                                     && argument.name.is_some()
@@ -18562,7 +15788,7 @@ impl<'a> FunctionCompiler<'a> {
                                 let timeout = self.load_operand(&argument.value)?;
                                 let timeout = self.ensure_opaque(timeout)?;
                                 self.builder.ins().call(
-                                    self.task_join_timeout_value,
+                                    self.runtime[RuntimeFn::TaskJoinTimeoutValue],
                                     &[object.values[0], timeout.values[0]],
                                 )
                             }
@@ -18586,7 +15812,7 @@ impl<'a> FunctionCompiler<'a> {
                             [] => self
                                 .builder
                                 .ins()
-                                .call(self.task_join_or_none, &[object.values[0]]),
+                                .call(self.runtime[RuntimeFn::TaskJoinOrNone], &[object.values[0]]),
                             [argument] => {
                                 if argument.name.as_deref() != Some("timeout")
                                     && argument.name.is_some()
@@ -18599,7 +15825,7 @@ impl<'a> FunctionCompiler<'a> {
                                 let timeout = self.load_operand(&argument.value)?;
                                 let timeout = self.ensure_opaque(timeout)?;
                                 self.builder.ins().call(
-                                    self.task_join_or_none_timeout_value,
+                                    self.runtime[RuntimeFn::TaskJoinOrNoneTimeoutValue],
                                     &[object.values[0], timeout.values[0]],
                                 )
                             }
@@ -18629,15 +15855,16 @@ impl<'a> FunctionCompiler<'a> {
                                 let timeout = self.ensure_opaque(timeout)?;
                                 let default = self.transfer_owned_opaque_value(&loaded);
                                 self.builder.ins().call(
-                                    self.task_join_or_value_timeout_value,
+                                    self.runtime[RuntimeFn::TaskJoinOrValueTimeoutValue],
                                     &[object.values[0], default, timeout.values[0]],
                                 )
                             }
                             None => {
                                 let default = self.transfer_owned_opaque_value(&loaded);
-                                self.builder
-                                    .ins()
-                                    .call(self.task_join_or_value, &[object.values[0], default])
+                                self.builder.ins().call(
+                                    self.runtime[RuntimeFn::TaskJoinOrValue],
+                                    &[object.values[0], default],
+                                )
                             }
                         };
                         Ok(self.owned_opaque_result(
@@ -18659,10 +15886,10 @@ impl<'a> FunctionCompiler<'a> {
                             return Err("direct backend expected `cancel()` to take no arguments"
                                 .to_string());
                         }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.task_group_cancel, &[object.values[0]]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::TaskGroupCancel],
+                            &[object.values[0]],
+                        );
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         Ok(unit_value(&mut self.builder))
                     }
@@ -18672,10 +15899,10 @@ impl<'a> FunctionCompiler<'a> {
                                 .to_string());
                         }
                         let cancel_before = self.builder.ins().iconst(types::I64, 0);
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.task_group_close, &[object.values[0], cancel_before]);
+                        let inst = self.builder.ins().call(
+                            self.runtime[RuntimeFn::TaskGroupClose],
+                            &[object.values[0], cancel_before],
+                        );
                         self.release_opaque_handle(self.builder.inst_results(inst)[0]);
                         Ok(unit_value(&mut self.builder))
                     }
@@ -18787,7 +16014,7 @@ impl<'a> FunctionCompiler<'a> {
         let probe = self
             .builder
             .ins()
-            .call(self.value_is_union, &[raw.values[0]]);
+            .call(self.runtime[RuntimeFn::ValueIsUnion], &[raw.values[0]]);
         let is_union = self.builder.inst_results(probe)[0];
         let union_block = self.builder.create_block();
         let plain_block = self.builder.create_block();
@@ -18809,17 +16036,18 @@ impl<'a> FunctionCompiler<'a> {
             self.emit_pending_cleanups(true)?;
             let line = self.builder.ins().iconst(types::I64, 0);
             let column = self.builder.ins().iconst(types::I64, 0);
-            self.builder
-                .ins()
-                .call(self.fail_erased_union_mutable_receiver, &[line, column]);
+            self.builder.ins().call(
+                self.runtime[RuntimeFn::FailErasedUnionMutableReceiver],
+                &[line, column],
+            );
             self.builder.ins().trap(TrapCode::unwrap_user(1));
         } else {
             let consumes = candidates[0].1.receiver == Some(MirReceiverKind::Value);
             let consume_flag = self.builder.ins().iconst(types::I64, i64::from(consumes));
-            let inst = self
-                .builder
-                .ins()
-                .call(self.union_active_payload, &[raw.values[0], consume_flag]);
+            let inst = self.builder.ins().call(
+                self.runtime[RuntimeFn::UnionActivePayload],
+                &[raw.values[0], consume_flag],
+            );
             let payload = self.owned_opaque_result(
                 self.builder.inst_results(inst).to_vec(),
                 Type::named("Unknown"),
@@ -18943,10 +16171,10 @@ impl<'a> FunctionCompiler<'a> {
             class_name
         ))?;
         let (class_ptr, class_len) = self.string_constant(class_name.as_bytes())?;
-        let init = self
-            .builder
-            .ins()
-            .call(self.instance_empty, &[class_ptr, class_len]);
+        let init = self.builder.ins().call(
+            self.runtime[RuntimeFn::InstanceEmpty],
+            &[class_ptr, class_len],
+        );
         let current =
             self.owned_opaque_result(self.builder.inst_results(init).to_vec(), target_ty.clone());
         let substitutions = match target_ty {
@@ -18981,7 +16209,7 @@ impl<'a> FunctionCompiler<'a> {
             let loaded = self.transfer_owned_opaque_value(&loaded);
             let (field_ptr, field_len) = self.string_constant(field.name.as_bytes())?;
             self.builder.ins().call(
-                self.instance_set_field_owned,
+                self.runtime[RuntimeFn::InstanceSetFieldOwned],
                 &[current.values[0], field_ptr, field_len, loaded],
             );
         }
@@ -19014,12 +16242,12 @@ impl<'a> FunctionCompiler<'a> {
         let buffer_call = self
             .builder
             .ins()
-            .call(self.arg_buffer_new, &[arg_count_value]);
+            .call(self.runtime[RuntimeFn::ArgBufferNew], &[arg_count_value]);
         let buffer = self.builder.inst_results(buffer_call)[0];
-        let guard_call = self
-            .builder
-            .ins()
-            .call(self.task_arg_buffer_guard, &[buffer, arg_count_value]);
+        let guard_call = self.builder.ins().call(
+            self.runtime[RuntimeFn::TaskArgBufferGuard],
+            &[buffer, arg_count_value],
+        );
         let buffer_guard = self.builder.inst_results(guard_call)[0];
         let expected = function_value_param_types(
             &function_params,
@@ -19045,13 +16273,13 @@ impl<'a> FunctionCompiler<'a> {
             let value = self.ensure_opaque(value)?;
             let index_value = self.builder.ins().iconst(types::I64, index as i64);
             self.builder.ins().call(
-                self.arg_buffer_store,
+                self.runtime[RuntimeFn::ArgBufferStore],
                 &[buffer, index_value, value.values[0]],
             );
         }
         let transfer_defaults = self.builder.ins().iconst(types::I64, 1);
         self.builder.ins().call(
-            self.function_bind_defaults,
+            self.runtime[RuntimeFn::FunctionBindDefaults],
             &[
                 function_value.values[0],
                 buffer,
@@ -19111,11 +16339,12 @@ impl<'a> FunctionCompiler<'a> {
         // Every operation that can trap after raw allocation has completed.
         // Transfer the buffer from the direct cleanup stack to the task runtime
         // only across this allocation-free call boundary.
-        self.builder
-            .ins()
-            .call(self.task_arg_buffer_disarm, &[buffer_guard]);
+        self.builder.ins().call(
+            self.runtime[RuntimeFn::TaskArgBufferDisarm],
+            &[buffer_guard],
+        );
         let call = self.builder.ins().call(
-            self.start_task_call,
+            self.runtime[RuntimeFn::StartTaskCall],
             &[
                 function_value.values[0],
                 buffer,
@@ -19159,10 +16388,10 @@ impl<'a> FunctionCompiler<'a> {
         type_name: &str,
     ) -> std::result::Result<Value, String> {
         let (ptr, len) = self.string_constant(type_name.as_bytes())?;
-        let inst = self
-            .builder
-            .ins()
-            .call(self.value_type_matches, &[value, ptr, len]);
+        let inst = self.builder.ins().call(
+            self.runtime[RuntimeFn::ValueTypeMatches],
+            &[value, ptr, len],
+        );
         Ok(self.builder.inst_results(inst)[0])
     }
 
@@ -19209,7 +16438,7 @@ impl<'a> FunctionCompiler<'a> {
                 let tagged = self
                     .builder
                     .ins()
-                    .call(self.value_has_runtime_type, &[value]);
+                    .call(self.runtime[RuntimeFn::ValueHasRuntimeType], &[value]);
                 let tagged = self.builder.inst_results(tagged)[0];
                 self.builder
                     .ins()
@@ -19234,10 +16463,10 @@ impl<'a> FunctionCompiler<'a> {
                         continue;
                     }
                     let (field_ptr, field_len) = self.string_constant(field.name.as_bytes())?;
-                    let inst = self
-                        .builder
-                        .ins()
-                        .call(self.instance_get_field, &[value, field_ptr, field_len]);
+                    let inst = self.builder.ins().call(
+                        self.runtime[RuntimeFn::InstanceGetField],
+                        &[value, field_ptr, field_len],
+                    );
                     let field_value = self.builder.inst_results(inst)[0];
                     let field_matches = self.value_matches_runtime_type(field_value, &field_ty)?;
                     self.release_opaque_handle(field_value);
@@ -19488,6 +16717,23 @@ fn find_method<'a>(class: Option<&'a MirClass>, field: &str) -> Option<&'a MirMe
         .map(|v| v as _)
 }
 
+fn declare_runtime_helper(
+    module: &mut ObjectModule,
+    function: RuntimeFn,
+) -> std::result::Result<FuncId, String> {
+    let params = function
+        .params()
+        .iter()
+        .map(|param| abi_type(*param))
+        .collect::<Vec<_>>();
+    declare_runtime_function(
+        module,
+        function.symbol(),
+        &params,
+        function.result().map(abi_type),
+    )
+}
+
 fn declare_runtime_function(
     module: &mut ObjectModule,
     name: &str,
@@ -19507,6 +16753,14 @@ fn declare_runtime_function(
             "failed to declare runtime function `{}`: {}",
             name, error
         )),
+    }
+}
+
+fn abi_type(ty: AbiType) -> cranelift_codegen::ir::Type {
+    match ty {
+        AbiType::I32 => types::I32,
+        AbiType::I64 => types::I64,
+        AbiType::F64 => types::F64,
     }
 }
 
@@ -19906,13 +17160,14 @@ fn release_cleanup_thunk_results(
         let boxed = box_thunk_value(codegen, builder, &results[..return_count], &return_ty)?;
         let (class_ptr, class_len) =
             thunk_string_constant(codegen, builder, class_name.as_bytes())?;
-        let record = codegen
-            .object
-            .declare_func_in_func(codegen.record_manager_exit_failure, builder.func);
+        let record = codegen.object.declare_func_in_func(
+            codegen.runtime[RuntimeFn::RecordManagerExitFailure],
+            builder.func,
+        );
         builder.ins().call(record, &[boxed, class_ptr, class_len]);
         let release = codegen
             .object
-            .declare_func_in_func(codegen.release_value, builder.func);
+            .declare_func_in_func(codegen.runtime[RuntimeFn::ReleaseValue], builder.func);
         builder.ins().call(release, &[boxed]);
         let mut cursor = return_count;
         for writeback_ty in codegen
@@ -22231,7 +19486,7 @@ fn box_thunk_value(
         DirectType::Union(union) => {
             let union_inject = codegen
                 .object
-                .declare_func_in_func(codegen.union_inject, builder.func);
+                .declare_func_in_func(codegen.runtime[RuntimeFn::UnionInject], builder.func);
             let encoded = crate::native_runtime::canonical_runtime_type_name(&union.union_type);
             let (ptr, len) = thunk_string_constant(codegen, builder, encoded.as_bytes())?;
             let tag = values[0];
@@ -22270,52 +19525,53 @@ fn box_thunk_value(
         DirectType::Scalar(ScalarKind::Int32) => {
             let box_i32 = codegen
                 .object
-                .declare_func_in_func(codegen.box_i32, builder.func);
+                .declare_func_in_func(codegen.runtime[RuntimeFn::BoxI32], builder.func);
             let inst = builder.ins().call(box_i32, &[values[0]]);
             Ok(builder.inst_results(inst)[0])
         }
         DirectType::Scalar(ScalarKind::Int64) => {
             let box_i64 = codegen
                 .object
-                .declare_func_in_func(codegen.box_i64, builder.func);
+                .declare_func_in_func(codegen.runtime[RuntimeFn::BoxI64], builder.func);
             let inst = builder.ins().call(box_i64, &[values[0]]);
             Ok(builder.inst_results(inst)[0])
         }
         DirectType::Scalar(ScalarKind::Uint64) => {
             let box_u64 = codegen
                 .object
-                .declare_func_in_func(codegen.box_u64, builder.func);
+                .declare_func_in_func(codegen.runtime[RuntimeFn::BoxU64], builder.func);
             let inst = builder.ins().call(box_u64, &[values[0]]);
             Ok(builder.inst_results(inst)[0])
         }
         DirectType::Scalar(ScalarKind::Float32) | DirectType::Scalar(ScalarKind::Float64) => {
             let box_f64 = codegen
                 .object
-                .declare_func_in_func(codegen.box_f64, builder.func);
+                .declare_func_in_func(codegen.runtime[RuntimeFn::BoxF64], builder.func);
             let inst = builder.ins().call(box_f64, &[values[0]]);
             Ok(builder.inst_results(inst)[0])
         }
         DirectType::Scalar(ScalarKind::Bool) => {
             let box_bool = codegen
                 .object
-                .declare_func_in_func(codegen.box_bool, builder.func);
+                .declare_func_in_func(codegen.runtime[RuntimeFn::BoxBool], builder.func);
             let inst = builder.ins().call(box_bool, &[values[0]]);
             Ok(builder.inst_results(inst)[0])
         }
         DirectType::Scalar(ScalarKind::Unit) => {
             let box_unit = codegen
                 .object
-                .declare_func_in_func(codegen.box_unit, builder.func);
+                .declare_func_in_func(codegen.runtime[RuntimeFn::BoxUnit], builder.func);
             let inst = builder.ins().call(box_unit, &[]);
             Ok(builder.inst_results(inst)[0])
         }
         DirectType::PlainClass(class) => {
             let instance_empty = codegen
                 .object
-                .declare_func_in_func(codegen.instance_empty, builder.func);
-            let instance_set_field_owned = codegen
-                .object
-                .declare_func_in_func(codegen.instance_set_field_owned, builder.func);
+                .declare_func_in_func(codegen.runtime[RuntimeFn::InstanceEmpty], builder.func);
+            let instance_set_field_owned = codegen.object.declare_func_in_func(
+                codegen.runtime[RuntimeFn::InstanceSetFieldOwned],
+                builder.func,
+            );
             let (class_ptr, class_len) =
                 thunk_string_constant(codegen, builder, class.class_name.as_bytes())?;
             let init = builder.ins().call(instance_empty, &[class_ptr, class_len]);
@@ -22351,13 +19607,13 @@ fn unbox_thunk_value(
         DirectType::Union(union) => {
             let union_tag = codegen
                 .object
-                .declare_func_in_func(codegen.union_tag, builder.func);
+                .declare_func_in_func(codegen.runtime[RuntimeFn::UnionTag], builder.func);
             let union_payload_copy = codegen
                 .object
-                .declare_func_in_func(codegen.union_payload_copy, builder.func);
+                .declare_func_in_func(codegen.runtime[RuntimeFn::UnionPayloadCopy], builder.func);
             let release_value = codegen
                 .object
-                .declare_func_in_func(codegen.release_value, builder.func);
+                .declare_func_in_func(codegen.runtime[RuntimeFn::ReleaseValue], builder.func);
             let tag_inst = builder.ins().call(union_tag, &[raw]);
             let tag = builder.inst_results(tag_inst)[0];
             let result_types = ty.abi_types();
@@ -22397,35 +19653,35 @@ fn unbox_thunk_value(
         DirectType::Scalar(ScalarKind::Int32) => {
             let unbox_i64 = codegen
                 .object
-                .declare_func_in_func(codegen.unbox_i64, builder.func);
+                .declare_func_in_func(codegen.runtime[RuntimeFn::UnboxI64], builder.func);
             let inst = builder.ins().call(unbox_i64, &[raw]);
             Ok(builder.inst_results(inst).to_vec())
         }
         DirectType::Scalar(ScalarKind::Int64) => {
             let unbox_int64 = codegen
                 .object
-                .declare_func_in_func(codegen.unbox_int64, builder.func);
+                .declare_func_in_func(codegen.runtime[RuntimeFn::UnboxInt64], builder.func);
             let inst = builder.ins().call(unbox_int64, &[raw]);
             Ok(builder.inst_results(inst).to_vec())
         }
         DirectType::Scalar(ScalarKind::Uint64) => {
             let unbox_u64 = codegen
                 .object
-                .declare_func_in_func(codegen.unbox_u64, builder.func);
+                .declare_func_in_func(codegen.runtime[RuntimeFn::UnboxU64], builder.func);
             let inst = builder.ins().call(unbox_u64, &[raw]);
             Ok(builder.inst_results(inst).to_vec())
         }
         DirectType::Scalar(ScalarKind::Float32) | DirectType::Scalar(ScalarKind::Float64) => {
             let unbox_f64 = codegen
                 .object
-                .declare_func_in_func(codegen.unbox_f64, builder.func);
+                .declare_func_in_func(codegen.runtime[RuntimeFn::UnboxF64], builder.func);
             let inst = builder.ins().call(unbox_f64, &[raw]);
             Ok(builder.inst_results(inst).to_vec())
         }
         DirectType::Scalar(ScalarKind::Bool) => {
             let unbox_bool = codegen
                 .object
-                .declare_func_in_func(codegen.unbox_bool, builder.func);
+                .declare_func_in_func(codegen.runtime[RuntimeFn::UnboxBool], builder.func);
             let inst = builder.ins().call(unbox_bool, &[raw]);
             Ok(builder.inst_results(inst).to_vec())
         }
@@ -22433,7 +19689,7 @@ fn unbox_thunk_value(
         DirectType::PlainClass(class) => {
             let instance_get_field = codegen
                 .object
-                .declare_func_in_func(codegen.instance_get_field, builder.func);
+                .declare_func_in_func(codegen.runtime[RuntimeFn::InstanceGetField], builder.func);
             let mut values = Vec::new();
             for field in &class.fields {
                 let (field_ptr, field_len) =
@@ -22444,9 +19700,10 @@ fn unbox_thunk_value(
                 let field_raw = builder.inst_results(inst)[0];
                 values.extend(unbox_thunk_value(codegen, builder, field_raw, &field.ty)?);
                 if !matches!(field.ty, DirectType::Opaque(_) | DirectType::Callable(_)) {
-                    let release_value = codegen
-                        .object
-                        .declare_func_in_func(codegen.release_value, builder.func);
+                    let release_value = codegen.object.declare_func_in_func(
+                        codegen.runtime[RuntimeFn::ReleaseValue],
+                        builder.func,
+                    );
                     builder.ins().call(release_value, &[field_raw]);
                 }
             }
@@ -22523,7 +19780,7 @@ fn release_direct_values(
             if union.owns_handles() {
                 let release_value = codegen
                     .object
-                    .declare_func_in_func(codegen.release_value, builder.func);
+                    .declare_func_in_func(codegen.runtime[RuntimeFn::ReleaseValue], builder.func);
                 let tag = values[0];
                 let handle = values[1];
                 for &index in &union.owning {
@@ -22560,7 +19817,7 @@ fn release_direct_values(
             };
             let release_value = codegen
                 .object
-                .declare_func_in_func(codegen.release_value, builder.func);
+                .declare_func_in_func(codegen.runtime[RuntimeFn::ReleaseValue], builder.func);
             builder.ins().call(release_value, &[value]);
         }
         DirectType::PlainClass(class) => {

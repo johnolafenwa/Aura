@@ -272,7 +272,7 @@ fn marshal_direct_values(
     if !matches!(to, DirectType::Opaque(_) | DirectType::Callable(_)) {
         let release_value = codegen
             .object
-            .declare_func_in_func(codegen.release_value, builder.func);
+            .declare_func_in_func(codegen.runtime[RuntimeFn::ReleaseValue], builder.func);
         builder.ins().call(release_value, &[handle]);
     }
     Ok(converted)
@@ -357,7 +357,7 @@ pub(super) fn retain_direct_values(
         DirectType::Opaque(_) => {
             let retain_value = codegen
                 .object
-                .declare_func_in_func(codegen.retain_value, builder.func);
+                .declare_func_in_func(codegen.runtime[RuntimeFn::RetainValue], builder.func);
             let value = values.first().copied().ok_or({
                 format!(
                     "direct backend retain expected an opaque `{}` value",
@@ -393,7 +393,7 @@ pub(super) fn retain_direct_values(
             }
             let retain_value = codegen
                 .object
-                .declare_func_in_func(codegen.retain_value, builder.func);
+                .declare_func_in_func(codegen.runtime[RuntimeFn::RetainValue], builder.func);
             let (tag, handle) = match values {
                 [tag, handle, ..] => (*tag, *handle),
                 _ => {
@@ -554,7 +554,7 @@ impl NativeCodegen<'_> {
             // captures and frees it.
             let env_release = self
                 .object
-                .declare_func_in_func(self.callable_env_release, builder.func);
+                .declare_func_in_func(self.runtime[RuntimeFn::CallableEnvRelease], builder.func);
             let call = builder.ins().call(env_release, &[env_base]);
             let last = builder.inst_results(call)[0];
             let release_block = builder.create_block();
@@ -570,7 +570,7 @@ impl NativeCodegen<'_> {
             }
             let env_free = self
                 .object
-                .declare_func_in_func(self.callable_env_free, builder.func);
+                .declare_func_in_func(self.runtime[RuntimeFn::CallableEnvFree], builder.func);
             builder.ins().call(env_free, &[env_base]);
             builder.ins().jump(done_block, &[]);
             builder.switch_to_block(done_block);
@@ -613,7 +613,7 @@ impl NativeCodegen<'_> {
             // retaining each capture.
             let env_retain = self
                 .object
-                .declare_func_in_func(self.callable_env_retain, builder.func);
+                .declare_func_in_func(self.runtime[RuntimeFn::CallableEnvRetain], builder.func);
             builder.ins().call(env_retain, &[env_base]);
         } else {
             let captures = load_captures(&mut builder, env_base, &shape.capture_types);
@@ -703,7 +703,7 @@ impl NativeCodegen<'_> {
             .iconst(types::I64, function.span.column as i64);
         let function_value = self
             .object
-            .declare_func_in_func(self.function_value, builder.func);
+            .declare_func_in_func(self.runtime[RuntimeFn::FunctionValue], builder.func);
         let call = builder.ins().call(
             function_value,
             &[
@@ -734,10 +734,10 @@ impl NativeCodegen<'_> {
         let captures = load_captures(&mut builder, env_base, &shape.capture_types);
         let arg_buffer_new = self
             .object
-            .declare_func_in_func(self.arg_buffer_new, builder.func);
+            .declare_func_in_func(self.runtime[RuntimeFn::ArgBufferNew], builder.func);
         let store_owned = self
             .object
-            .declare_func_in_func(self.arg_buffer_store_owned, builder.func);
+            .declare_func_in_func(self.runtime[RuntimeFn::ArgBufferStoreOwned], builder.func);
         let count = builder.ins().iconst(types::I64, key.captures as i64);
         let buffer_call = builder.ins().call(arg_buffer_new, &[count]);
         let buffer = builder.inst_results(buffer_call)[0];
@@ -769,7 +769,7 @@ impl NativeCodegen<'_> {
         let consuming = builder.ins().iconst(types::I64, i64::from(key.consuming));
         let closure_value = self
             .object
-            .declare_func_in_func(self.closure_value, builder.func);
+            .declare_func_in_func(self.runtime[RuntimeFn::ClosureValue], builder.func);
         let call = builder.ins().call(
             closure_value,
             &[function_handle, buffer, count, modes, consuming],
@@ -901,9 +901,10 @@ impl NativeCodegen<'_> {
 
         // A caller's indirect sink handoff (public sinks by contract index,
         // capture sinks by capture index) becomes the callee's own sink list.
-        let claim_sinks = self
-            .object
-            .declare_func_in_func(self.claim_indirect_mutable_sinks, builder.func);
+        let claim_sinks = self.object.declare_func_in_func(
+            self.runtime[RuntimeFn::ClaimIndirectMutableSinks],
+            builder.func,
+        );
         let capture_count = builder.ins().iconst(types::I64, key.captures as i64);
         builder.ins().call(claim_sinks, &[capture_count]);
         let target_ref = self.object.declare_func_in_func(target_id, builder.func);
@@ -1249,9 +1250,21 @@ impl NativeCodegen<'_> {
         &mut self,
         contract: ContractDescriptor,
     ) -> std::result::Result<(), String> {
-        self.define_contract_handle_adapter(contract.drop, self.release_value, false)?;
-        self.define_contract_handle_adapter(contract.retain, self.retain_value, false)?;
-        self.define_contract_handle_adapter(contract.box_value, self.retain_value, true)?;
+        self.define_contract_handle_adapter(
+            contract.drop,
+            self.runtime[RuntimeFn::ReleaseValue],
+            false,
+        )?;
+        self.define_contract_handle_adapter(
+            contract.retain,
+            self.runtime[RuntimeFn::RetainValue],
+            false,
+        )?;
+        self.define_contract_handle_adapter(
+            contract.box_value,
+            self.runtime[RuntimeFn::RetainValue],
+            true,
+        )?;
         self.define_contract_invoke(&contract)?;
         let mut data = DataDescription::new();
         let mut bytes = vec![0u8; DESCRIPTOR_BYTES];
@@ -1382,7 +1395,7 @@ impl NativeCodegen<'_> {
         let count_value = builder.ins().iconst(types::I64, count as i64);
         let bind_defaults = self
             .object
-            .declare_func_in_func(self.function_bind_defaults, builder.func);
+            .declare_func_in_func(self.runtime[RuntimeFn::FunctionBindDefaults], builder.func);
         let keep_defaults_owned = builder.ins().iconst(types::I64, 0);
         builder.ins().call(
             bind_defaults,
@@ -1390,14 +1403,14 @@ impl NativeCodegen<'_> {
         );
         let function_call = self
             .object
-            .declare_func_in_func(self.function_call, builder.func);
+            .declare_func_in_func(self.runtime[RuntimeFn::FunctionCall], builder.func);
         let call = builder
             .ins()
             .call(function_call, &[handle, buffer, count_value]);
         let raw_result = builder.inst_results(call)[0];
         let release_value = self
             .object
-            .declare_func_in_func(self.release_value, builder.func);
+            .declare_func_in_func(self.runtime[RuntimeFn::ReleaseValue], builder.func);
         // An opaque or callable result keeps the runtime's handle, so only
         // a value unboxed into direct words releases it.
         let mut returned = unbox_thunk_value(self, &mut builder, raw_result, &contract.return_ty)?;
