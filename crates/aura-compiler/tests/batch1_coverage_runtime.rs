@@ -143,7 +143,8 @@ def main():
     let mut encoded = encode(source);
     let main = function_mut(&mut encoded, "main");
     let constructor = find_instruction(main, |instruction| {
-        instruction["Assign"]["value"]["Call"]["callee"]["Name"] == "Array.from_list"
+        instruction["Assign"]["value"]["Call"]["callee"]["Runtime"]["op"]
+            == serde_json::json!({ "Function": "ArrayFromList" })
     });
     constructor["Assign"]["value"]["Call"]["args"][0]["value"] = serde_json::json!({ "Int": 1 });
     let forged: MirModule = serde_json::from_value(encoded).expect("forged MIR deserializes");

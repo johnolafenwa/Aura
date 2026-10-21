@@ -5167,11 +5167,14 @@ def main():
                 Instruction::Assign {
                     value:
                         Rvalue::Call {
-                            callee: CallTarget::Name(name),
+                            callee:
+                                CallTarget::Runtime {
+                                    op, receiver: None, ..
+                                },
                             args,
                         },
                     ..
-                } if name == "str.to_bytes" => args.first().map(|argument| &argument.value),
+                } if op.name() == "str.to_bytes" => args.first().map(|argument| &argument.value),
                 _ => None,
             })
             .unwrap_or_else(|| panic!("{function_name} should call str.to_bytes"))
@@ -22995,7 +22998,7 @@ def main():
         };
         *callee = CallTarget::Member {
             object: receiver.clone(),
-            field: op.member_name().to_string(),
+            field: op.name().to_string(),
             receiver_place: receiver_place.clone(),
         };
     }
@@ -23013,6 +23016,21 @@ def main():
         serde_json::to_value(&loaded).expect("MIR serializes"),
         serde_json::to_value(&resolved).expect("MIR serializes")
     );
+}
+
+#[test]
+fn mir_runtime_reports_a_named_builtin_it_does_not_implement() {
+    let module = crate::lower_source_to_mir("def main():\n    pass\n").expect("main should lower");
+    let mut runtime = MirRuntime::new(
+        module,
+        Arc::new(Mutex::new(String::new())),
+        CancellationContext::default(),
+    );
+    let mut env = Env::default();
+    let error = runtime
+        .evaluate_named_builtin("missing", &[], &mut env, None)
+        .expect_err("an unknown built-in must not evaluate");
+    assert_eq!(error.message, "unknown MIR built-in function `missing`");
 }
 
 #[test]
@@ -23046,7 +23064,10 @@ print(byte.wrapping_mul(2))
                 instruction,
                 Instruction::Assign {
                     value: Rvalue::Call {
-                        callee: CallTarget::Runtime { .. },
+                        callee: CallTarget::Runtime {
+                            op: crate::runtime_ops::RuntimeOp::Scalar(_),
+                            ..
+                        },
                         ..
                     },
                     ..
@@ -23082,7 +23103,12 @@ fn step8d_interpreter_rejects_a_runtime_op_without_a_receiver() {
             Instruction::Assign {
                 value:
                     Rvalue::Call {
-                        callee: CallTarget::Runtime { receiver, .. },
+                        callee:
+                            CallTarget::Runtime {
+                                op: crate::runtime_ops::RuntimeOp::Rng(_),
+                                receiver,
+                                ..
+                            },
                         ..
                     },
                 ..

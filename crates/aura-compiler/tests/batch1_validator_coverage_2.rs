@@ -1,5 +1,6 @@
 //! Forged-MIR regressions for validator place typing and metadata lookups.
 
+use aura_compiler::runtime_ops::RuntimeOp;
 use aura_compiler::{emit_host_native_object, lower_source_to_mir, run_mir, MirModule};
 use serde_json::{json, Value};
 
@@ -25,6 +26,22 @@ fn instruction_mut<'a>(function: &'a mut Value, matches: impl Fn(&Value) -> bool
         }
     }
     panic!("expected instruction not found");
+}
+
+/// The function a call names: a `Name` call, or a named built-in that
+/// lowering resolved to a runtime operation with no receiver.
+fn named_callee(instruction: &Value) -> Option<String> {
+    let callee = &instruction["Assign"]["value"]["Call"]["callee"];
+    if let Some(name) = callee["Name"].as_str() {
+        return Some(name.to_string());
+    }
+    let runtime = callee.get("Runtime")?;
+    if !runtime["receiver"].is_null() {
+        return None;
+    }
+    let op: RuntimeOp =
+        serde_json::from_value(runtime["op"].clone()).expect("a runtime callee names a runtime op");
+    Some(op.name().to_string())
 }
 
 fn assert_rejected(encoded: Value, expected: &str) {
@@ -176,9 +193,7 @@ fn forge_named_call_argument(name_fragment: &str, replacement: Value) -> MirModu
     let mut encoded = encode(BYTES_CALLS);
     let main = function_mut(&mut encoded, "main");
     let call = instruction_mut(main, |instruction| {
-        instruction["Assign"]["value"]["Call"]["callee"]["Name"]
-            .as_str()
-            .is_some_and(|name| name.contains(name_fragment))
+        named_callee(instruction).is_some_and(|name| name.contains(name_fragment))
     });
     call["Assign"]["value"]["Call"]["args"][0]["value"] = replacement;
     serde_json::from_value(encoded).expect("forged MIR should deserialize")
@@ -221,9 +236,7 @@ fn divmod_with_untyped_operand_locals_is_rejected() {
     let mut targets = Vec::new();
     for block in main["blocks"].as_array_mut().unwrap() {
         for instruction in block["instructions"].as_array_mut().unwrap() {
-            let is_divmod = instruction["Assign"]["value"]["Call"]["callee"]["Name"]
-                .as_str()
-                .is_some_and(|name| name.ends_with("divmod"));
+            let is_divmod = named_callee(instruction).is_some_and(|name| name.ends_with("divmod"));
             if !is_divmod {
                 continue;
             }

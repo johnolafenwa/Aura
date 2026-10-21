@@ -1,24 +1,47 @@
 //! Resolved runtime operations in MIR (Batch 7 step 8d).
 //!
-//! `resolve_runtime_ops` rewrites a member call to `CallTarget::Runtime`
-//! when its receiver has a concrete built-in type and the member is a
-//! resolved runtime operation (see `crate::runtime_ops`). A receiver whose
-//! type is a type parameter, a union, or a class that declares the member
-//! keeps its `Member` call. The pass is idempotent, so lowering, the
+//! `resolve_runtime_ops` rewrites a call to `CallTarget::Runtime` when it
+//! names a resolved runtime operation (see `crate::runtime_ops`):
+//!
+//! - a member call whose receiver has a concrete built-in type. A receiver
+//!   whose type is a type parameter, a union, or a class that declares the
+//!   member keeps its `Member` call.
+//! - a `Name` call to a built-in function, such as `print`, `range`, or
+//!   `fs::exists`. A user function with the same name keeps its `Name`
+//!   call. `print` and `wait_any` are specialized by their arguments here.
+//!
+//! It also marks each f-string part whose operand is an `int64` as
+//! `MirFormatPart::Int64`. The pass is idempotent, so lowering, the
 //! interpreter's MIR loader, and the native emitter can each run it.
 //!
-//! `validate_runtime_ops` rejects an op that does not apply to its
-//! receiver, or that is called with arguments its parameters do not bind.
+//! `validate_runtime_ops` rejects an op that does not apply to its receiver
+//! or arguments, or that is called with arguments its parameters do not
+//! bind.
 
 use super::{CallTarget, Instruction, MirFunction, MirLoanValidationContext, MirModule, Rvalue};
-use crate::mir::{MirArg, Operand};
-use crate::runtime_ops::RuntimeOp;
+use crate::call::CallableParam;
+use crate::mir::{MirArg, MirFormatPart, Operand};
+use crate::runtime_ops::{builtin_function_for_name, FunctionOp, PrintKind, RuntimeOp};
+use crate::sema::Type;
 
-/// Rewrites every member call that names a resolved runtime operation.
+/// Whether `function` is the MIR body lowering gives a runtime-provided
+/// builtin module declaration, such as `fs::exists`, so that a function
+/// value can call it. A wrapper has its builtin's name and calls it, so it
+/// does not shadow the builtin.
+pub(crate) fn is_builtin_wrapper(function: &MirFunction) -> bool {
+    function.source_path.is_none()
+        && crate::builtin_modules::builtin_module_namespace(std::slice::from_ref(
+            &function.module_name,
+        ))
+        .is_some()
+}
+
+/// Rewrites every call that names a resolved runtime operation, and every
+/// `int64` f-string part.
 pub(crate) fn resolve_runtime_ops(module: &mut MirModule) {
     let rewrites = {
-        // A module the validator cannot read keeps its member calls; the
-        // validator reports what is wrong with it.
+        // A module the validator cannot read keeps its calls; the validator
+        // reports what is wrong with it.
         let Ok(context) = MirLoanValidationContext::new(module) else {
             return;
         };
@@ -39,29 +62,49 @@ pub(crate) fn resolve_runtime_ops(module: &mut MirModule) {
                 .as_mut()
                 .expect("a top-level rewrite has a top-level function"),
         };
-        // `collect_rewrites` recorded only member calls, so each rewrite
-        // finds one.
-        if let Instruction::Assign {
-            value: Rvalue::Call { callee, .. },
-            ..
-        }
-        | Instruction::WriteLoan {
-            value: Rvalue::Call { callee, .. },
-            ..
-        } = &mut function.blocks[rewrite.block].instructions[rewrite.instruction]
+        // Rewrites are collected from assignments and loan writes, so each
+        // one finds the rvalue it was collected from.
+        let instruction = &mut function.blocks[rewrite.block].instructions[rewrite.instruction];
+        if let Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. } =
+            instruction
         {
-            if let CallTarget::Member {
-                object,
-                receiver_place,
-                ..
-            } = callee
-            {
-                *callee = CallTarget::Runtime {
-                    op: rewrite.op,
-                    receiver: Some(std::mem::replace(object, Operand::Unit)),
-                    receiver_place: receiver_place.take(),
-                };
+            apply_rewrite(value, rewrite.kind);
+        }
+    }
+}
+
+fn apply_rewrite(value: &mut Rvalue, kind: RewriteKind) {
+    if let Rvalue::FormatString { parts } = value {
+        if let RewriteKind::FormatInt64(index) = kind {
+            if let MirFormatPart::Value(operand) = &mut parts[index] {
+                let operand = std::mem::replace(operand, Operand::Unit);
+                parts[index] = MirFormatPart::Int64(operand);
             }
+        }
+        return;
+    }
+    if let Rvalue::Call { callee, .. } = value {
+        let receiver = match (kind, &mut *callee) {
+            (
+                RewriteKind::Member(_),
+                CallTarget::Member {
+                    object,
+                    receiver_place,
+                    ..
+                },
+            ) => Some((
+                std::mem::replace(object, Operand::Unit),
+                receiver_place.take(),
+            )),
+            _ => None,
+        };
+        if let RewriteKind::Member(op) | RewriteKind::Named(op) = kind {
+            let (receiver, receiver_place) = receiver.unzip();
+            *callee = CallTarget::Runtime {
+                op,
+                receiver,
+                receiver_place: receiver_place.flatten(),
+            };
         }
     }
 }
@@ -72,7 +115,17 @@ struct Rewrite {
     function: Option<usize>,
     block: usize,
     instruction: usize,
-    op: RuntimeOp,
+    kind: RewriteKind,
+}
+
+#[derive(Clone, Copy)]
+enum RewriteKind {
+    /// A member call becomes this op on its receiver.
+    Member(RuntimeOp),
+    /// A `Name` call becomes this op.
+    Named(RuntimeOp),
+    /// The f-string part at this index appends an `int64`.
+    FormatInt64(usize),
 }
 
 fn collect_rewrites(
@@ -88,20 +141,41 @@ fn collect_rewrites(
             else {
                 continue;
             };
-            let Rvalue::Call {
-                callee: CallTarget::Member { object, field, .. },
-                ..
-            } = value
-            else {
-                continue;
-            };
-            if let Some(op) = context.resolved_runtime_op(function, object, field) {
+            let mut push = |kind| {
                 rewrites.push(Rewrite {
                     function: function_index,
                     block: block_index,
                     instruction: instruction_index,
-                    op,
-                });
+                    kind,
+                })
+            };
+            match value {
+                Rvalue::Call {
+                    callee: CallTarget::Member { object, field, .. },
+                    ..
+                } => {
+                    if let Some(op) = context.resolved_runtime_op(function, object, field) {
+                        push(RewriteKind::Member(op));
+                    }
+                }
+                Rvalue::Call {
+                    callee: CallTarget::Name(name),
+                    args,
+                } => {
+                    if let Some(op) = context.resolved_named_op(function, name, args) {
+                        push(RewriteKind::Named(op));
+                    }
+                }
+                Rvalue::FormatString { parts } => {
+                    for (index, part) in parts.iter().enumerate() {
+                        if let MirFormatPart::Value(value) = part {
+                            if context.is_int64_operand(function, value) {
+                                push(RewriteKind::FormatInt64(index));
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -113,6 +187,14 @@ impl MirLoanValidationContext<'_> {
         self.classes
             .get(class)
             .is_some_and(|class| class.methods.iter().any(|method| method.name == field))
+    }
+
+    /// Whether a function of the program, not a builtin wrapper, is named
+    /// `name`.
+    fn declares_user_function(&self, name: &str) -> bool {
+        self.functions
+            .get(name)
+            .is_some_and(|function| !is_builtin_wrapper(function))
     }
 
     /// The runtime operation a member call `object.field` resolves to.
@@ -127,11 +209,73 @@ impl MirLoanValidationContext<'_> {
             self.class_declares_method(class, field)
         })
     }
+
+    /// The runtime operation a call to `name` with `args` resolves to.
+    fn resolved_named_op(
+        &self,
+        function: &MirFunction,
+        name: &str,
+        args: &[MirArg],
+    ) -> Option<RuntimeOp> {
+        let op = builtin_function_for_name(name, |name| self.declares_user_function(name))?;
+        Some(self.specialized_named_op(function, op, args))
+    }
+
+    /// The specialization of an unspecialized named op for `args`: `print`
+    /// by the layout of its argument, and `wait_any` and `wait_all` by
+    /// whether they pass a timeout.
+    fn specialized_named_op(
+        &self,
+        function: &MirFunction,
+        op: RuntimeOp,
+        args: &[MirArg],
+    ) -> RuntimeOp {
+        match op {
+            RuntimeOp::Print(_) => RuntimeOp::Print(PrintKind::for_type(
+                self.print_argument_type(function, args).as_ref(),
+            )),
+            RuntimeOp::Function(op) if binds_timeout(args) => {
+                RuntimeOp::Function(op.with_timeout())
+            }
+            other => other,
+        }
+    }
+
+    /// The layout type of the value a `print` call writes, if MIR records
+    /// one.
+    fn print_argument_type(&self, function: &MirFunction, args: &[MirArg]) -> Option<Type> {
+        let value = args
+            .iter()
+            .find(|argument| argument.name.as_deref().is_none_or(|name| name == "value"))?;
+        self.layout_type(function, &value.value)
+    }
+
+    /// The type an operand loads with: an integer literal that fits in
+    /// 64 bits loads as an `int64`.
+    fn layout_type(&self, function: &MirFunction, operand: &Operand) -> Option<Type> {
+        match operand {
+            Operand::Int(value) => i64::try_from(*value).is_ok().then(|| Type::named("int64")),
+            other => self.operand_type(function, other).ok().flatten(),
+        }
+    }
+
+    fn is_int64_operand(&self, function: &MirFunction, operand: &Operand) -> bool {
+        self.layout_type(function, operand) == Some(Type::named("int64"))
+    }
+}
+
+/// Whether a `wait_any(tasks, timeout)` call passes its timeout.
+fn binds_timeout(args: &[MirArg]) -> bool {
+    args.len() > 1
+        || args
+            .iter()
+            .any(|argument| argument.name.as_deref() == Some("timeout"))
 }
 
 /// Checks every runtime operation in `function`: its receiver has a type the
-/// op applies to and no class method shadows it, and its arguments bind to
-/// the op's parameters.
+/// op applies to and no class method shadows it, or its name resolves to it
+/// and its arguments pick its specialization, and its arguments bind to the
+/// op's parameters. Each `int64` f-string part must append an `int64`.
 pub(super) fn validate_runtime_ops(
     function: &MirFunction,
     context: &MirLoanValidationContext<'_>,
@@ -142,6 +286,10 @@ pub(super) fn validate_runtime_ops(
         else {
             continue;
         };
+        if let Rvalue::FormatString { parts } = value {
+            validate_format_parts(function, parts, context)?;
+            continue;
+        }
         let Rvalue::Call {
             callee: CallTarget::Runtime { op, receiver, .. },
             args,
@@ -158,7 +306,7 @@ pub(super) fn validate_runtime_ops(
                         function.name
                     ));
                 };
-                let field = op.member_name();
+                let field = op.name();
                 let resolved = RuntimeOp::resolve_member(&receiver_type, field, |class| {
                     context.class_declares_method(class, field)
                 });
@@ -181,29 +329,90 @@ pub(super) fn validate_runtime_ops(
                     function.name
                 ))
             }
-            (false, None) => {}
+            (false, None) => {
+                let resolved = builtin_function_for_name(op.name(), |name| {
+                    context.declares_user_function(name)
+                });
+                if resolved != Some(op.unspecialized()) {
+                    return Err(format!(
+                        "invalid MIR runtime operation `{op}` in `{}` does not name the built-in `{}`",
+                        function.name,
+                        op.name()
+                    ));
+                }
+                // A `print` of a local with no recorded type is refused
+                // later, as an untyped local.
+                let untyped_print = matches!(op, RuntimeOp::Print(_))
+                    && context.print_argument_type(function, args).is_none();
+                if !untyped_print
+                    && context.specialized_named_op(function, op.unspecialized(), args) != op
+                {
+                    return Err(format!(
+                        "invalid MIR runtime operation `{op}` in `{}` does not match the types of its arguments",
+                        function.name
+                    ));
+                }
+            }
         }
         validate_runtime_op_args(function, op, args)?;
     }
     Ok(())
 }
 
+fn validate_format_parts(
+    function: &MirFunction,
+    parts: &[MirFormatPart],
+    context: &MirLoanValidationContext<'_>,
+) -> std::result::Result<(), String> {
+    for part in parts {
+        if let MirFormatPart::Int64(value) = part {
+            if !context.is_int64_operand(function, value) {
+                return Err(format!(
+                    "invalid MIR f-string part in `{}` appends an operand that is not `int64` as one",
+                    function.name
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Binds `args` to `op`'s parameters as a call binds them: named arguments
 /// by name, the rest in order, with every required parameter bound once.
-/// The messages name the member as the direct emitter's arity checks did.
+/// `select` takes one or more positional sources, and `range` with one
+/// argument binds it to `stop`. The messages name the call as the direct
+/// emitter's arity checks did.
 fn validate_runtime_op_args(
     function: &MirFunction,
     op: RuntimeOp,
     args: &[MirArg],
 ) -> std::result::Result<(), String> {
-    let member = op.member_name();
+    let member = op.name();
     let invalid = |detail: String| {
         format!(
             "invalid MIR runtime operation `{op}` in `{}`: {detail}",
             function.name
         )
     };
-    let params = op.params().collect::<Vec<_>>();
+    let params = match op {
+        RuntimeOp::Function(FunctionOp::Select) => {
+            if args.is_empty() || args.iter().any(|argument| argument.name.is_some()) {
+                return Err(invalid(
+                    "expected `select(source, ...)` to receive one or more positional sources"
+                        .to_string(),
+                ));
+            }
+            return Ok(());
+        }
+        // As in the checker, one argument binds `stop` unless it names
+        // `start`.
+        RuntimeOp::Function(FunctionOp::Range)
+            if args.len() == 1 && args[0].name.as_deref() != Some("start") =>
+        {
+            vec![CallableParam::required("stop")]
+        }
+        _ => op.params(),
+    };
     let mut bound = vec![false; params.len()];
     let mut next_positional = 0usize;
     for argument in args {

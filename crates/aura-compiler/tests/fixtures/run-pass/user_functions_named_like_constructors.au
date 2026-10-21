@@ -1,0 +1,27 @@
+# A user function named like an unreserved built-in constructor keeps its
+# call; the built-ins it shares a name with still resolve elsewhere.
+def worker(value: int32) -> int32:
+    return value + 1
+
+# A task started inside `set` needs the task scheduler, so `set` counts
+# as source, not as a builtin wrapper.
+def set(value: int32) -> int32:
+    with TaskGroup() as group:
+        task = group.start(worker, value)
+        match task.result():
+            case TaskResult.Ready(result):
+                return result
+            case _:
+                return 0
+
+def Queue(value: int32) -> int32:
+    return value + 2
+
+def main():
+    print(set(1))
+    print(Queue(1))
+    total: int64 = 40
+    ratio: float64 = 0.5
+    print(f"total={total + 2} ratio={ratio}")
+    for index in range(2):
+        print(index)

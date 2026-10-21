@@ -26,7 +26,9 @@ use crate::mir::{
     MirTraitImpl, Operand, Rvalue, Terminator, MIR_LOOP_SAFEPOINT_INTERVAL,
 };
 use crate::randomness::{self, SecureRandomError};
-use crate::runtime_ops::builtin_member_for_receiver;
+use crate::runtime_ops::{
+    builtin_function_for_name, builtin_member_for_receiver, FunctionOp, RuntimeOp,
+};
 use crate::runtime_value::{
     append_string_checked, cast_numeric_value, catch_lightweight_task_failure,
     claim_task_result_observations, clone_json_codec_source, concat_strings_checked,
@@ -146,11 +148,15 @@ pub(crate) fn run_entry_with_stdout_sink_and_program_args_trusted(
     stdout_sink: Option<StdoutSink>,
     program_args: Vec<String>,
 ) -> Result<RunOutput> {
-    crate::mir::validate_loan_flow(module)
+    let mut module = module.clone();
+    // Hand-built MIR may still spell resolved operations as named or member
+    // calls. Resolve them as the native emitter does, so both boundaries
+    // validate and run the same form.
+    crate::mir::resolve_runtime_ops(&mut module);
+    crate::mir::validate_loan_flow(&module)
         .map_err(|error| Diagnostic::coded("AU4001", format!("invalid MIR loan flow: {error}")))?;
     crate::runtime_config::validate_runtime_configuration()?;
     let entry = entry.map(|name| name.to_string());
-    let module = module.clone();
     let program_args = Arc::new(program_args);
     let handle = match thread::Builder::new()
         .stack_size(MIR_RUNTIME_STACK_SIZE)
@@ -265,8 +271,12 @@ fn module_uses_lightweight_tasks(module: &MirModule) -> bool {
         // first-class builtin values dispatch through the same implementation
         // as direct calls. Those wrappers are not source reachability: in
         // particular, the always-present `process::run` wrapper must not force
-        // every otherwise-synchronous program onto a 768 KiB task stack.
-        .filter(|function| !crate::mir::has_runtime_named_function(&function.name))
+        // every otherwise-synchronous program onto a 768 KiB task stack. A
+        // user function named like a builtin, such as `set`, is source.
+        .filter(|function| {
+            !(crate::mir::is_builtin_wrapper(function)
+                && crate::mir::has_runtime_named_function(&function.name))
+        })
         .any(function_uses_lightweight_tasks)
 }
 
@@ -304,6 +314,16 @@ fn rvalue_uses_lightweight_tasks(value: &Rvalue) -> bool {
                 ..
             } if name == "process::run"
         )
+        || matches!(
+            value,
+            Rvalue::Call {
+                callee: CallTarget::Runtime {
+                    op: RuntimeOp::Function(FunctionOp::ProcessRun),
+                    ..
+                },
+                ..
+            }
+        )
         || rvalue_materializes_process_run(value)
 }
 
@@ -338,13 +358,10 @@ fn rvalue_materializes_process_run(value: &Rvalue) -> bool {
         Rvalue::Closure { captures, .. } => captures
             .iter()
             .any(|capture| operand_is_process_run_function(&capture.value)),
-        Rvalue::FormatString { parts } => parts.iter().any(|part| match part {
-            crate::mir::MirFormatPart::Value(value)
-            | crate::mir::MirFormatPart::Formatted { value, .. } => {
-                operand_is_process_run_function(value)
-            }
-            crate::mir::MirFormatPart::Literal(_) => false,
-        }),
+        Rvalue::FormatString { parts } => parts
+            .iter()
+            .filter_map(crate::mir::MirFormatPart::operand)
+            .any(operand_is_process_run_function),
         // `rvalue_uses_lightweight_tasks` recognizes every `StartTask` before
         // consulting this recursive materialization helper. Inspecting its
         // operands here was therefore unreachable, and obscured the simpler
@@ -4275,7 +4292,7 @@ impl MirRuntime {
                 for part in parts {
                     match part {
                         MirFormatPart::Literal(text) => append_string_checked(&mut rendered, text)?,
-                        MirFormatPart::Value(value) => {
+                        MirFormatPart::Value(value) | MirFormatPart::Int64(value) => {
                             let value = self.evaluate_operand(value, env)?;
                             let value = self.render_display(&value)?;
                             append_string_checked(&mut rendered, &value)?;
@@ -4727,6 +4744,568 @@ impl MirRuntime {
         self.evaluate_call_for_target(callee, args, env, None)
     }
 
+    /// Whether a function of the program, not a builtin wrapper, is named
+    /// `name`.
+    fn declares_user_function(&self, name: &str) -> bool {
+        self.functions
+            .get(name)
+            .is_some_and(|function| !crate::mir::is_builtin_wrapper(function))
+    }
+
+    /// Runs the built-in function a named call or named runtime op calls.
+    fn evaluate_named_builtin(
+        &mut self,
+        name: &str,
+        args: &[MirArg],
+        env: &mut Env,
+        expected_return_type: Option<&Type>,
+    ) -> Result<Value> {
+        if name == "control::__retry_cancel_if_requested" {
+            let values = evaluate_named_args(args, env)?;
+            bind_builtin_args(&[], values)?;
+            if poll_cancellation(&self.cancellation) {
+                panic::panic_any(TaskCancelledSignal);
+            }
+            return Ok(Value::Unit);
+        }
+        if name == "print" {
+            let values = evaluate_named_args(args, env)?;
+            let bound = bind_builtin_args(&["value"], values)?;
+            let rendered_value = match (&bound[0].value, bound[0].ty.as_ref()) {
+                (Value::Float(value), Some(Type::Named(name, args)))
+                    if name == "float32" && args.is_empty() =>
+                {
+                    render_float32(*value as f32)
+                }
+                (Value::Float(value), _) => render_float(*value),
+                (value, _) => self.render_display(value)?,
+            };
+            let rendered = format!("{}\n", rendered_value);
+            let mut stdout = lock_stdout(&self.stdout);
+            stdout.push_str(&rendered);
+            drop(stdout);
+            if let Some(sink) = &self.stdout_sink {
+                sink(&rendered);
+            }
+            return Ok(Value::Unit);
+        }
+
+        if name == "range" {
+            let values = evaluate_named_args(args, env)?;
+            return build_range(values);
+        }
+
+        if name == "Queue" {
+            let values = evaluate_named_args(args, env)?;
+            if values.len() > 1 {
+                return Err(Diagnostic::new(format!(
+                    "`{}()` expects at most one optional `capacity` argument",
+                    name
+                )));
+            }
+            let capacity = match values.as_slice() {
+                [] => None,
+                [argument] => {
+                    if argument.name.as_deref() != Some("capacity") && argument.name.is_some() {
+                        return Err(Diagnostic::new(
+                            "`Queue()` expects an optional `capacity=` argument",
+                        ));
+                    }
+                    let capacity = expect_i32_value(&argument.value, "Queue(capacity=...)")?;
+                    if capacity <= 0 {
+                        return Err(Diagnostic::new(
+                            "`Queue(capacity=...)` expects a positive `int32`",
+                        ));
+                    }
+                    Some(capacity as usize)
+                }
+                _ => unreachable!(),
+            };
+            return Ok(Value::Channel(match capacity {
+                Some(capacity) => ChannelValue::with_capacity(capacity),
+                None => ChannelValue::new(),
+            }));
+        }
+
+        if name == "list" {
+            let values = evaluate_named_args(args, env)?;
+            bind_builtin_args(&[], values)?;
+            return Ok(Value::Vec(VecValue {
+                element_type: Type::named("Unknown"),
+                elements: Vec::new().into(),
+            }));
+        }
+
+        if name == "set" {
+            let values = evaluate_named_args(args, env)?;
+            bind_builtin_args(&[], values)?;
+            return Ok(Value::Set(SetValue {
+                element_type: Type::named("Unknown"),
+                elements: SetElements::new(),
+            }));
+        }
+
+        if name == "dict" {
+            let values = evaluate_named_args(args, env)?;
+            bind_builtin_args(&[], values)?;
+            return Ok(Value::Map(MapValue {
+                key_type: Type::named("Unknown"),
+                value_type: Type::named("Unknown"),
+                entries: DictEntries::new(),
+            }));
+        }
+
+        if name == "TaskGroup" {
+            let values = evaluate_named_args(args, env)?;
+            bind_builtin_args(&[], values)?;
+            return Ok(Value::TaskGroup(TaskGroupValue::new(&self.cancellation)));
+        }
+
+        if name == "random::Rng" {
+            let values = evaluate_named_args(args, env)?;
+            let bound = bind_builtin_args(&["seed"], values)?;
+            let seed = expect_i64_value(&bound[0].value, "random.Rng(seed=...)")?;
+            return Ok(Value::Rng(RngValue::from_seed(seed)));
+        }
+
+        if name == "random::secure_int" {
+            let values = evaluate_named_args(args, env)?;
+            let bound = bind_builtin_args(&["lo", "hi"], values)?;
+            let lo = expect_i64_value(&bound[0].value, "random.secure_int(...)")?;
+            let hi = expect_i64_value(&bound[1].value, "random.secure_int(...)")?;
+            return randomness::secure_int(lo, hi)
+                .map(|value| Value::Int(IntegerValue::from_signed(i128::from(value))))
+                .map_err(|error| random_resource_error_to_diagnostic(error, Some((lo, hi))));
+        }
+
+        if name == "random::secure_bytes" {
+            let values = evaluate_named_args(args, env)?;
+            let bound = bind_builtin_args(&["n"], values)?;
+            let count = expect_i64_value(&bound[0].value, "random.secure_bytes(n)")?;
+            if count < 0 {
+                return Err(Diagnostic::coded(
+                    "AU4003",
+                    format!(
+                        "`random.secure_bytes(n)` requires a non-negative byte count, found `{count}`"
+                    ),
+                ));
+            }
+            // Every supported Aura release target is 64-bit, so a
+            // validated non-negative int64 always fits usize.
+            let count = count as usize;
+            return randomness::secure_bytes(count)
+                .map(bytes_vec_value)
+                .map_err(|error| random_resource_error_to_diagnostic(error, None));
+        }
+
+        if let Some((_, member_name)) = name
+            .split_once('.')
+            .filter(|(type_name, _)| *type_name == "Array")
+        {
+            let dtype = checked_mir_array_dtype(expected_return_type);
+            let values = evaluate_named_args(args, env)?;
+            let array = if member_name == "zeros" {
+                let bound = bind_builtin_args(&["shape"], values)?;
+                let shape = array_shape_from_runtime(&bound[0].value)?;
+                ArrayValue::zeros(dtype, shape)?
+            } else if member_name == "full" {
+                let bound = bind_builtin_args(&["shape", "value"], values)?;
+                let shape = array_shape_from_runtime(&bound[0].value)?;
+                ArrayValue::full(dtype, shape, &bound[1].value)?
+            } else {
+                debug_assert_eq!(member_name, "from_list");
+                let bound = bind_builtin_args(&["values", "shape"], values)?;
+                let vector = checked_mir_vec_ref(&bound[0].value);
+                debug_assert_eq!(ArrayDType::from_type(&vector.element_type), Some(dtype));
+                let shape = array_shape_from_runtime(&bound[1].value)?;
+                ArrayValue::from_vec(vector, Some(&shape))?
+            };
+            return Ok(Value::Array(array));
+        }
+
+        if let Some((type_name, member_name)) = name
+            .split_once('.')
+            .filter(|(type_name, _)| *type_name == "Duration")
+        {
+            if let Some(constructor) = BuiltinAssociatedFunction::resolve(type_name, member_name) {
+                let values = evaluate_named_args(args, env)?;
+                let bound = bind_builtin_args(&["value"], values)?;
+                let value = match &bound[0].value {
+                    Value::Int(value) => *value,
+                    _ => {
+                        return Err(Diagnostic::new(format!(
+                            "`Duration.{}` expects `int64`",
+                            constructor.name()
+                        )))
+                    }
+                };
+                let value = value
+                    .as_i128()
+                    .filter(|value| i64::try_from(*value).is_ok())
+                    .ok_or_else(|| {
+                        Diagnostic::new(format!(
+                            "`Duration.{}` expects `int64`",
+                            constructor.name()
+                        ))
+                    })?;
+                let scale = if member_name == "ms" {
+                    NANOS_PER_MILLISECOND
+                } else if member_name == "seconds" {
+                    NANOS_PER_SECOND
+                } else {
+                    debug_assert_eq!(member_name, "minutes");
+                    NANOS_PER_MINUTE
+                };
+                // `value` is int64 and the largest scale is 60e9, so the
+                // product is strictly inside the i128 Duration range.
+                return Ok(Value::Duration(value * scale));
+            }
+        }
+
+        if let Some((type_name, "with_capacity")) = name
+            .split_once('.')
+            .filter(|(type_name, _)| matches!(*type_name, "list" | "dict" | "set"))
+        {
+            let values = evaluate_named_args(args, env)?;
+            let bound = bind_builtin_args(&["minimum"], values)?;
+            let minimum =
+                expect_i64_value(&bound[0].value, &format!("{type_name}.with_capacity(...)"))?;
+            let minimum = usize::try_from(minimum).map_err(|_| {
+                Diagnostic::coded("AU4003", "collection capacity cannot be negative")
+            })?;
+            return match (type_name, expected_return_type) {
+                ("list", Some(Type::Named(_, args))) if args.len() == 1 => {
+                    let mut elements = Vec::new();
+                    elements.try_reserve(minimum).map_err(|_| {
+                        Diagnostic::coded("AU4005", "list capacity allocation failed")
+                    })?;
+                    Ok(Value::Vec(VecValue {
+                        element_type: args[0].clone(),
+                        elements: elements.into(),
+                    }))
+                }
+                ("dict", Some(Type::Named(_, args))) if args.len() == 2 => {
+                    let mut entries = DictEntries::new();
+                    entries.try_reserve(minimum).map_err(|_| {
+                        Diagnostic::coded("AU4005", "dictionary capacity allocation failed")
+                    })?;
+                    Ok(Value::Map(MapValue {
+                        key_type: args[0].clone(),
+                        value_type: args[1].clone(),
+                        entries,
+                    }))
+                }
+                ("set", Some(Type::Named(_, args))) if args.len() == 1 => {
+                    let mut elements = SetElements::new();
+                    elements.try_reserve(minimum).map_err(|_| {
+                        Diagnostic::coded("AU4005", "set capacity allocation failed")
+                    })?;
+                    Ok(Value::Set(SetValue {
+                        element_type: args[0].clone(),
+                        elements,
+                    }))
+                }
+                _ => Err(Diagnostic::new("invalid collection capacity constructor")),
+            };
+        }
+
+        if name == "cancelled" {
+            let values = evaluate_named_args(args, env)?;
+            bind_builtin_args(&[], values)?;
+            return Ok(Value::Bool(poll_cancellation(&self.cancellation)));
+        }
+
+        if name == "yield_now" {
+            let values = evaluate_named_args(args, env)?;
+            bind_builtin_args(&[], values)?;
+            yield_now_with_runtime_scheduler();
+            return Ok(Value::Unit);
+        }
+
+        if name == "sleep" {
+            let values = evaluate_named_args(args, env)?;
+            let bound = bind_builtin_args(&["duration"], values)?;
+            let duration = match bound[0].value {
+                Value::Duration(duration) => duration_to_host_timer(duration, "sleep(...)")
+                    .map_err(|error| Diagnostic::coded("AU4001", error.to_string()))?,
+                _ => {
+                    return Err(Diagnostic::new(
+                        "`sleep(...)` expects a duration value in MIR runtime",
+                    ))
+                }
+            };
+            sleep_with_runtime_scheduler(duration, Some(&self.cancellation))
+                .map_err(timer_error_to_diagnostic)?;
+            return Ok(Value::Unit);
+        }
+
+        if name == "select" {
+            let values = evaluate_named_args(args, env)?;
+            return select_runtime_values(
+                validate_mir_select_sources(values)?,
+                Some(&self.cancellation),
+            );
+        }
+
+        if matches!(name, "wait_any" | "wait_all") {
+            let values = evaluate_named_args(args, env)?;
+            let bound = bind_builtin_args(&["tasks", "timeout"], values)?;
+            let tasks = self.expect_task_list(&bound[0].value, name)?;
+            let timeout =
+                expect_optional_timeout(Some(&bound[1].value), &format!("{name}(timeout=...)"))?;
+            return if name == "wait_any" {
+                self.wait_any(tasks, timeout)
+            } else {
+                self.wait_all(tasks, timeout)
+            };
+        }
+
+        if name == "abs" {
+            let values = evaluate_named_args(args, env)?;
+            let bound = bind_builtin_args(&["value"], values)?;
+            return match bound[0].value.clone() {
+                Value::Int(value) => match value.representation() {
+                    IntegerRepresentation::Signed(signed) if signed < 0 => {
+                        if signed == i128::MIN {
+                            return Err(Diagnostic::new(
+                                "`abs(...)` overflowed the signed integer range",
+                            ));
+                        }
+                        value.checked_neg().map(Value::Int).ok_or(Diagnostic::new(
+                            "`abs(...)` overflowed the signed integer range",
+                        ))
+                    }
+                    IntegerRepresentation::Signed(_) | IntegerRepresentation::Unsigned(_) => {
+                        Ok(Value::Int(value))
+                    }
+                },
+                Value::Float(value) => Ok(Value::Float(value.abs())),
+                other => Err(Diagnostic::new(format!(
+                    "`abs(...)` expects an integer or float value, found `{}`",
+                    other.render()
+                ))),
+            };
+        }
+
+        if name == "min" || name == "max" {
+            let values = evaluate_named_args(args, env)?;
+            let bound = bind_builtin_args(&["left", "right"], values)?;
+            return match (&bound[0].value, &bound[1].value) {
+                (Value::Int(left), Value::Int(right)) => Ok(
+                    if (name == "min" && left <= right) || (name == "max" && left >= right) {
+                        bound[0].value.clone()
+                    } else {
+                        bound[1].value.clone()
+                    },
+                ),
+                (Value::Float(left), Value::Float(right)) => Ok(
+                    if (name == "min" && left <= right) || (name == "max" && left >= right) {
+                        bound[0].value.clone()
+                    } else {
+                        bound[1].value.clone()
+                    },
+                ),
+                _ => Err(Diagnostic::new(format!(
+                    "`{}` expects matching numeric arguments",
+                    name
+                ))),
+            };
+        }
+
+        if name == "sqrt" {
+            let values = evaluate_named_args(args, env)?;
+            let bound = bind_builtin_args(&["value"], values)?;
+            return match bound[0].value.clone() {
+                Value::Float(value) => Ok(Value::Float(value.sqrt())),
+                other => Err(Diagnostic::new(format!(
+                    "`sqrt(...)` expects `float32` or `float64`, found `{}`",
+                    other.render()
+                ))),
+            };
+        }
+
+        if name == "round" {
+            return evaluate_round_builtin(args, env);
+        }
+
+        if name == "divmod" {
+            return evaluate_divmod_builtin(args, env);
+        }
+
+        if name == "parse_int32" {
+            let values = evaluate_named_args(args, env)?;
+            let bound = bind_builtin_args(&["text"], values)?;
+            return match &bound[0].value {
+                Value::String(text) => match text.parse::<i32>() {
+                    Ok(value) => Ok(result_ok(Value::Int(IntegerValue::from_signed(
+                        value as i128,
+                    )))),
+                    Err(error) => Ok(result_err(Value::String(error.to_string()))),
+                },
+                other => Err(Diagnostic::new(format!(
+                    "`parse_int32(...)` expects `str`, found `{}`",
+                    other.render()
+                ))),
+            };
+        }
+
+        if name == "parse_int64" {
+            let values = evaluate_named_args(args, env)?;
+            let bound = bind_builtin_args(&["text"], values)?;
+            return match &bound[0].value {
+                Value::String(text) => match text.parse::<i64>() {
+                    Ok(value) => Ok(result_ok(Value::Int(IntegerValue::from_signed(
+                        value as i128,
+                    )))),
+                    Err(error) => Ok(result_err(Value::String(error.to_string()))),
+                },
+                other => Err(Diagnostic::new(format!(
+                    "`parse_int64(...)` expects `str`, found `{}`",
+                    other.render()
+                ))),
+            };
+        }
+
+        if name == "parse_float64" {
+            let values = evaluate_named_args(args, env)?;
+            let bound = bind_builtin_args(&["text"], values)?;
+            return match &bound[0].value {
+                Value::String(text) => match text.parse::<f64>() {
+                    Ok(value) if value.is_finite() => Ok(result_ok(Value::Float(value))),
+                    Ok(_) => Ok(result_err(Value::String(
+                        "float must be finite".to_string(),
+                    ))),
+                    Err(error) => Ok(result_err(Value::String(error.to_string()))),
+                },
+                other => Err(Diagnostic::new(format!(
+                    "`parse_float64(...)` expects `str`, found `{}`",
+                    other.render()
+                ))),
+            };
+        }
+
+        if name == "io::write" {
+            let values = evaluate_named_args(args, env)?;
+            let bound = bind_builtin_args(&["text"], values)?;
+            return match &bound[0].value {
+                Value::String(text) => {
+                    let mut stdout = lock_stdout(&self.stdout);
+                    stdout.push_str(text);
+                    drop(stdout);
+                    if let Some(sink) = &self.stdout_sink {
+                        sink(text);
+                    }
+                    Ok(result_ok(Value::Unit))
+                }
+                other => Err(Diagnostic::new(format!(
+                    "`io.write(...)` expects `str`, found `{}`",
+                    other.render()
+                ))),
+            };
+        }
+
+        if name == "io::flush" {
+            let values = evaluate_named_args(args, env)?;
+            bind_builtin_args(&[], values)?;
+            return Ok(result_ok(Value::Unit));
+        }
+
+        if name == "io::read_line" {
+            let values = evaluate_named_args(args, env)?;
+            bind_builtin_args(&[], values)?;
+            return match io_read_line() {
+                Ok(Some(line)) => Ok(result_ok(optional_str_value(Some(line)))),
+                Ok(None) => Ok(result_ok(optional_str_value(None))),
+                Err(error) => Ok(result_err(io_error(error))),
+            };
+        }
+
+        if name == "fs::exists" {
+            let values = evaluate_named_args(args, env)?;
+            let bound = bind_builtin_args(&["path"], values)?;
+            return match &bound[0].value {
+                Value::String(path) => Ok(Value::Bool(std::path::Path::new(path).exists())),
+                other => Err(Diagnostic::new(format!(
+                    "`fs.exists(...)` expects `str`, found `{}`",
+                    other.render()
+                ))),
+            };
+        }
+
+        if let Some(result) = evaluate_bytes_mir_host_call(name, args, env) {
+            return result;
+        }
+
+        if let Some(result) = evaluate_json_mir_host_call(name, args, env) {
+            return result;
+        }
+
+        if let Some(metadata) = host_builtin_metadata(name) {
+            // Checked MIR materializes builtin defaults before runtime dispatch, so
+            // optional metadata parameters are present in this argument list too.
+            let arg_names = metadata
+                .params
+                .iter()
+                .map(|param| param.name.as_str())
+                .collect::<Vec<_>>();
+            let values = evaluate_named_args(args, env)?;
+            let bound = bind_builtin_args(&arg_names, values)?;
+            return evaluate_host_builtin_with_program_args(
+                &metadata.qualified_name,
+                bound.into_iter().map(|argument| argument.value).collect(),
+                self.program_args.as_slice(),
+            );
+        }
+
+        if matches!(
+            name,
+            "fs::read_to_string"
+                | "fs::read_bytes"
+                | "fs::write_string"
+                | "fs::write_bytes"
+                | "fs::append_string"
+                | "fs::append_bytes"
+                | "fs::create_dir"
+                | "fs::read_dir"
+                | "fs::remove_file"
+                | "fs::rename"
+                | "fs::open"
+                | "fs::create"
+                | "fs::append"
+                | "net::connect"
+                | "net::connect_timeout"
+                | "net::listen"
+                | "net::udp_bind"
+                | "net::unix_listen"
+                | "net::unix_connect"
+                | "net::unix_connect_timeout"
+                | "net::tls_listen"
+                | "net::tls_connect"
+                | "net::tls_connect_timeout"
+                | "net::http_listen"
+                | "net::http_request_text"
+                | "net::http_request_text_timeout"
+                | "net::http_request_bytes"
+                | "net::http_request_bytes_timeout"
+                | "net::websocket_listen"
+                | "net::websocket_connect"
+                | "net::websocket_connect_timeout"
+                | "process::inherit"
+                | "process::null"
+                | "process::pipe"
+                | "process::supervisor"
+                | "process::start"
+                | "process::run"
+        ) {
+            let values = evaluate_named_args(args, env)?;
+            return self.evaluate_builtin_io_call(name, values);
+        }
+
+        Err(Diagnostic::new(format!(
+            "unknown MIR built-in function `{name}`"
+        )))
+    }
+
     fn evaluate_call_for_target(
         &mut self,
         callee: &CallTarget,
@@ -4736,563 +5315,11 @@ impl MirRuntime {
     ) -> Result<Value> {
         match callee {
             CallTarget::Name(name) => {
-                if name == "control::__retry_cancel_if_requested" {
-                    let values = evaluate_named_args(args, env)?;
-                    bind_builtin_args(&[], values)?;
-                    if poll_cancellation(&self.cancellation) {
-                        panic::panic_any(TaskCancelledSignal);
-                    }
-                    return Ok(Value::Unit);
-                }
-                if name == "print" {
-                    let values = evaluate_named_args(args, env)?;
-                    let bound = bind_builtin_args(&["value"], values)?;
-                    let rendered_value = match (&bound[0].value, bound[0].ty.as_ref()) {
-                        (Value::Float(value), Some(Type::Named(name, args)))
-                            if name == "float32" && args.is_empty() =>
-                        {
-                            render_float32(*value as f32)
-                        }
-                        (Value::Float(value), _) => render_float(*value),
-                        (value, _) => self.render_display(value)?,
-                    };
-                    let rendered = format!("{}\n", rendered_value);
-                    let mut stdout = lock_stdout(&self.stdout);
-                    stdout.push_str(&rendered);
-                    drop(stdout);
-                    if let Some(sink) = &self.stdout_sink {
-                        sink(&rendered);
-                    }
-                    return Ok(Value::Unit);
-                }
-
-                if name == "range" {
-                    let values = evaluate_named_args(args, env)?;
-                    return build_range(values);
-                }
-
-                if name == "Queue" {
-                    let values = evaluate_named_args(args, env)?;
-                    if values.len() > 1 {
-                        return Err(Diagnostic::new(format!(
-                            "`{}()` expects at most one optional `capacity` argument",
-                            name
-                        )));
-                    }
-                    let capacity = match values.as_slice() {
-                        [] => None,
-                        [argument] => {
-                            if argument.name.as_deref() != Some("capacity")
-                                && argument.name.is_some()
-                            {
-                                return Err(Diagnostic::new(
-                                    "`Queue()` expects an optional `capacity=` argument",
-                                ));
-                            }
-                            let capacity =
-                                expect_i32_value(&argument.value, "Queue(capacity=...)")?;
-                            if capacity <= 0 {
-                                return Err(Diagnostic::new(
-                                    "`Queue(capacity=...)` expects a positive `int32`",
-                                ));
-                            }
-                            Some(capacity as usize)
-                        }
-                        _ => unreachable!(),
-                    };
-                    return Ok(Value::Channel(match capacity {
-                        Some(capacity) => ChannelValue::with_capacity(capacity),
-                        None => ChannelValue::new(),
-                    }));
-                }
-
-                if name == "list" {
-                    let values = evaluate_named_args(args, env)?;
-                    bind_builtin_args(&[], values)?;
-                    return Ok(Value::Vec(VecValue {
-                        element_type: Type::named("Unknown"),
-                        elements: Vec::new().into(),
-                    }));
-                }
-
-                if name == "set" {
-                    let values = evaluate_named_args(args, env)?;
-                    bind_builtin_args(&[], values)?;
-                    return Ok(Value::Set(SetValue {
-                        element_type: Type::named("Unknown"),
-                        elements: SetElements::new(),
-                    }));
-                }
-
-                if name == "dict" {
-                    let values = evaluate_named_args(args, env)?;
-                    bind_builtin_args(&[], values)?;
-                    return Ok(Value::Map(MapValue {
-                        key_type: Type::named("Unknown"),
-                        value_type: Type::named("Unknown"),
-                        entries: DictEntries::new(),
-                    }));
-                }
-
-                if name == "TaskGroup" {
-                    let values = evaluate_named_args(args, env)?;
-                    bind_builtin_args(&[], values)?;
-                    return Ok(Value::TaskGroup(TaskGroupValue::new(&self.cancellation)));
-                }
-
-                if name == "random::Rng" {
-                    let values = evaluate_named_args(args, env)?;
-                    let bound = bind_builtin_args(&["seed"], values)?;
-                    let seed = expect_i64_value(&bound[0].value, "random.Rng(seed=...)")?;
-                    return Ok(Value::Rng(RngValue::from_seed(seed)));
-                }
-
-                if name == "random::secure_int" {
-                    let values = evaluate_named_args(args, env)?;
-                    let bound = bind_builtin_args(&["lo", "hi"], values)?;
-                    let lo = expect_i64_value(&bound[0].value, "random.secure_int(...)")?;
-                    let hi = expect_i64_value(&bound[1].value, "random.secure_int(...)")?;
-                    return randomness::secure_int(lo, hi)
-                        .map(|value| Value::Int(IntegerValue::from_signed(i128::from(value))))
-                        .map_err(|error| {
-                            random_resource_error_to_diagnostic(error, Some((lo, hi)))
-                        });
-                }
-
-                if name == "random::secure_bytes" {
-                    let values = evaluate_named_args(args, env)?;
-                    let bound = bind_builtin_args(&["n"], values)?;
-                    let count = expect_i64_value(&bound[0].value, "random.secure_bytes(n)")?;
-                    if count < 0 {
-                        return Err(Diagnostic::coded(
-                            "AU4003",
-                            format!(
-                                "`random.secure_bytes(n)` requires a non-negative byte count, found `{count}`"
-                            ),
-                        ));
-                    }
-                    // Every supported Aura release target is 64-bit, so a
-                    // validated non-negative int64 always fits usize.
-                    let count = count as usize;
-                    return randomness::secure_bytes(count)
-                        .map(bytes_vec_value)
-                        .map_err(|error| random_resource_error_to_diagnostic(error, None));
-                }
-
-                if let Some((_, member_name)) = name
-                    .split_once('.')
-                    .filter(|(type_name, _)| *type_name == "Array")
+                if builtin_function_for_name(name, |name| self.declares_user_function(name))
+                    .is_some()
                 {
-                    let dtype = checked_mir_array_dtype(expected_return_type);
-                    let values = evaluate_named_args(args, env)?;
-                    let array = if member_name == "zeros" {
-                        let bound = bind_builtin_args(&["shape"], values)?;
-                        let shape = array_shape_from_runtime(&bound[0].value)?;
-                        ArrayValue::zeros(dtype, shape)?
-                    } else if member_name == "full" {
-                        let bound = bind_builtin_args(&["shape", "value"], values)?;
-                        let shape = array_shape_from_runtime(&bound[0].value)?;
-                        ArrayValue::full(dtype, shape, &bound[1].value)?
-                    } else {
-                        debug_assert_eq!(member_name, "from_list");
-                        let bound = bind_builtin_args(&["values", "shape"], values)?;
-                        let vector = checked_mir_vec_ref(&bound[0].value);
-                        debug_assert_eq!(ArrayDType::from_type(&vector.element_type), Some(dtype));
-                        let shape = array_shape_from_runtime(&bound[1].value)?;
-                        ArrayValue::from_vec(vector, Some(&shape))?
-                    };
-                    return Ok(Value::Array(array));
+                    return self.evaluate_named_builtin(name, args, env, expected_return_type);
                 }
-
-                if let Some((type_name, member_name)) = name
-                    .split_once('.')
-                    .filter(|(type_name, _)| *type_name == "Duration")
-                {
-                    if let Some(constructor) =
-                        BuiltinAssociatedFunction::resolve(type_name, member_name)
-                    {
-                        let values = evaluate_named_args(args, env)?;
-                        let bound = bind_builtin_args(&["value"], values)?;
-                        let value = match &bound[0].value {
-                            Value::Int(value) => *value,
-                            _ => {
-                                return Err(Diagnostic::new(format!(
-                                    "`Duration.{}` expects `int64`",
-                                    constructor.name()
-                                )))
-                            }
-                        };
-                        let value = value
-                            .as_i128()
-                            .filter(|value| i64::try_from(*value).is_ok())
-                            .ok_or_else(|| {
-                                Diagnostic::new(format!(
-                                    "`Duration.{}` expects `int64`",
-                                    constructor.name()
-                                ))
-                            })?;
-                        let scale = if member_name == "ms" {
-                            NANOS_PER_MILLISECOND
-                        } else if member_name == "seconds" {
-                            NANOS_PER_SECOND
-                        } else {
-                            debug_assert_eq!(member_name, "minutes");
-                            NANOS_PER_MINUTE
-                        };
-                        // `value` is int64 and the largest scale is 60e9, so the
-                        // product is strictly inside the i128 Duration range.
-                        return Ok(Value::Duration(value * scale));
-                    }
-                }
-
-                if let Some((type_name, "with_capacity")) = name
-                    .split_once('.')
-                    .filter(|(type_name, _)| matches!(*type_name, "list" | "dict" | "set"))
-                {
-                    let values = evaluate_named_args(args, env)?;
-                    let bound = bind_builtin_args(&["minimum"], values)?;
-                    let minimum = expect_i64_value(
-                        &bound[0].value,
-                        &format!("{type_name}.with_capacity(...)"),
-                    )?;
-                    let minimum = usize::try_from(minimum).map_err(|_| {
-                        Diagnostic::coded("AU4003", "collection capacity cannot be negative")
-                    })?;
-                    return match (type_name, expected_return_type) {
-                        ("list", Some(Type::Named(_, args))) if args.len() == 1 => {
-                            let mut elements = Vec::new();
-                            elements.try_reserve(minimum).map_err(|_| {
-                                Diagnostic::coded("AU4005", "list capacity allocation failed")
-                            })?;
-                            Ok(Value::Vec(VecValue {
-                                element_type: args[0].clone(),
-                                elements: elements.into(),
-                            }))
-                        }
-                        ("dict", Some(Type::Named(_, args))) if args.len() == 2 => {
-                            let mut entries = DictEntries::new();
-                            entries.try_reserve(minimum).map_err(|_| {
-                                Diagnostic::coded("AU4005", "dictionary capacity allocation failed")
-                            })?;
-                            Ok(Value::Map(MapValue {
-                                key_type: args[0].clone(),
-                                value_type: args[1].clone(),
-                                entries,
-                            }))
-                        }
-                        ("set", Some(Type::Named(_, args))) if args.len() == 1 => {
-                            let mut elements = SetElements::new();
-                            elements.try_reserve(minimum).map_err(|_| {
-                                Diagnostic::coded("AU4005", "set capacity allocation failed")
-                            })?;
-                            Ok(Value::Set(SetValue {
-                                element_type: args[0].clone(),
-                                elements,
-                            }))
-                        }
-                        _ => Err(Diagnostic::new("invalid collection capacity constructor")),
-                    };
-                }
-
-                if name == "cancelled" {
-                    let values = evaluate_named_args(args, env)?;
-                    bind_builtin_args(&[], values)?;
-                    return Ok(Value::Bool(poll_cancellation(&self.cancellation)));
-                }
-
-                if name == "yield_now" {
-                    let values = evaluate_named_args(args, env)?;
-                    bind_builtin_args(&[], values)?;
-                    yield_now_with_runtime_scheduler();
-                    return Ok(Value::Unit);
-                }
-
-                if name == "sleep" {
-                    let values = evaluate_named_args(args, env)?;
-                    let bound = bind_builtin_args(&["duration"], values)?;
-                    let duration = match bound[0].value {
-                        Value::Duration(duration) => duration_to_host_timer(duration, "sleep(...)")
-                            .map_err(|error| Diagnostic::coded("AU4001", error.to_string()))?,
-                        _ => {
-                            return Err(Diagnostic::new(
-                                "`sleep(...)` expects a duration value in MIR runtime",
-                            ))
-                        }
-                    };
-                    sleep_with_runtime_scheduler(duration, Some(&self.cancellation))
-                        .map_err(timer_error_to_diagnostic)?;
-                    return Ok(Value::Unit);
-                }
-
-                if name == "select" {
-                    let values = evaluate_named_args(args, env)?;
-                    return select_runtime_values(
-                        validate_mir_select_sources(values)?,
-                        Some(&self.cancellation),
-                    );
-                }
-
-                if matches!(name.as_str(), "wait_any" | "wait_all") {
-                    let values = evaluate_named_args(args, env)?;
-                    let bound = bind_builtin_args(&["tasks", "timeout"], values)?;
-                    let tasks = self.expect_task_list(&bound[0].value, name)?;
-                    let timeout = expect_optional_timeout(
-                        Some(&bound[1].value),
-                        &format!("{name}(timeout=...)"),
-                    )?;
-                    return if name == "wait_any" {
-                        self.wait_any(tasks, timeout)
-                    } else {
-                        self.wait_all(tasks, timeout)
-                    };
-                }
-
-                if name == "abs" {
-                    let values = evaluate_named_args(args, env)?;
-                    let bound = bind_builtin_args(&["value"], values)?;
-                    return match bound[0].value.clone() {
-                        Value::Int(value) => match value.representation() {
-                            IntegerRepresentation::Signed(signed) if signed < 0 => {
-                                if signed == i128::MIN {
-                                    return Err(Diagnostic::new(
-                                        "`abs(...)` overflowed the signed integer range",
-                                    ));
-                                }
-                                value.checked_neg().map(Value::Int).ok_or(Diagnostic::new(
-                                    "`abs(...)` overflowed the signed integer range",
-                                ))
-                            }
-                            IntegerRepresentation::Signed(_)
-                            | IntegerRepresentation::Unsigned(_) => Ok(Value::Int(value)),
-                        },
-                        Value::Float(value) => Ok(Value::Float(value.abs())),
-                        other => Err(Diagnostic::new(format!(
-                            "`abs(...)` expects an integer or float value, found `{}`",
-                            other.render()
-                        ))),
-                    };
-                }
-
-                if name == "min" || name == "max" {
-                    let values = evaluate_named_args(args, env)?;
-                    let bound = bind_builtin_args(&["left", "right"], values)?;
-                    return match (&bound[0].value, &bound[1].value) {
-                        (Value::Int(left), Value::Int(right)) => Ok(
-                            if (name == "min" && left <= right) || (name == "max" && left >= right)
-                            {
-                                bound[0].value.clone()
-                            } else {
-                                bound[1].value.clone()
-                            },
-                        ),
-                        (Value::Float(left), Value::Float(right)) => Ok(
-                            if (name == "min" && left <= right) || (name == "max" && left >= right)
-                            {
-                                bound[0].value.clone()
-                            } else {
-                                bound[1].value.clone()
-                            },
-                        ),
-                        _ => Err(Diagnostic::new(format!(
-                            "`{}` expects matching numeric arguments",
-                            name
-                        ))),
-                    };
-                }
-
-                if name == "sqrt" {
-                    let values = evaluate_named_args(args, env)?;
-                    let bound = bind_builtin_args(&["value"], values)?;
-                    return match bound[0].value.clone() {
-                        Value::Float(value) => Ok(Value::Float(value.sqrt())),
-                        other => Err(Diagnostic::new(format!(
-                            "`sqrt(...)` expects `float32` or `float64`, found `{}`",
-                            other.render()
-                        ))),
-                    };
-                }
-
-                if name == "round" {
-                    return evaluate_round_builtin(args, env);
-                }
-
-                if name == "divmod" {
-                    return evaluate_divmod_builtin(args, env);
-                }
-
-                if name == "parse_int32" {
-                    let values = evaluate_named_args(args, env)?;
-                    let bound = bind_builtin_args(&["text"], values)?;
-                    return match &bound[0].value {
-                        Value::String(text) => match text.parse::<i32>() {
-                            Ok(value) => Ok(result_ok(Value::Int(IntegerValue::from_signed(
-                                value as i128,
-                            )))),
-                            Err(error) => Ok(result_err(Value::String(error.to_string()))),
-                        },
-                        other => Err(Diagnostic::new(format!(
-                            "`parse_int32(...)` expects `str`, found `{}`",
-                            other.render()
-                        ))),
-                    };
-                }
-
-                if name == "parse_int64" {
-                    let values = evaluate_named_args(args, env)?;
-                    let bound = bind_builtin_args(&["text"], values)?;
-                    return match &bound[0].value {
-                        Value::String(text) => match text.parse::<i64>() {
-                            Ok(value) => Ok(result_ok(Value::Int(IntegerValue::from_signed(
-                                value as i128,
-                            )))),
-                            Err(error) => Ok(result_err(Value::String(error.to_string()))),
-                        },
-                        other => Err(Diagnostic::new(format!(
-                            "`parse_int64(...)` expects `str`, found `{}`",
-                            other.render()
-                        ))),
-                    };
-                }
-
-                if name == "parse_float64" {
-                    let values = evaluate_named_args(args, env)?;
-                    let bound = bind_builtin_args(&["text"], values)?;
-                    return match &bound[0].value {
-                        Value::String(text) => match text.parse::<f64>() {
-                            Ok(value) if value.is_finite() => Ok(result_ok(Value::Float(value))),
-                            Ok(_) => Ok(result_err(Value::String(
-                                "float must be finite".to_string(),
-                            ))),
-                            Err(error) => Ok(result_err(Value::String(error.to_string()))),
-                        },
-                        other => Err(Diagnostic::new(format!(
-                            "`parse_float64(...)` expects `str`, found `{}`",
-                            other.render()
-                        ))),
-                    };
-                }
-
-                if name == "io::write" {
-                    let values = evaluate_named_args(args, env)?;
-                    let bound = bind_builtin_args(&["text"], values)?;
-                    return match &bound[0].value {
-                        Value::String(text) => {
-                            let mut stdout = lock_stdout(&self.stdout);
-                            stdout.push_str(text);
-                            drop(stdout);
-                            if let Some(sink) = &self.stdout_sink {
-                                sink(text);
-                            }
-                            Ok(result_ok(Value::Unit))
-                        }
-                        other => Err(Diagnostic::new(format!(
-                            "`io.write(...)` expects `str`, found `{}`",
-                            other.render()
-                        ))),
-                    };
-                }
-
-                if name == "io::flush" {
-                    let values = evaluate_named_args(args, env)?;
-                    bind_builtin_args(&[], values)?;
-                    return Ok(result_ok(Value::Unit));
-                }
-
-                if name == "io::read_line" {
-                    let values = evaluate_named_args(args, env)?;
-                    bind_builtin_args(&[], values)?;
-                    return match io_read_line() {
-                        Ok(Some(line)) => Ok(result_ok(optional_str_value(Some(line)))),
-                        Ok(None) => Ok(result_ok(optional_str_value(None))),
-                        Err(error) => Ok(result_err(io_error(error))),
-                    };
-                }
-
-                if name == "fs::exists" {
-                    let values = evaluate_named_args(args, env)?;
-                    let bound = bind_builtin_args(&["path"], values)?;
-                    return match &bound[0].value {
-                        Value::String(path) => Ok(Value::Bool(std::path::Path::new(path).exists())),
-                        other => Err(Diagnostic::new(format!(
-                            "`fs.exists(...)` expects `str`, found `{}`",
-                            other.render()
-                        ))),
-                    };
-                }
-
-                if let Some(result) = evaluate_bytes_mir_host_call(name, args, env) {
-                    return result;
-                }
-
-                if let Some(result) = evaluate_json_mir_host_call(name, args, env) {
-                    return result;
-                }
-
-                if let Some(metadata) = host_builtin_metadata(name) {
-                    // Checked MIR materializes builtin defaults before runtime dispatch, so
-                    // optional metadata parameters are present in this argument list too.
-                    let arg_names = metadata
-                        .params
-                        .iter()
-                        .map(|param| param.name.as_str())
-                        .collect::<Vec<_>>();
-                    let values = evaluate_named_args(args, env)?;
-                    let bound = bind_builtin_args(&arg_names, values)?;
-                    return evaluate_host_builtin_with_program_args(
-                        &metadata.qualified_name,
-                        bound.into_iter().map(|argument| argument.value).collect(),
-                        self.program_args.as_slice(),
-                    );
-                }
-
-                if matches!(
-                    name.as_str(),
-                    "fs::read_to_string"
-                        | "fs::read_bytes"
-                        | "fs::write_string"
-                        | "fs::write_bytes"
-                        | "fs::append_string"
-                        | "fs::append_bytes"
-                        | "fs::create_dir"
-                        | "fs::read_dir"
-                        | "fs::remove_file"
-                        | "fs::rename"
-                        | "fs::open"
-                        | "fs::create"
-                        | "fs::append"
-                        | "net::connect"
-                        | "net::connect_timeout"
-                        | "net::listen"
-                        | "net::udp_bind"
-                        | "net::unix_listen"
-                        | "net::unix_connect"
-                        | "net::unix_connect_timeout"
-                        | "net::tls_listen"
-                        | "net::tls_connect"
-                        | "net::tls_connect_timeout"
-                        | "net::http_listen"
-                        | "net::http_request_text"
-                        | "net::http_request_text_timeout"
-                        | "net::http_request_bytes"
-                        | "net::http_request_bytes_timeout"
-                        | "net::websocket_listen"
-                        | "net::websocket_connect"
-                        | "net::websocket_connect_timeout"
-                        | "process::inherit"
-                        | "process::null"
-                        | "process::pipe"
-                        | "process::supervisor"
-                        | "process::start"
-                        | "process::run"
-                ) {
-                    let values = evaluate_named_args(args, env)?;
-                    return self.evaluate_builtin_io_call(name, values);
-                }
-
-                if name == "print" || name == "range" {
-                    unreachable!("handled earlier");
-                }
-
                 let function =
                     self.functions.get(name).cloned().ok_or_else(|| {
                         Diagnostic::new(format!("unknown MIR function `{}`", name))
@@ -5327,10 +5354,14 @@ impl MirRuntime {
                 receiver,
                 receiver_place,
             } => {
+                // A named op runs the built-in its name calls.
                 let Some(object) = receiver else {
-                    return Err(Diagnostic::new(format!(
-                        "MIR runtime operation `{op}` has no receiver"
-                    )));
+                    if op.has_receiver() {
+                        return Err(Diagnostic::new(format!(
+                            "MIR runtime operation `{op}` has no receiver"
+                        )));
+                    }
+                    return self.evaluate_named_builtin(op.name(), args, env, expected_return_type);
                 };
                 let receiver_static_ty = self
                     .resolve_operand_type(object, env)
@@ -5339,7 +5370,7 @@ impl MirRuntime {
                 self.evaluate_receiver_method(
                     receiver,
                     receiver_static_ty,
-                    op.member_name(),
+                    op.name(),
                     receiver_place.as_deref(),
                     args,
                     expected_return_type,

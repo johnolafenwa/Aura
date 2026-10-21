@@ -604,11 +604,14 @@ def main() -> int32:
             Instruction::Assign {
                 value:
                     Rvalue::Call {
-                        callee: CallTarget::Name(name),
+                        callee:
+                            CallTarget::Runtime {
+                                op, receiver: None, ..
+                            },
                         args,
                     },
                 ..
-            } if name == "sys::monotonic_time_ms" => Some(args),
+            } if op.name() == "sys::monotonic_time_ms" => Some(args),
             _ => None,
         })
         .expect("lowered source should contain the monotonic clock call");
@@ -622,7 +625,7 @@ def main() -> int32:
         .expect_err("monotonic clock calls with arguments should fail direct codegen");
     assert_eq!(
         error,
-        "invalid MIR call to `sys::monotonic_time_ms` has too many arguments"
+        "invalid MIR runtime operation `Function.MonotonicTimeMs` in `main`: expected `sys::monotonic_time_ms()` to take no arguments"
     );
 }
 

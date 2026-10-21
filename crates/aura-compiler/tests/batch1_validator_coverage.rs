@@ -1136,7 +1136,8 @@ fn native_backend_rejects_yield_now_with_arguments() {
     let main = function_mut(&mut encoded, "main");
     let call = find_instruction(main, |instruction| {
         rvalue_kind(instruction) == Some("Call")
-            && instruction["Assign"]["value"]["Call"]["callee"] == json!({ "Name": "yield_now" })
+            && instruction["Assign"]["value"]["Call"]["callee"]
+                == json!({ "Runtime": { "op": { "Function": "YieldNow" }, "receiver": null, "receiver_place": null } })
     });
     call["Assign"]["value"]["Call"]["args"] =
         json!([{ "name": null, "value": { "Int": 1 }, "writeback_place": null }]);

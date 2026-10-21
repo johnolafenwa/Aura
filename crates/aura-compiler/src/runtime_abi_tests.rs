@@ -36,18 +36,29 @@ fn runtime_tables_index_each_helper_in_declaration_order() {
 
 #[test]
 fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
-    use crate::runtime_ops::RuntimeOp;
+    use crate::runtime_ops::{RuntimeOp, RuntimeTarget};
 
     let mut covered = BTreeSet::new();
+    let mut host_symbols = BTreeSet::new();
     for op in RuntimeOp::all() {
-        let call = op.runtime_call();
+        let call = match op.runtime_target() {
+            RuntimeTarget::Helper(call) => call,
+            RuntimeTarget::Host(symbol) => {
+                assert!(matches!(op, RuntimeOp::Host(_)), "{op} calls a host entry");
+                assert!(symbol.starts_with("aura_host_"), "{op} calls `{symbol}`");
+                assert!(host_symbols.insert(symbol), "{op} repeats `{symbol}`");
+                continue;
+            }
+        };
+        assert_eq!(op.runtime_call(), call);
         assert!(
             RuntimeFn::ALL.contains(&call.function),
             "{op} calls undeclared helper {:?}",
             call.function
         );
-        let words = usize::from(op.has_receiver())
-            + op.params().count()
+        let words = call.layout_words
+            + usize::from(op.has_receiver())
+            + op.params().len()
             + call.immediates.len()
             + 2 * usize::from(call.span);
         assert_eq!(
@@ -58,6 +69,18 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
         );
         covered.insert(call.function);
     }
+    // Every host table entry has an op, except the ones a dedicated
+    // helper replaces.
+    let replaced = crate::native_runtime::HOST_BUILTIN_SYMBOLS
+        .iter()
+        .filter(|(name, _)| crate::runtime_ops::FunctionOp::from_name(name).is_some())
+        .map(|(name, _)| *name)
+        .collect::<Vec<_>>();
+    assert_eq!(replaced, ["sys::monotonic_time_ms"]);
+    assert_eq!(
+        host_symbols.len() + replaced.len(),
+        crate::native_runtime::HOST_BUILTIN_SYMBOLS.len()
+    );
     // Each resource handle method has its own helper.
     let resource_ops = RuntimeOp::all()
         .filter(|op| matches!(op, RuntimeOp::Resource(_)))
@@ -68,19 +91,87 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
         .collect::<BTreeSet<_>>();
     assert_eq!(resource_ops, resource_helpers.len());
     assert!(covered.contains(&RuntimeFn::IntegerWidthBinary));
+    // Every helper a named built-in call, `print`, or a `Duration`
+    // constructor calls has an op.
+    let named_call_helpers = [
+        RuntimeFn::PrintI64,
+        RuntimeFn::PrintU64,
+        RuntimeFn::PrintF32,
+        RuntimeFn::PrintF64,
+        RuntimeFn::PrintBool,
+        RuntimeFn::PrintValue,
+        RuntimeFn::RngNew,
+        RuntimeFn::RandomSecureInt,
+        RuntimeFn::RandomSecureBytes,
+        RuntimeFn::ArrayZeros,
+        RuntimeFn::ArrayFull,
+        RuntimeFn::ArrayFromVec,
+        RuntimeFn::DurationFromI64,
+        RuntimeFn::CollectionOperation,
+        RuntimeFn::VecEmpty,
+        RuntimeFn::MapEmpty,
+        RuntimeFn::SetEmpty,
+        RuntimeFn::RangeNew,
+        RuntimeFn::ChannelNew,
+        RuntimeFn::TaskGroupNew,
+        RuntimeFn::Cancelled,
+        RuntimeFn::YieldNow,
+        RuntimeFn::SleepValueVoid,
+        RuntimeFn::Select,
+        RuntimeFn::WaitAny,
+        RuntimeFn::WaitAnyTimeoutValue,
+        RuntimeFn::WaitAll,
+        RuntimeFn::WaitAllTimeoutValue,
+        RuntimeFn::AbsValue,
+        RuntimeFn::MinValue,
+        RuntimeFn::MaxValue,
+        RuntimeFn::SqrtValue,
+        RuntimeFn::RoundValue,
+        RuntimeFn::DivmodValue,
+        RuntimeFn::ParseInt32,
+        RuntimeFn::ParseInt64,
+        RuntimeFn::ParseFloat64,
+        RuntimeFn::MonotonicTimeMs,
+        RuntimeFn::IoWrite,
+        RuntimeFn::IoFlush,
+        RuntimeFn::IoReadLine,
+        RuntimeFn::ProcessInherit,
+        RuntimeFn::ProcessNull,
+        RuntimeFn::ProcessPipe,
+        RuntimeFn::ProcessSupervisor,
+        RuntimeFn::ProcessStart,
+        RuntimeFn::ProcessRun,
+    ];
+    for helper in named_call_helpers
+        .into_iter()
+        .chain(RuntimeFn::ALL.iter().copied().filter(|helper| {
+            helper.symbol().starts_with("aura_direct_fs_")
+                || helper.symbol().starts_with("aura_direct_net_")
+        }))
+    {
+        assert!(covered.contains(&helper), "{helper:?} has no runtime op");
+    }
 }
 
 #[test]
-fn every_runtime_op_round_trips_through_its_builtin_member() {
-    use crate::runtime_ops::RuntimeOp;
+fn every_runtime_op_round_trips_through_its_builtin_member_or_name() {
+    use crate::runtime_ops::{builtin_function_for_name, RuntimeOp};
 
     for op in RuntimeOp::all() {
-        assert_eq!(
-            RuntimeOp::from_builtin_member(op.builtin_member()),
-            Some(op),
-            "{op} does not resolve back from `{}`",
-            op.member_name()
-        );
+        match op.builtin_member() {
+            Some(member) => assert_eq!(
+                RuntimeOp::from_builtin_member(member),
+                Some(op),
+                "{op} does not resolve back from `{}`",
+                op.name()
+            ),
+            None => assert_eq!(
+                builtin_function_for_name(op.name(), |_| false),
+                Some(op.unspecialized()),
+                "{op} does not resolve back from `{}`",
+                op.name()
+            ),
+        }
         let json = serde_json::to_string(&op).unwrap();
         assert_eq!(serde_json::from_str::<RuntimeOp>(&json).unwrap(), op);
     }

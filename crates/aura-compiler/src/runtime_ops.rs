@@ -6,14 +6,25 @@
 //! its result type, so the interpreter and every native emitter dispatch on
 //! the op instead of re-resolving the member name.
 //!
+//! Lowering also resolves a call to a named built-in, such as `range(10)`,
+//! `Duration.ms(5)`, `fs.exists(path)`, or `print(value)`, to an op with no
+//! receiver. A user function with the same name keeps its `Name` call.
+//!
 //! Ops are grouped by family. This table holds the resource handle
-//! (`fs.File`, `process.*`, `net.*`), `random.Rng`, scalar, and value
-//! families. Strings, collections, queues, tasks, named built-ins, and
-//! `print` are still `CallTarget::Member` or `CallTarget::Name` calls.
+//! (`fs.File`, `process.*`, `net.*`), `random.Rng`, scalar, value, named
+//! function, `print`, and host builtin families. Strings, collections,
+//! queues, and tasks are still `CallTarget::Member` calls.
 
 use serde::{Deserialize, Serialize};
 
-use crate::call::{BuiltinMember, CallableParam};
+use crate::builtin_modules::{
+    builtin_module_function_metadata, host_builtin_metadata, HostBuiltinMetadata,
+};
+use crate::call::{
+    BuiltinAssociatedFunction, BuiltinClassConstructor, BuiltinFunction, BuiltinMember,
+    CallableParam,
+};
+use crate::native_runtime::HOST_BUILTIN_SYMBOLS;
 use crate::runtime_abi::RuntimeFn;
 use crate::sema::{optional_type, Type};
 
@@ -28,17 +39,39 @@ pub enum RuntimeOp {
     Scalar(ScalarOp),
     /// `to_string`, `clone`, or `copy` on a concrete built-in value.
     Value(ValueOp),
+    /// A named built-in function or associated function, such as `range`,
+    /// `Duration.ms`, or `fs.exists`.
+    Function(FunctionOp),
+    /// `print(value)`, by the layout of its argument.
+    Print(PrintKind),
+    /// A host builtin, such as `json.parse`, called through its generic
+    /// `(args, count) -> value` entry.
+    Host(HostBuiltin),
 }
 
-/// The runtime helper an op calls. The emitter passes the receiver word,
-/// the argument words, the immediate words, and then, when `span` is set,
-/// a source line and column word. A member call names no source span, so
-/// both are zero.
+/// The runtime helper an op calls. The emitter passes the layout words, the
+/// receiver word, the argument words, the immediate words, and then, when
+/// `span` is set, a source line and column word. A call names no source
+/// span, so both are zero.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RuntimeCall {
     pub(crate) function: RuntimeFn,
     pub(crate) immediates: &'static [i64],
     pub(crate) span: bool,
+    /// Words the backend derives from value layout and passes first: an
+    /// `Array` dtype code, a `select` source tuple, or a fresh collection
+    /// and its unused index word.
+    pub(crate) layout_words: usize,
+}
+
+/// What a resolved op calls.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RuntimeTarget {
+    /// A helper in the runtime ABI table.
+    Helper(RuntimeCall),
+    /// A host builtin's exported entry, which takes an argument buffer and
+    /// its length.
+    Host(&'static str),
 }
 
 macro_rules! resource_ops {
@@ -387,9 +420,434 @@ impl ValueOp {
     pub const ALL: &'static [ValueOp] = &[ValueOp::ToString, ValueOp::Clone, ValueOp::Copy];
 }
 
-const DURATION_TO_MILLISECONDS_WORDS: &[i64] =
-    &[crate::runtime_value::NANOS_PER_MILLISECOND as i64];
-const DURATION_TO_SECONDS_WORDS: &[i64] = &[crate::runtime_value::NANOS_PER_SECOND as i64];
+macro_rules! function_ops {
+    (
+        named { $( $op:ident => ($name:literal, $runtime:ident) ),+ $(,)? }
+        specialized { $( $special:ident => ($special_name:literal, $special_runtime:ident) ),+ $(,)? }
+    ) => {
+        /// A named built-in function. Each variant is named after the call
+        /// it resolves from, and a specialized variant after its base call
+        /// and the argument shape lowering picked it for.
+        #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+        pub enum FunctionOp {
+            $($op,)+
+            $($special,)+
+        }
+
+        impl FunctionOp {
+            /// Every function op, in declaration order.
+            pub const ALL: &'static [FunctionOp] = &[$(FunctionOp::$op,)+ $(FunctionOp::$special,)+];
+
+            /// The callee name a MIR `Name` call spells this op with.
+            pub const fn name(self) -> &'static str {
+                match self {
+                    $(FunctionOp::$op => $name,)+
+                    $(FunctionOp::$special => $special_name,)+
+                }
+            }
+
+            const fn runtime_fn(self) -> RuntimeFn {
+                match self {
+                    $(FunctionOp::$op => RuntimeFn::$runtime,)+
+                    $(FunctionOp::$special => RuntimeFn::$special_runtime,)+
+                }
+            }
+
+            /// The unspecialized op a call to `name` resolves to.
+            pub(crate) fn from_name(name: &str) -> Option<Self> {
+                match name {
+                    $($name => Some(FunctionOp::$op),)+
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+function_ops! {
+    named {
+        RngNew => ("random::Rng", RngNew),
+        RandomSecureInt => ("random::secure_int", RandomSecureInt),
+        RandomSecureBytes => ("random::secure_bytes", RandomSecureBytes),
+        ArrayZeros => ("Array.zeros", ArrayZeros),
+        ArrayFull => ("Array.full", ArrayFull),
+        ArrayFromList => ("Array.from_list", ArrayFromVec),
+        DurationMilliseconds => ("Duration.ms", DurationFromI64),
+        DurationSeconds => ("Duration.seconds", DurationFromI64),
+        DurationMinutes => ("Duration.minutes", DurationFromI64),
+        ListWithCapacity => ("list.with_capacity", CollectionOperation),
+        DictWithCapacity => ("dict.with_capacity", CollectionOperation),
+        SetWithCapacity => ("set.with_capacity", CollectionOperation),
+        ListEmpty => ("list", VecEmpty),
+        DictEmpty => ("dict", MapEmpty),
+        SetEmpty => ("set", SetEmpty),
+        Range => ("range", RangeNew),
+        QueueNew => ("Queue", ChannelNew),
+        TaskGroupNew => ("TaskGroup", TaskGroupNew),
+        Cancelled => ("cancelled", Cancelled),
+        YieldNow => ("yield_now", YieldNow),
+        Sleep => ("sleep", SleepValueVoid),
+        Select => ("select", Select),
+        WaitAny => ("wait_any", WaitAny),
+        WaitAll => ("wait_all", WaitAll),
+        Abs => ("abs", AbsValue),
+        Min => ("min", MinValue),
+        Max => ("max", MaxValue),
+        Sqrt => ("sqrt", SqrtValue),
+        Round => ("round", RoundValue),
+        Divmod => ("divmod", DivmodValue),
+        ParseInt32 => ("parse_int32", ParseInt32),
+        ParseInt64 => ("parse_int64", ParseInt64),
+        ParseFloat64 => ("parse_float64", ParseFloat64),
+        MonotonicTimeMs => ("sys::monotonic_time_ms", MonotonicTimeMs),
+        IoWrite => ("io::write", IoWrite),
+        IoFlush => ("io::flush", IoFlush),
+        IoReadLine => ("io::read_line", IoReadLine),
+        FsExists => ("fs::exists", FsExists),
+        FsReadToString => ("fs::read_to_string", FsReadToString),
+        FsReadBytes => ("fs::read_bytes", FsReadBytes),
+        FsWriteString => ("fs::write_string", FsWriteString),
+        FsWriteBytes => ("fs::write_bytes", FsWriteBytes),
+        FsAppendString => ("fs::append_string", FsAppendString),
+        FsAppendBytes => ("fs::append_bytes", FsAppendBytes),
+        FsCreateDir => ("fs::create_dir", FsCreateDir),
+        FsReadDir => ("fs::read_dir", FsReadDir),
+        FsRemoveFile => ("fs::remove_file", FsRemoveFile),
+        FsRename => ("fs::rename", FsRename),
+        FsOpen => ("fs::open", FsOpen),
+        FsCreate => ("fs::create", FsCreate),
+        FsAppend => ("fs::append", FsAppend),
+        ProcessInherit => ("process::inherit", ProcessInherit),
+        ProcessNull => ("process::null", ProcessNull),
+        ProcessPipe => ("process::pipe", ProcessPipe),
+        ProcessSupervisor => ("process::supervisor", ProcessSupervisor),
+        ProcessStart => ("process::start", ProcessStart),
+        ProcessRun => ("process::run", ProcessRun),
+        NetConnect => ("net::connect", NetConnect),
+        NetConnectTimeout => ("net::connect_timeout", NetConnectTimeout),
+        NetListen => ("net::listen", NetListen),
+        NetUdpBind => ("net::udp_bind", NetUdpBind),
+        NetUnixListen => ("net::unix_listen", NetUnixListen),
+        NetUnixConnect => ("net::unix_connect", NetUnixConnect),
+        NetUnixConnectTimeout => ("net::unix_connect_timeout", NetUnixConnectTimeout),
+        NetTlsListen => ("net::tls_listen", NetTlsListen),
+        NetTlsConnect => ("net::tls_connect", NetTlsConnect),
+        NetTlsConnectTimeout => ("net::tls_connect_timeout", NetTlsConnectTimeout),
+        NetHttpListen => ("net::http_listen", NetHttpListen),
+        NetHttpRequestText => ("net::http_request_text", NetHttpRequestText),
+        NetHttpRequestTextTimeout => ("net::http_request_text_timeout", NetHttpRequestTextTimeout),
+        NetHttpRequestBytes => ("net::http_request_bytes", NetHttpRequestBytes),
+        NetHttpRequestBytesTimeout => ("net::http_request_bytes_timeout", NetHttpRequestBytesTimeout),
+        NetWebsocketListen => ("net::websocket_listen", NetWebsocketListen),
+        NetWebsocketConnect => ("net::websocket_connect", NetWebsocketConnect),
+        NetWebsocketConnectTimeout => ("net::websocket_connect_timeout", NetWebsocketConnectTimeout),
+    }
+    specialized {
+        WaitAnyTimeout => ("wait_any", WaitAnyTimeoutValue),
+        WaitAllTimeout => ("wait_all", WaitAllTimeoutValue),
+    }
+}
+
+const QUEUE_PARAMS: &[CallableParam<'static>] = &[CallableParam::optional("capacity")];
+const TASKS_PARAMS: &[CallableParam<'static>] = &[CallableParam::required("tasks")];
+const TASKS_TIMEOUT_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("tasks"),
+    CallableParam::required("timeout"),
+];
+/// `aura_direct_collection_operation`'s reserve operation code.
+const COLLECTION_RESERVE_WORDS: &[i64] = &[4];
+/// The nanoseconds in one unit of a `Duration` conversion.
+const NANOS_PER_MILLISECOND_WORDS: &[i64] = &[crate::runtime_value::NANOS_PER_MILLISECOND as i64];
+const NANOS_PER_SECOND_WORDS: &[i64] = &[crate::runtime_value::NANOS_PER_SECOND as i64];
+const NANOS_PER_MINUTE_WORDS: &[i64] = &[crate::runtime_value::NANOS_PER_MINUTE as i64];
+
+impl FunctionOp {
+    /// The op with its specialization removed: the op `name()` resolves to.
+    pub const fn unspecialized(self) -> Self {
+        match self {
+            FunctionOp::WaitAnyTimeout => FunctionOp::WaitAny,
+            FunctionOp::WaitAllTimeout => FunctionOp::WaitAll,
+            other => other,
+        }
+    }
+
+    /// The specialization of an unspecialized op for a call that passes a
+    /// `timeout`.
+    pub const fn with_timeout(self) -> Self {
+        match self {
+            FunctionOp::WaitAny => FunctionOp::WaitAnyTimeout,
+            FunctionOp::WaitAll => FunctionOp::WaitAllTimeout,
+            other => other,
+        }
+    }
+
+    /// The declared signature of a builtin module function op.
+    fn module_metadata(self) -> Option<&'static HostBuiltinMetadata> {
+        builtin_module_function_metadata(self.name())
+    }
+
+    /// The op's parameters, in declaration order. `range` lists both of its
+    /// two-argument parameters, and `select` takes its sources variadically.
+    fn params(self) -> Vec<CallableParam<'static>> {
+        use FunctionOp::*;
+        match self {
+            QueueNew => QUEUE_PARAMS.to_vec(),
+            WaitAny | WaitAll => TASKS_PARAMS.to_vec(),
+            WaitAnyTimeout | WaitAllTimeout => TASKS_TIMEOUT_PARAMS.to_vec(),
+            TaskGroupNew | ListEmpty | DictEmpty | SetEmpty => Vec::new(),
+            RngNew => BuiltinClassConstructor::RandomRng.params().collect(),
+            _ => {
+                if let Some(builtin) = BuiltinFunction::from_name(self.name()) {
+                    return builtin.params().collect();
+                }
+                if let Some(associated) = self
+                    .name()
+                    .split_once('.')
+                    .and_then(|(owner, member)| BuiltinAssociatedFunction::resolve(owner, member))
+                {
+                    return associated.params().collect();
+                }
+                self.module_metadata()
+                    .map(metadata_params)
+                    .unwrap_or_default()
+            }
+        }
+    }
+
+    fn runtime_call(self) -> RuntimeCall {
+        use FunctionOp::*;
+        let (immediates, span, layout_words): (&'static [i64], bool, usize) = match self {
+            ArrayZeros | ArrayFull | ArrayFromList => (&[], true, 1),
+            DurationMilliseconds => (NANOS_PER_MILLISECOND_WORDS, false, 0),
+            DurationSeconds => (NANOS_PER_SECOND_WORDS, false, 0),
+            DurationMinutes => (NANOS_PER_MINUTE_WORDS, false, 0),
+            ListWithCapacity | DictWithCapacity | SetWithCapacity => {
+                (COLLECTION_RESERVE_WORDS, false, 2)
+            }
+            Select => (&[], false, 1),
+            _ => (&[], false, 0),
+        };
+        RuntimeCall {
+            function: self.runtime_fn(),
+            immediates,
+            span,
+            layout_words,
+        }
+    }
+
+    /// The helper that makes the empty collection a collection op returns.
+    pub(crate) const fn empty_collection_fn(self) -> Option<RuntimeFn> {
+        match self {
+            FunctionOp::ListEmpty | FunctionOp::ListWithCapacity => Some(RuntimeFn::VecEmpty),
+            FunctionOp::DictEmpty | FunctionOp::DictWithCapacity => Some(RuntimeFn::MapEmpty),
+            FunctionOp::SetEmpty | FunctionOp::SetWithCapacity => Some(RuntimeFn::SetEmpty),
+            _ => None,
+        }
+    }
+
+    /// The result type for arguments of types `args`, in call order. An op
+    /// whose result type the call's type arguments name, such as `Queue` or
+    /// `Array.zeros`, has none here.
+    fn result_type(self, args: &[Option<Type>]) -> Option<Type> {
+        use FunctionOp::*;
+        let first = || args.first().cloned().flatten();
+        let named = |name: &str, args: Vec<Type>| Type::Named(name.to_string(), args);
+        let parsed = |ok: &str| named("Result", vec![Type::named(ok), Type::named("str")]);
+        Some(match self {
+            RngNew => Type::named("random.Rng"),
+            DurationMilliseconds | DurationSeconds | DurationMinutes => Type::named("Duration"),
+            Range => Type::named("Range"),
+            TaskGroupNew => Type::named("TaskGroup"),
+            Cancelled => Type::named("bool"),
+            YieldNow | Sleep => Type::Unit,
+            Select => {
+                let mut queue_payload = None;
+                let mut task_result = None;
+                for argument in args.iter().flatten() {
+                    match argument {
+                        Type::Named(source, payload) if payload.len() == 1 && source == "Queue" => {
+                            queue_payload = Some(payload[0].clone());
+                        }
+                        Type::Named(source, result) if result.len() == 1 && source == "Task" => {
+                            task_result = Some(result[0].clone());
+                        }
+                        _ => {}
+                    }
+                }
+                named(
+                    "SelectOutcome",
+                    vec![
+                        queue_payload.unwrap_or(Type::Unit),
+                        task_result.unwrap_or(Type::Unit),
+                    ],
+                )
+            }
+            WaitAny | WaitAnyTimeout | WaitAll | WaitAllTimeout => {
+                let Some(Type::Named(container, tasks)) = first() else {
+                    return None;
+                };
+                let [Type::Named(task, result)] = tasks.as_slice() else {
+                    return None;
+                };
+                if container != "list" || task != "Task" || result.len() != 1 {
+                    return None;
+                }
+                let outcome = match self.unspecialized() {
+                    WaitAny => "WaitAny",
+                    _ => "WaitAll",
+                };
+                named(outcome, vec![result[0].clone()])
+            }
+            Abs | Min | Max | Sqrt => first()?,
+            Round => match first()? {
+                Type::Named(name, type_args)
+                    if type_args.is_empty() && matches!(name.as_str(), "float32" | "float64") =>
+                {
+                    Type::named("int64")
+                }
+                other => other,
+            },
+            Divmod => {
+                let ty = first()?;
+                Type::Tuple(vec![ty.clone(), ty])
+            }
+            ParseInt32 => parsed("int32"),
+            ParseInt64 => parsed("int64"),
+            ParseFloat64 => parsed("float64"),
+            ArrayZeros | ArrayFull | ArrayFromList | ListWithCapacity | DictWithCapacity
+            | SetWithCapacity | ListEmpty | DictEmpty | SetEmpty | QueueNew => return None,
+            _ => self.module_metadata()?.return_type.clone(),
+        })
+    }
+}
+
+fn metadata_params(metadata: &'static HostBuiltinMetadata) -> Vec<CallableParam<'static>> {
+    metadata
+        .params
+        .iter()
+        .map(|param| CallableParam {
+            name: param.name.as_str(),
+            required: param.required,
+            keyword_only: false,
+        })
+        .collect()
+}
+
+/// How `print` writes its argument: a scalar word of one numeric kind or a
+/// `bool`, or a boxed value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum PrintKind {
+    /// An `int32` or `int64`.
+    Int,
+    Uint64,
+    Float32,
+    Float64,
+    Bool,
+    /// Any other value, boxed.
+    Value,
+}
+
+impl PrintKind {
+    pub const ALL: &'static [PrintKind] = &[
+        PrintKind::Int,
+        PrintKind::Uint64,
+        PrintKind::Float32,
+        PrintKind::Float64,
+        PrintKind::Bool,
+        PrintKind::Value,
+    ];
+
+    /// The kind that prints a value of type `ty`, or of unknown type.
+    pub fn for_type(ty: Option<&Type>) -> Self {
+        let Some(Type::Named(name, args)) = ty else {
+            return PrintKind::Value;
+        };
+        if !args.is_empty() {
+            return PrintKind::Value;
+        }
+        match name.as_str() {
+            "int32" | "int64" => PrintKind::Int,
+            "uint64" => PrintKind::Uint64,
+            "float32" => PrintKind::Float32,
+            "float64" => PrintKind::Float64,
+            "bool" => PrintKind::Bool,
+            _ => PrintKind::Value,
+        }
+    }
+
+    const fn runtime_fn(self) -> RuntimeFn {
+        match self {
+            PrintKind::Int => RuntimeFn::PrintI64,
+            PrintKind::Uint64 => RuntimeFn::PrintU64,
+            PrintKind::Float32 => RuntimeFn::PrintF32,
+            PrintKind::Float64 => RuntimeFn::PrintF64,
+            PrintKind::Bool => RuntimeFn::PrintBool,
+            PrintKind::Value => RuntimeFn::PrintValue,
+        }
+    }
+}
+
+/// A host builtin: an index into the runtime's host builtin table. It
+/// serializes as the builtin's qualified name, such as `json::parse`, so
+/// serialized MIR does not depend on the table's order, and the native
+/// emitter's reachability walk sees the builtin's wrapper name.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct HostBuiltin(u16);
+
+impl HostBuiltin {
+    /// Every host builtin a call can resolve to, in table order. A table
+    /// entry whose name a `FunctionOp` claims, such as
+    /// `sys::monotonic_time_ms`, has a dedicated helper instead.
+    pub fn all() -> impl Iterator<Item = HostBuiltin> {
+        (0..HOST_BUILTIN_SYMBOLS.len() as u16)
+            .map(HostBuiltin)
+            .filter(|builtin| FunctionOp::from_name(builtin.name()).is_none())
+    }
+
+    /// The host builtin a call to the qualified name `name` resolves to.
+    pub fn from_name(name: &str) -> Option<Self> {
+        if FunctionOp::from_name(name).is_some() {
+            return None;
+        }
+        HOST_BUILTIN_SYMBOLS
+            .iter()
+            .position(|(entry, _)| *entry == name)
+            .map(|index| HostBuiltin(index as u16))
+    }
+
+    /// The builtin's qualified name, such as `json::parse`.
+    pub fn name(self) -> &'static str {
+        HOST_BUILTIN_SYMBOLS[usize::from(self.0)].0
+    }
+
+    /// The exported runtime entry the native emitter calls.
+    pub fn symbol(self) -> &'static str {
+        HOST_BUILTIN_SYMBOLS[usize::from(self.0)].1
+    }
+
+    /// The builtin's declared parameters and result type.
+    pub(crate) fn metadata(self) -> &'static HostBuiltinMetadata {
+        host_builtin_metadata(self.name()).expect("every host builtin entry has metadata")
+    }
+}
+
+impl Serialize for HostBuiltin {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.name())
+    }
+}
+
+impl<'de> Deserialize<'de> for HostBuiltin {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        match HostBuiltin::from_name(&name) {
+            Some(builtin) => Ok(builtin),
+            None => Err(serde::de::Error::custom(format!(
+                "unknown host builtin `{name}`"
+            ))),
+        }
+    }
+}
 
 /// The built-in member that `receiver.field` names, if it names one. The
 /// receiver must have a concrete named type: a type parameter, union, or
@@ -411,6 +869,28 @@ pub(crate) fn builtin_member_for_receiver(
     BuiltinMember::resolve_runtime(name, field)
 }
 
+/// The op a call to the built-in named `name` resolves to, before lowering
+/// specializes it by its arguments: `print` resolves to `Print(Value)` and
+/// `wait_any` to `Function(WaitAny)`. A user function named `name` shadows
+/// the built-in, as a class method shadows a built-in member. Lowering, the
+/// MIR validator, and the interpreter all decide named-call precedence here.
+pub(crate) fn builtin_function_for_name(
+    name: &str,
+    declares_function: impl FnOnce(&str) -> bool,
+) -> Option<RuntimeOp> {
+    let op = if name == "print" {
+        RuntimeOp::Print(PrintKind::Value)
+    } else if let Some(function) = FunctionOp::from_name(name) {
+        RuntimeOp::Function(function)
+    } else {
+        RuntimeOp::Host(HostBuiltin::from_name(name)?)
+    };
+    if declares_function(name) {
+        return None;
+    }
+    Some(op)
+}
+
 impl RuntimeOp {
     /// Every op, grouped by family.
     pub fn all() -> impl Iterator<Item = RuntimeOp> {
@@ -421,6 +901,9 @@ impl RuntimeOp {
             .chain(RngOp::ALL.iter().copied().map(RuntimeOp::Rng))
             .chain(ScalarOp::ALL.iter().copied().map(RuntimeOp::Scalar))
             .chain(ValueOp::ALL.iter().copied().map(RuntimeOp::Value))
+            .chain(FunctionOp::ALL.iter().copied().map(RuntimeOp::Function))
+            .chain(PrintKind::ALL.iter().copied().map(RuntimeOp::Print))
+            .chain(HostBuiltin::all().map(RuntimeOp::Host))
     }
 
     /// The op a call `receiver.field` resolves to, under the member
@@ -467,11 +950,11 @@ impl RuntimeOp {
     }
 
     /// The built-in member whose call shape and receiver passing this op
-    /// has. `copy()` has the same shape on every collection, so it reports
-    /// the `list` member.
-    pub fn builtin_member(self) -> BuiltinMember {
+    /// has, for an op with a receiver. `copy()` has the same shape on every
+    /// collection, so it reports the `list` member.
+    pub fn builtin_member(self) -> Option<BuiltinMember> {
         use BuiltinMember as M;
-        match self {
+        Some(match self {
             RuntimeOp::Resource(op) => op.builtin_member(),
             RuntimeOp::Rng(RngOp::NextInt) => M::RngNextInt,
             RuntimeOp::Rng(RngOp::NextFloat) => M::RngNextFloat,
@@ -493,12 +976,23 @@ impl RuntimeOp {
             RuntimeOp::Value(ValueOp::ToString) => M::ScalarToString,
             RuntimeOp::Value(ValueOp::Clone) => M::StringClone,
             RuntimeOp::Value(ValueOp::Copy) => M::VecClone,
-        }
+            RuntimeOp::Function(_) | RuntimeOp::Print(_) | RuntimeOp::Host(_) => return None,
+        })
     }
 
-    /// The source member name, such as `read_all`.
-    pub fn member_name(self) -> &'static str {
-        self.builtin_member().name()
+    /// The source name: a member name such as `read_all` for an op with a
+    /// receiver, or the callee name a MIR `Name` call spells, such as
+    /// `print` or `fs::exists`.
+    pub fn name(self) -> &'static str {
+        match self {
+            RuntimeOp::Function(op) => op.name(),
+            RuntimeOp::Print(_) => "print",
+            RuntimeOp::Host(builtin) => builtin.name(),
+            _ => self
+                .builtin_member()
+                .expect("an op with a receiver has a built-in member")
+                .name(),
+        }
     }
 
     /// Whether the op is a method call with a receiver operand.
@@ -508,27 +1002,52 @@ impl RuntimeOp {
             | RuntimeOp::Rng(_)
             | RuntimeOp::Scalar(_)
             | RuntimeOp::Value(_) => true,
+            RuntimeOp::Function(_) | RuntimeOp::Print(_) | RuntimeOp::Host(_) => false,
+        }
+    }
+
+    /// The op with any specialization by argument shape removed: the op
+    /// `builtin_function_for_name` resolves a named call to.
+    pub fn unspecialized(self) -> Self {
+        match self {
+            RuntimeOp::Function(op) => RuntimeOp::Function(op.unspecialized()),
+            RuntimeOp::Print(_) => RuntimeOp::Print(PrintKind::Value),
+            other => other,
         }
     }
 
     /// The op's parameters after the receiver, in declaration order.
-    pub fn params(self) -> impl Iterator<Item = CallableParam<'static>> {
-        self.builtin_member().params()
+    pub fn params(self) -> Vec<CallableParam<'static>> {
+        match self {
+            RuntimeOp::Function(op) => op.params(),
+            RuntimeOp::Print(_) => BuiltinFunction::Print.params().collect(),
+            RuntimeOp::Host(builtin) => metadata_params(builtin.metadata()),
+            _ => self
+                .builtin_member()
+                .expect("an op with a receiver has a built-in member")
+                .params()
+                .collect(),
+        }
     }
 
     /// Whether this op applies to a receiver whose type is named `name`.
+    /// An op with no receiver applies to none.
     pub fn applies_to(self, name: &str) -> bool {
-        BuiltinMember::resolve_runtime(name, self.member_name()).and_then(Self::from_builtin_member)
-            == Some(self)
+        self.has_receiver()
+            && BuiltinMember::resolve_runtime(name, self.name()).and_then(Self::from_builtin_member)
+                == Some(self)
     }
 
-    /// The runtime helper the op calls and the immediate words that follow
-    /// its receiver and argument words.
-    pub(crate) fn runtime_call(self) -> RuntimeCall {
-        let call = |function, immediates| RuntimeCall {
-            function,
-            immediates,
-            span: false,
+    /// What the op calls: a runtime helper and the immediate words that
+    /// follow its receiver and argument words, or a host builtin's entry.
+    pub(crate) fn runtime_target(self) -> RuntimeTarget {
+        let call = |function, immediates| {
+            RuntimeTarget::Helper(RuntimeCall {
+                function,
+                immediates,
+                span: false,
+                layout_words: 0,
+            })
         };
         match self {
             RuntimeOp::Resource(op) => call(op.runtime_fn(), &[]),
@@ -546,29 +1065,47 @@ impl RuntimeOp {
                 | ScalarOp::WrappingShr
                 | ScalarOp::SaturatingShl
                 | ScalarOp::SaturatingShr),
-            ) => RuntimeCall {
+            ) => RuntimeTarget::Helper(RuntimeCall {
                 function: RuntimeFn::IntegerWidthBinary,
                 immediates: op
                     .integer_width_words()
                     .expect("fixed-width integer ops name their operation words"),
                 span: true,
-            },
+                layout_words: 0,
+            }),
             RuntimeOp::Scalar(ScalarOp::ToFloat) => call(RuntimeFn::IntegerToFloat, &[]),
             RuntimeOp::Scalar(ScalarOp::Sqrt) => call(RuntimeFn::SqrtF64, &[]),
             RuntimeOp::Scalar(ScalarOp::DurationToMilliseconds) => {
-                call(RuntimeFn::DurationToFloat, DURATION_TO_MILLISECONDS_WORDS)
+                call(RuntimeFn::DurationToFloat, NANOS_PER_MILLISECOND_WORDS)
             }
             RuntimeOp::Scalar(ScalarOp::DurationToSeconds) => {
-                call(RuntimeFn::DurationToFloat, DURATION_TO_SECONDS_WORDS)
+                call(RuntimeFn::DurationToFloat, NANOS_PER_SECOND_WORDS)
             }
             RuntimeOp::Value(ValueOp::ToString) => call(RuntimeFn::StringifyValue, &[]),
             RuntimeOp::Value(ValueOp::Clone | ValueOp::Copy) => call(RuntimeFn::CloneValue, &[]),
+            RuntimeOp::Function(op) => RuntimeTarget::Helper(op.runtime_call()),
+            RuntimeOp::Print(kind) => call(kind.runtime_fn(), &[]),
+            RuntimeOp::Host(builtin) => RuntimeTarget::Host(builtin.symbol()),
         }
     }
 
-    /// The type of the op's result for a receiver of type `receiver`. This
-    /// is the one result-type table for the resolved families.
-    pub fn result_type(self, receiver: &Type) -> Option<Type> {
+    /// The runtime helper an op that calls one calls. A host builtin calls
+    /// its own entry instead; see `runtime_target`.
+    pub(crate) fn runtime_call(self) -> RuntimeCall {
+        match self.runtime_target() {
+            RuntimeTarget::Helper(call) => call,
+            RuntimeTarget::Host(symbol) => {
+                unreachable!("host builtin `{self}` calls its own entry `{symbol}`")
+            }
+        }
+    }
+
+    /// The type of the op's result. `receiver` is the receiver's type, for
+    /// an op with a receiver, and `args` are the argument types in call
+    /// order, which only named ops read. This is the one result-type table
+    /// for the resolved families. An op whose result type only the call's
+    /// type arguments name, such as `Queue[int64]()`, has none.
+    pub fn result_type(self, receiver: Option<&Type>, args: &[Option<Type>]) -> Option<Type> {
         Some(match self {
             RuntimeOp::Resource(op) => op.result_type(),
             RuntimeOp::Rng(RngOp::NextInt) => Type::named("int64"),
@@ -581,9 +1118,12 @@ impl RuntimeOp {
                 | ScalarOp::DurationToSeconds,
             ) => Type::named("float64"),
             RuntimeOp::Scalar(_) | RuntimeOp::Value(ValueOp::Clone | ValueOp::Copy) => {
-                receiver.clone()
+                receiver?.clone()
             }
             RuntimeOp::Value(ValueOp::ToString) => Type::named("str"),
+            RuntimeOp::Function(op) => return op.result_type(args),
+            RuntimeOp::Print(_) => Type::Unit,
+            RuntimeOp::Host(builtin) => builtin.metadata().return_type.clone(),
         })
     }
 }
@@ -595,6 +1135,9 @@ impl std::fmt::Display for RuntimeOp {
             RuntimeOp::Rng(op) => write!(formatter, "Rng.{op:?}"),
             RuntimeOp::Scalar(op) => write!(formatter, "Scalar.{op:?}"),
             RuntimeOp::Value(op) => write!(formatter, "Value.{op:?}"),
+            RuntimeOp::Function(op) => write!(formatter, "Function.{op:?}"),
+            RuntimeOp::Print(kind) => write!(formatter, "Print.{kind:?}"),
+            RuntimeOp::Host(builtin) => write!(formatter, "Host.{}", builtin.name()),
         }
     }
 }

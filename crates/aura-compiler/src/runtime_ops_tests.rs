@@ -1,4 +1,9 @@
-use super::{builtin_member_for_receiver, ResourceOp, RngOp, RuntimeOp, ScalarOp, ValueOp};
+use super::{
+    builtin_function_for_name, builtin_member_for_receiver, FunctionOp, HostBuiltin, PrintKind,
+    ResourceOp, RngOp, RuntimeOp, RuntimeTarget, ScalarOp, ValueOp,
+};
+use crate::native_runtime::HOST_BUILTIN_SYMBOLS;
+use crate::runtime_abi::RuntimeFn;
 use crate::sema::{optional_type, Type};
 
 fn named(name: &str, args: Vec<Type>) -> Type {
@@ -25,12 +30,15 @@ fn sample_receiver(op: RuntimeOp) -> Type {
         RuntimeOp::Scalar(_) | RuntimeOp::Value(ValueOp::ToString) => Type::named("int32"),
         RuntimeOp::Value(ValueOp::Clone) => Type::named("str"),
         RuntimeOp::Value(ValueOp::Copy) => named("list", vec![Type::named("int64")]),
+        RuntimeOp::Function(_) | RuntimeOp::Print(_) | RuntimeOp::Host(_) => {
+            unreachable!("{op} has no receiver")
+        }
     }
 }
 
 #[test]
 fn every_runtime_op_resolves_from_its_receiver_and_has_a_result_type() {
-    for op in RuntimeOp::all() {
+    for op in RuntimeOp::all().filter(|op| op.has_receiver()) {
         let receiver = sample_receiver(op);
         let Type::Named(name, _) = &receiver else {
             unreachable!("sample receivers are named types")
@@ -38,13 +46,13 @@ fn every_runtime_op_resolves_from_its_receiver_and_has_a_result_type() {
         assert!(op.applies_to(name), "{op} applies to `{receiver}`");
         assert!(!op.applies_to("Queue"), "{op} does not apply to `Queue`");
         assert_eq!(
-            RuntimeOp::resolve_member(&receiver, op.member_name(), |_| false),
+            RuntimeOp::resolve_member(&receiver, op.name(), |_| false),
             Some(op),
             "`{receiver}.{}` resolves to {op}",
-            op.member_name()
+            op.name()
         );
         assert!(
-            op.result_type(&receiver).is_some(),
+            op.result_type(Some(&receiver), &[]).is_some(),
             "{op} names a result type"
         );
     }
@@ -137,11 +145,15 @@ fn runtime_op_results_name_each_member_type() {
         let receiver = Type::named(name);
         let op = RuntimeOp::resolve_member(&receiver, field, |_| false)
             .unwrap_or_else(|| panic!("`{name}.{field}` is a runtime op"));
-        assert_eq!(op.result_type(&receiver), Some(expected), "{name}.{field}");
+        assert_eq!(
+            op.result_type(Some(&receiver), &[]),
+            Some(expected),
+            "{name}.{field}"
+        );
     }
     let list = named("list", vec![int64]);
     assert_eq!(
-        RuntimeOp::Value(ValueOp::Copy).result_type(&list),
+        RuntimeOp::Value(ValueOp::Copy).result_type(Some(&list), &[]),
         Some(list)
     );
 }
@@ -178,10 +190,335 @@ fn runtime_ops_display_their_family() {
         (RuntimeOp::Rng(RngOp::Shuffle), "Rng.Shuffle"),
         (RuntimeOp::Scalar(ScalarOp::Sqrt), "Scalar.Sqrt"),
         (RuntimeOp::Value(ValueOp::Copy), "Value.Copy"),
+        (RuntimeOp::Function(FunctionOp::Range), "Function.Range"),
+        (RuntimeOp::Print(PrintKind::Int), "Print.Int"),
+        (
+            RuntimeOp::Host(HostBuiltin::from_name("json::parse").unwrap()),
+            "Host.json::parse",
+        ),
     ];
     for (op, expected) in cases {
         assert_eq!(op.to_string(), expected);
     }
+}
+
+fn some(name: &str) -> Option<Type> {
+    Some(Type::named(name))
+}
+
+#[test]
+fn named_builtins_resolve_by_precedence_and_yield_to_user_functions() {
+    let none_declared = |_: &str| false;
+    let cases = [
+        ("print", RuntimeOp::Print(PrintKind::Value)),
+        ("range", RuntimeOp::Function(FunctionOp::Range)),
+        ("wait_any", RuntimeOp::Function(FunctionOp::WaitAny)),
+        (
+            "Duration.ms",
+            RuntimeOp::Function(FunctionOp::DurationMilliseconds),
+        ),
+        (
+            "Array.from_list",
+            RuntimeOp::Function(FunctionOp::ArrayFromList),
+        ),
+        ("set", RuntimeOp::Function(FunctionOp::SetEmpty)),
+        ("fs::exists", RuntimeOp::Function(FunctionOp::FsExists)),
+        // A dedicated helper wins over the host table entry of one name.
+        (
+            "sys::monotonic_time_ms",
+            RuntimeOp::Function(FunctionOp::MonotonicTimeMs),
+        ),
+    ];
+    for (name, op) in cases {
+        assert_eq!(
+            builtin_function_for_name(name, none_declared),
+            Some(op),
+            "{name}"
+        );
+        assert_eq!(op.name(), name);
+    }
+    let parse = builtin_function_for_name("json::parse", none_declared)
+        .expect("a host builtin resolves by its qualified name");
+    assert!(matches!(parse, RuntimeOp::Host(builtin) if builtin.name() == "json::parse"));
+    assert_eq!(builtin_function_for_name("missing", none_declared), None);
+    // A user function of the same name shadows the builtin.
+    assert_eq!(builtin_function_for_name("set", |name| name == "set"), None);
+    assert_eq!(builtin_function_for_name("print", |_| true), None);
+    assert_eq!(
+        builtin_function_for_name("list", |name| name == "set"),
+        Some(RuntimeOp::Function(FunctionOp::ListEmpty))
+    );
+}
+
+#[test]
+fn print_kinds_follow_the_argument_layout() {
+    let cases = [
+        (some("int32"), PrintKind::Int),
+        (some("int64"), PrintKind::Int),
+        (some("uint64"), PrintKind::Uint64),
+        (some("float32"), PrintKind::Float32),
+        (some("float64"), PrintKind::Float64),
+        (some("bool"), PrintKind::Bool),
+        (some("str"), PrintKind::Value),
+        (
+            Some(named("list", vec![Type::named("int64")])),
+            PrintKind::Value,
+        ),
+        (Some(Type::Unit), PrintKind::Value),
+        (None, PrintKind::Value),
+    ];
+    for (ty, kind) in cases {
+        assert_eq!(PrintKind::for_type(ty.as_ref()), kind, "{ty:?}");
+    }
+    let helpers = PrintKind::ALL
+        .iter()
+        .map(|kind| kind.runtime_fn())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(helpers.len(), PrintKind::ALL.len());
+    assert_eq!(PrintKind::Value.runtime_fn(), RuntimeFn::PrintValue);
+    for kind in PrintKind::ALL {
+        let op = RuntimeOp::Print(*kind);
+        assert_eq!(op.name(), "print");
+        assert_eq!(op.unspecialized(), RuntimeOp::Print(PrintKind::Value));
+        assert_eq!(op.result_type(None, &[]), Some(Type::Unit));
+    }
+}
+
+#[test]
+fn function_op_result_types_follow_their_arguments() {
+    let result =
+        |op: FunctionOp, args: &[Option<Type>]| RuntimeOp::Function(op).result_type(None, args);
+    let int64 = Type::named("int64");
+    let tasks = |payload: Type| Some(named("list", vec![named("Task", vec![payload])]));
+    assert_eq!(result(FunctionOp::RngNew, &[]), some("random.Rng"));
+    assert_eq!(result(FunctionOp::DurationSeconds, &[]), some("Duration"));
+    assert_eq!(result(FunctionOp::Range, &[]), some("Range"));
+    assert_eq!(result(FunctionOp::TaskGroupNew, &[]), some("TaskGroup"));
+    assert_eq!(result(FunctionOp::Cancelled, &[]), some("bool"));
+    assert_eq!(result(FunctionOp::YieldNow, &[]), Some(Type::Unit));
+    assert_eq!(result(FunctionOp::Sleep, &[]), Some(Type::Unit));
+    assert_eq!(
+        result(
+            FunctionOp::Select,
+            &[
+                Some(named("Queue", vec![Type::named("str")])),
+                Some(named("Task", vec![int64.clone()])),
+                some("Duration"),
+                None,
+            ]
+        ),
+        Some(named(
+            "SelectOutcome",
+            vec![Type::named("str"), int64.clone()]
+        ))
+    );
+    assert_eq!(
+        result(FunctionOp::Select, &[some("Duration")]),
+        Some(named("SelectOutcome", vec![Type::Unit, Type::Unit]))
+    );
+    assert_eq!(
+        result(FunctionOp::WaitAny, &[tasks(int64.clone())]),
+        Some(named("WaitAny", vec![int64.clone()]))
+    );
+    assert_eq!(
+        result(
+            FunctionOp::WaitAllTimeout,
+            &[tasks(int64.clone()), some("Duration")]
+        ),
+        Some(named("WaitAll", vec![int64.clone()]))
+    );
+    for args in [
+        vec![],
+        vec![some("int64")],
+        vec![Some(named("list", vec![int64.clone()]))],
+        vec![Some(named("set", vec![named("Task", vec![int64.clone()])]))],
+        vec![Some(named("list", vec![named("Task", vec![])]))],
+    ] {
+        assert_eq!(result(FunctionOp::WaitAny, &args), None, "{args:?}");
+    }
+    for op in [
+        FunctionOp::Abs,
+        FunctionOp::Min,
+        FunctionOp::Max,
+        FunctionOp::Sqrt,
+    ] {
+        assert_eq!(result(op, &[some("int8"), some("int8")]), some("int8"));
+        assert_eq!(result(op, &[]), None);
+    }
+    assert_eq!(result(FunctionOp::Round, &[some("float32")]), some("int64"));
+    assert_eq!(result(FunctionOp::Round, &[some("int16")]), some("int16"));
+    assert_eq!(result(FunctionOp::Round, &[None]), None);
+    assert_eq!(
+        result(FunctionOp::Divmod, &[some("int8"), some("int8")]),
+        Some(Type::Tuple(vec![Type::named("int8"), Type::named("int8")]))
+    );
+    assert_eq!(result(FunctionOp::Divmod, &[]), None);
+    assert_eq!(
+        result(FunctionOp::ParseInt32, &[]),
+        Some(result_of("int32"))
+    );
+    assert_eq!(
+        result(FunctionOp::ParseInt64, &[]),
+        Some(result_of("int64"))
+    );
+    assert_eq!(
+        result(FunctionOp::ParseFloat64, &[]),
+        Some(result_of("float64"))
+    );
+    for op in [
+        FunctionOp::ArrayZeros,
+        FunctionOp::ArrayFull,
+        FunctionOp::ArrayFromList,
+        FunctionOp::ListWithCapacity,
+        FunctionOp::DictWithCapacity,
+        FunctionOp::SetWithCapacity,
+        FunctionOp::ListEmpty,
+        FunctionOp::DictEmpty,
+        FunctionOp::SetEmpty,
+        FunctionOp::QueueNew,
+    ] {
+        assert_eq!(result(op, &[]), None, "{op:?} takes its type from the call");
+    }
+    // A receiver op asked for its result without a receiver has none.
+    assert_eq!(
+        RuntimeOp::Scalar(ScalarOp::WrappingAdd).result_type(None, &[]),
+        None
+    );
+    // Module functions read their declared signature.
+    assert_eq!(result(FunctionOp::FsExists, &[]), some("bool"));
+    assert_eq!(result(FunctionOp::MonotonicTimeMs, &[]), some("int64"));
+}
+
+fn result_of(ok: &str) -> Type {
+    result(Type::named(ok), "str")
+}
+
+#[test]
+fn function_op_params_by_category() {
+    let names = |op: FunctionOp| {
+        RuntimeOp::Function(op)
+            .params()
+            .into_iter()
+            .map(|param| (param.name, param.required))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(FunctionOp::QueueNew), [("capacity", false)]);
+    assert_eq!(names(FunctionOp::WaitAny), [("tasks", true)]);
+    assert_eq!(
+        names(FunctionOp::WaitAllTimeout),
+        [("tasks", true), ("timeout", true)]
+    );
+    for op in [
+        FunctionOp::TaskGroupNew,
+        FunctionOp::ListEmpty,
+        FunctionOp::DictEmpty,
+        FunctionOp::SetEmpty,
+        FunctionOp::Cancelled,
+    ] {
+        assert_eq!(names(op), [], "{op:?}");
+    }
+    assert_eq!(names(FunctionOp::RngNew), [("seed", true)]);
+    assert_eq!(names(FunctionOp::Min), [("left", true), ("right", true)]);
+    assert_eq!(
+        names(FunctionOp::ArrayFromList),
+        [("values", true), ("shape", true)]
+    );
+    assert_eq!(names(FunctionOp::FsExists), [("path", true)]);
+    assert_eq!(
+        RuntimeOp::Print(PrintKind::Int)
+            .params()
+            .into_iter()
+            .map(|param| param.name)
+            .collect::<Vec<_>>(),
+        ["value"]
+    );
+}
+
+#[test]
+fn function_op_specializations_and_collections() {
+    for op in FunctionOp::ALL {
+        assert_eq!(op.unspecialized().unspecialized(), op.unspecialized());
+        let runtime_op = RuntimeOp::Function(*op);
+        assert!(!runtime_op.has_receiver());
+        assert!(!runtime_op.applies_to("list"));
+        assert_eq!(runtime_op.builtin_member(), None);
+    }
+    assert_eq!(
+        FunctionOp::WaitAny.with_timeout(),
+        FunctionOp::WaitAnyTimeout
+    );
+    assert_eq!(
+        FunctionOp::WaitAll.with_timeout(),
+        FunctionOp::WaitAllTimeout
+    );
+    assert_eq!(FunctionOp::Sleep.with_timeout(), FunctionOp::Sleep);
+    assert_eq!(
+        FunctionOp::WaitAnyTimeout.unspecialized(),
+        FunctionOp::WaitAny
+    );
+    assert_eq!(FunctionOp::WaitAnyTimeout.name(), "wait_any");
+    assert_eq!(
+        FunctionOp::WaitAllTimeout.runtime_fn(),
+        RuntimeFn::WaitAllTimeoutValue
+    );
+    let cases = [
+        (FunctionOp::ListEmpty, Some(RuntimeFn::VecEmpty)),
+        (FunctionOp::ListWithCapacity, Some(RuntimeFn::VecEmpty)),
+        (FunctionOp::DictEmpty, Some(RuntimeFn::MapEmpty)),
+        (FunctionOp::DictWithCapacity, Some(RuntimeFn::MapEmpty)),
+        (FunctionOp::SetEmpty, Some(RuntimeFn::SetEmpty)),
+        (FunctionOp::SetWithCapacity, Some(RuntimeFn::SetEmpty)),
+        (FunctionOp::Range, None),
+    ];
+    for (op, empty) in cases {
+        assert_eq!(op.empty_collection_fn(), empty, "{op:?}");
+    }
+}
+
+#[test]
+fn host_builtins_round_trip_through_their_names() {
+    let mut count = 0;
+    for builtin in HostBuiltin::all() {
+        count += 1;
+        assert_eq!(HostBuiltin::from_name(builtin.name()), Some(builtin));
+        assert!(
+            builtin.symbol().starts_with("aura_host_"),
+            "{}",
+            builtin.symbol()
+        );
+        let op = RuntimeOp::Host(builtin);
+        assert_eq!(op.name(), builtin.name());
+        assert!(!op.has_receiver());
+        assert_eq!(op.unspecialized(), op);
+        assert_eq!(op.builtin_member(), None);
+        assert_eq!(op.runtime_target(), RuntimeTarget::Host(builtin.symbol()));
+        assert_eq!(op.params().len(), builtin.metadata().params.len());
+        assert_eq!(
+            op.result_type(None, &[]).as_ref(),
+            Some(&builtin.metadata().return_type)
+        );
+        let json = serde_json::to_string(&builtin).unwrap();
+        assert_eq!(json, format!("\"{}\"", builtin.name()));
+        assert_eq!(serde_json::from_str::<HostBuiltin>(&json).unwrap(), builtin);
+    }
+    assert_eq!(count + 1, HOST_BUILTIN_SYMBOLS.len());
+    assert_eq!(HostBuiltin::from_name("sys::monotonic_time_ms"), None);
+    assert_eq!(HostBuiltin::from_name("json::missing"), None);
+    let error = serde_json::from_str::<HostBuiltin>("\"json::missing\"").unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("unknown host builtin `json::missing`"),
+        "{error}"
+    );
+    assert!(serde_json::from_str::<HostBuiltin>("7").is_err());
+}
+
+#[test]
+#[should_panic(expected = "calls its own entry")]
+fn a_host_builtin_has_no_runtime_helper() {
+    let builtin = HostBuiltin::from_name("json::parse").unwrap();
+    let _ = RuntimeOp::Host(builtin).runtime_call();
 }
 
 #[test]
