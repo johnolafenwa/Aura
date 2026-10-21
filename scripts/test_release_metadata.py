@@ -10,8 +10,8 @@ import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-VERSION = "0.5.0"
-EXTENSION_VERSION = "0.5.0"
+VERSION = "0.6.0"
+EXTENSION_VERSION = "0.6.0"
 
 
 class ReleaseMetadataTests(unittest.TestCase):
@@ -130,11 +130,19 @@ class ReleaseMetadataTests(unittest.TestCase):
         for stale in stale_minors:
             # A bare minor version such as "0.3" frames the current release.
             # Patch versions and series promises such as "0.3.x" are history.
+            # Code is skipped, because a literal such as `0.5` is a number.
             pattern = re.compile(rf"(?<![\w.]){re.escape(stale)}(?![\w.])")
             for page in pages:
+                in_fence = False
                 for number, line in enumerate(page.read_text().splitlines(), 1):
+                    if line.lstrip().startswith("```"):
+                        in_fence = not in_fence
+                        continue
+                    if in_fence:
+                        continue
+                    prose = re.sub(r"`[^`]*`", "", line)
                     with self.subTest(page=str(page.relative_to(ROOT)), line=number):
-                        self.assertIsNone(pattern.search(line), line)
+                        self.assertIsNone(pattern.search(prose), line)
 
     def test_scheduled_safety_jobs_pin_the_instrumented_toolchain_and_leaks(self) -> None:
         workflow = (ROOT / ".github/workflows/safety.yml").read_text()

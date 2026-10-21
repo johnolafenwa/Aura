@@ -1,6 +1,6 @@
 # Status And Compatibility
 
-Aura 0.5.0 is a technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments. It is not a production systems-language release, and it is not a security boundary for untrusted programs.
+Aura 0.6.0 is a technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments. It is not a production systems-language release, and it is not a security boundary for untrusted programs.
 
 This page states what the maintained language contract is, which surface it currently covers, and how that surface may change.
 
@@ -125,11 +125,11 @@ The Manual is reference-frozen. Every semantic change, including any extension, 
 
 Compiler coverage is held at the current non-regression floor, not pushed to 100%. New behavior still requires focused tests. The freeze only ends marginal coverage work that does not reduce product risk.
 
-Seeded randomness has an extra observable-data promise. The algorithm, seed mapping, integer and floating mappings, and shuffle order documented in [Randomness Module](/manual/randomness) stay stable throughout Aura 0.3.x, 0.4.x, and 0.5.x. A later release may change them only with an explicit decision and new conformance vectors. OS-secure outputs are intentionally not stable.
+Seeded randomness has an extra observable-data promise. The algorithm, seed mapping, integer and floating mappings, and shuffle order documented in [Randomness Module](/manual/randomness) stay stable throughout Aura 0.3.x, 0.4.x, 0.5.x, and 0.6.x. A later release may change them only with an explicit decision and new conformance vectors. OS-secure outputs are intentionally not stable.
 
 ## Maintained Concurrency Surface
 
-Aura 0.5 uses structured concurrency:
+Aura 0.6 uses structured concurrency:
 
 - `TaskGroup()` owns child tasks inside `with`.
 - `TaskGroup.start(...)` returns a `Task[T]`.
@@ -183,7 +183,7 @@ See [Execution Model](/manual/execution-model) and [Current Limits](/manual/curr
 - Both maintained backends produce complete typed runtime frames. Diagnostics carry innermost-first Aura call frames and youngest-first task ancestry.
 - Each public schema-version-1 frame span has its own required source `path`. The analysis/LSP editor shape permits an optional `file_path` for source-only analysis.
 - The public diagnostic schema stays at version `1`, because the always-present arrays are an additive extension.
-- Compiler-service and editor transport uses semantic schema version `19`. This version includes structural function values, import aliases, the expanded numeric expression surface, returned views of list elements and dictionary entries, class initializers, and context managers. It forwards the same diagnostic records.
+- Compiler-service and editor transport uses semantic schema version `20`. This version includes structural function values, import aliases, the expanded numeric expression surface, returned views of list elements and dictionary entries, class initializers, context managers, and decorators. It forwards the same diagnostic records.
 
 ## Platform And Distribution Support
 

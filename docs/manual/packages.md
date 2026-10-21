@@ -117,7 +117,7 @@ Each dependency entry chooses exactly one source:
 
 Registry forms are not implemented. These include string-valued version
 dependencies such as `util = "1.2.0"` and detailed `version =` dependencies.
-Aura 0.5 has no registry resolution, publish, or install flow.
+Aura 0.6 has no registry resolution, publish, or install flow.
 
 The dependency key is not a free alias. It must exactly match the resolved
 dependency's `[package].name`, so the manifest name and the import root are
@@ -146,7 +146,7 @@ rules:
 - every package has a readable `src/` directory and a valid package manifest
 
 Two different paths cannot claim the same package name. The graph limits are
-observable Aura 0.5 limits. Raising them requires matching reference and
+observable Aura 0.6 limits. Raising them requires matching reference and
 conformance changes.
 
 ## Workspaces
@@ -464,4 +464,4 @@ No package semantics on this page are provisional.
 
 Registry resolution, publishing, installation, alternative source roots,
 workspace globs, wildcard or relative imports, implicit re-exports, and
-import-time initialization are outside the Aura 0.5 language contract.
+import-time initialization are outside the Aura 0.6 language contract.

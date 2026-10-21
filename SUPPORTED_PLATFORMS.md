@@ -1,6 +1,6 @@
 # Supported Platforms
 
-Aura 0.5 is a technical preview. It supports these hosts:
+Aura 0.6 is a technical preview. It supports these hosts:
 
 | Host | Architecture | CI | Release archive | Native `aura build` |
 | --- | --- | --- | --- | --- |
@@ -16,7 +16,7 @@ x86-64 archive inside WSL 2.
 
 ## Unsupported Hosts
 
-The 0.5 preview archives do not support:
+The 0.6 preview archives do not support:
 
 - native Windows
 - Windows on ARM

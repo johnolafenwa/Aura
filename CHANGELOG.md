@@ -7,6 +7,23 @@ in this file.
 
 ## Unreleased
 
+## VS Code extension 0.6.0 — 2026-10-21
+
+- Bundles language server 0.6.0, which speaks semantic interface version 20.
+
+## 0.6.0 — 2026-10-21 (technical preview)
+
+Aura 0.6.0 adds typed JSON codecs and schemas. A class or enum derives
+`json.Codec` and its JSON Schema from one bodyless `impl`. Module-level
+functions take decorators, and native calls, list loops, strings, `dict`,
+and `set` run faster.
+
+### Breaking changes
+
+- The semantic interface schema is version 20. Tools that pin the schema
+  must update.
+- The native cache format is `v8`. Cached executables rebuild once.
+
 ### Added
 
 - A generic function can call a trait's associated method through its
@@ -49,8 +66,6 @@ in this file.
   `@traced` decorator on each tool. It links the JSON library, so its
   release executable is 1,915,000 bytes on Linux x86-64 and 1,792,816
   bytes on macOS arm64, and the size gate records those baselines.
-- The semantic interface version is 20, and the native cache format is
-  `v8`. Cached executables rebuild once.
 - A native executable checks at startup that its runtime matches the value
   layout the compiler read lists with. A mismatch stops the program with
   "this executable was built for a different Aura runtime; rebuild it with
@@ -104,7 +119,6 @@ in this file.
   from its method with blank lines.
 - On the direct backend, a callable stored in a module constant that
   returned another callable could crash or leak when called.
-
 - A `view` or a `for x in mut` element used inside a later `while` or `for`
   loop failed to compile with `AU4001`, because its loan ended at its last
   use inside the loop body.
