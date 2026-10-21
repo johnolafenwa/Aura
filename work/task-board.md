@@ -2,16 +2,18 @@
 
 Last updated: 2026-10-21
 
-## Aura 0.6.0 preview release (in progress)
+## Aura 0.6.0 preview release (complete)
 
 - Target: release 0.6.0-preview with Batch 6 and phase 1 of Batch 7. This
   is the release in step 7 of the Batch 7 delivery plan.
-- Done: versions, docs, and CHANGELOG moved to 0.6.0. Details are in
+- Done: released 2026-10-21 from `main` at `840f91ee` (PR #99) as
+  `v0.6.0-preview`. Release `39583781735` published the archives, docs,
+  VSIX, and extension 0.6.0. Details are in
   `2026-10-21-v0.6.0-preview-release.md`.
-- Verification: local release checks pass. Hosted CI runs on the release
-  PR.
-- Remaining: merge the release PR and push the tag after John approves.
-  Then start phase 2 of Batch 7 with step 8.
+- Measured: four of six programs meet their phase 1 targets on Linux and
+  macOS arm64. `record_field_reads` misses on both, and `fib(30)` misses on
+  macOS arm64.
+- Next: phase 2 of Batch 7, starting with step 8.
 
 ## Batch 7 design checkpoint: Rust-class native performance (ratified)
 
