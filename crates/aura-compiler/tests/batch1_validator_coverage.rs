@@ -782,7 +782,7 @@ fn returned_loan_descriptor_without_a_preceding_call_is_rejected() {
 const BINARY_SOURCE: &str =
     "def main():\n    narrow: int32 = 1\n    wide = 2\n    print(wide + 1)\n";
 
-fn forged_binary(op: &str, left: Value, right: Value) -> MirModule {
+fn forged_binary(op: &str, left: Value, right: Value, keep_type: bool) -> MirModule {
     let mut encoded = encode(BINARY_SOURCE);
     let main = function_mut(&mut encoded, "main");
     let assign = find_instruction(main, |instruction| {
@@ -790,46 +790,49 @@ fn forged_binary(op: &str, left: Value, right: Value) -> MirModule {
     });
     assign["Assign"]["value"] = json!({ "Binary": { "op": op, "left": left, "right": right, "span": { "line": 4, "column": 11 } } });
     let target = assign["Assign"]["target"].clone();
-    // Without a declared result type the interpreter cannot coerce the
-    // operands toward the destination, so mismatches surface as errors.
-    main["local_types"]
-        .as_array_mut()
-        .unwrap()
-        .retain(|entry| entry["name"] != target);
+    if !keep_type {
+        main["local_types"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|entry| entry["name"] != target);
+    }
     serde_json::from_value(encoded).expect("forged binary MIR should deserialize")
 }
 
 #[test]
 fn interpreter_rejects_mismatched_binary_operand_types() {
-    for (op, left, right, expected) in [
-        (
-            "Pow",
-            json!({ "Int": 2 }),
-            json!({ "Bool": true }),
-            "matching numeric operands",
-        ),
-        (
-            "BitAnd",
-            json!({ "Int": 2 }),
-            json!({ "Float": 1.5 }),
-            "matching integer operands",
-        ),
-        (
-            "Shl",
-            json!({ "Int": 2 }),
-            json!({ "Float": 1.5 }),
-            "matching integer operands",
-        ),
+    let error = run_mir(&forged_binary(
+        "Pow",
+        json!({ "Int": 2 }),
+        json!({ "Bool": true }),
+        true,
+    ))
+    .expect_err("a power of a bool must not run");
+    assert!(
+        error.message.contains("matching numeric operands"),
+        "{}",
+        error.message
+    );
+    // A declared integer destination coerces bitwise operands, so a mismatch
+    // can only reach the interpreter through an untyped destination. MIR now
+    // types every assigned local, and the shared validator rejects the rest.
+    for (op, left, right) in [
+        ("Pow", json!({ "Int": 2 }), json!({ "Bool": true })),
+        ("BitAnd", json!({ "Int": 2 }), json!({ "Float": 1.5 })),
+        ("Shl", json!({ "Int": 2 }), json!({ "Float": 1.5 })),
         (
             "BitOr",
             json!({ "Place": "wide" }),
             json!({ "Place": "narrow" }),
-            "operand types must match",
         ),
     ] {
-        let error =
-            run_mir(&forged_binary(op, left, right)).expect_err("mismatched operands must not run");
-        assert!(error.message.contains(expected), "{op}: {}", error.message);
+        let error = run_mir(&forged_binary(op, left, right, false))
+            .expect_err("an untyped destination must not run");
+        assert!(
+            error.message.contains("assigns untyped local"),
+            "{op}: {}",
+            error.message
+        );
     }
 }
 
@@ -840,14 +843,9 @@ fn interpreter_rejects_bitwise_not_on_a_non_integer() {
     let assign = find_instruction(main, |instruction| {
         rvalue_kind(instruction) == Some("Binary")
     });
-    assign["Assign"]["value"] = json!({ "Unary": { "op": "BitNot", "value": { "Float": 1.5 }, "span": { "line": 4, "column": 11 } } });
-    let target = assign["Assign"]["target"].clone();
-    main["local_types"]
-        .as_array_mut()
-        .unwrap()
-        .retain(|entry| entry["name"] != target);
+    assign["Assign"]["value"] = json!({ "Unary": { "op": "BitNot", "value": { "Bool": true }, "span": { "line": 4, "column": 11 } } });
     let mir: MirModule = serde_json::from_value(encoded).unwrap();
-    let error = run_mir(&mir).expect_err("bitwise not on a float must not run");
+    let error = run_mir(&mir).expect_err("bitwise not on a bool must not run");
     assert!(error.message.contains("integer"), "{}", error.message);
 }
 
@@ -1113,7 +1111,7 @@ fn native_backend_rejects_unsupported_unary_operations_on_untyped_targets() {
         .as_array_mut()
         .unwrap()
         .retain(|entry| entry["name"] != target);
-    assert_native_rejects(encoded, "could not infer direct type");
+    assert_native_rejects(encoded, "assigns untyped local");
 }
 
 #[test]

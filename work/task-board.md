@@ -9,9 +9,11 @@ Last updated: 2026-10-21
   backend. The sub-steps are in the checkpoint's Step 8 section.
 - Done: 8a, repeatable native builds, merged in PR #101. Details are in
   `2026-10-21-batch-7-step-8a-repeatable-builds.md`.
-- In progress: 8b, one runtime ABI table. Details are in
+- Done: 8b, one runtime ABI table, merged in PR #102. Details are in
   `2026-10-21-batch-7-step-8b-runtime-abi-table.md`.
-- Next: 8c, complete local types in MIR.
+- In progress: 8c, complete local types in MIR. Details are in
+  `2026-10-21-batch-7-step-8c-local-types.md`.
+- Next: 8d, resolved runtime operations.
 
 ## Aura 0.6.0 preview release (complete)
 
