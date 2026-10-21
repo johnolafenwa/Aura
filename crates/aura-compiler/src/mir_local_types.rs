@@ -317,7 +317,6 @@ pub(super) fn validate_assigned_local_types(
 fn runtime_member_result_type(name: &str, args: &[Type], field: &str) -> Option<Type> {
     Some(match (name, field) {
         ("str" | "list" | "Array", "__slice") => Type::Named(name.to_string(), args.to_vec()),
-        ("Queue", "get_or") => args.first()?.clone(),
         _ => return None,
     })
 }

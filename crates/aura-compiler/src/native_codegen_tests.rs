@@ -2101,15 +2101,15 @@ def main() -> int32:
             instruction,
             Instruction::Assign {
                 value: Rvalue::Call {
-                    callee: CallTarget::Member {
-                        object: Operand::MovePlace(place),
-                        field,
+                    callee: CallTarget::Runtime {
+                        op: crate::runtime_ops::RuntimeOp::Task(crate::runtime_ops::TaskOp::ResultOr),
+                        receiver: Some(Operand::MovePlace(place)),
                         ..
                     },
                     ..
                 },
                 ..
-            } if place == "string_task" && field == "result_or"
+            } if place == "string_task"
         )));
     assert!(main
         .blocks
@@ -4252,21 +4252,6 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             ),
         ),
         (
-            "str.add",
-            module_with_main_member_call_result_type(
-                "text",
-                string_ty.clone(),
-                string_value.clone(),
-                Type::named("str"),
-                "add",
-                vec![MirArg {
-                    name: None,
-                    value: Operand::String(" language".to_string()),
-                    writeback_place: None,
-                }],
-            ),
-        ),
-        (
             "str.to_lower",
             module_with_main_member_call_result_type(
                 "text",
@@ -4760,21 +4745,10 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
             "TaskGroup.cancel",
             module_with_main_member_call_result_type(
                 "group",
-                task_group_ty.clone(),
-                task_group_value.clone(),
-                Type::Unit,
-                "cancel",
-                Vec::new(),
-            ),
-        ),
-        (
-            "TaskGroup.close",
-            module_with_main_member_call_result_type(
-                "group",
-                task_group_ty.clone(),
+                task_group_ty,
                 task_group_value,
                 Type::Unit,
-                "close",
+                "cancel",
                 Vec::new(),
             ),
         ),
@@ -5303,25 +5277,25 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
             Type::named("str"),
             "contains",
             Vec::new(),
-            "expected `contains`() to receive one string argument",
+            "expected `contains()` to receive `text`",
         ),
         (
             Type::named("str"),
             "split",
             Vec::new(),
-            "expected `split()` to receive one string argument",
+            "expected `split()` to receive `text`",
         ),
         (
             Type::named("str"),
             "replace",
             vec![arg(None, Operand::String("from".to_string()))],
-            "expected `replace()` to receive `from` and `to` string arguments",
+            "expected `replace()` to receive `to`",
         ),
         (
             Type::named("str"),
             "add",
             Vec::new(),
-            "expected `add()` to receive one string argument",
+            "does not know runtime member `str.add`",
         ),
         (
             Type::named("str"),
@@ -5339,13 +5313,13 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
             Type::named("str"),
             "join",
             Vec::new(),
-            "expected `join()` to receive one list argument",
+            "expected `join()` to receive `parts`",
         ),
         (
             Type::named("str"),
             "strip_prefix",
             Vec::new(),
-            "expected `strip_prefix`() to receive one string argument",
+            "expected `strip_prefix()` to receive `text`",
         ),
         (
             Type::named("str"),
@@ -5591,13 +5565,13 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
             queue_int(),
             "put",
             Vec::new(),
-            "expected `put()` to receive a value argument",
+            "expected `put()` to receive `value`",
         ),
         (
             queue_int(),
             "try_put",
             Vec::new(),
-            "expected `try_put()` to receive one argument",
+            "expected `try_put()` to receive `value`",
         ),
         (
             queue_int(),
@@ -5621,7 +5595,7 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
             Type::named("TaskGroup"),
             "close",
             vec![arg(None, Operand::Int(1))],
-            "expected `close()` to take no arguments",
+            "does not know runtime member `TaskGroup.close`",
         ),
         (
             task_int(),
@@ -6107,7 +6081,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "contains",
                 Vec::new(),
             ),
-            "expected `contains`() to receive one string argument",
+            "expected `contains()` to receive `text`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6122,7 +6096,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                     writeback_place: None,
                 }],
             ),
-            "expected `replace()` to receive `from` and `to` string arguments",
+            "expected `replace()` to receive `to`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6160,7 +6134,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "split",
                 Vec::new(),
             ),
-            "expected `split()` to receive one string argument",
+            "expected `split()` to receive `text`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6171,7 +6145,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "add",
                 Vec::new(),
             ),
-            "expected `add()` to receive one string argument",
+            "does not know runtime member `str.add`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6204,7 +6178,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "strip_prefix",
                 Vec::new(),
             ),
-            "expected `strip_prefix`() to receive one string argument",
+            "expected `strip_prefix()` to receive `text`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6584,7 +6558,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "put",
                 Vec::new(),
             ),
-            "expected `put()` to receive a value argument",
+            "expected `put()` to receive `value`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6599,7 +6573,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                     writeback_place: None,
                 }],
             ),
-            "expected `put()` arguments to use `value` and optional `timeout`, found `delay`",
+            "`put()` has no parameter `delay`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6614,7 +6588,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                     arg(Operand::Int(3)),
                 ],
             ),
-            "expected `put(value, timeout=...)`",
+            "expected `put()` to take at most 2 argument(s), found 3",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6625,7 +6599,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "try_put",
                 Vec::new(),
             ),
-            "expected `try_put()` to receive one argument",
+            "expected `try_put()` to receive `value`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6640,7 +6614,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                     writeback_place: None,
                 }],
             ),
-            "expected `try_put()` to receive only `value=`",
+            "`try_put()` has no parameter `item`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6655,7 +6629,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                     writeback_place: None,
                 }],
             ),
-            "expected `get()` or `get(timeout=...)`",
+            "`get()` has no parameter `delay`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6677,7 +6651,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                     },
                 ],
             ),
-            "expected `get()` or `get(timeout=...)`",
+            "expected `get()` to take at most 1 argument(s), found 2",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6688,7 +6662,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "__get_in_task_group",
                 Vec::new(),
             ),
-            "expected internal `__get_in_task_group()` to receive one task-group argument",
+            "expected `__get_in_task_group()` to receive `group`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6699,7 +6673,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "__get_with_registered_producers",
                 vec![arg(Operand::Int(1))],
             ),
-            "expected internal `__get_with_registered_producers()` to take no arguments",
+            "expected `__get_with_registered_producers()` to take no arguments",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6714,7 +6688,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                     writeback_place: None,
                 }],
             ),
-            "expected `poll()` or `poll(timeout=...)`",
+            "`poll()` has no parameter `delay`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6725,7 +6699,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "poll",
                 vec![arg(Operand::Int(1)), arg(Operand::Int(2))],
             ),
-            "expected `poll()` or `poll(timeout=...)`",
+            "expected `poll()` to take at most 1 argument(s), found 2",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6777,7 +6751,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                     writeback_place: None,
                 }],
             ),
-            "expected `result()` or `result(timeout=...)`",
+            "`result()` has no parameter `delay`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6788,7 +6762,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "result",
                 vec![arg(Operand::Int(1)), arg(Operand::Int(2))],
             ),
-            "expected `result()` or `result(timeout=...)`",
+            "expected `result()` to take at most 1 argument(s), found 2",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6803,7 +6777,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                     writeback_place: None,
                 }],
             ),
-            "expected `poll()` or `poll(timeout=...)`",
+            "`poll()` has no parameter `delay`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6814,7 +6788,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "poll",
                 vec![arg(Operand::Int(1)), arg(Operand::Int(2))],
             ),
-            "expected `poll()` or `poll(timeout=...)`",
+            "expected `poll()` to take at most 1 argument(s), found 2",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6866,7 +6840,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                     writeback_place: None,
                 }],
             ),
-            "expected `close()` to take no arguments",
+            "does not know runtime member `TaskGroup.close`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -9543,7 +9517,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
                 "contains",
                 vec![],
             ),
-            "expected `contains`() to receive one string argument",
+            "expected `contains()` to receive `text`",
         ),
         (
             "vec len extra arg",
@@ -9626,7 +9600,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
                 "get",
                 two_args.clone(),
             ),
-            "expected `get()` or `get(timeout=...)`",
+            "expected `get()` to take at most 1 argument(s), found 2",
         ),
         (
             "queue put missing arg",
@@ -9637,7 +9611,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
                 "put",
                 vec![],
             ),
-            "expected `put()` to receive a value argument",
+            "expected `put()` to receive `value`",
         ),
         (
             "vec swap missing arg",
@@ -9706,7 +9680,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
                 "replace",
                 one_arg.clone(),
             ),
-            "expected `replace()` to receive `from` and `to` string arguments",
+            "expected `replace()` to receive `to`",
         ),
         (
             "vec insert missing arg",
@@ -9753,7 +9727,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
                 "join",
                 vec![],
             ),
-            "expected `join()` to receive one list argument",
+            "expected `join()` to receive `parts`",
         ),
         (
             "string trim extra arg",

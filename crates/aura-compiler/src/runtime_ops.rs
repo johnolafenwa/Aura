@@ -11,12 +11,13 @@
 //! receiver. A user function with the same name keeps its `Name` call.
 //!
 //! Ops are grouped by family. This table holds the resource handle
-//! (`fs.File`, `process.*`, `net.*`), `random.Rng`, scalar, value, named
-//! function, `print`, and host builtin families. Strings, collections,
-//! queues, and tasks are still `CallTarget::Member` calls.
+//! (`fs.File`, `process.*`, `net.*`), `random.Rng`, scalar, value, `str`,
+//! `Queue`, `Task`, `TaskGroup`, named function, `print`, and host builtin
+//! families. Collections are still `CallTarget::Member` calls.
 
 use serde::{Deserialize, Serialize};
 
+use crate::ast::ReceiverKind;
 use crate::builtin_modules::{
     builtin_module_function_metadata, host_builtin_metadata, HostBuiltinMetadata,
 };
@@ -26,7 +27,7 @@ use crate::call::{
 };
 use crate::native_runtime::HOST_BUILTIN_SYMBOLS;
 use crate::runtime_abi::RuntimeFn;
-use crate::sema::{optional_type, Type};
+use crate::sema::{optional_type, poll_type, text_convenience_result_type, Type};
 
 /// One resolved built-in operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -39,6 +40,15 @@ pub enum RuntimeOp {
     Scalar(ScalarOp),
     /// `to_string`, `clone`, or `copy` on a concrete built-in value.
     Value(ValueOp),
+    /// A method of `str`.
+    Str(StrOp),
+    /// A method of `Queue[T]`, including the private receives that queue
+    /// iteration lowers to.
+    Queue(QueueOp),
+    /// A method of `Task[T]`.
+    Task(TaskOp),
+    /// A method of `TaskGroup`.
+    TaskGroup(TaskGroupOp),
     /// A named built-in function or associated function, such as `range`,
     /// `Duration.ms`, or `fs.exists`.
     Function(FunctionOp),
@@ -58,9 +68,10 @@ pub(crate) struct RuntimeCall {
     pub(crate) function: RuntimeFn,
     pub(crate) immediates: &'static [i64],
     pub(crate) span: bool,
-    /// Words the backend derives from value layout and passes first: an
-    /// `Array` dtype code, a `select` source tuple, or a fresh collection
-    /// and its unused index word.
+    /// Words the backend derives from value layout: an `Array` dtype code,
+    /// a `select` source tuple, or a fresh collection and its unused index
+    /// word, which pass first, or the zero words that fill the unused
+    /// argument slots of the `str` text dispatcher.
     pub(crate) layout_words: usize,
 }
 
@@ -418,6 +429,312 @@ pub enum ValueOp {
 
 impl ValueOp {
     pub const ALL: &'static [ValueOp] = &[ValueOp::ToString, ValueOp::Clone, ValueOp::Copy];
+}
+
+macro_rules! str_ops {
+    ($( $op:ident => ($member:ident, $runtime:ident, $words:expr, $padding:literal) ),+ $(,)?) => {
+        /// A method of `str`. Each variant is named after the method it
+        /// resolves from.
+        #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+        pub enum StrOp {
+            $($op),+
+        }
+
+        impl StrOp {
+            /// Every `str` op, in declaration order.
+            pub const ALL: &'static [StrOp] = &[$(StrOp::$op),+];
+
+            pub const fn builtin_member(self) -> BuiltinMember {
+                match self {
+                    $(StrOp::$op => BuiltinMember::$member),+
+                }
+            }
+
+            const fn runtime_call(self) -> RuntimeCall {
+                match self {
+                    $(StrOp::$op => RuntimeCall {
+                        function: RuntimeFn::$runtime,
+                        immediates: $words,
+                        span: false,
+                        layout_words: $padding,
+                    }),+
+                }
+            }
+
+            const fn from_builtin_member(member: BuiltinMember) -> Option<Self> {
+                match member {
+                    $(BuiltinMember::$member => Some(StrOp::$op),)+
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+// A text-convenience method calls the shared text dispatcher with its
+// opcode, the receiver, a text argument word, and a count word. The opcode
+// is the method's index in `text_methods::TEXT_METHOD_NAMES`, and the
+// padding is the number of the two argument words the method leaves zero.
+str_ops! {
+    Len => (StringLen, StringLen, &[], 0),
+    ByteLen => (StringByteLen, StringByteLen, &[], 0),
+    Contains => (StringContains, StringContains, &[], 0),
+    StartsWith => (StringStartsWith, StringStartsWith, &[], 0),
+    EndsWith => (StringEndsWith, StringEndsWith, &[], 0),
+    Split => (StringSplit, StringSplit, &[], 0),
+    Replace => (StringReplace, StringReplace, &[], 0),
+    ToLower => (StringToLower, StringToLower, &[], 0),
+    ToUpper => (StringToUpper, StringToUpper, &[], 0),
+    StripPrefix => (StringStripPrefix, StringStripPrefix, &[], 0),
+    StripSuffix => (StringStripSuffix, StringStripSuffix, &[], 0),
+    Trim => (StringTrim, StringTrim, &[], 0),
+    Join => (StringJoin, StringJoin, &[], 0),
+    TrimStart => (StringTrimStart, StringTextMethod, &[0], 2),
+    TrimEnd => (StringTrimEnd, StringTextMethod, &[1], 2),
+    SplitOnce => (StringSplitOnce, StringTextMethod, &[2], 1),
+    RsplitOnce => (StringRsplitOnce, StringTextMethod, &[3], 1),
+    Lines => (StringLines, StringTextMethod, &[4], 2),
+    SplitWhitespace => (StringSplitWhitespace, StringTextMethod, &[5], 2),
+    Find => (StringFind, StringTextMethod, &[6], 1),
+    Count => (StringCount, StringTextMethod, &[7], 1),
+    Repeat => (StringRepeat, StringTextMethod, &[8], 1),
+}
+
+impl StrOp {
+    /// Whether the op calls the shared text dispatcher.
+    pub(crate) const fn is_text_method(self) -> bool {
+        matches!(self.runtime_call().function, RuntimeFn::StringTextMethod)
+    }
+
+    fn result_type(self) -> Option<Type> {
+        use StrOp::*;
+        let text = || Type::named("str");
+        Some(match self {
+            Len | ByteLen => Type::named("int64"),
+            Contains | StartsWith | EndsWith => Type::named("bool"),
+            Split => Type::Named("list".to_string(), vec![text()]),
+            Replace | ToLower | ToUpper | Trim | Join => text(),
+            StripPrefix | StripSuffix => optional_type(text()),
+            TrimStart | TrimEnd | SplitOnce | RsplitOnce | Lines | SplitWhitespace | Find
+            | Count | Repeat => return text_convenience_result_type(self.builtin_member().name()),
+        })
+    }
+}
+
+/// A method of `Queue[T]`. A `Timeout` variant is the specialization
+/// lowering picks for a call that passes a `timeout`. `GetInTaskGroup` and
+/// `GetWithRegisteredProducers` are the private receives that a `for` loop
+/// over a queue lowers to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum QueueOp {
+    Put,
+    PutTimeout,
+    TryPut,
+    Get,
+    GetTimeout,
+    GetInTaskGroup,
+    GetWithRegisteredProducers,
+    Poll,
+    PollTimeout,
+    GetOr,
+    GetOrTimeout,
+    Close,
+}
+
+impl QueueOp {
+    pub const ALL: &'static [QueueOp] = &[
+        QueueOp::Put,
+        QueueOp::PutTimeout,
+        QueueOp::TryPut,
+        QueueOp::Get,
+        QueueOp::GetTimeout,
+        QueueOp::GetInTaskGroup,
+        QueueOp::GetWithRegisteredProducers,
+        QueueOp::Poll,
+        QueueOp::PollTimeout,
+        QueueOp::GetOr,
+        QueueOp::GetOrTimeout,
+        QueueOp::Close,
+    ];
+
+    /// The member a `for` loop inside a task group receives with.
+    pub const GET_IN_TASK_GROUP: &'static str = "__get_in_task_group";
+    /// The member a `for` loop outside a task group receives with.
+    pub const GET_WITH_REGISTERED_PRODUCERS: &'static str = "__get_with_registered_producers";
+
+    /// The private receive a MIR member call named `field` spells.
+    fn from_private_name(field: &str) -> Option<Self> {
+        match field {
+            QueueOp::GET_IN_TASK_GROUP => Some(QueueOp::GetInTaskGroup),
+            QueueOp::GET_WITH_REGISTERED_PRODUCERS => Some(QueueOp::GetWithRegisteredProducers),
+            _ => None,
+        }
+    }
+
+    /// The source member of a public op; a private receive has none.
+    const fn builtin_member(self) -> Option<BuiltinMember> {
+        use QueueOp::*;
+        Some(match self {
+            Put | PutTimeout => BuiltinMember::QueuePut,
+            TryPut => BuiltinMember::QueueTryPut,
+            Get | GetTimeout => BuiltinMember::QueueGet,
+            Poll | PollTimeout => BuiltinMember::QueuePoll,
+            GetOr | GetOrTimeout => BuiltinMember::QueueGetOr,
+            Close => BuiltinMember::QueueClose,
+            GetInTaskGroup | GetWithRegisteredProducers => return None,
+        })
+    }
+
+    const fn unspecialized(self) -> Self {
+        match self {
+            QueueOp::PutTimeout => QueueOp::Put,
+            QueueOp::GetTimeout => QueueOp::Get,
+            QueueOp::PollTimeout => QueueOp::Poll,
+            QueueOp::GetOrTimeout => QueueOp::GetOr,
+            other => other,
+        }
+    }
+
+    const fn with_timeout(self) -> Self {
+        match self {
+            QueueOp::Put => QueueOp::PutTimeout,
+            QueueOp::Get => QueueOp::GetTimeout,
+            QueueOp::Poll => QueueOp::PollTimeout,
+            QueueOp::GetOr => QueueOp::GetOrTimeout,
+            other => other,
+        }
+    }
+
+    const fn runtime_fn(self) -> RuntimeFn {
+        match self {
+            QueueOp::Put => RuntimeFn::ChannelSend,
+            QueueOp::PutTimeout => RuntimeFn::ChannelSendTimeoutValue,
+            QueueOp::TryPut => RuntimeFn::ChannelTrySend,
+            QueueOp::Get => RuntimeFn::ChannelRecv,
+            QueueOp::GetTimeout => RuntimeFn::ChannelRecvTimeoutValue,
+            QueueOp::GetInTaskGroup => RuntimeFn::ChannelRecvInTaskGroup,
+            QueueOp::GetWithRegisteredProducers => RuntimeFn::ChannelRecvWithRegisteredProducers,
+            QueueOp::Poll => RuntimeFn::ChannelRecvOrNone,
+            QueueOp::PollTimeout => RuntimeFn::ChannelRecvOrNoneTimeoutValue,
+            QueueOp::GetOr => RuntimeFn::ChannelRecvOrValue,
+            QueueOp::GetOrTimeout => RuntimeFn::ChannelRecvOrValueTimeoutValue,
+            QueueOp::Close => RuntimeFn::ChannelClose,
+        }
+    }
+
+    /// The result type on a queue of payload type `payload`.
+    fn result_type(self, payload: Option<Type>) -> Option<Type> {
+        use QueueOp::*;
+        let payload_or_unknown = || payload.clone().unwrap_or_else(|| Type::named("Unknown"));
+        Some(match self {
+            Put | PutTimeout | TryPut => Type::Named(
+                "Result".to_string(),
+                vec![
+                    Type::Unit,
+                    Type::Named("SendError".to_string(), vec![payload_or_unknown()]),
+                ],
+            ),
+            Get | GetTimeout | GetInTaskGroup | GetWithRegisteredProducers => {
+                Type::Named("QueueReceive".to_string(), vec![payload_or_unknown()])
+            }
+            Poll | PollTimeout => poll_type(payload_or_unknown()),
+            GetOr | GetOrTimeout => return payload,
+            Close => Type::Unit,
+        })
+    }
+}
+
+/// A method of `Task[T]`. A `Timeout` variant is the specialization
+/// lowering picks for a call that passes a `timeout`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum TaskOp {
+    Result,
+    ResultTimeout,
+    Poll,
+    PollTimeout,
+    ResultOr,
+    ResultOrTimeout,
+}
+
+impl TaskOp {
+    pub const ALL: &'static [TaskOp] = &[
+        TaskOp::Result,
+        TaskOp::ResultTimeout,
+        TaskOp::Poll,
+        TaskOp::PollTimeout,
+        TaskOp::ResultOr,
+        TaskOp::ResultOrTimeout,
+    ];
+
+    const fn builtin_member(self) -> BuiltinMember {
+        match self {
+            TaskOp::Result | TaskOp::ResultTimeout => BuiltinMember::TaskResult,
+            TaskOp::Poll | TaskOp::PollTimeout => BuiltinMember::TaskPoll,
+            TaskOp::ResultOr | TaskOp::ResultOrTimeout => BuiltinMember::TaskResultOr,
+        }
+    }
+
+    const fn unspecialized(self) -> Self {
+        match self {
+            TaskOp::ResultTimeout => TaskOp::Result,
+            TaskOp::PollTimeout => TaskOp::Poll,
+            TaskOp::ResultOrTimeout => TaskOp::ResultOr,
+            other => other,
+        }
+    }
+
+    const fn with_timeout(self) -> Self {
+        match self {
+            TaskOp::Result => TaskOp::ResultTimeout,
+            TaskOp::Poll => TaskOp::PollTimeout,
+            TaskOp::ResultOr => TaskOp::ResultOrTimeout,
+            other => other,
+        }
+    }
+
+    const fn runtime_fn(self) -> RuntimeFn {
+        match self {
+            TaskOp::Result => RuntimeFn::TaskJoin,
+            TaskOp::ResultTimeout => RuntimeFn::TaskJoinTimeoutValue,
+            TaskOp::Poll => RuntimeFn::TaskJoinOrNone,
+            TaskOp::PollTimeout => RuntimeFn::TaskJoinOrNoneTimeoutValue,
+            TaskOp::ResultOr => RuntimeFn::TaskJoinOrValue,
+            TaskOp::ResultOrTimeout => RuntimeFn::TaskJoinOrValueTimeoutValue,
+        }
+    }
+
+    /// The result type on a task whose function returns `result`.
+    fn result_type(self, result: Option<Type>) -> Option<Type> {
+        Some(match self {
+            TaskOp::Result | TaskOp::ResultTimeout => {
+                Type::Named("TaskResult".to_string(), vec![result.unwrap_or(Type::Unit)])
+            }
+            TaskOp::Poll | TaskOp::PollTimeout => poll_type(result.unwrap_or(Type::Unit)),
+            // `result_or` yields the task's own result type, so a local
+            // bound from a function-valued task result keeps its callable
+            // type.
+            TaskOp::ResultOr | TaskOp::ResultOrTimeout => return result,
+        })
+    }
+}
+
+/// A method of `TaskGroup`. Starting a task lowers to `StartTask`, so
+/// `cancel` is the one member call.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum TaskGroupOp {
+    Cancel,
+}
+
+impl TaskGroupOp {
+    pub const ALL: &'static [TaskGroupOp] = &[TaskGroupOp::Cancel];
+}
+
+/// The first type argument of a receiver type, such as `T` of `Queue[T]`.
+pub(crate) fn first_type_arg(receiver: Option<&Type>) -> Option<Type> {
+    match receiver {
+        Some(Type::Named(_, args)) => args.first().cloned(),
+        _ => None,
+    }
 }
 
 macro_rules! function_ops {
@@ -901,6 +1218,10 @@ impl RuntimeOp {
             .chain(RngOp::ALL.iter().copied().map(RuntimeOp::Rng))
             .chain(ScalarOp::ALL.iter().copied().map(RuntimeOp::Scalar))
             .chain(ValueOp::ALL.iter().copied().map(RuntimeOp::Value))
+            .chain(StrOp::ALL.iter().copied().map(RuntimeOp::Str))
+            .chain(QueueOp::ALL.iter().copied().map(RuntimeOp::Queue))
+            .chain(TaskOp::ALL.iter().copied().map(RuntimeOp::Task))
+            .chain(TaskGroupOp::ALL.iter().copied().map(RuntimeOp::TaskGroup))
             .chain(FunctionOp::ALL.iter().copied().map(RuntimeOp::Function))
             .chain(PrintKind::ALL.iter().copied().map(RuntimeOp::Print))
             .chain(HostBuiltin::all().map(RuntimeOp::Host))
@@ -908,12 +1229,17 @@ impl RuntimeOp {
 
     /// The op a call `receiver.field` resolves to, under the member
     /// precedence of `builtin_member_for_receiver`. `class_declares` says
-    /// whether the class named by the receiver type declares `field`.
+    /// whether the class named by the receiver type declares `field`. A
+    /// private queue receive resolves by its MIR spelling. The op is
+    /// unspecialized; lowering picks a timeout form from the arguments.
     pub(crate) fn resolve_member(
         receiver: &Type,
         field: &str,
         class_declares: impl FnOnce(&str) -> bool,
     ) -> Option<Self> {
+        if let (Type::Named(name, _), Some(op)) = (receiver, QueueOp::from_private_name(field)) {
+            return (name == "Queue" && !class_declares(name)).then_some(RuntimeOp::Queue(op));
+        }
         builtin_member_for_receiver(receiver, field, class_declares)
             .and_then(Self::from_builtin_member)
     }
@@ -923,6 +1249,9 @@ impl RuntimeOp {
         use BuiltinMember as M;
         if let Some(op) = ResourceOp::from_builtin_member(member) {
             return Some(RuntimeOp::Resource(op));
+        }
+        if let Some(op) = StrOp::from_builtin_member(member) {
+            return Some(RuntimeOp::Str(op));
         }
         Some(match member {
             M::RngNextInt => RuntimeOp::Rng(RngOp::NextInt),
@@ -945,13 +1274,24 @@ impl RuntimeOp {
             M::ScalarToString => RuntimeOp::Value(ValueOp::ToString),
             M::StringClone => RuntimeOp::Value(ValueOp::Clone),
             M::VecClone | M::MapClone | M::SetClone => RuntimeOp::Value(ValueOp::Copy),
+            M::QueuePut => RuntimeOp::Queue(QueueOp::Put),
+            M::QueueTryPut => RuntimeOp::Queue(QueueOp::TryPut),
+            M::QueueGet => RuntimeOp::Queue(QueueOp::Get),
+            M::QueuePoll => RuntimeOp::Queue(QueueOp::Poll),
+            M::QueueGetOr => RuntimeOp::Queue(QueueOp::GetOr),
+            M::QueueClose => RuntimeOp::Queue(QueueOp::Close),
+            M::TaskResult => RuntimeOp::Task(TaskOp::Result),
+            M::TaskPoll => RuntimeOp::Task(TaskOp::Poll),
+            M::TaskResultOr => RuntimeOp::Task(TaskOp::ResultOr),
+            M::TaskGroupCancel => RuntimeOp::TaskGroup(TaskGroupOp::Cancel),
             _ => return None,
         })
     }
 
     /// The built-in member whose call shape and receiver passing this op
     /// has, for an op with a receiver. `copy()` has the same shape on every
-    /// collection, so it reports the `list` member.
+    /// collection, so it reports the `list` member, and a timeout form
+    /// reports its base member. A private queue receive has none.
     pub fn builtin_member(self) -> Option<BuiltinMember> {
         use BuiltinMember as M;
         Some(match self {
@@ -976,6 +1316,10 @@ impl RuntimeOp {
             RuntimeOp::Value(ValueOp::ToString) => M::ScalarToString,
             RuntimeOp::Value(ValueOp::Clone) => M::StringClone,
             RuntimeOp::Value(ValueOp::Copy) => M::VecClone,
+            RuntimeOp::Str(op) => op.builtin_member(),
+            RuntimeOp::Queue(op) => return op.builtin_member(),
+            RuntimeOp::Task(op) => op.builtin_member(),
+            RuntimeOp::TaskGroup(TaskGroupOp::Cancel) => M::TaskGroupCancel,
             RuntimeOp::Function(_) | RuntimeOp::Print(_) | RuntimeOp::Host(_) => return None,
         })
     }
@@ -988,6 +1332,10 @@ impl RuntimeOp {
             RuntimeOp::Function(op) => op.name(),
             RuntimeOp::Print(_) => "print",
             RuntimeOp::Host(builtin) => builtin.name(),
+            RuntimeOp::Queue(QueueOp::GetInTaskGroup) => QueueOp::GET_IN_TASK_GROUP,
+            RuntimeOp::Queue(QueueOp::GetWithRegisteredProducers) => {
+                QueueOp::GET_WITH_REGISTERED_PRODUCERS
+            }
             _ => self
                 .builtin_member()
                 .expect("an op with a receiver has a built-in member")
@@ -1001,32 +1349,76 @@ impl RuntimeOp {
             RuntimeOp::Resource(_)
             | RuntimeOp::Rng(_)
             | RuntimeOp::Scalar(_)
-            | RuntimeOp::Value(_) => true,
+            | RuntimeOp::Value(_)
+            | RuntimeOp::Str(_)
+            | RuntimeOp::Queue(_)
+            | RuntimeOp::Task(_)
+            | RuntimeOp::TaskGroup(_) => true,
             RuntimeOp::Function(_) | RuntimeOp::Print(_) | RuntimeOp::Host(_) => false,
         }
     }
 
     /// The op with any specialization by argument shape removed: the op
-    /// `builtin_function_for_name` resolves a named call to.
+    /// `builtin_function_for_name` resolves a named call to, or
+    /// `resolve_member` resolves a member call to.
     pub fn unspecialized(self) -> Self {
         match self {
             RuntimeOp::Function(op) => RuntimeOp::Function(op.unspecialized()),
             RuntimeOp::Print(_) => RuntimeOp::Print(PrintKind::Value),
+            RuntimeOp::Queue(op) => RuntimeOp::Queue(op.unspecialized()),
+            RuntimeOp::Task(op) => RuntimeOp::Task(op.unspecialized()),
             other => other,
         }
     }
 
-    /// The op's parameters after the receiver, in declaration order.
+    /// The specialization of an unspecialized op for a call that passes a
+    /// `timeout`, or the op itself when it has no timeout form.
+    pub fn with_timeout(self) -> Self {
+        match self {
+            RuntimeOp::Function(op) => RuntimeOp::Function(op.with_timeout()),
+            RuntimeOp::Queue(op) => RuntimeOp::Queue(op.with_timeout()),
+            RuntimeOp::Task(op) => RuntimeOp::Task(op.with_timeout()),
+            other => other,
+        }
+    }
+
+    /// The op's parameters after the receiver, in declaration order. A
+    /// member op with a timeout form takes `timeout` only in that form,
+    /// where it is required.
     pub fn params(self) -> Vec<CallableParam<'static>> {
         match self {
             RuntimeOp::Function(op) => op.params(),
             RuntimeOp::Print(_) => BuiltinFunction::Print.params().collect(),
             RuntimeOp::Host(builtin) => metadata_params(builtin.metadata()),
-            _ => self
-                .builtin_member()
-                .expect("an op with a receiver has a built-in member")
-                .params()
-                .collect(),
+            RuntimeOp::Queue(QueueOp::GetInTaskGroup) => vec![CallableParam::required("group")],
+            RuntimeOp::Queue(QueueOp::GetWithRegisteredProducers) => Vec::new(),
+            _ => {
+                let params = self
+                    .builtin_member()
+                    .expect("an op with a receiver has a built-in member")
+                    .params();
+                let base = self.unspecialized();
+                if base.with_timeout() == base {
+                    return params.collect();
+                }
+                let timeout = self != base;
+                params
+                    .filter(|param| timeout || param.name != "timeout")
+                    .map(|param| CallableParam {
+                        required: param.required || param.name == "timeout",
+                        ..param
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    /// How the op passes the argument at `index`: `Value` for an `own`
+    /// parameter, which the call takes.
+    pub(crate) fn argument_passing(self, index: usize) -> Option<ReceiverKind> {
+        match self.builtin_member() {
+            Some(member) => member.argument_passing(index),
+            None => Some(ReceiverKind::Borrow),
         }
     }
 
@@ -1034,8 +1426,8 @@ impl RuntimeOp {
     /// An op with no receiver applies to none.
     pub fn applies_to(self, name: &str) -> bool {
         self.has_receiver()
-            && BuiltinMember::resolve_runtime(name, self.name()).and_then(Self::from_builtin_member)
-                == Some(self)
+            && Self::resolve_member(&Type::named(name), self.name(), |_| false)
+                == Some(self.unspecialized())
     }
 
     /// What the op calls: a runtime helper and the immediate words that
@@ -1083,6 +1475,10 @@ impl RuntimeOp {
             }
             RuntimeOp::Value(ValueOp::ToString) => call(RuntimeFn::StringifyValue, &[]),
             RuntimeOp::Value(ValueOp::Clone | ValueOp::Copy) => call(RuntimeFn::CloneValue, &[]),
+            RuntimeOp::Str(op) => RuntimeTarget::Helper(op.runtime_call()),
+            RuntimeOp::Queue(op) => call(op.runtime_fn(), &[]),
+            RuntimeOp::Task(op) => call(op.runtime_fn(), &[]),
+            RuntimeOp::TaskGroup(TaskGroupOp::Cancel) => call(RuntimeFn::TaskGroupCancel, &[]),
             RuntimeOp::Function(op) => RuntimeTarget::Helper(op.runtime_call()),
             RuntimeOp::Print(kind) => call(kind.runtime_fn(), &[]),
             RuntimeOp::Host(builtin) => RuntimeTarget::Host(builtin.symbol()),
@@ -1121,6 +1517,10 @@ impl RuntimeOp {
                 receiver?.clone()
             }
             RuntimeOp::Value(ValueOp::ToString) => Type::named("str"),
+            RuntimeOp::Str(op) => return op.result_type(),
+            RuntimeOp::Queue(op) => return op.result_type(first_type_arg(receiver)),
+            RuntimeOp::Task(op) => return op.result_type(first_type_arg(receiver)),
+            RuntimeOp::TaskGroup(TaskGroupOp::Cancel) => Type::Unit,
             RuntimeOp::Function(op) => return op.result_type(args),
             RuntimeOp::Print(_) => Type::Unit,
             RuntimeOp::Host(builtin) => builtin.metadata().return_type.clone(),
@@ -1135,6 +1535,10 @@ impl std::fmt::Display for RuntimeOp {
             RuntimeOp::Rng(op) => write!(formatter, "Rng.{op:?}"),
             RuntimeOp::Scalar(op) => write!(formatter, "Scalar.{op:?}"),
             RuntimeOp::Value(op) => write!(formatter, "Value.{op:?}"),
+            RuntimeOp::Str(op) => write!(formatter, "Str.{op:?}"),
+            RuntimeOp::Queue(op) => write!(formatter, "Queue.{op:?}"),
+            RuntimeOp::Task(op) => write!(formatter, "Task.{op:?}"),
+            RuntimeOp::TaskGroup(op) => write!(formatter, "TaskGroup.{op:?}"),
             RuntimeOp::Function(op) => write!(formatter, "Function.{op:?}"),
             RuntimeOp::Print(kind) => write!(formatter, "Print.{kind:?}"),
             RuntimeOp::Host(builtin) => write!(formatter, "Host.{}", builtin.name()),

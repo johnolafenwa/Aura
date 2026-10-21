@@ -5,7 +5,8 @@
 //!
 //! - a member call whose receiver has a concrete built-in type. A receiver
 //!   whose type is a type parameter, a union, or a class that declares the
-//!   member keeps its `Member` call.
+//!   member keeps its `Member` call. A queue or task call that passes a
+//!   `timeout` takes the op's timeout form.
 //! - a `Name` call to a built-in function, such as `print`, `range`, or
 //!   `fs::exists`. A user function with the same name keeps its `Name`
 //!   call. `print` and `wait_any` are specialized by their arguments here.
@@ -151,9 +152,9 @@ fn collect_rewrites(
             match value {
                 Rvalue::Call {
                     callee: CallTarget::Member { object, field, .. },
-                    ..
+                    args,
                 } => {
-                    if let Some(op) = context.resolved_runtime_op(function, object, field) {
+                    if let Some(op) = context.resolved_runtime_op(function, object, field, args) {
                         push(RewriteKind::Member(op));
                     }
                 }
@@ -196,17 +197,20 @@ impl MirLoanValidationContext<'_> {
             .is_some_and(|function| !is_builtin_wrapper(function))
     }
 
-    /// The runtime operation a member call `object.field` resolves to.
+    /// The runtime operation a member call `object.field` with `args`
+    /// resolves to.
     fn resolved_runtime_op(
         &self,
         function: &MirFunction,
         object: &Operand,
         field: &str,
+        args: &[MirArg],
     ) -> Option<RuntimeOp> {
         let receiver = self.operand_type(function, object).ok().flatten()?;
-        RuntimeOp::resolve_member(&receiver, field, |class| {
+        let op = RuntimeOp::resolve_member(&receiver, field, |class| {
             self.class_declares_method(class, field)
-        })
+        })?;
+        Some(specialized_timeout_op(op, args))
     }
 
     /// The runtime operation a call to `name` with `args` resolves to.
@@ -233,10 +237,7 @@ impl MirLoanValidationContext<'_> {
             RuntimeOp::Print(_) => RuntimeOp::Print(PrintKind::for_type(
                 self.print_argument_type(function, args).as_ref(),
             )),
-            RuntimeOp::Function(op) if binds_timeout(args) => {
-                RuntimeOp::Function(op.with_timeout())
-            }
-            other => other,
+            other => specialized_timeout_op(other, args),
         }
     }
 
@@ -263,12 +264,34 @@ impl MirLoanValidationContext<'_> {
     }
 }
 
-/// Whether a `wait_any(tasks, timeout)` call passes its timeout.
-fn binds_timeout(args: &[MirArg]) -> bool {
-    args.len() > 1
-        || args
-            .iter()
-            .any(|argument| argument.name.as_deref() == Some("timeout"))
+/// The timeout form of an unspecialized op when `args` bind its timeout,
+/// such as `Queue.get(timeout)` or `wait_any(tasks, timeout)`, and the op
+/// itself otherwise. The timeout is the timeout form's last parameter, so
+/// the call binds it by name, or by position once the positional arguments
+/// fill every parameter no name binds.
+fn specialized_timeout_op(op: RuntimeOp, args: &[MirArg]) -> RuntimeOp {
+    let timed = op.with_timeout();
+    if timed == op {
+        return op;
+    }
+    let names = |name: &str| {
+        args.iter()
+            .any(|argument| argument.name.as_deref() == Some(name))
+    };
+    let open = timed
+        .params()
+        .iter()
+        .filter(|param| !names(param.name))
+        .count();
+    let positional = args
+        .iter()
+        .filter(|argument| argument.name.is_none())
+        .count();
+    if names("timeout") || positional >= open {
+        timed
+    } else {
+        op
+    }
 }
 
 /// Checks every runtime operation in `function`: its receiver has a type the
@@ -309,9 +332,15 @@ pub(super) fn validate_runtime_ops(
                 let resolved = RuntimeOp::resolve_member(&receiver_type, field, |class| {
                     context.class_declares_method(class, field)
                 });
-                if resolved != Some(op) {
+                if resolved != Some(op.unspecialized()) {
                     return Err(format!(
                         "invalid MIR runtime operation `{op}` in `{}` does not apply to a receiver of type `{receiver_type}`",
+                        function.name
+                    ));
+                }
+                if specialized_timeout_op(op.unspecialized(), args) != op {
+                    return Err(format!(
+                        "invalid MIR runtime operation `{op}` in `{}` does not match the types of its arguments",
                         function.name
                     ));
                 }

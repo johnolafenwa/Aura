@@ -5396,20 +5396,21 @@ def drain(jobs: Queue[int64]):
                 value:
                     Rvalue::Call {
                         callee:
-                            CallTarget::Member {
-                                object,
-                                field,
+                            CallTarget::Runtime {
+                                op:
+                                    crate::runtime_ops::RuntimeOp::Queue(
+                                        crate::runtime_ops::QueueOp::GetWithRegisteredProducers,
+                                    ),
+                                receiver: Some(object),
                                 receiver_place,
                             },
                         ..
                     },
                 ..
-            } if field == INTERNAL_QUEUE_GET_WITH_REGISTERED_PRODUCERS_FIELD => {
-                Some((object, receiver_place.as_deref()))
-            }
+            } => Some((object, receiver_place.as_deref())),
             _ => None,
         })
-        .expect("queue iteration should use the internal receive member");
+        .expect("queue iteration should use the internal receive op");
     let Operand::Place(object_place) = object else {
         panic!("queue iteration should call through a materialized place operand")
     };
@@ -7243,13 +7244,14 @@ def main():
             Instruction::Assign {
                 value:
                     Rvalue::Call {
-                        callee: CallTarget::Member { object, field, .. },
+                        callee: callee @ CallTarget::Runtime { .. },
                         ..
                     },
                 ..
-            } if matches!(field.as_str(), "result" | "poll" | "result_or") => {
-                Some((field.as_str(), object))
-            }
+            } => callee
+                .member_parts()
+                .filter(|parts| matches!(parts.field, "result" | "poll" | "result_or"))
+                .map(|parts| (parts.field, parts.object)),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -14760,4 +14762,261 @@ fn step8d_hand_built_named_calls_run_like_resolved_ones() {
         expected
     );
     crate::native_codegen::emit_host_object(&named).expect("the direct backend resolves it too");
+}
+
+const STEP8D3_SOURCE: &str = r#"
+def produce(values: Queue[int64]) -> None:
+    match values.put(1):
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            pass
+    match values.put(2, timeout=Duration.ms(50)):
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            pass
+    values.close()
+
+def drain(values: Queue[int64]) -> int64:
+    mut total = 0
+    for value in values:
+        total = total + value
+    return total
+
+def work() -> str:
+    return "done"
+
+def main():
+    text = "  Aura language  "
+    print(text.trim().len())
+    print(text.byte_len())
+    print(text.contains("Aura"))
+    print(text.trim_start().repeat(2))
+    print(text.count("a"))
+    values = Queue[int64](capacity=4)
+    with TaskGroup() as group:
+        group.start_soon(produce, values)
+        for value in values:
+            print(value)
+        task = group.start(work)
+        print(task.result_or("none", timeout=Duration.seconds(5)))
+        group.cancel()
+    print(values.get_or(7))
+    more = Queue[int64](capacity=2)
+    match more.try_put(5):
+        case Result.Ok(_):
+            pass
+        case Result.Err(_):
+            pass
+    more.close()
+    print(drain(more))
+"#;
+
+const STEP8D3_STDOUT: &str = "13\n17\ntrue\nAura language  Aura language  \n3\n1\n2\ndone\n7\n5\n";
+
+/// The first receiver op in function `name` of `module` that `matches`.
+fn first_receiver_op_call<'a>(
+    module: &'a mut MirModule,
+    name: &str,
+    matches: impl Fn(crate::runtime_ops::RuntimeOp) -> bool,
+) -> (&'a mut CallTarget, &'a mut Vec<MirArg>) {
+    module
+        .functions
+        .iter_mut()
+        .find(|function| function.name == name)
+        .into_iter()
+        .flat_map(|function| &mut function.blocks)
+        .flat_map(|block| &mut block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::Call { callee, args },
+                ..
+            } if matches!(
+                &*callee,
+                CallTarget::Runtime { op, receiver: Some(_), .. } if matches(*op)
+            ) =>
+            {
+                Some((callee, args))
+            }
+            _ => None,
+        })
+        .expect("the fixture should lower the op")
+}
+
+#[test]
+fn step8d_str_queue_and_task_members_lower_to_runtime_ops() {
+    use crate::runtime_ops::{QueueOp, RuntimeOp, StrOp, TaskGroupOp, TaskOp};
+    let module = crate::lower_source_to_mir(STEP8D3_SOURCE).expect("the fixture should lower");
+    let expected = [
+        (
+            "produce",
+            vec![
+                RuntimeOp::Queue(QueueOp::Put),
+                RuntimeOp::Queue(QueueOp::PutTimeout),
+                RuntimeOp::Queue(QueueOp::Close),
+            ],
+        ),
+        (
+            "drain",
+            vec![RuntimeOp::Queue(QueueOp::GetWithRegisteredProducers)],
+        ),
+        (
+            "main",
+            vec![
+                RuntimeOp::Str(StrOp::Trim),
+                RuntimeOp::Str(StrOp::Len),
+                RuntimeOp::Str(StrOp::ByteLen),
+                RuntimeOp::Str(StrOp::Contains),
+                RuntimeOp::Str(StrOp::TrimStart),
+                RuntimeOp::Str(StrOp::Repeat),
+                RuntimeOp::Str(StrOp::Count),
+                RuntimeOp::Queue(QueueOp::GetInTaskGroup),
+                RuntimeOp::Task(TaskOp::ResultOrTimeout),
+                RuntimeOp::TaskGroup(TaskGroupOp::Cancel),
+                RuntimeOp::Queue(QueueOp::GetOr),
+                RuntimeOp::Queue(QueueOp::TryPut),
+                RuntimeOp::Queue(QueueOp::Close),
+            ],
+        ),
+    ];
+    for (function, ops) in expected {
+        let found = runtime_ops_in(&module, function);
+        for op in ops {
+            assert!(found.contains(&op), "{op} in {function}: {found:?}");
+        }
+        let members = member_fields_in(&module, function);
+        assert!(members.is_empty(), "{function}: {members:?}");
+    }
+    let mut again = module.clone();
+    resolve_runtime_ops(&mut again);
+    assert_eq!(
+        serde_json::to_value(&again).expect("MIR serializes"),
+        serde_json::to_value(&module).expect("MIR serializes")
+    );
+    validate_loan_flow(&module).expect("resolved runtime ops should validate");
+}
+
+#[test]
+fn step8d_hand_built_str_queue_and_task_members_run_like_resolved_ones() {
+    let resolved = crate::lower_source_to_mir(STEP8D3_SOURCE).expect("the fixture should lower");
+    // Spell every resolved receiver op back as the member call it came from.
+    let mut members = resolved.clone();
+    for function in members.functions.iter_mut() {
+        for instruction in function
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.instructions)
+        {
+            if let Instruction::Assign {
+                value: Rvalue::Call { callee, .. },
+                ..
+            } = instruction
+            {
+                if let CallTarget::Runtime {
+                    op,
+                    receiver: Some(object),
+                    receiver_place,
+                } = callee
+                {
+                    *callee = CallTarget::Member {
+                        object: object.clone(),
+                        field: op.name().to_string(),
+                        receiver_place: receiver_place.clone(),
+                    };
+                }
+            }
+        }
+    }
+    assert!(runtime_ops_in(&members, "main").is_empty());
+    let output = crate::run_mir(&resolved).expect("the resolved module runs");
+    assert_eq!(output.stdout, STEP8D3_STDOUT);
+    assert_eq!(
+        crate::run_mir(&members)
+            .expect("the member spelling runs")
+            .stdout,
+        STEP8D3_STDOUT
+    );
+    let serialized = serde_json::to_vec(&members).unwrap();
+    assert_eq!(
+        crate::run_serialized_mir(&serialized, "<members>", "")
+            .expect("the serialized member spelling runs")
+            .stdout,
+        STEP8D3_STDOUT
+    );
+    crate::native_codegen::emit_host_object(&members).expect("the direct backend resolves it too");
+}
+
+#[test]
+fn step8d_validator_rejects_forged_str_queue_and_task_ops() {
+    use crate::runtime_ops::{QueueOp, RuntimeOp, StrOp, TaskOp};
+    let baseline = crate::lower_source_to_mir(STEP8D3_SOURCE).expect("the fixture should lower");
+    validate_loan_flow(&baseline).expect("the source-produced ops should validate");
+
+    // A timeout form for a call that passes no timeout.
+    let mut timeout = baseline.clone();
+    let (callee, _) = first_receiver_op_call(&mut timeout, "main", |op| {
+        op == RuntimeOp::Queue(QueueOp::GetOr)
+    });
+    let CallTarget::Runtime { op, .. } = callee else {
+        unreachable!()
+    };
+    *op = RuntimeOp::Queue(QueueOp::GetOrTimeout);
+    assert_public_boundaries_reject(
+        &timeout,
+        "invalid MIR runtime operation `Queue.GetOrTimeout` in `main` does not match the types of its arguments",
+    );
+
+    // The base form for a call that passes a timeout.
+    let mut untimed = baseline.clone();
+    let (callee, _) = first_receiver_op_call(&mut untimed, "main", |op| {
+        op == RuntimeOp::Task(TaskOp::ResultOrTimeout)
+    });
+    let CallTarget::Runtime { op, .. } = callee else {
+        unreachable!()
+    };
+    *op = RuntimeOp::Task(TaskOp::ResultOr);
+    assert_public_boundaries_reject(
+        &untimed,
+        "`Task.ResultOr` in `main` does not match the types of its arguments",
+    );
+
+    // A `str` op on a queue receiver.
+    let mut wrong_family = baseline.clone();
+    let (callee, _) = first_receiver_op_call(&mut wrong_family, "main", |op| {
+        op == RuntimeOp::Queue(QueueOp::TryPut)
+    });
+    let CallTarget::Runtime { op, .. } = callee else {
+        unreachable!()
+    };
+    *op = RuntimeOp::Str(StrOp::Len);
+    assert_public_boundaries_reject(
+        &wrong_family,
+        "`Str.Len` in `main` does not apply to a receiver of type `Queue[int64]`",
+    );
+
+    // A private queue receive on a `str` receiver.
+    let mut private = baseline.clone();
+    let (callee, _) = first_receiver_op_call(&mut private, "main", |op| {
+        op == RuntimeOp::Str(StrOp::ByteLen)
+    });
+    let CallTarget::Runtime { op, .. } = callee else {
+        unreachable!()
+    };
+    *op = RuntimeOp::Queue(QueueOp::GetWithRegisteredProducers);
+    assert_public_boundaries_reject(
+        &private,
+        "`Queue.GetWithRegisteredProducers` in `main` does not apply to a receiver of type `str`",
+    );
+
+    // A private receive without its task group.
+    let mut groupless = baseline.clone();
+    let (_, args) = first_receiver_op_call(&mut groupless, "main", |op| {
+        op == RuntimeOp::Queue(QueueOp::GetInTaskGroup)
+    });
+    args.clear();
+    assert_public_boundaries_reject(
+        &groupless,
+        "expected `__get_in_task_group()` to receive `group`",
+    );
 }

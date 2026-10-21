@@ -17,7 +17,7 @@ use crate::sema::{
     ClosureCallKind, ClosureCaptureMode, ClosureInfo, ClosureOwner, ComprehensionClauseInfo,
     ComprehensionInfo, FunctionParamContract, ModuleNamespace, Program, TraitBound, Type,
 };
-use crate::sema::{lookup_type, optional_type, poll_type, text_convenience_result_type};
+use crate::sema::{lookup_type, optional_type};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -43,8 +43,9 @@ const INTERNAL_COLLECTION_TAKE_INDEX_OPTION_FIELD: &str = "__take_index_option";
 const INTERNAL_VEC_SET_INDEX_FIELD: &str = "__set_index";
 const INTERNAL_MAP_INDEX_FIELD: &str = "__index";
 const INTERNAL_MAP_SET_INDEX_FIELD: &str = "__set_index";
-const INTERNAL_QUEUE_GET_IN_TASK_GROUP_FIELD: &str = "__get_in_task_group";
-const INTERNAL_QUEUE_GET_WITH_REGISTERED_PRODUCERS_FIELD: &str = "__get_with_registered_producers";
+const INTERNAL_QUEUE_GET_IN_TASK_GROUP_FIELD: &str = crate::runtime_ops::QueueOp::GET_IN_TASK_GROUP;
+const INTERNAL_QUEUE_GET_WITH_REGISTERED_PRODUCERS_FIELD: &str =
+    crate::runtime_ops::QueueOp::GET_WITH_REGISTERED_PRODUCERS;
 
 /// Whether the runtime implements the built-in function named `name`, so
 /// its declaration needs a forwarding wrapper body.
@@ -25517,24 +25518,6 @@ impl<'a> Lowerer<'a> {
             ("Array", "fill") => Some(Type::Unit),
             ("Array", "sum") | ("Array", "min") | ("Array", "max") => args.first().cloned(),
             ("Array", "mean") => Some(Type::named("float64")),
-            ("str", "len" | "byte_len") => Some(Type::named("int64")),
-            ("str", "contains") | ("str", "starts_with") | ("str", "ends_with") => {
-                Some(Type::named("bool"))
-            }
-            ("str", "split") => Some(Type::Named("list".to_string(), vec![Type::named("str")])),
-            ("str", "replace")
-            | ("str", "to_lower")
-            | ("str", "to_upper")
-            | ("str", "trim")
-            | ("str", "join") => Some(Type::named("str")),
-            ("str", "strip_prefix") | ("str", "strip_suffix") => {
-                Some(optional_type(Type::named("str")))
-            }
-            (
-                "str",
-                "trim_start" | "trim_end" | "split_once" | "rsplit_once" | "lines"
-                | "split_whitespace" | "find" | "count" | "repeat",
-            ) => text_convenience_result_type(field),
             ("list", "len") => Some(Type::named("int64")),
             ("list", "is_empty") => Some(Type::named("bool")),
             ("list", "append")
@@ -25593,62 +25576,11 @@ impl<'a> Lowerer<'a> {
                     .cloned()
                     .unwrap_or_else(|| Type::named("Unknown")),
             )),
-            ("Queue", "get" | "__get_in_task_group" | "__get_with_registered_producers") => {
-                Some(Type::Named(
-                    "QueueReceive".to_string(),
-                    vec![args
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| Type::named("Unknown"))],
-                ))
-            }
-            ("Queue", "poll") => Some(poll_type(
-                args.first()
-                    .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown")),
-            )),
-            ("Queue", "put") => Some(Type::Named(
-                "Result".to_string(),
-                vec![
-                    Type::Unit,
-                    Type::Named(
-                        "SendError".to_string(),
-                        vec![args
-                            .first()
-                            .cloned()
-                            .unwrap_or_else(|| Type::named("Unknown"))],
-                    ),
-                ],
-            )),
-            ("Queue", "try_put") => Some(Type::Named(
-                "Result".to_string(),
-                vec![
-                    Type::Unit,
-                    Type::Named(
-                        "SendError".to_string(),
-                        vec![args
-                            .first()
-                            .cloned()
-                            .unwrap_or_else(|| Type::named("Unknown"))],
-                    ),
-                ],
-            )),
-            ("Queue", "close") | ("TaskGroup", "cancel") | ("TaskGroup", "close") => {
-                Some(Type::Unit)
-            }
             // `with` cleanup closes these handles with no runtime call, so
             // they have no resolved operation.
             ("net.HttpExchange", "close")
             | ("net.HttpResponse", "close")
             | ("net.WebSocketListener", "close") => Some(Type::Unit),
-            ("Task", "result") => Some(Type::Named(
-                "TaskResult".to_string(),
-                vec![args.first().cloned().unwrap_or(Type::Unit)],
-            )),
-            ("Task", "poll") => Some(poll_type(args.first().cloned().unwrap_or(Type::Unit))),
-            // `result_or` yields the task's own result type, so a local bound
-            // from a function-valued task result keeps its callable type.
-            ("Task", "result_or") => args.first().cloned(),
             ("TaskGroup", "start") | ("TaskGroup", "start_with_stack") => Some(Type::Named(
                 "Task".to_string(),
                 vec![Type::named("Unknown")],
