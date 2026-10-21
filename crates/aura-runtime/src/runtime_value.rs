@@ -242,8 +242,12 @@ fn checked_deadline_after(duration: StdDuration, label: &str) -> io::Result<Inst
 }
 
 pub fn nominal_runtime_base_name(name: &str) -> &str {
-    name.split_once(DIRECT_RUNTIME_TYPE_SEPARATOR)
-        .map_or(name, |(base, _)| base)
+    // The separator is one byte, so a byte search finds it without the
+    // general character searcher.
+    match memchr::memchr(DIRECT_RUNTIME_TYPE_SEPARATOR as u8, name.as_bytes()) {
+        Some(index) => &name[..index],
+        None => name,
+    }
 }
 
 pub fn embedded_nominal_runtime_type_name(name: &str) -> Option<&str> {
@@ -2339,15 +2343,27 @@ fn shared_collection_clone(value: &Value) -> Option<Value> {
     shareable.then(|| value.clone())
 }
 
-pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
-    // Leaves have no children to visit, so skip the frame machinery.
-    match value {
+fn is_clone_leaf(value: &Value) -> bool {
+    matches!(
+        value,
         Value::Int(_)
-        | Value::Float(_)
-        | Value::Bool(_)
-        | Value::Unit
-        | Value::String(_)
-        | Value::Duration(_) => return Ok(value.clone()),
+            | Value::Float(_)
+            | Value::Bool(_)
+            | Value::Unit
+            | Value::String(_)
+            | Value::Duration(_)
+    )
+}
+
+pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
+    // Leaves have no children to visit, so skip the frame machinery. An enum
+    // variant whose payloads are all leaves, such as `json.Value.Int(3)`,
+    // clones the same way.
+    match value {
+        leaf if is_clone_leaf(leaf) => return Ok(value.clone()),
+        Value::EnumVariant(variant) if variant.payloads.iter().all(is_clone_leaf) => {
+            return Ok(value.clone())
+        }
         _ => {}
     }
     if let Some(shared) = shared_collection_clone(value) {
@@ -7331,6 +7347,17 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
 
 impl Clone for Value {
     fn clone(&self) -> Self {
+        // A variant whose payloads are all leaves, such as `Lookup.Found(3)`
+        // or `json.Value.Int(3)`, has no tree to walk.
+        if let Value::EnumVariant(variant) = self {
+            if variant.payloads.iter().all(is_clone_leaf) {
+                return Value::EnumVariant(EnumVariantValue {
+                    enum_name: variant.enum_name.clone(),
+                    variant_name: variant.variant_name.clone(),
+                    payloads: variant.payloads.clone(),
+                });
+            }
+        }
         if matches!(
             self,
             Value::EnumVariant(variant)

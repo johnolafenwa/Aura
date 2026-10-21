@@ -36,7 +36,21 @@ fn hash_state() -> &'static RandomState {
 /// A hash of `value` that agrees with `Value`'s equality.
 pub fn hash_value(value: &Value) -> u64 {
     let mut hasher = hash_state().build_hasher();
-    let mut pending = vec![value];
+    // A scalar or `str` key, the common case, writes what the walk below
+    // would write without allocating its stack.
+    let mut root = value;
+    while let Value::Union(union) = root {
+        root = &union.payload;
+    }
+    if hash_scalar(root, &mut hasher) {
+        return hasher.finish();
+    }
+    if let Value::String(text) = root {
+        std::mem::discriminant(root).hash(&mut hasher);
+        text.hash(&mut hasher);
+        return hasher.finish();
+    }
+    let mut pending = vec![root];
     let mut budget = HASH_NODE_BUDGET;
     while let Some(mut value) = pending.pop() {
         if budget == 0 {
@@ -110,6 +124,23 @@ pub fn hash_value(value: &Value) -> u64 {
         }
     }
     hasher.finish()
+}
+
+/// [`hash_value`] of a `str` value holding `text`, without building one.
+pub fn hash_str(text: &str) -> u64 {
+    let mut hasher = hash_state().build_hasher();
+    std::mem::discriminant(&Value::String(String::new())).hash(&mut hasher);
+    text.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Whether `key` equals a `str` value holding `text`. A union equals its
+/// active member.
+fn key_is_str(mut key: &Value, text: &str) -> bool {
+    while let Value::Union(union) = key {
+        key = &union.payload;
+    }
+    matches!(key, Value::String(key) if key == text)
 }
 
 /// Hashes an `int`, `float`, or `bool` value and returns true, or returns
@@ -341,6 +372,24 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
         }
     }
 
+    /// [`Self::position`] of a `str` key holding `text`, without building it.
+    pub fn position_str(&self, text: &str) -> Option<usize> {
+        match &self.storage {
+            Storage::Small(entries) => entries
+                .iter()
+                .position(|entry| key_is_str(entry.key(), text)),
+            Storage::Large(large) => {
+                let hash = hash_str(text);
+                large
+                    .index
+                    .find(hash, |&(entry_hash, position)| {
+                        entry_hash == hash && key_is_str(large.entries[position].key(), text)
+                    })
+                    .map(|&(_, position)| position)
+            }
+        }
+    }
+
     pub fn contains_key(&self, key: &Value) -> bool {
         self.position(key).is_some()
     }
@@ -463,6 +512,12 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
 impl DictEntries {
     pub fn value_of(&self, key: &Value) -> Option<&Value> {
         self.find(key).map(|(_, value)| value)
+    }
+
+    /// [`Self::value_of`] a `str` key holding `text`.
+    pub fn value_of_str(&self, text: &str) -> Option<&Value> {
+        self.position_str(text)
+            .map(|position| &self.entries()[position].1)
     }
 
     /// The value at `position`, for writing.

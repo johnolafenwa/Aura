@@ -361,6 +361,7 @@ Each step is one pull request with its tests, docs, and measurements.
 | 5 | Bounds-check removal in proven `for` loops, and direct `Array` element reads. Done for `for` loops over a list or a span, and for rank-1 `Array` reads by one `int64`: `int_list_sum` went from 106 to 79 million instructions, and indexed `float64` Array reads run about 34 times faster |
 | 6 | Vectorized integer Array kernels with ordered first-trap reporting. Done: `int32` and `int64` operators, `wrapping_` and `saturating_` forms, and `sum()` run in 256-element blocks on machine integers. One-million-element `int64` addition went from about 37 ms to 0.9 ms |
 | 6a | Unboxed `int64`, `float64`, and `bool` lists, added on 2026-10-20. Done: these lists store 8-byte or 1-byte scalars instead of 112-byte values, and native code reads them in place. `int_list_sum` went from about 9x to about 4.1x Rust |
+| 6b | Fewer boxes in string, key, and membership code, added on 2026-10-21. Done: f-strings build in one string, literal `str` keys and `int64` set needles are not boxed, lent loop elements skip a second bounds check, and repeated type tags are dropped. `string_list_scan` went to about 5.3x Rust, `dict_build_get` to 4.4x, `set_insert_contains` to 3.4x, and `record_field_reads` to 11x |
 | 7 | Re-measurement against the targets, then a preview release on Cranelift |
 
 Steps 2 and 6 do not depend on the others. Step 4 depends on step 3 for the

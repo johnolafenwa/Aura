@@ -265,3 +265,49 @@ fn shared_vecs_copy_on_the_first_write() {
     let nan: SharedVec<Value> = vec![Value::Float(f64::NAN)].into();
     assert_ne!(nan, nan.clone());
 }
+
+#[test]
+fn string_keys_hash_the_same_bare_and_inside_a_union() {
+    let text = Value::String("ready".to_string());
+    let union_type = Type::normalize_union(
+        vec![Type::named("str"), Type::named("int64")],
+        "main",
+        &BTreeMap::new(),
+    )
+    .expect("normalized union");
+    let Type::Union(members) = &union_type else {
+        panic!("expected a union type");
+    };
+    let member_index = members
+        .members
+        .iter()
+        .position(|member| *member == Type::named("str"))
+        .expect("str member");
+    let union = Value::Union(Box::new(UnionValue {
+        union_type,
+        member_index,
+        payload: text.clone(),
+    }));
+    assert_eq!(hash_value(&union), hash_value(&text));
+    assert_ne!(
+        hash_value(&text),
+        hash_value(&Value::String("readz".to_string()))
+    );
+}
+
+#[test]
+fn str_lookups_agree_with_value_lookups_in_small_and_large_maps() {
+    for count in [3_usize, 40] {
+        let mut entries = DictEntries::new();
+        for index in 0..count {
+            entries.insert(Value::String(format!("key-{index}")), int(index as i64));
+        }
+        entries.insert(int(1), int(-1));
+        for probe in ["key-0", "key-2", "key-39", "key-40", "", "1"] {
+            let needle = Value::String(probe.to_string());
+            assert_eq!(hash_str(probe), hash_value(&needle));
+            assert_eq!(entries.position_str(probe), entries.position(&needle));
+            assert_eq!(entries.value_of_str(probe), entries.value_of(&needle));
+        }
+    }
+}

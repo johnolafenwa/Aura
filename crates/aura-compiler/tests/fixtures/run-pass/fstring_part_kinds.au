@@ -1,0 +1,39 @@
+class Counter:
+    value: int64
+
+    def bump(mut self) -> int64:
+        self.value += 1
+        return self.value
+
+class Tag:
+    name: str
+
+impl Display for Tag:
+    def display(self) -> str:
+        return f"#{self.name}"
+
+def label(step: int) -> str:
+    print(f"label {step}")
+    return f"<{step}>"
+
+def main():
+    low: int64 = -9223372036854775807 - 1
+    high: int64 = 9223372036854775807
+    small: int32 = -42
+    wide: uint64 = 18446744073709551615
+    ratio = 2.5
+    ready = true
+    tag = Tag(name="release")
+    names = ["a", "b"]
+    print(f"{low}|{high}|{0}|{-7}")
+    print(f"{small}|{wide}|{ratio}|{ready}|{names}")
+    print(f"tag={tag} padded=[{tag:>10}] number=[{high:+,d}]")
+    print(f"{label(1)}{label(2)}-{f"inner {label(3)}"}")
+    mut keys: list[str] = []
+    for i in range(3):
+        keys.append(f"key-{i}")
+    print(f"{keys}")
+    print(f"")
+    print(f"{ratio:.3f} only")
+    mut counter = Counter(value=1)
+    print(f"{counter.value} then {counter.bump()} then {counter.value}")

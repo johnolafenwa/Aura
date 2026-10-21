@@ -16152,18 +16152,21 @@ def main():
     let object = emit_host_object(&mir).expect("borrowed loop source should emit directly");
     let referenced = object_referenced_symbols(&object);
     for symbol in [
-        "aura_direct_vec_check_index",
         "aura_direct_compare_str_literal_at",
         "aura_direct_compare_values_at",
         "aura_direct_vec_element_len",
-        "aura_direct_vec_element_map_get",
+        "aura_direct_vec_element_map_get_str",
     ] {
         assert!(
             referenced.iter().any(|name| name.ends_with(symbol)),
             "the loops should call `{symbol}`, referenced: {referenced:?}"
         );
     }
+    // The loop's bound check covers each loan, and the literal key is not
+    // boxed.
     for symbol in [
+        "aura_direct_vec_check_index",
+        "aura_direct_vec_element_map_get",
         "aura_direct_vec_index",
         "aura_direct_element_path_load",
         "aura_direct_element_path_probe",

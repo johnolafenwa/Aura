@@ -17555,6 +17555,16 @@ impl<'a> Lowerer<'a> {
         let (collection, selector, projection, selector_span) = self
             .element_loan_source(&element, mutable)
             .expect("a lent list iterable is an element-loan source");
+        // The bound check above, under a shape the loop freezes, keeps the
+        // selected element in range.
+        if let Operand::Place(selected) = &selector {
+            if projection.is_empty() && !self.view_sources.contains_key(&collection) {
+                self.emit(Instruction::IndexInRange {
+                    list: collection.clone(),
+                    index: selected.clone(),
+                });
+            }
+        }
         self.emit_element_loan(
             &binding,
             &collection,
@@ -18303,7 +18313,18 @@ impl<'a> Lowerer<'a> {
                             MirFormatPart::Literal(text.clone())
                         }
                         crate::ast::FormatPart::Expr(expr) => {
+                            let value_type = self.infer_expr_type(expr);
                             let value = self.lower_expr_at_sequence_point(expr, None);
+                            if value_type
+                                .as_ref()
+                                .is_some_and(|ty| self.renders_without_effects(ty))
+                            {
+                                // The sequence point copied the scalar, and
+                                // rendering it runs no user code, so the
+                                // string renders it in place.
+                                lowered_parts.push(MirFormatPart::Value(value));
+                                continue;
+                            }
                             let rendered = self.new_typed_temp(Type::named("str"));
                             self.emit(Instruction::Assign {
                                 target: rendered.clone(),
@@ -20042,6 +20063,35 @@ impl<'a> Lowerer<'a> {
             ExprKind::Call { callee, args } => self.lower_call(expr, callee, args, expected),
             _ => self.lower_expr(expr),
         }
+    }
+
+    /// Whether a value of `ty` is a copied scalar whose rendering runs no user
+    /// code, so an f-string can render it after later parts evaluate.
+    fn renders_without_effects(&self, ty: &Type) -> bool {
+        matches!(
+            ty,
+            Type::Named(name, args)
+                if args.is_empty()
+                    && matches!(
+                        name.as_str(),
+                        "bool"
+                            | "float32"
+                            | "float64"
+                            | "int8"
+                            | "int16"
+                            | "int32"
+                            | "int64"
+                            | "int128"
+                            | "intsize"
+                            | "uint8"
+                            | "uint16"
+                            | "uint32"
+                            | "uint64"
+                            | "uint128"
+                            | "uintsize"
+                    )
+        ) && type_is_copy_in_program(ty, self.program)
+            && !self.has_custom_display(ty)
     }
 
     fn lower_expr_at_sequence_point(&mut self, expr: &Expr, expected: Option<&Type>) -> Operand {

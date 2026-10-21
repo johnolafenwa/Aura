@@ -9247,6 +9247,27 @@ fn direct_runtime_map_and_set_helpers_cover_collection_surface() {
     assert_eq!(super::aura_direct_set_remove_in_place(set, int_value(3)), 0);
 }
 
+#[test]
+fn direct_set_contains_int64_agrees_with_boxed_membership() {
+    // Twenty elements pass the scan threshold, so both paths hash.
+    for count in [3_i64, 20] {
+        let set = super::aura_direct_set_empty();
+        for element in 0..count {
+            super::aura_direct_set_insert_in_place(set, super::aura_direct_box_i64(element * 7));
+        }
+        for probe in [i64::MIN, -7, 0, 6, 7, 13 * 7, 19 * 7, 20 * 7, i64::MAX] {
+            let boxed = super::aura_direct_box_i64(probe);
+            assert_eq!(
+                super::aura_direct_set_contains_int64(set, probe),
+                super::aura_direct_set_contains(set, boxed),
+                "probe {probe} in a set of {count}"
+            );
+            unsafe { release_value(boxed) };
+        }
+        unsafe { release_value(set) };
+    }
+}
+
 unsafe extern "C-unwind" fn test_native_thunk(args: *const i64, len: usize) -> *mut OpaqueValue {
     let args = std::slice::from_raw_parts(args, len);
     let total = args
@@ -10554,6 +10575,35 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
         ),
         0
     );
+    // A tagged enum name carries its descriptor after the separator; only
+    // the base name takes part in the match.
+    let tagged = boxed_value(Value::EnumVariant(EnumVariantValue {
+        enum_name: format!(
+            "Lookup{}Lookup[int64]",
+            crate::runtime_value::DIRECT_RUNTIME_TYPE_SEPARATOR
+        ),
+        variant_name: "Missing".to_string(),
+        payloads: Vec::new(),
+    }));
+    for (enum_name, variant_name, expected) in [
+        ("Lookup", "Missing", 1),
+        ("Lookup", "Found", 0),
+        ("Lookup[int64]", "Missing", 0),
+        ("Look", "Missing", 0),
+        ("", "", 0),
+    ] {
+        assert_eq!(
+            super::aura_direct_variant_matches(
+                tagged,
+                enum_name.as_ptr(),
+                enum_name.len(),
+                variant_name.as_ptr(),
+                variant_name.len(),
+            ),
+            expected,
+            "{enum_name}.{variant_name}"
+        );
+    }
     let payloads = super::aura_direct_arg_buffer_new(1);
     super::aura_direct_arg_buffer_store(payloads, 0, string_value("payload") as i64);
     let boxed_payload = super::aura_direct_enum_variant(
@@ -21051,6 +21101,94 @@ fn direct_format_abi_returns_exact_text_and_preserves_type_diagnostic_codes() {
     unsafe { release_value(invalid_value) };
 }
 
+#[test]
+fn direct_format_builder_appends_the_same_text_as_stringify_and_format() {
+    let spec = "+6d";
+    let value_type = "int64";
+    let parts = [
+        string_value("name"),
+        float_value(2.5),
+        bool_value(true),
+        integer_vector(IntegerKind::Int64, &[1, 2]),
+    ];
+    let mut expected = "key-".to_string();
+    let builder = super::aura_direct_format_begin("key-".as_ptr(), 4);
+    for value in [i64::MIN, -1, 0, 7, i64::MAX] {
+        let boxed = super::aura_direct_box_i64(value);
+        expected.push_str(&expect_string(super::aura_direct_stringify_value(boxed)));
+        unsafe { release_value(boxed) };
+        super::aura_direct_format_push_i64(builder, value);
+        expected.push('|');
+        super::aura_direct_format_push_str(builder, "|".as_ptr(), 1);
+    }
+    for part in parts {
+        expected.push_str(&expect_string(super::aura_direct_stringify_value(part)));
+        super::aura_direct_format_push_value(builder, part);
+        unsafe { release_value(part) };
+    }
+    let number = int_value(42);
+    expected.push_str(&expect_string(super::aura_direct_format_value(
+        number,
+        spec.as_ptr(),
+        spec.len(),
+        value_type.as_ptr(),
+        value_type.len(),
+    )));
+    super::aura_direct_format_push_formatted(
+        builder,
+        number,
+        spec.as_ptr(),
+        spec.len(),
+        value_type.as_ptr(),
+        value_type.len(),
+    );
+    unsafe { release_value(number) };
+    assert_eq!(expect_string(builder), expected);
+    assert!(expected.starts_with("key--9223372036854775808|-1|0|7|9223372036854775807|name"));
+    assert!(expected.ends_with("   +42"));
+}
+
+#[test]
+fn direct_format_builder_reports_the_string_limit_and_format_errors() {
+    let builder = super::aura_direct_format_begin("".as_ptr(), 0);
+    let filler = "x".repeat(crate::runtime_value::MAX_STRING_BYTES);
+    super::aura_direct_format_push_str(builder, filler.as_ptr(), filler.len());
+    let builder_address = builder as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_format_push_i64(builder_address as *mut OpaqueValue, 1);
+    });
+    assert_eq!(diagnostic.code, "AU4005");
+    assert_eq!(
+        diagnostic.message,
+        format!(
+            "string output exceeds the maintained {}-byte allocation limit",
+            crate::runtime_value::MAX_STRING_BYTES
+        )
+    );
+    unsafe { release_value(builder) };
+
+    let builder = super::aura_direct_format_begin("".as_ptr(), 0);
+    let invalid_value = int_value(42);
+    let addresses = (builder as usize, invalid_value as usize);
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_format_push_formatted(
+            addresses.0 as *mut OpaqueValue,
+            addresses.1 as *mut OpaqueValue,
+            "s".as_ptr(),
+            1,
+            "int64".as_ptr(),
+            5,
+        );
+    });
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(
+        diagnostic.message,
+        "format code `s` requires `str`, found integer"
+    );
+    assert_eq!(expect_string(builder), "");
+    unsafe { release_value(invalid_value) };
+}
+
 static DIRECT_CONSTANT_INITIALIZER_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 unsafe extern "C-unwind" fn counted_direct_constant_initializer(
@@ -25082,6 +25220,58 @@ fn list_element_reads_borrow_the_element_in_place() {
         other => panic!("expected a list, found {other:?}"),
     }
     for value in [names, groups, other, key, found] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
+fn direct_str_literal_map_gets_agree_with_boxed_key_gets() {
+    let map = string_map(&[("age", "41"), ("city", "Lagos")]);
+    let groups = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_in_place(groups, int_vec(&[1]));
+    super::aura_direct_vec_push_in_place(groups, string_map(&[("age", "41")]));
+    for key in ["age", "city", "missing", ""] {
+        let boxed = string_value(key);
+        assert_eq!(
+            format!("{:?}", unsafe {
+                take_value(super::aura_direct_map_get_str(map, key.as_ptr(), key.len()))
+            }),
+            format!("{:?}", unsafe {
+                take_value(super::aura_direct_map_get(map, boxed))
+            }),
+        );
+        assert_eq!(
+            format!("{:?}", unsafe {
+                take_value(super::aura_direct_vec_element_map_get_str(
+                    groups,
+                    1,
+                    key.as_ptr(),
+                    key.len(),
+                    0,
+                    0,
+                ))
+            }),
+            format!("{:?}", unsafe {
+                take_value(super::aura_direct_vec_element_map_get(
+                    groups, 1, boxed, 0, 0,
+                ))
+            }),
+        );
+        unsafe { release_value(boxed) };
+    }
+    let groups_address = groups as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_vec_element_map_get_str(
+            groups_address as *mut OpaqueValue,
+            0,
+            "age".as_ptr(),
+            3,
+            0,
+            0,
+        );
+    });
+    assert_eq!(diagnostic.message, "expected `dict`, found `list`");
+    for value in [map, groups] {
         unsafe { release_value(value) };
     }
 }

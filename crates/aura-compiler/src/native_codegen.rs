@@ -251,10 +251,26 @@ enum ProvenAccess {
     /// `index = index + 1`: `index` is below a list length, so the sum
     /// cannot overflow.
     Advance,
+    /// An element loan of `list[index]`: the element exists, so the loan
+    /// begins without a bounds check.
+    Lend,
 }
 
 impl ProvenAccess {
     fn of(instruction: &Instruction, list: &str, index: &str) -> Self {
+        if let Instruction::BeginElementLoan {
+            source,
+            selector: Operand::Place(selected),
+            projection,
+            ..
+        } = instruction
+        {
+            return if source == list && selected == index && projection.is_empty() {
+                Self::Lend
+            } else {
+                Self::None
+            };
+        }
         let Instruction::Assign { target, value } = instruction else {
             return Self::None;
         };
@@ -659,7 +675,11 @@ struct NativeCodegen<'a> {
     string_text_method: FuncId,
     stringify_value: FuncId,
     register_display: FuncId,
-    format_value: FuncId,
+    format_begin: FuncId,
+    format_push_str: FuncId,
+    format_push_i64: FuncId,
+    format_push_value: FuncId,
+    format_push_formatted: FuncId,
     abs_value: FuncId,
     min_value: FuncId,
     max_value: FuncId,
@@ -706,6 +726,7 @@ struct NativeCodegen<'a> {
     compare_values_at: FuncId,
     vec_element_len: FuncId,
     vec_element_map_get: FuncId,
+    vec_element_map_get_str: FuncId,
     vec_push_scalar: FuncId,
     vec_span: FuncId,
     vec_take_index_in_place: FuncId,
@@ -733,6 +754,7 @@ struct NativeCodegen<'a> {
     map_len: FuncId,
     map_is_empty: FuncId,
     map_get: FuncId,
+    map_get_str: FuncId,
     map_set_in_place: FuncId,
     map_remove_in_place: FuncId,
     map_contains_key: FuncId,
@@ -747,6 +769,7 @@ struct NativeCodegen<'a> {
     set_len: FuncId,
     set_is_empty: FuncId,
     set_contains: FuncId,
+    set_contains_int64: FuncId,
     set_insert_in_place: FuncId,
     set_remove_in_place: FuncId,
     set_index_option: FuncId,
@@ -1219,7 +1242,11 @@ impl<'a> NativeCodegen<'a> {
             string_text_method => ("aura_direct_string_text_method", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             stringify_value => ("aura_direct_stringify_value", [types::I64], Some(types::I64)),
             register_display => ("aura_direct_register_display", [types::I64, types::I64, types::I64], None),
-            format_value => ("aura_direct_format_value", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            format_begin => ("aura_direct_format_begin", [types::I64, types::I64], Some(types::I64)),
+            format_push_str => ("aura_direct_format_push_str", [types::I64, types::I64, types::I64], None),
+            format_push_i64 => ("aura_direct_format_push_i64", [types::I64, types::I64], None),
+            format_push_value => ("aura_direct_format_push_value", [types::I64, types::I64], None),
+            format_push_formatted => ("aura_direct_format_push_formatted", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], None),
             abs_value => ("aura_direct_abs", [types::I64], Some(types::I64)),
             min_value => ("aura_direct_min", [types::I64, types::I64], Some(types::I64)),
             max_value => ("aura_direct_max", [types::I64, types::I64], Some(types::I64)),
@@ -1266,6 +1293,7 @@ impl<'a> NativeCodegen<'a> {
             compare_values_at => ("aura_direct_compare_values_at", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             vec_element_len => ("aura_direct_vec_element_len", [types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             vec_element_map_get => ("aura_direct_vec_element_map_get", [types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
+            vec_element_map_get_str => ("aura_direct_vec_element_map_get_str", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             vec_push_scalar => ("aura_direct_vec_push_scalar", [types::I64, types::I64, types::I64], None),
             vec_span => ("aura_direct_vec_span", [types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64, types::I64], Some(types::I64)),
             vec_take_index_in_place => ("aura_direct_vec_take_index_in_place", [types::I64, types::I64], Some(types::I64)),
@@ -1293,6 +1321,7 @@ impl<'a> NativeCodegen<'a> {
             map_len => ("aura_direct_map_len", [types::I64], Some(types::I64)),
             map_is_empty => ("aura_direct_map_is_empty", [types::I64], Some(types::I64)),
             map_get => ("aura_direct_map_get", [types::I64, types::I64], Some(types::I64)),
+            map_get_str => ("aura_direct_map_get_str", [types::I64, types::I64, types::I64], Some(types::I64)),
             map_set_in_place => ("aura_direct_map_set_in_place", [types::I64, types::I64, types::I64], Some(types::I64)),
             map_remove_in_place => ("aura_direct_map_remove_in_place", [types::I64, types::I64], Some(types::I64)),
             map_contains_key => ("aura_direct_map_contains_key", [types::I64, types::I64], Some(types::I64)),
@@ -1307,6 +1336,7 @@ impl<'a> NativeCodegen<'a> {
             set_len => ("aura_direct_set_len", [types::I64], Some(types::I64)),
             set_is_empty => ("aura_direct_set_is_empty", [types::I64], Some(types::I64)),
             set_contains => ("aura_direct_set_contains", [types::I64, types::I64], Some(types::I64)),
+            set_contains_int64 => ("aura_direct_set_contains_int64", [types::I64, types::I64], Some(types::I64)),
             set_insert_in_place => ("aura_direct_set_insert_in_place", [types::I64, types::I64], Some(types::I64)),
             set_remove_in_place => ("aura_direct_set_remove_in_place", [types::I64, types::I64], Some(types::I64)),
             set_index_option => ("aura_direct_set_index_option", [types::I64, types::I64], Some(types::I64)),
@@ -1745,7 +1775,11 @@ impl<'a> NativeCodegen<'a> {
             string_text_method,
             stringify_value,
             register_display,
-            format_value,
+            format_begin,
+            format_push_str,
+            format_push_i64,
+            format_push_value,
+            format_push_formatted,
             abs_value,
             min_value,
             max_value,
@@ -1792,6 +1826,7 @@ impl<'a> NativeCodegen<'a> {
             compare_values_at,
             vec_element_len,
             vec_element_map_get,
+            vec_element_map_get_str,
             vec_push_scalar,
             vec_span,
             vec_take_index_in_place,
@@ -1819,6 +1854,7 @@ impl<'a> NativeCodegen<'a> {
             map_len,
             map_is_empty,
             map_get,
+            map_get_str,
             map_set_in_place,
             map_remove_in_place,
             map_contains_key,
@@ -1833,6 +1869,7 @@ impl<'a> NativeCodegen<'a> {
             set_len,
             set_is_empty,
             set_contains,
+            set_contains_int64,
             set_insert_in_place,
             set_remove_in_place,
             set_index_option,
@@ -2596,9 +2633,21 @@ impl<'a> NativeCodegen<'a> {
         let stringify_value = self
             .object
             .declare_func_in_func(self.stringify_value, builder.func);
-        let format_value = self
+        let format_begin = self
             .object
-            .declare_func_in_func(self.format_value, builder.func);
+            .declare_func_in_func(self.format_begin, builder.func);
+        let format_push_str = self
+            .object
+            .declare_func_in_func(self.format_push_str, builder.func);
+        let format_push_i64 = self
+            .object
+            .declare_func_in_func(self.format_push_i64, builder.func);
+        let format_push_value = self
+            .object
+            .declare_func_in_func(self.format_push_value, builder.func);
+        let format_push_formatted = self
+            .object
+            .declare_func_in_func(self.format_push_formatted, builder.func);
         let abs_value = self
             .object
             .declare_func_in_func(self.abs_value, builder.func);
@@ -2728,6 +2777,9 @@ impl<'a> NativeCodegen<'a> {
         let vec_element_len = self
             .object
             .declare_func_in_func(self.vec_element_len, builder.func);
+        let vec_element_map_get_str = self
+            .object
+            .declare_func_in_func(self.vec_element_map_get_str, builder.func);
         let vec_element_map_get = self
             .object
             .declare_func_in_func(self.vec_element_map_get, builder.func);
@@ -2808,6 +2860,9 @@ impl<'a> NativeCodegen<'a> {
             .object
             .declare_func_in_func(self.map_is_empty, builder.func);
         let map_get = self.object.declare_func_in_func(self.map_get, builder.func);
+        let map_get_str = self
+            .object
+            .declare_func_in_func(self.map_get_str, builder.func);
         let map_set_in_place = self
             .object
             .declare_func_in_func(self.map_set_in_place, builder.func);
@@ -2848,6 +2903,9 @@ impl<'a> NativeCodegen<'a> {
         let set_contains = self
             .object
             .declare_func_in_func(self.set_contains, builder.func);
+        let set_contains_int64 = self
+            .object
+            .declare_func_in_func(self.set_contains_int64, builder.func);
         let set_insert_in_place = self
             .object
             .declare_func_in_func(self.set_insert_in_place, builder.func);
@@ -3539,6 +3597,7 @@ impl<'a> NativeCodegen<'a> {
             trait_impls: self.trait_impls.clone(),
             return_type: function.return_type.clone(),
             owned_opaque_temporaries: OwnedTemporaries::default(),
+            last_runtime_type_tag: None,
             proven_access: ProvenAccess::None,
             view_places: HashMap::new(),
             view_element_keys: HashMap::new(),
@@ -3614,7 +3673,11 @@ impl<'a> NativeCodegen<'a> {
             string_join,
             string_text_method,
             stringify_value,
-            format_value,
+            format_begin,
+            format_push_str,
+            format_push_i64,
+            format_push_value,
+            format_push_formatted,
             abs_value,
             min_value,
             max_value,
@@ -3661,6 +3724,7 @@ impl<'a> NativeCodegen<'a> {
             compare_values_at,
             vec_element_len,
             vec_element_map_get,
+            vec_element_map_get_str,
             vec_push_scalar,
             vec_span,
             vec_take_index_in_place,
@@ -3688,6 +3752,7 @@ impl<'a> NativeCodegen<'a> {
             map_len,
             map_is_empty,
             map_get,
+            map_get_str,
             map_set_in_place,
             map_remove_in_place,
             map_contains_key,
@@ -3702,6 +3767,7 @@ impl<'a> NativeCodegen<'a> {
             set_len,
             set_is_empty,
             set_contains,
+            set_contains_int64,
             set_insert_in_place,
             set_remove_in_place,
             set_index_option,
@@ -5014,6 +5080,9 @@ struct FunctionCompiler<'a> {
     trait_impls: Vec<MirTraitImpl>,
     return_type: Type,
     owned_opaque_temporaries: OwnedTemporaries,
+    /// The latest `tag_value_type` call: its instruction, value, and encoded
+    /// type, so an identical tag that no other call follows is not repeated.
+    last_runtime_type_tag: Option<(cranelift_codegen::ir::Inst, Value, String)>,
     /// What an `IndexInRange` fact proves about the instruction being
     /// compiled.
     proven_access: ProvenAccess,
@@ -5095,7 +5164,11 @@ struct FunctionCompiler<'a> {
     string_join: cranelift_codegen::ir::FuncRef,
     string_text_method: cranelift_codegen::ir::FuncRef,
     stringify_value: cranelift_codegen::ir::FuncRef,
-    format_value: cranelift_codegen::ir::FuncRef,
+    format_begin: cranelift_codegen::ir::FuncRef,
+    format_push_str: cranelift_codegen::ir::FuncRef,
+    format_push_i64: cranelift_codegen::ir::FuncRef,
+    format_push_value: cranelift_codegen::ir::FuncRef,
+    format_push_formatted: cranelift_codegen::ir::FuncRef,
     abs_value: cranelift_codegen::ir::FuncRef,
     min_value: cranelift_codegen::ir::FuncRef,
     max_value: cranelift_codegen::ir::FuncRef,
@@ -5144,6 +5217,7 @@ struct FunctionCompiler<'a> {
     compare_values_at: cranelift_codegen::ir::FuncRef,
     vec_element_len: cranelift_codegen::ir::FuncRef,
     vec_element_map_get: cranelift_codegen::ir::FuncRef,
+    vec_element_map_get_str: cranelift_codegen::ir::FuncRef,
     vec_push_scalar: cranelift_codegen::ir::FuncRef,
     vec_span: cranelift_codegen::ir::FuncRef,
     vec_take_index_in_place: cranelift_codegen::ir::FuncRef,
@@ -5171,6 +5245,7 @@ struct FunctionCompiler<'a> {
     map_len: cranelift_codegen::ir::FuncRef,
     map_is_empty: cranelift_codegen::ir::FuncRef,
     map_get: cranelift_codegen::ir::FuncRef,
+    map_get_str: cranelift_codegen::ir::FuncRef,
     map_set_in_place: cranelift_codegen::ir::FuncRef,
     map_remove_in_place: cranelift_codegen::ir::FuncRef,
     map_contains_key: cranelift_codegen::ir::FuncRef,
@@ -5185,6 +5260,7 @@ struct FunctionCompiler<'a> {
     set_len: cranelift_codegen::ir::FuncRef,
     set_is_empty: cranelift_codegen::ir::FuncRef,
     set_contains: cranelift_codegen::ir::FuncRef,
+    set_contains_int64: cranelift_codegen::ir::FuncRef,
     set_insert_in_place: cranelift_codegen::ir::FuncRef,
     #[allow(dead_code)]
     set_remove_in_place: cranelift_codegen::ir::FuncRef,
@@ -8497,25 +8573,42 @@ impl<'a> FunctionCompiler<'a> {
         Ok(unit_value(&mut self.builder))
     }
 
+    /// Builds an f-string in one `str` box: the leading literal starts it and
+    /// each later part appends in place, so no part needs its own box or a
+    /// concatenation. `int64` parts append without being boxed.
     fn compile_format_string(
         &mut self,
         parts: &[MirFormatPart],
     ) -> std::result::Result<ValueRef, String> {
-        let mut current = self.string_value("")?;
-        for part in parts {
-            let next = match part {
-                MirFormatPart::Literal(text) => self.string_value(text)?,
+        let (leading, rest) = match parts.split_first() {
+            Some((MirFormatPart::Literal(text), rest)) => (text.as_str(), rest),
+            _ => ("", parts),
+        };
+        let (ptr, len) = self.string_constant(leading.as_bytes())?;
+        let call = self.builder.ins().call(self.format_begin, &[ptr, len]);
+        let builder =
+            self.owned_opaque_result(self.builder.inst_results(call).to_vec(), Type::named("str"));
+        let handle = builder.values[0];
+        for part in rest {
+            match part {
+                MirFormatPart::Literal(text) => {
+                    let (ptr, len) = self.string_constant(text.as_bytes())?;
+                    self.builder
+                        .ins()
+                        .call(self.format_push_str, &[handle, ptr, len]);
+                }
                 MirFormatPart::Value(value) => {
                     let value = self.load_operand(value)?;
-                    let value = self.ensure_opaque(value)?;
-                    let call = self
-                        .builder
-                        .ins()
-                        .call(self.stringify_value, &[value.values[0]]);
-                    self.owned_opaque_result(
-                        self.builder.inst_results(call).to_vec(),
-                        Type::named("str"),
-                    )
+                    if value.ty == DirectType::Scalar(ScalarKind::Int64) {
+                        self.builder
+                            .ins()
+                            .call(self.format_push_i64, &[handle, value.values[0]]);
+                    } else {
+                        let value = self.ensure_opaque(value)?;
+                        self.builder
+                            .ins()
+                            .call(self.format_push_value, &[handle, value.values[0]]);
+                    }
                 }
                 MirFormatPart::Formatted {
                     value,
@@ -8527,19 +8620,21 @@ impl<'a> FunctionCompiler<'a> {
                     let (spec_ptr, spec_len) = self.string_constant(spec.as_bytes())?;
                     let type_name = value_type.to_string();
                     let (type_ptr, type_len) = self.string_constant(type_name.as_bytes())?;
-                    let call = self.builder.ins().call(
-                        self.format_value,
-                        &[value.values[0], spec_ptr, spec_len, type_ptr, type_len],
+                    self.builder.ins().call(
+                        self.format_push_formatted,
+                        &[
+                            handle,
+                            value.values[0],
+                            spec_ptr,
+                            spec_len,
+                            type_ptr,
+                            type_len,
+                        ],
                     );
-                    self.owned_opaque_result(
-                        self.builder.inst_results(call).to_vec(),
-                        Type::named("str"),
-                    )
                 }
-            };
-            current = self.compile_binary(BinaryOp::Add, current, next, None)?;
+            }
         }
-        Ok(current)
+        Ok(builder)
     }
 
     fn string_value(&mut self, text: &str) -> std::result::Result<ValueRef, String> {
@@ -10127,13 +10222,24 @@ impl<'a> FunctionCompiler<'a> {
         let (line, column) = self.span_operands(selection.span);
         match (field, args, &selection.element_type) {
             ("get", [key], Type::Named(_, entry_types)) => {
-                let key_direct_ty = ensure_direct_type(&entry_types[0], &self.classes, "dict key")?;
-                let key = self.load_operand_as_opaque_direct(&key.value, &key_direct_ty)?;
-                let (list, index) = self.load_borrowed_list_element(&selection)?;
-                let inst = self.builder.ins().call(
-                    self.vec_element_map_get,
-                    &[list, index, key.values[0], line, column],
-                );
+                let inst = if let Some(text) = str_literal_key(&key.value, &entry_types[0]) {
+                    // A literal `str` key is looked up without a box.
+                    let (key_ptr, key_len) = self.string_constant(text.as_bytes())?;
+                    let (list, index) = self.load_borrowed_list_element(&selection)?;
+                    self.builder.ins().call(
+                        self.vec_element_map_get_str,
+                        &[list, index, key_ptr, key_len, line, column],
+                    )
+                } else {
+                    let key_direct_ty =
+                        ensure_direct_type(&entry_types[0], &self.classes, "dict key")?;
+                    let key = self.load_operand_as_opaque_direct(&key.value, &key_direct_ty)?;
+                    let (list, index) = self.load_borrowed_list_element(&selection)?;
+                    self.builder.ins().call(
+                        self.vec_element_map_get,
+                        &[list, index, key.values[0], line, column],
+                    )
+                };
                 Ok(Some(self.owned_opaque_result(
                     self.builder.inst_results(inst).to_vec(),
                     optional_type(entry_types[1].clone()),
@@ -10953,6 +11059,9 @@ impl<'a> FunctionCompiler<'a> {
         // unconditional selection is probed in place; otherwise probe the
         // selected slot through the loan and drop the copy.
         if let Some(selection) = self.borrowed_list_element(&Operand::Place(loan.to_string())) {
+            if self.proven_access == ProvenAccess::Lend {
+                return Ok(());
+            }
             let (list, index) = self.load_borrowed_list_element(&selection)?;
             let (line, column) = self.span_operands(selection.span);
             self.builder
@@ -11965,12 +12074,54 @@ impl<'a> FunctionCompiler<'a> {
                 "direct backend expected opaque `{ty}` to use one runtime value"
             ));
         };
+        self.emit_runtime_type_tag(*raw, ty)
+    }
+
+    /// Tags `raw` with `ty`. A tag repeats nothing when the same value got the
+    /// same tag earlier in this block and no call ran since, because only a
+    /// call can change a box.
+    fn emit_runtime_type_tag(&mut self, raw: Value, ty: &Type) -> std::result::Result<(), String> {
         let encoded = crate::native_runtime::canonical_runtime_type_name(ty);
+        if let Some((inst, tagged, tagged_type)) = &self.last_runtime_type_tag {
+            if *tagged == raw && *tagged_type == encoded && self.no_call_since(*inst) {
+                return Ok(());
+            }
+        }
         let (type_ptr, type_len) = self.string_constant(encoded.as_bytes())?;
-        self.builder
+        let inst = self
+            .builder
             .ins()
-            .call(self.tag_value_type, &[*raw, type_ptr, type_len]);
+            .call(self.tag_value_type, &[raw, type_ptr, type_len]);
+        self.last_runtime_type_tag = Some((inst, raw, encoded));
         Ok(())
+    }
+
+    /// Whether `inst` is in the current block and no call that could change
+    /// a box follows it there. A retain or a release changes only the count
+    /// of the value it names, and a tag of `raw` is never followed by a
+    /// release of `raw` that frees it.
+    fn no_call_since(&self, inst: cranelift_codegen::ir::Inst) -> bool {
+        let Some(block) = self.builder.current_block() else {
+            return false;
+        };
+        let func = &self.builder.func;
+        if func.layout.inst_block(inst) != Some(block) {
+            return false;
+        }
+        let mut cursor = func.layout.last_inst(block);
+        while let Some(current) = cursor {
+            if current == inst {
+                return true;
+            }
+            match func.dfg.insts[current] {
+                cranelift_codegen::ir::InstructionData::Call { func_ref, .. }
+                    if func_ref == self.retain_value || func_ref == self.release_value => {}
+                ref data if data.opcode().is_call() => return false,
+                _ => {}
+            }
+            cursor = func.layout.prev_inst(current);
+        }
+        false
     }
 
     fn tag_raw_opaque_runtime_type(
@@ -11984,12 +12135,7 @@ impl<'a> FunctionCompiler<'a> {
         if runtime_type_is_wildcard(ty) {
             return Ok(());
         }
-        let encoded = crate::native_runtime::canonical_runtime_type_name(ty);
-        let (type_ptr, type_len) = self.string_constant(encoded.as_bytes())?;
-        self.builder
-            .ins()
-            .call(self.tag_value_type, &[raw, type_ptr, type_len]);
-        Ok(())
+        self.emit_runtime_type_tag(raw, ty)
     }
 
     /// The value of `value` when an `iconst` defines it.
@@ -15683,12 +15829,19 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         };
-                        let key =
-                            self.load_operand_as_opaque_direct(&argument.value, &key_direct_ty)?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.map_get, &[object.values[0], key.values[0]]);
+                        let inst = if let Some(text) = str_literal_key(&argument.value, &key_ty) {
+                            // A literal `str` key is looked up without a box.
+                            let (key_ptr, key_len) = self.string_constant(text.as_bytes())?;
+                            self.builder
+                                .ins()
+                                .call(self.map_get_str, &[object.values[0], key_ptr, key_len])
+                        } else {
+                            let key = self
+                                .load_operand_as_opaque_direct(&argument.value, &key_direct_ty)?;
+                            self.builder
+                                .ins()
+                                .call(self.map_get, &[object.values[0], key.values[0]])
+                        };
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             optional_type(value_ty.clone()),
@@ -15972,12 +16125,21 @@ impl<'a> FunctionCompiler<'a> {
                                     .to_string(),
                             );
                         };
-                        let value = self
-                            .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.set_contains, &[object.values[0], value.values[0]]);
+                        let loaded =
+                            self.load_operand_for_target(&argument.value, &element_direct_ty)?;
+                        let value = self.coerce_value(loaded, &element_direct_ty)?;
+                        let inst = if value.ty == DirectType::Scalar(ScalarKind::Int64) {
+                            // An `int64` needle is compared without a box.
+                            self.builder.ins().call(
+                                self.set_contains_int64,
+                                &[object.values[0], value.values[0]],
+                            )
+                        } else {
+                            let value = self.ensure_opaque(value)?;
+                            self.builder
+                                .ins()
+                                .call(self.set_contains, &[object.values[0], value.values[0]])
+                        };
                         Ok(ValueRef {
                             values: self.builder.inst_results(inst).to_vec(),
                             ty: DirectType::Scalar(ScalarKind::Bool),
@@ -22642,6 +22804,14 @@ fn collect_direct_runtime_type_substitutions(
             collect_direct_runtime_type_substitutions(pattern_return, actual_return, substitutions);
         }
         Type::Unit | Type::Module(_) => {}
+    }
+}
+
+/// The text of a `str` literal key for a dictionary whose keys are `str`.
+fn str_literal_key<'a>(key: &'a Operand, key_type: &Type) -> Option<&'a str> {
+    match key {
+        Operand::String(text) if *key_type == Type::named("str") => Some(text),
+        _ => None,
     }
 }
 
