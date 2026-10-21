@@ -7,6 +7,12 @@ in this file.
 
 ## Unreleased
 
+### Fixed
+
+- Building the same program twice produces the same native object. Native
+  code used to release a function's values at return, and declare some
+  callees, in hash map order, which changed from one build to the next.
+
 ## VS Code extension 0.6.0 — 2026-10-21
 
 - Bundles language server 0.6.0, which speaks semantic interface version 20.

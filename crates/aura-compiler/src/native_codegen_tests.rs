@@ -16253,3 +16253,48 @@ def main():
         "a shared array or another rank reads through the runtime, referenced: {referenced:?}"
     );
 }
+
+#[test]
+fn direct_objects_are_identical_across_repeated_builds() {
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/run-pass");
+    let mut paths = std::fs::read_dir(&fixtures)
+        .expect("run-pass fixtures should be readable")
+        .map(|entry| entry.expect("fixture entry should be readable").path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "au"))
+        .collect::<Vec<_>>();
+    paths.sort();
+    // Every third fixture keeps this test short next to the timing-sensitive
+    // runtime tests while still covering every kind of program.
+    let paths = paths.into_iter().step_by(3).collect::<Vec<_>>();
+    let mut compared = 0;
+    let mut differing = Vec::new();
+    for path in paths {
+        let source = std::fs::read_to_string(&path).expect("fixture should be readable");
+        let Ok(mir) = lower_source_to_mir(&source) else {
+            continue;
+        };
+        let Ok(first) = emit_host_object(&mir) else {
+            continue;
+        };
+        compared += 1;
+        let relowered = lower_source_to_mir(&source).expect("a repeated lowering should succeed");
+        if serde_json::to_string(&relowered).ok() != serde_json::to_string(&mir).ok() {
+            differing.push(format!(
+                "{} (MIR)",
+                path.file_name().unwrap().to_string_lossy()
+            ));
+        }
+        // Each build seeds its own hash maps, so one repeat is enough to see
+        // iteration order reach the object.
+        let again = emit_host_object(&mir).expect("a repeated build should emit");
+        if again != first {
+            differing.push(path.file_name().unwrap().to_string_lossy().into_owned());
+        }
+    }
+    assert!(compared > 150, "only {compared} fixtures compiled directly");
+    assert!(
+        differing.is_empty(),
+        "{} of {compared} fixtures emit different objects across builds: {differing:?}",
+        differing.len()
+    );
+}

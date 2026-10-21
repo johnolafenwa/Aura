@@ -391,7 +391,7 @@ keeps them.
 
 | Step | Work |
 | --- | --- |
-| 8 | Move the semantic decisions left in `native_codegen.rs` into checked MIR or a shared lowering, so an emitter only translates |
+| 8 | Move the semantic decisions left in `native_codegen.rs` into checked MIR, so an emitter translates MIR and lays out values. [Step 8](#step-8-semantics-in-mir) lists the sub-steps |
 | 9 | LLVM emitter through inkwell, pinned to the LLVM version rustc uses. CI and release builds provide libLLVM. The forced parity matrix, size gates, and per-function sections pass on LLVM |
 | 10 | Runtime fast paths and inlining across the runtime boundary, with frame records kept |
 | 11 | LLVM becomes the only native backend. Cranelift code and dependencies are removed, and the native cache format, size baselines, and docs are updated |
@@ -402,6 +402,27 @@ the new emitter. Step 11 ends that.
 
 Two facts need checking at step 9 before the emitter grows: whether inkwell
 supports LLVM 22, and how much libLLVM adds to the `aura` binary.
+
+### Step 8: Semantics In MIR
+
+The direct emitter is 22,934 lines. About 7,200 choose a runtime helper by
+receiver and member name, about 3,000 declare the helpers, about 2,600 track
+ownership, and about 1,550 re-infer the types of MIR temporaries. Value
+layout takes about 3,900. Layout stays in the backend, and the rest moves
+into MIR, where the interpreter and every native backend read it.
+
+| Sub-step | Work |
+| --- | --- |
+| 8a | Repeatable builds. Codegen iterated hash maps with a per-process seed, so 538 of 626 run-pass fixtures emitted different objects from one build to the next. Iteration that reaches the object is ordered, and a test compares two builds of a third of the fixtures |
+| 8b | One runtime ABI table: each helper's symbol, parameters, and result, declared once for every emitter |
+| 8c | Complete local types. MIR records the type of every temporary, and the validator checks them. The emitter's type inference goes away |
+| 8d | Resolved runtime operations. Lowering resolves each built-in call to a typed MIR operation, with the specializations made so far. The interpreter dispatches on the same operation |
+| 8e | Explicit ownership. A MIR pass inserts retain and release, pair cancellation runs on the result, and a check verifies every path releases what it owns. The interpreter treats them as no-ops |
+| 8f | Explicit checks. Element reads that `IndexInRange` proves become unchecked MIR reads, and checked arithmetic names its trap |
+| 8g | Measure what is left in the emitter and the compile-time cost, before step 9 |
+
+The Cranelift emitter follows each sub-step until step 11 removes it, so the
+parity matrix keeps comparing native code with the interpreter.
 
 ## Owner Questions
 
@@ -434,6 +455,10 @@ The owner decided on 2026-10-20:
    removes only checks it proves redundant.
 4. **SIMD.** Vectorization stays inside the current Array contracts, with no
    new language surface.
+
+On 2026-10-21 the owner chose to move the emitter's semantic decisions into
+MIR rather than into a separate backend IR. That decision is
+[Step 8](#step-8-semantics-in-mir).
 
 Every other rule above is the ratified default. On 2026-10-20 the owner also
 approved every numeric target that step 1 proposed, listed in
