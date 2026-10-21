@@ -2,6 +2,15 @@
 
 Last updated: 2026-10-21
 
+## Batch 7 step 8: semantics in MIR (in progress)
+
+- Target: move the direct emitter's semantic decisions into MIR before the
+  LLVM emitter, as John chose on 2026-10-21. Value layout stays in the
+  backend. The sub-steps are in the checkpoint's Step 8 section.
+- In progress: 8a, repeatable native builds. Details are in
+  `2026-10-21-batch-7-step-8a-repeatable-builds.md`.
+- Next: 8b, one runtime ABI table.
+
 ## Aura 0.6.0 preview release (complete)
 
 - Target: release 0.6.0-preview with Batch 6 and phase 1 of Batch 7. This

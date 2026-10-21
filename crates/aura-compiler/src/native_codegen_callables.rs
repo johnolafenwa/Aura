@@ -12,7 +12,7 @@ use super::*;
 
 /// One callable shape: a lowered function constructed with a fixed number of
 /// leading capture parameters.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub(super) struct CallableShapeKey {
     pub(super) function: String,
     pub(super) captures: usize,
@@ -497,7 +497,8 @@ fn call_callable_unary_adapter_live(
 impl NativeCodegen<'_> {
     /// Defines the descriptor and adapters of every declared shape.
     pub(super) fn define_callable_shapes(&mut self) -> std::result::Result<(), String> {
-        let keys: Vec<CallableShapeKey> = self.callable_shapes.keys().cloned().collect();
+        let mut keys: Vec<CallableShapeKey> = self.callable_shapes.keys().cloned().collect();
+        keys.sort();
         for key in keys {
             let shape = self.callable_shapes[&key].clone();
             self.define_callable_drop(&shape)?;

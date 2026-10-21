@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::immediates::Ieee64;
@@ -478,13 +478,14 @@ struct ValueRef {
 }
 
 /// The temporaries a statement owns: opaque handles, and inline unions
-/// whose active member may hold a handle (keyed by the tag word).
+/// whose active member may hold a handle (keyed by the tag word). They are
+/// ordered by value, so releases come out in the same order in every build.
 #[derive(Clone, Default)]
 struct OwnedTemporaries {
-    opaque: HashSet<Value>,
-    unions: HashMap<Value, (Vec<Value>, DirectUnionType)>,
+    opaque: BTreeSet<Value>,
+    unions: BTreeMap<Value, (Vec<Value>, DirectUnionType)>,
     /// Inline callables the statement owns, keyed by the descriptor word.
-    callables: HashMap<Value, Vec<Value>>,
+    callables: BTreeMap<Value, Vec<Value>>,
 }
 
 impl OwnedTemporaries {
@@ -2468,12 +2469,18 @@ impl<'a> NativeCodegen<'a> {
         }
 
         let mut function_refs = HashMap::new();
-        for (name, func_id) in &self.functions {
+        // Sorted, so each function declares its callees in the same order in
+        // every build.
+        let mut functions = self.functions.iter().collect::<Vec<_>>();
+        functions.sort_by(|left, right| left.0.cmp(right.0));
+        for (name, func_id) in functions {
             let func_ref = self.object.declare_func_in_func(*func_id, builder.func);
             function_refs.insert(name.clone(), func_ref);
         }
         let mut function_thunk_refs = HashMap::new();
-        for (name, func_id) in &self.function_thunks {
+        let mut function_thunks = self.function_thunks.iter().collect::<Vec<_>>();
+        function_thunks.sort_by(|left, right| left.0.cmp(right.0));
+        for (name, func_id) in function_thunks {
             let func_ref = self.object.declare_func_in_func(*func_id, builder.func);
             function_thunk_refs.insert(name.clone(), func_ref);
         }
@@ -5906,7 +5913,10 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn release_all_opaque_roots(&mut self) -> std::result::Result<(), String> {
-        let names = self.variable_types.keys().cloned().collect::<Vec<_>>();
+        // Sorted, so the same program releases its roots in the same order
+        // in every build.
+        let mut names = self.variable_types.keys().cloned().collect::<Vec<_>>();
+        names.sort();
         for name in names {
             self.release_root_if_opaque(&name)?;
         }
