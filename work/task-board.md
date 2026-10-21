@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-10-20
+Last updated: 2026-10-21
 
 ## Batch 7 design checkpoint: Rust-class native performance (ratified)
 
@@ -17,7 +17,21 @@ Last updated: 2026-10-20
   LLVM and removes it. LLVM's inliner replaces the planned MIR inliner.
 - Next: step 1, below.
 
-## Batch 7 unboxed scalar lists (in progress)
+## Batch 7 strings, keys, and membership without boxes (in progress)
+
+- Target: remove the per-operation boxes in the string, `dict`, `set`, and
+  record programs before step 7, the option recommended to John on
+  2026-10-20.
+- Done: f-strings build in one string, literal `str` keys and `int64` set
+  needles are looked up without a box, a lent loop element skips its second
+  bounds check, and a repeated type tag is dropped. Notes are in
+  `2026-10-21-batch-7-strings-keys-membership.md`.
+- Verification: see the work note. Every program prints the same output.
+  `string_list_scan`, `dict_build_get`, and `set_insert_contains` now meet
+  their phase 1 targets. `record_field_reads` is about 11x Rust against 8x.
+- Next: hosted CI, then step 7.
+
+## Batch 7 unboxed scalar lists (complete)
 
 - Target: store `int64`, `float64`, and `bool` lists unboxed, as John chose
   on 2026-10-20, after step 6 and before step 7.
@@ -28,7 +42,7 @@ Last updated: 2026-10-20
 - Verification: see the work note. `int_list_sum` went from a median of
   21.0 ms to 9.5 ms, about 4.1x Rust. The other collection programs stay
   within 1% of their instruction counts.
-- Next: hosted CI, then step 7.
+- Done: merged in PR #97.
 
 ## Batch 7 step 6: integer Array kernels (complete)
 

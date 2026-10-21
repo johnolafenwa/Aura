@@ -18722,3 +18722,39 @@ fn integer_array_sums_report_the_first_prefix_that_overflows() {
         }
     }
 }
+
+#[test]
+fn array_aware_copy_keeps_enum_variants_with_leaf_and_nested_payloads() {
+    let leaf = Value::EnumVariant(EnumVariantValue {
+        enum_name: "json.Value".to_string(),
+        variant_name: "Int".to_string(),
+        payloads: vec![Value::Int(crate::integer::IntegerValue::from_i64(42))],
+    });
+    let nested = Value::EnumVariant(EnumVariantValue {
+        enum_name: "Pair".to_string(),
+        variant_name: "Both".to_string(),
+        payloads: vec![
+            Value::String("left".to_string()),
+            Value::Vec(VecValue {
+                element_type: Type::named("int64"),
+                elements: vec![Value::Int(crate::integer::IntegerValue::from_i64(1))].into(),
+            }),
+        ],
+    });
+    let empty = Value::EnumVariant(EnumVariantValue {
+        enum_name: "Lookup".to_string(),
+        variant_name: "Missing".to_string(),
+        payloads: Vec::new(),
+    });
+    let text = Value::EnumVariant(EnumVariantValue {
+        enum_name: "json.Value".to_string(),
+        variant_name: "String".to_string(),
+        payloads: vec![Value::String("Lagos".to_string())],
+    });
+    for source in [leaf, nested, empty, text] {
+        let copy = super::try_clone_array_containing_value(&source)
+            .expect("an enum variant without Arrays should copy");
+        assert_eq!(format!("{copy:?}"), format!("{source:?}"));
+        assert_eq!(format!("{:?}", source.clone()), format!("{source:?}"));
+    }
+}

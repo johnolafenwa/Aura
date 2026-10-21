@@ -305,9 +305,11 @@ M2 Pro host feed later performance decisions.
 | Retry | favors Aura |
 | Array addition | 1.006974 times NumPy, 1.006524 times the same-session Rust kernel |
 | Array reduction | 6.682308 times NumPy, 1.339087 times the same-session Rust kernel |
-| `record_field_reads` | about 18 times Python 3.13, about 13 times Rust |
-| `string_list_scan` | about 12 times Rust |
-| `int_list_sum` | about 4.1 times Rust |
+| `record_field_reads` | about 11 times Rust |
+| `string_list_scan` | about 5.3 times Rust |
+| `dict_build_get` | about 4.4 times Rust |
+| `set_insert_contains` | about 3.4 times Rust |
+| `int_list_sum` | about 3.7 times Rust |
 | AuraDB `update` by id | about 3 times Python 3.13 |
 
 These gaps are specific to these workloads. Scheduling, runtime
@@ -485,6 +487,34 @@ elements.
 73,209,689 instructions instead of 78,657,685, so most of the gain comes
 from the smaller list fitting in the processor cache. The other programs
 run within 1% of their previous instruction counts.
+
+### Strings, Keys, And Membership Without Boxes
+
+Native code builds an f-string in one string. The first literal starts it,
+and each later part appends in place. A number or `bool` part is copied
+when the f-string evaluates it and rendered as it appends, because rendering
+it runs no `Display` code. An `int64` part appends without a box.
+
+A literal `str` key, as in `doc.get("age")` on a `dict[str, V]`, is looked
+up where it lies in the program image. An `int64` needle, as in `j in seen`
+on a `set[int64]`, is tested without a box. A `for` loop that lends each
+element of a list checks the index against the length once, so the loan
+begins without a second check. Native code also skips a type tag that
+repeats the tag the same value received earlier in the block.
+
+On the shared Linux container, 11 alternating whole-process runs give these
+medians.
+
+| Program | Before | After | Instructions before | Instructions after |
+| --- | ---: | ---: | ---: | ---: |
+| `int_list_sum` | 11.6 ms | 10.8 ms | 73,209,658 | 73,212,011 |
+| `string_list_scan` | 35.7 ms | 14.1 ms | 370,041,432 | 150,970,171 |
+| `record_field_reads` | 127.3 ms | 84.4 ms | 1,173,189,605 | 692,557,847 |
+| `dict_build_get` | 322.4 ms | 89.3 ms | 3,080,859,389 | 939,551,832 |
+| `set_insert_contains` | 39.6 ms | 18.0 ms | 351,223,140 | 148,691,758 |
+
+`record_field_reads` still copies each `Lookup` payload and each enum name,
+and every box passes through the task's ownership ledger.
 
 ## Performance Direction
 

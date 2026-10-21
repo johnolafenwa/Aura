@@ -88,6 +88,15 @@ in this file.
   per `bool`, instead of 112. Native code reads them in place.
   `int_list_sum` went from 21.0 ms to 9.5 ms on Linux x86-64, about 4.1
   times the Rust reference.
+- Native code builds an f-string in one string instead of one string per
+  part, and writes `int64` parts without a box. It looks up a literal `str`
+  key in a `dict[str, V]` and tests an `int64` for membership in a
+  `set[int64]` without a box. It also skips the bounds check when a `for`
+  loop lends an element it has already checked, and a repeated type tag on
+  the same value. On Linux x86-64, `dict_build_get` went from 322.4 ms to
+  89.3 ms, `string_list_scan` from 35.7 ms to 14.1 ms, `set_insert_contains`
+  from 39.6 ms to 18.0 ms, and `record_field_reads` from 127.3 ms to
+  84.4 ms.
 
 ### Fixed
 

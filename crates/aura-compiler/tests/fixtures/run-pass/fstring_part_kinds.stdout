@@ -1,0 +1,11 @@
+-9223372036854775808|9223372036854775807|0|-7
+-42|18446744073709551615|2.5|true|[a, b]
+tag=#release padded=[  #release] number=[+9,223,372,036,854,775,807]
+label 1
+label 2
+label 3
+<1><2>-inner <3>
+[key-0, key-1, key-2]
+
+2.500 only
+1 then 2 then 2

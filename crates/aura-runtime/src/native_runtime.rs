@@ -35,9 +35,9 @@ use crate::json_codec;
 use crate::list_elements::ListElements;
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
-    cancel_current_lightweight_task_boundary, cast_numeric_value, claim_task_result_observations,
-    clone_json_codec_source, collect_queue_values, concat_strings_checked,
-    current_lightweight_task_cancellation, current_lightweight_task_id,
+    append_string_checked, cancel_current_lightweight_task_boundary, cast_numeric_value,
+    claim_task_result_observations, clone_json_codec_source, collect_queue_values,
+    concat_strings_checked, current_lightweight_task_cancellation, current_lightweight_task_id,
     decode_process_restart_policy, decode_process_stdio, divmod_numeric_values,
     embedded_nominal_runtime_type_name, fail_current_lightweight_task, float_floor_divmod,
     float_power, format_runtime_value_with, host_builtins, io_error, io_read_line,
@@ -2327,10 +2327,13 @@ unsafe fn set_explicit_runtime_type_tag(ptr: *mut OpaqueValue, tag: &RuntimeType
                 // `enum_name` is `base`, or `base SEPARATOR descriptor` once
                 // tagged. A matching descriptor means the rebuilt name would
                 // equal the current one.
-                let base = match variant.enum_name.split_once(DIRECT_RUNTIME_TYPE_SEPARATOR) {
-                    Some((_, embedded)) if embedded == runtime_type_name => None,
-                    Some((base, _)) => Some(base),
-                    None => Some(variant.enum_name.as_str()),
+                let enum_name = variant.enum_name.as_str();
+                let separator =
+                    memchr::memchr(DIRECT_RUNTIME_TYPE_SEPARATOR as u8, enum_name.as_bytes());
+                let base = match separator {
+                    Some(at) if &enum_name[at + 1..] == runtime_type_name => None,
+                    Some(at) => Some(&enum_name[..at]),
+                    None => Some(enum_name),
                 };
                 if let Some(base) = base {
                     // Sized up front: `format!` costs more than the tag lookup.
@@ -5487,6 +5490,102 @@ pub extern "C-unwind" fn aura_direct_format_value(
     })
 }
 
+/// Starts an f-string with its leading literal text. The result is a new
+/// `str` box that only the `aura_direct_format_push_*` calls change, so the
+/// parts append in place instead of through one concatenation per part.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_format_begin(ptr: *const u8, len: usize) -> *mut OpaqueValue {
+    task_runtime_boundary(|| boxed_value(Value::String(decode_bytes(ptr, len))))
+}
+
+fn push_format_text(builder: *mut OpaqueValue, text: &str) {
+    let appended = unsafe {
+        value_mut(builder, |value| match value {
+            Value::String(output) => append_string_checked(output, text),
+            other => runtime_error(format!(
+                "f-string builder holds `{}` instead of `str`",
+                value_type_name(&*other)
+            )),
+        })
+    };
+    if let Err(error) = appended {
+        runtime_diagnostic_error(error);
+    }
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_format_push_str(
+    builder: *mut OpaqueValue,
+    ptr: *const u8,
+    len: usize,
+) {
+    task_runtime_boundary(|| {
+        let bytes = unsafe { slice::from_raw_parts(ptr, len) };
+        let text = str::from_utf8(bytes)
+            .unwrap_or_else(|_| runtime_error("aura direct runtime received invalid UTF-8 bytes"));
+        push_format_text(builder, text);
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_format_push_i64(builder: *mut OpaqueValue, value: i64) {
+    task_runtime_boundary(|| {
+        // Decimal digits written right to left; `i64::MIN` needs all 20 bytes.
+        let mut digits = [0_u8; 20];
+        let mut start = digits.len();
+        let mut magnitude = value.unsigned_abs();
+        loop {
+            start -= 1;
+            digits[start] = b'0' + (magnitude % 10) as u8;
+            magnitude /= 10;
+            if magnitude == 0 {
+                break;
+            }
+        }
+        if value < 0 {
+            start -= 1;
+            digits[start] = b'-';
+        }
+        // SAFETY: the bytes are ASCII digits and a minus sign.
+        push_format_text(builder, unsafe {
+            str::from_utf8_unchecked(&digits[start..])
+        });
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_format_push_value(
+    builder: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+) {
+    task_runtime_boundary(|| {
+        let rendered = render_direct_value(value);
+        push_format_text(builder, &rendered);
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_format_push_formatted(
+    builder: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+    spec_ptr: *const u8,
+    spec_len: usize,
+    type_ptr: *const u8,
+    type_len: usize,
+) {
+    task_runtime_boundary(|| {
+        let spec = decode_bytes(spec_ptr, spec_len);
+        let value_type = Type::named(decode_bytes(type_ptr, type_len));
+        let value = unsafe { value_ref(value) };
+        match format_runtime_value_with(&value, &value_type, &spec, &mut |value| {
+            Ok(render_direct_display(value))
+        }) {
+            Ok(rendered) => push_format_text(builder, &rendered),
+            Err(error) => runtime_diagnostic_error(error),
+        }
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_duration_literal(low: i64, high: i64) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
@@ -6931,7 +7030,7 @@ pub extern "C-unwind" fn aura_direct_compare_str_literal_at(
         let compared = with_vec_element(list, index, line, column, |value| {
             compare_with_str_literal(op, value, literal_ptr, literal_len, literal_on_left)
         });
-        direct_comparison_bit(compared, line, column)
+        direct_comparison_flag(compared, line, column)
     })
 }
 
@@ -7607,16 +7706,56 @@ pub extern "C-unwind" fn aura_direct_map_get(
 /// `Lookup.Found` with a copy of the value stored under `key`, or
 /// `Lookup.Missing`.
 fn direct_map_lookup(map: &MapValue, key: *mut OpaqueValue) -> *mut OpaqueValue {
-    let value = unsafe {
-        with_value(key, |key| {
-            map.entries
-                .value_of(key)
-                .map(try_clone_array_containing_value)
-                .transpose()
-        })
-    };
+    unsafe { with_value(key, |key| boxed_map_lookup(map.entries.value_of(key))) }
+}
+
+/// The boxed `Lookup` for a value found in a map, or `Lookup.Missing`.
+fn boxed_map_lookup(found: Option<&Value>) -> *mut OpaqueValue {
+    let value = found.map(try_clone_array_containing_value).transpose();
     let value = direct_array_result(value, 0, 0);
     boxed_value(value.map(lookup_found).unwrap_or_else(lookup_missing))
+}
+
+/// The key of a `dict[str, V]` lookup, a literal in the program image.
+fn literal_str<'a>(ptr: *const u8, len: usize) -> &'a str {
+    let bytes = unsafe { slice::from_raw_parts(ptr, len) };
+    str::from_utf8(bytes)
+        .unwrap_or_else(|_| runtime_error("aura direct runtime received invalid UTF-8 bytes"))
+}
+
+/// `aura_direct_map_get` with a `str` literal key, which is never boxed.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_get_str(
+    map: *mut OpaqueValue,
+    key_ptr: *const u8,
+    key_len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let key = literal_str(key_ptr, key_len);
+        with_map(map, |map| boxed_map_lookup(map.entries.value_of_str(key)))
+    })
+}
+
+/// `aura_direct_vec_element_map_get` with a `str` literal key.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_element_map_get_str(
+    list: *mut OpaqueValue,
+    index: i64,
+    key_ptr: *const u8,
+    key_len: usize,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let key = literal_str(key_ptr, key_len);
+        with_vec_element(list, index, line, column, |element| match element {
+            Value::Map(map) => boxed_map_lookup(map.entries.value_of_str(key)),
+            other => runtime_error(format!(
+                "expected `dict`, found `{}`",
+                value_type_name(other)
+            )),
+        })
+    })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -8314,6 +8453,16 @@ pub extern "C-unwind" fn aura_direct_set_contains(
     })
 }
 
+/// `aura_direct_set_contains` for an `int64` needle, which is built on the
+/// stack instead of in a box.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_set_contains_int64(set: *mut OpaqueValue, value: i64) -> i64 {
+    task_runtime_boundary(|| {
+        let needle = Value::Int(IntegerValue::from_i64(value));
+        i64::from(with_set(set, |set| set.elements.contains_key(&needle)))
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_set_insert_in_place(
     set: *mut OpaqueValue,
@@ -8693,6 +8842,17 @@ fn direct_comparison_op(op: i64) -> BinaryOp {
     }
 }
 
+fn direct_comparison_flag(
+    compared: std::result::Result<bool, Diagnostic>,
+    line: i64,
+    column: i64,
+) -> i64 {
+    match compared {
+        Ok(flag) => i64::from(flag),
+        Err(error) => runtime_diagnostic_error_at(error, runtime_span(line, column)),
+    }
+}
+
 fn direct_comparison_bit(
     compared: std::result::Result<Value, Diagnostic>,
     line: i64,
@@ -8749,7 +8909,7 @@ pub extern "C-unwind" fn aura_direct_compare_str_literal(
                 compare_with_str_literal(op, value, literal_ptr, literal_len, literal_on_left)
             })
         };
-        direct_comparison_bit(compared, line, column)
+        direct_comparison_flag(compared, line, column)
     })
 }
 
@@ -8759,33 +8919,40 @@ fn compare_with_str_literal(
     literal_ptr: *const u8,
     literal_len: usize,
     literal_on_left: i64,
-) -> std::result::Result<Value, Diagnostic> {
+) -> std::result::Result<bool, Diagnostic> {
     match value {
         // UTF-8 byte order matches `str` order, so a `str` operand compares
-        // bytes and never decodes the literal.
+        // bytes and never decodes the literal. Equality compares the lengths
+        // before any byte.
         Value::String(text) => {
             let literal = unsafe { slice::from_raw_parts(literal_ptr, literal_len) };
-            let ordering = if literal_on_left != 0 {
-                literal.cmp(text.as_bytes())
-            } else {
-                text.as_bytes().cmp(literal)
-            };
-            Ok(Value::Bool(match op {
-                BinaryOp::Eq => ordering.is_eq(),
-                BinaryOp::NotEq => ordering.is_ne(),
-                BinaryOp::Less => ordering.is_lt(),
-                BinaryOp::LessEq => ordering.is_le(),
-                BinaryOp::Greater => ordering.is_gt(),
-                _ => ordering.is_ge(),
-            }))
+            let text = text.as_bytes();
+            Ok(match op {
+                BinaryOp::Eq => text == literal,
+                BinaryOp::NotEq => text != literal,
+                _ => {
+                    let ordering = if literal_on_left != 0 {
+                        literal.cmp(text)
+                    } else {
+                        text.cmp(literal)
+                    };
+                    match op {
+                        BinaryOp::Less => ordering.is_lt(),
+                        BinaryOp::LessEq => ordering.is_le(),
+                        BinaryOp::Greater => ordering.is_gt(),
+                        _ => ordering.is_ge(),
+                    }
+                }
+            })
         }
         other => {
             let literal = Value::String(decode_bytes(literal_ptr, literal_len));
-            if literal_on_left != 0 {
+            let compared = if literal_on_left != 0 {
                 compare_value_refs(&literal, other, op)
             } else {
                 compare_value_refs(other, &literal, op)
-            }
+            };
+            compared.map(|value| matches!(value, Value::Bool(true)))
         }
     }
 }
@@ -9507,13 +9674,16 @@ pub extern "C-unwind" fn aura_direct_variant_matches(
     variant_len: usize,
 ) -> i64 {
     task_runtime_boundary(|| {
-        let expected_enum = decode_bytes(enum_ptr, enum_len);
-        let expected_variant = decode_bytes(variant_ptr, variant_len);
+        // The compiler emits both names as UTF-8 literals, so comparing bytes
+        // matches comparing strings and allocates nothing.
+        let expected_enum = unsafe { slice::from_raw_parts(enum_ptr, enum_len) };
+        let expected_variant = unsafe { slice::from_raw_parts(variant_ptr, variant_len) };
         unsafe {
             with_value(value, |value| match value {
                 Value::EnumVariant(variant) => i64::from(
-                    nominal_runtime_base_name(&variant.enum_name) == expected_enum
-                        && variant.variant_name == expected_variant,
+                    variant.variant_name.as_bytes() == expected_variant
+                        && nominal_runtime_base_name(&variant.enum_name).as_bytes()
+                            == expected_enum,
                 ),
                 _ => 0,
             })
