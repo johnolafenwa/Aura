@@ -1,11 +1,14 @@
 //! Forged-MIR regressions for the shared validator's named-builtin contract
-//! table. `Array.zeros`, `Array.full`, and `Array.from_list` are dispatched
-//! by name without a MIR declaration to bind against; every forged arity,
-//! argument name, operand type, writeback, or result type must be refused by
-//! BOTH public boundaries (`run_mir` and `emit_host_native_object`) with the
-//! same validator reason, before either backend relies on the operand shapes
-//! the checker guaranteed.
+//! table. `Array.zeros`, `Array.full`, and `Array.from_list` resolve to
+//! runtime ops without a MIR declaration to bind against; every forged
+//! arity, argument name, operand type, writeback, or result type must be
+//! refused by BOTH public boundaries (`run_mir` and
+//! `emit_host_native_object`) with the same validator reason, before either
+//! backend relies on the operand shapes the checker guaranteed. The runtime
+//! op validator refuses arity and argument names; the contract table
+//! refuses operand types, writebacks, and result types.
 
+use aura_compiler::runtime_ops::RuntimeOp;
 use aura_compiler::{emit_host_native_object, lower_source_to_mir, run_mir, MirModule};
 use serde_json::{json, Value};
 
@@ -22,11 +25,28 @@ fn function_mut<'a>(encoded: &'a mut Value, name: &str) -> &'a mut Value {
         .unwrap_or_else(|| panic!("function `{name}` should exist"))
 }
 
+/// The function a call names: a `Name` call, or a named built-in that
+/// lowering resolved to a runtime operation with no receiver.
+fn named_callee(callee: &Value) -> Option<String> {
+    if let Some(name) = callee["Name"].as_str() {
+        return Some(name.to_string());
+    }
+    let runtime = callee.get("Runtime")?;
+    if !runtime["receiver"].is_null() {
+        return None;
+    }
+    let op: RuntimeOp =
+        serde_json::from_value(runtime["op"].clone()).expect("a runtime callee names a runtime op");
+    Some(op.name().to_string())
+}
+
 /// The whole `Assign` instruction whose rvalue is the named builtin call.
 fn named_call_instruction_mut<'a>(function: &'a mut Value, name: &str) -> &'a mut Value {
     for block in function["blocks"].as_array_mut().unwrap() {
         for instruction in block["instructions"].as_array_mut().unwrap() {
-            if instruction["Assign"]["value"]["Call"]["callee"]["Name"] == json!(name) {
+            if named_callee(&instruction["Assign"]["value"]["Call"]["callee"]).as_deref()
+                == Some(name)
+            {
                 return instruction;
             }
         }
@@ -155,7 +175,7 @@ fn from_list_with_an_unknown_argument_name_is_rejected_on_both_boundaries() {
     call_args_mut(main, "Array.from_list")[1]["name"] = json!("sizes");
     assert_rejected_on_both_boundaries(
         encoded,
-        "invalid MIR call to builtin `Array.from_list` in `main` has unknown argument `sizes`",
+        "invalid MIR runtime operation `Function.ArrayFromList` in `main`: `Array.from_list()` has no parameter `sizes`",
     );
 }
 
@@ -168,7 +188,7 @@ fn from_list_binding_one_argument_twice_is_rejected_on_both_boundaries() {
     args[1]["name"] = json!("shape");
     assert_rejected_on_both_boundaries(
         encoded,
-        "invalid MIR call to builtin `Array.from_list` in `main` binds argument `shape` more than once",
+        "invalid MIR runtime operation `Function.ArrayFromList` in `main`: `Array.from_list()` receives `shape` twice",
     );
 }
 
@@ -179,7 +199,7 @@ fn from_list_with_an_extra_argument_is_rejected_on_both_boundaries() {
     call_args_mut(main, "Array.from_list").push(arg(json!({ "Int": 3 })));
     assert_rejected_on_both_boundaries(
         encoded,
-        "invalid MIR call to builtin `Array.from_list` in `main` has too many arguments",
+        "invalid MIR runtime operation `Function.ArrayFromList` in `main`: expected `Array.from_list()` to take at most 2 argument(s), found 3",
     );
 }
 
@@ -190,7 +210,7 @@ fn from_list_missing_its_shape_is_rejected_on_both_boundaries() {
     call_args_mut(main, "Array.from_list").pop();
     assert_rejected_on_both_boundaries(
         encoded,
-        "invalid MIR call to builtin `Array.from_list` in `main` omits argument `shape`",
+        "invalid MIR runtime operation `Function.ArrayFromList` in `main`: expected `Array.from_list()` to receive `shape`",
     );
 }
 
@@ -289,7 +309,7 @@ fn zeros_with_an_extra_argument_is_rejected_on_both_boundaries() {
     call_args_mut(main, "Array.zeros").push(arg(json!({ "Int": 1 })));
     assert_rejected_on_both_boundaries(
         encoded,
-        "invalid MIR call to builtin `Array.zeros` in `main` has too many arguments",
+        "invalid MIR runtime operation `Function.ArrayZeros` in `main`: expected `Array.zeros()` to take at most 1 argument(s), found 2",
     );
 }
 

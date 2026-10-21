@@ -46,70 +46,10 @@ const INTERNAL_MAP_SET_INDEX_FIELD: &str = "__set_index";
 const INTERNAL_QUEUE_GET_IN_TASK_GROUP_FIELD: &str = "__get_in_task_group";
 const INTERNAL_QUEUE_GET_WITH_REGISTERED_PRODUCERS_FIELD: &str = "__get_with_registered_producers";
 
+/// Whether the runtime implements the built-in function named `name`, so
+/// its declaration needs a forwarding wrapper body.
 pub(crate) fn has_runtime_named_function(name: &str) -> bool {
-    BuiltinFunction::from_name(name).is_some()
-        || crate::builtin_modules::host_builtin_metadata(name).is_some()
-        || matches!(
-            name,
-            "random::secure_int"
-                | "random::secure_bytes"
-                | "io::write"
-                | "io::flush"
-                | "io::read_line"
-                | "fs::exists"
-                | "fs::read_to_string"
-                | "fs::read_bytes"
-                | "fs::write_string"
-                | "fs::write_bytes"
-                | "fs::append_string"
-                | "fs::append_bytes"
-                | "fs::create_dir"
-                | "fs::read_dir"
-                | "fs::remove_file"
-                | "fs::rename"
-                | "fs::open"
-                | "fs::create"
-                | "fs::append"
-                | "net::connect"
-                | "net::connect_timeout"
-                | "net::listen"
-                | "net::udp_bind"
-                | "net::unix_listen"
-                | "net::unix_connect"
-                | "net::unix_connect_timeout"
-                | "net::tls_listen"
-                | "net::tls_connect"
-                | "net::tls_connect_timeout"
-                | "net::http_listen"
-                | "net::http_request_text"
-                | "net::http_request_text_timeout"
-                | "net::http_request_bytes"
-                | "net::http_request_bytes_timeout"
-                | "net::websocket_listen"
-                | "net::websocket_connect"
-                | "net::websocket_connect_timeout"
-                | "process::inherit"
-                | "process::null"
-                | "process::pipe"
-                | "process::supervisor"
-                | "process::start"
-                | "process::run"
-                | "bytes::hex_encode"
-                | "bytes::base64_encode"
-                | "bytes::sha256"
-                | "bytes::hex_decode"
-                | "bytes::base64_decode"
-                | "bytes::sha256_string"
-                | "json::parse"
-                | "json::dumps"
-                | "json::is_null"
-                | "json::as_bool"
-                | "json::as_int"
-                | "json::as_float"
-                | "json::into_string"
-                | "json::into_array"
-                | "json::into_object"
-        )
+    crate::runtime_ops::builtin_function_for_name(name, |_| false).is_some()
 }
 
 fn is_builtin_unary_operator(op: UnaryOp, ty: &Type) -> bool {
@@ -1140,7 +1080,7 @@ impl CallTarget {
                 receiver_place,
             } => Some(MemberCallParts {
                 object,
-                field: op.member_name(),
+                field: op.name(),
                 receiver_place: receiver_place.as_deref(),
                 trait_name: None,
             }),
@@ -1190,11 +1130,26 @@ pub struct MirMapEntry {
 pub enum MirFormatPart {
     Literal(String),
     Value(Operand),
+    /// An `int64` value, which appends as a scalar word without a box.
+    /// Lowering picks it from the operand's type.
+    Int64(Operand),
     Formatted {
         value: Operand,
         spec: String,
         value_type: Type,
     },
+}
+
+impl MirFormatPart {
+    /// The interpolated operand, for every part but a literal.
+    pub fn operand(&self) -> Option<&Operand> {
+        match self {
+            MirFormatPart::Literal(_) => None,
+            MirFormatPart::Value(value)
+            | MirFormatPart::Int64(value)
+            | MirFormatPart::Formatted { value, .. } => Some(value),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -3476,9 +3431,15 @@ impl<'a> MirLoanValidationContext<'a> {
                 ("<indirect>".to_string(), Vec::new(), None)
             }
             CallTarget::Extern(call) => (format!("extern {}", call.symbol), Vec::new(), None),
+            // A named op checks its arguments against its builtin wrapper,
+            // when it has one, as its `Name` call did.
             CallTarget::Runtime {
                 op, receiver: None, ..
-            } => (format!("runtime {op}"), Vec::new(), None),
+            } => (
+                op.name().to_string(),
+                self.functions.get(op.name()).copied().into_iter().collect(),
+                None,
+            ),
             CallTarget::Member { .. } | CallTarget::Runtime { .. } => {
                 let MemberCallParts {
                     object,
@@ -4735,12 +4696,10 @@ fn function_body_moves_root(function: &MirFunction, root: &str) -> bool {
             Rvalue::Closure { captures, .. } => captures
                 .iter()
                 .any(|capture| operand_moves(&capture.value, root)),
-            Rvalue::FormatString { parts } => parts.iter().any(|part| match part {
-                MirFormatPart::Literal(_) => false,
-                MirFormatPart::Value(operand) | MirFormatPart::Formatted { value: operand, .. } => {
-                    operand_moves(operand, root)
-                }
-            }),
+            Rvalue::FormatString { parts } => parts
+                .iter()
+                .filter_map(MirFormatPart::operand)
+                .any(|operand| operand_moves(operand, root)),
             Rvalue::StartTask {
                 stack_size,
                 task_group,
@@ -6579,14 +6538,33 @@ fn validate_loan_operand(
     }
 }
 
+/// The callee name and arguments of a named call: a `Name` call, or a
+/// resolved op with no receiver, which names the call it resolved from.
+fn named_call(value: &Rvalue) -> Option<(&str, &[MirArg])> {
+    match value {
+        Rvalue::Call {
+            callee: CallTarget::Name(name),
+            args,
+        } => Some((name, args)),
+        Rvalue::Call {
+            callee: CallTarget::Runtime {
+                op, receiver: None, ..
+            },
+            args,
+        } => Some((op.name(), args)),
+        _ => None,
+    }
+}
+
 /// Checks a call the backends dispatch by builtin name against the shared
 /// contract table of named builtins that have no MIR declaration to bind
 /// against. The table mirrors the checker's associated-function signatures
 /// (`Array.zeros(shape)`, `Array.full(shape, value)`,
-/// `Array.from_list(values, shape)`), so a forged arity, argument name,
-/// operand type, or result type is refused here with one reason on both
-/// public boundaries instead of reaching the operand shapes each backend
-/// assumes after checking.
+/// `Array.from_list(values, shape)`), so a forged operand type, writeback,
+/// or result type is refused here with one reason on both public
+/// boundaries instead of reaching the operand shapes each backend assumes
+/// after checking. `validate_runtime_ops` refuses a forged arity or
+/// argument name first.
 fn validate_named_builtin_call(
     function: &MirFunction,
     name: &str,
@@ -6625,39 +6603,23 @@ fn validate_named_builtin_call(
         ],
         _ => return Ok(()),
     };
-    // Bind names and positions exactly as both backends' builtin binders do.
+    // `validate_runtime_ops` already refused a forged arity, an unknown
+    // argument name, or a parameter bound twice, so this only finds the
+    // argument each parameter binds.
     let mut bound: Vec<Option<&MirArg>> = vec![None; contract.len()];
     let mut next_positional = 0usize;
     for arg in args {
-        let index = if let Some(arg_name) = arg.name.as_deref() {
-            contract
-                .iter()
-                .position(|(slot, _)| *slot == arg_name)
-                .ok_or_else(|| {
-                    format!(
-                        "invalid MIR call to builtin `{name}` in `{}` has unknown argument `{arg_name}`",
-                        function.name
-                    )
-                })?
-        } else {
-            while next_positional < bound.len() && bound[next_positional].is_some() {
-                next_positional += 1;
+        let index = match arg.name.as_deref() {
+            Some(arg_name) => contract.iter().position(|(slot, _)| *slot == arg_name),
+            None => {
+                while next_positional < bound.len() && bound[next_positional].is_some() {
+                    next_positional += 1;
+                }
+                Some(next_positional).filter(|index| *index < bound.len())
             }
-            if next_positional >= bound.len() {
-                return Err(format!(
-                    "invalid MIR call to builtin `{name}` in `{}` has too many arguments",
-                    function.name
-                ));
-            }
-            let index = next_positional;
-            next_positional += 1;
-            index
         };
-        if bound[index].replace(arg).is_some() {
-            return Err(format!(
-                "invalid MIR call to builtin `{name}` in `{}` binds argument `{}` more than once",
-                function.name, contract[index].0
-            ));
+        if let Some(index) = index {
+            bound[index] = Some(arg);
         }
     }
     for ((slot, expected), arg) in contract.iter().zip(bound) {
@@ -7192,13 +7154,8 @@ fn validate_loan_rvalue(
             Ok(())
         }
         Rvalue::FormatString { parts } => {
-            for part in parts {
-                match part {
-                    MirFormatPart::Literal(_) => {}
-                    MirFormatPart::Value(value) | MirFormatPart::Formatted { value, .. } => {
-                        validate_loan_operand(function, value, context, state)?;
-                    }
-                }
+            for value in parts.iter().filter_map(MirFormatPart::operand) {
+                validate_loan_operand(function, value, context, state)?;
             }
             Ok(())
         }
@@ -7450,16 +7407,19 @@ fn validate_loan_rvalue(
                     receiver: Some(object),
                     ..
                 } => {
-                    for callee in context.member_function_candidates(
-                        function,
-                        object,
-                        None,
-                        op.member_name(),
-                    )? {
+                    for callee in
+                        context.member_function_candidates(function, object, None, op.name())?
+                    {
                         context.validate_owned_call_args(function, callee, args, state)?;
                     }
                 }
-                CallTarget::Runtime { receiver: None, .. } => {}
+                CallTarget::Runtime {
+                    op, receiver: None, ..
+                } => {
+                    if let Some(callee) = context.functions.get(op.name()) {
+                        context.validate_owned_call_args(function, callee, args, state)?;
+                    }
+                }
                 CallTarget::TraitMember {
                     object,
                     trait_name,
@@ -8529,11 +8489,7 @@ fn validate_loan_instruction(
             validate_loan_rvalue(function, value, context, state)?;
             let task_borrowed_closure = rvalue_has_task_borrowed_closure(value, state);
             let destinations = validated_loan_sources(loan, &state.loans)?;
-            if let Rvalue::Call {
-                callee: CallTarget::Name(name),
-                args,
-            } = value
-            {
+            if let Some((name, args)) = named_call(value) {
                 // The written value takes the loan's pointee type, which is
                 // the type of every place the loan may select.
                 let result_type = match destinations.first() {
@@ -8751,11 +8707,7 @@ fn validate_loan_instruction(
                     &absent_fields,
                 )?;
             }
-            if let Rvalue::Call {
-                callee: CallTarget::Name(name),
-                args,
-            } = value
-            {
+            if let Some((name, args)) = named_call(value) {
                 let result_type = context.place_type(function, target)?;
                 validate_named_builtin_call(function, name, args, result_type.as_ref(), context)?;
             }
@@ -9766,12 +9718,8 @@ fn rvalue_place_mentions<'a>(value: &'a Rvalue, mentions: &mut Vec<&'a str>) {
             }
         }
         Rvalue::FormatString { parts } => {
-            for part in parts {
-                if let MirFormatPart::Value(operand)
-                | MirFormatPart::Formatted { value: operand, .. } = part
-                {
-                    operand_place_mention(operand, mentions);
-                }
+            for operand in parts.iter().filter_map(MirFormatPart::operand) {
+                operand_place_mention(operand, mentions);
             }
         }
         Rvalue::Binary { left, right, .. } => {
@@ -24431,141 +24379,27 @@ impl<'a> Lowerer<'a> {
                 }
                 match &base_callee.kind {
                     ExprKind::Name(name) => {
-                        if name == "range" {
-                            return Some(Type::named("Range"));
-                        }
-                        if name == "cancelled" {
-                            return Some(Type::named("bool"));
-                        }
-                        if name == "yield_now" {
-                            return Some(Type::Unit);
-                        }
-                        if name == "sleep" {
-                            return Some(Type::Unit);
-                        }
-                        if name == "select" {
-                            let mut queue_payload = None;
-                            let mut task_result = None;
-                            for argument in args {
-                                match self.infer_expr_type(&argument.value) {
-                                    Some(Type::Named(source, mut source_args))
-                                        if source == "Queue" && source_args.len() == 1 =>
-                                    {
-                                        queue_payload = Some(source_args.remove(0));
-                                    }
-                                    Some(Type::Named(source, mut source_args))
-                                        if source == "Task" && source_args.len() == 1 =>
-                                    {
-                                        task_result = Some(source_args.remove(0));
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            return Some(Type::Named(
-                                "SelectOutcome".to_string(),
-                                vec![
-                                    queue_payload.unwrap_or(Type::Unit),
-                                    task_result.unwrap_or(Type::Unit),
-                                ],
-                            ));
-                        }
-                        if name == "wait_any" {
-                            return args.first().and_then(|argument| {
-                                match self.infer_expr_type(&argument.value) {
-                                    Some(Type::Named(container, container_args))
-                                        if container == "list" && container_args.len() == 1 =>
-                                    {
-                                        match &container_args[0] {
-                                            Type::Named(task, task_args)
-                                                if task == "Task" && task_args.len() == 1 =>
-                                            {
-                                                Some(Type::Named(
-                                                    "WaitAny".to_string(),
-                                                    vec![task_args[0].clone()],
-                                                ))
-                                            }
-                                            _ => None,
-                                        }
-                                    }
-                                    _ => None,
-                                }
-                            });
-                        }
-                        if name == "wait_all" {
-                            return args.first().and_then(|argument| {
-                                match self.infer_expr_type(&argument.value) {
-                                    Some(Type::Named(container, container_args))
-                                        if container == "list" && container_args.len() == 1 =>
-                                    {
-                                        match &container_args[0] {
-                                            Type::Named(task, task_args)
-                                                if task == "Task" && task_args.len() == 1 =>
-                                            {
-                                                Some(Type::Named(
-                                                    "WaitAll".to_string(),
-                                                    vec![task_args[0].clone()],
-                                                ))
-                                            }
-                                            _ => None,
-                                        }
-                                    }
-                                    _ => None,
-                                }
-                            });
-                        }
                         if name == "len" {
                             return Some(Type::named("int64"));
                         }
                         if name == "str" {
                             return Some(Type::named("str"));
                         }
-                        if matches!(name.as_str(), "abs" | "min" | "max" | "sqrt") {
-                            return args
-                                .first()
-                                .and_then(|argument| self.infer_expr_type(&argument.value));
+                        // A user function named like a built-in constructor,
+                        // such as `set`, shadows it.
+                        let user_function = self.resolve_function_info(name).is_some();
+                        if let Some(op) =
+                            crate::runtime_ops::builtin_function_for_name(name, |_| user_function)
+                        {
+                            let arg_types = args
+                                .iter()
+                                .map(|argument| self.infer_expr_type(&argument.value))
+                                .collect::<Vec<_>>();
+                            if let Some(ty) = op.result_type(None, &arg_types) {
+                                return Some(ty);
+                            }
                         }
-                        if name == "round" {
-                            let ty = args
-                                .first()
-                                .and_then(|argument| self.infer_expr_type(&argument.value))?;
-                            return Some(
-                                if matches!(
-                                    ty,
-                                    Type::Named(ref type_name, ref type_args)
-                                        if type_args.is_empty()
-                                            && matches!(type_name.as_str(), "float32" | "float64")
-                                ) {
-                                    Type::named("int64")
-                                } else {
-                                    ty
-                                },
-                            );
-                        }
-                        if name == "divmod" {
-                            let ty = args
-                                .first()
-                                .and_then(|argument| self.infer_expr_type(&argument.value))?;
-                            return Some(Type::Tuple(vec![ty.clone(), ty]));
-                        }
-                        if name == "parse_int32" {
-                            return Some(Type::Named(
-                                "Result".to_string(),
-                                vec![Type::named("int32"), Type::named("str")],
-                            ));
-                        }
-                        if name == "parse_int64" {
-                            return Some(Type::Named(
-                                "Result".to_string(),
-                                vec![Type::named("int64"), Type::named("str")],
-                            ));
-                        }
-                        if name == "parse_float64" {
-                            return Some(Type::Named(
-                                "Result".to_string(),
-                                vec![Type::named("float64"), Type::named("str")],
-                            ));
-                        }
-                        if name == "Queue" {
+                        if name == "Queue" && !user_function {
                             return explicit_type_args.map(|type_args| {
                                 Type::Named(
                                     "Queue".to_string(),
@@ -24576,10 +24410,7 @@ impl<'a> Lowerer<'a> {
                                 )
                             });
                         }
-                        if name == "TaskGroup" {
-                            return Some(Type::named("TaskGroup"));
-                        }
-                        if name == "list" {
+                        if name == "list" && !user_function {
                             return explicit_type_args.map(|type_args| {
                                 Type::Named(
                                     "list".to_string(),
@@ -24590,7 +24421,7 @@ impl<'a> Lowerer<'a> {
                                 )
                             });
                         }
-                        if name == "set" {
+                        if name == "set" && !user_function {
                             return explicit_type_args.map(|type_args| {
                                 Type::Named(
                                     "set".to_string(),
@@ -24601,7 +24432,7 @@ impl<'a> Lowerer<'a> {
                                 )
                             });
                         }
-                        if name == "dict" {
+                        if name == "dict" && !user_function {
                             return explicit_type_args.map(|type_args| {
                                 Type::Named(
                                     "dict".to_string(),
@@ -24981,7 +24812,7 @@ impl<'a> Lowerer<'a> {
                         if let Some(op) =
                             RuntimeOp::resolve_member(&receiver_type, field, |_| false)
                         {
-                            return op.result_type(&receiver_type);
+                            return op.result_type(Some(&receiver_type), &[]);
                         }
                         if let Some(runtime_ty) =
                             self.builtin_runtime_member_return_type(&receiver_type, field)
@@ -26607,7 +26438,7 @@ mod local_types;
 #[path = "mir_runtime_ops.rs"]
 mod runtime_ops;
 
-pub(crate) use runtime_ops::resolve_runtime_ops;
+pub(crate) use runtime_ops::{is_builtin_wrapper, resolve_runtime_ops};
 
 pub(crate) use spans::span_member_mutates_receiver;
 

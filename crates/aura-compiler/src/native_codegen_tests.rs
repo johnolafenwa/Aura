@@ -2119,11 +2119,13 @@ def main() -> int32:
             instruction,
             Instruction::Assign {
                 value: Rvalue::Call {
-                    callee: CallTarget::Name(name),
+                    callee: CallTarget::Runtime {
+                        op, receiver: None, ..
+                    },
                     args,
                 },
                 ..
-            } if name == "wait_all"
+            } if op.name() == "wait_all"
                 && matches!(
                     args.first().map(|arg| &arg.value),
                     Some(Operand::MovePlace(place)) if place == "string_tasks"
@@ -3949,13 +3951,8 @@ fn direct_backend_scalar_bool_range_and_coercion_paths_compile() {
                                     writeback_place: None,
                                 },
                                 MirArg {
-                                    name: None,
+                                    name: Some("stop".to_string()),
                                     value: Operand::Int(4),
-                                    writeback_place: None,
-                                },
-                                MirArg {
-                                    name: Some("start".to_string()),
-                                    value: Operand::Int(1),
                                     writeback_place: None,
                                 },
                             ],
@@ -8092,7 +8089,7 @@ def main() -> int32:
                 callee: CallTarget::Name("print".to_string()),
                 args: vec![],
             }),
-            "expected `print` to receive one argument",
+            "`Print.Value` in `main`: expected `print()` to receive `value`",
         ),
         (
             "channel extra arg",
@@ -8111,7 +8108,7 @@ def main() -> int32:
                     },
                 ],
             }),
-            "expected `Queue()` to take at most one capacity argument",
+            "expected `Queue()` to take at most 1 argument(s), found 2",
         ),
         (
             "channel bad named arg",
@@ -8123,7 +8120,7 @@ def main() -> int32:
                     writeback_place: None,
                 }],
             }),
-            "expected `Queue()` to receive only `capacity=`",
+            "`Queue()` has no parameter `size`",
         ),
         (
             "tasks extra arg",
@@ -8155,7 +8152,7 @@ def main() -> int32:
                 callee: CallTarget::Name("sleep".to_string()),
                 args: vec![],
             }),
-            "expected `sleep()` to receive one duration argument",
+            "expected `sleep()` to receive `duration`",
         ),
         (
             "wait_any duplicate tasks",
@@ -8174,7 +8171,7 @@ def main() -> int32:
                     },
                 ],
             }),
-            "expected `wait_any(tasks, timeout=...)`",
+            "`wait_any()` receives `tasks` twice",
         ),
         (
             "wait_all duplicate timeout",
@@ -8198,7 +8195,7 @@ def main() -> int32:
                     },
                 ],
             }),
-            "expected `wait_all(tasks, timeout=...)`",
+            "`wait_all()` receives `timeout` twice",
         ),
         (
             "wait_any unknown arg",
@@ -8210,7 +8207,7 @@ def main() -> int32:
                     writeback_place: None,
                 }],
             }),
-            "expected `wait_any(tasks, timeout=...)`",
+            "`wait_any()` has no parameter `jobs`",
         ),
         (
             "abs missing arg",
@@ -8218,7 +8215,7 @@ def main() -> int32:
                 callee: CallTarget::Name("abs".to_string()),
                 args: vec![],
             }),
-            "expected `abs()` to receive one argument",
+            "expected `abs()` to receive `value`",
         ),
         (
             "parse_int32 missing arg",
@@ -8226,7 +8223,7 @@ def main() -> int32:
                 callee: CallTarget::Name("parse_int32".to_string()),
                 args: vec![],
             }),
-            "expected `parse_int32`() to receive one string argument",
+            "expected `parse_int32()` to receive `text`",
         ),
         (
             "min missing arg",
@@ -8238,7 +8235,7 @@ def main() -> int32:
                     writeback_place: None,
                 }],
             }),
-            "expected `min`() to receive two arguments",
+            "expected `min()` to receive `right`",
         ),
         (
             "sqrt missing arg",
@@ -8246,7 +8243,7 @@ def main() -> int32:
                 callee: CallTarget::Name("sqrt".to_string()),
                 args: vec![],
             }),
-            "expected `sqrt()` to receive one argument",
+            "expected `sqrt()` to receive `value`",
         ),
         (
             "round missing arg",
@@ -8254,7 +8251,7 @@ def main() -> int32:
                 callee: CallTarget::Name("round".to_string()),
                 args: vec![],
             }),
-            "direct backend is missing a builtin argument",
+            "expected `round()` to receive `value`",
         ),
         (
             "divmod missing arg",
@@ -8266,7 +8263,7 @@ def main() -> int32:
                     writeback_place: None,
                 }],
             }),
-            "direct backend is missing a builtin argument",
+            "expected `divmod()` to receive `right`",
         ),
         (
             "list extra arg",
@@ -8278,7 +8275,7 @@ def main() -> int32:
                     writeback_place: None,
                 }],
             }),
-            "expected `list`() to take no arguments",
+            "expected `list()` to take no arguments",
         ),
         (
             "range too many args",
@@ -8302,7 +8299,7 @@ def main() -> int32:
                     },
                 ],
             }),
-            "expected `range()` to receive one or two arguments",
+            "expected `range()` to take at most 2 argument(s)",
         ),
         (
             "range too many mixed args",
@@ -8331,7 +8328,7 @@ def main() -> int32:
                     },
                 ],
             }),
-            "expected `range()` to receive one or two arguments",
+            "expected `range()` to take at most 2 argument(s)",
         ),
         (
             "range bad named arg",
@@ -8350,7 +8347,7 @@ def main() -> int32:
                     },
                 ],
             }),
-            "does not recognize `range()` argument `middle`",
+            "`range()` has no parameter `middle`",
         ),
         (
             "range missing stop",
@@ -8362,7 +8359,7 @@ def main() -> int32:
                     writeback_place: None,
                 }],
             }),
-            "expected `range()` to receive a `stop` argument",
+            "expected `range()` to receive `stop`",
         ),
     ];
 
@@ -8784,6 +8781,8 @@ def main() -> int32:
         name: "test_task".to_string(),
         ty: Type::Named("Task".to_string(), vec![Type::named("int32")]),
     });
+    // `define_function` skips the emitter entry that resolves named calls.
+    crate::mir::resolve_runtime_ops(&mut task_start_mir);
 
     let main = task_start_mir
         .functions
@@ -9132,11 +9131,13 @@ def main() -> int32:
                     instruction,
                     Instruction::Assign {
                         value: Rvalue::Call {
-                            callee: CallTarget::Name(name),
+                            callee: CallTarget::Runtime {
+                                op, receiver: None, ..
+                            },
                             ..
                         },
                         ..
-                    } if name == "str.to_bytes"
+                    } if op.name() == "str.to_bytes"
                 ))
             ),
         "public str.to_bytes syntax must canonicalize to the registered host-builtin call"
@@ -13774,5 +13775,101 @@ fn direct_objects_are_identical_across_repeated_builds() {
         differing.is_empty(),
         "{} of {compared} fixtures emit different objects across builds: {differing:?}",
         differing.len()
+    );
+}
+
+/// Emits `main` of `module` after `forge` changes its first `print` call,
+/// without the shared validator, so the emitter's own guards are reached.
+fn define_main_with_forged_print(
+    module: &crate::mir::MirModule,
+    forge: impl Fn(&mut CallTarget, &mut Vec<MirArg>),
+) -> Result<(), String> {
+    let mut main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .cloned()
+        .expect("main should lower");
+    let (callee, args) = main
+        .blocks
+        .iter_mut()
+        .flat_map(|block| &mut block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::Call { callee, args },
+                ..
+            } if matches!(
+                callee,
+                CallTarget::Runtime {
+                    op: crate::runtime_ops::RuntimeOp::Print(_),
+                    ..
+                }
+            ) =>
+            {
+                Some((callee, args))
+            }
+            _ => None,
+        })
+        .expect("main should print");
+    forge(callee, args);
+    let mut codegen = NativeCodegen::new(module, "/tmp/direct_forged_named_op.au", "")
+        .expect("codegen should initialize");
+    codegen.define_function(&main)
+}
+
+#[test]
+fn direct_named_runtime_ops_guard_receivers_targets_and_sources() {
+    use crate::runtime_ops::{FunctionOp, ResourceOp, RuntimeOp};
+    let module = lower_source_to_mir("def main():\n    value: int64 = 5\n    print(value)\n")
+        .expect("the fixture should lower");
+    let set_op = |forged: RuntimeOp| {
+        move |callee: &mut CallTarget, _: &mut Vec<MirArg>| {
+            let CallTarget::Runtime { op, .. } = callee else {
+                unreachable!()
+            };
+            *op = forged;
+        }
+    };
+
+    // A named op with a receiver.
+    let error = define_main_with_forged_print(&module, |callee, _| {
+        let CallTarget::Runtime { receiver, .. } = callee else {
+            unreachable!()
+        };
+        *receiver = Some(Operand::Place("value".to_string()));
+    })
+    .expect_err("a named op takes no receiver");
+    assert!(
+        error.contains("received named runtime operation `Print.Int` with a receiver"),
+        "{error}"
+    );
+
+    // A member op without its receiver.
+    let error = define_main_with_forged_print(
+        &module,
+        set_op(RuntimeOp::Resource(ResourceOp::FileReadAll)),
+    )
+    .expect_err("a member op needs a receiver");
+    assert!(
+        error.contains("received runtime operation `Resource.FileReadAll` without a receiver"),
+        "{error}"
+    );
+
+    // An `Array` constructor whose result is not an `Array`.
+    let error =
+        define_main_with_forged_print(&module, set_op(RuntimeOp::Function(FunctionOp::ArrayZeros)))
+            .expect_err("an Array constructor needs an Array result");
+    assert!(
+        error.contains("requires an Array result type for `Array.zeros`"),
+        "{error}"
+    );
+
+    // A `select` source that is not a Queue, Task, or Duration.
+    let error =
+        define_main_with_forged_print(&module, set_op(RuntimeOp::Function(FunctionOp::Select)))
+            .expect_err("select needs Queue, Task, or Duration sources");
+    assert!(
+        error.contains("expected a Queue, Task, or Duration `select` source, found `int64`"),
+        "{error}"
     );
 }

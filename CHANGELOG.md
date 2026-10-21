@@ -10,8 +10,9 @@ in this file.
 ### Changed
 
 - `aura mir` prints built-in calls on files, sockets, processes,
-  `random.Rng`, numbers, and `Duration` as resolved `Runtime` calls instead
-  of member calls.
+  `random.Rng`, numbers, and `Duration`, and named built-in calls such as
+  `print`, `range`, and `fs.exists`, as resolved `Runtime` calls instead of
+  member or named calls, with `int64` f-string parts marked `Int64`.
 
 ### Performance
 
@@ -25,6 +26,9 @@ in this file.
 - Building the same program twice produces the same native object. Native
   code used to release a function's values at return, and declare some
   callees, in hash map order, which changed from one build to the next.
+- A program can call its own function named `list`, `dict`, `set`, or
+  `Queue`. Lowering used to give such a call no result type, so both
+  backends rejected the program.
 
 ## VS Code extension 0.6.0 — 2026-10-21
 

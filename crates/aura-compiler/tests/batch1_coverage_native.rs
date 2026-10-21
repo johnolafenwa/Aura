@@ -44,11 +44,9 @@ fn member_call_mut<'a>(function: &'a mut Value, field: &str) -> &'a mut Value {
 fn named_call_mut<'a>(function: &'a mut Value, name: &str) -> &'a mut Value {
     instructions_mut(function)
         .find(|instruction| {
-            instruction["Assign"]["value"]["Call"]["callee"]["Name"]
-                .as_str()
-                .is_some_and(|candidate| {
-                    candidate == name || candidate.ends_with(&format!("::{name}"))
-                })
+            named_callee(instruction).is_some_and(|candidate| {
+                candidate == name || candidate.ends_with(&format!("::{name}"))
+            })
         })
         .map(|instruction| &mut instruction["Assign"]["value"]["Call"])
         .unwrap_or_else(|| panic!("named call `{name}` not found"))
@@ -80,9 +78,27 @@ fn path<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a Value> {
 /// resolved runtime operation.
 fn member_callee_kind(instruction: &Value) -> Option<&'static str> {
     let callee = path(instruction, &["Assign", "value", "Call", "callee"])?;
-    ["Member", "Runtime"]
-        .into_iter()
-        .find(|kind| callee.get(kind).is_some())
+    ["Member", "Runtime"].into_iter().find(|kind| {
+        callee
+            .get(kind)
+            .is_some_and(|call| *kind == "Member" || !call["receiver"].is_null())
+    })
+}
+
+/// The function a call names: a `Name` call, or a named built-in that
+/// lowering resolved to a runtime operation with no receiver.
+fn named_callee(instruction: &Value) -> Option<String> {
+    let callee = path(instruction, &["Assign", "value", "Call", "callee"])?;
+    if let Some(name) = callee.get("Name").and_then(Value::as_str) {
+        return Some(name.to_string());
+    }
+    let runtime = callee.get("Runtime")?;
+    if !runtime["receiver"].is_null() {
+        return None;
+    }
+    let op: RuntimeOp =
+        serde_json::from_value(runtime["op"].clone()).expect("a runtime callee names a runtime op");
+    Some(op.name().to_string())
 }
 
 /// The source member a call names; a resolved runtime operation names the
@@ -94,7 +110,7 @@ fn member_field(instruction: &Value) -> Option<String> {
         _ => {
             let op: RuntimeOp = serde_json::from_value(callee["Runtime"]["op"].clone())
                 .expect("a runtime callee names a runtime op");
-            Some(op.member_name().to_string())
+            Some(op.name().to_string())
         }
     }
 }
@@ -432,9 +448,7 @@ fn native_backend_rejects_malformed_select_sources() {
     let mut encoded = encode(SELECT);
     let main = function_mut(&mut encoded, "main");
     let target = instructions_mut(main)
-        .find(|instruction| {
-            instruction["Assign"]["value"]["Call"]["callee"]["Name"] == json!("select")
-        })
+        .find(|instruction| named_callee(instruction).as_deref() == Some("select"))
         .map(|instruction| {
             instruction["Assign"]["target"]
                 .as_str()
@@ -682,7 +696,7 @@ fn strip_temporary_local_types(function: &mut Value, kinds: &[&str]) {
                 && kinds.iter().any(|kind| {
                     value[kind].is_object()
                         || (*kind == "MemberCall" && value["Call"]["callee"]["Member"].is_object())
-                        || (*kind == "NamedCall" && value["Call"]["callee"]["Name"].is_string())
+                        || (*kind == "NamedCall" && named_callee(instruction).is_some())
                         || (*kind == "ValueCall" && value["Call"]["callee"]["Value"].is_object())
                 })
         })
@@ -753,7 +767,7 @@ fn native_backend_rejects_malformed_task_starts_and_waits() {
     let mut encoded = encode(TASKS);
     let call = named_call_mut(function_mut(&mut encoded, "main"), "wait_all");
     call["args"].as_array_mut().unwrap().remove(0);
-    assert_native_rejects(encoded, "expected `wait_all(tasks, timeout=...)`");
+    assert_native_rejects(encoded, "expected `wait_all()` to receive `tasks`");
 
     let mut encoded = encode(TASKS);
     let main = function_mut(&mut encoded, "main");

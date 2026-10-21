@@ -2410,6 +2410,48 @@ pub(crate) fn host_builtin_metadata(name: &str) -> Option<&'static HostBuiltinMe
     METADATA.get_or_init(build_host_builtin_metadata).get(name)
 }
 
+/// The declared signature of a builtin module function, such as
+/// `fs::exists` or `json::parse`, by its qualified name. Unlike
+/// `host_builtin_metadata`, this covers every builtin module, including the
+/// ones whose functions call their own runtime helpers.
+pub(crate) fn builtin_module_function_metadata(name: &str) -> Option<&'static HostBuiltinMetadata> {
+    static METADATA: OnceLock<BTreeMap<String, HostBuiltinMetadata>> = OnceLock::new();
+    METADATA
+        .get_or_init(|| {
+            builtin_module_registry()
+                .into_values()
+                .flat_map(|namespace| namespace.functions.into_values())
+                .map(|function| {
+                    let metadata = HostBuiltinMetadata::from_function_info(&function);
+                    (metadata.qualified_name.clone(), metadata)
+                })
+                .collect()
+        })
+        .get(name)
+}
+
+/// Whether `name` is a runtime-provided root module, without building its
+/// namespace.
+pub(crate) fn is_builtin_root_module(name: &str) -> bool {
+    matches!(
+        name,
+        "io" | "fs"
+            | "net"
+            | "process"
+            | "random"
+            | "control"
+            | "sys"
+            | "path"
+            | "math"
+            | "bytes"
+            | "json"
+            | "toml"
+            | "log"
+            | "metrics"
+            | "trace"
+    )
+}
+
 pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespace> {
     match path {
         [name] => builtin_root_namespace(name),

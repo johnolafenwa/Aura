@@ -6250,11 +6250,11 @@ def main() -> int32:
                 instruction,
                 Instruction::Assign {
                     value: Rvalue::Call {
-                        callee: CallTarget::Name(name),
+                        callee,
                         ..
                     },
                     ..
-                } if name == "Duration.seconds"
+                } if call_name(callee) == "Duration.seconds"
             ))
         ));
     assert!(function
@@ -6309,11 +6309,11 @@ def render(value: json.Value) -> str:
                 instruction,
                 Instruction::Assign {
                     value: Rvalue::Call {
-                        callee: CallTarget::Name(name),
+                        callee,
                         args,
                     },
                     ..
-                } if name == "json::dumps" && args.len() == 2
+                } if call_name(callee) == "json::dumps" && args.len() == 2
             )
         })
     }));
@@ -6422,13 +6422,9 @@ def extract(value: own json.Value) -> str | None:
         .flat_map(|block| &block.instructions)
         .find_map(|instruction| match instruction {
             Instruction::Assign {
-                value:
-                    Rvalue::Call {
-                        callee: CallTarget::Name(name),
-                        args,
-                    },
+                value: Rvalue::Call { callee, args },
                 ..
-            } if name == "json::into_string" => args.first(),
+            } if call_name(callee) == "json::into_string" => args.first(),
             _ => None,
         })
         .expect("json.into_string call should be present");
@@ -7274,14 +7270,10 @@ def main():
         .flat_map(|block| &block.instructions)
         .filter_map(|instruction| match instruction {
             Instruction::Assign {
-                value:
-                    Rvalue::Call {
-                        callee: CallTarget::Name(name),
-                        args,
-                    },
+                value: Rvalue::Call { callee, args },
                 ..
-            } if matches!(name.as_str(), "wait_any" | "wait_all") => {
-                Some((name.as_str(), &args[0].value))
+            } if matches!(call_name(callee), "wait_any" | "wait_all") => {
+                Some((call_name(callee), &args[0].value))
             }
             _ => None,
         })
@@ -7321,13 +7313,9 @@ def main():
         .flat_map(|block| &block.instructions)
         .find_map(|instruction| match instruction {
             Instruction::Assign {
-                value:
-                    Rvalue::Call {
-                        callee: CallTarget::Name(name),
-                        args,
-                    },
+                value: Rvalue::Call { callee, args },
                 ..
-            } if name == "select" => Some(args),
+            } if call_name(callee) == "select" => Some(args),
             _ => None,
         })
         .expect("select should lower as one variadic MIR call");
@@ -7596,11 +7584,11 @@ def main() -> int32:
                 instruction,
                 Instruction::Assign {
                     value: Rvalue::Call {
-                        callee: CallTarget::Name(name),
+                        callee,
                         ..
                     },
                     ..
-                } if name == "random::Rng"
+                } if call_name(callee) == "random::Rng"
             )
         })
     }));
@@ -8166,7 +8154,7 @@ def generic_helper[T](value: own T) -> T:
 /// type, or else the remaining built-in member table.
 fn member_result_type(lowerer: &Lowerer<'_>, receiver: &Type, field: &str) -> Option<Type> {
     match crate::runtime_ops::RuntimeOp::resolve_member(receiver, field, |_| false) {
-        Some(op) => op.result_type(receiver),
+        Some(op) => op.result_type(Some(receiver), &[]),
         None => lowerer.builtin_runtime_member_return_type(receiver, field),
     }
 }
@@ -11556,11 +11544,11 @@ def main() -> int32:
         instruction,
         Instruction::Assign {
             value: Rvalue::Call {
-                callee: CallTarget::Name(name),
+                callee,
                 args,
             },
             ..
-        } if name == "list.with_capacity" && args.len() == 1
+        } if call_name(callee) == "list.with_capacity" && args.len() == 1
     )));
     for field in ["append", "reserve", "index", "count"] {
         assert_eq!(member_call(field).0, Some("values"), "{field}");
@@ -11742,10 +11730,10 @@ def main() -> int32:
         Instruction::Assign {
             target,
             value: Rvalue::Call {
-                callee: CallTarget::Name(name),
+                callee,
                 args,
             },
-        } if name == "divmod"
+        } if call_name(callee) == "divmod"
             && main.local_types.iter().any(|local| {
                 local.name == *target
                     && local.ty
@@ -11758,10 +11746,10 @@ def main() -> int32:
         Instruction::Assign {
             target,
             value: Rvalue::Call {
-                callee: CallTarget::Name(name),
+                callee,
                 args,
             },
-        } if name == "round"
+        } if call_name(callee) == "round"
             && main.local_types.iter().any(|local| {
                 local.name == *target && local.ty == Type::named("int64")
             })
@@ -11960,15 +11948,13 @@ def main():
         "sleep",
     ] {
         assert!(
-            calls
-                .iter()
-                .any(|callee| matches!(callee, CallTarget::Name(name) if name == internal)),
+            calls.iter().any(|callee| call_name(callee) == internal),
             "retry MIR should contain `{internal}`"
         );
     }
     assert!(!calls
         .iter()
-        .any(|callee| matches!(callee, CallTarget::Name(name) if name == "control::retry")));
+        .any(|callee| call_name(callee) == "control::retry"));
 }
 
 #[test]
@@ -12027,9 +12013,7 @@ def main() -> int32:
         "sleep",
     ] {
         assert!(
-            calls
-                .iter()
-                .any(|callee| matches!(callee, CallTarget::Name(name) if name == adapter)),
+            calls.iter().any(|callee| call_name(callee) == adapter),
             "the named retry target should contain `{adapter}`"
         );
     }
@@ -13966,7 +13950,7 @@ def main():
     )
     .expect("typed source should lower");
 
-    let is_print = |value: &Rvalue| matches!(value, Rvalue::Call { callee: CallTarget::Name(name), .. } if name == "print");
+    let is_print = |value: &Rvalue| matches!(value, Rvalue::Call { callee, .. } if call_name(callee) == "print");
     for ty in assigned_local_types(&module, "main", is_print) {
         assert_eq!(ty, Type::Unit, "a print result is unit");
     }
@@ -14045,12 +14029,8 @@ def main():
                     .find_map(|instruction| match instruction {
                         Instruction::Assign {
                             target,
-                            value:
-                                Rvalue::Call {
-                                    callee: CallTarget::Name(name),
-                                    ..
-                                },
-                        } if name == "print" => Some(target.clone()),
+                            value: Rvalue::Call { callee, .. },
+                        } if call_name(callee) == "print" => Some(target.clone()),
                         _ => None,
                     })
             })
@@ -14113,14 +14093,44 @@ fn function_callees<'a>(module: &'a MirModule, name: &str) -> Vec<&'a CallTarget
         .collect()
 }
 
+/// The member runtime ops function `name` of `module` calls.
 fn runtime_ops_in(module: &MirModule, name: &str) -> Vec<crate::runtime_ops::RuntimeOp> {
     function_callees(module, name)
         .into_iter()
         .filter_map(|callee| match callee {
-            CallTarget::Runtime { op, .. } => Some(*op),
+            CallTarget::Runtime {
+                op,
+                receiver: Some(_),
+                ..
+            } => Some(*op),
             _ => None,
         })
         .collect()
+}
+
+/// The named built-in ops function `name` of `module` calls.
+fn named_ops_in(module: &MirModule, name: &str) -> Vec<crate::runtime_ops::RuntimeOp> {
+    function_callees(module, name)
+        .into_iter()
+        .filter_map(|callee| match callee {
+            CallTarget::Runtime {
+                op, receiver: None, ..
+            } => Some(*op),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The function a call names, whether it stays a `Name` call or
+/// resolved to a named built-in op.
+fn call_name(callee: &CallTarget) -> &str {
+    match callee {
+        CallTarget::Name(name) => name,
+        CallTarget::Runtime {
+            op, receiver: None, ..
+        } => op.name(),
+        _ => "",
+    }
 }
 
 fn member_fields_in<'a>(module: &'a MirModule, name: &str) -> Vec<&'a str> {
@@ -14295,7 +14305,16 @@ fn first_runtime_call(module: &mut MirModule) -> (&mut CallTarget, &mut Vec<MirA
             Instruction::Assign {
                 value: Rvalue::Call { callee, args },
                 ..
-            } if matches!(callee, CallTarget::Runtime { .. }) => Some((callee, args)),
+            } if matches!(
+                callee,
+                CallTarget::Runtime {
+                    receiver: Some(_),
+                    ..
+                }
+            ) =>
+            {
+                Some((callee, args))
+            }
             _ => None,
         })
         .expect("the fixture should lower a runtime op")
@@ -14367,4 +14386,378 @@ fn step8d_validator_rejects_forged_runtime_ops() {
     let (_, args) = first_runtime_call(&mut twice);
     args[1].name = Some("lo".to_string());
     assert_public_boundaries_reject(&twice, "`next_int()` receives `lo` twice");
+}
+
+#[test]
+fn step8d_named_calls_print_and_fstrings_lower_to_runtime_ops() {
+    use crate::runtime_ops::{FunctionOp, PrintKind, RuntimeOp};
+    let module = crate::lower_source_to_mir(
+        r#"
+import fs
+import json
+
+def main():
+    value: int64 = 5
+    flag = true
+    ratio: float64 = 1.5
+    print(value)
+    print(flag)
+    print(ratio)
+    print("text")
+    print(abs(value))
+    print(fs.exists("/tmp/aura-step8d2-missing"))
+    print(json.is_valid("{}"))
+    for index in range(3):
+        print(f"item {index} of {ratio}")
+    print(Duration.ms(5))
+"#,
+    )
+    .expect("named built-in calls should lower");
+
+    let ops = named_ops_in(&module, "main");
+    for expected in [
+        RuntimeOp::Print(PrintKind::Int),
+        RuntimeOp::Print(PrintKind::Bool),
+        RuntimeOp::Print(PrintKind::Float64),
+        RuntimeOp::Print(PrintKind::Value),
+        RuntimeOp::Function(FunctionOp::Abs),
+        RuntimeOp::Function(FunctionOp::FsExists),
+        RuntimeOp::Function(FunctionOp::Range),
+        RuntimeOp::Function(FunctionOp::DurationMilliseconds),
+    ] {
+        assert!(ops.contains(&expected), "{expected} in {ops:?}");
+    }
+    assert!(ops
+        .iter()
+        .any(|op| matches!(op, RuntimeOp::Host(builtin) if builtin.name() == "json::is_valid")));
+    assert!(
+        !function_callees(&module, "main")
+            .iter()
+            .any(|callee| matches!(callee, CallTarget::Name(_))),
+        "every named call in `main` is a built-in"
+    );
+
+    // The `int64` loop index appends as a scalar word; the float does not.
+    let parts = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .into_iter()
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::FormatString { parts },
+                ..
+            } => Some(parts),
+            _ => None,
+        })
+        .expect("the f-string should lower");
+    assert_eq!(
+        parts
+            .iter()
+            .filter(|part| matches!(part, MirFormatPart::Int64(_)))
+            .count(),
+        1,
+        "{parts:?}"
+    );
+    assert_eq!(
+        parts
+            .iter()
+            .filter(|part| matches!(part, MirFormatPart::Value(_)))
+            .count(),
+        1,
+        "{parts:?}"
+    );
+
+    validate_loan_flow(&module).expect("resolved named calls should validate");
+    let mut again = module.clone();
+    crate::mir::resolve_runtime_ops(&mut again);
+    assert_eq!(
+        serde_json::to_value(&again).unwrap(),
+        serde_json::to_value(&module).unwrap(),
+        "the pass is idempotent"
+    );
+}
+
+#[test]
+fn step8d_wait_timeouts_and_user_functions_pick_their_targets() {
+    use crate::runtime_ops::{FunctionOp, RuntimeOp};
+    let module = crate::lower_source_to_mir(
+        r#"
+def set(value: int64) -> int64:
+    return value + 1
+
+def Queue(value: int64) -> int64:
+    return value + 2
+
+def worker(value: int32) -> int32:
+    return value
+
+def main():
+    print(set(1))
+    print(Queue(1))
+    with TaskGroup() as group:
+        mut tasks = list[Task[int32]]()
+        tasks.append(group.start(worker, 3))
+        match wait_any(tasks, timeout=20ms):
+            case WaitAny.Ready(index, value):
+                print(value)
+            case _:
+                print("other")
+        match wait_all(tasks):
+            case WaitAll.Ready(values):
+                print(values)
+            case _:
+                print("other")
+"#,
+    )
+    .expect("wait helpers and shadowing user functions should lower");
+
+    let ops = named_ops_in(&module, "main");
+    for expected in [
+        RuntimeOp::Function(FunctionOp::WaitAnyTimeout),
+        RuntimeOp::Function(FunctionOp::WaitAll),
+        RuntimeOp::Function(FunctionOp::TaskGroupNew),
+    ] {
+        assert!(ops.contains(&expected), "{expected} in {ops:?}");
+    }
+    assert!(!ops.contains(&RuntimeOp::Function(FunctionOp::SetEmpty)));
+    assert!(!ops.contains(&RuntimeOp::Function(FunctionOp::QueueNew)));
+    let callees = function_callees(&module, "main");
+    for user in ["set", "Queue"] {
+        assert!(
+            callees
+                .iter()
+                .any(|callee| matches!(callee, CallTarget::Name(name) if name == user)),
+            "a user `{user}` keeps its `Name` call"
+        );
+    }
+    validate_loan_flow(&module).expect("the module should validate");
+}
+
+const STEP8D2_FORGERY_SOURCE: &str = r#"
+def set(value: int64) -> int64:
+    return value + 1
+
+def main():
+    value: int64 = 5
+    print(value)
+    print(f"n={value}")
+    print(set(value))
+"#;
+
+/// The first call in `main` whose callee `matches`.
+fn first_call_in_main(
+    module: &mut MirModule,
+    matches: impl Fn(&CallTarget) -> bool,
+) -> (&mut CallTarget, &mut Vec<MirArg>) {
+    module
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "main")
+        .into_iter()
+        .flat_map(|function| &mut function.blocks)
+        .flat_map(|block| &mut block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::Call { callee, args },
+                ..
+            } if matches(callee) => Some((callee, args)),
+            _ => None,
+        })
+        .expect("the fixture should lower the call")
+}
+
+fn is_print(callee: &CallTarget) -> bool {
+    matches!(
+        callee,
+        CallTarget::Runtime {
+            op: crate::runtime_ops::RuntimeOp::Print(_),
+            ..
+        }
+    )
+}
+
+fn forge_print_op(
+    module: &mut MirModule,
+    forged: crate::runtime_ops::RuntimeOp,
+) -> &mut Vec<MirArg> {
+    let (callee, args) = first_call_in_main(module, is_print);
+    let CallTarget::Runtime { op, .. } = callee else {
+        unreachable!()
+    };
+    *op = forged;
+    args
+}
+
+#[test]
+fn step8d_validator_rejects_forged_named_ops() {
+    use crate::runtime_ops::{FunctionOp, PrintKind, RuntimeOp};
+    let baseline = crate::lower_source_to_mir(STEP8D2_FORGERY_SOURCE)
+        .expect("the forgery fixture should lower");
+    validate_loan_flow(&baseline).expect("the source-produced ops should validate");
+
+    // A `print` kind that does not match its argument's type.
+    let mut wrong_kind = baseline.clone();
+    forge_print_op(&mut wrong_kind, RuntimeOp::Print(PrintKind::Float64));
+    assert_public_boundaries_reject(
+        &wrong_kind,
+        "invalid MIR runtime operation `Print.Float64` in `main` does not match the types of its arguments",
+    );
+
+    // A specialization the arguments do not ask for.
+    let mut timeout = baseline.clone();
+    forge_print_op(
+        &mut timeout,
+        RuntimeOp::Function(FunctionOp::WaitAnyTimeout),
+    );
+    assert_public_boundaries_reject(
+        &timeout,
+        "`Function.WaitAnyTimeout` in `main` does not match the types of its arguments",
+    );
+
+    // An op where a user function of that name shadows the built-in.
+    let mut shadowed = baseline.clone();
+    let (callee, _) = first_call_in_main(
+        &mut shadowed,
+        |callee| matches!(callee, CallTarget::Name(name) if name == "set"),
+    );
+    *callee = CallTarget::Runtime {
+        op: RuntimeOp::Function(FunctionOp::SetEmpty),
+        receiver: None,
+        receiver_place: None,
+    };
+    assert_public_boundaries_reject(
+        &shadowed,
+        "invalid MIR runtime operation `Function.SetEmpty` in `main` does not name the built-in `set`",
+    );
+
+    // A named op with a receiver.
+    let mut receiver = baseline.clone();
+    let (callee, _) = first_call_in_main(&mut receiver, is_print);
+    let CallTarget::Runtime { receiver: slot, .. } = callee else {
+        unreachable!()
+    };
+    *slot = Some(Operand::Place("value".to_string()));
+    assert_public_boundaries_reject(&receiver, "`Print.Int` in `main` takes no receiver");
+
+    // `select` with a named source.
+    let mut select = baseline.clone();
+    let args = forge_print_op(&mut select, RuntimeOp::Function(FunctionOp::Select));
+    args[0].name = Some("source".to_string());
+    assert_public_boundaries_reject(
+        &select,
+        "expected `select(source, ...)` to receive one or more positional sources",
+    );
+    let mut empty_select = baseline.clone();
+    forge_print_op(&mut empty_select, RuntimeOp::Function(FunctionOp::Select)).clear();
+    assert_public_boundaries_reject(
+        &empty_select,
+        "expected `select(source, ...)` to receive one or more positional sources",
+    );
+
+    // `range` with too many arguments, and with only a `start`.
+    let mut range = baseline.clone();
+    let args = forge_print_op(&mut range, RuntimeOp::Function(FunctionOp::Range));
+    let extra = args[0].clone();
+    args.extend([extra.clone(), extra]);
+    assert_public_boundaries_reject(
+        &range,
+        "invalid MIR runtime operation `Function.Range` in `main`: expected `range()` to take at most 2 argument(s), found 3",
+    );
+    let mut start_only = baseline.clone();
+    let args = forge_print_op(&mut start_only, RuntimeOp::Function(FunctionOp::Range));
+    args[0].name = Some("start".to_string());
+    assert_public_boundaries_reject(&start_only, "expected `range()` to receive `stop`");
+
+    // An op that takes no arguments.
+    let mut cancelled = baseline.clone();
+    forge_print_op(&mut cancelled, RuntimeOp::Function(FunctionOp::Cancelled));
+    assert_public_boundaries_reject(&cancelled, "expected `cancelled()` to take no arguments");
+
+    // An `int64` f-string part whose operand is not an `int64`.
+    let mut format = baseline.clone();
+    let parts = format
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "main")
+        .into_iter()
+        .flat_map(|function| &mut function.blocks)
+        .flat_map(|block| &mut block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::FormatString { parts },
+                ..
+            } => Some(parts),
+            _ => None,
+        })
+        .expect("the f-string should lower");
+    let part = parts
+        .iter_mut()
+        .find(|part| matches!(part, MirFormatPart::Int64(_)))
+        .expect("the `int64` part should lower as one");
+    *part = MirFormatPart::Int64(Operand::String("five".to_string()));
+    assert_public_boundaries_reject(&format, "appends an operand that is not `int64` as one");
+
+    // A host builtin that a dedicated helper replaced does not deserialize.
+    let serialized = serde_json::to_string(&baseline)
+        .unwrap()
+        .replace(r#"{"Print":"Int"}"#, r#"{"Host":"sys::monotonic_time_ms"}"#);
+    let error = crate::run_serialized_mir(serialized.as_bytes(), "<forged>", "")
+        .expect_err("a replaced host builtin must not deserialize");
+    assert!(
+        error
+            .message
+            .contains("unknown host builtin `sys::monotonic_time_ms`"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn step8d_hand_built_named_calls_run_like_resolved_ones() {
+    let resolved =
+        crate::lower_source_to_mir(STEP8D2_FORGERY_SOURCE).expect("the fixture should lower");
+    // Spell every resolved named op back as the `Name` call it came from.
+    let mut named = resolved.clone();
+    for function in named.functions.iter_mut() {
+        for instruction in function
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.instructions)
+        {
+            if let Instruction::Assign {
+                value: Rvalue::Call { callee, .. },
+                ..
+            } = instruction
+            {
+                if let CallTarget::Runtime {
+                    op, receiver: None, ..
+                } = callee
+                {
+                    *callee = CallTarget::Name(op.name().to_string());
+                }
+            }
+        }
+    }
+    assert!(named_ops_in(&named, "main").is_empty());
+    let expected = crate::run_mir(&resolved)
+        .expect("the resolved module runs")
+        .stdout;
+    assert_eq!(expected, "5\nn=5\n6\n");
+    assert_eq!(
+        crate::run_mir(&named)
+            .expect("the named spelling runs")
+            .stdout,
+        expected
+    );
+    let serialized = serde_json::to_vec(&named).unwrap();
+    assert_eq!(
+        crate::run_serialized_mir(&serialized, "<named>", "")
+            .expect("the serialized named spelling runs")
+            .stdout,
+        expected
+    );
+    crate::native_codegen::emit_host_object(&named).expect("the direct backend resolves it too");
 }

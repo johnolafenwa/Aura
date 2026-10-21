@@ -115,17 +115,18 @@ impl BuiltinCallShape {
         }
     }
 
+    /// The shape's parameters, in declaration order.
+    fn bindings(self) -> impl Iterator<Item = CallableParam<'static>> {
+        self.params.iter().map(|param| param.binding)
+    }
+
     fn bind_args<'arg>(
         self,
         callee_name: &str,
         args: &'arg [Argument],
         span: Span,
     ) -> Result<Vec<Option<&'arg Argument>>> {
-        let bindings = self
-            .params
-            .iter()
-            .map(|param| param.binding)
-            .collect::<Vec<_>>();
+        let bindings = self.bindings().collect::<Vec<_>>();
         let Some(_) = self.variadic_passing else {
             return bind_call_arguments(callee_name, &bindings, args, span, self.convention);
         };
@@ -652,6 +653,12 @@ impl BuiltinFunction {
         }
     }
 
+    /// The function's parameters, in declaration order. `range` lists
+    /// both of its two-argument parameters.
+    pub fn params(self) -> impl Iterator<Item = CallableParam<'static>> {
+        self.call_shape().bindings()
+    }
+
     pub const fn argument_passing(self, index: usize) -> Option<ReceiverKind> {
         let shape = self.call_shape();
         if index < shape.params.len() {
@@ -831,6 +838,11 @@ impl BuiltinAssociatedFunction {
         )
     }
 
+    /// The function's parameters, in declaration order.
+    pub fn params(self) -> impl Iterator<Item = CallableParam<'static>> {
+        self.call_shape().bindings()
+    }
+
     pub const fn argument_passing(self, index: usize) -> Option<ReceiverKind> {
         let shape = self.call_shape();
         if index < shape.params.len() {
@@ -916,6 +928,11 @@ impl BuiltinClassConstructor {
     pub fn bind_args(self, args: &[Argument], span: Span) -> Result<Vec<Option<&Argument>>> {
         self.call_shape()
             .bind_args(&format!("`{}`", self.qualified_name()), args, span)
+    }
+
+    /// The constructor's parameters, in declaration order.
+    pub fn params(self) -> impl Iterator<Item = CallableParam<'static>> {
+        self.call_shape().bindings()
     }
 
     pub const fn argument_passing(self, index: usize) -> Option<ReceiverKind> {
@@ -2626,7 +2643,7 @@ impl BuiltinMember {
 
     /// The member's parameters after the receiver, in declaration order.
     pub fn params(self) -> impl Iterator<Item = CallableParam<'static>> {
-        self.call_shape().params.iter().map(|param| param.binding)
+        self.call_shape().bindings()
     }
 
     pub const fn argument_passing(self, index: usize) -> Option<ReceiverKind> {

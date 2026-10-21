@@ -8,11 +8,12 @@
 //! no backend infers the type of a temporary.
 
 use super::{
-    type_contains_unknown, CallTarget, Instruction, Lowerer, MirFunction, MirParam, Operand, Rvalue,
+    type_contains_unknown, CallTarget, Instruction, Lowerer, MirArg, MirFunction, MirParam,
+    Operand, Rvalue,
 };
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::call::BuiltinMember;
-use crate::runtime_ops::RuntimeOp;
+use crate::runtime_ops::{builtin_function_for_name, RuntimeOp};
 use crate::sema::{substitute_type, substitutions_from_decl_type_args, Type};
 use std::collections::{BTreeSet, HashMap};
 
@@ -92,7 +93,7 @@ impl Lowerer<'_> {
                     _ => self.completed_operand_type(left, params),
                 }
             }
-            Rvalue::Call { callee, .. } => self.completed_call_type(callee, params),
+            Rvalue::Call { callee, args } => self.completed_call_type(callee, args, params),
             Rvalue::VariantPayload {
                 scrutinee,
                 variant_name,
@@ -137,12 +138,19 @@ impl Lowerer<'_> {
     fn completed_call_type(
         &self,
         callee: &CallTarget,
+        args: &[MirArg],
         params: &HashMap<&str, &Type>,
     ) -> Option<Type> {
+        let arg_types = || {
+            args.iter()
+                .map(|argument| self.completed_operand_type(&argument.value, params))
+                .collect::<Vec<_>>()
+        };
         match callee {
-            CallTarget::Name(name) if name == "print" => Some(Type::Unit),
-            CallTarget::Name(name) => crate::builtin_modules::host_builtin_metadata(name)
-                .map(|metadata| metadata.return_type.clone()),
+            CallTarget::Name(name) => {
+                let user_function = self.resolve_function_info(name).is_some();
+                builtin_function_for_name(name, |_| user_function)?.result_type(None, &arg_types())
+            }
             CallTarget::Member { object, field, .. }
             | CallTarget::TraitMember { object, field, .. } => {
                 let receiver = self.completed_operand_type(object, params)?;
@@ -150,10 +158,10 @@ impl Lowerer<'_> {
             }
             CallTarget::Runtime { op, receiver, .. } => {
                 let receiver = match receiver {
-                    Some(object) => self.completed_operand_type(object, params)?,
-                    None => Type::Unit,
+                    Some(object) => Some(self.completed_operand_type(object, params)?),
+                    None => None,
                 };
-                op.result_type(&receiver)
+                op.result_type(receiver.as_ref(), &arg_types())
             }
             CallTarget::Extern(call) => Some(call.return_type.clone()),
             // A call through a callable value has the contract's pointee
@@ -202,7 +210,7 @@ impl Lowerer<'_> {
                 }
             }
             if let Some(op) = RuntimeOp::resolve_member(receiver, field, |_| false) {
-                return op.result_type(receiver);
+                return op.result_type(Some(receiver), &[]);
             }
             if let Some(ty) = runtime_member_result_type(name, args, field) {
                 return Some(ty);

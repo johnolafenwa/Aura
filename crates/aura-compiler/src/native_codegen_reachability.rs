@@ -12,7 +12,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::mir::{MirFunction, MirModule};
+use crate::mir::{CallTarget, Instruction, MirFunction, MirModule, Rvalue};
 
 pub(super) fn prune_unreachable_functions(module: &MirModule) -> MirModule {
     let wrappers = module
@@ -66,6 +66,7 @@ pub(super) fn prune_unreachable_functions(module: &MirModule) -> MirModule {
             return module.clone();
         };
         collect_strings(&value, &mut names);
+        collect_named_op_callees(function, &mut names);
         for name in names.drain(..) {
             if let Some(wrapper) = wrappers.get(name.as_str()) {
                 if kept.insert(name) {
@@ -85,12 +86,33 @@ pub(super) fn prune_unreachable_functions(module: &MirModule) -> MirModule {
 fn is_builtin_wrapper(function: &MirFunction) -> bool {
     // A `Display` wrapper is a root: the renderer reaches it by its name's
     // prefix, not through a call.
-    function.source_path.is_none()
-        && crate::mir::display_wrapper_type_name(&function.name).is_none()
-        && crate::builtin_modules::builtin_module_namespace(std::slice::from_ref(
-            &function.module_name,
-        ))
-        .is_some()
+    crate::mir::display_wrapper_type_name(&function.name).is_none()
+        && crate::mir::is_builtin_wrapper(function)
+}
+
+/// The callee name of each named runtime op in `function`, such as
+/// `fs::exists`. A resolved op serializes as its variant, not as the name
+/// its wrapper has.
+fn collect_named_op_callees(function: &MirFunction, out: &mut Vec<String>) {
+    let values = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. } => Some(value),
+            _ => None,
+        });
+    for value in values {
+        if let Rvalue::Call {
+            callee: CallTarget::Runtime {
+                op, receiver: None, ..
+            },
+            ..
+        } = value
+        {
+            out.push(op.name().to_string());
+        }
+    }
 }
 
 fn collect_strings(value: &serde_json::Value, out: &mut Vec<String>) {
