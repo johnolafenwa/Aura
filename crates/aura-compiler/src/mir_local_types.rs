@@ -175,10 +175,12 @@ impl Lowerer<'_> {
             if field == "clone" {
                 return Some(receiver.clone());
             }
-            return union
-                .members
-                .iter()
-                .find_map(|member| self.completed_member_call_type(member, field));
+            for member in &union.members {
+                if let Some(ty) = self.completed_member_call_type(member, field) {
+                    return Some(ty);
+                }
+            }
+            return None;
         }
         if let Type::Named(name, args) = receiver {
             if field == "sqrt" && args.is_empty() && matches!(name.as_str(), "float32" | "float64")
@@ -202,10 +204,11 @@ impl Lowerer<'_> {
         if let Some(ty) = self.builtin_runtime_member_return_type(receiver, field) {
             return Some(ty);
         }
-        self.trait_method_for_receiver(receiver, field)
-            .map(|(method, substitutions)| {
-                substitute_type(&method.signature.return_type, &substitutions)
-            })
+        let (method, substitutions) = self.trait_method_for_receiver(receiver, field)?;
+        Some(substitute_type(
+            &method.signature.return_type,
+            &substitutions,
+        ))
     }
 
     fn completed_operand_type(
@@ -375,3 +378,7 @@ pub(super) fn builtin_member_argument_type(
         _ => return None,
     })
 }
+
+#[cfg(test)]
+#[path = "mir_local_types_tests.rs"]
+mod tests;
