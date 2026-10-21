@@ -299,7 +299,7 @@ M2 Pro host feed later performance decisions.
 
 | Workload | Aura compared with its reference |
 | --- | --- |
-| fib | 29.664884 times the exact Rust comparison on the foundations host; about 8 times with static frame descriptors on Linux |
+| fib | 29.664884 times the exact Rust comparison on the foundations host; in 0.6.0, about 5.8 times on Linux and 14.5 times on macOS arm64 |
 | Task creation | 29.068501 times the exact Rust comparison |
 | TCP | near parity |
 | Retry | favors Aura |
@@ -315,6 +315,26 @@ M2 Pro host feed later performance decisions.
 These gaps are specific to these workloads. Scheduling, runtime
 implementation, allocation, and optimizer-barrier choices affect how to read
 them.
+
+### Phase 1 Release Check
+
+Aura 0.6.0 ran against the Rust references on two hosts: the shared Linux
+x86-64 container and a macOS arm64 Mac14,9. Each figure is the median of 11
+alternating runs. `fib(30)` times GO to DONE, and the other programs time
+the whole process. The Rust references build with Rust 1.95.0.
+
+| Program | Linux, Aura / Rust | macOS, Aura | macOS, Rust | macOS, Aura / Rust | Phase 1 target |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `fib(30)` | 5.8x | 42.65 ms | 2.95 ms | 14.5x | 8x |
+| `int_list_sum` | 3.7x | 8.09 ms | 3.98 ms | 2.0x | 5x |
+| `string_list_scan` | 5.3x | 13.05 ms | 3.65 ms | 3.6x | 10x |
+| `dict_build_get` | 4.4x | 84.08 ms | 15.26 ms | 5.5x | 8x |
+| `set_insert_contains` | 3.4x | 13.98 ms | 5.07 ms | 2.8x | 5x |
+| `record_field_reads` | 11.0x | 67.02 ms | 5.01 ms | 13.4x | 8x |
+
+Four programs meet their phase 1 targets on both hosts.
+`record_field_reads` misses on both. `fib(30)` meets its target on Linux and
+misses on macOS arm64. Phase 2 of Batch 7 owns both gaps.
 
 ### Per-Call Attribution
 
