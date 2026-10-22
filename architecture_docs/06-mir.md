@@ -197,8 +197,11 @@ An explicit module may hold:
   local empty.
 - `releases_on_error` on `Rvalue::Try`, the root locals the `Err` edge
   releases after the pending cleanups, in name order.
+- `Lend { place, temp, mutable }` and `EndLend { place, temp, mutable }`,
+  which move a value out of `place` into the empty temporary `temp` for
+  one call and back after it (see Lending below).
 
-The shared validator refuses all three in an implicit module. It also
+The shared validator refuses all four in an implicit module. It also
 refuses a release of a projection, an unknown local, or a local that an
 active loan holds, a retain of an unknown place, and `try` releases out of
 name order.
@@ -213,7 +216,9 @@ type with a field or payload that needs drop.
 the native build path compiles is explicit. The native emitter carries out
 what the module states (see Native Lowering below). The interpreter gains
 nothing from the pass, so `aura run` lowers with `mir::lower_implicit` and
-skips it. The interpreter treats `Retain` and `Release` as no-ops.
+skips it. The interpreter treats `Retain` and `Release` as no-ops. It
+lends a copy: `Lend` copies the place into the temporary, and a mutable
+`EndLend` writes the temporary back.
 
 ### Ownership Pass
 
@@ -247,7 +252,55 @@ builtins, `MirClass.copy`, `MirEnum.copy`, and union plans decide that.
 
 A module the pass cannot read stays implicit, and the validator reports
 what is wrong with it. `strip_ownership` takes the pass's output out again,
-and tests use it to forge implicit MIR. A move the pass made stays a move.
+lends included, and tests use it to forge implicit MIR. A move the pass
+made stays a move.
+
+### Lending
+
+A call that reads part of a value would otherwise copy that part out of
+its owner: `total(self.docs)` or `self.docs.len()` copies the whole list,
+because an instance holds its fields inline. `mir::lending` runs first in
+the ownership pass, per function. It moves the part into a fresh `%tN`
+temporary for the call and back after it:
+
+```text
+Lend { place: self.docs, temp: %t4, mutable: false }
+Retain(%t4)
+%t0 = total(%t4)
+EndLend { place: self.docs, temp: %t4, mutable: false }
+```
+
+The slot is empty during the call, so the pass lends only what the call
+cannot reach another way.
+
+- A direct call lends a field of a class instance given to a shared
+  parameter, or to a `mut` parameter whose writeback is the field. The
+  field's type needs drop and is not a union or a callable.
+- A builtin `list`, `dict`, or `set` operation lends its receiver when it
+  is a field of a class instance or an element a loan selects. A
+  consuming read and a span operation store the receiver back themselves,
+  so they lend nothing. The size of an element of a local list, and a
+  lookup in it, is read where the element lies.
+- A class method lends its receiver when a loan selects it.
+- No other operand of the call may overlap the place, or reach into a
+  different root through a field or an element. No argument may hold a
+  class instance or a callable, which could alias the owner. The call's
+  target may not overlap the place.
+- A `mut` receiver or parameter takes a mutable lend. The call writes the
+  temporary back, and `EndLend` publishes the change.
+
+The ownership pass then covers the temporaries. A shared temporary gets a
+`Retain`, because the callee owns its parameter. The call of a mutable
+lend takes the temporary and returns it through the writeback, so it
+moves in with no retain. A lend of an element read that an `IndexInRange`
+covers goes before the fact, which then names the temporary.
+
+The loan validator checks each lend as a read of the place into the
+temporary and the end as a write back. `mir::lending::validate_lends`
+checks the shape: `Lend`s, retains and the fact, one call, releases, then
+the `EndLend`s in reverse. The temporary is a fresh local that nothing
+else names. The call must be one the pass would lend exactly these places
+for.
 
 ### Pair Cancellation
 
@@ -289,6 +342,8 @@ adds nothing, because definite assignment is the type checker's rule.
 - A store to a root needs it Empty.
 - Each consuming `Place` operand takes one earlier `Retain` in the same
   instruction, and none is left over.
+- `Lend` reads its place and fills its temporary, which must be Empty.
+  `EndLend` moves the temporary out and reads the place.
 - A release needs Owned or Maybe.
 - A release or a move needs no active loan of the root and no registered
   cleanup on it.
@@ -322,6 +377,14 @@ and value an index write stores and the values a span restore puts back.
 Every other argument borrows. `RuntimeOp::receiver_ownership` borrows the
 receiver of every operation that has one.
 
+A `Member` or `TraitMember` call whose receiver's type is a type parameter
+borrows the receiver. Native code finds the method on the boxed value
+where it lies. A union's `clone` borrows its receiver too, since it copies
+the active member. `ownership::borrowed_receiver` finds such a receiver
+from the place's type, and `operand_roles_with` borrows it. The pass, the
+checker, and the emitter all use it, so no `Retain` pays for a reference
+the call never takes.
+
 ### Native Lowering
 
 The native emitter follows an explicit module.
@@ -329,10 +392,19 @@ The native emitter follows an explicit module.
 - `Release` drops the root's value by its layout: an opaque handle, the
   active member of an inline union, or the captures of an inline callable.
   It then zeroes the root's words. A plain class owns no handle.
-- `Retain` pays for the consumer that follows. The consumer adds the
-  reference by layout when it hands the value on. A consumer that only
-  borrows, such as a call dispatched on a boxed generic receiver, adds
-  none.
+- `Retain` makes the reference by layout where MIR states it: it retains
+  an opaque handle, the active member of an inline union, or the captures
+  of an inline callable. The consuming operand that follows takes it as
+  an owned temporary. A method call on a union receiver hands the active
+  member to the member's method. A consumer that stores the value inline
+  turns the retain into a copy. A consumer that only reads the value, such as one
+  that copies a boxed value out, leaves the reference: the retain and its
+  releases then cancel at the end of the instruction. Each arm of a branch
+  inside one instruction takes the same references.
+- `Lend` takes the place's value by name out of its instance, or out of
+  its collection through the loan's element path. `EndLend` stores it
+  back. The call of a mutable lend takes the temporary. A builtin
+  operation changes a lent receiver in place, so it stores nothing back.
 - `MovePlace` takes the value out of its root.
 - A store to a tracked root adds no release, because the module released
   the old value first.
@@ -350,9 +422,10 @@ return.
 Each instruction's layout temporaries live in `LayoutScratch`: boxed
 copies, fresh copies from projections, and values a consumer has not
 taken yet. The end of the instruction releases what is left, and debug
-builds check that the set is empty at each instruction boundary. Lending,
-borrowed-element fusion, proven-access adjacency, and the tag elision in
-`no_call_since` work as before.
+builds check that the set is empty at each instruction boundary.
+Borrowed-element fusion, proven-access adjacency, and the tag elision in
+`no_call_since` work as before. Fusion reads an element of a local list
+where it lies, so it moves nothing and needs no lend.
 
 Debug builds of the direct runtime refuse a release of a value that the
 task's ledger does not hold, so every debug run of a native program checks

@@ -33,6 +33,11 @@ in this file.
   the value instead of retaining it, and a `try` error edge releases what
   its list names. A match that covers every variant traps on its
   impossible fall-through.
+- `aura mir` shows lending: a call that reads a field or a selected
+  element without keeping it gets a `Lend` that moves the value into a
+  temporary and an `EndLend` that moves it back, instead of a copy.
+  Native code lends only where MIR does, and makes each `Retain` where MIR
+  states it.
 - Debug builds of the direct runtime stop a task that releases a value it
   does not own.
 - `AURA_RUNTIME_STATS=1` also reports `retains`, `releases`, and `clones`:

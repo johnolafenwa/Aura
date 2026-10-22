@@ -47,7 +47,61 @@ impl OperandRole {
     }
 }
 
-/// Every operand of `instruction` with its role, in evaluation order.
+/// The receiver a call reads where it lies, though it names a method the
+/// callee owns its receiver for: the `Place` object of a `Member` or
+/// `TraitMember` call whose type, by `place_type`, is a type parameter, as
+/// the call finds the method on the boxed value; or of a union's `clone`,
+/// which copies the active member.
+pub fn borrowed_receiver(
+    instruction: &Instruction,
+    place_type: impl Fn(&str) -> Option<Type>,
+) -> Option<&Operand> {
+    let (Instruction::Assign {
+        value: Rvalue::Call { callee, args },
+        ..
+    }
+    | Instruction::WriteLoan {
+        value: Rvalue::Call { callee, args },
+        ..
+    }) = instruction
+    else {
+        return None;
+    };
+    let (clone, object) = match callee {
+        CallTarget::Member { object, field, .. } => (field == "clone" && args.is_empty(), object),
+        CallTarget::TraitMember { object, .. } => (false, object),
+        _ => return None,
+    };
+    let Operand::Place(place) = object else {
+        return None;
+    };
+    match place_type(place) {
+        Some(Type::TypeParam(_)) => Some(object),
+        Some(Type::Union(_)) if clone => Some(object),
+        _ => None,
+    }
+}
+
+/// [`operand_roles`] with `erased`, the receiver [`borrowed_receiver`]
+/// found, borrowed.
+pub fn operand_roles_with<'a>(
+    instruction: &'a Instruction,
+    erased: Option<&Operand>,
+) -> Vec<(&'a Operand, OperandRole)> {
+    let mut roles = operand_roles(instruction);
+    if let Some(erased) = erased {
+        for (operand, role) in &mut roles {
+            if std::ptr::eq(*operand, erased) {
+                *role = OperandRole::Borrow;
+            }
+        }
+    }
+    roles
+}
+
+/// Every operand of `instruction` with its role, in evaluation order. A
+/// call on a boxed generic receiver borrows it: see
+/// [`operand_roles_with`].
 pub fn operand_roles(instruction: &Instruction) -> Vec<(&Operand, OperandRole)> {
     let mut roles = Vec::new();
     match instruction {
@@ -477,8 +531,16 @@ fn push_rvalue_places<'a>(value: &'a Rvalue, accesses: &mut Vec<(&'a str, Access
 /// writebacks and the target. A loan instruction reads its source, so the
 /// source stays live while the loan is.
 pub(super) fn instruction_accesses(instruction: &Instruction) -> Vec<(&str, Access)> {
+    instruction_accesses_with(instruction, None)
+}
+
+/// [`instruction_accesses`] with the erased receiver `erased` borrowed.
+pub(super) fn instruction_accesses_with<'a>(
+    instruction: &'a Instruction,
+    erased: Option<&Operand>,
+) -> Vec<(&'a str, Access)> {
     let mut accesses = Vec::new();
-    for (operand, role) in operand_roles(instruction) {
+    for (operand, role) in operand_roles_with(instruction, erased) {
         push_operand(&mut accesses, operand, role);
     }
     // A moved payload or element leaves the rest of its enum or tuple.
@@ -605,6 +667,8 @@ pub(super) struct OwnershipFacts<'f> {
     needs_drop: HashMap<&'f str, bool>,
     /// The temporaries of the function's mutable lends.
     lent: HashSet<&'f str>,
+    /// The receivers of the function's calls on boxed generic values.
+    erased: HashSet<*const Operand>,
 }
 
 impl<'f> OwnershipFacts<'f> {
@@ -667,6 +731,14 @@ impl<'f> OwnershipFacts<'f> {
             mutable,
             types,
             needs_drop: HashMap::new(),
+            erased: instructions()
+                .filter_map(|instruction| {
+                    borrowed_receiver(instruction, |place| {
+                        context.place_type(function, place).ok().flatten()
+                    })
+                })
+                .map(|operand| operand as *const Operand)
+                .collect(),
             lent: instructions()
                 .filter_map(|instruction| match instruction {
                     Instruction::Lend {
@@ -682,12 +754,20 @@ impl<'f> OwnershipFacts<'f> {
         facts
     }
 
+    /// The receiver of `instruction`'s call on a boxed generic value.
+    pub(super) fn erased_in(&self, instruction: &'f Instruction) -> Option<&'f Operand> {
+        operand_roles(instruction)
+            .into_iter()
+            .map(|(operand, _)| operand)
+            .find(|operand| self.erased.contains(&(*operand as *const Operand)))
+    }
+
     /// What `instruction` does to each place it touches. The call of a
     /// mutable lend takes the temporary's value and returns it through the
     /// writeback, so the temporary moves in instead of taking a retained
     /// reference: see `mir_lending.rs`.
     pub(super) fn accesses(&self, instruction: &'f Instruction) -> Vec<(&'f str, Access)> {
-        let mut accesses = instruction_accesses(instruction);
+        let mut accesses = instruction_accesses_with(instruction, self.erased_in(instruction));
         if self.lent.is_empty() {
             return accesses;
         }
@@ -1414,7 +1494,7 @@ fn move_pairs(function: &MirFunction, context: &MirLoanValidationContext<'_>) ->
                 continue;
             }
             let accesses = match consumer {
-                Some(position) => instruction_accesses(&instructions[position]),
+                Some(position) => facts.accesses(&instructions[position]),
                 None => terminator_accesses(&block.terminator),
             };
             if !sole_consume(&facts, &accesses, place, root) {

@@ -1033,3 +1033,75 @@ def main():
         assert_eq!(module.ownership, MirOwnership::Implicit);
     }
 }
+
+#[test]
+fn a_call_on_a_boxed_generic_receiver_borrows_it() {
+    let type_of = |place: &str| match place {
+        "mapper" => Some(Type::TypeParam("T".to_string())),
+        _ => Some(Type::named("Doubler")),
+    };
+    let call_on = |object: &str| {
+        call(
+            CallTarget::Member {
+                object: place(object),
+                field: "map".to_string(),
+                receiver_place: Some(object.to_string()),
+            },
+            vec![arg(None, "value")],
+        )
+    };
+    let generic = call_on("mapper");
+    let erased = super::borrowed_receiver(&generic, type_of);
+    assert!(erased.is_some());
+    let roles = super::operand_roles_with(&generic, erased)
+        .into_iter()
+        .map(|(operand, role)| (named(operand), role))
+        .collect::<Vec<_>>();
+    assert_eq!(roles, expect(&[("mapper", Borrow), ("value", Consume)]));
+    // A receiver of a known class still goes to the callee.
+    assert!(super::borrowed_receiver(&call_on("doubler"), type_of).is_none());
+
+    let module = crate::lower_source_to_mir(include_str!(
+        "../tests/fixtures/run-pass/generic_trait_bounds.au"
+    ))
+    .expect("the program should lower");
+    let apply = module
+        .functions
+        .iter()
+        .find(|function| function.name == "apply_twice")
+        .expect("apply_twice should exist");
+    assert!(
+        apply
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .all(|instruction| !matches!(instruction, Instruction::Retain { .. })),
+        "{apply:#?}"
+    );
+}
+
+#[test]
+fn a_union_clone_borrows_its_receiver() {
+    let module = crate::lower_source_to_mir(include_str!(
+        "../tests/fixtures/run-pass/union_properties_copy.au"
+    ))
+    .expect("the program should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should exist");
+    // The clone copies the active member of `text`, so no `Retain` pays for
+    // a reference the call never takes.
+    let instructions = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .collect::<Vec<_>>();
+    assert!(
+        instructions.iter().all(
+            |instruction| !matches!(instruction, Instruction::Retain { place } if place == "text")
+        ),
+        "{main:#?}"
+    );
+}

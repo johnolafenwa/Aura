@@ -477,6 +477,14 @@ struct LayoutScratch {
     unions: BTreeMap<Value, (Vec<Value>, DirectUnionType)>,
     /// Inline callables the statement owns, keyed by the descriptor word.
     callables: BTreeMap<Value, Vec<Value>>,
+    /// The references MIR `Retain`s made for the instruction that follows,
+    /// in order, each with its place. A consuming operand of that place
+    /// takes the first one; the end of the instruction releases any left.
+    /// A branch of the instruction restores them with the rest.
+    retained: Vec<(String, ValueRef)>,
+    /// The consuming `Place` operands of the instruction being compiled,
+    /// by address, which take the retained references.
+    consumers: Vec<*const Operand>,
 }
 
 impl LayoutScratch {
@@ -496,6 +504,8 @@ impl LayoutScratch {
         self.opaque.clear();
         self.unions.clear();
         self.callables.clear();
+        self.retained.clear();
+        self.consumers.clear();
     }
 
     fn is_empty(&self) -> bool {
@@ -1342,6 +1352,11 @@ impl<'a> NativeCodegen<'a> {
             closed_matches: explicit_locals.closed_matches,
             emptied_store_root: None,
             lent_temps: HashMap::new(),
+            retain_calls: HashMap::new(),
+            retain_releases: HashMap::new(),
+            consumed_retains: HashSet::new(),
+            callable_retains: HashMap::new(),
+            retained_unions: HashSet::new(),
             last_runtime_type_tag: None,
             proven_access: ProvenAccess::None,
             view_places: HashMap::new(),
@@ -2576,6 +2591,28 @@ struct FunctionCompiler<'a> {
     /// as MIR states by giving it no retain. A builtin operation changes a
     /// lent receiver in place, so it stores nothing back.
     lent_temps: HashMap<String, bool>,
+    /// Each retained handle with the retain that made it and the handle it
+    /// retained. A consumer that copies the value into its slot turns the
+    /// retain into the copy.
+    retain_calls: HashMap<Value, (cranelift_codegen::ir::Inst, Value)>,
+    /// The releases of each retained handle, and the handles a consumer
+    /// took. A handle no consumer took was only read: its retain and its
+    /// releases cancel at the end of the instruction.
+    retain_releases: HashMap<Value, Vec<cranelift_codegen::ir::Inst>>,
+    consumed_retains: HashSet<Value>,
+    /// The retain adapter call of each callable a `Retain` made, by its
+    /// first word, with the drop calls that release it. A consumer that
+    /// takes the callable removes it; the rest cancel like opaque retains.
+    callable_retains: HashMap<
+        Value,
+        (
+            cranelift_codegen::ir::Inst,
+            Vec<cranelift_codegen::ir::Inst>,
+        ),
+    >,
+    /// The tag words of inline unions a `Retain` made. Their handle stays
+    /// shared with the root, so boxing one copies the payload.
+    retained_unions: HashSet<Value>,
     /// The latest `tag_value_type` call: its instruction, value, and encoded
     /// type, so an identical tag that no other call follows is not repeated.
     last_runtime_type_tag: Option<(cranelift_codegen::ir::Inst, Value, String)>,
@@ -2680,6 +2717,9 @@ impl<'a> FunctionCompiler<'a> {
     fn clear_temporary_opaque_owned(&mut self, value: &ValueRef) {
         if self.is_opaque_value(value) {
             self.layout_scratch.remove(&value.values[0]);
+            if self.retain_calls.contains_key(&value.values[0]) {
+                self.consumed_retains.insert(value.values[0]);
+            }
         }
     }
 
@@ -2692,13 +2732,17 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn release_opaque_handle(&mut self, value: Value) {
-        let _ = self
+        let inst = self
             .builder
             .ins()
             .call(self.runtime[RuntimeFn::ReleaseValue], &[value]);
+        if self.retain_calls.contains_key(&value) {
+            self.retain_releases.entry(value).or_default().push(inst);
+        }
     }
 
     fn release_all_temporary_owned(&mut self) {
+        self.release_unconsumed_retains();
         let owned = self
             .layout_scratch
             .opaque
@@ -2860,13 +2904,18 @@ impl<'a> FunctionCompiler<'a> {
     fn clear_temporary_callable_owned(&mut self, value: &ValueRef) {
         if matches!(value.ty, DirectType::Callable(_)) {
             self.layout_scratch.callables.remove(&value.values[0]);
+            self.callable_retains.remove(&value.values[0]);
         }
     }
 
     /// Calls the `drop` or `retain` adapter named by an inline callable's
     /// descriptor on its four words; a zero descriptor (a moved-from or
     /// never-assigned value) names no shape and is skipped.
-    fn call_callable_adapter_on_words(&mut self, words: &[Value], descriptor_offset: i32) {
+    fn call_callable_adapter_on_words(
+        &mut self,
+        words: &[Value],
+        descriptor_offset: i32,
+    ) -> cranelift_codegen::ir::Inst {
         let live = self.builder.ins().icmp_imm(IntCC::NotEqual, words[0], 0);
         let call_block = self.builder.create_block();
         let continue_block = self.builder.create_block();
@@ -2875,13 +2924,18 @@ impl<'a> FunctionCompiler<'a> {
             .brif(live, call_block, &[], continue_block, &[]);
         self.builder.switch_to_block(call_block);
         self.builder.seal_block(call_block);
-        self.call_callable_adapter_on_live_words(words, descriptor_offset);
+        let call = self.call_callable_adapter_on_live_words(words, descriptor_offset);
         self.builder.ins().jump(continue_block, &[]);
         self.builder.switch_to_block(continue_block);
         self.builder.seal_block(continue_block);
+        call
     }
 
-    fn call_callable_adapter_on_live_words(&mut self, words: &[Value], descriptor_offset: i32) {
+    fn call_callable_adapter_on_live_words(
+        &mut self,
+        words: &[Value],
+        descriptor_offset: i32,
+    ) -> cranelift_codegen::ir::Inst {
         let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
             StackSlotKind::ExplicitSlot,
             (8 * (1 + CALLABLE_ENVIRONMENT_WORDS)) as u32,
@@ -2903,7 +2957,7 @@ impl<'a> FunctionCompiler<'a> {
             .import_signature(callables::callable_unary_signature(self.call_conv));
         self.builder
             .ins()
-            .call_indirect(signature, adapter, &[callable_ptr]);
+            .call_indirect(signature, adapter, &[callable_ptr])
     }
 
     /// Boxes an inline callable through its descriptor's `box` adapter and
@@ -2961,7 +3015,10 @@ impl<'a> FunctionCompiler<'a> {
 
     /// Releases the captures an inline callable owns.
     fn release_callable_words(&mut self, words: &[Value]) {
-        self.call_callable_adapter_on_words(words, callables::DESCRIPTOR_DROP);
+        let release = self.call_callable_adapter_on_words(words, callables::DESCRIPTOR_DROP);
+        if let Some((_, releases)) = self.callable_retains.get_mut(&words[0]) {
+            releases.push(release);
+        }
     }
 
     fn retain_callable_words(&mut self, words: &[Value]) {
@@ -3079,6 +3136,12 @@ impl<'a> FunctionCompiler<'a> {
     fn transfer_owned_opaque_value(&mut self, value: &ValueRef) -> Value {
         if self.temporary_owns_opaque(value) {
             self.clear_temporary_opaque_owned(value);
+            // A slot that holds its value inline needs a copy, not a second
+            // reference, so the retain becomes the copy.
+            if let Some((inst, handle)) = self.retain_calls.remove(&value.values[0]) {
+                let clone = self.runtime[RuntimeFn::CloneValue];
+                self.builder.func.dfg.replace(inst).call(clone, &[handle]);
+            }
             value.values[0]
         } else {
             let inst = self
@@ -3247,8 +3310,21 @@ impl<'a> FunctionCompiler<'a> {
             self.proven_access = ProvenAccess::None;
             compiled?;
         }
-        self.compile_terminator(&block.label, &block.terminator, return_ty)?;
-        Ok(())
+        // A retain before the terminator pays for the value a `Return`
+        // hands back.
+        self.layout_scratch.consumers =
+            consuming_operands(crate::mir::ownership::terminator_roles(&block.terminator));
+        if !matches!(block.terminator, Terminator::Return(_)) {
+            self.release_unconsumed_retains();
+        }
+        let compiled = self.compile_terminator(&block.label, &block.terminator, return_ty);
+        self.layout_scratch.consumers.clear();
+        debug_assert!(
+            self.layout_scratch.retained.is_empty(),
+            "a retain outlived the end of block `{}`",
+            block.label
+        );
+        compiled
     }
 
     fn compile_instruction(
@@ -3261,11 +3337,175 @@ impl<'a> FunctionCompiler<'a> {
             self.layout_scratch.is_empty(),
             "layout temporaries outlived the instruction before {instruction:?}"
         );
+        if let Instruction::Retain { place } = instruction {
+            return self.retain_place(place);
+        }
+        let erased = crate::mir::ownership::borrowed_receiver(instruction, |place| {
+            self.type_of_place(place)
+                .ok()
+                .map(|ty| direct_type_to_type(&ty))
+        });
+        self.layout_scratch.consumers = consuming_operands(
+            crate::mir::ownership::operand_roles_with(instruction, erased),
+        );
         let compiled = self.compile_instruction_body(block_label, instruction_index, instruction);
         self.emptied_store_root = None;
+        self.layout_scratch.consumers.clear();
         compiled?;
         self.release_all_temporary_owned();
+        self.cancel_unconsumed_retains();
         Ok(())
+    }
+
+    /// Lowers MIR `Retain`: makes the new reference by the value's layout
+    /// and keeps it for the consumer that follows. A copy the load already
+    /// made is the new reference.
+    fn retain_place(&mut self, place: &str) -> std::result::Result<(), String> {
+        let value = self.load_place(place)?;
+        let retained = match &value.ty {
+            DirectType::Opaque(_) if self.temporary_owns_opaque(&value) => {
+                self.clear_temporary_opaque_owned(&value);
+                value
+            }
+            DirectType::Opaque(ty) => {
+                let ty = ty.clone();
+                let inst = self
+                    .builder
+                    .ins()
+                    .call(self.runtime[RuntimeFn::RetainValue], &[value.values[0]]);
+                let handle = self.builder.inst_results(inst)[0];
+                self.retain_calls.insert(handle, (inst, value.values[0]));
+                ValueRef {
+                    values: vec![handle],
+                    ty: DirectType::Opaque(ty),
+                }
+            }
+            DirectType::Union(union) if union.owns_handles() => {
+                if self.temporary_owns_union(&value) {
+                    self.clear_temporary_union_owned(&value);
+                    value
+                } else {
+                    let union = union.clone();
+                    self.retain_union_words(&union, &value.values);
+                    let fresh = self.fresh_words(value);
+                    self.retained_unions.insert(fresh.values[0]);
+                    fresh
+                }
+            }
+            DirectType::Callable(_) => {
+                if self.temporary_owns_callable(&value) {
+                    self.clear_temporary_callable_owned(&value);
+                    value
+                } else {
+                    let retain = self.call_callable_adapter_on_words(
+                        &value.values,
+                        callables::DESCRIPTOR_RETAIN,
+                    );
+                    let fresh = self.fresh_words(value);
+                    self.callable_retains
+                        .insert(fresh.values[0], (retain, Vec::new()));
+                    fresh
+                }
+            }
+            _ => value,
+        };
+        // The load may leave temporaries behind; the new reference is kept
+        // apart from them.
+        self.release_all_temporary_owned();
+        self.layout_scratch
+            .retained
+            .push((place.to_string(), retained));
+        Ok(())
+    }
+
+    /// `value` in new SSA words, so the layout scratch can own it apart
+    /// from the root it was read from.
+    fn fresh_words(&mut self, value: ValueRef) -> ValueRef {
+        let values = value
+            .values
+            .iter()
+            .map(|word| {
+                if self.builder.func.dfg.value_type(*word) == types::I64 {
+                    self.builder.ins().iadd_imm(*word, 0)
+                } else {
+                    *word
+                }
+            })
+            .collect();
+        ValueRef {
+            values,
+            ty: value.ty,
+        }
+    }
+
+    /// The reference a `Retain` made for `operand`, when it is a consuming
+    /// operand of the instruction. The value is then an owned temporary.
+    fn take_retained(&mut self, operand: &Operand) -> Option<ValueRef> {
+        let Operand::Place(place) = operand else {
+            return None;
+        };
+        let consumer = self
+            .layout_scratch
+            .consumers
+            .iter()
+            .position(|consumer| std::ptr::eq(*consumer, operand))?;
+        let position = self
+            .layout_scratch
+            .retained
+            .iter()
+            .position(|(retained, _)| retained == place)?;
+        self.layout_scratch.consumers.remove(consumer);
+        let (_, value) = self.layout_scratch.retained.remove(position);
+        self.mark_temporary_opaque_owned(&value);
+        self.mark_temporary_union_owned(&value);
+        self.mark_temporary_callable_owned(&value);
+        Some(value)
+    }
+
+    /// Cancels each retain of the instruction that no consumer took against
+    /// its releases: the consumer only read the value, which its root holds
+    /// throughout the instruction.
+    fn cancel_unconsumed_retains(&mut self) {
+        let retains = std::mem::take(&mut self.retain_calls);
+        let mut releases = std::mem::take(&mut self.retain_releases);
+        let consumed = std::mem::take(&mut self.consumed_retains);
+        self.retained_unions.clear();
+        // A callable a consumer took left this map; the rest were only read.
+        for (retain, releases) in std::mem::take(&mut self.callable_retains).into_values() {
+            for inst in std::iter::once(retain).chain(releases) {
+                self.builder.func.dfg.replace(inst).nop();
+            }
+        }
+        for (handle, (retain, retained)) in retains {
+            if consumed.contains(&handle) {
+                continue;
+            }
+            self.builder.func.dfg.replace(retain).iadd_imm(retained, 0);
+            for release in releases.remove(&handle).unwrap_or_default() {
+                self.builder.func.dfg.replace(release).nop();
+            }
+        }
+    }
+
+    /// Restores the layout temporaries from before a branch at its merge.
+    /// Every arm takes the same retained references, so the ones the last
+    /// arm left stay for the rest of the instruction.
+    fn restore_scratch_after_branches(&mut self, caller: LayoutScratch) {
+        let retained = std::mem::take(&mut self.layout_scratch.retained);
+        let consumers = std::mem::take(&mut self.layout_scratch.consumers);
+        self.layout_scratch = caller;
+        self.layout_scratch.retained = retained;
+        self.layout_scratch.consumers = consumers;
+    }
+
+    /// Makes the references no consumer took owned temporaries, which the
+    /// end of the instruction releases: their consumer only borrowed.
+    fn release_unconsumed_retains(&mut self) {
+        for (_, value) in std::mem::take(&mut self.layout_scratch.retained) {
+            self.mark_temporary_opaque_owned(&value);
+            self.mark_temporary_union_owned(&value);
+            self.mark_temporary_callable_owned(&value);
+        }
     }
 
     fn compile_instruction_body(
@@ -3695,6 +3935,7 @@ impl<'a> FunctionCompiler<'a> {
         match terminator {
             Terminator::Return(operand) => {
                 let value = self.load_operand_for_target(operand, return_ty)?;
+                self.release_unconsumed_retains();
                 let coerced = self.coerce_value(value, return_ty)?;
                 // A return releases the root it returns from, unless the
                 // root moved out whole or goes back to the caller.
@@ -7151,6 +7392,9 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn load_operand(&mut self, operand: &Operand) -> std::result::Result<ValueRef, String> {
+        if let Some(retained) = self.take_retained(operand) {
+            return Ok(retained);
+        }
         match operand {
             Operand::Place(place) => self.load_place(place),
             Operand::MovePlace(place) => self.take_place(place),
@@ -7902,7 +8146,7 @@ impl<'a> FunctionCompiler<'a> {
         }
         self.builder.switch_to_block(merge);
         self.builder.seal_block(merge);
-        self.layout_scratch = caller_owned;
+        self.restore_scratch_after_branches(caller_owned);
         let value = ValueRef {
             values: self.builder.block_params(merge).to_vec(),
             ty: target_ty,
@@ -8394,7 +8638,13 @@ impl<'a> FunctionCompiler<'a> {
     fn emit_runtime_type_tag(&mut self, raw: Value, ty: &Type) -> std::result::Result<(), String> {
         let encoded = crate::native_runtime::canonical_runtime_type_name(ty);
         if let Some((inst, tagged, tagged_type)) = &self.last_runtime_type_tag {
-            if *tagged == raw && *tagged_type == encoded && self.no_call_since(*inst) {
+            // A retained handle names the box it retained.
+            let same_box = *tagged == raw
+                || self
+                    .retain_calls
+                    .get(&raw)
+                    .is_some_and(|(_, retained)| retained == tagged);
+            if same_box && *tagged_type == encoded && self.no_call_since(*inst) {
                 return Ok(());
             }
         }
@@ -8921,7 +9171,7 @@ impl<'a> FunctionCompiler<'a> {
         }
         self.builder.switch_to_block(merge);
         self.builder.seal_block(merge);
-        self.layout_scratch = caller_owned;
+        self.restore_scratch_after_branches(caller_owned);
         if value_was_owned {
             self.clear_temporary_opaque_owned(&value);
         }
@@ -9111,12 +9361,25 @@ impl<'a> FunctionCompiler<'a> {
                 )
             })?;
         let words = words.to_vec();
+        // A receiver the call owns, as MIR's `Retain` made it, hands its
+        // active member to the member's call.
+        let receiver = ValueRef {
+            values: words.clone(),
+            ty: DirectType::Union(union.clone()),
+        };
+        let owned = self.temporary_owns_union(&receiver);
+        if owned {
+            self.clear_temporary_union_owned(&receiver);
+        }
         let receiver_place = receiver_place.map(str::to_string);
         let args = args.to_vec();
         let field = field.to_string();
         let trait_name = trait_name.map(str::to_string);
         let result =
             self.switch_on_union_tag(union, &words, &result_ty, |codegen, index, member| {
+                if owned {
+                    codegen.mark_call_result_owned(&member);
+                }
                 let projected = receiver_place.as_ref().map(|place| {
                     format!(
                         "{place}.{}{index}",
@@ -9286,7 +9549,7 @@ impl<'a> FunctionCompiler<'a> {
         }
         self.builder.switch_to_block(merge);
         self.builder.seal_block(merge);
-        self.layout_scratch = caller_owned;
+        self.restore_scratch_after_branches(caller_owned);
         let merged = ValueRef {
             values: self.builder.block_params(merge).to_vec(),
             ty: result_ty.clone(),
@@ -9316,6 +9579,8 @@ impl<'a> FunctionCompiler<'a> {
         if owned {
             self.clear_temporary_union_owned(&source);
         }
+        // A retained union already holds the reference the copy takes.
+        let retained = owned && self.retained_unions.contains(&words[0]);
         let boxed =
             self.switch_on_union_tag(union, words, &result_ty, |codegen, index, member| {
                 // A handle payload of a borrowed union stays owned by the
@@ -9323,9 +9588,15 @@ impl<'a> FunctionCompiler<'a> {
                 // the retained handle, as the interpreter copies a place read
                 // into an injection. A moved union's payload or a freshly
                 // boxed member moves into the boxed value.
-                let borrowed_handle = !owned && matches!(member.ty, DirectType::Opaque(_));
+                let handle = matches!(member.ty, DirectType::Opaque(_));
+                let borrowed_handle = !owned && handle;
                 let payload = codegen.ensure_opaque(member)?;
-                let (inject, transferred) = if borrowed_handle {
+                let (inject, transferred) = if retained && handle {
+                    (
+                        codegen.runtime[RuntimeFn::UnionInjectCopy],
+                        payload.values[0],
+                    )
+                } else if borrowed_handle {
                     (
                         codegen.runtime[RuntimeFn::UnionInjectCopy],
                         codegen.retain_opaque_handle(payload.values[0]),
@@ -11956,7 +12227,7 @@ impl<'a> FunctionCompiler<'a> {
         // active member carries the method (ADR-0052 A8). The interpreter
         // inspects the runtime value; the direct backend branches on it.
         if matches!(object_ty, Type::TypeParam(_)) {
-            return self.compile_erased_receiver_dispatch(
+            return self.compile_borrowed_receiver_dispatch(
                 object,
                 field,
                 receiver_place,
@@ -12028,7 +12299,7 @@ impl<'a> FunctionCompiler<'a> {
     /// through its active payload (with the active-payload write-back
     /// projection for the receiver place), any other value dispatches
     /// directly. Both paths join on the same result storage.
-    fn compile_erased_receiver_dispatch(
+    fn compile_borrowed_receiver_dispatch(
         &mut self,
         object: ValueRef,
         field: &str,
@@ -12702,6 +12973,20 @@ fn find_concrete_impl_method<'a>(
             matches!(&trait_impl.for_type, Type::Named(name, args) if name == class_name && args.is_empty())
         })
         .find_map(|trait_impl| trait_impl.methods.iter().find(|method| method.name == field))
+}
+
+/// The addresses of the consuming `Place` operands among `roles`.
+fn consuming_operands(
+    roles: Vec<(&Operand, crate::mir::ownership::OperandRole)>,
+) -> Vec<*const Operand> {
+    roles
+        .into_iter()
+        .filter(|(operand, role)| {
+            *role == crate::mir::ownership::OperandRole::Consume
+                && matches!(operand, Operand::Place(_))
+        })
+        .map(|(operand, _)| operand as *const Operand)
+        .collect()
 }
 
 fn find_method<'a>(class: Option<&'a MirClass>, field: &str) -> Option<&'a MirMethod> {
