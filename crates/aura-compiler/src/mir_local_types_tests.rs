@@ -13,8 +13,9 @@ fn bytes() -> Type {
 #[test]
 fn runtime_member_results_name_each_member_type() {
     let int64 = Type::named("int64");
-    // Duration, `random.Rng`, and process members are resolved runtime
-    // operations; `runtime_ops_tests.rs` checks their result types.
+    // Duration, `random.Rng`, process, `str`, and queue members are
+    // resolved runtime operations; `runtime_ops_tests.rs` checks their
+    // result types.
     let cases = [
         (
             "list",
@@ -22,8 +23,7 @@ fn runtime_member_results_name_each_member_type() {
             "__slice",
             Some(named("list", vec![int64.clone()])),
         ),
-        ("Queue", vec![int64.clone()], "get_or", Some(int64.clone())),
-        ("Queue", vec![], "get_or", None),
+        ("str", vec![], "__slice", Some(Type::named("str"))),
         ("process.Pipe", vec![], "read_all", None),
         ("process.Pipe", vec![], "missing", None),
     ];

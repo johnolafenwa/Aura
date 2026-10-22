@@ -13,12 +13,13 @@ Last updated: 2026-10-21
   `2026-10-21-batch-7-step-8b-runtime-abi-table.md`.
 - Done: 8c, complete local types in MIR, merged in PR #103. Details are in
   `2026-10-21-batch-7-step-8c-local-types.md`.
-- In progress: 8d, resolved runtime operations, PR 2 of 4 (named
-  built-in calls, `print` kinds, f-string part kinds, and host builtins).
-  PR 1, merged in PR #104, moved resource handles, Rng, scalar and value
-  members. Details are
-  in `2026-10-21-batch-7-step-8d1-runtime-ops.md` and
-  `2026-10-21-batch-7-step-8d2-named-calls.md`.
+- In progress: 8d, resolved runtime operations, PR 3 of 4 (`str`,
+  `Queue`, `Task`, and `TaskGroup` members). PR 1, merged in PR #104,
+  moved resource handles, Rng, scalar and value members. PR 2, PR #105,
+  moved named built-in calls, `print` kinds, f-string part kinds, and host
+  builtins. Details are in `2026-10-21-batch-7-step-8d1-runtime-ops.md`,
+  `2026-10-21-batch-7-step-8d2-named-calls.md`, and
+  `2026-10-21-batch-7-step-8d3-str-queues-tasks.md`.
 
 ## Aura 0.6.0 preview release (complete)
 

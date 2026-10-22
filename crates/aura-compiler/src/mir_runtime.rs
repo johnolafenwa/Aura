@@ -27,7 +27,7 @@ use crate::mir::{
 };
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_ops::{
-    builtin_function_for_name, builtin_member_for_receiver, FunctionOp, RuntimeOp,
+    builtin_function_for_name, builtin_member_for_receiver, FunctionOp, RuntimeOp, StrOp,
 };
 use crate::runtime_value::{
     append_string_checked, cast_numeric_value, catch_lightweight_task_failure,
@@ -5363,6 +5363,16 @@ impl MirRuntime {
                     }
                     return self.evaluate_named_builtin(op.name(), args, env, expected_return_type);
                 };
+                // A `str` length is measured where the string lies.
+                let borrowed_length = match (op, object) {
+                    (RuntimeOp::Str(StrOp::Len | StrOp::ByteLen), Operand::Place(place)) => {
+                        evaluate_borrowed_length_member(&*env.place_ref(place)?, op.name(), args)
+                    }
+                    _ => None,
+                };
+                if let Some(result) = borrowed_length {
+                    return result;
+                }
                 let receiver_static_ty = self
                     .resolve_operand_type(object, env)
                     .filter(|ty| !matches!(ty, Type::TypeParam(_)));

@@ -27,9 +27,10 @@ use crate::native_runtime::{
 };
 use crate::runtime_abi::{AbiType, RuntimeFn, RuntimeTable};
 use crate::runtime_ops::{
-    FunctionOp, HostBuiltin, PrintKind, ResourceOp, RuntimeOp, RuntimeTarget, ScalarOp, ValueOp,
+    FunctionOp, HostBuiltin, PrintKind, ResourceOp, RuntimeOp, RuntimeTarget, ScalarOp, StrOp,
+    ValueOp,
 };
-use crate::sema::{optional_type, text_convenience_result_type};
+use crate::sema::optional_type;
 use crate::sema::{substitute_type, FunctionParamContract, Type};
 
 use callables::{CallableShape, CallableShapeKey};
@@ -612,11 +613,6 @@ fn split_field_path_segments<'a>(
         None => Err("internal error: direct backend received an empty field path".to_string()),
     }
 }
-
-/// The opcode the direct runtime's text dispatcher expects for one
-/// `str` text-convenience method. It must match
-/// `native_runtime::aura_direct_string_text_method`.
-pub(crate) use crate::text_methods::text_method_opcode;
 
 fn ordered_named_args<'a>(
     expected_names: &[&str],
@@ -1947,6 +1943,8 @@ enum RuntimeOpArgLayout {
     /// One boxed value word, stored back to the argument's writeback place
     /// after the call.
     BoxedWriteback,
+    /// One boxed word of the receiver's payload type: a `Queue` put value.
+    BoxedPayload,
     /// An `int32`, boxed.
     BoxedInt32,
     /// A scalar `int64` word.
@@ -1962,8 +1960,20 @@ fn runtime_op_arg_layout(op: RuntimeOp, name: &str) -> RuntimeOpArgLayout {
         (RuntimeOp::Resource(_), "max_bytes" | "count" | "status") => {
             RuntimeOpArgLayout::BoxedInt32
         }
+        (RuntimeOp::Queue(_), "value") => RuntimeOpArgLayout::BoxedPayload,
         _ => RuntimeOpArgLayout::Boxed,
     }
+}
+
+/// Whether an op's result is its receiver's payload, which the helper
+/// returns boxed whatever its type: `Queue.get_or` and `Task.result_or`.
+fn runtime_op_returns_boxed_payload(op: RuntimeOp) -> bool {
+    use crate::runtime_ops::{QueueOp, TaskOp};
+    matches!(
+        op,
+        RuntimeOp::Queue(QueueOp::GetOr | QueueOp::GetOrTimeout)
+            | RuntimeOp::Task(TaskOp::ResultOr | TaskOp::ResultOrTimeout)
+    )
 }
 
 /// One lowered argument of a handle runtime operation.
@@ -5942,58 +5952,6 @@ impl<'a> FunctionCompiler<'a> {
         lendable
     }
 
-    /// Lowers one `str` text-convenience method to the shared runtime
-    /// dispatcher. The receiver stays shared; a text argument is moved into
-    /// the call and a count travels as a scalar.
-    fn compile_string_text_method(
-        &mut self,
-        receiver: Value,
-        field: &str,
-        args: &[MirArg],
-    ) -> std::result::Result<ValueRef, String> {
-        let opcode = text_method_opcode(field)
-            .expect("only text-convenience methods reach the text dispatcher");
-        let expected: &[&str] = match field {
-            "split_once" | "rsplit_once" => &["separator"],
-            "find" | "count" => &["text"],
-            "repeat" => &["count"],
-            _ => &[],
-        };
-        let ordered = ordered_named_args(expected, args)?;
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        let (argument, count) = match (field, ordered.first()) {
-            ("repeat", Some(argument)) => {
-                let count =
-                    self.load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
-                let count = self.coerce_value(count, &DirectType::Scalar(ScalarKind::Int64))?;
-                (zero, count.values[0])
-            }
-            (_, Some(argument)) => {
-                let loaded = self.load_operand(&argument.value)?;
-                let text = self.ensure_opaque(loaded)?;
-                (text.values[0], zero)
-            }
-            (_, None) => (zero, zero),
-        };
-        let opcode = self.builder.ins().iconst(types::I64, opcode);
-        let inst = self.builder.ins().call(
-            self.runtime[RuntimeFn::StringTextMethod],
-            &[opcode, receiver, argument, count],
-        );
-        let semantic_type = text_convenience_result_type(field)
-            .expect("text-convenience methods have a result type");
-        let result = self.owned_opaque_result(
-            self.builder.inst_results(inst).to_vec(),
-            semantic_type.clone(),
-        );
-        let target = ensure_direct_type(
-            &semantic_type,
-            &self.classes,
-            &format!("return value of `str.{field}`"),
-        )?;
-        self.coerce_value(result, &target)
-    }
-
     /// Binds the arguments of a named op to its parameters, in declaration
     /// order. The validator has already checked them.
     fn bind_named_runtime_op_args<'args>(
@@ -6021,7 +5979,11 @@ impl<'a> FunctionCompiler<'a> {
             RuntimeOp::Resource(_)
             | RuntimeOp::Rng(_)
             | RuntimeOp::Scalar(_)
-            | RuntimeOp::Value(_) => Err(format!(
+            | RuntimeOp::Value(_)
+            | RuntimeOp::Str(_)
+            | RuntimeOp::Queue(_)
+            | RuntimeOp::Task(_)
+            | RuntimeOp::TaskGroup(_) => Err(format!(
                 "direct backend received runtime operation `{op}` without a receiver"
             )),
         }
@@ -10925,9 +10887,15 @@ impl<'a> FunctionCompiler<'a> {
         match op {
             RuntimeOp::Scalar(scalar) => self.compile_scalar_runtime_op(scalar, object, args),
             RuntimeOp::Value(value) => self.compile_value_runtime_op(value, object, args),
-            RuntimeOp::Resource(_) | RuntimeOp::Rng(_) => {
-                self.compile_handle_runtime_op(op, object, args)
+            RuntimeOp::Str(text) if text.is_text_method() => {
+                self.compile_str_text_runtime_op(op, object, args)
             }
+            RuntimeOp::Resource(_)
+            | RuntimeOp::Rng(_)
+            | RuntimeOp::Str(_)
+            | RuntimeOp::Queue(_)
+            | RuntimeOp::Task(_)
+            | RuntimeOp::TaskGroup(_) => self.compile_handle_runtime_op(op, object, args),
             RuntimeOp::Function(_) | RuntimeOp::Print(_) | RuntimeOp::Host(_) => Err(format!(
                 "direct backend received named runtime operation `{op}` with a receiver"
             )),
@@ -10951,8 +10919,9 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    /// A resource handle or `random.Rng` method: the receiver and each
-    /// argument pass as one word, and the helper's result word is the value.
+    /// A method of a resource handle, `random.Rng`, `str`, `Queue`, `Task`,
+    /// or `TaskGroup`: the receiver and each argument pass as one word, and
+    /// the helper's result word is the value.
     fn compile_handle_runtime_op(
         &mut self,
         op: RuntimeOp,
@@ -10980,6 +10949,14 @@ impl<'a> FunctionCompiler<'a> {
                     let loaded = self.load_operand(&argument.value)?;
                     RuntimeOpArg::Boxed(self.ensure_opaque(loaded)?)
                 }
+                RuntimeOpArgLayout::BoxedPayload => {
+                    let payload = crate::runtime_ops::first_type_arg(Some(&receiver_ty))
+                        .unwrap_or(Type::named("Unknown"));
+                    let target = ensure_direct_type(&payload, &self.classes, "Queue element")?;
+                    RuntimeOpArg::Boxed(
+                        self.load_operand_as_opaque_direct(&argument.value, &target)?,
+                    )
+                }
                 RuntimeOpArgLayout::BoxedWriteback => {
                     let loaded = self.load_operand(&argument.value)?;
                     let value = self.ensure_opaque(loaded)?;
@@ -11004,14 +10981,11 @@ impl<'a> FunctionCompiler<'a> {
         }
         // An `own` parameter takes its argument: each one is handed over
         // after every argument is loaded.
-        let member = op
-            .builtin_member()
-            .expect("a handle op has a built-in member");
         let mut words = vec![object.values[0]];
         for (index, value) in lowered.iter().enumerate() {
             words.push(match value {
                 RuntimeOpArg::Boxed(value)
-                    if member.argument_passing(index) == Some(ReceiverKind::Value) =>
+                    if op.argument_passing(index) == Some(ReceiverKind::Value) =>
                 {
                     self.transfer_owned_opaque_value(value)
                 }
@@ -11034,6 +11008,9 @@ impl<'a> FunctionCompiler<'a> {
         let result_ty = op
             .result_type(Some(&receiver_ty), &[])
             .ok_or_else(|| format!("direct backend does not know the result type of `{op}`"))?;
+        if runtime_op_returns_boxed_payload(op) {
+            return Ok(self.owned_opaque_result(results, result_ty));
+        }
         let scalar = match &result_ty {
             // A close helper returns the handle's last reference.
             Type::Unit => {
@@ -11059,6 +11036,50 @@ impl<'a> FunctionCompiler<'a> {
             },
             None => self.owned_opaque_result(results, result_ty),
         })
+    }
+
+    /// A `str` text-convenience method, through the shared text dispatcher.
+    /// The dispatcher takes the op's opcode word first, then the receiver,
+    /// a text argument word, and a count word, and leaves unused words zero.
+    /// The receiver stays shared; a text argument is moved into the call
+    /// and a count travels as a scalar.
+    fn compile_str_text_runtime_op(
+        &mut self,
+        op: RuntimeOp,
+        object: ValueRef,
+        args: &[MirArg],
+    ) -> std::result::Result<ValueRef, String> {
+        let call = op.runtime_call();
+        let object = self.ensure_opaque(object)?;
+        let params = op.params();
+        let names = params.iter().map(|param| param.name).collect::<Vec<_>>();
+        let ordered = ordered_named_args(&names, args)?;
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let (argument, count) = match (op, ordered.first()) {
+            (RuntimeOp::Str(StrOp::Repeat), Some(argument)) => {
+                let count =
+                    self.load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
+                let count = self.coerce_value(count, &DirectType::Scalar(ScalarKind::Int64))?;
+                (zero, count.values[0])
+            }
+            (_, Some(argument)) => {
+                let loaded = self.load_operand(&argument.value)?;
+                let text = self.ensure_opaque(loaded)?;
+                (text.values[0], zero)
+            }
+            (_, None) => (zero, zero),
+        };
+        let mut words = Vec::with_capacity(4);
+        self.push_runtime_call_words(call, &mut words);
+        words.extend([object.values[0], argument, count]);
+        let results = self.runtime_call_results(self.runtime[call.function], &words);
+        let semantic_type = op
+            .result_type(None, &[])
+            .expect("text-convenience methods have a result type");
+        let result = self.owned_opaque_result(results, semantic_type.clone());
+        let context = format!("return value of `str.{}`", op.name());
+        let target = ensure_direct_type(&semantic_type, &self.classes, &context)?;
+        self.coerce_value(result, &target)
     }
 
     /// The value an omitted optional argument of a handle op passes.
@@ -11332,199 +11353,6 @@ impl<'a> FunctionCompiler<'a> {
                                 column.values[0],
                             ],
                         );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::named("str"),
-                        ))
-                    }
-                    "len" | "byte_len" => {
-                        if !args.is_empty() {
-                            return Err(format!(
-                                "direct backend expected `{field}()` to take no arguments"
-                            ));
-                        }
-                        let function = match field {
-                            "len" => self.runtime[RuntimeFn::StringLen],
-                            "byte_len" => self.runtime[RuntimeFn::StringByteLen],
-                            _ => unreachable!(),
-                        };
-                        let inst = self.builder.ins().call(function, &[object.values[0]]);
-                        let len = self.builder.inst_results(inst)[0];
-                        Ok(ValueRef {
-                            values: vec![len],
-                            ty: DirectType::Scalar(ScalarKind::Int64),
-                        })
-                    }
-                    "contains" | "starts_with" | "ends_with" => {
-                        let [argument] = args else {
-                            return Err(format!(
-                                "direct backend expected `{}`() to receive one string argument",
-                                field
-                            ));
-                        };
-                        let loaded_value = self.load_operand(&argument.value)?;
-                        let value = self.ensure_opaque(loaded_value)?;
-                        let func = match field {
-                            "contains" => self.runtime[RuntimeFn::StringContains],
-                            "starts_with" => self.runtime[RuntimeFn::StringStartsWith],
-                            "ends_with" => self.runtime[RuntimeFn::StringEndsWith],
-                            _ => unreachable!(),
-                        };
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(func, &[object.values[0], value.values[0]]);
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Bool),
-                        })
-                    }
-                    "split" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected `split()` to receive one string argument"
-                                    .to_string(),
-                            );
-                        };
-                        let loaded_value = self.load_operand(&argument.value)?;
-                        let value = self.ensure_opaque(loaded_value)?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::StringSplit],
-                            &[object.values[0], value.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named("list".to_string(), vec![Type::named("str")]),
-                        ))
-                    }
-                    "replace" => {
-                        let [from_arg, to_arg] = args else {
-                            return Err(
-                                "direct backend expected `replace()` to receive `from` and `to` string arguments"
-                                    .to_string(),
-                            );
-                        };
-                        let loaded_from = self.load_operand(&from_arg.value)?;
-                        let from = self.ensure_opaque(loaded_from)?;
-                        let loaded_to = self.load_operand(&to_arg.value)?;
-                        let to = self.ensure_opaque(loaded_to)?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::StringReplace],
-                            &[object.values[0], from.values[0], to.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::named("str"),
-                        ))
-                    }
-                    "add" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected `add()` to receive one string argument"
-                                    .to_string(),
-                            );
-                        };
-                        let loaded_value = self.load_operand(&argument.value)?;
-                        let value = self.ensure_opaque(loaded_value)?;
-                        let binary_opcode = Self::binary_opcode(BinaryOp::Add);
-                        let opcode = self.builder.ins().iconst(types::I64, binary_opcode);
-                        let zero = self.builder.ins().iconst(types::I64, 0);
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::BinaryValue],
-                            &[opcode, object.values[0], value.values[0], zero, zero, zero],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::named("str"),
-                        ))
-                    }
-                    "to_lower" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `to_lower()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::StringToLower], &[object.values[0]]);
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::named("str"),
-                        ))
-                    }
-                    "to_upper" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `to_upper()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::StringToUpper], &[object.values[0]]);
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::named("str"),
-                        ))
-                    }
-                    "join" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected `join()` to receive one list argument"
-                                    .to_string(),
-                            );
-                        };
-                        let loaded_value = self.load_operand(&argument.value)?;
-                        let value = self.ensure_opaque(loaded_value)?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::StringJoin],
-                            &[object.values[0], value.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::named("str"),
-                        ))
-                    }
-                    "strip_prefix" | "strip_suffix" => {
-                        let [argument] = args else {
-                            return Err(format!(
-                                "direct backend expected `{}`() to receive one string argument",
-                                field
-                            ));
-                        };
-                        let loaded_value = self.load_operand(&argument.value)?;
-                        let value = self.ensure_opaque(loaded_value)?;
-                        let func = match field {
-                            "strip_prefix" => self.runtime[RuntimeFn::StringStripPrefix],
-                            "strip_suffix" => self.runtime[RuntimeFn::StringStripSuffix],
-                            _ => unreachable!(),
-                        };
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(func, &[object.values[0], value.values[0]]);
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            optional_type(Type::named("str")),
-                        ))
-                    }
-                    "trim_start" | "trim_end" | "lines" | "split_whitespace" | "split_once"
-                    | "rsplit_once" | "find" | "count" | "repeat" => {
-                        self.compile_string_text_method(object.values[0], field, args)
-                    }
-                    "trim" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `trim()` to take no arguments".to_string()
-                            );
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::StringTrim], &[object.values[0]]);
                         Ok(self.owned_opaque_result(
                             self.builder.inst_results(inst).to_vec(),
                             Type::named("str"),
@@ -12983,416 +12811,10 @@ impl<'a> FunctionCompiler<'a> {
                     return Ok(result);
                 }
             }
-            if name == "Queue" {
-                let object = self.ensure_opaque(object)?;
-                let element_ty = class_args
-                    .first()
-                    .cloned()
-                    .unwrap_or(Type::named("Unknown"));
-                let element_direct_ty =
-                    ensure_direct_type(&element_ty, &self.classes, "Queue element")?;
-                return match field {
-                    "put" => {
-                        let mut value_arg: Option<&MirArg> = None;
-                        let mut timeout_arg: Option<&MirArg> = None;
-                        for argument in args {
-                            match argument.name.as_deref() {
-                                Some("value") => value_arg = Some(argument),
-                                Some("timeout") => timeout_arg = Some(argument),
-                                Some(other) => {
-                                    return Err(format!(
-                                        "direct backend expected `put()` arguments to use `value` and optional `timeout`, found `{}`",
-                                        other
-                                    ))
-                                }
-                                None if value_arg.is_none() => value_arg = Some(argument),
-                                None if timeout_arg.is_none() => timeout_arg = Some(argument),
-                                None => {
-                                    return Err(
-                                        "direct backend expected `put(value, timeout=...)`".to_string(),
-                                    )
-                                }
-                            }
-                        }
-                        let Some(argument) = value_arg else {
-                            return Err(
-                                "direct backend expected `put()` to receive a value argument"
-                                    .to_string(),
-                            );
-                        };
-                        let value = self
-                            .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
-                        let inst = if let Some(timeout_arg) = timeout_arg {
-                            let timeout = self.load_operand(&timeout_arg.value)?;
-                            let timeout = self.ensure_opaque(timeout)?;
-                            let value = self.transfer_owned_opaque_value(&value);
-                            self.builder.ins().call(
-                                self.runtime[RuntimeFn::ChannelSendTimeoutValue],
-                                &[object.values[0], value, timeout.values[0]],
-                            )
-                        } else {
-                            let value = self.transfer_owned_opaque_value(&value);
-                            self.builder.ins().call(
-                                self.runtime[RuntimeFn::ChannelSend],
-                                &[object.values[0], value],
-                            )
-                        };
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::Unit,
-                                    Type::Named("SendError".to_string(), vec![element_ty.clone()]),
-                                ],
-                            ),
-                        ))
-                    }
-                    "try_put" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected `try_put()` to receive one argument"
-                                    .to_string(),
-                            );
-                        };
-                        if argument.name.as_deref() != Some("value") && argument.name.is_some() {
-                            return Err(
-                                "direct backend expected `try_put()` to receive only `value=`"
-                                    .to_string(),
-                            );
-                        }
-                        let value = self
-                            .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
-                        let value = self.transfer_owned_opaque_value(&value);
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ChannelTrySend],
-                            &[object.values[0], value],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "Result".to_string(),
-                                vec![
-                                    Type::Unit,
-                                    Type::Named("SendError".to_string(), vec![element_ty.clone()]),
-                                ],
-                            ),
-                        ))
-                    }
-                    "get" => {
-                        let inst = match args {
-                            [] => self
-                                .builder
-                                .ins()
-                                .call(self.runtime[RuntimeFn::ChannelRecv], &[object.values[0]]),
-                            [argument] => {
-                                if argument.name.as_deref() != Some("timeout")
-                                    && argument.name.is_some()
-                                {
-                                    return Err(
-                                        "direct backend expected `get()` or `get(timeout=...)`"
-                                            .to_string(),
-                                    );
-                                }
-                                let timeout = self.load_operand(&argument.value)?;
-                                let timeout = self.ensure_opaque(timeout)?;
-                                self.builder.ins().call(
-                                    self.runtime[RuntimeFn::ChannelRecvTimeoutValue],
-                                    &[object.values[0], timeout.values[0]],
-                                )
-                            }
-                            _ => {
-                                return Err("direct backend expected `get()` or `get(timeout=...)`"
-                                    .to_string())
-                            }
-                        };
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "QueueReceive".to_string(),
-                                vec![class_args
-                                    .first()
-                                    .cloned()
-                                    .unwrap_or(Type::named("Unknown"))],
-                            ),
-                        ))
-                    }
-                    "__get_in_task_group" => {
-                        let [task_group] = args else {
-                            return Err(
-                                "direct backend expected internal `__get_in_task_group()` to receive one task-group argument"
-                                    .to_string(),
-                            );
-                        };
-                        let task_group = self.load_operand(&task_group.value)?;
-                        let task_group = self.ensure_opaque(task_group)?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ChannelRecvInTaskGroup],
-                            &[object.values[0], task_group.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "QueueReceive".to_string(),
-                                vec![class_args
-                                    .first()
-                                    .cloned()
-                                    .unwrap_or(Type::named("Unknown"))],
-                            ),
-                        ))
-                    }
-                    "__get_with_registered_producers" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected internal `__get_with_registered_producers()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ChannelRecvWithRegisteredProducers],
-                            &[object.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "QueueReceive".to_string(),
-                                vec![class_args
-                                    .first()
-                                    .cloned()
-                                    .unwrap_or(Type::named("Unknown"))],
-                            ),
-                        ))
-                    }
-                    "poll" => {
-                        let inst = match args {
-                            [] => self.builder.ins().call(
-                                self.runtime[RuntimeFn::ChannelRecvOrNone],
-                                &[object.values[0]],
-                            ),
-                            [argument] => {
-                                if argument.name.as_deref() != Some("timeout")
-                                    && argument.name.is_some()
-                                {
-                                    return Err(
-                                        "direct backend expected `poll()` or `poll(timeout=...)`"
-                                            .to_string(),
-                                    );
-                                }
-                                let timeout = self.load_operand(&argument.value)?;
-                                let timeout = self.ensure_opaque(timeout)?;
-                                self.builder.ins().call(
-                                    self.runtime[RuntimeFn::ChannelRecvOrNoneTimeoutValue],
-                                    &[object.values[0], timeout.values[0]],
-                                )
-                            }
-                            _ => {
-                                return Err(
-                                    "direct backend expected `poll()` or `poll(timeout=...)`"
-                                        .to_string(),
-                                )
-                            }
-                        };
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            optional_type(element_ty.clone()),
-                        ))
-                    }
-                    "get_or" => {
-                        let bound = ordered_optional_named_args(&["default", "timeout"], args)?;
-                        let default = required_named_arg(
-                            bound[0],
-                            "direct backend expected `get_or()` to receive `default`",
-                        )?;
-                        let loaded = self.load_operand(&default.value)?;
-                        let loaded = self.ensure_opaque(loaded)?;
-                        let inst = match bound[1] {
-                            Some(timeout) => {
-                                let timeout = self.load_operand(&timeout.value)?;
-                                let timeout = self.ensure_opaque(timeout)?;
-                                let default = self.transfer_owned_opaque_value(&loaded);
-                                self.builder.ins().call(
-                                    self.runtime[RuntimeFn::ChannelRecvOrValueTimeoutValue],
-                                    &[object.values[0], default, timeout.values[0]],
-                                )
-                            }
-                            None => {
-                                let default = self.transfer_owned_opaque_value(&loaded);
-                                self.builder.ins().call(
-                                    self.runtime[RuntimeFn::ChannelRecvOrValue],
-                                    &[object.values[0], default],
-                                )
-                            }
-                        };
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            class_args
-                                .first()
-                                .cloned()
-                                .unwrap_or(Type::named("Unknown")),
-                        ))
-                    }
-                    "close" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `close()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::ChannelClose], &[object.values[0]]);
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
-            }
-            if name == "Task" {
-                let object = self.ensure_opaque(object)?;
-                return match field {
-                    "result" => {
-                        let inst = match args {
-                            [] => self
-                                .builder
-                                .ins()
-                                .call(self.runtime[RuntimeFn::TaskJoin], &[object.values[0]]),
-                            [argument] => {
-                                if argument.name.as_deref() != Some("timeout")
-                                    && argument.name.is_some()
-                                {
-                                    return Err(
-                                        "direct backend expected `result()` or `result(timeout=...)`"
-                                            .to_string(),
-                                    );
-                                }
-                                let timeout = self.load_operand(&argument.value)?;
-                                let timeout = self.ensure_opaque(timeout)?;
-                                self.builder.ins().call(
-                                    self.runtime[RuntimeFn::TaskJoinTimeoutValue],
-                                    &[object.values[0], timeout.values[0]],
-                                )
-                            }
-                            _ => {
-                                return Err(
-                                    "direct backend expected `result()` or `result(timeout=...)`"
-                                        .to_string(),
-                                )
-                            }
-                        };
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "TaskResult".to_string(),
-                                vec![class_args.first().cloned().unwrap_or(Type::Unit)],
-                            ),
-                        ))
-                    }
-                    "poll" => {
-                        let inst = match args {
-                            [] => self
-                                .builder
-                                .ins()
-                                .call(self.runtime[RuntimeFn::TaskJoinOrNone], &[object.values[0]]),
-                            [argument] => {
-                                if argument.name.as_deref() != Some("timeout")
-                                    && argument.name.is_some()
-                                {
-                                    return Err(
-                                        "direct backend expected `poll()` or `poll(timeout=...)`"
-                                            .to_string(),
-                                    );
-                                }
-                                let timeout = self.load_operand(&argument.value)?;
-                                let timeout = self.ensure_opaque(timeout)?;
-                                self.builder.ins().call(
-                                    self.runtime[RuntimeFn::TaskJoinOrNoneTimeoutValue],
-                                    &[object.values[0], timeout.values[0]],
-                                )
-                            }
-                            _ => {
-                                return Err(
-                                    "direct backend expected `poll()` or `poll(timeout=...)`"
-                                        .to_string(),
-                                )
-                            }
-                        };
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            optional_type(class_args.first().cloned().unwrap_or(Type::Unit)),
-                        ))
-                    }
-                    "result_or" => {
-                        let bound = ordered_optional_named_args(&["default", "timeout"], args)?;
-                        let default = required_named_arg(
-                            bound[0],
-                            "direct backend expected `result_or()` to receive `default`",
-                        )?;
-                        let loaded = self.load_operand(&default.value)?;
-                        let loaded = self.ensure_opaque(loaded)?;
-                        let inst = match bound[1] {
-                            Some(timeout) => {
-                                let timeout = self.load_operand(&timeout.value)?;
-                                let timeout = self.ensure_opaque(timeout)?;
-                                let default = self.transfer_owned_opaque_value(&loaded);
-                                self.builder.ins().call(
-                                    self.runtime[RuntimeFn::TaskJoinOrValueTimeoutValue],
-                                    &[object.values[0], default, timeout.values[0]],
-                                )
-                            }
-                            None => {
-                                let default = self.transfer_owned_opaque_value(&loaded);
-                                self.builder.ins().call(
-                                    self.runtime[RuntimeFn::TaskJoinOrValue],
-                                    &[object.values[0], default],
-                                )
-                            }
-                        };
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            class_args.first().cloned().unwrap_or(Type::Unit),
-                        ))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
-            }
-            if name == "TaskGroup" {
-                let object = self.ensure_opaque(object)?;
-                return match field {
-                    "cancel" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `cancel()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::TaskGroupCancel],
-                            &[object.values[0]],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    "close" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `close()` to take no arguments"
-                                .to_string());
-                        }
-                        let cancel_before = self.builder.ins().iconst(types::I64, 0);
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::TaskGroupClose],
-                            &[object.values[0], cancel_before],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
+            if matches!(name.as_str(), "Queue" | "Task" | "TaskGroup") {
+                return Err(format!(
+                    "direct backend does not know runtime member `{name}.{field}`"
+                ));
             }
             let _ = class_args;
         }

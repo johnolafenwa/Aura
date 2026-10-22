@@ -1,6 +1,7 @@
 use super::{
     builtin_function_for_name, builtin_member_for_receiver, FunctionOp, HostBuiltin, PrintKind,
-    ResourceOp, RngOp, RuntimeOp, RuntimeTarget, ScalarOp, ValueOp,
+    QueueOp, ResourceOp, RngOp, RuntimeOp, RuntimeTarget, ScalarOp, StrOp, TaskGroupOp, TaskOp,
+    ValueOp,
 };
 use crate::native_runtime::HOST_BUILTIN_SYMBOLS;
 use crate::runtime_abi::RuntimeFn;
@@ -30,6 +31,10 @@ fn sample_receiver(op: RuntimeOp) -> Type {
         RuntimeOp::Scalar(_) | RuntimeOp::Value(ValueOp::ToString) => Type::named("int32"),
         RuntimeOp::Value(ValueOp::Clone) => Type::named("str"),
         RuntimeOp::Value(ValueOp::Copy) => named("list", vec![Type::named("int64")]),
+        RuntimeOp::Str(_) => Type::named("str"),
+        RuntimeOp::Queue(_) => named("Queue", vec![Type::named("int64")]),
+        RuntimeOp::Task(_) => named("Task", vec![Type::named("str")]),
+        RuntimeOp::TaskGroup(_) => Type::named("TaskGroup"),
         RuntimeOp::Function(_) | RuntimeOp::Print(_) | RuntimeOp::Host(_) => {
             unreachable!("{op} has no receiver")
         }
@@ -44,10 +49,10 @@ fn every_runtime_op_resolves_from_its_receiver_and_has_a_result_type() {
             unreachable!("sample receivers are named types")
         };
         assert!(op.applies_to(name), "{op} applies to `{receiver}`");
-        assert!(!op.applies_to("Queue"), "{op} does not apply to `Queue`");
+        assert!(!op.applies_to("Range"), "{op} does not apply to `Range`");
         assert_eq!(
             RuntimeOp::resolve_member(&receiver, op.name(), |_| false),
-            Some(op),
+            Some(op.unspecialized()),
             "`{receiver}.{}` resolves to {op}",
             op.name()
         );
@@ -174,10 +179,217 @@ fn class_methods_and_unnamed_receivers_shadow_runtime_ops() {
     );
     assert_eq!(RuntimeOp::resolve_member(&file, "missing", |_| false), None);
     assert_eq!(
-        RuntimeOp::resolve_member(&Type::named("Queue"), "get", |_| false),
+        RuntimeOp::resolve_member(&named("list", vec![]), "len", |_| false),
         None,
-        "Queue ops are not resolved yet"
+        "collection ops are not resolved yet"
     );
+    // A private queue receive resolves only on a `Queue`, under the same
+    // class precedence.
+    let queue = named("Queue", vec![Type::named("int64")]);
+    assert_eq!(
+        RuntimeOp::resolve_member(&queue, QueueOp::GET_IN_TASK_GROUP, |_| false),
+        Some(RuntimeOp::Queue(QueueOp::GetInTaskGroup))
+    );
+    assert_eq!(
+        RuntimeOp::resolve_member(&queue, QueueOp::GET_IN_TASK_GROUP, |_| true),
+        None
+    );
+    assert_eq!(
+        RuntimeOp::resolve_member(
+            &Type::named("str"),
+            QueueOp::GET_WITH_REGISTERED_PRODUCERS,
+            |_| unreachable!("only a `Queue` receiver asks")
+        ),
+        None
+    );
+    assert_eq!(
+        RuntimeOp::resolve_member(
+            &Type::TypeParam("T".to_string()),
+            QueueOp::GET_IN_TASK_GROUP,
+            |_| unreachable!("a type parameter names no class")
+        ),
+        None
+    );
+}
+
+#[test]
+fn str_queue_and_task_ops_name_their_members_and_results() {
+    let int64 = Type::named("int64");
+    let text = Type::named("str");
+    let queue = named("Queue", vec![int64.clone()]);
+    let task = named("Task", vec![text.clone()]);
+    let result = |op: RuntimeOp, receiver: &Type| op.result_type(Some(receiver), &[]);
+    assert_eq!(
+        result(RuntimeOp::Str(StrOp::Len), &text),
+        Some(int64.clone())
+    );
+    assert_eq!(result(RuntimeOp::Str(StrOp::EndsWith), &text), some("bool"));
+    assert_eq!(
+        result(RuntimeOp::Str(StrOp::Split), &text),
+        Some(named("list", vec![text.clone()]))
+    );
+    assert_eq!(
+        result(RuntimeOp::Str(StrOp::StripSuffix), &text),
+        Some(optional_type(text.clone()))
+    );
+    assert_eq!(result(RuntimeOp::Str(StrOp::Join), &text), some("str"));
+    assert_eq!(
+        result(RuntimeOp::Str(StrOp::SplitOnce), &text),
+        Some(optional_type(Type::Tuple(vec![text.clone(), text.clone()])))
+    );
+    assert_eq!(result(RuntimeOp::Str(StrOp::Count), &text), some("int64"));
+    let send = named(
+        "Result",
+        vec![Type::Unit, named("SendError", vec![int64.clone()])],
+    );
+    let cases = [
+        (QueueOp::Put, Some(send.clone())),
+        (QueueOp::PutTimeout, Some(send.clone())),
+        (QueueOp::TryPut, Some(send)),
+        (
+            QueueOp::GetWithRegisteredProducers,
+            Some(named("QueueReceive", vec![int64.clone()])),
+        ),
+        (
+            QueueOp::PollTimeout,
+            Some(named("Poll", vec![int64.clone()])),
+        ),
+        (QueueOp::GetOrTimeout, Some(int64.clone())),
+        (QueueOp::Close, Some(Type::Unit)),
+    ];
+    for (op, expected) in cases {
+        assert_eq!(result(RuntimeOp::Queue(op), &queue), expected, "{op:?}");
+    }
+    // A queue without a payload type names an unknown payload, and has no
+    // `get_or` result.
+    assert_eq!(
+        result(RuntimeOp::Queue(QueueOp::Get), &Type::named("Queue")),
+        Some(named("QueueReceive", vec![Type::named("Unknown")]))
+    );
+    assert_eq!(
+        result(RuntimeOp::Queue(QueueOp::GetOr), &Type::named("Queue")),
+        None
+    );
+    assert_eq!(
+        result(RuntimeOp::Task(TaskOp::ResultTimeout), &task),
+        Some(named("TaskResult", vec![text.clone()]))
+    );
+    assert_eq!(
+        result(RuntimeOp::Task(TaskOp::Poll), &task),
+        Some(named("Poll", vec![text.clone()]))
+    );
+    assert_eq!(
+        result(RuntimeOp::Task(TaskOp::ResultOr), &task),
+        Some(text.clone())
+    );
+    assert_eq!(
+        RuntimeOp::Task(TaskOp::Result).result_type(None, &[]),
+        Some(named("TaskResult", vec![Type::Unit]))
+    );
+    assert_eq!(
+        result(
+            RuntimeOp::TaskGroup(TaskGroupOp::Cancel),
+            &Type::named("TaskGroup")
+        ),
+        Some(Type::Unit)
+    );
+}
+
+#[test]
+fn queue_and_task_timeout_forms_take_a_required_timeout() {
+    let names = |op: RuntimeOp| {
+        op.params()
+            .into_iter()
+            .map(|param| (param.name, param.required))
+            .collect::<Vec<_>>()
+    };
+    let cases = [
+        (RuntimeOp::Queue(QueueOp::Put), vec![("value", true)]),
+        (
+            RuntimeOp::Queue(QueueOp::PutTimeout),
+            vec![("value", true), ("timeout", true)],
+        ),
+        (RuntimeOp::Queue(QueueOp::Get), vec![]),
+        (
+            RuntimeOp::Queue(QueueOp::GetTimeout),
+            vec![("timeout", true)],
+        ),
+        (
+            RuntimeOp::Queue(QueueOp::GetInTaskGroup),
+            vec![("group", true)],
+        ),
+        (
+            RuntimeOp::Queue(QueueOp::GetWithRegisteredProducers),
+            vec![],
+        ),
+        (
+            RuntimeOp::Task(TaskOp::ResultOrTimeout),
+            vec![("default", true), ("timeout", true)],
+        ),
+        (RuntimeOp::Queue(QueueOp::Close), vec![]),
+        (
+            RuntimeOp::Str(StrOp::Replace),
+            vec![("from", true), ("to", true)],
+        ),
+    ];
+    for (op, expected) in cases {
+        assert_eq!(names(op), expected, "{op}");
+    }
+    for op in RuntimeOp::all() {
+        let base = op.unspecialized();
+        assert_eq!(base.unspecialized(), base, "{op}");
+        if op != base && !matches!(op, RuntimeOp::Print(_)) {
+            assert_eq!(base.with_timeout(), op, "{op} is its base's timeout form");
+            assert_eq!(op.name(), base.name());
+            assert_eq!(op.builtin_member(), base.builtin_member());
+        }
+    }
+    assert_eq!(
+        RuntimeOp::Task(TaskOp::Poll).with_timeout(),
+        RuntimeOp::Task(TaskOp::PollTimeout)
+    );
+    assert_eq!(
+        RuntimeOp::Queue(QueueOp::Close).with_timeout(),
+        RuntimeOp::Queue(QueueOp::Close)
+    );
+    // A timeout form is its own timeout form.
+    assert_eq!(
+        RuntimeOp::Task(TaskOp::PollTimeout).with_timeout(),
+        RuntimeOp::Task(TaskOp::PollTimeout)
+    );
+    assert_eq!(
+        RuntimeOp::Queue(QueueOp::GetTimeout).with_timeout(),
+        RuntimeOp::Queue(QueueOp::GetTimeout)
+    );
+    assert_eq!(
+        RuntimeOp::Str(StrOp::Len).with_timeout(),
+        RuntimeOp::Str(StrOp::Len)
+    );
+    // A private receive borrows its argument; `put` takes its value.
+    assert_eq!(
+        RuntimeOp::Queue(QueueOp::GetInTaskGroup).argument_passing(0),
+        Some(crate::ast::ReceiverKind::Borrow)
+    );
+    assert_eq!(
+        RuntimeOp::Queue(QueueOp::Put).argument_passing(0),
+        Some(crate::ast::ReceiverKind::Value)
+    );
+}
+
+#[test]
+fn str_text_methods_pass_their_dispatcher_opcode() {
+    for op in StrOp::ALL {
+        let call = RuntimeOp::Str(*op).runtime_call();
+        let opcode = crate::text_methods::text_method_opcode(op.builtin_member().name());
+        assert_eq!(op.is_text_method(), opcode.is_some(), "{op:?}");
+        match opcode {
+            Some(opcode) => {
+                assert_eq!(call.function, RuntimeFn::StringTextMethod);
+                assert_eq!(call.immediates, [opcode], "{op:?}");
+            }
+            None => assert!(call.immediates.is_empty(), "{op:?}"),
+        }
+    }
 }
 
 #[test]
@@ -190,6 +402,16 @@ fn runtime_ops_display_their_family() {
         (RuntimeOp::Rng(RngOp::Shuffle), "Rng.Shuffle"),
         (RuntimeOp::Scalar(ScalarOp::Sqrt), "Scalar.Sqrt"),
         (RuntimeOp::Value(ValueOp::Copy), "Value.Copy"),
+        (RuntimeOp::Str(StrOp::TrimStart), "Str.TrimStart"),
+        (
+            RuntimeOp::Queue(QueueOp::GetOrTimeout),
+            "Queue.GetOrTimeout",
+        ),
+        (RuntimeOp::Task(TaskOp::Poll), "Task.Poll"),
+        (
+            RuntimeOp::TaskGroup(TaskGroupOp::Cancel),
+            "TaskGroup.Cancel",
+        ),
         (RuntimeOp::Function(FunctionOp::Range), "Function.Range"),
         (RuntimeOp::Print(PrintKind::Int), "Print.Int"),
         (

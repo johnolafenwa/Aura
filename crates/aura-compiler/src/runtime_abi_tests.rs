@@ -151,6 +151,25 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
     {
         assert!(covered.contains(&helper), "{helper:?} has no runtime op");
     }
+    // Every `str`, queue, and task helper a member call makes has an op.
+    // Slicing, `with` cleanup of a task group, and task start stay in the
+    // backend.
+    for helper in RuntimeFn::ALL.iter().copied().filter(|helper| {
+        let symbol = helper.symbol();
+        (symbol.starts_with("aura_direct_string_")
+            || symbol.starts_with("aura_direct_channel_")
+            || symbol.starts_with("aura_direct_task_"))
+            && !matches!(
+                helper,
+                RuntimeFn::StringLiteral
+                    | RuntimeFn::StringSlice
+                    | RuntimeFn::TaskGroupClose
+                    | RuntimeFn::TaskArgBufferGuard
+                    | RuntimeFn::TaskArgBufferDisarm
+            )
+    }) {
+        assert!(covered.contains(&helper), "{helper:?} has no runtime op");
+    }
 }
 
 #[test]
@@ -161,6 +180,13 @@ fn every_runtime_op_round_trips_through_its_builtin_member_or_name() {
         match op.builtin_member() {
             Some(member) => assert_eq!(
                 RuntimeOp::from_builtin_member(member),
+                Some(op.unspecialized()),
+                "{op} does not resolve back from `{}`",
+                op.name()
+            ),
+            // A private queue receive resolves by its MIR spelling.
+            None if op.has_receiver() => assert_eq!(
+                RuntimeOp::resolve_member(&crate::sema::Type::named("Queue"), op.name(), |_| false),
                 Some(op),
                 "{op} does not resolve back from `{}`",
                 op.name()
