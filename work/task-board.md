@@ -33,10 +33,13 @@ Last updated: 2026-10-22
   and release, both boundaries check them, and the emitter still ignores
   them. PR 2 merged as PR #109. PR 3 switches the emitter: the pass
   cancels retain and release pairs into moves, and native code releases
-  each value where MIR does. PR 4 moves lending into MIR. Details are in
+  each value where MIR does. PR 4 moves lending into MIR as `Lend` and
+  `EndLend`, borrows the receivers the emitter reads in place, and makes
+  each `Retain` where MIR states it. Details are in
   `2026-10-22-batch-7-step-8e1-ownership-vocabulary.md`,
-  `2026-10-22-batch-7-step-8e2-ownership-pass.md`, and
-  `2026-10-22-batch-7-step-8e3-emitter-ownership.md`.
+  `2026-10-22-batch-7-step-8e2-ownership-pass.md`,
+  `2026-10-22-batch-7-step-8e3-emitter-ownership.md`, and
+  `2026-10-22-batch-7-step-8e4-transfers-and-lending.md`.
 
 ## Aura 0.6.0 preview release (complete)
 

@@ -624,8 +624,8 @@ pub struct MirModule {
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub enum MirOwnership {
     /// The backends decide when a value gains or loses a reference. An
-    /// implicit module holds no `Retain`, no `Release`, and no `Try`
-    /// releases.
+    /// implicit module holds no `Retain`, no `Release`, no `Try`
+    /// releases, and no lends.
     #[default]
     Implicit,
     /// `Retain` and `Release` instructions and `Try` releases state each
@@ -770,6 +770,25 @@ pub enum Instruction {
     /// module holds it, and both backends treat it as a no-op.
     Release {
         place: String,
+    },
+    /// Moves the value at `place` into the empty root local `temp` for the
+    /// one call that follows, which reads `temp` instead of `place`. Only
+    /// retains come between them, and the matching `EndLend` follows the
+    /// call. The call cannot reach `place`, so no copy is needed: see
+    /// `mir_lending.rs`. A `mutable` lend lets the call write `temp` back.
+    /// Only an explicit module holds it.
+    Lend {
+        place: String,
+        temp: String,
+        mutable: bool,
+    },
+    /// Moves the value of `temp` back into `place` and leaves `temp` empty,
+    /// ending the `Lend` with the same operands. The value is the one the
+    /// call left, so a mutable lend publishes the call's change.
+    EndLend {
+        place: String,
+        temp: String,
+        mutable: bool,
     },
     /// Records that `index` selects an element of the list `list` here:
     /// `0 <= index < list.len()`. A `for` loop over a whole list or a span
@@ -2685,7 +2704,7 @@ impl<'a> MirLoanValidationContext<'a> {
         Ok(())
     }
 
-    fn root_allows_mutable_loan(&self, function: &MirFunction, root: &str) -> bool {
+    pub(super) fn root_allows_mutable_loan(&self, function: &MirFunction, root: &str) -> bool {
         // `self` names the receiver only in a method that has one; an
         // initializer's `self` is an ordinary owned local.
         if root == "self" && function.receiver.is_some() {
@@ -7988,6 +8007,53 @@ fn validate_loan_instruction(
             validate_released_root(function, place, known_roots, state)?;
             invalidate_union_facts_for_place(place, state);
         }
+        // A lend reads its place into the temporary, and its end writes the
+        // temporary back. The value is the same one, so neither changes
+        // what the loan rules know about where values came from.
+        Instruction::Lend { place, temp, .. } => {
+            let origins = (
+                state.derived_value_origins.clone(),
+                state.borrowed_value_origins.clone(),
+            );
+            let read = Instruction::Assign {
+                target: temp.clone(),
+                value: Rvalue::Use(Operand::Place(place.clone())),
+            };
+            validate_loan_instruction(function, &read, known_roots, context, budget, state)?;
+            (state.derived_value_origins, state.borrowed_value_origins) = origins;
+        }
+        Instruction::EndLend {
+            place,
+            temp,
+            mutable,
+        } => {
+            let origins = (
+                state.derived_value_origins.clone(),
+                state.borrowed_value_origins.clone(),
+            );
+            let value = Rvalue::Use(Operand::MovePlace(temp.clone()));
+            let back = if !*mutable {
+                validate_loan_operand(function, &Operand::Place(place.clone()), context, state)?;
+                Instruction::Eval {
+                    value: Operand::MovePlace(temp.clone()),
+                }
+            } else if state
+                .loans
+                .contains_key(place.split('.').next().unwrap_or_default())
+            {
+                Instruction::WriteLoan {
+                    loan: place.clone(),
+                    value,
+                }
+            } else {
+                Instruction::Assign {
+                    target: place.clone(),
+                    value,
+                }
+            };
+            validate_loan_instruction(function, &back, known_roots, context, budget, state)?;
+            (state.derived_value_origins, state.borrowed_value_origins) = origins;
+        }
         Instruction::BeginElementLoan {
             loan,
             source,
@@ -9430,6 +9496,10 @@ pub(crate) fn validate_loan_flow(module: &MirModule) -> std::result::Result<(), 
     validate_copy_marks(module, &context)?;
     for function in module.functions.iter().chain(module.top_level.iter()) {
         validate_ownership_vocabulary(module.ownership, function)?;
+        // The vocabulary check refuses a lend in an implicit module.
+        if !module.ownership.is_implicit() {
+            lending::validate_lends(function, &context)?;
+        }
         validate_enum_variant_payloads(function, &context)?;
         validate_initializer_slot(function, &context)?;
         runtime_ops::validate_runtime_ops(function, &context)?;
@@ -9476,7 +9546,7 @@ fn validate_copy_marks(
 }
 
 /// An implicit module states no ownership: it holds no `Retain`, no
-/// `Release`, and no `Try` releases.
+/// `Release`, no lend, and no `Try` releases.
 fn validate_ownership_vocabulary(
     ownership: MirOwnership,
     function: &MirFunction,
@@ -9486,7 +9556,10 @@ fn validate_ownership_vocabulary(
     }
     for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
         let explicit = match instruction {
-            Instruction::Retain { .. } | Instruction::Release { .. } => true,
+            Instruction::Retain { .. }
+            | Instruction::Release { .. }
+            | Instruction::Lend { .. }
+            | Instruction::EndLend { .. } => true,
             Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. } => matches!(
                 value,
                 Rvalue::Try { releases_on_error, .. } if !releases_on_error.is_empty()
@@ -9846,6 +9919,9 @@ pub(crate) fn instruction_place_mentions<'a>(
     match instruction {
         Instruction::Safepoint => {}
         Instruction::Retain { place } | Instruction::Release { place } => mentions.push(place),
+        Instruction::Lend { place, temp, .. } | Instruction::EndLend { place, temp, .. } => {
+            mentions.extend([place.as_str(), temp])
+        }
         Instruction::IndexInRange { list, index } => mentions.extend([list.as_str(), index]),
         Instruction::BeginLoan { source, .. } | Instruction::PushCleanup { place: source, .. } => {
             mentions.push(source)
@@ -26545,6 +26621,9 @@ pub mod ownership;
 
 #[path = "mir_ownership_check.rs"]
 mod ownership_check;
+
+#[path = "mir_lending.rs"]
+mod lending;
 
 pub(crate) use ownership_check::validate_ownership;
 
