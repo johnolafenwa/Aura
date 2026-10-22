@@ -1,7 +1,17 @@
 //! Forged MIR must not manufacture access to an inactive union payload.
 
+use aura_compiler::mir::ownership::strip_ownership;
 use aura_compiler::{emit_host_native_object, lower_source_to_mir, run_mir, MirModule};
+
 use serde_json::{json, Value};
+
+/// Lowers `source` to MIR that states no ownership. A forgery edits it, and
+/// each boundary then fills the ownership in.
+fn lower_implicit(source: &str) -> aura_compiler::Result<MirModule> {
+    let mut mir = lower_source_to_mir(source)?;
+    strip_ownership(&mut mir);
+    Ok(mir)
+}
 
 fn main_block_mut<'a>(encoded: &'a mut Value, label: &str) -> &'a mut Value {
     encoded["functions"]
@@ -72,7 +82,7 @@ fn assert_accepted_on_both_boundaries(mir: &MirModule, label: &str) -> aura_comp
 
 fn forged_pattern_mir(then_instructions: Vec<Value>) -> MirModule {
     let source = "def main():\n    value: int64 | str = 1\n    other: int64 | str = 1\n    flag = false\n    payload = 0\n";
-    let mir = lower_source_to_mir(source).expect("baseline union locals must lower");
+    let mir = lower_implicit(source).expect("baseline union locals must lower");
     let mut encoded = serde_json::to_value(mir).expect("MIR must serialize");
     let main = encoded["functions"]
         .as_array_mut()
@@ -346,7 +356,7 @@ fn moving_the_union_invalidates_its_tag_fact() {
 }
 
 fn forged_enum_pattern_mir(source: &str, matched_instructions: Vec<Value>) -> MirModule {
-    let mir = lower_source_to_mir(source).expect("baseline enum locals must lower");
+    let mir = lower_implicit(source).expect("baseline enum locals must lower");
     let mut encoded = serde_json::to_value(mir).expect("MIR must serialize");
     let main = encoded["functions"]
         .as_array_mut()
@@ -508,7 +518,7 @@ fn enum_payload_projection_requires_embedded_layout_metadata() {
 #[test]
 fn nested_enum_and_union_payload_proofs_compose() {
     let source = "enum Inner:\n    Data(int64 | str)\nenum Outer:\n    Nested(Inner)\ndef main():\n    value = Outer.Nested(Inner.Data(42))\n    match value:\n        case Outer.Nested(Inner.Data(int64 as number)):\n            print(number)\n        case Outer.Nested(Inner.Data(str as text)):\n            print(text)\n";
-    let mir = lower_source_to_mir(source).expect("nested enum-union pattern must lower");
+    let mir = lower_implicit(source).expect("nested enum-union pattern must lower");
     let output = assert_accepted_on_both_boundaries(
         &mir,
         "every nested projection has its own dominating proof",
@@ -518,7 +528,7 @@ fn nested_enum_and_union_payload_proofs_compose() {
 
 fn forged_nested_enum_mir(with_wrong_inner_proof: bool) -> MirModule {
     let source = "enum Inner:\n    Data(int64)\n    Other(int64)\nenum Outer:\n    Nested(Inner)\ndef main():\n    value = Outer.Nested(Inner.Data(42))\n    number = 0\n";
-    let mir = lower_source_to_mir(source).expect("nested enum baseline must lower");
+    let mir = lower_implicit(source).expect("nested enum baseline must lower");
     let mut encoded = serde_json::to_value(mir).unwrap();
     let main = encoded["functions"]
         .as_array_mut()
@@ -567,7 +577,7 @@ fn nested_enum_projection_rejects_wrong_inner_proof() {
 #[test]
 fn union_member_enum_and_nested_union_proofs_compose() {
     let source = "enum Inner:\n    Data(int64 | str)\ndef main():\n    value: Inner | None = Inner.Data(42)\n    match value:\n        case Inner as inner:\n            match inner:\n                case Inner.Data(int64 as number):\n                    print(number)\n                case Inner.Data(str as text):\n                    print(text)\n        case None:\n            pass\n";
-    let mir = lower_source_to_mir(source).expect("union-enum-union pattern must lower");
+    let mir = lower_implicit(source).expect("union-enum-union pattern must lower");
     let output = assert_accepted_on_both_boundaries(
         &mir,
         "nested proofs must follow the resolved union member place",
@@ -578,7 +588,7 @@ fn union_member_enum_and_nested_union_proofs_compose() {
 #[test]
 fn union_tag_test_rejects_an_unproven_enum_payload_ancestor() {
     let source = "enum Inner:\n    Data(int64 | str)\nenum Outer:\n    Nested(Inner)\ndef main():\n    value = Outer.Nested(Inner.Data(42))\n    choice: int64 | str = 1\n    flag = false\n";
-    let mir = lower_source_to_mir(source).expect("nested tag-test baseline must lower");
+    let mir = lower_implicit(source).expect("nested tag-test baseline must lower");
     let mut encoded = serde_json::to_value(mir).unwrap();
     let main = encoded["functions"]
         .as_array_mut()
@@ -613,7 +623,7 @@ fn union_tag_test_rejects_an_unproven_enum_payload_ancestor() {
 
 #[test]
 fn projected_assignment_requires_a_dominating_enum_proof() {
-    let mir = lower_source_to_mir(ENUM_PATTERN_SOURCE).unwrap();
+    let mir = lower_implicit(ENUM_PATTERN_SOURCE).unwrap();
     let mut encoded = serde_json::to_value(mir).unwrap();
     main_block_mut(&mut encoded, "entry")["instructions"] = json!([{ "Assign": {
         "target": "boxed.__variant_payload_Item_0", "value": { "Use": { "Int": 2 }}
@@ -626,7 +636,7 @@ fn projected_assignment_requires_a_dominating_enum_proof() {
 
 #[test]
 fn read_loan_target_requires_a_dominating_enum_proof() {
-    let mir = lower_source_to_mir(ENUM_PATTERN_SOURCE).unwrap();
+    let mir = lower_implicit(ENUM_PATTERN_SOURCE).unwrap();
     let mut encoded = serde_json::to_value(mir).unwrap();
     main_block_mut(&mut encoded, "entry")["instructions"]
         .as_array_mut()
@@ -643,7 +653,7 @@ fn read_loan_target_requires_a_dominating_enum_proof() {
 }
 
 fn forged_dotted_loan_access(instruction: Value, mutable: bool) -> MirModule {
-    let mir = lower_source_to_mir(ENUM_PATTERN_SOURCE).unwrap();
+    let mir = lower_implicit(ENUM_PATTERN_SOURCE).unwrap();
     let mut encoded = serde_json::to_value(mir).unwrap();
     main_block_mut(&mut encoded, "entry")["instructions"]
         .as_array_mut()
@@ -680,8 +690,7 @@ fn dotted_write_loan_requires_a_dominating_enum_proof() {
 
 #[test]
 fn variant_payload_requires_a_dominating_enum_fact() {
-    let mut encoded =
-        serde_json::to_value(lower_source_to_mir(ENUM_PATTERN_SOURCE).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(ENUM_PATTERN_SOURCE).unwrap()).unwrap();
     main_block_mut(&mut encoded, "entry")["instructions"]
         .as_array_mut()
         .unwrap()
@@ -721,7 +730,7 @@ fn variant_payload_metadata_must_match_the_proven_variant_and_layout() {
 fn for_range_binding_requires_a_dominating_enum_proof() {
     let source =
         "enum Boxed:\n    Item(int64)\ndef main():\n    boxed = Boxed.Item(1)\n    values = range(1)\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let main = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -751,7 +760,7 @@ fn for_range_binding_requires_a_dominating_enum_proof() {
 
 #[test]
 fn projected_assignment_requires_a_dominating_union_proof() {
-    let mir = lower_source_to_mir("def main():\n    value: int64 | str = 1\n").unwrap();
+    let mir = lower_implicit("def main():\n    value: int64 | str = 1\n").unwrap();
     let mut encoded = serde_json::to_value(mir).unwrap();
     main_block_mut(&mut encoded, "entry")["instructions"] = json!([{ "Assign": {
         "target": "value.__union_payload_0", "value": { "Use": { "Int": 2 }}
@@ -764,7 +773,7 @@ fn projected_assignment_requires_a_dominating_union_proof() {
 
 fn forged_enum_parameter_projection(passing: &str, instruction: Value) -> MirModule {
     let source = "enum Boxed:\n    Item(int64)\ndef inspect(value: Boxed):\n    payload = 0\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let function = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -852,7 +861,7 @@ fn consuming_match_requires_owned_parameter_authority() {
 #[test]
 fn tuple_take_requires_owned_parameter_authority() {
     let source = "def inspect(value: (int64, int64)):\n    payload = 0\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let function = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -884,7 +893,7 @@ fn consuming_nested_noncopy_match_can_backtrack_before_payload_moves() {
     let source = include_str!(
         "fixtures/run-pass/consuming_nested_noncopy_match_backtracks_before_moving.au"
     );
-    let mir = lower_source_to_mir(source).expect("maintained consuming match must lower");
+    let mir = lower_implicit(source).expect("maintained consuming match must lower");
     let output = assert_accepted_on_both_boundaries(
         &mir,
         "failed alternatives must preserve later variant proofs",
@@ -929,7 +938,7 @@ fn projected_mutation_and_move_accept_sufficient_authority() {
 
 fn forged_borrowed_noncopy_laundering(extraction: Value) -> MirModule {
     let source = "enum Boxed:\n    Item(list[int64])\ndef inspect(value: Boxed):\n    pass\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let function = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -971,7 +980,7 @@ fn borrowed_whole_value_temporary_cannot_be_laundered_into_owned_value() {
 #[test]
 fn borrowed_copy_value_may_be_copied_then_moved_from_its_temporary() {
     let source = "def inspect(value: int64):\n    pass\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let function = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -1013,7 +1022,7 @@ fn assert_interpreter_and_native_reject_owned_laundering(mir: &MirModule) {
 #[test]
 fn borrowed_noncopy_value_cannot_be_laundered_through_a_tuple() {
     let source = "enum Boxed:\n    Item(list[int64])\ndef inspect(value: Boxed):\n    pass\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let function = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -1189,7 +1198,7 @@ fn construct_sibling_write_loan_preserves_conservative_borrowed_origin() {
 #[test]
 fn read_loan_of_borrowed_noncopy_value_cannot_be_laundered() {
     let source = "def inspect(value: list[int64]):\n    pass\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let function = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -1214,7 +1223,7 @@ fn read_loan_of_borrowed_noncopy_value_cannot_be_laundered() {
 #[test]
 fn borrowed_noncopy_class_value_cannot_be_laundered_through_a_temporary() {
     let source = "class Holder:\n    values: list[int64]\ndef inspect(value: Holder):\n    pass\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let function = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -1263,7 +1272,7 @@ fn forged_boxed_borrow_function(extra_source: &str) -> (Value, Value) {
     let source = format!(
         "enum Boxed:\n    Item(list[int64])\n{extra_source}\ndef inspect(value: Boxed):\n    pass\ndef main():\n    pass\n"
     );
-    let mut encoded = serde_json::to_value(lower_source_to_mir(&source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(&source).unwrap()).unwrap();
     let boxed = json!({ "Named": ["Boxed", []] });
     let function = encoded["functions"]
         .as_array_mut()
@@ -1460,7 +1469,7 @@ fn overwriting_a_tuple_sibling_preserves_borrowed_origin_of_other_element() {
 #[test]
 fn borrowed_noncopy_place_cannot_bind_an_owned_method_receiver() {
     let source = "class Holder:\n    values: list[int64]\n    def take(own self):\n        pass\ndef inspect(value: Holder):\n    pass\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let function = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -1483,7 +1492,7 @@ fn borrowed_noncopy_place_cannot_bind_an_owned_method_receiver() {
 #[test]
 fn write_loan_cannot_launder_a_borrowed_noncopy_value_into_owned_storage() {
     let source = "def inspect(source: list[int64]):\n    pass\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let function = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -1515,10 +1524,19 @@ fn fully_overwriting_tainted_tuple_element_clears_only_that_origin() {
         .unwrap();
     function["local_types"] = json!([
         { "name": "owned", "ty": boxed.clone() },
+        { "name": "%t997", "ty": { "Named": ["list", [{ "Named": ["int64", []] }]] }},
         { "name": "%t998", "ty": { "Tuple": [boxed.clone(), { "Named": ["int64", []] }] }},
         { "name": "%t999", "ty": boxed.clone() }
     ]);
+    // `owned` holds a value of its own before it replaces the element.
     function["blocks"] = json!([{ "label": "entry", "instructions": [
+        { "Assign": { "target": "%t997", "value": { "VecLiteral": {
+            "elements": [], "element_type": { "Named": ["int64", []] }
+        }}}},
+        { "Assign": { "target": "owned", "value": { "EnumVariant": {
+            "enum_name": "Boxed", "variant_name": "Item",
+            "payloads": [{ "MovePlace": "%t997" }]
+        }}}},
         { "Assign": { "target": "%t998", "value": { "TupleLiteral": {
             "elements": [{ "Place": "value" }, { "Int": 0 }],
             "element_types": [boxed.clone(), { "Named": ["int64", []] }]
@@ -1538,7 +1556,7 @@ fn fully_overwriting_tainted_tuple_element_clears_only_that_origin() {
 #[test]
 fn borrowed_copy_value_may_call_an_owned_receiver_method() {
     let source = "copy class Point:\n    value: int64\n    def take(own self):\n        pass\ndef inspect(value: Point):\n    pass\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let function = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -1562,7 +1580,7 @@ fn borrowed_copy_value_may_call_an_owned_receiver_method() {
 #[test]
 fn cleanup_cannot_close_a_whole_shared_borrowed_value() {
     let source = "class Handle:\n    value: int64\n    def close(mut self):\n        pass\ndef inspect(value: Handle):\n    pass\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let function = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -1587,7 +1605,7 @@ fn cleanup_cannot_close_a_whole_shared_borrowed_value() {
 #[test]
 fn consuming_closure_cannot_consume_a_shared_borrowed_capture() {
     let source = "class Holder:\n    values: list[int64]\ndef inspect(value: Holder):\n    take: def() -> int64 = lambda [value]: value.values.len()\n    take()\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let lambda = encoded["functions"]
         .as_array()
         .unwrap()
@@ -1637,7 +1655,7 @@ fn consuming_closure_cannot_consume_a_shared_borrowed_capture() {
 #[test]
 fn mutable_parameter_cannot_write_back_a_borrowed_noncopy_origin() {
     let source = "class Holder:\n    values: list[int64]\ndef overwrite(source: Holder, target: mut Holder):\n    pass\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let function = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -1657,7 +1675,7 @@ fn mutable_parameter_cannot_write_back_a_borrowed_noncopy_origin() {
 #[test]
 fn mutable_parameter_may_write_back_an_owned_noncopy_value() {
     let source = "class Holder:\n    values: list[int64]\ndef overwrite(source: own Holder, target: mut Holder):\n    pass\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let function = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -1678,7 +1696,7 @@ fn mutable_parameter_may_write_back_an_owned_noncopy_value() {
 #[test]
 fn start_task_cannot_consume_a_closure_with_shared_borrowed_capture() {
     let source = "class Holder:\n    values: list[int64]\ndef consume(job: own def() -> int64):\n    pass\ndef inspect(value: Holder):\n    take: def() -> int64 = lambda: 1\n    take()\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let function = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -1733,7 +1751,7 @@ fn start_task_cannot_consume_a_closure_with_shared_borrowed_capture() {
 #[test]
 fn start_task_cannot_outlive_a_repeatable_closure_shared_borrowed_capture() {
     let source = "class Holder:\n    values: list[int64]\ndef inspect(value: Holder):\n    take: def() -> int64 = lambda: 1\n    take()\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let function = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -1781,7 +1799,7 @@ fn start_task_cannot_outlive_a_repeatable_closure_shared_borrowed_capture() {
 #[test]
 fn local_repeatable_closure_with_borrowed_capture_remains_valid() {
     let source = "class Holder:\n    values: list[int64]\ndef inspect(value: Holder) -> int64:\n    take: def() -> int64 = lambda [value]: value.values.len()\n    return take()\ndef main():\n    pass\n";
-    let mir = lower_source_to_mir(source).expect("valid repeatable closure must lower");
+    let mir = lower_implicit(source).expect("valid repeatable closure must lower");
     run_mir(&mir).expect("local repeatable closure capture must validate in MIR");
     emit_host_native_object(&mir).expect("local repeatable closure capture must emit natively");
 }
@@ -1791,7 +1809,7 @@ fn forged_repeatable_borrowed_closure_escape(
     via_return: bool,
 ) -> MirModule {
     let source = "class Holder:\n    values: list[int64]\nclass Runner:\n    job: def() -> int64\ndef inspect(value: Holder):\n    take: def() -> int64 = lambda [value]: value.values.len()\n    take()\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let lambda = encoded["functions"]
         .as_array()
         .unwrap()
@@ -2362,7 +2380,7 @@ fn union_payload_wrapper_cannot_erase_an_authoritative_callable_subtree() {
         (call, actual)
     };
     let union_source = "def main():\n    value: (def(own def() -> int64) -> None,) | None = None\n";
-    let union_mir = serde_json::to_value(lower_source_to_mir(union_source).unwrap()).unwrap();
+    let union_mir = serde_json::to_value(lower_implicit(union_source).unwrap()).unwrap();
     let union_type = union_mir["functions"][0]["local_types"]
         .as_array()
         .unwrap()
@@ -2455,7 +2473,7 @@ fn union_payload_wrapper_cannot_erase_an_authoritative_callable_subtree() {
 #[test]
 fn list_get_option_payload_preserves_authoritative_callable_identity() {
     let source = "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef inspect(value: own Holder):\n    callbacks: list[def(item: own Holder) -> None] = [consume]\n    match callbacks.get(0):\n        case Lookup.Found(callback):\n            callback(value)\n        case Lookup.Missing:\n            pass\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let inspect = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -2484,7 +2502,7 @@ fn list_get_option_payload_preserves_authoritative_callable_identity() {
 #[test]
 fn nested_list_get_tuple_payload_preserves_authoritative_callable_identity() {
     let source = "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef inspect(value: own Holder):\n    callbacks: list[(def(item: own Holder) -> None, int64)] = [(consume, 0)]\n    match callbacks.get(0):\n        case Lookup.Found(entry):\n            callback: def(item: own Holder) -> None = entry[0]\n            callback(value)\n        case Lookup.Missing:\n            pass\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let inspect = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -2517,7 +2535,7 @@ fn dict_get_callable_source() -> &'static str {
 #[test]
 fn dict_get_option_payload_preserves_authoritative_value_callable_identity() {
     let mut encoded =
-        serde_json::to_value(lower_source_to_mir(dict_get_callable_source()).unwrap()).unwrap();
+        serde_json::to_value(lower_implicit(dict_get_callable_source()).unwrap()).unwrap();
     let inspect = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -2545,14 +2563,14 @@ fn dict_get_option_payload_preserves_authoritative_value_callable_identity() {
 
 #[test]
 fn dict_get_callable_with_owned_argument_remains_valid() {
-    let mir = lower_source_to_mir(dict_get_callable_source()).unwrap();
+    let mir = lower_implicit(dict_get_callable_source()).unwrap();
     run_mir(&mir).expect("owned callable dictionary extraction remains valid");
     emit_host_native_object(&mir).expect("native validation accepts owned dictionary extraction");
 }
 
 fn forged_higher_order_callable_downgrade(start_task: bool) -> MirModule {
     let source = "class Holder:\n    values: list[int64]\ndef inspect(value: Holder):\n    pass\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let template = encoded["functions"]
         .as_array()
         .unwrap()
@@ -2863,7 +2881,7 @@ fn aggregate_write_loan_preserves_authoritative_callable_subtrees() {
 #[test]
 fn aggregate_write_loan_accepts_a_matching_callable_subtree() {
     let source = "def consume(item: int64):\n    pass\ndef main():\n    callback: def(item: int64) -> None = consume\n    mut slot: (def(item: int64) -> None,) = (callback,)\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let main = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -2895,7 +2913,7 @@ fn aggregate_write_loan_accepts_a_matching_callable_subtree() {
 #[test]
 fn aggregate_write_loan_preserves_borrowed_noncopy_element_origins() {
     let source = "def inspect(source: list[int64]):\n    pass\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let inspect = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -2950,7 +2968,7 @@ fn forged_closure_metadata_cannot_downgrade_its_function_declaration() {
 #[test]
 fn forged_closure_hidden_capture_cannot_launder_a_shared_noncopy_value() {
     let source = "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef inspect(value: Holder):\n    pass\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let inspect = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -2979,7 +2997,7 @@ fn forged_closure_hidden_capture_cannot_launder_a_shared_noncopy_value() {
 #[test]
 fn forged_closure_named_parameter_metadata_is_rejected_by_common_validation() {
     let source = "def consume(item: int64):\n    pass\ndef main():\n    offset = 1\n    callback: def(int64) -> None = lambda [offset] item: consume(item + offset)\n    callback(1)\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let closure = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -3020,7 +3038,7 @@ fn forged_closure_named_parameter_metadata_is_rejected_by_common_validation() {
 #[test]
 fn forged_copy_temp_type_cannot_hide_borrowed_noncopy_call_argument() {
     let source = "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef inspect(value: Holder):\n    pass\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let function = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -3046,7 +3064,7 @@ fn forged_copy_temp_type_cannot_hide_borrowed_noncopy_call_argument() {
 #[test]
 fn projected_cleanup_requires_a_dominating_variant_proof() {
     let source = "class Handle:\n    value: int64\n    def close(mut self):\n        pass\nenum Boxed:\n    Item(Handle)\ndef main():\n    boxed = Boxed.Item(Handle(value=1))\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     main_block_mut(&mut encoded, "entry")["instructions"].as_array_mut().unwrap().extend([
         json!({ "PushCleanup": { "place": "boxed.__variant_payload_Item_0" }}),
         json!({ "PopCleanup": { "place": "boxed.__variant_payload_Item_0", "cancel_before_cleanup": false }})
@@ -3060,7 +3078,7 @@ fn projected_cleanup_requires_a_dominating_variant_proof() {
 #[test]
 fn projected_cleanup_accepts_a_proven_owned_local_payload() {
     let source = "class Handle:\n    value: int64\n    def close(mut self):\n        pass\nenum Boxed:\n    Item(Handle)\ndef main():\n    boxed = Boxed.Item(Handle(value=1))\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let main = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -3104,7 +3122,7 @@ fn projected_cleanup_accepts_a_proven_owned_local_payload() {
 #[test]
 fn enum_payload_view_cannot_be_returned_through_its_argument_origin() {
     let source = "class Profile:\n    name: int64\nenum Boxed:\n    Item(int64)\n    Empty\ndef inspect(profile: Profile) -> view int64 from profile:\n    return view profile.name\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let function = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -3142,8 +3160,7 @@ fn enum_payload_view_cannot_be_returned_through_its_argument_origin() {
 
 #[test]
 fn class_and_enum_metadata_names_cannot_collide() {
-    let mut encoded =
-        serde_json::to_value(lower_source_to_mir(ENUM_PATTERN_SOURCE).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(ENUM_PATTERN_SOURCE).unwrap()).unwrap();
     encoded["classes"].as_array_mut().unwrap().push(json!({
         "name": "Boxed", "type_params": [], "fields": [], "methods": []
     }));
@@ -3221,7 +3238,7 @@ fn runtime_index_nested_tuple_get_source() -> &'static str {
 #[test]
 fn runtime_index_nested_tuple_get_preserves_authoritative_callable_identity() {
     let mut encoded =
-        serde_json::to_value(lower_source_to_mir(runtime_index_nested_tuple_get_source()).unwrap())
+        serde_json::to_value(lower_implicit(runtime_index_nested_tuple_get_source()).unwrap())
             .unwrap();
     weaken_function_callable_metadata(&mut encoded, "inspect");
     assert_interpreter_and_native_reject_owned_laundering(
@@ -3231,7 +3248,7 @@ fn runtime_index_nested_tuple_get_preserves_authoritative_callable_identity() {
 
 #[test]
 fn runtime_index_nested_tuple_get_with_owned_argument_remains_valid() {
-    let mir = lower_source_to_mir(runtime_index_nested_tuple_get_source()).unwrap();
+    let mir = lower_implicit(runtime_index_nested_tuple_get_source()).unwrap();
     run_mir(&mir).expect("owned callable nested tuple extraction remains valid");
     emit_host_native_object(&mir).expect("native validation accepts nested tuple extraction");
 }
@@ -3243,7 +3260,7 @@ fn runtime_index_nested_tuple_subscript_source() -> &'static str {
 #[test]
 fn runtime_index_nested_tuple_subscript_preserves_authoritative_callable_identity() {
     let mut encoded = serde_json::to_value(
-        lower_source_to_mir(runtime_index_nested_tuple_subscript_source()).unwrap(),
+        lower_implicit(runtime_index_nested_tuple_subscript_source()).unwrap(),
     )
     .unwrap();
     weaken_function_callable_metadata(&mut encoded, "inspect");
@@ -3254,7 +3271,7 @@ fn runtime_index_nested_tuple_subscript_preserves_authoritative_callable_identit
 
 #[test]
 fn runtime_index_nested_tuple_subscript_with_owned_argument_remains_valid() {
-    let mir = lower_source_to_mir(runtime_index_nested_tuple_subscript_source()).unwrap();
+    let mir = lower_implicit(runtime_index_nested_tuple_subscript_source()).unwrap();
     run_mir(&mir).expect("owned callable nested tuple subscript remains valid");
     emit_host_native_object(&mir).expect("native validation accepts nested tuple subscript");
 }
@@ -3266,7 +3283,7 @@ fn runtime_index_nested_tuple_pop_source() -> &'static str {
 #[test]
 fn runtime_index_nested_tuple_pop_preserves_authoritative_callable_identity() {
     let mut encoded =
-        serde_json::to_value(lower_source_to_mir(runtime_index_nested_tuple_pop_source()).unwrap())
+        serde_json::to_value(lower_implicit(runtime_index_nested_tuple_pop_source()).unwrap())
             .unwrap();
     weaken_function_callable_metadata(&mut encoded, "inspect");
     assert_interpreter_and_native_reject_owned_laundering(
@@ -3276,7 +3293,7 @@ fn runtime_index_nested_tuple_pop_preserves_authoritative_callable_identity() {
 
 #[test]
 fn runtime_index_nested_tuple_pop_with_owned_argument_remains_valid() {
-    let mir = lower_source_to_mir(runtime_index_nested_tuple_pop_source()).unwrap();
+    let mir = lower_implicit(runtime_index_nested_tuple_pop_source()).unwrap();
     run_mir(&mir).expect("owned callable nested tuple pop remains valid");
     emit_host_native_object(&mir).expect("native validation accepts nested tuple pop");
 }
@@ -3288,8 +3305,7 @@ fn dict_values_nested_tuple_source() -> &'static str {
 #[test]
 fn dict_values_nested_tuple_preserves_authoritative_callable_identity() {
     let mut encoded =
-        serde_json::to_value(lower_source_to_mir(dict_values_nested_tuple_source()).unwrap())
-            .unwrap();
+        serde_json::to_value(lower_implicit(dict_values_nested_tuple_source()).unwrap()).unwrap();
     weaken_function_callable_metadata(&mut encoded, "inspect");
     assert_interpreter_and_native_reject_owned_laundering(
         &serde_json::from_value(encoded).unwrap(),
@@ -3298,7 +3314,7 @@ fn dict_values_nested_tuple_preserves_authoritative_callable_identity() {
 
 #[test]
 fn dict_values_nested_tuple_with_owned_argument_remains_valid() {
-    let mir = lower_source_to_mir(dict_values_nested_tuple_source()).unwrap();
+    let mir = lower_implicit(dict_values_nested_tuple_source()).unwrap();
     run_mir(&mir).expect("owned callable dictionary values extraction remains valid");
     emit_host_native_object(&mir).expect("native validation accepts dictionary values extraction");
 }
@@ -3309,10 +3325,9 @@ fn runtime_index_doubly_nested_list_source() -> &'static str {
 
 #[test]
 fn runtime_index_doubly_nested_list_preserves_authoritative_callable_identity() {
-    let mut encoded = serde_json::to_value(
-        lower_source_to_mir(runtime_index_doubly_nested_list_source()).unwrap(),
-    )
-    .unwrap();
+    let mut encoded =
+        serde_json::to_value(lower_implicit(runtime_index_doubly_nested_list_source()).unwrap())
+            .unwrap();
     weaken_function_callable_metadata(&mut encoded, "inspect");
     assert_interpreter_and_native_reject_owned_laundering(
         &serde_json::from_value(encoded).unwrap(),
@@ -3321,7 +3336,7 @@ fn runtime_index_doubly_nested_list_preserves_authoritative_callable_identity() 
 
 #[test]
 fn runtime_index_doubly_nested_list_with_owned_argument_remains_valid() {
-    let mir = lower_source_to_mir(runtime_index_doubly_nested_list_source()).unwrap();
+    let mir = lower_implicit(runtime_index_doubly_nested_list_source()).unwrap();
     run_mir(&mir).expect("owned callable doubly nested extraction remains valid");
     emit_host_native_object(&mir).expect("native validation accepts doubly nested extraction");
 }
@@ -3332,10 +3347,9 @@ fn runtime_index_direct_tuple_call_source() -> &'static str {
 
 #[test]
 fn runtime_index_direct_tuple_call_preserves_authoritative_callable_identity() {
-    let mut encoded = serde_json::to_value(
-        lower_source_to_mir(runtime_index_direct_tuple_call_source()).unwrap(),
-    )
-    .unwrap();
+    let mut encoded =
+        serde_json::to_value(lower_implicit(runtime_index_direct_tuple_call_source()).unwrap())
+            .unwrap();
     weaken_function_callable_metadata(&mut encoded, "inspect");
     assert_interpreter_and_native_reject_owned_laundering(
         &serde_json::from_value(encoded).unwrap(),
@@ -3344,7 +3358,7 @@ fn runtime_index_direct_tuple_call_preserves_authoritative_callable_identity() {
 
 #[test]
 fn runtime_index_direct_tuple_call_with_owned_argument_remains_valid() {
-    let mir = lower_source_to_mir(runtime_index_direct_tuple_call_source()).unwrap();
+    let mir = lower_implicit(runtime_index_direct_tuple_call_source()).unwrap();
     run_mir(&mir).expect("owned callable direct tuple call remains valid");
     emit_host_native_object(&mir).expect("native validation accepts direct tuple call");
 }
@@ -3355,7 +3369,7 @@ fn runtime_index_two_functions_source() -> &'static str {
 
 #[test]
 fn runtime_index_over_distinct_functions_with_equal_contracts_remains_valid() {
-    let mir = lower_source_to_mir(runtime_index_two_functions_source()).unwrap();
+    let mir = lower_implicit(runtime_index_two_functions_source()).unwrap();
     run_mir(&mir).expect("distinct functions with one contract remain callable by runtime index");
     emit_host_native_object(&mir)
         .expect("native validation accepts distinct functions with one contract");
@@ -3368,8 +3382,7 @@ fn runtime_index_task_start_source() -> &'static str {
 #[test]
 fn runtime_index_task_start_preserves_authoritative_callable_identity() {
     let mut encoded =
-        serde_json::to_value(lower_source_to_mir(runtime_index_task_start_source()).unwrap())
-            .unwrap();
+        serde_json::to_value(lower_implicit(runtime_index_task_start_source()).unwrap()).unwrap();
     weaken_function_callable_metadata(&mut encoded, "inspect");
     assert_interpreter_and_native_reject_owned_laundering(
         &serde_json::from_value(encoded).unwrap(),
@@ -3378,7 +3391,7 @@ fn runtime_index_task_start_preserves_authoritative_callable_identity() {
 
 #[test]
 fn runtime_index_task_start_with_owned_argument_remains_valid() {
-    let mir = lower_source_to_mir(runtime_index_task_start_source()).unwrap();
+    let mir = lower_implicit(runtime_index_task_start_source()).unwrap();
     run_mir(&mir).expect("owned callable task start remains valid");
     emit_host_native_object(&mir).expect("native validation accepts task start");
 }
@@ -3389,10 +3402,9 @@ fn runtime_index_returned_callable_source() -> &'static str {
 
 #[test]
 fn runtime_index_returned_callable_preserves_contract_at_return() {
-    let mut encoded = serde_json::to_value(
-        lower_source_to_mir(runtime_index_returned_callable_source()).unwrap(),
-    )
-    .unwrap();
+    let mut encoded =
+        serde_json::to_value(lower_implicit(runtime_index_returned_callable_source()).unwrap())
+            .unwrap();
     weaken_function_callable_metadata(&mut encoded, "inspect");
     // Weaken the producer's declared return contract so the caller's forged
     // local type appears consistent with it.
@@ -3427,7 +3439,7 @@ fn runtime_index_returned_callable_preserves_contract_at_return() {
 
 #[test]
 fn runtime_index_returned_callable_with_owned_argument_remains_valid() {
-    let mir = lower_source_to_mir(runtime_index_returned_callable_source()).unwrap();
+    let mir = lower_implicit(runtime_index_returned_callable_source()).unwrap();
     run_mir(&mir).expect("owned callable return remains valid");
     emit_host_native_object(&mir).expect("native validation accepts returned callable");
 }
@@ -3439,8 +3451,7 @@ fn runtime_index_writeback_source() -> &'static str {
 #[test]
 fn runtime_index_writeback_preserves_authoritative_callable_identity() {
     let mut encoded =
-        serde_json::to_value(lower_source_to_mir(runtime_index_writeback_source()).unwrap())
-            .unwrap();
+        serde_json::to_value(lower_implicit(runtime_index_writeback_source()).unwrap()).unwrap();
     // The view binding keeps its authentic loan type; only the derived
     // temporaries and the call are forged.
     weaken_function_callable_metadata_preserving(&mut encoded, "inspect", &["current"]);
@@ -3451,7 +3462,7 @@ fn runtime_index_writeback_preserves_authoritative_callable_identity() {
 
 #[test]
 fn runtime_index_writeback_with_owned_argument_remains_valid() {
-    let mir = lower_source_to_mir(runtime_index_writeback_source()).unwrap();
+    let mir = lower_implicit(runtime_index_writeback_source()).unwrap();
     run_mir(&mir).expect("owned callable writeback remains valid");
     emit_host_native_object(&mir).expect("native validation accepts callable writeback");
 }
@@ -3463,7 +3474,7 @@ fn appended_element_runtime_index_source() -> &'static str {
 #[test]
 fn appended_element_runtime_index_preserves_authoritative_contract() {
     let mut encoded =
-        serde_json::to_value(lower_source_to_mir(appended_element_runtime_index_source()).unwrap())
+        serde_json::to_value(lower_implicit(appended_element_runtime_index_source()).unwrap())
             .unwrap();
     weaken_function_callable_metadata(&mut encoded, "inspect");
     assert_interpreter_and_native_reject_owned_laundering(
@@ -3473,7 +3484,7 @@ fn appended_element_runtime_index_preserves_authoritative_contract() {
 
 #[test]
 fn appended_element_runtime_index_with_owned_argument_remains_valid() {
-    let mir = lower_source_to_mir(appended_element_runtime_index_source()).unwrap();
+    let mir = lower_implicit(appended_element_runtime_index_source()).unwrap();
     run_mir(&mir).expect("distinct appended functions with one contract remain valid");
     emit_host_native_object(&mir).expect("native validation accepts appended functions");
 }
@@ -3485,8 +3496,7 @@ fn dict_runtime_key_index_source() -> &'static str {
 #[test]
 fn dict_runtime_key_index_preserves_authoritative_callable_identity() {
     let mut encoded =
-        serde_json::to_value(lower_source_to_mir(dict_runtime_key_index_source()).unwrap())
-            .unwrap();
+        serde_json::to_value(lower_implicit(dict_runtime_key_index_source()).unwrap()).unwrap();
     weaken_function_callable_metadata(&mut encoded, "inspect");
     assert_interpreter_and_native_reject_owned_laundering(
         &serde_json::from_value(encoded).unwrap(),
@@ -3495,7 +3505,7 @@ fn dict_runtime_key_index_preserves_authoritative_callable_identity() {
 
 #[test]
 fn dict_runtime_key_index_with_owned_argument_remains_valid() {
-    let mir = lower_source_to_mir(dict_runtime_key_index_source()).unwrap();
+    let mir = lower_implicit(dict_runtime_key_index_source()).unwrap();
     run_mir(&mir).expect("owned callable dictionary index remains valid");
     emit_host_native_object(&mir).expect("native validation accepts dictionary index");
 }
@@ -3506,7 +3516,7 @@ fn runtime_index_over_mixed_contracts_is_poisoned_and_rejected() {
     // selection cannot prove which contract applies, so the call is rejected
     // even though the declared element metadata claims a weak contract.
     let source = "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef peek(item: Holder):\n    pass\ndef inspect(value: Holder, index: int64):\n    callbacks: list[def(item: Holder) -> None] = [peek]\n    others: list[def(item: own Holder) -> None] = [consume]\n    match callbacks.get(index):\n        case Lookup.Found(callback):\n            callback(value)\n        case Lookup.Missing:\n            pass\ndef main():\n    pass\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let inspect = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -3563,10 +3573,9 @@ fn runtime_index_returned_callable_rejects_forged_caller_result_metadata() {
     // Only the caller's declared result metadata is weakened; the producer's
     // return contract stays authentic. The call result must carry the callee's
     // declared return contract so the forged local type cannot be trusted.
-    let mut encoded = serde_json::to_value(
-        lower_source_to_mir(runtime_index_returned_callable_source()).unwrap(),
-    )
-    .unwrap();
+    let mut encoded =
+        serde_json::to_value(lower_implicit(runtime_index_returned_callable_source()).unwrap())
+            .unwrap();
     weaken_function_callable_metadata(&mut encoded, "inspect");
     assert_interpreter_and_native_reject_owned_laundering(
         &serde_json::from_value(encoded).unwrap(),
@@ -3674,7 +3683,7 @@ fn weaken_function_declaration(encoded: &mut Value, function_name: &str) {
 }
 
 fn assert_valid_on_both_backends(source: &str, label: &str) {
-    let mir = lower_source_to_mir(source).unwrap_or_else(|error| panic!("{label}: {error:?}"));
+    let mir = lower_implicit(source).unwrap_or_else(|error| panic!("{label}: {error:?}"));
     run_mir(&mir).unwrap_or_else(|error| panic!("{label} remains valid: {error}"));
     emit_host_native_object(&mir)
         .unwrap_or_else(|error| panic!("{label} native validation remains valid: {error}"));
@@ -3696,7 +3705,7 @@ fn tuple_boundary_source() -> String {
 #[test]
 fn tuple_call_boundary_rejects_weakened_callee_parameter_contract() {
     let mut encoded =
-        serde_json::to_value(lower_source_to_mir(&tuple_boundary_source()).unwrap()).unwrap();
+        serde_json::to_value(lower_implicit(&tuple_boundary_source()).unwrap()).unwrap();
     weaken_function_declaration(&mut encoded, "invoke");
     forge_borrowed_callable_caller(&mut encoded, "invoke", "value", &[]);
     forge_borrowed_callable_caller(&mut encoded, "inspect", "value", &[]);
@@ -3720,7 +3729,7 @@ fn list_boundary_source() -> String {
 #[test]
 fn list_call_boundary_rejects_weakened_callee_parameter_contract() {
     let mut encoded =
-        serde_json::to_value(lower_source_to_mir(&list_boundary_source()).unwrap()).unwrap();
+        serde_json::to_value(lower_implicit(&list_boundary_source()).unwrap()).unwrap();
     weaken_function_declaration(&mut encoded, "invoke");
     forge_borrowed_callable_caller(&mut encoded, "invoke", "value", &[]);
     forge_borrowed_callable_caller(&mut encoded, "inspect", "value", &[]);
@@ -3744,7 +3753,7 @@ fn list_return_boundary_source() -> String {
 #[test]
 fn list_return_boundary_rejects_weakened_return_contract() {
     let mut encoded =
-        serde_json::to_value(lower_source_to_mir(&list_return_boundary_source()).unwrap()).unwrap();
+        serde_json::to_value(lower_implicit(&list_return_boundary_source()).unwrap()).unwrap();
     weaken_function_declaration(&mut encoded, "choose");
     forge_borrowed_callable_caller(&mut encoded, "inspect", "value", &[]);
     assert_interpreter_and_native_reject_owned_laundering(
@@ -3769,7 +3778,7 @@ fn closure_capture_source() -> String {
 #[test]
 fn closure_capture_rejects_weakened_capture_parameter_contract() {
     let mut encoded =
-        serde_json::to_value(lower_source_to_mir(&closure_capture_source()).unwrap()).unwrap();
+        serde_json::to_value(lower_implicit(&closure_capture_source()).unwrap()).unwrap();
     let closure_name = encoded["functions"]
         .as_array()
         .unwrap()
@@ -3800,7 +3809,7 @@ fn join_source() -> String {
 
 #[test]
 fn control_flow_join_poisons_disagreeing_callable_identities() {
-    let mut encoded = serde_json::to_value(lower_source_to_mir(&join_source()).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(&join_source()).unwrap()).unwrap();
     forge_borrowed_callable_caller(&mut encoded, "inspect", "value", &[]);
     assert_interpreter_and_native_reject_owned_laundering(
         &serde_json::from_value(encoded).unwrap(),
@@ -3822,7 +3831,7 @@ fn extend_source() -> String {
 
 #[test]
 fn extend_with_identity_less_operand_poisons_receiver_identities() {
-    let mut encoded = serde_json::to_value(lower_source_to_mir(&extend_source()).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(&extend_source()).unwrap()).unwrap();
     forge_borrowed_callable_caller(&mut encoded, "inspect", "value", &[]);
     assert_interpreter_and_native_reject_owned_laundering(
         &serde_json::from_value(encoded).unwrap(),
@@ -3844,7 +3853,7 @@ fn try_source() -> String {
 
 #[test]
 fn try_preserves_ok_payload_callable_identity() {
-    let mut encoded = serde_json::to_value(lower_source_to_mir(&try_source()).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(&try_source()).unwrap()).unwrap();
     forge_borrowed_callable_caller(&mut encoded, "inspect", "value", &[]);
     assert_interpreter_and_native_reject_owned_laundering(
         &serde_json::from_value(encoded).unwrap(),
@@ -3864,7 +3873,7 @@ fn type_parameter_callee_requires_authoritative_contract() {
         "{}def invoke[T](item: T, value: own Holder):\n    pass\ndef inspect(value: own Holder):\n    invoke(consume, value)\ndef main():\n    pass\n",
         holder_prelude()
     );
-    let mut encoded = serde_json::to_value(lower_source_to_mir(&source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(&source).unwrap()).unwrap();
     let invoke = encoded["functions"]
         .as_array_mut()
         .unwrap()
@@ -3899,7 +3908,7 @@ fn items_source() -> String {
 
 #[test]
 fn dict_items_nested_tuple_preserves_authoritative_callable_identity() {
-    let mut encoded = serde_json::to_value(lower_source_to_mir(&items_source()).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(&items_source()).unwrap()).unwrap();
     forge_borrowed_callable_caller(&mut encoded, "inspect", "value", &[]);
     assert_interpreter_and_native_reject_owned_laundering(
         &serde_json::from_value(encoded).unwrap(),
@@ -3923,8 +3932,7 @@ fn dict_copy_source() -> String {
 
 #[test]
 fn dict_copy_preserves_authoritative_callable_identity() {
-    let mut encoded =
-        serde_json::to_value(lower_source_to_mir(&dict_copy_source()).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(&dict_copy_source()).unwrap()).unwrap();
     forge_borrowed_callable_caller(&mut encoded, "inspect", "value", &[]);
     assert_interpreter_and_native_reject_owned_laundering(
         &serde_json::from_value(encoded).unwrap(),
@@ -3965,7 +3973,7 @@ fn module_constant_source() -> String {
 #[test]
 fn module_constant_preserves_authoritative_callable_identity() {
     let mut encoded =
-        serde_json::to_value(lower_source_to_mir(&module_constant_source()).unwrap()).unwrap();
+        serde_json::to_value(lower_implicit(&module_constant_source()).unwrap()).unwrap();
     forge_borrowed_callable_caller(&mut encoded, "inspect", "value", &[]);
     assert_interpreter_and_native_reject_owned_laundering(
         &serde_json::from_value(encoded).unwrap(),
@@ -3986,8 +3994,7 @@ fn task_result_source() -> String {
 
 #[test]
 fn task_result_preserves_authoritative_callable_identity() {
-    let mut encoded =
-        serde_json::to_value(lower_source_to_mir(&task_result_source()).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(&task_result_source()).unwrap()).unwrap();
     forge_borrowed_callable_caller(&mut encoded, "inspect", "value", &[]);
     assert_interpreter_and_native_reject_owned_laundering(
         &serde_json::from_value(encoded).unwrap(),
@@ -4003,7 +4010,7 @@ fn task_result_with_owned_argument_remains_valid() {
 #[test]
 fn wildcard_element_segment_is_not_a_canonical_place() {
     let source = "def main():\n    values: list[int64] = [1]\n    print(values.len())\n";
-    let mut encoded = serde_json::to_value(lower_source_to_mir(source).unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(lower_implicit(source).unwrap()).unwrap();
     let main = encoded["functions"]
         .as_array_mut()
         .unwrap()

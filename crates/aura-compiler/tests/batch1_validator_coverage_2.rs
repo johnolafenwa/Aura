@@ -1,11 +1,16 @@
 //! Forged-MIR regressions for validator place typing and metadata lookups.
 
+use aura_compiler::mir::ownership::strip_ownership;
 use aura_compiler::runtime_ops::RuntimeOp;
 use aura_compiler::{emit_host_native_object, lower_source_to_mir, run_mir, MirModule};
 use serde_json::{json, Value};
 
 fn encode(source: &str) -> Value {
-    serde_json::to_value(lower_source_to_mir(source).expect("source should lower")).unwrap()
+    // A forgery edits MIR that states no ownership, which each boundary
+    // then fills in.
+    let mut mir = lower_source_to_mir(source).expect("source should lower");
+    strip_ownership(&mut mir);
+    serde_json::to_value(mir).unwrap()
 }
 
 fn function_mut<'a>(encoded: &'a mut Value, name: &str) -> &'a mut Value {
@@ -379,4 +384,32 @@ fn runtime_format_widths_are_bounded() {
         "{}",
         error.message
     );
+}
+
+#[test]
+fn a_tuple_projection_past_the_address_space_is_rejected() {
+    let mut encoded = encode(PLACES);
+    let main = function_mut(&mut encoded, "main");
+    let read = instruction_mut(main, |instruction| {
+        assigned_target(instruction) == Some("copy")
+    });
+    read["Assign"]["value"] = json!({ "Use": { "Place": "pair.99999999999999999999999" } });
+    assert_rejected(
+        encoded,
+        "invalid MIR tuple projection `99999999999999999999999` in `pair.99999999999999999999999`",
+    );
+}
+
+#[test]
+fn an_indirect_union_call_with_an_unknown_argument_is_rejected() {
+    let source = "def show(value: int64 | str):\n    print(value)\ndef main():\n    target = show\n    target(1)\n";
+    let mut encoded = encode(source);
+    let main = function_mut(&mut encoded, "main");
+    let call = instruction_mut(main, |instruction| {
+        instruction["Assign"]["value"]["Call"]["callee"]
+            .get("Value")
+            .is_some()
+    });
+    call["Assign"]["value"]["Call"]["args"][0]["name"] = json!("missing");
+    assert_rejected(encoded, "has unknown argument `missing`");
 }

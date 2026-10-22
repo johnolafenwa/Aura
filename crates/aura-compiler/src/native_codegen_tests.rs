@@ -7697,7 +7697,17 @@ def main() -> int32:
         })
         .expect("worker invocation should use a non-consuming call target");
     *call_target = CallTarget::Value(Operand::MovePlace("worker".to_string()));
-    let consuming_error = emit_host_object(&consuming_target)
+    // `worker` is used again, so the ownership checker refuses the move at
+    // the boundary first. The emitter's own check is what this case pins.
+    let boundary_error = emit_host_object(&consuming_target)
+        .expect_err("the boundary must refuse a use after the move");
+    assert!(
+        boundary_error.contains("uses `worker` after moving it"),
+        "{boundary_error}"
+    );
+    crate::mir::ownership::strip_ownership(&mut consuming_target);
+    let consuming_error = NativeCodegen::new(&consuming_target, "<aura>", "")
+        .and_then(|codegen| codegen.emit())
         .expect_err("indirect call targets must not consume their callable place");
     assert!(
         consuming_error.contains(
@@ -14021,4 +14031,45 @@ def main():
             .any(|name| name.ends_with("aura_direct_vec_element_map_get_str")),
         "only a literal key is looked up without a box"
     );
+}
+
+#[test]
+fn an_unresolved_internal_slice_needs_all_six_arguments() {
+    // Lowering resolves `__slice` to a runtime op, so only forged MIR
+    // reaches the emitter's own arity check.
+    let mut module = lower_source_to_mir("def main():\n    xs = [1, 2, 3]\n    print(xs[0:1])\n")
+        .expect("the slice program should lower");
+    let call = module
+        .functions
+        .iter_mut()
+        .flat_map(|function| function.blocks.iter_mut())
+        .flat_map(|block| block.instructions.iter_mut())
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::Call { callee, args },
+                ..
+            } if matches!(
+                callee,
+                CallTarget::Runtime {
+                    receiver: Some(_),
+                    ..
+                }
+            ) && args.len() == 6 =>
+            {
+                Some((callee, args))
+            }
+            _ => None,
+        })
+        .expect("the slice should lower to a runtime call with six arguments");
+    let CallTarget::Runtime { receiver, .. } = call.0.clone() else {
+        unreachable!()
+    };
+    *call.0 = CallTarget::Member {
+        object: receiver.expect("a slice has a receiver"),
+        field: "__slice".to_string(),
+        receiver_place: None,
+    };
+    call.1.truncate(2);
+    let error = super::validate_module(&module).expect_err("a short internal slice must fail");
+    assert_eq!(error, super::DIRECT_INTERNAL_SLICE_ARITY_ERROR);
 }

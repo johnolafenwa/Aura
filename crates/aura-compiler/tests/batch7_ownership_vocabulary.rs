@@ -4,6 +4,7 @@
 //! no-ops, and the shared validator refuses malformed uses on both public
 //! boundaries.
 
+use aura_compiler::mir::ownership::strip_ownership;
 use aura_compiler::mir::{MirOwnership, Rvalue};
 use aura_compiler::{emit_host_native_object, lower_source_to_mir, run_mir, MirModule};
 use serde_json::{json, Value};
@@ -117,7 +118,11 @@ fn with_try_releases(encoded: Value, releases: Value) -> Value {
         .unwrap()
         .iter_mut()
         .flat_map(|block| block["instructions"].as_array_mut().unwrap().iter_mut())
-        .find_map(|instruction| instruction["Assign"]["value"].get_mut("Try"))
+        .find_map(|instruction| {
+            instruction
+                .get_mut("Assign")
+                .and_then(|assign| assign["value"].get_mut("Try"))
+        })
         .expect("`double` should hold a `try`");
     try_value["releases_on_error"] = releases;
     encoded
@@ -139,19 +144,16 @@ fn assert_rejected_on_both_boundaries(encoded: Value, expected: &str) {
     );
 }
 
-/// The module runs as the program does and emits the same object as the
-/// lowered module, so the new vocabulary changes nothing in either backend.
-fn assert_runs_and_emits_unchanged(encoded: Value) {
-    let base = emit_host_native_object(&lowered()).expect("the program should emit");
-    let mir = decode(encoded);
-    assert_eq!(run_mir(&mir).expect("the module should run").stdout, STDOUT);
-    let object = emit_host_native_object(&mir).expect("the module should emit");
-    assert!(object == base, "the vocabulary must not change the object");
+/// The lowered module without what the ownership pass added.
+fn implicit() -> MirModule {
+    let mut module = lowered();
+    strip_ownership(&mut module);
+    module
 }
 
 #[test]
-fn lowering_is_implicit_and_serializes_without_the_new_fields() {
-    let module = lowered();
+fn implicit_mir_serializes_without_the_new_fields() {
+    let module = implicit();
     assert_eq!(module.ownership, MirOwnership::Implicit);
     assert_eq!(run_mir(&module).expect("the program runs").stdout, STDOUT);
     let encoded = encode(&module);
@@ -225,21 +227,25 @@ fn lowering_marks_copy_classes_and_enums() {
 
 #[test]
 fn backends_treat_retain_release_and_try_releases_as_no_ops() {
-    let mut encoded = explicit(encode(&lowered()));
-    let main = function_mut(&mut encoded, "main");
-    let instructions = entry_instructions(main);
-    // After `named` is built: retain it, read it, then release a local that
-    // is not used again.
-    instructions.insert(1, json!({ "Retain": { "place": "named.label" } }));
-    instructions.insert(2, json!({ "Retain": { "place": "named" } }));
-    instructions.insert(3, json!({ "Release": { "place": "named" } }));
-    let encoded = with_try_releases(encoded, json!(["note"]));
-    assert_runs_and_emits_unchanged(encoded);
+    // Lowering states ownership; the stripped module states none, so both
+    // backends must do the same with either.
+    let explicit = lowered();
+    assert_eq!(explicit.ownership, MirOwnership::Explicit);
+    let text = encode(&explicit).to_string();
+    assert!(text.contains("\"Retain\"") && text.contains("\"Release\""));
+    assert!(text.contains("\"releases_on_error\":[\"note\"]"));
+    assert_eq!(
+        run_mir(&explicit).expect("the module should run").stdout,
+        STDOUT
+    );
+    let base = emit_host_native_object(&implicit()).expect("the program should emit");
+    let object = emit_host_native_object(&explicit).expect("the module should emit");
+    assert!(object == base, "the vocabulary must not change the object");
 }
 
 #[test]
 fn an_implicit_module_states_no_ownership() {
-    let base = encode(&lowered());
+    let base = encode(&implicit());
     for instruction in [
         json!({ "Retain": { "place": "named" } }),
         json!({ "Release": { "place": "named" } }),

@@ -23,14 +23,17 @@ Last updated: 2026-10-22
   `2026-10-21-batch-7-step-8d2-named-calls.md`,
   `2026-10-21-batch-7-step-8d3-str-queues-tasks.md`, and
   `2026-10-21-batch-7-step-8d4-collections.md`.
-- In progress: 8e, explicit ownership in MIR, PR 1 of 4. PR 1 adds the
-  vocabulary with no change to emitted objects: `Retain`, `Release`, `try`
-  releases, the module ownership flag, Copy marks on classes and enums,
-  the operand-role table, and runtime op argument ownership. It also
-  stops a runtime helper from emptying a shared box, and adds retain,
-  release, and clone counters. PR 2 adds the ownership pass and checker in
-  shadow mode, PR 3 switches the emitter, and PR 4 moves lending into MIR.
-  Details are in `2026-10-22-batch-7-step-8e1-ownership-vocabulary.md`.
+- In progress: 8e, explicit ownership in MIR, in four PRs. PR 1, merged
+  in PR #108, adds the vocabulary with no change to emitted objects:
+  `Retain`, `Release`, `try` releases, the module ownership flag, Copy
+  marks on classes and enums, the operand-role table, and runtime op
+  argument ownership. It also stops a runtime helper from emptying a
+  shared box, and adds retain, release, and clone counters. PR 2 adds the
+  ownership pass and checker in shadow mode: lowering states every retain
+  and release, both boundaries check them, and the emitter still ignores
+  them. PR 3 switches the emitter, and PR 4 moves lending into MIR.
+  Details are in `2026-10-22-batch-7-step-8e1-ownership-vocabulary.md` and
+  `2026-10-22-batch-7-step-8e2-ownership-pass.md`.
 
 ## Aura 0.6.0 preview release (complete)
 

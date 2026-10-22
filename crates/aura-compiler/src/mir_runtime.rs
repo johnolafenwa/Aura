@@ -153,8 +153,14 @@ pub(crate) fn run_entry_with_stdout_sink_and_program_args_trusted(
     // calls. Resolve them as the native emitter does, so both boundaries
     // validate and run the same form.
     crate::mir::resolve_runtime_ops(&mut module);
-    crate::mir::validate_loan_flow(&module)
-        .map_err(|error| Diagnostic::coded("AU4001", format!("invalid MIR loan flow: {error}")))?;
+    crate::mir::validate_for_interpreter(&module).map_err(|error| match error {
+        crate::mir::BoundaryError::LoanFlow(error) => {
+            Diagnostic::coded("AU4001", format!("invalid MIR loan flow: {error}"))
+        }
+        crate::mir::BoundaryError::Ownership(error) => {
+            Diagnostic::coded("AU4001", format!("invalid MIR ownership: {error}"))
+        }
+    })?;
     crate::runtime_config::validate_runtime_configuration()?;
     let entry = entry.map(|name| name.to_string());
     let program_args = Arc::new(program_args);

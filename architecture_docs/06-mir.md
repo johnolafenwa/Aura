@@ -194,7 +194,7 @@ An explicit module may hold:
   `place`. The next consuming `Place(place)` operand in the same block
   takes it.
 - `Release { place }`, which drops the value of a root local and leaves the
-  local empty. Releasing an empty local does nothing.
+  local empty.
 - `releases_on_error` on `Rvalue::Try`, the root locals the `Err` edge
   releases after the pending cleanups, in name order.
 
@@ -209,8 +209,80 @@ generic class and an enum with a payload of a type parameter are not
 marked. MIR without the mark needs drop. The validator refuses a mark on a
 type with a field or payload that needs drop.
 
-No pass inserts `Retain` or `Release` yet. Both backends treat them as
-no-ops and ignore `try` releases.
+`mir::lower` runs the ownership pass, so the module `aura mir` prints and
+the native build path compiles is explicit. Both backends still decide
+ownership themselves, in shadow mode. The interpreter gains nothing from
+the pass, so `aura run` lowers with `mir::lower_implicit` and skips it.
+The interpreter treats `Retain` and `Release` as no-ops. The native
+boundary strips what the pass added before it emits, so objects do not
+change.
+
+### Ownership Pass
+
+`mir::ownership::insert_ownership` runs in `lower()` after the union plans,
+and at the native boundary on an implicit module. It does nothing to an
+explicit module. It tracks each root local whose value needs drop. Copy
+builtins, `MirClass.copy`, `MirEnum.copy`, and union plans decide that.
+
+- A backward liveness pass finds where each value dies. A loan, a closure
+  that borrows a capture, and a `VariantPayload` result keep their source
+  alive.
+- A consuming `Place` operand of such a value gets a `Retain` right before
+  its instruction.
+- A value that dies inside a block is released right after its last use.
+- A value that dies on an edge is released at the start of the successor
+  when the successor has one way in, or when the edge leaves a `ForRange`.
+  Otherwise the pass splits the edge with a new `%edgeN` block.
+- A store to a root that still holds a value releases it first. When the
+  right side reads the root, the value goes to a new temporary, then the
+  root is released, then the temporary moves in.
+- `Return` releases what is left, except `mut` parameters and the root it
+  returns from.
+- A `try` lists the roots that hold a value there, except `mut` parameters.
+- Releases at one point come out in name order.
+- Nothing goes between `IndexInRange` and the access it covers, or between
+  a call and the returned loan that follows it.
+- A block that ends in `Unreachable` or `AssertFail` releases nothing. The
+  abort reclaims every value.
+- A match chain whose arms cover every variant of an enum has no
+  fall-through edge for the pass or the checker. No value takes it.
+
+A module the pass cannot read stays implicit, and the validator reports
+what is wrong with it. `strip_ownership` takes the pass's output out again.
+
+### Ownership Checker
+
+`validate_ownership` runs next to `validate_loan_flow` at both boundaries.
+It walks each function forward and gives each tracked root a state.
+
+| State | Meaning |
+| --- | --- |
+| Empty | holds no value |
+| Owned | holds a value |
+| Maybe | holds a value on some paths only |
+
+Joining Owned with Empty gives Maybe. A path that never stored the root
+adds nothing, because definite assignment is the type checker's rule.
+
+- Parameters and the receiver start Owned. Every other root starts Empty.
+- A use, a retain, or a move needs Owned. A move leaves the root Empty.
+- A store to a root needs it Empty.
+- Each consuming `Place` operand takes one earlier `Retain` in the same
+  instruction, and none is left over.
+- A release needs Owned or Maybe.
+- A release or a move needs no active loan of the root and no registered
+  cleanup on it.
+- A task argument is never retained, because a task copies its arguments.
+- A `try` must list exactly the roots that hold a value, except `mut`
+  parameters.
+- A return leaves every root Empty, except `mut` parameters, which stay
+  Owned, and the root it returns from.
+
+The checker has the loan validator's budgets: a cap on roots times blocks,
+and a cap on block visits. Native emission runs it on every module, after
+the pass fills in an implicit one. The interpreter runs it only on an
+explicit module. Each error names the function. The interpreter reports it
+after `invalid MIR ownership:`, and native emission reports it as it is.
 
 ### Operand Roles
 

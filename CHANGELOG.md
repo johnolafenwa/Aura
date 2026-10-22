@@ -15,10 +15,19 @@ in this file.
   that indexing and iteration lower to, and named built-in calls such as
   `print`, `range`, and `fs.exists`, as resolved `Runtime` calls instead of
   member or named calls, with `int64` f-string parts marked `Int64`.
-- `aura mir` prints each module's `ownership`, `Implicit` for every
-  lowered module, and a `copy` mark on each class and enum. A class or
-  enum is marked when its values need no drop. `try` lists the locals its
-  error edge releases, which lowering leaves empty.
+- `aura mir` prints each module's `ownership` and a `copy` mark on each
+  class and enum. A class or enum is marked when its values need no drop.
+- Lowering states ownership in MIR, so `aura mir` shows `Explicit`, a
+  `Retain` before each instruction that consumes a value another local
+  still needs, and a `Release` where each value dies. `try` lists the
+  locals its error edge releases. Both backends still decide ownership
+  themselves, and native objects are unchanged.
+- Both backends check the ownership an explicit module states and refuse
+  MIR that releases a value twice, uses it after a release or a move,
+  releases it on only some paths, or releases it under a loan or a
+  cleanup. Native emission gives MIR that states no ownership the
+  ownership pass first. `aura run` skips the pass, so its startup time is
+  unchanged.
 - `AURA_RUNTIME_STATS=1` also reports `retains`, `releases`, and `clones`:
   how often the direct runtime retains, releases, and copies a boxed value.
   The interpreter reports zero for them.

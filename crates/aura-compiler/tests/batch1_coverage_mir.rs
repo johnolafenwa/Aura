@@ -5,11 +5,16 @@
 //! through its serialized form, and assert that both public boundaries (the
 //! interpreter and the direct backend) reject it with the validator's message.
 
+use aura_compiler::mir::ownership::strip_ownership;
 use aura_compiler::{emit_host_native_object, lower_source_to_mir, run_mir, run_source, MirModule};
 use serde_json::{json, Value};
 
 fn encode(source: &str) -> Value {
-    serde_json::to_value(lower_source_to_mir(source).expect("source should lower")).unwrap()
+    // A forgery edits MIR that states no ownership, which each boundary
+    // then fills in.
+    let mut mir = lower_source_to_mir(source).expect("source should lower");
+    strip_ownership(&mut mir);
+    serde_json::to_value(mir).unwrap()
 }
 
 fn function_mut<'a>(encoded: &'a mut Value, name: &str) -> &'a mut Value {
