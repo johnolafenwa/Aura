@@ -12,8 +12,9 @@ decisions, and PR 4 moves lending into MIR.
 ## Work Completed
 
 - `mir::ownership::insert_ownership` states ownership in an implicit
-  module. `lower()` runs it after the union plans, and both boundaries run
-  it on an implicit module. It does nothing to an explicit module.
+  module. `mir::lower` runs it after the union plans, and the native
+  boundary runs it on an implicit module. It does nothing to an explicit
+  module. `aura mir` and the native build path lower with it.
   - It tracks each root local whose value needs drop. Copy builtins,
     `MirClass.copy`, `MirEnum.copy`, and union plans decide that.
   - Backward liveness finds where each value dies. A loan, a closure that
@@ -42,9 +43,9 @@ decisions, and PR 4 moves lending into MIR.
     ones.
   - A module the pass cannot read stays implicit, and the validator
     reports what is wrong with it.
-- `mir_ownership_check.rs` holds `validate_ownership`. It runs next to
-  `validate_loan_flow` at both boundaries through
-  `mir::validate_at_boundary`.
+- `mir_ownership_check.rs` holds `validate_ownership`. Native emission
+  runs it next to `validate_loan_flow` through `mir::validate_at_boundary`
+  on every module. The interpreter runs it on explicit modules only.
   - Each tracked root is Empty, Owned, or Maybe. Joining Owned with Empty
     gives Maybe. A path that never stored the root adds nothing, because
     definite assignment is the type checker's rule.
@@ -60,14 +61,16 @@ decisions, and PR 4 moves lending into MIR.
 - The native boundary strips what the pass added before it emits, with
   `strip_ownership`. An implicit module is checked through a copy that
   the pass fills in, and the original is emitted.
-- The interpreter still treats `Retain` and `Release` as no-ops. A debug
-  build forgets a released local, so a read after a release fails. Every
-  debug fixture run checks the pass's liveness this way.
+- The interpreter gains nothing from the pass, so `aura run` and the
+  other interpreter paths lower with `mir::lower_implicit` and skip both
+  the pass and the checker. The interpreter still treats `Retain` and
+  `Release` as no-ops. Native builds check every fixture, so the gate
+  stays.
 - The loan validator lets a `try` release a root a loan still holds,
   because the error edge leaves the frame and ends every loan in it. A
   `Retain` may follow a returned loan.
-- Tests that forge MIR now forge implicit MIR, which each boundary fills
-  in. One forgery read a local it never stored and now stores it first.
+- Tests that forge MIR now forge implicit MIR, which the native boundary
+  fills in. One forgery read a local it never stored and now stores it first.
 
 ## Verification
 
@@ -77,26 +80,30 @@ decisions, and PR 4 moves lending into MIR.
 - Every run-pass fixture emits a byte-identical object at base and head
   (627 of 627).
 - Tests pass with `package_io_helpers_cover_local_error_paths` skipped:
-  aura-compiler 2608, aura-runtime 739, aura 500.
+  aura-compiler 2619 (under coverage), aura-runtime 739, aura 500.
 - Backend parity passes, and so does
   `direct_objects_are_identical_across_repeated_builds`.
-- Debug builds without debug info, medians, base then head:
-  - `aura run` of `print("hi")`, 30 runs: 37.7 ms and 48.5 ms;
-  - `aura check` of `json_dynamic_values.au`, the largest run-pass
-    fixture, 15 runs: 100.9 ms and 99.4 ms;
-  - `aura mir` of it: 352.5 ms and 380.0 ms;
-  - `aura run` of it: 745.9 ms and 768.3 ms.
-- The startup cost comes from the 111 functions that even `print("hi")`
-  lowers. A profile puts the pass at 23% and the checker at 12% of the
-  instructions. A third of the pass is the first lookup of built-in
-  module metadata for runtime op roles, which the base build never needs
-  for this program.
+- Debug builds without debug info, medians, base then head, interleaved:
+  - `aura run` of `print("hi")`, 30 runs: 43.3 ms and 40.5 ms. Callgrind
+    counts 79.93 and 79.91 million instructions, so `aura run` does the
+    same work as before;
+  - `aura run` of `json_dynamic_values.au`, the largest run-pass fixture,
+    15 runs: 840.7 ms and 811.3 ms;
+  - `aura mir` of it: 383.4 ms and 395.6 ms;
+  - `aura check` of it: 100.9 ms and 99.4 ms.
+- A first version ran the pass and the checker on the interpreter path
+  too, which cost 11 ms at startup for the 111 functions even
+  `print("hi")` lowers. The interpreter gains nothing from them, so it now
+  skips both.
 - `scripts/test_bench_compile_time.py` passes. The full
   `bench-compile-time.py` run needs release builds of base and head and
   was not run.
-- Coverage meets the floors: lines 96.55%, functions 97.33% (10007 of
-  10281), regions 95.47%. `mir_ownership.rs` covers 98.59% of its lines
-  and `mir_ownership_check.rs` 99.49%, with every function run.
+- Coverage meets the floors: lines 96.56%, functions 97.37% (10013 of
+  10283), regions 95.48%. Every function in `mir_ownership.rs` and
+  `mir_ownership_check.rs` runs. Three new tests cover old validator
+  paths: a tuple projection past the address space, an unknown argument
+  to an indirect call with a union parameter, and the emitter's own arity
+  check for an unresolved internal slice.
 
 ## Follow-Up
 
@@ -105,6 +112,3 @@ decisions, and PR 4 moves lending into MIR.
   exhaustive match, which the pass treats as unreachable.
 - PR 3: compare each fixture's `retains` plus `clones` against the base
   counters from PR 1.
-- Cut the startup cost. Options: a static role table for runtime ops,
-  so the pass never builds the built-in module registry, and sharing the
-  pass's per-function facts with the checker.

@@ -9991,7 +9991,17 @@ fn arg_place_mentions<'a>(args: &'a [MirArg], mentions: &mut Vec<&'a str>) {
     }
 }
 
+/// Lowers `program` and states its ownership: the module is explicit.
+/// `aura mir` and the native build path use this form.
 pub fn lower(program: &Program) -> MirModule {
+    let mut module = lower_implicit(program);
+    ownership::insert_ownership(&mut module);
+    module
+}
+
+/// Lowers `program` without the ownership pass, for the interpreter, which
+/// decides ownership itself and gains nothing from the pass.
+pub fn lower_implicit(program: &Program) -> MirModule {
     let mut functions = program
         .functions
         .values()
@@ -10151,7 +10161,6 @@ pub fn lower(program: &Program) -> MirModule {
     crate::union_layout::plan_module_unions(&mut module, |member| {
         type_is_copy_in_program(member, program)
     });
-    ownership::insert_ownership(&mut module);
     module
 }
 
@@ -26556,6 +26565,16 @@ pub(crate) fn validate_at_boundary(
         validate_loan_flow(module).map_err(BoundaryError::LoanFlow)?;
         ownership::insert_ownership(module);
     }
+    validate_loan_flow(module).map_err(BoundaryError::LoanFlow)?;
+    validate_ownership(module).map_err(BoundaryError::Ownership)
+}
+
+/// The checks the interpreter runs. It decides ownership itself, so an
+/// implicit module skips the pass and the checker. An explicit module must
+/// still state its ownership correctly.
+pub(crate) fn validate_for_interpreter(
+    module: &MirModule,
+) -> std::result::Result<(), BoundaryError> {
     validate_loan_flow(module).map_err(BoundaryError::LoanFlow)?;
     validate_ownership(module).map_err(BoundaryError::Ownership)
 }

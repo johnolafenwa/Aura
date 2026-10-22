@@ -231,19 +231,19 @@ fn reject_source_only_ffi(module: &ast::Module) -> Result<()> {
 
 pub fn run_source(source: &str) -> Result<RunOutput> {
     let program = check_source(source)?;
-    let mir = lower_to_mir(&program);
+    let mir = mir::lower_implicit(&program);
     run_mir(&mir)
 }
 
 pub fn run_source_with_stdout_sink(source: &str, stdout_sink: StdoutSink) -> Result<RunOutput> {
     let program = check_source(source)?;
-    let mir = lower_to_mir(&program);
+    let mir = mir::lower_implicit(&program);
     run_mir_with_stdout_sink(&mir, Some(stdout_sink))
 }
 
 pub fn run_path_with_source(path: &Path, source: &str) -> Result<RunOutput> {
     let program = check_path_with_source(path, source)?;
-    let mir = lower_to_mir(&program);
+    let mir = mir::lower_implicit(&program);
     mir_runtime::run_trusted(&mir)
 }
 
@@ -253,7 +253,7 @@ pub fn run_path_with_source_and_stdout_sink(
     stdout_sink: StdoutSink,
 ) -> Result<RunOutput> {
     let program = check_path_with_source(path, source)?;
-    let mir = lower_to_mir(&program);
+    let mir = mir::lower_implicit(&program);
     mir_runtime::run_with_stdout_sink_trusted(&mir, Some(stdout_sink))
 }
 
@@ -264,7 +264,7 @@ pub fn run_path_with_source_and_stdout_sink_and_program_args(
     program_args: Vec<String>,
 ) -> Result<RunOutput> {
     let program = check_path_with_source(path, source)?;
-    let mir = lower_to_mir(&program);
+    let mir = mir::lower_implicit(&program);
     mir_runtime::run_with_stdout_sink_and_program_args_trusted(
         &mir,
         Some(stdout_sink),
@@ -466,13 +466,13 @@ fn check_path_with_source_inner(
 
 pub fn run_path(path: &Path) -> Result<RunOutput> {
     let program = check_path(path)?;
-    let mir = lower_to_mir(&program);
+    let mir = mir::lower_implicit(&program);
     mir_runtime::run_trusted(&mir)
 }
 
 pub fn run_path_with_stdout_sink(path: &Path, stdout_sink: StdoutSink) -> Result<RunOutput> {
     let program = check_path(path)?;
-    let mir = lower_to_mir(&program);
+    let mir = mir::lower_implicit(&program);
     mir_runtime::run_with_stdout_sink_trusted(&mir, Some(stdout_sink))
 }
 
@@ -496,7 +496,7 @@ pub fn run_path_entry_with_stdout_sink_and_program_args(
     program_args: Vec<String>,
 ) -> Result<RunOutput> {
     let program = check_path(path)?;
-    let mir = lower_to_mir(&program);
+    let mir = mir::lower_implicit(&program);
     mir_runtime::run_entry_with_stdout_sink_and_program_args_trusted(
         &mir,
         entry,
@@ -528,7 +528,7 @@ pub fn run_checked_mir_entry_with_stdout_sink_and_program_args(
 /// MIR that is eligible for repeated trusted entry execution.
 pub fn lower_path_to_checked_mir(path: &Path) -> Result<CheckedMirModule> {
     let program = check_path(path)?;
-    Ok(CheckedMirModule(lower_to_mir(&program)))
+    Ok(CheckedMirModule(mir::lower_implicit(&program)))
 }
 
 pub fn lower_path_to_mir(path: &Path) -> Result<MirModule> {

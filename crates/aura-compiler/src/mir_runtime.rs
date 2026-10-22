@@ -153,7 +153,7 @@ pub(crate) fn run_entry_with_stdout_sink_and_program_args_trusted(
     // calls. Resolve them as the native emitter does, so both boundaries
     // validate and run the same form.
     crate::mir::resolve_runtime_ops(&mut module);
-    crate::mir::validate_at_boundary(&mut module).map_err(|error| match error {
+    crate::mir::validate_for_interpreter(&module).map_err(|error| match error {
         crate::mir::BoundaryError::LoanFlow(error) => {
             Diagnostic::coded("AU4001", format!("invalid MIR loan flow: {error}"))
         }
@@ -3650,17 +3650,8 @@ impl MirRuntime {
     ) -> Result<Option<Value>> {
         match instruction {
             // The interpreter's values own themselves, so a retain or a
-            // release has nothing to do. A debug build forgets a released
-            // local, so a later read of it fails as a read after a move
-            // does, and every run checks the pass's liveness.
-            Instruction::Retain { .. } => Ok(None),
-            Instruction::Release { place } => {
-                if cfg!(debug_assertions) {
-                    env.values.remove(place);
-                    env.shared_values.remove(place);
-                }
-                Ok(None)
-            }
+            // release has nothing to do.
+            Instruction::Retain { .. } | Instruction::Release { .. } => Ok(None),
             Instruction::Safepoint => {
                 if self.safepoints_enabled {
                     *safepoint_fuel -= 1;

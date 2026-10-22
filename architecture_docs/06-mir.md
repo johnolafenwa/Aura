@@ -209,16 +209,18 @@ generic class and an enum with a payload of a type parameter are not
 marked. MIR without the mark needs drop. The validator refuses a mark on a
 type with a field or payload that needs drop.
 
-Lowering runs the ownership pass, so every lowered module is explicit.
-Both backends still decide ownership themselves, in shadow mode. The
-interpreter treats `Retain` and `Release` as no-ops, except that a debug
-build forgets a released local, so a later read fails. The native boundary
-strips what the pass added before it emits, so objects do not change.
+`mir::lower` runs the ownership pass, so the module `aura mir` prints and
+the native build path compiles is explicit. Both backends still decide
+ownership themselves, in shadow mode. The interpreter gains nothing from
+the pass, so `aura run` lowers with `mir::lower_implicit` and skips it.
+The interpreter treats `Retain` and `Release` as no-ops. The native
+boundary strips what the pass added before it emits, so objects do not
+change.
 
 ### Ownership Pass
 
 `mir::ownership::insert_ownership` runs in `lower()` after the union plans,
-and at both boundaries on an implicit module. It does nothing to an
+and at the native boundary on an implicit module. It does nothing to an
 explicit module. It tracks each root local whose value needs drop. Copy
 builtins, `MirClass.copy`, `MirEnum.copy`, and union plans decide that.
 
@@ -277,9 +279,10 @@ adds nothing, because definite assignment is the type checker's rule.
   Owned, and the root it returns from.
 
 The checker has the loan validator's budgets: a cap on roots times blocks,
-and a cap on block visits. Each error names the function. The interpreter
-reports it after `invalid MIR ownership:`, and native emission reports it
-as it is.
+and a cap on block visits. Native emission runs it on every module, after
+the pass fills in an implicit one. The interpreter runs it only on an
+explicit module. Each error names the function. The interpreter reports it
+after `invalid MIR ownership:`, and native emission reports it as it is.
 
 ### Operand Roles
 

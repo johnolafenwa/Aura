@@ -22,10 +22,12 @@ in this file.
   still needs, and a `Release` where each value dies. `try` lists the
   locals its error edge releases. Both backends still decide ownership
   themselves, and native objects are unchanged.
-- Both backends check the ownership a module states and refuse MIR that
-  releases a value twice, uses it after a release or a move, releases it
-  on only some paths, or releases it under a loan or a cleanup. MIR that
-  states no ownership gets the ownership pass first.
+- Both backends check the ownership an explicit module states and refuse
+  MIR that releases a value twice, uses it after a release or a move,
+  releases it on only some paths, or releases it under a loan or a
+  cleanup. Native emission gives MIR that states no ownership the
+  ownership pass first. `aura run` skips the pass, so its startup time is
+  unchanged.
 - `AURA_RUNTIME_STATS=1` also reports `retains`, `releases`, and `clones`:
   how often the direct runtime retains, releases, and copies a boxed value.
   The interpreter reports zero for them.
