@@ -947,10 +947,12 @@ fn adr0038_cfg_view_module(reverse_branch_storage: bool, include_dead_loan: bool
                 },
             ],
             methods: Vec::new(),
+            copy: false,
         }],
         trait_impls: Vec::new(),
         constants: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     }
 }
 
@@ -1034,6 +1036,7 @@ fn adr0038_pair_class() -> MirClass {
             },
         ],
         methods: Vec::new(),
+        copy: false,
     }
 }
 
@@ -1159,6 +1162,7 @@ fn adr0038_closure_branch_module(flag: bool, reverse_branch_storage: bool) -> Mi
         trait_impls: Vec::new(),
         constants: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     }
 }
 
@@ -1371,6 +1375,7 @@ fn adr0038_selector_reuse_module() -> MirModule {
         trait_impls: Vec::new(),
         constants: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     }
 }
 

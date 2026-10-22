@@ -313,15 +313,25 @@ pub enum Value {
 /// opaque runtime box, and callable overflow allocation, and a process whose
 /// `AURA_RUNTIME_STATS` environment variable is `1` reports the totals on
 /// standard error when its program ends, so measurements are the same
-/// numbers on the interpreter and the direct backend.
+/// numbers on the interpreter and the direct backend. The direct runtime also
+/// counts the retains, releases, and copies of its boxes. Those three
+/// counters run only when the report is requested, so a retain costs one
+/// relaxed load otherwise. The interpreter reports zero for them.
 pub mod representation_stats {
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     static UNION_PAYLOAD_BOXES: AtomicU64 = AtomicU64::new(0);
     static CLOSURE_ENVIRONMENTS: AtomicU64 = AtomicU64::new(0);
     static OPAQUE_BOXES: AtomicU64 = AtomicU64::new(0);
     static CALLABLE_OVERFLOW_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
     static CLONED_ELEMENTS: AtomicU64 = AtomicU64::new(0);
+    static RETAINS: AtomicU64 = AtomicU64::new(0);
+    static RELEASES: AtomicU64 = AtomicU64::new(0);
+    static CLONES: AtomicU64 = AtomicU64::new(0);
+
+    /// Whether the ownership counters count. The direct runtime turns them on
+    /// at startup when the report is requested.
+    static OWNERSHIP_COUNTING: AtomicBool = AtomicBool::new(false);
 
     /// The environment variable that requests the exit report.
     pub const ENV_VAR: &str = "AURA_RUNTIME_STATS";
@@ -338,6 +348,13 @@ pub mod representation_stats {
         /// with the size of what is cloned, so a hidden clone of a whole
         /// collection shows up in proportion to that collection.
         pub cloned_elements: u64,
+        /// Direct-runtime retains of a box: one more reference to it.
+        pub retains: u64,
+        /// Direct-runtime releases of a box reference.
+        pub releases: u64,
+        /// Direct-runtime copies of a box's value: explicit clones, and a
+        /// consuming helper that copies a box another reference still holds.
+        pub clones: u64,
     }
 
     impl RepresentationStats {
@@ -350,18 +367,24 @@ pub mod representation_stats {
                 callable_overflow_allocations: self.callable_overflow_allocations
                     - earlier.callable_overflow_allocations,
                 cloned_elements: self.cloned_elements - earlier.cloned_elements,
+                retains: self.retains - earlier.retains,
+                releases: self.releases - earlier.releases,
+                clones: self.clones - earlier.clones,
             }
         }
 
         /// The report line a backend prints at exit.
         pub fn report_line(self, backend: &str) -> String {
             format!(
-                "aura runtime stats ({backend}): union_payload_boxes={} closure_environments={} opaque_boxes={} callable_overflow_allocations={} cloned_elements={}",
+                "aura runtime stats ({backend}): union_payload_boxes={} closure_environments={} opaque_boxes={} callable_overflow_allocations={} cloned_elements={} retains={} releases={} clones={}",
                 self.union_payload_boxes,
                 self.closure_environments,
                 self.opaque_boxes,
                 self.callable_overflow_allocations,
-                self.cloned_elements
+                self.cloned_elements,
+                self.retains,
+                self.releases,
+                self.clones
             )
         }
 
@@ -379,6 +402,9 @@ pub mod representation_stats {
                     "opaque_boxes" => stats.opaque_boxes = value,
                     "callable_overflow_allocations" => stats.callable_overflow_allocations = value,
                     "cloned_elements" => stats.cloned_elements = value,
+                    "retains" => stats.retains = value,
+                    "releases" => stats.releases = value,
+                    "clones" => stats.clones = value,
                     _ => return None,
                 }
             }
@@ -408,6 +434,36 @@ pub mod representation_stats {
         }
     }
 
+    /// Turns the ownership counters on when the process asked for the
+    /// report. The direct runtime calls it once when a program starts.
+    pub fn start_ownership_counting_if_requested() {
+        OWNERSHIP_COUNTING.fetch_or(requested(), Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_ownership_counting(on: bool) {
+        OWNERSHIP_COUNTING.store(on, Ordering::Relaxed);
+    }
+
+    #[inline]
+    fn note_ownership(counter: &AtomicU64) {
+        if OWNERSHIP_COUNTING.load(Ordering::Relaxed) {
+            counter.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn note_retain() {
+        note_ownership(&RETAINS);
+    }
+
+    pub fn note_release() {
+        note_ownership(&RELEASES);
+    }
+
+    pub fn note_clone() {
+        note_ownership(&CLONES);
+    }
+
     /// The current totals.
     pub fn snapshot() -> RepresentationStats {
         RepresentationStats {
@@ -416,6 +472,9 @@ pub mod representation_stats {
             opaque_boxes: OPAQUE_BOXES.load(Ordering::Relaxed),
             callable_overflow_allocations: CALLABLE_OVERFLOW_ALLOCATIONS.load(Ordering::Relaxed),
             cloned_elements: CLONED_ELEMENTS.load(Ordering::Relaxed),
+            retains: RETAINS.load(Ordering::Relaxed),
+            releases: RELEASES.load(Ordering::Relaxed),
+            clones: CLONES.load(Ordering::Relaxed),
         }
     }
 

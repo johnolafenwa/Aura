@@ -236,6 +236,8 @@ fn reject_untrusted_extern_calls(module: &MirModule) -> Result<()> {
                 _ => None,
             },
             Instruction::Safepoint
+            | Instruction::Retain { .. }
+            | Instruction::Release { .. }
             | Instruction::IndexInRange { .. }
             | Instruction::BeginLoan { .. }
             | Instruction::BeginElementLoan { .. }
@@ -288,6 +290,8 @@ fn function_uses_lightweight_tasks(function: &MirFunction) -> bool {
             .any(|instruction| match instruction {
                 Instruction::Assign { value, .. } => rvalue_uses_lightweight_tasks(value),
                 Instruction::Safepoint
+                | Instruction::Retain { .. }
+                | Instruction::Release { .. }
                 | Instruction::IndexInRange { .. }
                 | Instruction::BeginLoan { .. }
                 | Instruction::BeginElementLoan { .. }
@@ -349,7 +353,7 @@ fn rvalue_materializes_process_run(value: &Rvalue) -> bool {
         | Rvalue::UnionInject { value, .. }
         | Rvalue::Unary { value, .. }
         | Rvalue::Cast { value, .. }
-        | Rvalue::Try { value }
+        | Rvalue::Try { value, .. }
         | Rvalue::TupleElement { tuple: value, .. }
         | Rvalue::VariantPayload {
             scrutinee: value, ..
@@ -3639,6 +3643,9 @@ impl MirRuntime {
         safepoint_fuel: &mut u64,
     ) -> Result<Option<Value>> {
         match instruction {
+            // The interpreter's values own themselves, so a retain or a
+            // release has nothing to do.
+            Instruction::Retain { .. } | Instruction::Release { .. } => Ok(None),
             Instruction::Safepoint => {
                 if self.safepoints_enabled {
                     *safepoint_fuel -= 1;
@@ -4370,7 +4377,7 @@ impl MirRuntime {
                     Some(*span),
                 )?))
             }
-            Rvalue::Try { value } => {
+            Rvalue::Try { value, .. } => {
                 let source_error_ty = match self.resolve_operand_type(value, env) {
                     Some(Type::Named(name, args)) if name == "Result" && args.len() == 2 => {
                         args.get(1).cloned()

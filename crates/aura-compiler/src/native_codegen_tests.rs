@@ -406,6 +406,7 @@ fn adr0038_direct_cfg_join_rejects_branch_dependent_view_identity() {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     let mut codegen = NativeCodegen::new(&module, "/tmp/direct_view_join.au", "")
         .expect("direct codegen should initialize for structurally complete MIR");
@@ -464,6 +465,7 @@ fn adr0038_direct_tuple_place_errors_reach_codegen_after_constructor_setup() {
             classes: Vec::new(),
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         };
         let mut codegen = NativeCodegen::new(&module, "/tmp/direct_tuple_place.au", "")
             .expect("constructor should accept the function before place compilation");
@@ -585,6 +587,7 @@ def main() -> int32:
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     let mut missing_main_initializer =
         NativeCodegen::new(&constant_module, "/tmp/direct_constant_thunk.au", "")
@@ -622,6 +625,7 @@ def main() -> int32:
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     let mut missing_rvalue_initializer =
         NativeCodegen::new(&reader_module, "/tmp/direct_constant_rvalue.au", "")
@@ -1457,6 +1461,7 @@ fn tuple_native_symbols_keep_public_projection_separate_from_private_take() {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
 
     let public_projection = module(
@@ -2275,6 +2280,7 @@ fn handbuilt_mir_safepoint_validates_and_emits_for_a_sequential_module() {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     let object = emit_host_object(&module).expect("a hand-built MIR safepoint should emit");
     let referenced = object_referenced_symbols(&object);
@@ -2355,6 +2361,7 @@ fn dead_task_starts_do_not_enable_reachable_native_safepoints() {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
 
     let object = emit_host_object(&module)
@@ -3126,6 +3133,7 @@ fn module_with_main_call_result_type(call: Rvalue, result_ty: Type) -> crate::mi
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     }
 }
 
@@ -3310,6 +3318,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     let object = emit_host_object(&module)
         .expect("mutable byte views, opaque ownership, and narrow scalars should emit");
@@ -3444,6 +3453,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     assert_eq!(
         emit_host_object(&missing_mut_writeback)
@@ -3623,6 +3633,7 @@ fn module_with_main_member_call_result_type(
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     }
 }
 
@@ -3977,6 +3988,7 @@ fn direct_backend_scalar_bool_range_and_coercion_paths_compile() {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
 
     let object = emit_host_object(&module)
@@ -7007,6 +7019,7 @@ fn direct_backend_rejects_a_wait_result_of_unknown_payload_type() {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
 
     // MIR records a complete type for every assigned local, so the shared
@@ -7053,6 +7066,7 @@ fn direct_backend_entry_thunk_handles_unit_parameters() {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
 
     assert!(!emit_host_object(&unit_param_main)
@@ -7792,6 +7806,7 @@ fn native_codegen_function_value_signature_errors_are_precise() {
             classes: Vec::new(),
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         }
     }
 
@@ -8507,6 +8522,7 @@ fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths(
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     assert!(!emit_host_object(&wildcard_match)
         .expect("wildcard enum matches should compile directly")
@@ -8551,6 +8567,7 @@ fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths(
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     assert!(!emit_host_object(&opaque_branch)
         .expect("opaque branch conditions should use runtime truthiness")
@@ -8590,6 +8607,7 @@ fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths(
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     let scalar_error = emit_host_object(&scalar_match)
         .expect_err("scalar match scrutinees should be rejected by direct codegen");
@@ -8635,6 +8653,7 @@ fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths(
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     let module_error = emit_host_object(&module_match)
         .expect_err("non-named opaque match scrutinees should be rejected");
@@ -8686,6 +8705,7 @@ fn direct_backend_for_range_and_spawn_error_surface_reports_expected_diagnostics
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     let for_range_error = emit_host_object(&invalid_for_range)
         .expect_err("non-place for-range iterables should be rejected");
@@ -9809,6 +9829,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     let stray_pop_cleanup_error = emit_host_object(&stray_pop_cleanup_module)
         .expect_err("unmatched cleanup pops should report the missing cleanup registration");
@@ -9828,6 +9849,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
             },
         ],
         methods: Vec::new(),
+        copy: false,
     };
     let missing_field_module = crate::mir::MirModule {
         unions: Vec::new(),
@@ -9861,6 +9883,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
         classes: vec![pair_class.clone()],
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     let missing_field_error = emit_host_object(&missing_field_module)
         .expect_err("plain-class construction should require all fields");
@@ -9911,6 +9934,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
         classes: vec![pair_class.clone()],
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     let plain_cast_target_error = emit_host_object(&plain_cast_target_module)
         .expect_err("casts to plain classes should be rejected before code emission");
@@ -9974,6 +9998,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
         classes: vec![pair_class.clone()],
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     let plain_cast_source_error = emit_host_object(&plain_cast_source_module)
         .expect_err("casts from plain classes should be rejected before code emission");
@@ -10104,6 +10129,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
         classes: vec![pair_class],
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     let missing_field_access_error = emit_host_object(&missing_field_access_module)
         .expect_err("unknown plain-class fields should be rejected");
@@ -10157,6 +10183,7 @@ fn native_codegen_reports_invalid_non_boolean_branch_conditions() {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
 
     let error = emit_host_object(&invalid_module)
@@ -10200,6 +10227,7 @@ fn native_codegen_rejects_try_between_non_result_types() {
                         target: "target".to_string(),
                         value: Rvalue::Try {
                             value: Operand::Place("source".to_string()),
+                            releases_on_error: Vec::new(),
                         },
                     },
                 ],
@@ -10209,6 +10237,7 @@ fn native_codegen_rejects_try_between_non_result_types() {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
 
     let error = emit_host_object(&invalid_module)
@@ -10806,6 +10835,7 @@ fn infer_operand_types_track_plain_classes() {
                     function_name: "Point::norm".to_string(),
                     receiver: Some(MirReceiverKind::Borrow),
                 }],
+                copy: false,
             },
         ),
         (
@@ -10819,6 +10849,7 @@ fn infer_operand_types_track_plain_classes() {
                     function_name: "Node::size".to_string(),
                     receiver: Some(MirReceiverKind::Borrow),
                 }],
+                copy: false,
             },
         ),
     ]);
@@ -10999,6 +11030,7 @@ fn signature_helpers_flatten_plain_class_abi_types() {
                 },
             ],
             methods: Vec::new(),
+            copy: false,
         },
     );
     let function = MirFunction {
@@ -11085,6 +11117,7 @@ fn cleanup_place_type_resolves_receivers_params_locals_and_temporaries() {
             ty: Type::named("bool"),
         }],
         methods: Vec::new(),
+        copy: false,
     };
     let holder_class = crate::mir::MirClass {
         name: "Holder".to_string(),
@@ -11094,6 +11127,7 @@ fn cleanup_place_type_resolves_receivers_params_locals_and_temporaries() {
             ty: Type::named("Resource"),
         }],
         methods: Vec::new(),
+        copy: false,
     };
     let classes = HashMap::from([
         ("Resource".to_string(), resource_class),
@@ -11188,6 +11222,7 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
                     ty: Type::named("str"),
                 }],
                 methods: Vec::new(),
+                copy: false,
             },
         ),
         (
@@ -11200,6 +11235,7 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
                     ty: Type::TypeParam("T".to_string()),
                 }],
                 methods: Vec::new(),
+                copy: false,
             },
         ),
     ]);
@@ -11620,6 +11656,7 @@ fn native_codegen_helper_utilities_cover_signatures_wildcards_and_metadata() {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     emit_host_object(&invalid_module).expect("an unreachable terminator compiles to a trap");
 }
@@ -11706,6 +11743,7 @@ fn native_codegen_direct_types_keep_recursive_and_generic_classes_opaque() {
                     ty: Type::named("Node"),
                 }],
                 methods: Vec::new(),
+                copy: false,
             },
         ),
         (
@@ -11718,6 +11756,7 @@ fn native_codegen_direct_types_keep_recursive_and_generic_classes_opaque() {
                     ty: Type::TypeParam("T".to_string()),
                 }],
                 methods: Vec::new(),
+                copy: false,
             },
         ),
     ]);
@@ -11759,6 +11798,7 @@ fn native_codegen_type_helpers_cover_nested_type_params_and_opaque_fallbacks() {
                     },
                 ],
                 methods: Vec::new(),
+                copy: false,
             },
         ),
         (
@@ -11771,6 +11811,7 @@ fn native_codegen_type_helpers_cover_nested_type_params_and_opaque_fallbacks() {
                     ty: Type::named("str"),
                 }],
                 methods: Vec::new(),
+                copy: false,
             },
         ),
     ]);
@@ -11915,6 +11956,7 @@ fn direct_codegen_ignores_dead_cleanup_and_terminator_metadata_but_checks_cfg_st
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
 
     validate_function(&function, &HashMap::new())
@@ -11958,6 +12000,7 @@ fn native_codegen_constructor_initializes_runtime_function_surface() {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
 
     let codegen = super::NativeCodegen::new(
@@ -12068,6 +12111,7 @@ fn cleanup_test_module(functions: Vec<MirFunction>) -> crate::mir::MirModule {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     }
 }
 
@@ -12169,9 +12213,11 @@ fn dead_assignments_do_not_poison_reachable_cleanup_type_inference() {
             type_params: Vec::new(),
             fields: vec![class_field("value", Type::named("int64"))],
             methods: vec![close_method("Resource.close")],
+            copy: false,
         }],
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
 
     let object = emit_host_object(&module)
@@ -12234,9 +12280,11 @@ fn native_codegen_cleanup_thunks_cover_scalar_plain_opaque_and_metadata_errors()
             type_params: Vec::new(),
             fields: vec![class_field("value", Type::named("int32"))],
             methods: Vec::new(),
+            copy: false,
         }],
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     let mut plain_codegen =
         super::NativeCodegen::new(&plain_module, "/tmp/direct_plain_cleanup.au", "")
@@ -12270,9 +12318,11 @@ fn native_codegen_cleanup_thunks_cover_class_close_success_and_missing_targets()
             type_params: Vec::new(),
             fields: vec![class_field("closed", Type::named("bool"))],
             methods: vec![close_method("Resource.close")],
+            copy: false,
         }],
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     let mut plain_close_codegen = super::NativeCodegen::new(
         &plain_close_module,
@@ -12308,9 +12358,11 @@ fn native_codegen_cleanup_thunks_cover_class_close_success_and_missing_targets()
             type_params: Vec::new(),
             fields: vec![class_field("handle", Type::named("str"))],
             methods: vec![close_method("Managed.close")],
+            copy: false,
         }],
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     let mut opaque_close_codegen = super::NativeCodegen::new(
         &opaque_close_module,
@@ -12450,6 +12502,7 @@ fn direct_validation_accepts_assert_fail_operands_and_rejects_unknown_places() {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
 
     emit_host_object(&make_module(
@@ -12590,6 +12643,7 @@ def main():
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     let invalid = emit_host_object(&malformed_tuple_module("invalid"))
         .expect_err("tuple view projections must be fixed positions");
@@ -13000,6 +13054,7 @@ fn shape_test_module(main_value: Rvalue, helpers: Vec<MirFunction>) -> crate::mi
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     }
 }
 

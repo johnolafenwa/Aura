@@ -208,12 +208,14 @@ fn completed_rvalue_types_follow_each_rvalue_kind() {
         (
             Rvalue::Try {
                 value: place("outcome"),
+                releases_on_error: Vec::new(),
             },
             Some(int64.clone()),
         ),
         (
             Rvalue::Try {
                 value: place("count"),
+                releases_on_error: Vec::new(),
             },
             None,
         ),

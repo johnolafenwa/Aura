@@ -994,3 +994,102 @@ fn only_fixed_width_integer_ops_name_integer_width_words() {
         Some(&[4, 1][..])
     );
 }
+
+#[test]
+fn every_op_states_the_ownership_of_each_parameter_and_its_receiver() {
+    use crate::mir::ownership::OperandRole;
+    for op in RuntimeOp::all() {
+        let params = op.params();
+        for index in 0..params.len() {
+            assert!(
+                op.arg_ownership(index).is_some(),
+                "`{op}` states no ownership for parameter {index}"
+            );
+        }
+        if op != RuntimeOp::Function(FunctionOp::Select) {
+            assert_eq!(
+                op.arg_ownership(params.len()),
+                None,
+                "`{op}` has no parameter {}",
+                params.len()
+            );
+        }
+        assert_eq!(
+            op.receiver_ownership(),
+            op.has_receiver().then_some(OperandRole::Borrow),
+            "`{op}` borrows its receiver"
+        );
+        // A member op consumes exactly its `own` parameters.
+        if let Some(member) = op.builtin_member() {
+            for index in 0..params.len() {
+                assert_eq!(
+                    op.arg_ownership(index),
+                    member.argument_passing(index).map(OperandRole::of_passing),
+                    "`{op}` parameter {index}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn ops_consume_the_values_they_store() {
+    use crate::mir::ownership::OperandRole::{Borrow, Consume};
+    let roles = |op: RuntimeOp| {
+        (0..op.params().len())
+            .map(|index| op.arg_ownership(index).expect("a declared parameter"))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(roles(RuntimeOp::List(ListOp::Push)), [Consume]);
+    assert_eq!(
+        roles(RuntimeOp::List(ListOp::PushScalar(ScalarElement::Int64))),
+        [Consume]
+    );
+    assert_eq!(
+        roles(RuntimeOp::List(ListOp::SetIndex)),
+        [Borrow, Consume, Borrow, Borrow]
+    );
+    assert_eq!(
+        roles(RuntimeOp::Dict(DictOp::SetIndex)),
+        [Consume, Consume, Borrow, Borrow]
+    );
+    assert_eq!(
+        roles(RuntimeOp::Array(ArrayOp::SetIndex)),
+        [Borrow, Consume, Borrow, Borrow]
+    );
+    assert_eq!(roles(RuntimeOp::Span(SpanOp::Restore)), [Borrow, Consume]);
+    assert_eq!(roles(RuntimeOp::Span(SpanOp::Fill)), [Borrow; 3]);
+    assert_eq!(roles(RuntimeOp::List(ListOp::Index)), [Borrow; 3]);
+    assert_eq!(roles(RuntimeOp::Dict(DictOp::Index)), [Borrow; 3]);
+    assert_eq!(roles(RuntimeOp::Set(SetOp::TakeIndexOption)), [Borrow]);
+    assert_eq!(roles(RuntimeOp::Array(ArrayOp::Slice)), [Borrow; 6]);
+    assert_eq!(roles(RuntimeOp::Str(StrOp::Slice)), [Borrow; 6]);
+    assert_eq!(roles(RuntimeOp::Queue(QueueOp::GetInTaskGroup)), [Borrow]);
+    assert_eq!(roles(RuntimeOp::Print(PrintKind::Value)), [Borrow]);
+    assert_eq!(
+        RuntimeOp::Function(FunctionOp::Select).arg_ownership(5),
+        Some(Borrow),
+        "`select` borrows every source"
+    );
+    assert_eq!(roles(RuntimeOp::Function(FunctionOp::RngNew)), [Borrow]);
+    assert_eq!(roles(RuntimeOp::Function(FunctionOp::QueueNew)), [Borrow]);
+    assert_eq!(
+        roles(RuntimeOp::Function(FunctionOp::ArrayFull)),
+        [Borrow; 2]
+    );
+    assert_eq!(roles(RuntimeOp::Function(FunctionOp::FsExists)), [Borrow]);
+    assert_eq!(
+        RuntimeOp::Function(FunctionOp::FsExists).arg_ownership(1),
+        None
+    );
+    let host = HostBuiltin::all()
+        .next()
+        .expect("the runtime has host builtins");
+    assert_eq!(
+        RuntimeOp::Host(host).arg_ownership(0),
+        host.metadata()
+            .params
+            .first()
+            .map(|param| crate::mir::ownership::OperandRole::of_passing(param.passing))
+    );
+}

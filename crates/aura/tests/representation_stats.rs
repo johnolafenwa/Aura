@@ -52,6 +52,9 @@ struct Stats {
     opaque_boxes: u64,
     callable_overflow_allocations: u64,
     cloned_elements: u64,
+    retains: u64,
+    releases: u64,
+    clones: u64,
 }
 
 fn parse_stats(stderr: &str, backend: &str) -> Stats {
@@ -70,6 +73,9 @@ fn parse_stats(stderr: &str, backend: &str) -> Stats {
             "opaque_boxes" => stats.opaque_boxes = value,
             "callable_overflow_allocations" => stats.callable_overflow_allocations = value,
             "cloned_elements" => stats.cloned_elements = value,
+            "retains" => stats.retains = value,
+            "releases" => stats.releases = value,
+            "clones" => stats.clones = value,
             other => panic!("unexpected stats field `{other}`"),
         }
     }
@@ -135,6 +141,27 @@ fn stats_report_appears_only_when_requested_on_both_backends() {
             "{backend} packs no closure here"
         );
     }
+}
+
+const OWNED_STRINGS: &str = "def label(name: str) -> str:\n    return name + \"!\"\n\ndef main():\n    mut names: list[str] = []\n    names.append(\"ada\")\n    copy = names[0].clone()\n    print(label(copy))\n    print(names)\n";
+
+#[test]
+fn direct_backend_counts_retains_releases_and_clones() {
+    let (mir, direct) = assert_both_backends("repr-ownership", OWNED_STRINGS, "ada!\n[ada]\n");
+    assert_eq!(
+        (mir.retains, mir.releases, mir.clones),
+        (0, 0, 0),
+        "the interpreter has no boxes to retain or release"
+    );
+    assert!(direct.releases > 0, "the direct backend releases its boxes");
+    assert!(
+        direct.clones >= 1,
+        "`names[0].clone()` copies the string box"
+    );
+    assert!(
+        direct.releases >= direct.retains,
+        "every retain is released: {direct:?}"
+    );
 }
 
 #[test]

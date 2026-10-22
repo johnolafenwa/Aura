@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-10-21
+Last updated: 2026-10-22
 
 ## Batch 7 step 8: semantics in MIR (in progress)
 
@@ -13,16 +13,24 @@ Last updated: 2026-10-21
   `2026-10-21-batch-7-step-8b-runtime-abi-table.md`.
 - Done: 8c, complete local types in MIR, merged in PR #103. Details are in
   `2026-10-21-batch-7-step-8c-local-types.md`.
-- In progress: 8d, resolved runtime operations, PR 4 of 4 (`list`,
-  `dict`, `set`, and `Array` members, slices, and spans). PR 1, merged in
+- Done: 8d, resolved runtime operations, in four PRs. PR 1, merged in
   PR #104, moved resource handles, Rng, scalar and value members. PR 2,
   merged in PR #105, moved named built-in calls, `print` kinds, f-string
   part kinds, and host builtins. PR 3, PR #106, moved `str`, `Queue`,
-  `Task`, and `TaskGroup` members. Details are in
+  `Task`, and `TaskGroup` members. PR 4, PR #107, moved `list`, `dict`,
+  `set`, and `Array` members, slices, and spans. Details are in
   `2026-10-21-batch-7-step-8d1-runtime-ops.md`,
   `2026-10-21-batch-7-step-8d2-named-calls.md`,
   `2026-10-21-batch-7-step-8d3-str-queues-tasks.md`, and
   `2026-10-21-batch-7-step-8d4-collections.md`.
+- In progress: 8e, explicit ownership in MIR, PR 1 of 4. PR 1 adds the
+  vocabulary with no change to emitted objects: `Retain`, `Release`, `try`
+  releases, the module ownership flag, Copy marks on classes and enums,
+  the operand-role table, and runtime op argument ownership. It also
+  stops a runtime helper from emptying a shared box, and adds retain,
+  release, and clone counters. PR 2 adds the ownership pass and checker in
+  shadow mode, PR 3 switches the emitter, and PR 4 moves lending into MIR.
+  Details are in `2026-10-22-batch-7-step-8e1-ownership-vocabulary.md`.
 
 ## Aura 0.6.0 preview release (complete)
 

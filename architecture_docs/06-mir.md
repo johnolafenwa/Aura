@@ -179,6 +179,57 @@ Aura's real MIR goes well beyond the toy example. It includes:
 - cleanup instructions
   explicit `PushCleanup` and `PopCleanup`
 
+## Ownership in MIR
+
+A module's `ownership` field says whether its MIR states ownership.
+
+| Value | Meaning |
+| --- | --- |
+| `Implicit` | Each backend decides when a value gains or loses a reference. Lowering produces implicit MIR, and MIR without the field is implicit. |
+| `Explicit` | The instructions below state each reference a value gains or loses. |
+
+An explicit module may hold:
+
+- `Retain { place }`, which creates one new reference to the value at
+  `place`. The next consuming `Place(place)` operand in the same block
+  takes it.
+- `Release { place }`, which drops the value of a root local and leaves the
+  local empty. Releasing an empty local does nothing.
+- `releases_on_error` on `Rvalue::Try`, the root locals the `Err` edge
+  releases after the pending cleanups, in name order.
+
+The shared validator refuses all three in an implicit module. It also
+refuses a release of a projection, an unknown local, or a local that an
+active loan holds, a retain of an unknown place, and `try` releases out of
+name order.
+
+`MirClass.copy` and `MirEnum.copy` mark a type whose values need no drop.
+Lowering marks a class or enum by the rule union layout plans use. A
+generic class and an enum with a payload of a type parameter are not
+marked. MIR without the mark needs drop. The validator refuses a mark on a
+type with a field or payload that needs drop.
+
+No pass inserts `Retain` or `Release` yet. Both backends treat them as
+no-ops and ignore `try` releases.
+
+### Operand Roles
+
+`mir::ownership::operand_roles` and `terminator_roles` give each operand a
+role. A consuming operand takes one reference to its value. A borrowing
+operand reads the value and leaves it in place. A `MovePlace` operand
+always moves.
+
+| Role | Operands |
+| --- | --- |
+| Consume | `Use`, `Try`, `CallableAdapt`, and `UnionInject` values; the receiver and arguments of `Name`, `Value`, `Member`, and `TraitMember` calls; literal elements, `Construct` fields, and `EnumVariant` payloads; closure captures passed by value; `WriteLoan` values; element-loan selectors; `Return` |
+| Borrow | `Binary`, `Unary`, and `Cast` operands; `Member`, `TupleElement`, and `VariantPayload` objects; f-string parts; `Eval`, `Branch`, `Match`, and `ForRange` operands; the function a `Value` call calls; extern call arguments; task inputs; assertion operands |
+
+A runtime operation names the role of each argument in
+`RuntimeOp::arg_ownership`. An `own` parameter consumes, and so do the key
+and value an index write stores and the values a span restore puts back.
+Every other argument borrows. `RuntimeOp::receiver_ownership` borrows the
+receiver of every operation that has one.
+
 ## Why both backends benefit from MIR
 
 Aura uses the same MIR for:

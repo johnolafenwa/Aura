@@ -7,6 +7,8 @@ runs it with `AURA_RUNTIME_STATS=1`. It records, with commit provenance:
 
 - the runtime's allocation counters: union payload boxes, closure
   environments, opaque runtime boxes, and callable overflow allocations
+- the elements deep clones copy, and the direct runtime's retains,
+  releases, and copies of boxed values
 - wall time
 - the size of the direct binary
 

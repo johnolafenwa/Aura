@@ -3231,6 +3231,9 @@ impl<'a> FunctionCompiler<'a> {
         match instruction {
             // `compile_block` reads the fact for the instructions after it.
             Instruction::IndexInRange { .. } => {}
+            // The emitter still decides ownership itself, so it compiles a
+            // retain or a release to nothing.
+            Instruction::Retain { .. } | Instruction::Release { .. } => {}
             Instruction::Safepoint => {
                 let Some(fuel_variable) = self.safepoint_fuel else {
                     return Ok(());
@@ -3568,7 +3571,10 @@ impl<'a> FunctionCompiler<'a> {
                         }
                     }
                 }
-                if let Rvalue::Try { value: try_value } = value {
+                if let Rvalue::Try {
+                    value: try_value, ..
+                } = value
+                {
                     let target_ty = self.type_of_place(target)?;
                     self.compile_try_assign(target, target_ty, try_value)?;
                 } else {
@@ -13362,7 +13368,10 @@ fn validate_function_in_reachable(
         }
         for instruction in &block.instructions {
             match instruction {
-                Instruction::Safepoint | Instruction::IndexInRange { .. } => {}
+                Instruction::Safepoint
+                | Instruction::IndexInRange { .. }
+                | Instruction::Retain { .. }
+                | Instruction::Release { .. } => {}
                 Instruction::BeginElementLoan { selector, .. }
                 | Instruction::ReborrowElement { selector, .. } => validate_operand(selector)?,
                 Instruction::BeginLoan { .. }
@@ -13563,7 +13572,7 @@ fn validate_rvalue(
             Ok(())
         }
         Rvalue::VariantPayload { scrutinee, .. } => validate_operand(scrutinee),
-        Rvalue::Try { value } => validate_operand(value),
+        Rvalue::Try { value, .. } => validate_operand(value),
         Rvalue::StartTask {
             stack_size,
             task_group,
