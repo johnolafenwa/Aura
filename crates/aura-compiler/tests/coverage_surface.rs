@@ -574,6 +574,7 @@ fn public_native_codegen_rejects_invalid_mir_surface() {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     emit_host_native_object(&invalid_module)
         .expect("an unreachable terminator compiles to a trap through the public API");
@@ -736,6 +737,7 @@ fn public_serialized_mir_api_runs_safe_payloads_and_rejects_forged_ffi() {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     let forged_json = serde_json::to_vec(&forged).expect("forged MIR should serialize");
     let rejected = run_serialized_mir(

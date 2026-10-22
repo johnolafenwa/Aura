@@ -2526,8 +2526,24 @@ unsafe fn consume_value(ptr: *mut OpaqueValue) -> Value {
     value
 }
 
+/// Takes the value out of a box the caller owns one reference to. A box
+/// that another reference still holds keeps its value, and the caller gets
+/// a copy. Only a box with one reference is emptied.
+unsafe fn take_owned_contents(ptr: *mut OpaqueValue) -> Value {
+    // SAFETY: the caller owns a reference, so the box is live. A count of
+    // one cannot grow while the caller holds the only reference.
+    let shared =
+        unsafe { ptr.as_ref() }.is_some_and(|value| value.ref_count.load(Ordering::Acquire) > 1);
+    if shared {
+        crate::runtime_value::representation_stats::note_clone();
+        unsafe { value_ref(ptr) }
+    } else {
+        unsafe { value_mut(ptr, |value| std::mem::replace(value, Value::Unit)) }
+    }
+}
+
 unsafe fn consume_owned_value(ptr: *mut OpaqueValue) -> Value {
-    let value = unsafe { value_mut(ptr, |value| std::mem::replace(value, Value::Unit)) };
+    let value = unsafe { take_owned_contents(ptr) };
     unsafe {
         aura_direct_release_value(ptr);
     }
@@ -2543,7 +2559,7 @@ unsafe fn consume_untracked_value(ptr: *mut OpaqueValue) -> Value {
 }
 
 unsafe fn consume_owned_untracked_value(ptr: *mut OpaqueValue) -> Value {
-    let value = unsafe { value_mut(ptr, |value| std::mem::replace(value, Value::Unit)) };
+    let value = unsafe { take_owned_contents(ptr) };
     unsafe {
         release_untracked_value(ptr);
     }
@@ -4632,6 +4648,7 @@ pub extern "C-unwind" fn aura_direct_runtime_init(
     source_len: usize,
 ) {
     initialize_internal_diagnostic_channels();
+    crate::runtime_value::representation_stats::start_ownership_counting_if_requested();
     task_runtime_boundary(|| {
         clear_direct_task_runtime_states();
         clear_direct_module_constants();
@@ -5357,6 +5374,9 @@ pub unsafe extern "C-unwind" fn aura_direct_retain_value(
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        if !value.is_null() {
+            crate::runtime_value::representation_stats::note_retain();
+        }
         unsafe {
             retain_untracked_value(value);
         }
@@ -5373,6 +5393,9 @@ pub unsafe extern "C-unwind" fn aura_direct_retain_value(
 /// ownership contract.
 pub unsafe extern "C-unwind" fn aura_direct_release_value(value: *mut OpaqueValue) {
     task_runtime_boundary(|| {
+        if !value.is_null() {
+            crate::runtime_value::representation_stats::note_release();
+        }
         unregister_direct_owned_value(value);
         unsafe {
             release_untracked_value(value);
@@ -8541,6 +8564,7 @@ pub extern "C-unwind" fn aura_direct_set_take_index_in_place(
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_clone_value(value: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        crate::runtime_value::representation_stats::note_clone();
         let runtime_type_name = unsafe { explicit_runtime_type_tag(value) };
         let cloned = unsafe { with_value(value, try_clone_array_containing_value) };
         boxed_value_with_type(direct_array_result(cloned, 0, 0), runtime_type_name)

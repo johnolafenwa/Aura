@@ -107,7 +107,7 @@ impl Lowerer<'_> {
                     .get(*index)
                     .cloned()
             }
-            Rvalue::Try { value } => match self.completed_operand_type(value, params)? {
+            Rvalue::Try { value, .. } => match self.completed_operand_type(value, params)? {
                 Type::Named(name, mut args) if name == "Result" && args.len() == 2 => {
                     Some(args.remove(0))
                 }

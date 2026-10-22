@@ -15,6 +15,13 @@ in this file.
   that indexing and iteration lower to, and named built-in calls such as
   `print`, `range`, and `fs.exists`, as resolved `Runtime` calls instead of
   member or named calls, with `int64` f-string parts marked `Int64`.
+- `aura mir` prints each module's `ownership`, `Implicit` for every
+  lowered module, and a `copy` mark on each class and enum. A class or
+  enum is marked when its values need no drop. `try` lists the locals its
+  error edge releases, which lowering leaves empty.
+- `AURA_RUNTIME_STATS=1` also reports `retains`, `releases`, and `clones`:
+  how often the direct runtime retains, releases, and copies a boxed value.
+  The interpreter reports zero for them.
 
 ### Performance
 
@@ -25,6 +32,9 @@ in this file.
 
 ### Fixed
 
+- A direct runtime helper that takes a boxed value, such as `append`,
+  copies the value when another reference still holds the box. It used to
+  empty the box under the other reference.
 - Building the same program twice produces the same native object. Native
   code used to release a function's values at return, and declare some
   callees, in hash map order, which changed from one build to the next.

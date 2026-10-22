@@ -11183,12 +11183,15 @@ fn direct_projected_instance_wrappers_preserve_targets_and_obey_owned_consumptio
                     "failed projected assignment `{path}` must preserve its target"
                 )
             });
+            // The helper took its reference. The test's own reference keeps
+            // the box, so the helper copied the value instead of emptying it.
+            assert_eq!(
+                (*owned).ref_count.load(Ordering::Acquire),
+                1,
+                "an owned assignment argument must be consumed after path validation"
+            );
             super::with_value(owned, |value| {
-                assert_eq!(
-                    value,
-                    &Value::Unit,
-                    "an owned assignment argument must be consumed after path validation"
-                )
+                assert_eq!(value, &Value::String("consumed".to_string()))
             });
             release_value(target);
             release_value(owned);
@@ -25516,4 +25519,39 @@ fn rank_one_arrays_expose_their_storage_as_a_list_view() {
     for value in [int64, int32, float32, float64, grid] {
         unsafe { super::aura_direct_release_value(value) };
     }
+}
+
+#[test]
+fn consuming_a_shared_box_copies_its_value_and_keeps_the_other_reference() {
+    let vec = super::aura_direct_vec_empty();
+    let text = string_value("shared");
+    unsafe {
+        retain_value(text);
+        expect_unit(super::aura_direct_vec_push_in_place(vec, text));
+    }
+    // The push took one reference. The other still reads the string.
+    assert_eq!(
+        unsafe { take_value(text) },
+        Value::String("shared".to_string())
+    );
+    let Value::Vec(stored) = (unsafe { take_value(vec) }) else {
+        panic!("the list should stay a list");
+    };
+    assert_eq!(stored.elements.len(), 1);
+    unsafe {
+        release_value(text);
+        release_value(vec);
+    }
+}
+
+#[test]
+fn consuming_a_unique_box_moves_its_value() {
+    let vec = super::aura_direct_vec_empty();
+    let text = string_value("unique");
+    expect_unit(super::aura_direct_vec_push_in_place(vec, text));
+    let Value::Vec(stored) = (unsafe { take_value(vec) }) else {
+        panic!("the list should stay a list");
+    };
+    assert_eq!(stored.elements.len(), 1);
+    unsafe { release_value(vec) };
 }

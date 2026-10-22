@@ -2166,6 +2166,7 @@ fn adr0038_loan_validator_rejects_alias_spelling_moves_and_use_after_end() {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
 
     let numeric_alias = make_module(vec![
@@ -2612,6 +2613,7 @@ fn adr0038_public_mir_rejects_suspended_locked_and_overlapping_loan_accesses() {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
 
     let suspended_parent = make_module(vec![
@@ -2737,6 +2739,7 @@ fn adr0038_malformed_mir_loan_instruction_diagnostics_are_specific() {
             classes: Vec::new(),
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         };
         let error = validate_loan_flow(&module).expect_err(expected);
         assert!(
@@ -2997,6 +3000,7 @@ fn adr0038_mir_reborrow_and_returned_projections_are_canonical_and_type_valid() 
         classes,
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     let tuple_ty = Type::Tuple(vec![Type::named("int64"), Type::named("int64")]);
 
@@ -3077,6 +3081,7 @@ fn adr0038_mir_reborrow_and_returned_projections_are_canonical_and_type_valid() 
             ty: Type::TypeParam("T".to_string()),
         }],
         methods: Vec::new(),
+        copy: false,
     };
     let malformed_generic = make_module(
         Type::Named("Box".to_string(), Vec::new()),
@@ -3109,6 +3114,7 @@ fn adr0038_mir_reborrow_and_returned_projections_are_canonical_and_type_valid() 
             ty: Type::named("int64"),
         }],
         methods: Vec::new(),
+        copy: false,
     };
     let mismatched_descriptor = make_module(
         Type::named("TypedPair"),
@@ -3141,6 +3147,7 @@ fn adr0038_mir_reborrow_and_returned_projections_are_canonical_and_type_valid() 
             ty: Type::named("int64"),
         }],
         methods: Vec::new(),
+        copy: false,
     };
     let returned = |projections: Vec<String>| {
         let mut module = make_module(

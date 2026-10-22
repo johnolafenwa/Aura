@@ -1645,6 +1645,7 @@ fn test_runtime() -> MirRuntime {
             classes: Vec::new(),
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         CancellationContext::default(),
@@ -2683,6 +2684,7 @@ fn public_mir_execution_rejects_caller_supplied_ffi_metadata() {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
 
     let public_results = [
@@ -6959,6 +6961,7 @@ fn mir_runtime_process_capture_helpers_cover_success_and_malformed_results() {
             classes: Vec::new(),
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         group.child_cancellation(),
@@ -9195,6 +9198,7 @@ fn mir_runtime_complexity_guard_rejects_excessive_instruction_counts() {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
 
     let module = MirModule {
@@ -9225,6 +9229,7 @@ fn mir_runtime_complexity_guard_rejects_excessive_instruction_counts() {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
 
     let error = super::validate_runtime_module_complexity(&module)
@@ -9587,6 +9592,7 @@ fn mir_runtime_task_detection_helpers_cover_task_and_process_shapes() {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: None,
+        ownership: Default::default(),
     };
     assert!(!super::module_uses_lightweight_tasks(&without_tasks));
 
@@ -9598,6 +9604,7 @@ fn mir_runtime_task_detection_helpers_cover_task_and_process_shapes() {
         classes: Vec::new(),
         trait_impls: Vec::new(),
         top_level: Some(process_run),
+        ownership: Default::default(),
     };
     assert!(super::module_uses_lightweight_tasks(
         &with_top_level_process_run
@@ -10402,6 +10409,7 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
             classes: Vec::new(),
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         cancelled_context,
@@ -10910,6 +10918,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
             classes: Vec::new(),
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         cancelled_context,
@@ -12073,6 +12082,7 @@ fn mir_runtime_process_builtins_cover_spawn_timeout_and_cancelled_edges() {
             classes: Vec::new(),
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         cancelled_context,
@@ -12147,6 +12157,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
                 function_name: "widget_render".to_string(),
                 receiver: Some(crate::mir::MirReceiverKind::Borrow),
             }],
+            copy: false,
         },
     );
     runtime.trait_impls.push(MirTraitImpl {
@@ -12644,6 +12655,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
             type_params: Vec::new(),
             fields: Vec::new(),
             methods: Vec::new(),
+            copy: false,
         },
     );
     runtime.classes.insert(
@@ -12657,6 +12669,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
                 function_name: "missing_impl".to_string(),
                 receiver: Some(crate::mir::MirReceiverKind::Borrow),
             }],
+            copy: false,
         },
     );
     runtime.trait_impls.push(MirTraitImpl {
@@ -13023,6 +13036,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
                     receiver: Some(crate::mir::MirReceiverKind::BorrowMut),
                 },
             ],
+            copy: false,
         },
     );
     runtime.trait_impls.push(MirTraitImpl {
@@ -13472,6 +13486,7 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
                 },
             ],
             top_level: None,
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         CancellationContext::default(),
@@ -13520,6 +13535,7 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
                 }],
             }],
             top_level: None,
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         CancellationContext::default(),
@@ -13587,6 +13603,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
                 },
             ],
             top_level: None,
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         CancellationContext::default(),
@@ -13752,9 +13769,11 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
                     ty: Type::TypeParam("T".to_string()),
                 }],
                 methods: Vec::new(),
+                copy: false,
             }],
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         CancellationContext::default(),
@@ -14750,6 +14769,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             classes: Vec::new(),
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         cancellation_group.child_cancellation(),
@@ -16701,6 +16721,7 @@ fn mir_runtime_task_result_or_helpers_cover_nonblocking_shortcuts() {
             classes: Vec::new(),
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         cancelled_runtime_context,
@@ -16832,6 +16853,7 @@ fn mir_runtime_single_consumer_task_results_claim_every_observing_attempt() {
             classes: Vec::new(),
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         cancelled_context,
@@ -17140,6 +17162,7 @@ fn mir_runtime_select_adapter_distinguishes_child_and_current_task_cancellation(
             classes: Vec::new(),
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         cancellation,
@@ -17480,6 +17503,7 @@ fn mir_runtime_wait_helpers_cover_task_lists_ready_error_timeout_and_cancel_path
             classes: Vec::new(),
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         cancelled_context,
@@ -17543,6 +17567,7 @@ fn mir_runtime_print_tolerates_poisoned_stdout_lock() {
             classes: Vec::new(),
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         },
         stdout.clone(),
         CancellationContext::default(),
@@ -17588,6 +17613,7 @@ fn mir_runtime_io_write_streams_to_stdout_sink() {
             classes: Vec::new(),
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         },
         stdout.clone(),
         Some(sink),
@@ -17878,9 +17904,11 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
                     ty: Type::TypeParam("T".to_string()),
                 }],
                 methods: Vec::new(),
+                copy: false,
             }],
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         CancellationContext::default(),
@@ -18292,6 +18320,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
             function_name: "close_managed".to_string(),
             receiver: Some(crate::mir::MirReceiverKind::BorrowMut),
         }],
+        copy: false,
     };
     let borrow_managed_class = MirClass {
         name: "BorrowManaged".to_string(),
@@ -18302,12 +18331,14 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
             function_name: "close_borrow_managed".to_string(),
             receiver: Some(crate::mir::MirReceiverKind::Borrow),
         }],
+        copy: false,
     };
     let worker_class = MirClass {
         name: "Worker".to_string(),
         type_params: Vec::new(),
         fields: Vec::new(),
         methods: Vec::new(),
+        copy: false,
     };
     let broken_class = MirClass {
         name: "Broken".to_string(),
@@ -18318,6 +18349,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
             function_name: "missing_body".to_string(),
             receiver: Some(crate::mir::MirReceiverKind::BorrowMut),
         }],
+        copy: false,
     };
     let mut runtime = MirRuntime::new(
         MirModule {
@@ -18333,6 +18365,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
             ],
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         CancellationContext::default(),
@@ -18592,6 +18625,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
     let try_non_result = match runtime.evaluate_rvalue(
         &Rvalue::Try {
             value: Operand::Int(1),
+            releases_on_error: Vec::new(),
         },
         &mut env,
     ) {
@@ -18610,6 +18644,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
     let try_wrong_enum = match runtime.evaluate_rvalue(
         &Rvalue::Try {
             value: Operand::Place("lookup_value".to_string()),
+            releases_on_error: Vec::new(),
         },
         &mut env,
     ) {
@@ -18632,6 +18667,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         .evaluate_rvalue(
             &Rvalue::Try {
                 value: Operand::Place("ok_result".to_string()),
+                releases_on_error: Vec::new(),
             },
             &mut env,
         )
@@ -18659,6 +18695,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         .evaluate_rvalue(
             &Rvalue::Try {
                 value: Operand::Place("err_result".to_string()),
+                releases_on_error: Vec::new(),
             },
             &mut env,
         )
@@ -18688,6 +18725,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
     let invalid_payload = match runtime.evaluate_rvalue(
         &Rvalue::Try {
             value: Operand::Place("broken_result".to_string()),
+            releases_on_error: Vec::new(),
         },
         &mut env,
     ) {
@@ -18846,9 +18884,11 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
                     ty: Type::named("int32"),
                 }],
                 methods: Vec::new(),
+                copy: false,
             }],
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         CancellationContext::default(),
@@ -18887,9 +18927,11 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
                     ty: Type::TypeParam("T".to_string()),
                 }],
                 methods: Vec::new(),
+                copy: false,
             }],
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         CancellationContext::default(),
@@ -18931,6 +18973,7 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
             classes: Vec::new(),
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         CancellationContext::default(),
@@ -18970,6 +19013,7 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
                     terminator: Terminator::Return(Operand::Int(0)),
                 }],
             }),
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         CancellationContext::default(),
@@ -19518,6 +19562,7 @@ fn mir_function_value_runtime_moves_owned_args_writes_back_mut_args_and_traps_ba
             classes: Vec::new(),
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         CancellationContext::default(),
@@ -19656,6 +19701,7 @@ fn mir_function_value_runtime_rejects_missing_targets_defaults_and_malformed_tas
             classes: Vec::new(),
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         CancellationContext::default(),
@@ -19967,6 +20013,7 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
             classes: Vec::new(),
             trait_impls: Vec::new(),
             top_level: None,
+            ownership: Default::default(),
         },
         Arc::new(Mutex::new(String::new())),
         CancellationContext::default(),
@@ -20853,6 +20900,7 @@ fn mir_try_rejects_unknown_result_variants() {
         .evaluate_rvalue(
             &Rvalue::Try {
                 value: Operand::Place("weird".to_string()),
+                releases_on_error: Vec::new(),
             },
             &mut env,
         )

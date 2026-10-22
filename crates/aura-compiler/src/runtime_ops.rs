@@ -27,6 +27,7 @@ use crate::call::{
     BuiltinAssociatedFunction, BuiltinClassConstructor, BuiltinFunction, BuiltinMember,
     CallableParam,
 };
+use crate::mir::ownership::OperandRole;
 use crate::native_runtime::HOST_BUILTIN_SYMBOLS;
 use crate::runtime_abi::RuntimeFn;
 use crate::sema::{lookup_type, optional_type, poll_type, text_convenience_result_type, Type};
@@ -1989,6 +1990,32 @@ impl FunctionOp {
         }
     }
 
+    /// How the op passes the argument at `index`, by the declaration
+    /// `params` reads. `None` when it has no such parameter.
+    fn argument_passing(self, index: usize) -> Option<ReceiverKind> {
+        use FunctionOp::*;
+        match self {
+            QueueNew | WaitAny | WaitAll | WaitAnyTimeout | WaitAllTimeout | TaskGroupNew
+            | ListEmpty | DictEmpty | SetEmpty => {
+                (index < self.params().len()).then_some(ReceiverKind::Borrow)
+            }
+            RngNew => BuiltinClassConstructor::RandomRng.argument_passing(index),
+            _ => {
+                if let Some(builtin) = BuiltinFunction::from_name(self.name()) {
+                    return builtin.argument_passing(index);
+                }
+                if let Some(associated) = self
+                    .name()
+                    .split_once('.')
+                    .and_then(|(owner, member)| BuiltinAssociatedFunction::resolve(owner, member))
+                {
+                    return associated.argument_passing(index);
+                }
+                Some(self.module_metadata()?.params.get(index)?.passing)
+            }
+        }
+    }
+
     fn runtime_call(self) -> RuntimeCall {
         use FunctionOp::*;
         let (immediates, span, layout_words): (&'static [i64], bool, usize) = match self {
@@ -2564,6 +2591,100 @@ impl RuntimeOp {
         match self.builtin_member() {
             Some(member) => member.argument_passing(index),
             None => Some(ReceiverKind::Borrow),
+        }
+    }
+
+    /// How the op takes its argument at `index`, in `params()` order:
+    /// `Consume` when the helper keeps the reference, as for an `own`
+    /// parameter or the value an index write stores, and `Borrow` when it
+    /// only reads the value. `None` when the op has no such parameter. A
+    /// variadic `select` borrows every source.
+    pub fn arg_ownership(self, index: usize) -> Option<OperandRole> {
+        // A private op declares no member. `consumed` lists the positions
+        // of its parameters the helper keeps.
+        let private = |consumed: &[usize]| {
+            (index < self.params().len()).then(|| {
+                if consumed.contains(&index) {
+                    OperandRole::Consume
+                } else {
+                    OperandRole::Borrow
+                }
+            })
+        };
+        // A member op without its timeout form drops the trailing
+        // `timeout` the member declares.
+        let member = || {
+            if index >= self.params().len() {
+                return None;
+            }
+            self.builtin_member()?
+                .argument_passing(index)
+                .map(OperandRole::of_passing)
+        };
+        match self {
+            RuntimeOp::Resource(_)
+            | RuntimeOp::Rng(_)
+            | RuntimeOp::Scalar(_)
+            | RuntimeOp::Value(_)
+            | RuntimeOp::Task(_)
+            | RuntimeOp::TaskGroup(_) => member(),
+            RuntimeOp::Str(StrOp::Slice) => private(&[]),
+            RuntimeOp::Str(_) => member(),
+            RuntimeOp::Queue(QueueOp::GetInTaskGroup | QueueOp::GetWithRegisteredProducers) => {
+                private(&[])
+            }
+            RuntimeOp::Queue(_) => member(),
+            RuntimeOp::List(ListOp::SetIndex) => private(&[1]),
+            RuntimeOp::List(
+                ListOp::Index
+                | ListOp::IndexScalar(_)
+                | ListOp::Slice
+                | ListOp::IndexOption
+                | ListOp::TakeIndexOption,
+            ) => private(&[]),
+            RuntimeOp::List(_) => member(),
+            RuntimeOp::Dict(DictOp::SetIndex) => private(&[0, 1]),
+            RuntimeOp::Dict(DictOp::Index) => private(&[]),
+            RuntimeOp::Dict(_) => member(),
+            RuntimeOp::Set(SetOp::IndexOption | SetOp::TakeIndexOption) => private(&[]),
+            RuntimeOp::Set(_) => member(),
+            RuntimeOp::Array(ArrayOp::SetIndex) => private(&[1]),
+            RuntimeOp::Array(ArrayOp::Index | ArrayOp::Slice) => private(&[]),
+            RuntimeOp::Array(_) => member(),
+            // A restore puts the extracted values back into the list.
+            RuntimeOp::Span(SpanOp::Restore) => private(&[1]),
+            RuntimeOp::Span(_) => private(&[]),
+            RuntimeOp::Function(op) => op.argument_passing(index).map(OperandRole::of_passing),
+            RuntimeOp::Print(_) => BuiltinFunction::Print
+                .argument_passing(index)
+                .map(OperandRole::of_passing),
+            RuntimeOp::Host(builtin) => builtin
+                .metadata()
+                .params
+                .get(index)
+                .map(|param| OperandRole::of_passing(param.passing)),
+        }
+    }
+
+    /// How the op takes its receiver: every op with a receiver borrows it,
+    /// and a mutating op writes it back in place. `None` for an op with no
+    /// receiver.
+    pub fn receiver_ownership(self) -> Option<OperandRole> {
+        match self {
+            RuntimeOp::Resource(_)
+            | RuntimeOp::Rng(_)
+            | RuntimeOp::Scalar(_)
+            | RuntimeOp::Value(_)
+            | RuntimeOp::Str(_)
+            | RuntimeOp::Queue(_)
+            | RuntimeOp::Task(_)
+            | RuntimeOp::TaskGroup(_)
+            | RuntimeOp::List(_)
+            | RuntimeOp::Dict(_)
+            | RuntimeOp::Set(_)
+            | RuntimeOp::Array(_)
+            | RuntimeOp::Span(_) => Some(OperandRole::Borrow),
+            RuntimeOp::Function(_) | RuntimeOp::Print(_) | RuntimeOp::Host(_) => None,
         }
     }
 

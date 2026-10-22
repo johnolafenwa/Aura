@@ -623,6 +623,11 @@ closure environment, opaque runtime box, and callable overflow allocation. A
 process run with `AURA_RUNTIME_STATS=1` prints the totals on standard error
 when its program ends.
 
+The same line reports how often the direct backend retains, releases, and
+copies a boxed value, as `retains`, `releases`, and `clones`. The direct
+runtime counts these only when the report is requested. The interpreter
+reports zero for them.
+
 `benchmarks/representation` holds the programs.
 `scripts/bench-representation.py` records the counters, the direct binary's
 size, and wall time, with commit provenance. The table shows the counters,

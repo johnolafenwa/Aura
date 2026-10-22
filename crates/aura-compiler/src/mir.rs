@@ -614,6 +614,29 @@ pub struct MirModule {
     #[serde(default)]
     pub constants: Vec<MirConstant>,
     pub top_level: Option<MirFunction>,
+    /// Whether the module states ownership with `Retain` and `Release`
+    /// instructions. MIR without the field is `Implicit`.
+    #[serde(default, skip_serializing_if = "MirOwnership::is_implicit")]
+    pub ownership: MirOwnership,
+}
+
+/// How a module's MIR states ownership (Batch 7 step 8e).
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub enum MirOwnership {
+    /// The backends decide when a value gains or loses a reference. An
+    /// implicit module holds no `Retain`, no `Release`, and no `Try`
+    /// releases.
+    #[default]
+    Implicit,
+    /// `Retain` and `Release` instructions and `Try` releases state each
+    /// reference a value gains or loses.
+    Explicit,
+}
+
+impl MirOwnership {
+    pub fn is_implicit(&self) -> bool {
+        *self == MirOwnership::Implicit
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -650,6 +673,10 @@ pub struct MirClass {
     pub type_params: Vec<String>,
     pub fields: Vec<MirClassField>,
     pub methods: Vec<MirMethod>,
+    /// The class is Copy, so its values need no drop. A generic class is
+    /// never marked Copy here. MIR without the field needs drop.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub copy: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -663,6 +690,10 @@ pub struct MirEnum {
     pub name: String,
     pub type_params: Vec<String>,
     pub variants: Vec<MirEnumVariant>,
+    /// Every payload of every variant is Copy for any type arguments, so
+    /// the enum's values need no drop. MIR without the field needs drop.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub copy: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -728,6 +759,18 @@ pub enum Instruction {
     /// one on each semantic backedge; runtimes amortize the actual yield with
     /// a per-function fuel counter.
     Safepoint,
+    /// Creates one new reference to the value at `place`. The next
+    /// consuming `Place(place)` operand in the same block takes it. Only an
+    /// explicit module holds it, and both backends treat it as a no-op.
+    Retain {
+        place: String,
+    },
+    /// Drops the value of the root local `place` and leaves the local
+    /// empty. Releasing an empty local does nothing. Only an explicit
+    /// module holds it, and both backends treat it as a no-op.
+    Release {
+        place: String,
+    },
     /// Records that `index` selects an element of the list `list` here:
     /// `0 <= index < list.len()`. A `for` loop over a whole list or a span
     /// emits it after its bound check, because the iteration loan keeps the
@@ -916,6 +959,10 @@ pub enum Rvalue {
     },
     Try {
         value: Operand,
+        /// Root locals the `Err` edge releases after the pending cleanups,
+        /// in name order. Only an explicit module names any.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        releases_on_error: Vec<String>,
     },
     StartTask {
         returns_handle: bool,
@@ -4025,7 +4072,7 @@ fn rvalue_has_task_borrowed_closure(value: &Rvalue, state: &ValidatedLoanState) 
             capture.passing != MirReceiverKind::Value || operand_has(&capture.value)
         }),
         Rvalue::Use(value)
-        | Rvalue::Try { value }
+        | Rvalue::Try { value, .. }
         | Rvalue::Cast { value, .. }
         | Rvalue::TupleElement { tuple: value, .. }
         | Rvalue::UnionInject { value, .. }
@@ -4234,6 +4281,7 @@ fn rebase_callable_rvalue(
         // `try` yields the `Ok` payload: carry that payload's identities.
         Rvalue::Try {
             value: Operand::Place(place) | Operand::MovePlace(place),
+            ..
         } => rebase_authoritative_callables(
             &format!("{place}.{ENUM_PAYLOAD_PROJECTION_PREFIX}Ok_0"),
             target,
@@ -4683,7 +4731,7 @@ fn function_body_moves_root(function: &MirFunction, root: &str) -> bool {
             | Rvalue::UnionInject { value: operand, .. }
             | Rvalue::Unary { value: operand, .. }
             | Rvalue::Cast { value: operand, .. }
-            | Rvalue::Try { value: operand }
+            | Rvalue::Try { value: operand, .. }
             | Rvalue::TupleElement { tuple: operand, .. }
             | Rvalue::VariantPayload {
                 scrutinee: operand, ..
@@ -6792,7 +6840,7 @@ fn validate_loan_rvalue(
         | Rvalue::CallableAdapt { value, .. }
         | Rvalue::Unary { value, .. }
         | Rvalue::Cast { value, .. }
-        | Rvalue::Try { value }
+        | Rvalue::Try { value, .. }
         | Rvalue::TupleElement { tuple: value, .. } => {
             validate_loan_operand(function, value, context, state)
         }
@@ -7569,7 +7617,7 @@ fn borrowed_noncopy_origins_for_rvalue(
     match value {
         Rvalue::Use(value)
         | Rvalue::CallableAdapt { value, .. }
-        | Rvalue::Try { value }
+        | Rvalue::Try { value, .. }
         | Rvalue::Cast { value, .. }
         | Rvalue::UnionInject { value, .. } => candidates.push(value),
         Rvalue::TupleElement {
@@ -7879,6 +7927,7 @@ fn validate_loan_instruction(
             instruction,
             Instruction::EndLoan { .. }
                 | Instruction::PopCleanup { .. }
+                | Instruction::Release { .. }
                 | Instruction::Assign {
                     value: Rvalue::Use(_),
                     ..
@@ -7898,7 +7947,44 @@ fn validate_loan_instruction(
     {
         state.pending_handoff = None;
     }
+    if let Instruction::Assign {
+        value: Rvalue::Try {
+            releases_on_error, ..
+        },
+        ..
+    }
+    | Instruction::WriteLoan {
+        value: Rvalue::Try {
+            releases_on_error, ..
+        },
+        ..
+    } = instruction
+    {
+        for place in releases_on_error {
+            validate_released_root(function, place, known_roots, state)?;
+        }
+        if !releases_on_error.is_sorted_by(|left, right| left < right) {
+            return Err(format!(
+                "invalid MIR in `{}` lists `try` releases out of name order or twice",
+                function.name
+            ));
+        }
+    }
     match instruction {
+        Instruction::Retain { place } => {
+            let root = place.split('.').next().unwrap_or_default();
+            if !known_roots.contains(root) && !state.loans.contains_key(root) {
+                return Err(format!(
+                    "invalid MIR in `{}` retains unknown place `{place}`",
+                    function.name
+                ));
+            }
+            validate_loan_operand(function, &Operand::Place(place.clone()), context, state)?;
+        }
+        Instruction::Release { place } => {
+            validate_released_root(function, place, known_roots, state)?;
+            invalidate_union_facts_for_place(place, state);
+        }
         Instruction::BeginElementLoan {
             loan,
             source,
@@ -9338,7 +9424,9 @@ pub(crate) fn validate_loan_flow(module: &MirModule) -> std::result::Result<(), 
             }
         }
     }
+    validate_copy_marks(module, &context)?;
     for function in module.functions.iter().chain(module.top_level.iter()) {
+        validate_ownership_vocabulary(module.ownership, function)?;
         validate_enum_variant_payloads(function, &context)?;
         validate_initializer_slot(function, &context)?;
         runtime_ops::validate_runtime_ops(function, &context)?;
@@ -9346,6 +9434,89 @@ pub(crate) fn validate_loan_flow(module: &MirModule) -> std::result::Result<(), 
         local_types::validate_assigned_local_types(function)?;
     }
     Ok(())
+}
+
+/// A class or enum marked Copy holds no field or payload that needs drop,
+/// and a generic class is never marked Copy. An ownership pass skips the
+/// drops of a Copy value, so a forged mark would leak.
+fn validate_copy_marks(
+    module: &MirModule,
+    context: &MirLoanValidationContext<'_>,
+) -> std::result::Result<(), String> {
+    for class in module.classes.iter().filter(|class| class.copy) {
+        if !class.type_params.is_empty()
+            || class
+                .fields
+                .iter()
+                .any(|field| context.type_is_definitely_noncopy(&field.ty))
+        {
+            return Err(format!(
+                "invalid MIR class `{}` is marked Copy but its values need drop",
+                class.name
+            ));
+        }
+    }
+    for enum_decl in module.enums.iter().filter(|enum_decl| enum_decl.copy) {
+        if enum_decl
+            .variants
+            .iter()
+            .flat_map(|variant| &variant.payloads)
+            .any(|payload| context.type_is_definitely_noncopy(payload))
+        {
+            return Err(format!(
+                "invalid MIR enum `{}` is marked Copy but its values need drop",
+                enum_decl.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// An implicit module states no ownership: it holds no `Retain`, no
+/// `Release`, and no `Try` releases.
+fn validate_ownership_vocabulary(
+    ownership: MirOwnership,
+    function: &MirFunction,
+) -> std::result::Result<(), String> {
+    if ownership == MirOwnership::Explicit {
+        return Ok(());
+    }
+    for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+        let explicit = match instruction {
+            Instruction::Retain { .. } | Instruction::Release { .. } => true,
+            Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. } => matches!(
+                value,
+                Rvalue::Try { releases_on_error, .. } if !releases_on_error.is_empty()
+            ),
+            _ => false,
+        };
+        if explicit {
+            return Err(format!(
+                "invalid MIR in `{}` states ownership in a module whose ownership is implicit",
+                function.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Checks a local a `Release` or a `Try` release names: a root local or
+/// parameter of the function that no active loan holds.
+fn validate_released_root(
+    function: &MirFunction,
+    place: &str,
+    known_roots: &BTreeSet<String>,
+    state: &ValidatedLoanState,
+) -> std::result::Result<(), String> {
+    // Every known root is a canonical identifier, so this also refuses a
+    // malformed place.
+    if !known_roots.contains(place) {
+        return Err(format!(
+            "invalid MIR in `{}` releases `{place}`, which is not a root local",
+            function.name
+        ));
+    }
+    validate_loan_place_access(function, place, LoanPlaceAccess::Move, state)
 }
 
 /// Every variant built of a module enum is one the enum declares, with
@@ -9662,6 +9833,7 @@ pub(crate) fn instruction_place_mentions<'a>(
 ) {
     match instruction {
         Instruction::Safepoint => {}
+        Instruction::Retain { place } | Instruction::Release { place } => mentions.push(place),
         Instruction::IndexInRange { list, index } => mentions.extend([list.as_str(), index]),
         Instruction::BeginLoan { source, .. } | Instruction::PushCleanup { place: source, .. } => {
             mentions.push(source)
@@ -9701,7 +9873,6 @@ fn rvalue_place_mentions<'a>(value: &'a Rvalue, mentions: &mut Vec<&'a str>) {
         | Rvalue::NoneTest { value: operand }
         | Rvalue::Unary { value: operand, .. }
         | Rvalue::Cast { value: operand, .. }
-        | Rvalue::Try { value: operand }
         | Rvalue::TupleElement { tuple: operand, .. }
         | Rvalue::VariantPayload {
             scrutinee: operand, ..
@@ -9709,6 +9880,13 @@ fn rvalue_place_mentions<'a>(value: &'a Rvalue, mentions: &mut Vec<&'a str>) {
         | Rvalue::Member {
             object: operand, ..
         } => operand_place_mention(operand, mentions),
+        Rvalue::Try {
+            value,
+            releases_on_error,
+        } => {
+            operand_place_mention(value, mentions);
+            mentions.extend(releases_on_error.iter().map(String::as_str));
+        }
         Rvalue::UnionTagTest { place, .. }
         | Rvalue::UnionTakePayload { place, .. }
         | Rvalue::TupleTakeElement { place, .. } => mentions.push(place),
@@ -9871,11 +10049,13 @@ pub fn lower(program: &Program) -> MirModule {
                 receiver: lower_class_method_receiver(method),
             });
         }
+        let copy = mir_class_is_copy(program, &class_name, class);
         classes.push(MirClass {
             name: class_name,
             type_params: class.decl.type_params.clone(),
             fields,
             methods,
+            copy,
         });
     }
     let mut seen_class_names = classes
@@ -9950,6 +10130,7 @@ pub fn lower(program: &Program) -> MirModule {
         unions: Vec::new(),
         trait_impls,
         top_level,
+        ownership: MirOwnership::Implicit,
     };
     type_param_calls::specialize_type_param_calls(program, &mut module);
     runtime_ops::resolve_runtime_ops(&mut module);
@@ -9982,10 +10163,8 @@ fn lower_enum_layouts(program: &Program) -> Vec<MirEnum> {
         .into_iter()
         .filter_map(|info| {
             let name = mir_runtime_enum_name(program, info);
-            seen.insert(name.clone()).then(|| MirEnum {
-                name,
-                type_params: info.decl.type_params.clone(),
-                variants: info
+            seen.insert(name.clone()).then(|| {
+                let variants = info
                     .variants
                     .iter()
                     .map(|(name, variant)| MirEnumVariant {
@@ -9996,7 +10175,13 @@ fn lower_enum_layouts(program: &Program) -> Vec<MirEnum> {
                             .map(|payload| payload.ty.clone())
                             .collect(),
                     })
-                    .collect(),
+                    .collect::<Vec<_>>();
+                MirEnum {
+                    name,
+                    type_params: info.decl.type_params.clone(),
+                    copy: mir_enum_is_copy(program, &variants),
+                    variants,
+                }
             })
         })
         .collect::<Vec<_>>();
@@ -10021,17 +10206,45 @@ fn lower_enum_layouts(program: &Program) -> Vec<MirEnum> {
             name.to_string(),
             type_params.iter().cloned().map(Type::TypeParam).collect(),
         );
-        let variants = crate::sema::builtin_enum_variants(&ty).expect("built-in enum layout");
+        let variants = crate::sema::builtin_enum_variants(&ty)
+            .expect("built-in enum layout")
+            .into_iter()
+            .map(|(name, payloads)| MirEnumVariant { name, payloads })
+            .collect::<Vec<_>>();
         layouts.push(MirEnum {
             name: name.to_string(),
             type_params,
-            variants: variants
-                .into_iter()
-                .map(|(name, payloads)| MirEnumVariant { name, payloads })
-                .collect(),
+            copy: mir_enum_is_copy(program, &variants),
+            variants,
         });
     }
     layouts
+}
+
+/// Whether a class's values are Copy, by the rule union layout plans use.
+/// The class is asked about with its own type parameters as arguments, so
+/// a generic class is not Copy here.
+fn mir_class_is_copy(program: &Program, name: &str, class: &crate::sema::ClassInfo) -> bool {
+    let ty = Type::Named(
+        name.to_string(),
+        class
+            .decl
+            .type_params
+            .iter()
+            .cloned()
+            .map(Type::TypeParam)
+            .collect(),
+    );
+    type_is_copy_in_program(&ty, program)
+}
+
+/// Whether every payload of every variant is Copy, by the rule union layout
+/// plans use. A payload that names a type parameter is not Copy.
+fn mir_enum_is_copy(program: &Program, variants: &[MirEnumVariant]) -> bool {
+    variants
+        .iter()
+        .flat_map(|variant| &variant.payloads)
+        .all(|payload| type_is_copy_in_program(payload, program))
 }
 
 fn lower_constant_initializer(
@@ -10185,11 +10398,13 @@ fn push_imported_module_classes_from_namespace(
                 receiver: lower_class_method_receiver(method),
             });
         }
+        let copy = mir_class_is_copy(program, &class_name, class);
         classes.push(MirClass {
             name: class_name,
             type_params: class.decl.type_params.clone(),
             fields,
             methods,
+            copy,
         });
     }
     for child in namespace.modules.values() {
@@ -18499,7 +18714,10 @@ impl<'a> Lowerer<'a> {
                 let temp = self.new_temp_for_expr(expr);
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
-                    value: Rvalue::Try { value },
+                    value: Rvalue::Try {
+                        value,
+                        releases_on_error: Vec::new(),
+                    },
                 });
                 Operand::Place(temp)
             }
@@ -26299,6 +26517,9 @@ mod local_types;
 
 #[path = "mir_runtime_ops.rs"]
 mod runtime_ops;
+
+#[path = "mir_ownership.rs"]
+pub mod ownership;
 
 pub(crate) use runtime_ops::{is_builtin_wrapper, resolve_runtime_ops, specialized_member_op};
 
