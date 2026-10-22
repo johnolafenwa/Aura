@@ -244,6 +244,8 @@ fn reject_untrusted_extern_calls(module: &MirModule) -> Result<()> {
             Instruction::Safepoint
             | Instruction::Retain { .. }
             | Instruction::Release { .. }
+            | Instruction::Lend { .. }
+            | Instruction::EndLend { .. }
             | Instruction::IndexInRange { .. }
             | Instruction::BeginLoan { .. }
             | Instruction::BeginElementLoan { .. }
@@ -298,6 +300,8 @@ fn function_uses_lightweight_tasks(function: &MirFunction) -> bool {
                 Instruction::Safepoint
                 | Instruction::Retain { .. }
                 | Instruction::Release { .. }
+                | Instruction::Lend { .. }
+                | Instruction::EndLend { .. }
                 | Instruction::IndexInRange { .. }
                 | Instruction::BeginLoan { .. }
                 | Instruction::BeginElementLoan { .. }
@@ -3652,6 +3656,27 @@ impl MirRuntime {
             // The interpreter's values own themselves, so a retain or a
             // release has nothing to do.
             Instruction::Retain { .. } | Instruction::Release { .. } => Ok(None),
+            // The interpreter lends a copy: the call reads the temporary,
+            // and a mutable lend writes the call's change back.
+            Instruction::Lend { place, temp, .. } => {
+                let value = env.read_place(place)?;
+                if let Some(ty) = self.resolve_place_type(place, env) {
+                    env.set_place_type(temp, ty);
+                }
+                env.write_place(temp, value)?;
+                Ok(None)
+            }
+            Instruction::EndLend {
+                place,
+                temp,
+                mutable,
+            } => {
+                let value = env.take_place(temp)?;
+                if *mutable {
+                    env.write_place(place, value)?;
+                }
+                Ok(None)
+            }
             Instruction::Safepoint => {
                 if self.safepoints_enabled {
                     *safepoint_fuel -= 1;

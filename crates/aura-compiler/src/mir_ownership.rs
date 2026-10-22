@@ -54,6 +54,8 @@ pub fn operand_roles(instruction: &Instruction) -> Vec<(&Operand, OperandRole)> 
         Instruction::Safepoint
         | Instruction::Retain { .. }
         | Instruction::Release { .. }
+        | Instruction::Lend { .. }
+        | Instruction::EndLend { .. }
         | Instruction::IndexInRange { .. }
         | Instruction::BeginLoan { .. }
         | Instruction::BeginReturnedLoan { .. }
@@ -500,6 +502,16 @@ pub(super) fn instruction_accesses(instruction: &Instruction) -> Vec<(&str, Acce
         | Instruction::Retain { .. }
         | Instruction::Release { .. }
         | Instruction::Eval { .. } => {}
+        // The value moves into the temporary and back, so the place stays
+        // owned throughout and only the temporary changes state.
+        Instruction::Lend { place, temp, .. } => {
+            accesses.push((place, Access::Read));
+            accesses.push((temp, Access::Assign));
+        }
+        Instruction::EndLend { place, temp, .. } => {
+            accesses.push((temp, Access::Move));
+            accesses.push((place, Access::Read));
+        }
         Instruction::IndexInRange { list, index } => {
             accesses.push((list, Access::Read));
             accesses.push((index, Access::Read));
@@ -591,6 +603,8 @@ pub(super) struct OwnershipFacts<'f> {
     pub(super) mutable: RootSet,
     types: HashMap<&'f str, &'f Type>,
     needs_drop: HashMap<&'f str, bool>,
+    /// The temporaries of the function's mutable lends.
+    lent: HashSet<&'f str>,
 }
 
 impl<'f> OwnershipFacts<'f> {
@@ -653,9 +667,41 @@ impl<'f> OwnershipFacts<'f> {
             mutable,
             types,
             needs_drop: HashMap::new(),
+            lent: instructions()
+                .filter_map(|instruction| match instruction {
+                    Instruction::Lend {
+                        temp,
+                        mutable: true,
+                        ..
+                    } => Some(temp.as_str()),
+                    _ => None,
+                })
+                .collect(),
         };
         facts.borrows = facts.borrowed_roots();
         facts
+    }
+
+    /// What `instruction` does to each place it touches. The call of a
+    /// mutable lend takes the temporary's value and returns it through the
+    /// writeback, so the temporary moves in instead of taking a retained
+    /// reference: see `mir_lending.rs`.
+    pub(super) fn accesses(&self, instruction: &'f Instruction) -> Vec<(&'f str, Access)> {
+        let mut accesses = instruction_accesses(instruction);
+        if self.lent.is_empty() {
+            return accesses;
+        }
+        let written_back = accesses
+            .iter()
+            .filter(|(place, access)| *access == Access::Writeback && self.lent.contains(place))
+            .map(|(place, _)| *place)
+            .collect::<Vec<_>>();
+        for (place, access) in &mut accesses {
+            if *access == Access::Consume && written_back.contains(place) {
+                *access = Access::Move;
+            }
+        }
+        accesses
     }
 
     /// The roots each loan and each borrowing closure borrows from. A loan
@@ -1120,9 +1166,28 @@ fn insert_ownership_within(module: &mut MirModule, state_cells: usize) {
             .chain(module.top_level.iter())
             .enumerate()
         {
-            match function_ownership(function, &context, state_cells) {
-                Ok(Some(rewrite)) => rewrites.push((index, rewrite)),
-                Ok(None) => {}
+            // Lends come first, so the retains and releases cover their
+            // temporaries too.
+            let lent = super::lending::lend_function(function, &context);
+            let subject = lent.as_ref().unwrap_or(function);
+            match function_ownership(subject, &context, state_cells) {
+                Ok(Some(mut rewrite)) => {
+                    if lent.is_some() {
+                        rewrite.locals.extend(lent_locals(function, subject));
+                    }
+                    rewrites.push((index, rewrite));
+                }
+                Ok(None) => {
+                    if let Some(lent) = &lent {
+                        rewrites.push((
+                            index,
+                            FunctionOwnership {
+                                blocks: lent.blocks.clone(),
+                                locals: lent_locals(function, lent),
+                            },
+                        ));
+                    }
+                }
                 Err(()) => return,
             }
         }
@@ -1150,6 +1215,20 @@ fn insert_ownership_within(module: &mut MirModule, state_cells: usize) {
     }
     module.ownership = MirOwnership::Explicit;
     cancel_retain_release_pairs(module);
+}
+
+/// The temporaries `lent` declares that `function` does not.
+fn lent_locals(function: &MirFunction, lent: &MirFunction) -> Vec<MirLocalType> {
+    lent.local_types
+        .iter()
+        .filter(|local| {
+            !function
+                .local_types
+                .iter()
+                .any(|existing| existing.name == local.name)
+        })
+        .cloned()
+        .collect()
 }
 
 /// One retain the cancellation turns into a move: its block, the retain's
@@ -1492,6 +1571,8 @@ fn place_operand_mut<'a>(instruction: &'a mut Instruction, name: &str) -> Option
         Instruction::Safepoint
         | Instruction::Retain { .. }
         | Instruction::Release { .. }
+        | Instruction::Lend { .. }
+        | Instruction::EndLend { .. }
         | Instruction::IndexInRange { .. }
         | Instruction::BeginLoan { .. }
         | Instruction::BeginReturnedLoan { .. }
@@ -1612,7 +1693,10 @@ fn function_ownership(
         let instructions = block
             .instructions
             .iter()
-            .map(|instruction| Effect::of(&mut facts, context, instruction_accesses(instruction)))
+            .map(|instruction| {
+                let accesses = facts.accesses(instruction);
+                Effect::of(&mut facts, context, accesses)
+            })
             .collect::<Vec<_>>();
         let mut terminator =
             Effect::of(&mut facts, context, terminator_accesses(&block.terminator));
@@ -1990,7 +2074,7 @@ fn set_try_releases(instruction: &mut Instruction, releases: impl FnOnce() -> Ve
 /// one. A backend reads an `IndexInRange` fact for the instruction right
 /// after it, and for one advance after an element read. A returned-view
 /// loan must follow its call at once.
-fn glued(instructions: &[Instruction], position: usize) -> bool {
+pub(super) fn glued(instructions: &[Instruction], position: usize) -> bool {
     let Some(next) = instructions.get(position + 1) else {
         return false;
     };
@@ -2117,6 +2201,7 @@ pub fn strip_ownership(module: &mut MirModule) {
         .iter_mut()
         .chain(module.top_level.iter_mut())
     {
+        super::lending::unlend_function(function);
         let mut forwards = HashMap::new();
         for block in &function.blocks {
             if let (true, Terminator::Goto(target)) = (

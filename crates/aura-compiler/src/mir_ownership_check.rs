@@ -25,8 +25,8 @@
 use std::collections::BTreeSet;
 
 use super::ownership::{
-    edge_binding, instruction_accesses, root_of, terminator_accesses, Access, FlowGraph,
-    OwnershipFacts, Touch, MAX_OWNERSHIP_STATE_CELLS,
+    edge_binding, root_of, terminator_accesses, Access, FlowGraph, OwnershipFacts, Touch,
+    MAX_OWNERSHIP_STATE_CELLS,
 };
 use super::{
     Instruction, MirFunction, MirLoanValidationContext, MirModule, MirOwnership, Operand, Rvalue,
@@ -321,7 +321,7 @@ impl<'f> Checker<'f, '_> {
                     } => Some(releases_on_error),
                     _ => None,
                 };
-                let accesses = instruction_accesses(instruction);
+                let accesses = self.facts.accesses(instruction);
                 let count = accesses.len();
                 for (position, (place, access)) in accesses.into_iter().enumerate() {
                     // A `try` releases on its error edge once its operand is
