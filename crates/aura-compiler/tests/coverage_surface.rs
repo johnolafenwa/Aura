@@ -498,18 +498,11 @@ def main() -> int32:
             .any(|instruction| matches!(
                 instruction,
                 Instruction::Assign {
-                    value:
-                        Rvalue::Call {
-                            callee:
-                                CallTarget::Member {
-                                    field,
-                                    receiver_place: Some(_),
-                                    ..
-                                },
-                            ..
-                        },
+                    value: Rvalue::Call { callee, .. },
                     ..
-                } if field == "append"
+                } if callee.member_parts().is_some_and(|parts| {
+                    parts.field == "append" && parts.receiver_place.is_some()
+                })
             )),
         "mutable match append must retain the mutating receiver place"
     );

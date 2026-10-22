@@ -748,7 +748,7 @@ fn returned_loans_cannot_return_arm_local_payload_projections() {
 fn untyped_assigned_locals_are_rejected() {
     // MIR records the type of every assigned local, so no backend infers
     // one from the value at run time or from the rvalue at compile time.
-    let mut encoded = encode("def main():\n    values = [1]\n    print(values.len())\n");
+    let mut encoded = encode("def main():\n    values = [1]\n    print(values)\n");
     function_mut(&mut encoded, "main")["local_types"]
         .as_array_mut()
         .unwrap()

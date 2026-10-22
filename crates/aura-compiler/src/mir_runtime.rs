@@ -5363,6 +5363,27 @@ impl MirRuntime {
                     }
                     return self.evaluate_named_builtin(op.name(), args, env, expected_return_type);
                 };
+                // A collection op reads, slices, or writes its receiver
+                // where it lies, as its member spelling does.
+                if matches!(
+                    op,
+                    RuntimeOp::List(_)
+                        | RuntimeOp::Dict(_)
+                        | RuntimeOp::Set(_)
+                        | RuntimeOp::Array(_)
+                        | RuntimeOp::Span(_)
+                        | RuntimeOp::Str(StrOp::Slice)
+                ) {
+                    return self.evaluate_member_call(
+                        object,
+                        op.name(),
+                        receiver_place.as_deref(),
+                        args,
+                        expected_return_type,
+                        env,
+                        true,
+                    );
+                }
                 // A `str` length is measured where the string lies.
                 let borrowed_length = match (op, object) {
                     (RuntimeOp::Str(StrOp::Len | StrOp::ByteLen), Operand::Place(place)) => {
@@ -5447,155 +5468,162 @@ impl MirRuntime {
                         env,
                     );
                 }
-                if matches!(field.as_str(), "len" | "byte_len") {
-                    if let Operand::Place(place) = object {
-                        if let Some(result) =
-                            evaluate_borrowed_length_member(&*env.place_ref(place)?, field, args)
-                        {
-                            return result;
-                        }
-                    }
-                }
-
-                if field == "to_bytes" {
-                    if let Operand::Place(place) = object {
-                        let receiver = &*env.place_ref(place)?;
-                        if let Value::String(text) = receiver {
-                            if !args.is_empty() {
-                                return Err(Diagnostic::new("`to_bytes` does not take arguments"));
-                            }
-                            return evaluate_string_to_bytes_host_ref(text);
-                        }
-                    }
-                }
-
-                if field == "__slice" {
-                    if let Operand::Place(place) = object {
-                        let values = evaluate_named_args(args, env)?;
-                        let (start, end, span) = self.mir_slice_args(values)?;
-                        let result = match &*env.place_ref(place)? {
-                            Value::Vec(vector) => {
-                                slice_vec_owned(vector, start, end).map(Value::Vec)
-                            }
-                            Value::Array(array) => {
-                                array.slice_first_axis(start, end).map(Value::Array)
-                            }
-                            Value::String(text) => {
-                                slice_string_owned(text, start, end).map(Value::String)
-                            }
-                            other => {
-                                return Err(Diagnostic::new(format!(
-                                    "unsupported MIR member call `__slice` on `{}`",
-                                    other.render()
-                                )))
-                            }
-                        };
-                        return result.map_err(|mut error| {
-                            error.span = Some(span);
-                            error
-                        });
-                    }
-                }
-
-                if let Operand::Place(place) = object {
-                    if matches!(*env.place_ref(place)?, Value::Array(_)) {
-                        return self.evaluate_array_place_method(place, field, args, env);
-                    }
-                }
-
-                let receiver_static_ty = self
-                    .resolve_operand_type(object, env)
-                    .filter(|ty| !matches!(ty, Type::TypeParam(_)));
-                let mut receiver = self.evaluate_owned_operand(object, env)?;
-
-                if field == "clone" && matches!(receiver, Value::Union(_)) {
-                    // A union clones as its active member (ADR-0052 A6); the
-                    // checker admits this only when every member clones.
-                    if !args.is_empty() {
-                        return Err(Diagnostic::new("`clone` does not take arguments"));
-                    }
-                    return Ok(receiver);
-                }
-
-                if field == "__take_index_option" {
-                    let receiver = std::mem::replace(&mut receiver, Value::Unit);
-                    return match receiver {
-                        Value::Vec(vector) => self.evaluate_vec_method(
-                            vector,
-                            field,
-                            receiver_place.as_deref(),
-                            args,
-                            env,
-                        ),
-                        Value::Set(set) => self.evaluate_set_method(
-                            set,
-                            field,
-                            receiver_place.as_deref(),
-                            args,
-                            env,
-                        ),
-                        other => Err(Diagnostic::new(format!(
-                            "unsupported MIR member call `{}` on `{}`",
-                            field,
-                            other.render()
-                        ))),
-                    };
-                }
-
-                if field == "__slice" {
-                    let receiver = std::mem::replace(&mut receiver, Value::Unit);
-                    return match receiver {
-                        Value::Vec(vector) => {
-                            self.evaluate_vec_method(vector, field, None, args, env)
-                        }
-                        Value::String(text) => self.evaluate_string_method(text, field, args, env),
-                        other => Err(Diagnostic::new(format!(
-                            "unsupported MIR member call `__slice` on `{}`",
-                            other.render()
-                        ))),
-                    };
-                }
-
-                if !matches!(receiver, Value::Instance(_)) {
-                    let resolved_receiver_ty = receiver_static_ty
-                        .clone()
-                        .or_else(|| self.infer_runtime_value_type(&receiver));
-                    if let Some(resolved_receiver_ty) = resolved_receiver_ty {
-                        // An instance receiver was handled above, so no class
-                        // method shadows the built-in member here.
-                        if builtin_member_for_receiver(&resolved_receiver_ty, field, |_| false)
-                            .is_none()
-                        {
-                            if let Some(method) = self
-                                .find_trait_impl_method(&resolved_receiver_ty, field)
-                                .cloned()
-                            {
-                                return self.evaluate_resolved_trait_method_call(
-                                    receiver,
-                                    &resolved_receiver_ty,
-                                    field,
-                                    method,
-                                    receiver_place.as_deref(),
-                                    args,
-                                    expected_return_type,
-                                    env,
-                                );
-                            }
-                        }
-                    }
-                }
-
-                self.evaluate_receiver_method(
-                    receiver,
-                    receiver_static_ty,
+                self.evaluate_member_call(
+                    object,
                     field,
                     receiver_place.as_deref(),
                     args,
                     expected_return_type,
                     env,
+                    false,
                 )
             }
         }
+    }
+
+    /// Runs a member call that names no trait: a built-in method, a private
+    /// collection operation, or a class or trait method. `resolved` says the
+    /// call is a resolved runtime operation, which no trait method shadows.
+    /// Lengths and slices of a place are read where the value lies, and an
+    /// `Array` method runs on its place.
+    #[allow(clippy::too_many_arguments)]
+    fn evaluate_member_call(
+        &mut self,
+        object: &Operand,
+        field: &str,
+        receiver_place: Option<&str>,
+        args: &[MirArg],
+        expected_return_type: Option<&Type>,
+        env: &mut Env,
+        resolved: bool,
+    ) -> Result<Value> {
+        if matches!(field, "len" | "byte_len") {
+            if let Operand::Place(place) = object {
+                if let Some(result) =
+                    evaluate_borrowed_length_member(&*env.place_ref(place)?, field, args)
+                {
+                    return result;
+                }
+            }
+        }
+
+        if field == "to_bytes" {
+            if let Operand::Place(place) = object {
+                let receiver = &*env.place_ref(place)?;
+                if let Value::String(text) = receiver {
+                    if !args.is_empty() {
+                        return Err(Diagnostic::new("`to_bytes` does not take arguments"));
+                    }
+                    return evaluate_string_to_bytes_host_ref(text);
+                }
+            }
+        }
+
+        if field == "__slice" {
+            if let Operand::Place(place) = object {
+                let values = evaluate_named_args(args, env)?;
+                let (start, end, span) = self.mir_slice_args(values)?;
+                let result = match &*env.place_ref(place)? {
+                    Value::Vec(vector) => slice_vec_owned(vector, start, end).map(Value::Vec),
+                    Value::Array(array) => array.slice_first_axis(start, end).map(Value::Array),
+                    Value::String(text) => slice_string_owned(text, start, end).map(Value::String),
+                    other => {
+                        return Err(Diagnostic::new(format!(
+                            "unsupported MIR member call `__slice` on `{}`",
+                            other.render()
+                        )))
+                    }
+                };
+                return result.map_err(|mut error| {
+                    error.span = Some(span);
+                    error
+                });
+            }
+        }
+
+        if let Operand::Place(place) = object {
+            if matches!(*env.place_ref(place)?, Value::Array(_)) {
+                return self.evaluate_array_place_method(place, field, args, env);
+            }
+        }
+
+        let receiver_static_ty = self
+            .resolve_operand_type(object, env)
+            .filter(|ty| !matches!(ty, Type::TypeParam(_)));
+        let mut receiver = self.evaluate_owned_operand(object, env)?;
+
+        if field == "clone" && matches!(receiver, Value::Union(_)) {
+            // A union clones as its active member (ADR-0052 A6); the
+            // checker admits this only when every member clones.
+            if !args.is_empty() {
+                return Err(Diagnostic::new("`clone` does not take arguments"));
+            }
+            return Ok(receiver);
+        }
+
+        if field == "__take_index_option" {
+            let receiver = std::mem::replace(&mut receiver, Value::Unit);
+            return match receiver {
+                Value::Vec(vector) => {
+                    self.evaluate_vec_method(vector, field, receiver_place, args, env)
+                }
+                Value::Set(set) => self.evaluate_set_method(set, field, receiver_place, args, env),
+                other => Err(Diagnostic::new(format!(
+                    "unsupported MIR member call `{}` on `{}`",
+                    field,
+                    other.render()
+                ))),
+            };
+        }
+
+        if field == "__slice" {
+            let receiver = std::mem::replace(&mut receiver, Value::Unit);
+            return match receiver {
+                Value::Vec(vector) => self.evaluate_vec_method(vector, field, None, args, env),
+                Value::String(text) => self.evaluate_string_method(text, field, args, env),
+                other => Err(Diagnostic::new(format!(
+                    "unsupported MIR member call `__slice` on `{}`",
+                    other.render()
+                ))),
+            };
+        }
+
+        if !resolved && !matches!(receiver, Value::Instance(_)) {
+            let resolved_receiver_ty = receiver_static_ty
+                .clone()
+                .or_else(|| self.infer_runtime_value_type(&receiver));
+            if let Some(resolved_receiver_ty) = resolved_receiver_ty {
+                // An instance receiver was handled above, so no class
+                // method shadows the built-in member here.
+                if builtin_member_for_receiver(&resolved_receiver_ty, field, |_| false).is_none() {
+                    if let Some(method) = self
+                        .find_trait_impl_method(&resolved_receiver_ty, field)
+                        .cloned()
+                    {
+                        return self.evaluate_resolved_trait_method_call(
+                            receiver,
+                            &resolved_receiver_ty,
+                            field,
+                            method,
+                            receiver_place,
+                            args,
+                            expected_return_type,
+                            env,
+                        );
+                    }
+                }
+            }
+        }
+
+        self.evaluate_receiver_method(
+            receiver,
+            receiver_static_ty,
+            field,
+            receiver_place,
+            args,
+            expected_return_type,
+            env,
+        )
     }
 
     /// Runs a built-in method, or a class method on an instance, on an

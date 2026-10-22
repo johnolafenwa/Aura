@@ -1,4 +1,4 @@
-use super::{builtin_member_argument_type, runtime_member_result_type};
+use super::builtin_member_argument_type;
 use crate::call::BuiltinMember;
 use crate::sema::Type;
 
@@ -8,32 +8,6 @@ fn named(name: &str, args: Vec<Type>) -> Type {
 
 fn bytes() -> Type {
     named("list", vec![Type::named("uint8")])
-}
-
-#[test]
-fn runtime_member_results_name_each_member_type() {
-    let int64 = Type::named("int64");
-    // Duration, `random.Rng`, process, `str`, and queue members are
-    // resolved runtime operations; `runtime_ops_tests.rs` checks their
-    // result types.
-    let cases = [
-        (
-            "list",
-            vec![int64.clone()],
-            "__slice",
-            Some(named("list", vec![int64.clone()])),
-        ),
-        ("str", vec![], "__slice", Some(Type::named("str"))),
-        ("process.Pipe", vec![], "read_all", None),
-        ("process.Pipe", vec![], "missing", None),
-    ];
-    for (name, args, field, expected) in cases {
-        assert_eq!(
-            runtime_member_result_type(name, &args, field),
-            expected,
-            "{name}.{field}"
-        );
-    }
 }
 
 #[test]

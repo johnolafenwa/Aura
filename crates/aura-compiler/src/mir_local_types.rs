@@ -212,9 +212,6 @@ impl Lowerer<'_> {
             if let Some(op) = RuntimeOp::resolve_member(receiver, field, |_| false) {
                 return op.result_type(Some(receiver), &[]);
             }
-            if let Some(ty) = runtime_member_result_type(name, args, field) {
-                return Some(ty);
-            }
         }
         if let Some(ty) = self.builtin_runtime_member_return_type(receiver, field) {
             return Some(ty);
@@ -310,15 +307,6 @@ pub(super) fn validate_assigned_local_types(
         }
     }
     Ok(())
-}
-
-/// Result types of the runtime members that expression inference in
-/// lowering does not name.
-fn runtime_member_result_type(name: &str, args: &[Type], field: &str) -> Option<Type> {
-    Some(match (name, field) {
-        ("str" | "list" | "Array", "__slice") => Type::Named(name.to_string(), args.to_vec()),
-        _ => return None,
-    })
 }
 
 /// The collection type of a builtin member parameter, for an argument whose

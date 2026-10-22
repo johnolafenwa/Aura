@@ -3,6 +3,7 @@
 //! serialized module, and asserts that both public boundaries (the
 //! interpreter and the direct backend) reject it with the validator's message.
 
+use aura_compiler::runtime_ops::RuntimeOp;
 use aura_compiler::{emit_host_native_object, lower_source_to_mir, run_mir, MirModule};
 use serde_json::{json, Value};
 
@@ -37,6 +38,28 @@ fn find_instruction(function: &mut Value, matches: impl Fn(&Value) -> bool) -> &
         }
     }
     panic!("expected instruction not found");
+}
+
+/// The source member a call names; a resolved runtime operation names the
+/// member it was resolved from.
+fn member_field(instruction: &Value) -> Option<String> {
+    let callee = &instruction["Assign"]["value"]["Call"]["callee"];
+    if let Some(field) = callee["Member"]["field"].as_str() {
+        return Some(field.to_string());
+    }
+    let op: RuntimeOp = serde_json::from_value(callee["Runtime"]["op"].clone()).ok()?;
+    Some(op.name().to_string())
+}
+
+/// The `Member` or `Runtime` payload of a member call's callee.
+fn member_callee_mut(instruction: &mut Value) -> &mut Value {
+    let callee = &mut instruction["Assign"]["value"]["Call"]["callee"];
+    let kind = if callee["Member"].is_object() {
+        "Member"
+    } else {
+        "Runtime"
+    };
+    &mut callee[kind]
 }
 
 fn find_block<'a>(function: &'a mut Value, matches: impl Fn(&Value) -> bool) -> &'a mut Value {
@@ -262,7 +285,7 @@ fn union_tag_test_into_a_non_bool_local_is_rejected() {
     assert_rejected(encoded, "must assign to a bool local");
 }
 
-const OWNED_UNION_MATCH: &str = "def main():\n    value: list[int64] | None = [42]\n    match own value:\n        case list[int64] as values:\n            print(values.len())\n        case None:\n            print(0)\n";
+const OWNED_UNION_MATCH: &str = "def main():\n    value: list[int64] | None = [42]\n    match own value:\n        case list[int64] as values:\n            held = values\n        case None:\n            print(0)\n";
 
 #[test]
 fn union_payload_take_into_a_mismatched_destination_is_rejected() {
@@ -474,10 +497,9 @@ fn member_call_redirecting_its_receiver_writeback_is_rejected() {
     let main = function_mut(&mut encoded, "main");
     let call = find_instruction(main, |instruction| {
         rvalue_kind(instruction) == Some("Call")
-            && instruction["Assign"]["value"]["Call"]["callee"]["Member"]["field"]
-                == json!("append")
+            && member_field(instruction).as_deref() == Some("append")
     });
-    call["Assign"]["value"]["Call"]["callee"]["Member"]["receiver_place"] = json!("other");
+    member_callee_mut(call)["receiver_place"] = json!("other");
     assert_rejected(
         encoded,
         "redirects receiver `values` to unrelated writeback place `other`",
@@ -655,8 +677,7 @@ fn container_insert_without_an_identity_poisons_the_container() {
         .push(json!({ "name": "%t90", "ty": contract }));
     let call = find_instruction(main, |instruction| {
         rvalue_kind(instruction) == Some("Call")
-            && instruction["Assign"]["value"]["Call"]["callee"]["Member"]["field"]
-                == json!("append")
+            && member_field(instruction).as_deref() == Some("append")
     });
     call["Assign"]["value"]["Call"]["args"][0]["value"] = json!({ "Place": "%t90" });
     assert_rejected(encoded, "authoritative");
@@ -672,24 +693,22 @@ fn container_insert_source() -> String {
 fn append_call_mut(function: &mut Value) -> &mut Value {
     &mut find_instruction(function, |instruction| {
         rvalue_kind(instruction) == Some("Call")
-            && instruction["Assign"]["value"]["Call"]["callee"]["Member"]["field"]
-                == json!("append")
+            && member_field(instruction).as_deref() == Some("append")
     })["Assign"]["value"]["Call"]
 }
 
 #[test]
-fn container_insert_without_an_operand_poisons_every_element() {
-    // Arity corruption: an `append` with no operand cannot attribute an
-    // identity to any element, so the validator poisons every element
-    // position and the later indirect call through `callbacks.get(0)` has no
-    // authoritative contract. Both boundaries refuse the module for exactly
-    // that reason before anything executes.
+fn container_insert_without_an_operand_is_rejected_as_a_runtime_operation() {
+    // Arity corruption: an `append` with no operand resolves to `List.Push`,
+    // and the arity is part of that operation's contract. Both boundaries
+    // refuse the module there, before the element analysis that would
+    // otherwise poison every element position.
     let mut encoded = encode(&container_insert_source());
     append_call_mut(function_mut(&mut encoded, "main"))["args"] = json!([]);
-    let shared = assert_rejected(encoded, "has no single authoritative contract");
+    let shared = assert_rejected(encoded, "expected `append()` to receive `value`");
     assert!(
-        shared.contains("assignment from `main`"),
-        "the poisoned element must surface at assignment: {shared}"
+        shared.contains("runtime operation `List.Push` in `main`"),
+        "the arity must be checked as a runtime operation: {shared}"
     );
 }
 
@@ -1151,7 +1170,7 @@ fn native_backend_rejects_array_map_with_a_non_callable_callback() {
     let main = function_mut(&mut encoded, "main");
     let call = find_instruction(main, |instruction| {
         rvalue_kind(instruction) == Some("Call")
-            && instruction["Assign"]["value"]["Call"]["callee"]["Member"]["field"] == json!("map")
+            && member_field(instruction).as_deref() == Some("map")
     });
     call["Assign"]["value"]["Call"]["args"][0]["value"] = json!({ "Int": 1 });
     assert_native_rejects(encoded, "Array.map");

@@ -4046,15 +4046,16 @@ def measure(values: list[str]) -> int64:
             else {
                 return None;
             };
-            let CallTarget::Member {
+            let crate::mir::MemberCallParts {
                 object: Operand::Place(place),
                 field,
                 receiver_place,
-            } = callee
+                ..
+            } = callee.member_parts()?
             else {
                 return None;
             };
-            (field == "len" && place == "values" && receiver_place.as_deref() == Some("values"))
+            (field == "len" && place == "values" && receiver_place == Some("values"))
                 .then(|| (callee.clone(), args.clone()))
         })
         .expect("free len should lower to a borrowed member len call");

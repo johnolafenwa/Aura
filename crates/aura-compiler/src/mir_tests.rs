@@ -1948,7 +1948,7 @@ def main():
 "#,
     )
     .expect("builtin receiver fixture should lower");
-    let field = builtin
+    let op = builtin
         .functions
         .iter_mut()
         .find(|function| function.name == "main")
@@ -1959,15 +1959,15 @@ def main():
             Instruction::Assign {
                 value:
                     Rvalue::Call {
-                        callee: CallTarget::Member { field, .. },
+                        callee: CallTarget::Runtime { op, .. },
                         ..
                     },
                 ..
-            } if field == "contains" => Some(field),
+            } if op.name() == "contains" => Some(op),
             _ => None,
         })
-        .expect("contains call should lower as a member call");
-    *field = "reserve".to_string();
+        .expect("contains call should lower as a runtime op");
+    *op = crate::runtime_ops::RuntimeOp::List(crate::runtime_ops::ListOp::Reserve);
     let error = validate_loan_flow(&builtin)
         .expect_err("a builtin omitted from a field allowlist must retain its mutable effect");
     assert!(error.contains("mutates locked place `values`"), "{error}");
@@ -5009,12 +5009,11 @@ def main():
             // A shared list loop reads each element with bounded `__index`.
             Instruction::Assign {
                 target,
-                value:
-                    Rvalue::Call {
-                        callee: CallTarget::Member { field, .. },
-                        ..
-                    },
-            } if field == "__index" => {
+                value: Rvalue::Call { callee, .. },
+            } if callee
+                .member_parts()
+                .is_some_and(|parts| parts.field == "__index") =>
+            {
                 Some((target.as_str(), local_types.get(target.as_str()).copied()))
             }
             _ => None,
@@ -5077,12 +5076,13 @@ def main():
             } if matches!(variant_name.as_str(), "Item" | "Found") => Some(target.as_str()),
             Instruction::Assign {
                 target,
-                value:
-                    Rvalue::Call {
-                        callee: CallTarget::Member { field, .. },
-                        ..
-                    },
-            } if field == "__index" => Some(target.as_str()),
+                value: Rvalue::Call { callee, .. },
+            } if callee
+                .member_parts()
+                .is_some_and(|parts| parts.field == "__index") =>
+            {
+                Some(target.as_str())
+            }
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -5482,18 +5482,17 @@ def main():
         .flat_map(|block| &block.instructions)
         .find_map(|instruction| match instruction {
             Instruction::Assign {
-                value:
-                    Rvalue::Call {
-                        callee:
-                            CallTarget::Member {
-                                object,
-                                field,
-                                receiver_place,
-                            },
-                        ..
-                    },
+                value: Rvalue::Call { callee, .. },
                 ..
-            } if field == INTERNAL_MAP_INDEX_FIELD => Some((object, receiver_place.as_deref())),
+            } => match callee.member_parts()? {
+                MemberCallParts {
+                    object,
+                    field: INTERNAL_MAP_INDEX_FIELD,
+                    receiver_place,
+                    ..
+                } => Some((object, receiver_place)),
+                _ => None,
+            },
             _ => None,
         })
         .expect("module constant dictionary should lower through indexed access");
@@ -5529,18 +5528,17 @@ def main():
         .flat_map(|block| &block.instructions)
         .find_map(|instruction| match instruction {
             Instruction::Assign {
-                value:
-                    Rvalue::Call {
-                        callee:
-                            CallTarget::Member {
-                                object,
-                                field,
-                                receiver_place,
-                            },
-                        ..
-                    },
+                value: Rvalue::Call { callee, .. },
                 ..
-            } if field == INTERNAL_VEC_INDEX_FIELD => Some((object, receiver_place.as_deref())),
+            } => match callee.member_parts()? {
+                MemberCallParts {
+                    object,
+                    field: INTERNAL_VEC_INDEX_FIELD,
+                    receiver_place,
+                    ..
+                } => Some((object, receiver_place)),
+                _ => None,
+            },
             _ => None,
         })
         .expect("comprehension should lower through bounded indexed access");
@@ -5649,18 +5647,14 @@ def build(
                     Rvalue::VecLiteral { .. } => vec_literals += 1,
                     Rvalue::SetLiteral { .. } => set_literals += 1,
                     Rvalue::MapLiteral { .. } => map_literals += 1,
-                    Rvalue::Call {
-                        callee: CallTarget::Member { field, .. },
-                        ..
-                    } if field == "append" => append_calls += 1,
-                    Rvalue::Call {
-                        callee: CallTarget::Member { field, .. },
-                        ..
-                    } if field == "add" => add_calls += 1,
-                    Rvalue::Call {
-                        callee: CallTarget::Member { field, .. },
-                        ..
-                    } if field == INTERNAL_MAP_SET_INDEX_FIELD => map_set_calls += 1,
+                    Rvalue::Call { callee, .. } => {
+                        match callee.member_parts().map(|parts| parts.field) {
+                            Some("append") => append_calls += 1,
+                            Some("add") => add_calls += 1,
+                            Some(INTERNAL_MAP_SET_INDEX_FIELD) => map_set_calls += 1,
+                            _ => {}
+                        }
+                    }
                     _ => {}
                 },
                 _ => {}
@@ -5883,18 +5877,17 @@ fn ordinary_for_target_scope_starts_after_iterable_evaluation() {
         .flat_map(|block| &block.instructions)
         .find_map(|instruction| match instruction {
             Instruction::Assign {
-                value:
-                    Rvalue::Call {
-                        callee:
-                            CallTarget::Member {
-                                object,
-                                field,
-                                receiver_place,
-                            },
-                        ..
-                    },
+                value: Rvalue::Call { callee, .. },
                 ..
-            } if field == INTERNAL_VEC_INDEX_FIELD => Some((object, receiver_place.as_deref())),
+            } => match callee.member_parts()? {
+                MemberCallParts {
+                    object,
+                    field: INTERNAL_VEC_INDEX_FIELD,
+                    receiver_place,
+                    ..
+                } => Some((object, receiver_place)),
+                _ => None,
+            },
             _ => None,
         })
         .expect("Vec iteration should lower through bounded indexed access");
@@ -6746,18 +6739,17 @@ def consume_queue(values: Queue[str]):
                     matches!(
                         instruction,
                         Instruction::Assign {
-                            value:
-                                Rvalue::Call {
-                                    callee:
-                                        CallTarget::Member {
-                                            object: Operand::MovePlace(_),
-                                            field,
-                                            receiver_place: Some(_),
-                                        },
-                                    ..
-                                },
+                            value: Rvalue::Call { callee, .. },
                             ..
-                        } if field == "__take_index_option"
+                        } if matches!(
+                            callee.member_parts(),
+                            Some(MemberCallParts {
+                                object: Operand::MovePlace(_),
+                                field: "__take_index_option",
+                                receiver_place: Some(_),
+                                ..
+                            })
+                        )
                     )
                 })
             }),
@@ -11372,17 +11364,16 @@ def main():
                     matches!(
                         instruction,
                         Instruction::Assign {
-                            value: Rvalue::Call {
-                                callee:
-                                    CallTarget::Member {
-                                        field,
-                                        receiver_place: Some(place),
-                                        ..
-                                    },
-                                ..
-                            },
+                            value: Rvalue::Call { callee, .. },
                             ..
-                        } if field == "swap" && place == "values"
+                        } if matches!(
+                            callee.member_parts(),
+                            Some(MemberCallParts {
+                                field: "swap",
+                                receiver_place: Some("values"),
+                                ..
+                            })
+                        )
                     )
                 })
                 .then_some(index)
@@ -11492,18 +11483,12 @@ def main() -> int32:
             .iter()
             .find_map(|instruction| match instruction {
                 Instruction::Assign {
-                    value:
-                        Rvalue::Call {
-                            callee:
-                                CallTarget::Member {
-                                    field: actual,
-                                    receiver_place,
-                                    ..
-                                },
-                            args,
-                        },
+                    value: Rvalue::Call { callee, args },
                     ..
-                } if actual == field => Some((receiver_place.as_deref(), args.as_slice())),
+                } => {
+                    let parts = callee.member_parts()?;
+                    (parts.field == field).then_some((parts.receiver_place, args.as_slice()))
+                }
                 _ => None,
             })
             .unwrap_or_else(|| panic!("expected `{field}` member call in MIR"))
@@ -13738,12 +13723,9 @@ fn calls_member(instruction: &Instruction, member: &str) -> bool {
     matches!(
         instruction,
         Instruction::Assign {
-            value: Rvalue::Call {
-                callee: CallTarget::Member { field, .. },
-                ..
-            },
+            value: Rvalue::Call { callee, .. },
             ..
-        } if field == member
+        } if callee.member_parts().is_some_and(|parts| parts.field == member)
     )
 }
 
@@ -13834,14 +13816,16 @@ def main():
                 let reads = matches!(
                     &window[1],
                     Instruction::Assign {
-                        value: Rvalue::Call {
-                            callee: CallTarget::Member { object: Operand::Place(object), field, .. },
-                            args,
-                        },
+                        value: Rvalue::Call { callee, args },
                         ..
-                    } if object == list
-                        && field == INTERNAL_VEC_INDEX_FIELD
-                        && matches!(&args[0].value, Operand::Place(place) if place == index)
+                    } if matches!(
+                        callee.member_parts(),
+                        Some(MemberCallParts {
+                            object: Operand::Place(object),
+                            field: INTERNAL_VEC_INDEX_FIELD,
+                            ..
+                        }) if object == list
+                    ) && matches!(&args[0].value, Operand::Place(place) if place == index)
                 );
                 let advances = matches!(
                     &window[2],
@@ -15019,4 +15003,204 @@ fn step8d_validator_rejects_forged_str_queue_and_task_ops() {
         &groupless,
         "expected `__get_in_task_group()` to receive `group`",
     );
+}
+
+const STEP8D4_SOURCE: &str = r#"
+def total(values: Span[int64]) -> int64:
+    mut sum = 0
+    for value in values:
+        sum += value
+    return sum
+
+def main():
+    mut ints: list[int64] = [1, 2, 3]
+    ints.append(4)
+    mut floats: list[float64] = [1.5]
+    floats.append(2.5)
+    mut flags: list[bool] = [true]
+    flags.append(false)
+    mut words: list[str] = ["a"]
+    words.append("b")
+    print(ints[0] + ints.pop())
+    print(floats[1])
+    print(flags[1])
+    print(words[1])
+    print(ints[1:].len())
+    print(total(ints[0:2]))
+    mut counts: dict[str, int64] = {"a": 1}
+    counts["b"] = 2
+    print(counts.get("a"))
+    print(counts["b"])
+    print("b" in counts)
+    mut seen: set[int64] = set[int64]()
+    seen.add(3)
+    print(3 in seen)
+    source: list[int64] = [1, 2, 3, 4]
+    grid = Array[int64].from_list(source, [2, 2])
+    print(grid.clone().sum())
+    print(grid[1, 1])
+    for word in words:
+        print(word)
+"#;
+
+const STEP8D4_STDOUT: &str =
+    "5\n2.5\nfalse\nb\n2\n3\nLookup.Found(1)\n2\ntrue\ntrue\n10\n4\na\nb\n";
+
+#[test]
+fn step8d_collection_members_lower_to_specialized_runtime_ops() {
+    use crate::runtime_ops::{ArrayOp, DictOp, ListOp, RuntimeOp, ScalarElement, SetOp, StrOp};
+    let module = crate::lower_source_to_mir(STEP8D4_SOURCE).expect("the fixture should lower");
+    let found = runtime_ops_in(&module, "main");
+    for op in [
+        RuntimeOp::List(ListOp::PushScalar(ScalarElement::Int64)),
+        RuntimeOp::List(ListOp::PushScalar(ScalarElement::Float64)),
+        RuntimeOp::List(ListOp::PushScalar(ScalarElement::Bool)),
+        RuntimeOp::List(ListOp::Push),
+        RuntimeOp::List(ListOp::IndexScalar(ScalarElement::Int64)),
+        RuntimeOp::List(ListOp::IndexScalar(ScalarElement::Float64)),
+        RuntimeOp::List(ListOp::IndexScalar(ScalarElement::Bool)),
+        RuntimeOp::List(ListOp::Index),
+        RuntimeOp::List(ListOp::Pop),
+        RuntimeOp::List(ListOp::Slice),
+        RuntimeOp::List(ListOp::Len),
+        RuntimeOp::Dict(DictOp::GetStr),
+        RuntimeOp::Dict(DictOp::SetIndex),
+        RuntimeOp::Dict(DictOp::Index),
+        RuntimeOp::Dict(DictOp::ContainsKey),
+        RuntimeOp::Set(SetOp::Add),
+        RuntimeOp::Set(SetOp::ContainsInt64),
+        RuntimeOp::Array(ArrayOp::Clone),
+        RuntimeOp::Array(ArrayOp::Sum),
+        RuntimeOp::Array(ArrayOp::Index),
+    ] {
+        assert!(found.contains(&op), "{op} in main: {found:?}");
+    }
+    assert!(!found.contains(&RuntimeOp::Str(StrOp::Slice)));
+    let members = member_fields_in(&module, "main");
+    assert!(members.is_empty(), "main: {members:?}");
+    let mut again = module.clone();
+    resolve_runtime_ops(&mut again);
+    assert_eq!(
+        serde_json::to_value(&again).expect("MIR serializes"),
+        serde_json::to_value(&module).expect("MIR serializes")
+    );
+    validate_loan_flow(&module).expect("resolved collection ops should validate");
+}
+
+#[test]
+fn step8d_hand_built_collection_members_run_like_resolved_ones() {
+    let resolved = crate::lower_source_to_mir(STEP8D4_SOURCE).expect("the fixture should lower");
+    // Spell every resolved receiver op back as the member call it came from.
+    let mut members = resolved.clone();
+    for function in members.functions.iter_mut() {
+        for instruction in function
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.instructions)
+        {
+            if let Instruction::Assign {
+                value: Rvalue::Call { callee, .. },
+                ..
+            } = instruction
+            {
+                if let CallTarget::Runtime {
+                    op,
+                    receiver: Some(object),
+                    receiver_place,
+                } = callee
+                {
+                    *callee = CallTarget::Member {
+                        object: object.clone(),
+                        field: op.name().to_string(),
+                        receiver_place: receiver_place.clone(),
+                    };
+                }
+            }
+        }
+    }
+    assert!(runtime_ops_in(&members, "main").is_empty());
+    let output = crate::run_mir(&resolved).expect("the resolved module runs");
+    assert_eq!(output.stdout, STEP8D4_STDOUT);
+    assert_eq!(
+        crate::run_mir(&members)
+            .expect("the member spelling runs")
+            .stdout,
+        STEP8D4_STDOUT
+    );
+    let serialized = serde_json::to_vec(&members).unwrap();
+    assert_eq!(
+        crate::run_serialized_mir(&serialized, "<members>", "")
+            .expect("the serialized member spelling runs")
+            .stdout,
+        STEP8D4_STDOUT
+    );
+    assert_eq!(
+        crate::native_codegen::emit_host_object(&members)
+            .expect("the direct backend resolves it too"),
+        crate::native_codegen::emit_host_object(&resolved).expect("the resolved module emits"),
+        "both spellings emit the same object"
+    );
+}
+
+#[test]
+fn step8d_validator_rejects_forged_collection_ops() {
+    use crate::runtime_ops::{DictOp, ListOp, RuntimeOp, ScalarElement, SetOp, SpanOp};
+    let baseline = crate::lower_source_to_mir(STEP8D4_SOURCE).expect("the fixture should lower");
+    validate_loan_flow(&baseline).expect("the source-produced ops should validate");
+
+    let forge = |from: RuntimeOp, to: RuntimeOp| {
+        let mut module = baseline.clone();
+        let (callee, _) = first_receiver_op_call(&mut module, "main", |op| op == from);
+        let CallTarget::Runtime { op, .. } = callee else {
+            unreachable!()
+        };
+        *op = to;
+        module
+    };
+    // The boxed form for a list of `int64`, and a scalar form of the
+    // wrong kind.
+    assert_public_boundaries_reject(
+        &forge(
+            RuntimeOp::List(ListOp::PushScalar(ScalarElement::Int64)),
+            RuntimeOp::List(ListOp::Push),
+        ),
+        "`List.Push` in `main` does not match the types of its arguments",
+    );
+    assert_public_boundaries_reject(
+        &forge(
+            RuntimeOp::List(ListOp::IndexScalar(ScalarElement::Float64)),
+            RuntimeOp::List(ListOp::IndexScalar(ScalarElement::Int64)),
+        ),
+        "`List.IndexScalar(Int64)` in `main` does not match the types of its arguments",
+    );
+    // A literal-key read for a key that is not a literal.
+    assert_public_boundaries_reject(
+        &forge(
+            RuntimeOp::Dict(DictOp::Index),
+            RuntimeOp::Dict(DictOp::GetStr),
+        ),
+        "`Dict.GetStr` in `main` does not match the types of its arguments",
+    );
+    // A set search on a list, and a span op on a dict.
+    assert_public_boundaries_reject(
+        &forge(
+            RuntimeOp::List(ListOp::Pop),
+            RuntimeOp::Set(SetOp::ContainsInt64),
+        ),
+        "`Set.ContainsInt64` in `main` does not apply to a receiver of type `list[int64]`",
+    );
+    assert_public_boundaries_reject(
+        &forge(
+            RuntimeOp::Dict(DictOp::SetIndex),
+            RuntimeOp::Span(SpanOp::Start),
+        ),
+        "`Span.Start` in `main` does not apply to a receiver of type `dict[str, int64]`",
+    );
+    // A checked read without its source line and column.
+    let mut short = baseline.clone();
+    let (_, args) = first_receiver_op_call(&mut short, "main", |op| {
+        op == RuntimeOp::List(ListOp::Index)
+    });
+    args.truncate(1);
+    assert_public_boundaries_reject(&short, "expected `__index()` to receive `line`");
 }

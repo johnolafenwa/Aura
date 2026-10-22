@@ -11,13 +11,13 @@ use crate::call::{
 use crate::diag::Span;
 use crate::integer::{minimal_signed_type_for_negative_literal, IntegerValue};
 use crate::runtime_ops::RuntimeOp;
+use crate::sema::lookup_type;
 use crate::sema::{
     binary_operator_trait, resolve_param_passing, substitute_trait_bound, substitute_type,
     substitutions_from_decl_type_args, type_is_copy_in_program, unary_operator_trait,
     ClosureCallKind, ClosureCaptureMode, ClosureInfo, ClosureOwner, ComprehensionClauseInfo,
     ComprehensionInfo, FunctionParamContract, ModuleNamespace, Program, TraitBound, Type,
 };
-use crate::sema::{lookup_type, optional_type};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -36,13 +36,14 @@ fn is_known_enum_name(program: &Program, name: &str) -> bool {
         )
 }
 
-const INTERNAL_VEC_INDEX_FIELD: &str = "__index";
-const INTERNAL_SLICE_FIELD: &str = "__slice";
-const INTERNAL_VEC_INDEX_OPTION_FIELD: &str = "__index_option";
-const INTERNAL_COLLECTION_TAKE_INDEX_OPTION_FIELD: &str = "__take_index_option";
-const INTERNAL_VEC_SET_INDEX_FIELD: &str = "__set_index";
-const INTERNAL_MAP_INDEX_FIELD: &str = "__index";
-const INTERNAL_MAP_SET_INDEX_FIELD: &str = "__set_index";
+const INTERNAL_VEC_INDEX_FIELD: &str = crate::runtime_ops::INDEX_MEMBER;
+const INTERNAL_SLICE_FIELD: &str = crate::runtime_ops::SLICE_MEMBER;
+const INTERNAL_VEC_INDEX_OPTION_FIELD: &str = crate::runtime_ops::INDEX_OPTION_MEMBER;
+const INTERNAL_COLLECTION_TAKE_INDEX_OPTION_FIELD: &str =
+    crate::runtime_ops::TAKE_INDEX_OPTION_MEMBER;
+const INTERNAL_VEC_SET_INDEX_FIELD: &str = crate::runtime_ops::SET_INDEX_MEMBER;
+const INTERNAL_MAP_INDEX_FIELD: &str = crate::runtime_ops::INDEX_MEMBER;
+const INTERNAL_MAP_SET_INDEX_FIELD: &str = crate::runtime_ops::SET_INDEX_MEMBER;
 const INTERNAL_QUEUE_GET_IN_TASK_GROUP_FIELD: &str = crate::runtime_ops::QueueOp::GET_IN_TASK_GROUP;
 const INTERNAL_QUEUE_GET_WITH_REGISTERED_PRODUCERS_FIELD: &str =
     crate::runtime_ops::QueueOp::GET_WITH_REGISTERED_PRODUCERS;
@@ -25501,81 +25502,10 @@ impl<'a> Lowerer<'a> {
             return None;
         };
         match (name.as_str(), field) {
-            ("Array", "shape") => Some(Type::Named("list".to_string(), vec![Type::named("int64")])),
-            ("Array", "len") => Some(Type::named("int64")),
-            ("Array", "clone")
-            | ("Array", "wrapping_add")
-            | ("Array", "wrapping_sub")
-            | ("Array", "wrapping_mul")
-            | ("Array", "saturating_add")
-            | ("Array", "saturating_sub")
-            | ("Array", "saturating_mul") => Some(Type::Named("Array".to_string(), args.clone())),
-            ("Array", "get") | ("Array", "set") => Some(optional_type(
-                args.first()
-                    .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown")),
-            )),
-            ("Array", "fill") => Some(Type::Unit),
-            ("Array", "sum") | ("Array", "min") | ("Array", "max") => args.first().cloned(),
-            ("Array", "mean") => Some(Type::named("float64")),
-            ("list", "len") => Some(Type::named("int64")),
-            ("list", "is_empty") => Some(Type::named("bool")),
-            ("list", "append")
-            | ("list", "extend")
-            | ("list", "clear")
-            | ("list", "reverse")
-            | ("list", "sort")
-            | ("list", "reserve")
-            | ("list", "remove")
-            | ("list", "swap")
-            | ("list", "insert") => Some(Type::Unit),
+            // `sort` and `filter` lower to loops, so they have no resolved
+            // operation.
+            ("list", "sort") => Some(Type::Unit),
             ("list", "filter") => Some(Type::Named("list".to_string(), args.clone())),
-            ("list", "contains") => Some(Type::named("bool")),
-            ("list", "index") | ("list", "count") => Some(Type::named("int64")),
-            ("list", "pop") | ("list", "set") => args.first().cloned(),
-            ("list", "get") => Some(lookup_type(
-                args.first()
-                    .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown")),
-            )),
-            ("set", "len") => Some(Type::named("int64")),
-            ("set", "is_empty") => Some(Type::named("bool")),
-            ("set", "contains") => Some(Type::named("bool")),
-            ("set", "add" | "remove" | "discard" | "clear" | "reserve") => Some(Type::Unit),
-            ("dict", "len") => Some(Type::named("int64")),
-            ("dict", "is_empty") => Some(Type::named("bool")),
-            ("dict", "contains_key") => Some(Type::named("bool")),
-            ("dict", "keys") => Some(Type::Named(
-                "list".to_string(),
-                vec![args
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown"))],
-            )),
-            ("dict", "values") => Some(Type::Named(
-                "list".to_string(),
-                vec![args
-                    .get(1)
-                    .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown"))],
-            )),
-            ("dict", "items") => Some(Type::Named(
-                "list".to_string(),
-                vec![Type::Tuple(vec![
-                    args.first()
-                        .cloned()
-                        .unwrap_or_else(|| Type::named("Unknown")),
-                    args.get(1)
-                        .cloned()
-                        .unwrap_or_else(|| Type::named("Unknown")),
-                ])],
-            )),
-            ("dict", "clear") | ("dict", "update") | ("dict", "reserve") => Some(Type::Unit),
-            ("dict", "get") | ("dict", "set") | ("dict", "remove") => Some(lookup_type(
-                args.get(1)
-                    .cloned()
-                    .unwrap_or_else(|| Type::named("Unknown")),
-            )),
             // `with` cleanup closes these handles with no runtime call, so
             // they have no resolved operation.
             ("net.HttpExchange", "close")
@@ -26370,9 +26300,7 @@ mod local_types;
 #[path = "mir_runtime_ops.rs"]
 mod runtime_ops;
 
-pub(crate) use runtime_ops::{is_builtin_wrapper, resolve_runtime_ops};
-
-pub(crate) use spans::span_member_mutates_receiver;
+pub(crate) use runtime_ops::{is_builtin_wrapper, resolve_runtime_ops, specialized_member_op};
 
 #[cfg(test)]
 #[path = "mir_tests.rs"]

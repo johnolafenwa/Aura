@@ -220,7 +220,8 @@ fn list_reserve_rejects_a_non_integer_runtime_count() {
     let mut encoded = encode(BYTES_CALLS);
     let main = function_mut(&mut encoded, "main");
     let call = instruction_mut(main, |instruction| {
-        instruction["Assign"]["value"]["Call"]["callee"]["Member"]["field"] == json!("reserve")
+        let op = &instruction["Assign"]["value"]["Call"]["callee"]["Runtime"]["op"];
+        serde_json::from_value::<RuntimeOp>(op.clone()).is_ok_and(|op| op.name() == "reserve")
     });
     call["Assign"]["value"]["Call"]["args"][0]["value"] = json!({ "Float": 1.5 });
     let mir: MirModule = serde_json::from_value(encoded).expect("forged MIR should deserialize");

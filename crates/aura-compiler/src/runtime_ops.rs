@@ -10,10 +10,12 @@
 //! `Duration.ms(5)`, `fs.exists(path)`, or `print(value)`, to an op with no
 //! receiver. A user function with the same name keeps its `Name` call.
 //!
-//! Ops are grouped by family. This table holds the resource handle
-//! (`fs.File`, `process.*`, `net.*`), `random.Rng`, scalar, value, `str`,
-//! `Queue`, `Task`, `TaskGroup`, named function, `print`, and host builtin
-//! families. Collections are still `CallTarget::Member` calls.
+//! Ops are grouped by family: resource handles (`fs.File`, `process.*`,
+//! `net.*`), `random.Rng`, scalars, values, `str`, `list`, `dict`, `set`,
+//! `Array`, span ranges, `Queue`, `Task`, `TaskGroup`, named functions,
+//! `print`, and host builtins. The private members that indexing, slicing,
+//! iteration, and spans lower to, such as `__index`, resolve by their MIR
+//! spelling.
 
 use serde::{Deserialize, Serialize};
 
@@ -27,7 +29,7 @@ use crate::call::{
 };
 use crate::native_runtime::HOST_BUILTIN_SYMBOLS;
 use crate::runtime_abi::RuntimeFn;
-use crate::sema::{optional_type, poll_type, text_convenience_result_type, Type};
+use crate::sema::{lookup_type, optional_type, poll_type, text_convenience_result_type, Type};
 
 /// One resolved built-in operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -49,6 +51,16 @@ pub enum RuntimeOp {
     Task(TaskOp),
     /// A method of `TaskGroup`.
     TaskGroup(TaskGroupOp),
+    /// A method of `list[T]`, or a private list read, write, or slice.
+    List(ListOp),
+    /// A method of `dict[K, V]`, or a private entry read or write.
+    Dict(DictOp),
+    /// A method of `set[T]`, or a private iteration read.
+    Set(SetOp),
+    /// A method of `Array[T]`, or a private element read, write, or slice.
+    Array(ArrayOp),
+    /// A private range operation of a `Span[T]` view on its base list.
+    Span(SpanOp),
     /// A named built-in function or associated function, such as `range`,
     /// `Duration.ms`, or `fs.exists`.
     Function(FunctionOp),
@@ -432,21 +444,34 @@ impl ValueOp {
 }
 
 macro_rules! str_ops {
-    ($( $op:ident => ($member:ident, $runtime:ident, $words:expr, $padding:literal) ),+ $(,)?) => {
+    (
+        public { $( $op:ident => ($member:ident, $runtime:ident, $words:expr, $padding:literal) ),+ $(,)? }
+        private { $( $private:ident => ($name:expr, $private_runtime:ident) ),+ $(,)? }
+    ) => {
         /// A method of `str`. Each variant is named after the method it
-        /// resolves from.
+        /// resolves from, and a private variant after its MIR spelling.
         #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
         pub enum StrOp {
-            $($op),+
+            $($op,)+
+            $($private,)+
         }
 
         impl StrOp {
             /// Every `str` op, in declaration order.
-            pub const ALL: &'static [StrOp] = &[$(StrOp::$op),+];
+            pub const ALL: &'static [StrOp] = &[$(StrOp::$op,)+ $(StrOp::$private,)+];
 
-            pub const fn builtin_member(self) -> BuiltinMember {
+            /// The source method of a public op; a private op has none.
+            pub const fn builtin_member(self) -> Option<BuiltinMember> {
                 match self {
-                    $(StrOp::$op => BuiltinMember::$member),+
+                    $(StrOp::$op => Some(BuiltinMember::$member),)+
+                    $(StrOp::$private => None,)+
+                }
+            }
+
+            const fn private_name(self) -> Option<&'static str> {
+                match self {
+                    $(StrOp::$private => Some($name),)+
+                    _ => None,
                 }
             }
 
@@ -457,7 +482,13 @@ macro_rules! str_ops {
                         immediates: $words,
                         span: false,
                         layout_words: $padding,
-                    }),+
+                    },)+
+                    $(StrOp::$private => RuntimeCall {
+                        function: RuntimeFn::$private_runtime,
+                        immediates: &[],
+                        span: false,
+                        layout_words: 0,
+                    },)+
                 }
             }
 
@@ -466,6 +497,13 @@ macro_rules! str_ops {
                     $(BuiltinMember::$member => Some(StrOp::$op),)+
                     _ => None,
                 }
+            }
+
+            fn from_private_name(field: &str) -> Option<Self> {
+                $(if field == $name {
+                    return Some(StrOp::$private);
+                })+
+                None
             }
         }
     };
@@ -476,28 +514,34 @@ macro_rules! str_ops {
 // is the method's index in `text_methods::TEXT_METHOD_NAMES`, and the
 // padding is the number of the two argument words the method leaves zero.
 str_ops! {
-    Len => (StringLen, StringLen, &[], 0),
-    ByteLen => (StringByteLen, StringByteLen, &[], 0),
-    Contains => (StringContains, StringContains, &[], 0),
-    StartsWith => (StringStartsWith, StringStartsWith, &[], 0),
-    EndsWith => (StringEndsWith, StringEndsWith, &[], 0),
-    Split => (StringSplit, StringSplit, &[], 0),
-    Replace => (StringReplace, StringReplace, &[], 0),
-    ToLower => (StringToLower, StringToLower, &[], 0),
-    ToUpper => (StringToUpper, StringToUpper, &[], 0),
-    StripPrefix => (StringStripPrefix, StringStripPrefix, &[], 0),
-    StripSuffix => (StringStripSuffix, StringStripSuffix, &[], 0),
-    Trim => (StringTrim, StringTrim, &[], 0),
-    Join => (StringJoin, StringJoin, &[], 0),
-    TrimStart => (StringTrimStart, StringTextMethod, &[0], 2),
-    TrimEnd => (StringTrimEnd, StringTextMethod, &[1], 2),
-    SplitOnce => (StringSplitOnce, StringTextMethod, &[2], 1),
-    RsplitOnce => (StringRsplitOnce, StringTextMethod, &[3], 1),
-    Lines => (StringLines, StringTextMethod, &[4], 2),
-    SplitWhitespace => (StringSplitWhitespace, StringTextMethod, &[5], 2),
-    Find => (StringFind, StringTextMethod, &[6], 1),
-    Count => (StringCount, StringTextMethod, &[7], 1),
-    Repeat => (StringRepeat, StringTextMethod, &[8], 1),
+    public {
+        Len => (StringLen, StringLen, &[], 0),
+        ByteLen => (StringByteLen, StringByteLen, &[], 0),
+        Contains => (StringContains, StringContains, &[], 0),
+        StartsWith => (StringStartsWith, StringStartsWith, &[], 0),
+        EndsWith => (StringEndsWith, StringEndsWith, &[], 0),
+        Split => (StringSplit, StringSplit, &[], 0),
+        Replace => (StringReplace, StringReplace, &[], 0),
+        ToLower => (StringToLower, StringToLower, &[], 0),
+        ToUpper => (StringToUpper, StringToUpper, &[], 0),
+        StripPrefix => (StringStripPrefix, StringStripPrefix, &[], 0),
+        StripSuffix => (StringStripSuffix, StringStripSuffix, &[], 0),
+        Trim => (StringTrim, StringTrim, &[], 0),
+        Join => (StringJoin, StringJoin, &[], 0),
+        TrimStart => (StringTrimStart, StringTextMethod, &[0], 2),
+        TrimEnd => (StringTrimEnd, StringTextMethod, &[1], 2),
+        SplitOnce => (StringSplitOnce, StringTextMethod, &[2], 1),
+        RsplitOnce => (StringRsplitOnce, StringTextMethod, &[3], 1),
+        Lines => (StringLines, StringTextMethod, &[4], 2),
+        SplitWhitespace => (StringSplitWhitespace, StringTextMethod, &[5], 2),
+        Find => (StringFind, StringTextMethod, &[6], 1),
+        Count => (StringCount, StringTextMethod, &[7], 1),
+        Repeat => (StringRepeat, StringTextMethod, &[8], 1),
+    }
+    private {
+        // `text[a:b]`.
+        Slice => (SLICE_MEMBER, StringSlice),
+    }
 }
 
 impl StrOp {
@@ -516,7 +560,8 @@ impl StrOp {
             Replace | ToLower | ToUpper | Trim | Join => text(),
             StripPrefix | StripSuffix => optional_type(text()),
             TrimStart | TrimEnd | SplitOnce | RsplitOnce | Lines | SplitWhitespace | Find
-            | Count | Repeat => return text_convenience_result_type(self.builtin_member().name()),
+            | Count | Repeat => return text_convenience_result_type(self.builtin_member()?.name()),
+            Slice => text(),
         })
     }
 }
@@ -727,6 +772,1019 @@ pub enum TaskGroupOp {
 
 impl TaskGroupOp {
     pub const ALL: &'static [TaskGroupOp] = &[TaskGroupOp::Cancel];
+}
+
+/// The private member a checked element read `items[i]` lowers to.
+pub const INDEX_MEMBER: &str = "__index";
+/// The private member an element write `items[i] = value` lowers to.
+pub const SET_INDEX_MEMBER: &str = "__set_index";
+/// The private member a slice `items[a:b]` lowers to.
+pub const SLICE_MEMBER: &str = "__slice";
+/// The private optional read a `for` loop over a borrowed collection lowers
+/// to.
+pub const INDEX_OPTION_MEMBER: &str = "__index_option";
+/// The private consuming read a `for` loop over an owned collection lowers
+/// to.
+pub const TAKE_INDEX_OPTION_MEMBER: &str = "__take_index_option";
+
+/// How a list stores an element without a box. Lowering picks a scalar
+/// specialization, such as `ListOp::PushScalar`, from the list's element
+/// type, and the op passes the kind's word to the runtime.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum ScalarElement {
+    Int64,
+    Float64,
+    Bool,
+}
+
+impl ScalarElement {
+    pub const ALL: &'static [ScalarElement] = &[
+        ScalarElement::Int64,
+        ScalarElement::Float64,
+        ScalarElement::Bool,
+    ];
+
+    /// The kind a list of `element` stores unboxed, if any.
+    pub fn of(element: &Type) -> Option<Self> {
+        let Type::Named(name, args) = element else {
+            return None;
+        };
+        if !args.is_empty() {
+            return None;
+        }
+        match name.as_str() {
+            "int64" => Some(ScalarElement::Int64),
+            "float64" => Some(ScalarElement::Float64),
+            "bool" => Some(ScalarElement::Bool),
+            _ => None,
+        }
+    }
+
+    /// The runtime's kind word: 0 for `int64`, 1 for `float64`, 2 for
+    /// `bool`.
+    const fn words(self) -> &'static [i64] {
+        match self {
+            ScalarElement::Int64 => &[0],
+            ScalarElement::Float64 => &[1],
+            ScalarElement::Bool => &[2],
+        }
+    }
+}
+
+/// `aura_direct_collection_operation`'s operation words.
+const COLLECTION_POP_WORDS: &[i64] = &[0];
+const COLLECTION_REMOVE_WORDS: &[i64] = &[1];
+const COLLECTION_INDEX_WORDS: &[i64] = &[2];
+const COLLECTION_COUNT_WORDS: &[i64] = &[3];
+const COLLECTION_SET_REMOVE_WORDS: &[i64] = &[5];
+const COLLECTION_SET_DISCARD_WORDS: &[i64] = &[6];
+const COLLECTION_SET_CLEAR_WORDS: &[i64] = &[7];
+
+const INDEX_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("index"),
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
+const SET_INDEX_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("index"),
+    CallableParam::required("value"),
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
+const KEY_INDEX_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("key"),
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
+const KEY_SET_INDEX_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("key"),
+    CallableParam::required("value"),
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
+const SLICE_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("start"),
+    CallableParam::required("has_start"),
+    CallableParam::required("end"),
+    CallableParam::required("has_end"),
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
+const INDEX_OPTION_PARAMS: &[CallableParam<'static>] = &[CallableParam::required("index")];
+
+/// A call to `function` with no immediate or span words.
+const fn helper(function: RuntimeFn) -> RuntimeCall {
+    RuntimeCall {
+        function,
+        immediates: &[],
+        span: false,
+        layout_words: 0,
+    }
+}
+
+/// A call to `function` with immediate words and layout words.
+const fn helper_with(
+    function: RuntimeFn,
+    immediates: &'static [i64],
+    layout_words: usize,
+) -> RuntimeCall {
+    RuntimeCall {
+        function,
+        immediates,
+        span: false,
+        layout_words,
+    }
+}
+
+/// A call to `function` with immediate words and a zero source line and
+/// column.
+const fn spanned(function: RuntimeFn, immediates: &'static [i64]) -> RuntimeCall {
+    RuntimeCall {
+        function,
+        immediates,
+        span: true,
+        layout_words: 0,
+    }
+}
+
+/// A method of `list[T]`, including the private reads, writes, and slices
+/// that indexing and iteration lower to. `PushScalar` and `IndexScalar` are
+/// the specializations lowering picks for a list of `int64`, `float64`, or
+/// `bool`, which the runtime stores without a box.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum ListOp {
+    Len,
+    IsEmpty,
+    /// `append(value)`.
+    Push,
+    PushScalar(ScalarElement),
+    Pop,
+    Get,
+    Set,
+    Remove,
+    /// `index(value)`.
+    IndexOf,
+    Count,
+    Swap,
+    Contains,
+    Extend,
+    Insert,
+    Clear,
+    Reverse,
+    Reserve,
+    /// `__index(index, line, column)`: a checked element read.
+    Index,
+    IndexScalar(ScalarElement),
+    /// `__set_index(index, value, line, column)`: a checked element write.
+    SetIndex,
+    /// `__slice(start, has_start, end, has_end, line, column)`.
+    Slice,
+    /// `__index_option(index)`: a borrowed iteration read.
+    IndexOption,
+    /// `__take_index_option(index)`: a consuming iteration read.
+    TakeIndexOption,
+}
+
+impl ListOp {
+    pub const ALL: &'static [ListOp] = &[
+        ListOp::Len,
+        ListOp::IsEmpty,
+        ListOp::Push,
+        ListOp::PushScalar(ScalarElement::Int64),
+        ListOp::PushScalar(ScalarElement::Float64),
+        ListOp::PushScalar(ScalarElement::Bool),
+        ListOp::Pop,
+        ListOp::Get,
+        ListOp::Set,
+        ListOp::Remove,
+        ListOp::IndexOf,
+        ListOp::Count,
+        ListOp::Swap,
+        ListOp::Contains,
+        ListOp::Extend,
+        ListOp::Insert,
+        ListOp::Clear,
+        ListOp::Reverse,
+        ListOp::Reserve,
+        ListOp::Index,
+        ListOp::IndexScalar(ScalarElement::Int64),
+        ListOp::IndexScalar(ScalarElement::Float64),
+        ListOp::IndexScalar(ScalarElement::Bool),
+        ListOp::SetIndex,
+        ListOp::Slice,
+        ListOp::IndexOption,
+        ListOp::TakeIndexOption,
+    ];
+
+    const fn builtin_member(self) -> Option<BuiltinMember> {
+        use BuiltinMember as M;
+        Some(match self {
+            ListOp::Len => M::VecLen,
+            ListOp::IsEmpty => M::VecIsEmpty,
+            ListOp::Push | ListOp::PushScalar(_) => M::VecPush,
+            ListOp::Pop => M::VecPop,
+            ListOp::Get => M::VecGet,
+            ListOp::Set => M::VecSet,
+            ListOp::Remove => M::VecRemove,
+            ListOp::IndexOf => M::VecIndex,
+            ListOp::Count => M::VecCount,
+            ListOp::Swap => M::VecSwap,
+            ListOp::Contains => M::VecContains,
+            ListOp::Extend => M::VecExtend,
+            ListOp::Insert => M::VecInsert,
+            ListOp::Clear => M::VecClear,
+            ListOp::Reverse => M::VecReverse,
+            ListOp::Reserve => M::VecReserve,
+            ListOp::Index
+            | ListOp::IndexScalar(_)
+            | ListOp::SetIndex
+            | ListOp::Slice
+            | ListOp::IndexOption
+            | ListOp::TakeIndexOption => return None,
+        })
+    }
+
+    const fn from_builtin_member(member: BuiltinMember) -> Option<Self> {
+        use BuiltinMember as M;
+        Some(match member {
+            M::VecLen => ListOp::Len,
+            M::VecIsEmpty => ListOp::IsEmpty,
+            M::VecPush => ListOp::Push,
+            M::VecPop => ListOp::Pop,
+            M::VecGet => ListOp::Get,
+            M::VecSet => ListOp::Set,
+            M::VecRemove => ListOp::Remove,
+            M::VecIndex => ListOp::IndexOf,
+            M::VecCount => ListOp::Count,
+            M::VecSwap => ListOp::Swap,
+            M::VecContains => ListOp::Contains,
+            M::VecExtend => ListOp::Extend,
+            M::VecInsert => ListOp::Insert,
+            M::VecClear => ListOp::Clear,
+            M::VecReverse => ListOp::Reverse,
+            M::VecReserve => ListOp::Reserve,
+            _ => return None,
+        })
+    }
+
+    const fn private_name(self) -> Option<&'static str> {
+        Some(match self {
+            ListOp::Index | ListOp::IndexScalar(_) => INDEX_MEMBER,
+            ListOp::SetIndex => SET_INDEX_MEMBER,
+            ListOp::Slice => SLICE_MEMBER,
+            ListOp::IndexOption => INDEX_OPTION_MEMBER,
+            ListOp::TakeIndexOption => TAKE_INDEX_OPTION_MEMBER,
+            _ => return None,
+        })
+    }
+
+    fn from_private_name(field: &str) -> Option<Self> {
+        Some(match field {
+            INDEX_MEMBER => ListOp::Index,
+            SET_INDEX_MEMBER => ListOp::SetIndex,
+            SLICE_MEMBER => ListOp::Slice,
+            INDEX_OPTION_MEMBER => ListOp::IndexOption,
+            TAKE_INDEX_OPTION_MEMBER => ListOp::TakeIndexOption,
+            _ => return None,
+        })
+    }
+
+    const fn private_params(self) -> Option<&'static [CallableParam<'static>]> {
+        Some(match self {
+            ListOp::Index | ListOp::IndexScalar(_) => INDEX_PARAMS,
+            ListOp::SetIndex => SET_INDEX_PARAMS,
+            ListOp::Slice => SLICE_PARAMS,
+            ListOp::IndexOption | ListOp::TakeIndexOption => INDEX_OPTION_PARAMS,
+            _ => return None,
+        })
+    }
+
+    const fn unspecialized(self) -> Self {
+        match self {
+            ListOp::PushScalar(_) => ListOp::Push,
+            ListOp::IndexScalar(_) => ListOp::Index,
+            other => other,
+        }
+    }
+
+    /// The helper call. A collection operation passes the receiver, a value
+    /// word, an index word, and its operation word, so a call that uses one
+    /// of the two leaves the other zero.
+    const fn runtime_call(self) -> RuntimeCall {
+        match self {
+            ListOp::Len => helper(RuntimeFn::VecLen),
+            ListOp::IsEmpty => helper(RuntimeFn::VecIsEmpty),
+            ListOp::Push => helper(RuntimeFn::VecPushInPlace),
+            ListOp::PushScalar(kind) => helper_with(RuntimeFn::VecPushScalar, kind.words(), 0),
+            ListOp::Pop => helper_with(RuntimeFn::CollectionOperation, COLLECTION_POP_WORDS, 1),
+            ListOp::Get => helper(RuntimeFn::VecGet),
+            ListOp::Set => helper(RuntimeFn::VecSetInPlace),
+            ListOp::Remove => {
+                helper_with(RuntimeFn::CollectionOperation, COLLECTION_REMOVE_WORDS, 1)
+            }
+            ListOp::IndexOf => {
+                helper_with(RuntimeFn::CollectionOperation, COLLECTION_INDEX_WORDS, 1)
+            }
+            ListOp::Count => helper_with(RuntimeFn::CollectionOperation, COLLECTION_COUNT_WORDS, 1),
+            ListOp::Swap => helper(RuntimeFn::VecSwapInPlace),
+            ListOp::Contains => helper(RuntimeFn::VecContains),
+            ListOp::Extend => helper(RuntimeFn::VecExtendInPlace),
+            ListOp::Insert => helper(RuntimeFn::VecInsertInPlace),
+            ListOp::Clear => helper(RuntimeFn::VecClearInPlace),
+            ListOp::Reverse => helper(RuntimeFn::VecReverseInPlace),
+            ListOp::Reserve => {
+                helper_with(RuntimeFn::CollectionOperation, COLLECTION_RESERVE_WORDS, 1)
+            }
+            ListOp::Index => helper(RuntimeFn::VecIndex),
+            // The line and column reach only the bounds failure's call.
+            ListOp::IndexScalar(kind) => helper_with(RuntimeFn::VecIndexScalar, kind.words(), 0),
+            ListOp::SetIndex => helper(RuntimeFn::VecSetIndexInPlace),
+            ListOp::Slice => helper(RuntimeFn::VecSlice),
+            ListOp::IndexOption => helper(RuntimeFn::VecIndexOption),
+            ListOp::TakeIndexOption => helper(RuntimeFn::VecTakeIndexInPlace),
+        }
+    }
+
+    /// The result type on a list of type `receiver`.
+    fn result_type(self, receiver: Option<&Type>) -> Option<Type> {
+        let element = first_type_arg(receiver);
+        Some(match self {
+            ListOp::Len | ListOp::IndexOf | ListOp::Count => Type::named("int64"),
+            ListOp::IsEmpty | ListOp::Contains => Type::named("bool"),
+            ListOp::Push
+            | ListOp::PushScalar(_)
+            | ListOp::Remove
+            | ListOp::Swap
+            | ListOp::Extend
+            | ListOp::Insert
+            | ListOp::Clear
+            | ListOp::Reverse
+            | ListOp::Reserve
+            | ListOp::SetIndex => Type::Unit,
+            ListOp::Pop | ListOp::Set | ListOp::Index | ListOp::IndexScalar(_) => return element,
+            ListOp::Get | ListOp::IndexOption | ListOp::TakeIndexOption => {
+                lookup_type(element.unwrap_or_else(|| Type::named("Unknown")))
+            }
+            ListOp::Slice => receiver?.clone(),
+        })
+    }
+}
+
+/// A method of `dict[K, V]`, including the private `contains_key` and `set`
+/// that `in` and literal construction lower to, and the private element
+/// read and write. `GetStr` is the specialization lowering picks for a
+/// `get` with a literal `str` key, which the runtime looks up without a
+/// box.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum DictOp {
+    Len,
+    IsEmpty,
+    Get,
+    GetStr,
+    Set,
+    Remove,
+    ContainsKey,
+    Keys,
+    Values,
+    Items,
+    Clear,
+    /// `update(other)`.
+    Update,
+    Reserve,
+    /// `__index(key, line, column)`.
+    Index,
+    /// `__set_index(key, value, line, column)`.
+    SetIndex,
+}
+
+impl DictOp {
+    pub const ALL: &'static [DictOp] = &[
+        DictOp::Len,
+        DictOp::IsEmpty,
+        DictOp::Get,
+        DictOp::GetStr,
+        DictOp::Set,
+        DictOp::Remove,
+        DictOp::ContainsKey,
+        DictOp::Keys,
+        DictOp::Values,
+        DictOp::Items,
+        DictOp::Clear,
+        DictOp::Update,
+        DictOp::Reserve,
+        DictOp::Index,
+        DictOp::SetIndex,
+    ];
+
+    const fn builtin_member(self) -> Option<BuiltinMember> {
+        use BuiltinMember as M;
+        Some(match self {
+            DictOp::Len => M::MapLen,
+            DictOp::IsEmpty => M::MapIsEmpty,
+            DictOp::Get | DictOp::GetStr => M::MapGet,
+            DictOp::Set => M::MapSet,
+            DictOp::Remove => M::MapRemove,
+            DictOp::ContainsKey => M::MapContainsKey,
+            DictOp::Keys => M::MapKeys,
+            DictOp::Values => M::MapValues,
+            DictOp::Items => M::MapItems,
+            DictOp::Clear => M::MapClear,
+            DictOp::Update => M::MapExtend,
+            DictOp::Reserve => M::MapReserve,
+            DictOp::Index | DictOp::SetIndex => return None,
+        })
+    }
+
+    const fn from_builtin_member(member: BuiltinMember) -> Option<Self> {
+        use BuiltinMember as M;
+        Some(match member {
+            M::MapLen => DictOp::Len,
+            M::MapIsEmpty => DictOp::IsEmpty,
+            M::MapGet => DictOp::Get,
+            M::MapSet => DictOp::Set,
+            M::MapRemove => DictOp::Remove,
+            M::MapContainsKey => DictOp::ContainsKey,
+            M::MapKeys => DictOp::Keys,
+            M::MapValues => DictOp::Values,
+            M::MapItems => DictOp::Items,
+            M::MapClear => DictOp::Clear,
+            M::MapExtend => DictOp::Update,
+            M::MapReserve => DictOp::Reserve,
+            _ => return None,
+        })
+    }
+
+    /// The MIR spelling of an op that has no public member of its name.
+    /// `contains_key` resolves from its private spelling, though its member
+    /// is named `contains`.
+    const fn private_name(self) -> Option<&'static str> {
+        Some(match self {
+            DictOp::ContainsKey => "contains_key",
+            DictOp::Index => INDEX_MEMBER,
+            DictOp::SetIndex => SET_INDEX_MEMBER,
+            _ => return None,
+        })
+    }
+
+    fn from_private_name(field: &str) -> Option<Self> {
+        Some(match field {
+            INDEX_MEMBER => DictOp::Index,
+            SET_INDEX_MEMBER => DictOp::SetIndex,
+            _ => return None,
+        })
+    }
+
+    const fn private_params(self) -> Option<&'static [CallableParam<'static>]> {
+        Some(match self {
+            DictOp::Index => KEY_INDEX_PARAMS,
+            DictOp::SetIndex => KEY_SET_INDEX_PARAMS,
+            _ => return None,
+        })
+    }
+
+    const fn unspecialized(self) -> Self {
+        match self {
+            DictOp::GetStr => DictOp::Get,
+            other => other,
+        }
+    }
+
+    /// The helper call. `GetStr` passes its literal key as a pointer and a
+    /// length.
+    const fn runtime_call(self) -> RuntimeCall {
+        match self {
+            DictOp::Len => helper(RuntimeFn::MapLen),
+            DictOp::IsEmpty => helper(RuntimeFn::MapIsEmpty),
+            DictOp::Get => helper(RuntimeFn::MapGet),
+            DictOp::GetStr => helper_with(RuntimeFn::MapGetStr, &[], 1),
+            DictOp::Set => helper(RuntimeFn::MapSetInPlace),
+            DictOp::Remove => helper(RuntimeFn::MapRemoveInPlace),
+            DictOp::ContainsKey => helper(RuntimeFn::MapContainsKey),
+            DictOp::Keys => helper(RuntimeFn::MapKeys),
+            DictOp::Values => helper(RuntimeFn::MapValues),
+            DictOp::Items => helper(RuntimeFn::MapItems),
+            DictOp::Clear => helper(RuntimeFn::MapClearInPlace),
+            DictOp::Update => helper(RuntimeFn::MapExtendInPlace),
+            DictOp::Reserve => {
+                helper_with(RuntimeFn::CollectionOperation, COLLECTION_RESERVE_WORDS, 1)
+            }
+            DictOp::Index => helper(RuntimeFn::MapIndex),
+            DictOp::SetIndex => helper(RuntimeFn::MapSetIndexInPlace),
+        }
+    }
+
+    /// The result type on a dict of type `receiver`.
+    fn result_type(self, receiver: Option<&Type>) -> Option<Type> {
+        let arg = |index: usize| match receiver {
+            Some(Type::Named(_, args)) => args.get(index).cloned(),
+            _ => None,
+        };
+        let key = || arg(0).unwrap_or_else(|| Type::named("Unknown"));
+        let value = || arg(1).unwrap_or_else(|| Type::named("Unknown"));
+        let list = |element: Type| Type::Named("list".to_string(), vec![element]);
+        Some(match self {
+            DictOp::Len => Type::named("int64"),
+            DictOp::IsEmpty | DictOp::ContainsKey => Type::named("bool"),
+            DictOp::Get | DictOp::GetStr | DictOp::Set | DictOp::Remove => lookup_type(value()),
+            DictOp::Keys => list(key()),
+            DictOp::Values => list(value()),
+            DictOp::Items => list(Type::Tuple(vec![key(), value()])),
+            DictOp::Clear | DictOp::Update | DictOp::Reserve | DictOp::SetIndex => Type::Unit,
+            DictOp::Index => return arg(1),
+        })
+    }
+}
+
+/// A method of `set[T]`, including the private `contains` that `in` lowers
+/// to and the private iteration reads. `ContainsInt64` is the
+/// specialization lowering picks for a set of `int64`, which the runtime
+/// searches without boxing the needle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum SetOp {
+    Len,
+    IsEmpty,
+    Contains,
+    ContainsInt64,
+    Add,
+    Remove,
+    Discard,
+    Clear,
+    Reserve,
+    /// `__index_option(index)`: a borrowed iteration read.
+    IndexOption,
+    /// `__take_index_option(index)`: a consuming iteration read.
+    TakeIndexOption,
+}
+
+impl SetOp {
+    pub const ALL: &'static [SetOp] = &[
+        SetOp::Len,
+        SetOp::IsEmpty,
+        SetOp::Contains,
+        SetOp::ContainsInt64,
+        SetOp::Add,
+        SetOp::Remove,
+        SetOp::Discard,
+        SetOp::Clear,
+        SetOp::Reserve,
+        SetOp::IndexOption,
+        SetOp::TakeIndexOption,
+    ];
+
+    const fn builtin_member(self) -> Option<BuiltinMember> {
+        use BuiltinMember as M;
+        Some(match self {
+            SetOp::Len => M::SetLen,
+            SetOp::IsEmpty => M::SetIsEmpty,
+            SetOp::Contains | SetOp::ContainsInt64 => M::SetContains,
+            SetOp::Add => M::SetInsert,
+            SetOp::Remove => M::SetRemove,
+            SetOp::Discard => M::SetDiscard,
+            SetOp::Clear => M::SetClear,
+            SetOp::Reserve => M::SetReserve,
+            SetOp::IndexOption | SetOp::TakeIndexOption => return None,
+        })
+    }
+
+    const fn from_builtin_member(member: BuiltinMember) -> Option<Self> {
+        use BuiltinMember as M;
+        Some(match member {
+            M::SetLen => SetOp::Len,
+            M::SetIsEmpty => SetOp::IsEmpty,
+            M::SetContains => SetOp::Contains,
+            M::SetInsert => SetOp::Add,
+            M::SetRemove => SetOp::Remove,
+            M::SetDiscard => SetOp::Discard,
+            M::SetClear => SetOp::Clear,
+            M::SetReserve => SetOp::Reserve,
+            _ => return None,
+        })
+    }
+
+    const fn private_name(self) -> Option<&'static str> {
+        Some(match self {
+            SetOp::IndexOption => INDEX_OPTION_MEMBER,
+            SetOp::TakeIndexOption => TAKE_INDEX_OPTION_MEMBER,
+            _ => return None,
+        })
+    }
+
+    fn from_private_name(field: &str) -> Option<Self> {
+        Some(match field {
+            INDEX_OPTION_MEMBER => SetOp::IndexOption,
+            TAKE_INDEX_OPTION_MEMBER => SetOp::TakeIndexOption,
+            _ => return None,
+        })
+    }
+
+    const fn private_params(self) -> Option<&'static [CallableParam<'static>]> {
+        match self {
+            SetOp::IndexOption | SetOp::TakeIndexOption => Some(INDEX_OPTION_PARAMS),
+            _ => None,
+        }
+    }
+
+    const fn unspecialized(self) -> Self {
+        match self {
+            SetOp::ContainsInt64 => SetOp::Contains,
+            other => other,
+        }
+    }
+
+    const fn runtime_call(self) -> RuntimeCall {
+        match self {
+            SetOp::Len => helper(RuntimeFn::SetLen),
+            SetOp::IsEmpty => helper(RuntimeFn::SetIsEmpty),
+            SetOp::Contains => helper(RuntimeFn::SetContains),
+            SetOp::ContainsInt64 => helper(RuntimeFn::SetContainsInt64),
+            SetOp::Add => helper(RuntimeFn::SetInsertInPlace),
+            SetOp::Remove => helper_with(
+                RuntimeFn::CollectionOperation,
+                COLLECTION_SET_REMOVE_WORDS,
+                1,
+            ),
+            SetOp::Discard => helper_with(
+                RuntimeFn::CollectionOperation,
+                COLLECTION_SET_DISCARD_WORDS,
+                1,
+            ),
+            // A clear passes neither a value nor an index.
+            SetOp::Clear => helper_with(
+                RuntimeFn::CollectionOperation,
+                COLLECTION_SET_CLEAR_WORDS,
+                2,
+            ),
+            SetOp::Reserve => {
+                helper_with(RuntimeFn::CollectionOperation, COLLECTION_RESERVE_WORDS, 1)
+            }
+            SetOp::IndexOption => helper(RuntimeFn::SetIndexOption),
+            SetOp::TakeIndexOption => helper(RuntimeFn::SetTakeIndexInPlace),
+        }
+    }
+
+    /// The result type on a set of element type `element`.
+    fn result_type(self, element: Option<Type>) -> Type {
+        match self {
+            SetOp::Len => Type::named("int64"),
+            SetOp::IsEmpty | SetOp::Contains | SetOp::ContainsInt64 => Type::named("bool"),
+            SetOp::Add | SetOp::Remove | SetOp::Discard | SetOp::Clear | SetOp::Reserve => {
+                Type::Unit
+            }
+            SetOp::IndexOption | SetOp::TakeIndexOption => {
+                lookup_type(element.unwrap_or_else(|| Type::named("Unknown")))
+            }
+        }
+    }
+}
+
+/// A method of `Array[T]`, including the private element read and write
+/// and the slice that indexing lowers to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum ArrayOp {
+    Shape,
+    Len,
+    Clone,
+    Get,
+    Set,
+    Fill,
+    Map,
+    Sum,
+    Min,
+    Max,
+    Mean,
+    WrappingAdd,
+    WrappingSub,
+    WrappingMul,
+    SaturatingAdd,
+    SaturatingSub,
+    SaturatingMul,
+    /// `__index(index, line, column)`.
+    Index,
+    /// `__set_index(index, value, line, column)`.
+    SetIndex,
+    /// `__slice(start, has_start, end, has_end, line, column)`.
+    Slice,
+}
+
+impl ArrayOp {
+    pub const ALL: &'static [ArrayOp] = &[
+        ArrayOp::Shape,
+        ArrayOp::Len,
+        ArrayOp::Clone,
+        ArrayOp::Get,
+        ArrayOp::Set,
+        ArrayOp::Fill,
+        ArrayOp::Map,
+        ArrayOp::Sum,
+        ArrayOp::Min,
+        ArrayOp::Max,
+        ArrayOp::Mean,
+        ArrayOp::WrappingAdd,
+        ArrayOp::WrappingSub,
+        ArrayOp::WrappingMul,
+        ArrayOp::SaturatingAdd,
+        ArrayOp::SaturatingSub,
+        ArrayOp::SaturatingMul,
+        ArrayOp::Index,
+        ArrayOp::SetIndex,
+        ArrayOp::Slice,
+    ];
+
+    const fn builtin_member(self) -> Option<BuiltinMember> {
+        use BuiltinMember as M;
+        Some(match self {
+            ArrayOp::Shape => M::ArrayShape,
+            ArrayOp::Len => M::ArrayLen,
+            ArrayOp::Clone => M::ArrayClone,
+            ArrayOp::Get => M::ArrayGet,
+            ArrayOp::Set => M::ArraySet,
+            ArrayOp::Fill => M::ArrayFill,
+            ArrayOp::Map => M::ArrayMap,
+            ArrayOp::Sum => M::ArraySum,
+            ArrayOp::Min => M::ArrayMin,
+            ArrayOp::Max => M::ArrayMax,
+            ArrayOp::Mean => M::ArrayMean,
+            ArrayOp::WrappingAdd => M::ArrayWrappingAdd,
+            ArrayOp::WrappingSub => M::ArrayWrappingSub,
+            ArrayOp::WrappingMul => M::ArrayWrappingMul,
+            ArrayOp::SaturatingAdd => M::ArraySaturatingAdd,
+            ArrayOp::SaturatingSub => M::ArraySaturatingSub,
+            ArrayOp::SaturatingMul => M::ArraySaturatingMul,
+            ArrayOp::Index | ArrayOp::SetIndex | ArrayOp::Slice => return None,
+        })
+    }
+
+    const fn from_builtin_member(member: BuiltinMember) -> Option<Self> {
+        use BuiltinMember as M;
+        Some(match member {
+            M::ArrayShape => ArrayOp::Shape,
+            M::ArrayLen => ArrayOp::Len,
+            M::ArrayClone => ArrayOp::Clone,
+            M::ArrayGet => ArrayOp::Get,
+            M::ArraySet => ArrayOp::Set,
+            M::ArrayFill => ArrayOp::Fill,
+            M::ArrayMap => ArrayOp::Map,
+            M::ArraySum => ArrayOp::Sum,
+            M::ArrayMin => ArrayOp::Min,
+            M::ArrayMax => ArrayOp::Max,
+            M::ArrayMean => ArrayOp::Mean,
+            M::ArrayWrappingAdd => ArrayOp::WrappingAdd,
+            M::ArrayWrappingSub => ArrayOp::WrappingSub,
+            M::ArrayWrappingMul => ArrayOp::WrappingMul,
+            M::ArraySaturatingAdd => ArrayOp::SaturatingAdd,
+            M::ArraySaturatingSub => ArrayOp::SaturatingSub,
+            M::ArraySaturatingMul => ArrayOp::SaturatingMul,
+            _ => return None,
+        })
+    }
+
+    const fn private_name(self) -> Option<&'static str> {
+        Some(match self {
+            ArrayOp::Index => INDEX_MEMBER,
+            ArrayOp::SetIndex => SET_INDEX_MEMBER,
+            ArrayOp::Slice => SLICE_MEMBER,
+            _ => return None,
+        })
+    }
+
+    fn from_private_name(field: &str) -> Option<Self> {
+        Some(match field {
+            INDEX_MEMBER => ArrayOp::Index,
+            SET_INDEX_MEMBER => ArrayOp::SetIndex,
+            SLICE_MEMBER => ArrayOp::Slice,
+            _ => return None,
+        })
+    }
+
+    const fn private_params(self) -> Option<&'static [CallableParam<'static>]> {
+        Some(match self {
+            ArrayOp::Index => INDEX_PARAMS,
+            ArrayOp::SetIndex => SET_INDEX_PARAMS,
+            ArrayOp::Slice => SLICE_PARAMS,
+            _ => return None,
+        })
+    }
+
+    /// The helper call. A public member passes a zero source line and
+    /// column, and `map` passes its result dtype code after its callback.
+    /// A reduction passes its kind word, 0 sum, 1 min, 2 max, 3 mean. An
+    /// arithmetic method passes a zero scalar-left word, its operation word,
+    /// 0 add, 1 sub, 2 mul, and its mode word, 1 wrapping, 2 saturating.
+    const fn runtime_call(self) -> RuntimeCall {
+        match self {
+            ArrayOp::Shape => helper(RuntimeFn::ArrayShape),
+            ArrayOp::Len => helper(RuntimeFn::ArrayLen),
+            ArrayOp::Clone => spanned(RuntimeFn::ArrayClone, &[]),
+            ArrayOp::Get => spanned(RuntimeFn::ArrayGet, &[]),
+            ArrayOp::Set => spanned(RuntimeFn::ArraySetInPlace, &[]),
+            ArrayOp::Fill => spanned(RuntimeFn::ArrayFillInPlace, &[]),
+            ArrayOp::Map => RuntimeCall {
+                function: RuntimeFn::ArrayMap,
+                immediates: &[],
+                span: true,
+                layout_words: 1,
+            },
+            ArrayOp::Sum => spanned(RuntimeFn::ArrayReduce, &[0]),
+            ArrayOp::Min => spanned(RuntimeFn::ArrayReduce, &[1]),
+            ArrayOp::Max => spanned(RuntimeFn::ArrayReduce, &[2]),
+            ArrayOp::Mean => spanned(RuntimeFn::ArrayReduce, &[3]),
+            ArrayOp::WrappingAdd => spanned(RuntimeFn::ArrayBinary, &[0, 0, 1]),
+            ArrayOp::WrappingSub => spanned(RuntimeFn::ArrayBinary, &[0, 1, 1]),
+            ArrayOp::WrappingMul => spanned(RuntimeFn::ArrayBinary, &[0, 2, 1]),
+            ArrayOp::SaturatingAdd => spanned(RuntimeFn::ArrayBinary, &[0, 0, 2]),
+            ArrayOp::SaturatingSub => spanned(RuntimeFn::ArrayBinary, &[0, 1, 2]),
+            ArrayOp::SaturatingMul => spanned(RuntimeFn::ArrayBinary, &[0, 2, 2]),
+            ArrayOp::Index => helper(RuntimeFn::ArrayIndex),
+            ArrayOp::SetIndex => helper(RuntimeFn::ArraySetIndexInPlace),
+            ArrayOp::Slice => helper(RuntimeFn::ArraySlice),
+        }
+    }
+
+    /// The result type on an `Array` of type `receiver`. `map` names its
+    /// callback's result dtype, so its type comes from its argument.
+    fn result_type(self, receiver: Option<&Type>, args: &[Option<Type>]) -> Option<Type> {
+        let dtype = first_type_arg(receiver);
+        let array = |dtype: Vec<Type>| Type::Named("Array".to_string(), dtype);
+        Some(match self {
+            ArrayOp::Shape => Type::Named("list".to_string(), vec![Type::named("int64")]),
+            ArrayOp::Len => Type::named("int64"),
+            ArrayOp::Clone
+            | ArrayOp::WrappingAdd
+            | ArrayOp::WrappingSub
+            | ArrayOp::WrappingMul
+            | ArrayOp::SaturatingAdd
+            | ArrayOp::SaturatingSub
+            | ArrayOp::SaturatingMul
+            | ArrayOp::Slice => receiver?.clone(),
+            ArrayOp::Get | ArrayOp::Set => {
+                optional_type(dtype.unwrap_or_else(|| Type::named("Unknown")))
+            }
+            ArrayOp::Fill | ArrayOp::SetIndex => Type::Unit,
+            ArrayOp::Sum | ArrayOp::Min | ArrayOp::Max | ArrayOp::Index => return dtype,
+            ArrayOp::Mean => Type::named("float64"),
+            ArrayOp::Map => match args.first() {
+                Some(Some(
+                    Type::Function { return_type, .. } | Type::Closure { return_type, .. },
+                )) => array(vec![(**return_type).clone()]),
+                _ => return None,
+            },
+        })
+    }
+}
+
+/// A private range operation of a `Span[T]` view, which runs on the span's
+/// base list with absolute positions (see `mir_spans`). Each op is named
+/// after its MIR spelling, and its opcode is its index in
+/// `runtime_value::SPAN_OPERATIONS`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum SpanOp {
+    Start,
+    Stop,
+    Index,
+    Contains,
+    Find,
+    Count,
+    Eq,
+    Extract,
+    Restore,
+    Fill,
+}
+
+/// The helper's operand words after the receiver and opcode: up to eight
+/// `int64` operands and one value word.
+const SPAN_OPERAND_WORDS: usize = 9;
+
+const SPAN_BOUNDS_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("outer_start"),
+    CallableParam::required("outer_len"),
+    CallableParam::required("start"),
+    CallableParam::required("has_start"),
+    CallableParam::required("end"),
+    CallableParam::required("has_end"),
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
+const SPAN_INDEX_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("start"),
+    CallableParam::required("len"),
+    CallableParam::required("index"),
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
+const SPAN_VALUE_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("start"),
+    CallableParam::required("len"),
+    CallableParam::required("value"),
+];
+const SPAN_EQ_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("start"),
+    CallableParam::required("len"),
+    CallableParam::required("other"),
+    CallableParam::required("other_start"),
+    CallableParam::required("other_len"),
+];
+const SPAN_EXTRACT_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("start"),
+    CallableParam::required("len"),
+];
+const SPAN_RESTORE_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("start"),
+    CallableParam::required("values"),
+];
+
+impl SpanOp {
+    pub const ALL: &'static [SpanOp] = &[
+        SpanOp::Start,
+        SpanOp::Stop,
+        SpanOp::Index,
+        SpanOp::Contains,
+        SpanOp::Find,
+        SpanOp::Count,
+        SpanOp::Eq,
+        SpanOp::Extract,
+        SpanOp::Restore,
+        SpanOp::Fill,
+    ];
+
+    /// The op's opcode word, its index in `SPAN_OPERATIONS`.
+    const fn opcode_words(self) -> &'static [i64] {
+        match self {
+            SpanOp::Start => &[0],
+            SpanOp::Stop => &[1],
+            SpanOp::Index => &[2],
+            SpanOp::Contains => &[3],
+            SpanOp::Find => &[4],
+            SpanOp::Count => &[5],
+            SpanOp::Eq => &[6],
+            SpanOp::Extract => &[7],
+            SpanOp::Restore => &[8],
+            SpanOp::Fill => &[9],
+        }
+    }
+
+    /// The MIR spelling, such as `__span_start`.
+    pub const fn name(self) -> &'static str {
+        crate::runtime_value::SPAN_OPERATIONS[self.opcode_words()[0] as usize]
+    }
+
+    fn from_private_name(field: &str) -> Option<Self> {
+        for op in SpanOp::ALL {
+            if op.name() == field {
+                return Some(*op);
+            }
+        }
+        None
+    }
+
+    pub(crate) const fn params(self) -> &'static [CallableParam<'static>] {
+        match self {
+            SpanOp::Start | SpanOp::Stop => SPAN_BOUNDS_PARAMS,
+            SpanOp::Index => SPAN_INDEX_PARAMS,
+            SpanOp::Contains | SpanOp::Find | SpanOp::Count | SpanOp::Fill => SPAN_VALUE_PARAMS,
+            SpanOp::Eq => SPAN_EQ_PARAMS,
+            SpanOp::Extract => SPAN_EXTRACT_PARAMS,
+            SpanOp::Restore => SPAN_RESTORE_PARAMS,
+        }
+    }
+
+    /// The position of the argument that passes as the value word: the
+    /// element a search or fill compares or writes, the other list of an
+    /// equality, or the values a restore puts back. Every other argument is
+    /// an `int64` operand.
+    pub(crate) const fn value_position(self) -> Option<usize> {
+        match self {
+            SpanOp::Contains | SpanOp::Find | SpanOp::Count | SpanOp::Eq | SpanOp::Fill => Some(2),
+            SpanOp::Restore => Some(1),
+            SpanOp::Start | SpanOp::Stop | SpanOp::Index | SpanOp::Extract => None,
+        }
+    }
+
+    /// Whether the op writes the base list.
+    pub const fn mutates_receiver(self) -> bool {
+        matches!(self, SpanOp::Extract | SpanOp::Restore | SpanOp::Fill)
+    }
+
+    /// The helper takes the receiver and the opcode, then the `int64`
+    /// operands padded with zero words to eight, then the value word or a
+    /// zero.
+    const fn runtime_call(self) -> RuntimeCall {
+        helper_with(
+            RuntimeFn::VecSpan,
+            self.opcode_words(),
+            SPAN_OPERAND_WORDS - self.params().len(),
+        )
+    }
+
+    fn result_type(self, receiver: Option<&Type>) -> Option<Type> {
+        Some(match self {
+            SpanOp::Start | SpanOp::Stop | SpanOp::Index | SpanOp::Find | SpanOp::Count => {
+                Type::named("int64")
+            }
+            SpanOp::Contains | SpanOp::Eq => Type::named("bool"),
+            SpanOp::Extract => receiver?.clone(),
+            SpanOp::Restore | SpanOp::Fill => Type::Unit,
+        })
+    }
 }
 
 /// The first type argument of a receiver type, such as `T` of `Queue[T]`.
@@ -1222,6 +2280,11 @@ impl RuntimeOp {
             .chain(QueueOp::ALL.iter().copied().map(RuntimeOp::Queue))
             .chain(TaskOp::ALL.iter().copied().map(RuntimeOp::Task))
             .chain(TaskGroupOp::ALL.iter().copied().map(RuntimeOp::TaskGroup))
+            .chain(ListOp::ALL.iter().copied().map(RuntimeOp::List))
+            .chain(DictOp::ALL.iter().copied().map(RuntimeOp::Dict))
+            .chain(SetOp::ALL.iter().copied().map(RuntimeOp::Set))
+            .chain(ArrayOp::ALL.iter().copied().map(RuntimeOp::Array))
+            .chain(SpanOp::ALL.iter().copied().map(RuntimeOp::Span))
             .chain(FunctionOp::ALL.iter().copied().map(RuntimeOp::Function))
             .chain(PrintKind::ALL.iter().copied().map(RuntimeOp::Print))
             .chain(HostBuiltin::all().map(RuntimeOp::Host))
@@ -1230,18 +2293,39 @@ impl RuntimeOp {
     /// The op a call `receiver.field` resolves to, under the member
     /// precedence of `builtin_member_for_receiver`. `class_declares` says
     /// whether the class named by the receiver type declares `field`. A
-    /// private queue receive resolves by its MIR spelling. The op is
-    /// unspecialized; lowering picks a timeout form from the arguments.
+    /// private member, such as a queue receive or `__index`, resolves by its
+    /// MIR spelling on the receiver types that lower to it. The op is
+    /// unspecialized; lowering picks a timeout or scalar form from the
+    /// receiver and the arguments.
     pub(crate) fn resolve_member(
         receiver: &Type,
         field: &str,
         class_declares: impl FnOnce(&str) -> bool,
     ) -> Option<Self> {
-        if let (Type::Named(name, _), Some(op)) = (receiver, QueueOp::from_private_name(field)) {
-            return (name == "Queue" && !class_declares(name)).then_some(RuntimeOp::Queue(op));
+        if let Type::Named(name, _) = receiver {
+            if field.starts_with("__") {
+                let op = Self::from_private_member(name, field)?;
+                return (!class_declares(name)).then_some(op);
+            }
         }
         builtin_member_for_receiver(receiver, field, class_declares)
             .and_then(Self::from_builtin_member)
+    }
+
+    /// The private op a receiver of type `receiver` spells `field`.
+    fn from_private_member(receiver: &str, field: &str) -> Option<Self> {
+        match receiver {
+            "Queue" => QueueOp::from_private_name(field).map(RuntimeOp::Queue),
+            "str" => StrOp::from_private_name(field).map(RuntimeOp::Str),
+            "list" => match ListOp::from_private_name(field) {
+                Some(op) => Some(RuntimeOp::List(op)),
+                None => SpanOp::from_private_name(field).map(RuntimeOp::Span),
+            },
+            "dict" => DictOp::from_private_name(field).map(RuntimeOp::Dict),
+            "set" => SetOp::from_private_name(field).map(RuntimeOp::Set),
+            "Array" => ArrayOp::from_private_name(field).map(RuntimeOp::Array),
+            _ => None,
+        }
     }
 
     /// The op a resolved built-in member is, when its family is resolved.
@@ -1252,6 +2336,18 @@ impl RuntimeOp {
         }
         if let Some(op) = StrOp::from_builtin_member(member) {
             return Some(RuntimeOp::Str(op));
+        }
+        if let Some(op) = ListOp::from_builtin_member(member) {
+            return Some(RuntimeOp::List(op));
+        }
+        if let Some(op) = DictOp::from_builtin_member(member) {
+            return Some(RuntimeOp::Dict(op));
+        }
+        if let Some(op) = SetOp::from_builtin_member(member) {
+            return Some(RuntimeOp::Set(op));
+        }
+        if let Some(op) = ArrayOp::from_builtin_member(member) {
+            return Some(RuntimeOp::Array(op));
         }
         Some(match member {
             M::RngNextInt => RuntimeOp::Rng(RngOp::NextInt),
@@ -1290,8 +2386,8 @@ impl RuntimeOp {
 
     /// The built-in member whose call shape and receiver passing this op
     /// has, for an op with a receiver. `copy()` has the same shape on every
-    /// collection, so it reports the `list` member, and a timeout form
-    /// reports its base member. A private queue receive has none.
+    /// collection, so it reports the `list` member, and a timeout or scalar
+    /// form reports its base member. A private op has none.
     pub fn builtin_member(self) -> Option<BuiltinMember> {
         use BuiltinMember as M;
         Some(match self {
@@ -1316,7 +2412,12 @@ impl RuntimeOp {
             RuntimeOp::Value(ValueOp::ToString) => M::ScalarToString,
             RuntimeOp::Value(ValueOp::Clone) => M::StringClone,
             RuntimeOp::Value(ValueOp::Copy) => M::VecClone,
-            RuntimeOp::Str(op) => op.builtin_member(),
+            RuntimeOp::Str(op) => return op.builtin_member(),
+            RuntimeOp::List(op) => return op.builtin_member(),
+            RuntimeOp::Dict(op) => return op.builtin_member(),
+            RuntimeOp::Set(op) => return op.builtin_member(),
+            RuntimeOp::Array(op) => return op.builtin_member(),
+            RuntimeOp::Span(_) => return None,
             RuntimeOp::Queue(op) => return op.builtin_member(),
             RuntimeOp::Task(op) => op.builtin_member(),
             RuntimeOp::TaskGroup(TaskGroupOp::Cancel) => M::TaskGroupCancel,
@@ -1325,21 +2426,53 @@ impl RuntimeOp {
     }
 
     /// The source name: a member name such as `read_all` for an op with a
-    /// receiver, or the callee name a MIR `Name` call spells, such as
-    /// `print` or `fs::exists`.
+    /// receiver, the private member a MIR call spells, such as `__index`, or
+    /// the callee name a MIR `Name` call spells, such as `print` or
+    /// `fs::exists`.
     pub fn name(self) -> &'static str {
+        if let Some(name) = self.private_name() {
+            return name;
+        }
         match self {
             RuntimeOp::Function(op) => op.name(),
             RuntimeOp::Print(_) => "print",
             RuntimeOp::Host(builtin) => builtin.name(),
-            RuntimeOp::Queue(QueueOp::GetInTaskGroup) => QueueOp::GET_IN_TASK_GROUP,
-            RuntimeOp::Queue(QueueOp::GetWithRegisteredProducers) => {
-                QueueOp::GET_WITH_REGISTERED_PRODUCERS
-            }
             _ => self
                 .builtin_member()
                 .expect("an op with a receiver has a built-in member")
                 .name(),
+        }
+    }
+
+    /// The MIR spelling of a private member op, or of an op whose member is
+    /// named otherwise, such as `contains_key`.
+    const fn private_name(self) -> Option<&'static str> {
+        match self {
+            RuntimeOp::Queue(QueueOp::GetInTaskGroup) => Some(QueueOp::GET_IN_TASK_GROUP),
+            RuntimeOp::Queue(QueueOp::GetWithRegisteredProducers) => {
+                Some(QueueOp::GET_WITH_REGISTERED_PRODUCERS)
+            }
+            RuntimeOp::Str(op) => op.private_name(),
+            RuntimeOp::List(op) => op.private_name(),
+            RuntimeOp::Dict(op) => op.private_name(),
+            RuntimeOp::Set(op) => op.private_name(),
+            RuntimeOp::Array(op) => op.private_name(),
+            RuntimeOp::Span(op) => Some(op.name()),
+            _ => None,
+        }
+    }
+
+    /// The parameters of a private member op, which has no source member
+    /// to name them.
+    const fn private_params(self) -> Option<&'static [CallableParam<'static>]> {
+        match self {
+            RuntimeOp::Str(StrOp::Slice) => Some(SLICE_PARAMS),
+            RuntimeOp::List(op) => op.private_params(),
+            RuntimeOp::Dict(op) => op.private_params(),
+            RuntimeOp::Set(op) => op.private_params(),
+            RuntimeOp::Array(op) => op.private_params(),
+            RuntimeOp::Span(op) => Some(op.params()),
+            _ => None,
         }
     }
 
@@ -1353,7 +2486,12 @@ impl RuntimeOp {
             | RuntimeOp::Str(_)
             | RuntimeOp::Queue(_)
             | RuntimeOp::Task(_)
-            | RuntimeOp::TaskGroup(_) => true,
+            | RuntimeOp::TaskGroup(_)
+            | RuntimeOp::List(_)
+            | RuntimeOp::Dict(_)
+            | RuntimeOp::Set(_)
+            | RuntimeOp::Array(_)
+            | RuntimeOp::Span(_) => true,
             RuntimeOp::Function(_) | RuntimeOp::Print(_) | RuntimeOp::Host(_) => false,
         }
     }
@@ -1367,6 +2505,9 @@ impl RuntimeOp {
             RuntimeOp::Print(_) => RuntimeOp::Print(PrintKind::Value),
             RuntimeOp::Queue(op) => RuntimeOp::Queue(op.unspecialized()),
             RuntimeOp::Task(op) => RuntimeOp::Task(op.unspecialized()),
+            RuntimeOp::List(op) => RuntimeOp::List(op.unspecialized()),
+            RuntimeOp::Dict(op) => RuntimeOp::Dict(op.unspecialized()),
+            RuntimeOp::Set(op) => RuntimeOp::Set(op.unspecialized()),
             other => other,
         }
     }
@@ -1392,6 +2533,10 @@ impl RuntimeOp {
             RuntimeOp::Host(builtin) => metadata_params(builtin.metadata()),
             RuntimeOp::Queue(QueueOp::GetInTaskGroup) => vec![CallableParam::required("group")],
             RuntimeOp::Queue(QueueOp::GetWithRegisteredProducers) => Vec::new(),
+            _ if self.private_params().is_some() => self
+                .private_params()
+                .expect("a private op names its parameters")
+                .to_vec(),
             _ => {
                 let params = self
                     .builtin_member()
@@ -1479,6 +2624,11 @@ impl RuntimeOp {
             RuntimeOp::Queue(op) => call(op.runtime_fn(), &[]),
             RuntimeOp::Task(op) => call(op.runtime_fn(), &[]),
             RuntimeOp::TaskGroup(TaskGroupOp::Cancel) => call(RuntimeFn::TaskGroupCancel, &[]),
+            RuntimeOp::List(op) => RuntimeTarget::Helper(op.runtime_call()),
+            RuntimeOp::Dict(op) => RuntimeTarget::Helper(op.runtime_call()),
+            RuntimeOp::Set(op) => RuntimeTarget::Helper(op.runtime_call()),
+            RuntimeOp::Array(op) => RuntimeTarget::Helper(op.runtime_call()),
+            RuntimeOp::Span(op) => RuntimeTarget::Helper(op.runtime_call()),
             RuntimeOp::Function(op) => RuntimeTarget::Helper(op.runtime_call()),
             RuntimeOp::Print(kind) => call(kind.runtime_fn(), &[]),
             RuntimeOp::Host(builtin) => RuntimeTarget::Host(builtin.symbol()),
@@ -1521,6 +2671,11 @@ impl RuntimeOp {
             RuntimeOp::Queue(op) => return op.result_type(first_type_arg(receiver)),
             RuntimeOp::Task(op) => return op.result_type(first_type_arg(receiver)),
             RuntimeOp::TaskGroup(TaskGroupOp::Cancel) => Type::Unit,
+            RuntimeOp::List(op) => return op.result_type(receiver),
+            RuntimeOp::Dict(op) => return op.result_type(receiver),
+            RuntimeOp::Set(op) => op.result_type(first_type_arg(receiver)),
+            RuntimeOp::Array(op) => return op.result_type(receiver, args),
+            RuntimeOp::Span(op) => return op.result_type(receiver),
             RuntimeOp::Function(op) => return op.result_type(args),
             RuntimeOp::Print(_) => Type::Unit,
             RuntimeOp::Host(builtin) => builtin.metadata().return_type.clone(),
@@ -1539,6 +2694,11 @@ impl std::fmt::Display for RuntimeOp {
             RuntimeOp::Queue(op) => write!(formatter, "Queue.{op:?}"),
             RuntimeOp::Task(op) => write!(formatter, "Task.{op:?}"),
             RuntimeOp::TaskGroup(op) => write!(formatter, "TaskGroup.{op:?}"),
+            RuntimeOp::List(op) => write!(formatter, "List.{op:?}"),
+            RuntimeOp::Dict(op) => write!(formatter, "Dict.{op:?}"),
+            RuntimeOp::Set(op) => write!(formatter, "Set.{op:?}"),
+            RuntimeOp::Array(op) => write!(formatter, "Array.{op:?}"),
+            RuntimeOp::Span(op) => write!(formatter, "Span.{op:?}"),
             RuntimeOp::Function(op) => write!(formatter, "Function.{op:?}"),
             RuntimeOp::Print(kind) => write!(formatter, "Print.{kind:?}"),
             RuntimeOp::Host(builtin) => write!(formatter, "Host.{}", builtin.name()),

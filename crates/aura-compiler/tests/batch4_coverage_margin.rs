@@ -2,6 +2,7 @@
 //! validation paths that earlier suites did not pin. Forged-MIR cases assert
 //! that the interpreter and the direct backend reject the same module.
 
+use aura_compiler::runtime_ops::RuntimeOp;
 use aura_compiler::{
     check_source, emit_host_native_object, lower_source_to_mir, run_mir, run_source, MirModule,
 };
@@ -25,12 +26,23 @@ fn main_instructions(encoded: &mut Value) -> impl Iterator<Item = &mut Value> {
         .filter(|instruction| instruction.is_object())
 }
 
+/// The `Member` or `Runtime` payload of the first member call to `field`
+/// in `main`; a resolved runtime operation names the member it was
+/// resolved from.
 fn member_callee_mut<'a>(encoded: &'a mut Value, field: &str) -> &'a mut Value {
     main_instructions(encoded)
-        .find(|instruction| {
-            instruction["Assign"]["value"]["Call"]["callee"]["Member"]["field"] == field
+        .find_map(|instruction| {
+            let callee = instruction.pointer_mut("/Assign/value/Call/callee")?;
+            if callee
+                .get("Member")
+                .is_some_and(|member| member["field"] == field)
+            {
+                return Some(&mut callee["Member"]);
+            }
+            let op: RuntimeOp =
+                serde_json::from_value(callee.get("Runtime")?["op"].clone()).ok()?;
+            (op.name() == field).then(|| &mut callee["Runtime"])
         })
-        .map(|instruction| &mut instruction["Assign"]["value"]["Call"]["callee"]["Member"])
         .unwrap_or_else(|| panic!("member call `{field}` not found"))
 }
 

@@ -46,7 +46,8 @@ fn fill_call(instructions: &[Value]) -> usize {
     instructions
         .iter()
         .position(|instruction| {
-            instruction["Assign"]["value"]["Call"]["callee"]["Member"]["field"] == "__span_fill"
+            instruction["Assign"]["value"]["Call"]["callee"]["Runtime"]["op"]
+                == serde_json::json!({ "Span": "Fill" })
         })
         .expect("lowered MIR fills through the span")
 }
@@ -114,13 +115,31 @@ fn forged_fill_message(edit: impl FnOnce(&mut Value)) -> String {
 
 #[test]
 fn forged_span_calls_are_refused_by_the_interpreter() {
-    let set_field = |field: &str| {
-        let field = field.to_string();
-        move |call: &mut Value| call["callee"]["Member"]["field"] = Value::String(field)
+    // A span op the fill's arguments bind to: `restore` takes the start
+    // and an `int64` where its values belong, and `eq` takes the fill
+    // value where its other list belongs.
+    let set_op = |op: &str, arity: usize| {
+        let op = op.to_string();
+        move |call: &mut Value| {
+            call["callee"]["Runtime"]["op"] = serde_json::json!({ "Span": op });
+            let args = call["args"].as_array_mut().expect("span args are an array");
+            while args.len() < arity {
+                args.push(args[0].clone());
+            }
+            args.truncate(arity);
+        }
     };
     let cases: Vec<(Box<dyn FnOnce(&mut Value)>, &str)> = vec![
         (
-            Box::new(set_field("__span_bogus")),
+            // A private member no op names stays a member call.
+            Box::new(|call: &mut Value| {
+                let runtime = call["callee"]["Runtime"].clone();
+                call["callee"] = serde_json::json!({ "Member": {
+                    "object": runtime["receiver"],
+                    "field": "__span_bogus",
+                    "receiver_place": runtime["receiver_place"],
+                }});
+            }),
             "unknown internal span operation `__span_bogus`",
         ),
         (
@@ -130,11 +149,11 @@ fn forged_span_calls_are_refused_by_the_interpreter() {
             "internal span operation `__span_fill` expects an integer operand 0",
         ),
         (
-            Box::new(set_field("__span_restore")),
+            Box::new(set_op("Restore", 2)),
             "span restore expects a list operand",
         ),
         (
-            Box::new(set_field("__span_eq")),
+            Box::new(set_op("Eq", 5)),
             "span equality expects a list operand",
         ),
     ];

@@ -1,8 +1,9 @@
 use super::{
-    builtin_function_for_name, builtin_member_for_receiver, FunctionOp, HostBuiltin, PrintKind,
-    QueueOp, ResourceOp, RngOp, RuntimeOp, RuntimeTarget, ScalarOp, StrOp, TaskGroupOp, TaskOp,
-    ValueOp,
+    builtin_function_for_name, builtin_member_for_receiver, ArrayOp, DictOp, FunctionOp,
+    HostBuiltin, ListOp, PrintKind, QueueOp, ResourceOp, RngOp, RuntimeOp, RuntimeTarget,
+    ScalarElement, ScalarOp, SetOp, SpanOp, StrOp, TaskGroupOp, TaskOp, ValueOp,
 };
+use crate::mir::{specialized_member_op, MirArg, Operand};
 use crate::native_runtime::HOST_BUILTIN_SYMBOLS;
 use crate::runtime_abi::RuntimeFn;
 use crate::sema::{optional_type, Type};
@@ -35,9 +36,45 @@ fn sample_receiver(op: RuntimeOp) -> Type {
         RuntimeOp::Queue(_) => named("Queue", vec![Type::named("int64")]),
         RuntimeOp::Task(_) => named("Task", vec![Type::named("str")]),
         RuntimeOp::TaskGroup(_) => Type::named("TaskGroup"),
+        RuntimeOp::List(ListOp::PushScalar(kind) | ListOp::IndexScalar(kind)) => {
+            named("list", vec![scalar_element_type(kind)])
+        }
+        RuntimeOp::List(_) | RuntimeOp::Span(_) => named("list", vec![Type::named("str")]),
+        RuntimeOp::Dict(_) => named("dict", vec![Type::named("str"), Type::named("int64")]),
+        RuntimeOp::Set(SetOp::ContainsInt64) => named("set", vec![Type::named("int64")]),
+        RuntimeOp::Set(_) => named("set", vec![Type::named("str")]),
+        RuntimeOp::Array(_) => named("Array", vec![Type::named("float64")]),
         RuntimeOp::Function(_) | RuntimeOp::Print(_) | RuntimeOp::Host(_) => {
             unreachable!("{op} has no receiver")
         }
+    }
+}
+
+fn scalar_element_type(kind: ScalarElement) -> Type {
+    Type::named(match kind {
+        ScalarElement::Int64 => "int64",
+        ScalarElement::Float64 => "float64",
+        ScalarElement::Bool => "bool",
+    })
+}
+
+/// The argument types each op's result type reads: `Array.map` names its
+/// result dtype by its callback's result.
+fn sample_args(op: RuntimeOp) -> Vec<Option<Type>> {
+    match op {
+        RuntimeOp::Array(ArrayOp::Map) => vec![Some(Type::Function {
+            params: Vec::new(),
+            return_type: Box::new(Type::named("int64")),
+        })],
+        _ => Vec::new(),
+    }
+}
+
+fn positional(value: Operand) -> MirArg {
+    MirArg {
+        name: None,
+        value,
+        writeback_place: None,
     }
 }
 
@@ -57,9 +94,11 @@ fn every_runtime_op_resolves_from_its_receiver_and_has_a_result_type() {
             op.name()
         );
         assert!(
-            op.result_type(Some(&receiver), &[]).is_some(),
+            op.result_type(Some(&receiver), &sample_args(op)).is_some(),
             "{op} names a result type"
         );
+        // With no receiver type, an element falls back to `Unknown`.
+        let _ = op.result_type(None, &[]);
     }
 }
 
@@ -179,9 +218,46 @@ fn class_methods_and_unnamed_receivers_shadow_runtime_ops() {
     );
     assert_eq!(RuntimeOp::resolve_member(&file, "missing", |_| false), None);
     assert_eq!(
-        RuntimeOp::resolve_member(&named("list", vec![]), "len", |_| false),
+        RuntimeOp::resolve_member(&named("list", vec![]), "sort", |_| false),
         None,
-        "collection ops are not resolved yet"
+        "`sort` lowers to a loop"
+    );
+    // A private collection member resolves only on the receiver types that
+    // lower to it, under the same class precedence.
+    let list = named("list", vec![Type::named("int64")]);
+    assert_eq!(
+        RuntimeOp::resolve_member(&list, "__index", |_| false),
+        Some(RuntimeOp::List(ListOp::Index))
+    );
+    assert_eq!(RuntimeOp::resolve_member(&list, "__index", |_| true), None);
+    assert_eq!(
+        RuntimeOp::resolve_member(&list, "__span_fill", |_| false),
+        Some(RuntimeOp::Span(SpanOp::Fill))
+    );
+    assert_eq!(
+        RuntimeOp::resolve_member(&list, "__missing", |_| false),
+        None
+    );
+    assert_eq!(
+        RuntimeOp::resolve_member(&named("Array", vec![]), "__index_option", |_| false),
+        None,
+        "an `Array` has no iteration read"
+    );
+    assert_eq!(
+        RuntimeOp::resolve_member(&named("set", vec![]), "__span_start", |_| false),
+        None
+    );
+    assert_eq!(
+        RuntimeOp::resolve_member(&Type::named("Range"), "__index", |_| false),
+        None
+    );
+    assert_eq!(
+        RuntimeOp::resolve_member(&Type::named("str"), "__slice", |_| false),
+        Some(RuntimeOp::Str(StrOp::Slice))
+    );
+    assert_eq!(
+        RuntimeOp::resolve_member(&named("dict", vec![]), "contains_key", |_| false),
+        Some(RuntimeOp::Dict(DictOp::ContainsKey))
     );
     // A private queue receive resolves only on a `Queue`, under the same
     // class precedence.
@@ -339,7 +415,14 @@ fn queue_and_task_timeout_forms_take_a_required_timeout() {
         let base = op.unspecialized();
         assert_eq!(base.unspecialized(), base, "{op}");
         if op != base && !matches!(op, RuntimeOp::Print(_)) {
-            assert_eq!(base.with_timeout(), op, "{op} is its base's timeout form");
+            // A collection op specializes by its receiver's element type
+            // or a literal key, never by a timeout.
+            if !matches!(
+                op,
+                RuntimeOp::List(_) | RuntimeOp::Dict(_) | RuntimeOp::Set(_)
+            ) {
+                assert_eq!(base.with_timeout(), op, "{op} is its base's timeout form");
+            }
             assert_eq!(op.name(), base.name());
             assert_eq!(op.builtin_member(), base.builtin_member());
         }
@@ -380,7 +463,9 @@ fn queue_and_task_timeout_forms_take_a_required_timeout() {
 fn str_text_methods_pass_their_dispatcher_opcode() {
     for op in StrOp::ALL {
         let call = RuntimeOp::Str(*op).runtime_call();
-        let opcode = crate::text_methods::text_method_opcode(op.builtin_member().name());
+        let opcode = op
+            .builtin_member()
+            .and_then(|member| crate::text_methods::text_method_opcode(member.name()));
         assert_eq!(op.is_text_method(), opcode.is_some(), "{op:?}");
         match opcode {
             Some(opcode) => {
@@ -412,6 +497,14 @@ fn runtime_ops_display_their_family() {
             RuntimeOp::TaskGroup(TaskGroupOp::Cancel),
             "TaskGroup.Cancel",
         ),
+        (
+            RuntimeOp::List(ListOp::PushScalar(ScalarElement::Int64)),
+            "List.PushScalar(Int64)",
+        ),
+        (RuntimeOp::Dict(DictOp::GetStr), "Dict.GetStr"),
+        (RuntimeOp::Set(SetOp::ContainsInt64), "Set.ContainsInt64"),
+        (RuntimeOp::Array(ArrayOp::Map), "Array.Map"),
+        (RuntimeOp::Span(SpanOp::Extract), "Span.Extract"),
         (RuntimeOp::Function(FunctionOp::Range), "Function.Range"),
         (RuntimeOp::Print(PrintKind::Int), "Print.Int"),
         (
@@ -421,6 +514,133 @@ fn runtime_ops_display_their_family() {
     ];
     for (op, expected) in cases {
         assert_eq!(op.to_string(), expected);
+    }
+}
+
+#[test]
+fn collection_ops_specialize_by_element_type_and_literal_key() {
+    let push = RuntimeOp::List(ListOp::Push);
+    let index = RuntimeOp::List(ListOp::Index);
+    for kind in ScalarElement::ALL {
+        let element = scalar_element_type(*kind);
+        assert_eq!(ScalarElement::of(&element), Some(*kind));
+        let receiver = named("list", vec![element]);
+        assert_eq!(
+            specialized_member_op(push, &receiver, &[]),
+            RuntimeOp::List(ListOp::PushScalar(*kind))
+        );
+        assert_eq!(
+            specialized_member_op(index, &receiver, &[]),
+            RuntimeOp::List(ListOp::IndexScalar(*kind))
+        );
+    }
+    let text_list = named("list", vec![Type::named("str")]);
+    assert_eq!(specialized_member_op(push, &text_list, &[]), push);
+    assert_eq!(ScalarElement::of(&text_list), None);
+    assert_eq!(ScalarElement::of(&Type::named("int32")), None);
+    assert_eq!(ScalarElement::of(&Type::Unit), None);
+
+    let contains = RuntimeOp::Set(SetOp::Contains);
+    assert_eq!(
+        specialized_member_op(contains, &named("set", vec![Type::named("int64")]), &[]),
+        RuntimeOp::Set(SetOp::ContainsInt64)
+    );
+    assert_eq!(
+        specialized_member_op(contains, &named("set", vec![Type::named("bool")]), &[]),
+        contains
+    );
+
+    let get = RuntimeOp::Dict(DictOp::Get);
+    let text_keys = named("dict", vec![Type::named("str"), Type::named("int64")]);
+    let literal = [positional(Operand::String("key".to_string()))];
+    let place = [positional(Operand::Place("key".to_string()))];
+    assert_eq!(
+        specialized_member_op(get, &text_keys, &literal),
+        RuntimeOp::Dict(DictOp::GetStr)
+    );
+    assert_eq!(specialized_member_op(get, &text_keys, &place), get);
+    let int_keys = named("dict", vec![Type::named("int64"), Type::named("int64")]);
+    assert_eq!(specialized_member_op(get, &int_keys, &literal), get);
+}
+
+#[test]
+fn collection_ops_pass_their_kind_and_operation_words() {
+    use RuntimeFn as F;
+    let cases: [(RuntimeOp, RuntimeFn, &[i64], usize); 14] = [
+        (
+            RuntimeOp::List(ListOp::PushScalar(ScalarElement::Float64)),
+            F::VecPushScalar,
+            &[1],
+            0,
+        ),
+        (
+            RuntimeOp::List(ListOp::IndexScalar(ScalarElement::Bool)),
+            F::VecIndexScalar,
+            &[2],
+            0,
+        ),
+        (
+            RuntimeOp::List(ListOp::Pop),
+            F::CollectionOperation,
+            &[0],
+            1,
+        ),
+        (
+            RuntimeOp::List(ListOp::Remove),
+            F::CollectionOperation,
+            &[1],
+            1,
+        ),
+        (
+            RuntimeOp::List(ListOp::IndexOf),
+            F::CollectionOperation,
+            &[2],
+            1,
+        ),
+        (
+            RuntimeOp::List(ListOp::Count),
+            F::CollectionOperation,
+            &[3],
+            1,
+        ),
+        (
+            RuntimeOp::Dict(DictOp::Reserve),
+            F::CollectionOperation,
+            &[4],
+            1,
+        ),
+        (
+            RuntimeOp::Set(SetOp::Discard),
+            F::CollectionOperation,
+            &[6],
+            1,
+        ),
+        (
+            RuntimeOp::Set(SetOp::Clear),
+            F::CollectionOperation,
+            &[7],
+            2,
+        ),
+        (RuntimeOp::Dict(DictOp::GetStr), F::MapGetStr, &[], 1),
+        (RuntimeOp::Array(ArrayOp::Mean), F::ArrayReduce, &[3], 0),
+        (
+            RuntimeOp::Array(ArrayOp::SaturatingMul),
+            F::ArrayBinary,
+            &[0, 2, 2],
+            0,
+        ),
+        (RuntimeOp::Span(SpanOp::Fill), F::VecSpan, &[9], 6),
+        (RuntimeOp::Span(SpanOp::Start), F::VecSpan, &[0], 1),
+    ];
+    for (op, function, immediates, layout_words) in cases {
+        let call = op.runtime_call();
+        assert_eq!(call.function, function, "{op}");
+        assert_eq!(call.immediates, immediates, "{op}");
+        assert_eq!(call.layout_words, layout_words, "{op}");
+    }
+    for op in SpanOp::ALL {
+        let mutates = matches!(op, SpanOp::Extract | SpanOp::Restore | SpanOp::Fill);
+        assert_eq!(op.mutates_receiver(), mutates, "{op:?}");
     }
 }
 
