@@ -793,9 +793,10 @@ pub enum Instruction {
     /// Records that `index` selects an element of the list `list` here:
     /// `0 <= index < list.len()`. A `for` loop over a whole list or a span
     /// emits it after its bound check, because the iteration loan keeps the
-    /// length fixed. A backend may then read the element and advance the
-    /// index by one without a bounds or overflow check. The interpreter
-    /// checks the claim.
+    /// length fixed. The accesses it covers say so: an unchecked element
+    /// read, an index advance with trap `None`, and an element loan with
+    /// `checked: false` (see `mir_checks.rs`). The interpreter checks the
+    /// claim.
     IndexInRange {
         list: String,
         index: String,
@@ -822,6 +823,10 @@ pub enum Instruction {
         mutable: bool,
         /// The index expression, named by a bounds or presence trap.
         span: Span,
+        /// Whether creation checks bounds. Only a loan of `source[selector]`
+        /// that an `IndexInRange` covers skips the check.
+        #[serde(default = "checked_by_default", skip_serializing_if = "is_checked")]
+        checked: bool,
     },
     BeginReturnedLoan {
         loan: String,
@@ -910,6 +915,56 @@ pub enum ManagerExitResult {
     Result,
 }
 
+/// The check a numeric `Binary` or `Unary` operation makes, and so the trap
+/// a failed check raises. The operator and the operand types decide it:
+/// see `mir::checks::binary_trap`. The validator refuses any other trap,
+/// except `None` on an index advance that an `IndexInRange` covers.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ArithmeticTrap {
+    /// No check: the operation cannot fail, or a fact proves it cannot.
+    #[default]
+    None,
+    /// An integer result outside its type stops the program with an
+    /// integer overflow error.
+    Overflow,
+    /// A zero divisor stops the program with `division by zero`.
+    DivisionByZero,
+    /// A zero divisor stops the program first, then a quotient outside its
+    /// type, as in `int64` `MIN // -1`.
+    DivisionByZeroOrOverflow,
+    /// A runtime helper computes the value and makes the checks its
+    /// operands need: powers, bitwise operators, shifts, float floor
+    /// division and remainder, and operands that are not `int32`, `int64`,
+    /// `uint64`, `float32`, `float64`, or `bool`.
+    Runtime,
+}
+
+impl ArithmeticTrap {
+    /// Whether a backend that computes the value checks the divisor.
+    pub fn checks_divisor(self) -> bool {
+        matches!(
+            self,
+            Self::DivisionByZero | Self::DivisionByZeroOrOverflow | Self::Runtime
+        )
+    }
+
+    /// Whether a backend that computes the value checks its range.
+    pub fn checks_overflow(self) -> bool {
+        matches!(
+            self,
+            Self::Overflow | Self::DivisionByZeroOrOverflow | Self::Runtime
+        )
+    }
+}
+
+fn checked_by_default() -> bool {
+    true
+}
+
+fn is_checked(checked: &bool) -> bool {
+    *checked
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Rvalue {
     Use(Operand),
@@ -970,6 +1025,8 @@ pub enum Rvalue {
         op: UnaryOp,
         value: Operand,
         span: crate::diag::Span,
+        #[serde(default)]
+        trap: ArithmeticTrap,
     },
     Cast {
         value: Operand,
@@ -997,6 +1054,8 @@ pub enum Rvalue {
         left: Operand,
         right: Operand,
         span: crate::diag::Span,
+        #[serde(default)]
+        trap: ArithmeticTrap,
     },
     Call {
         callee: CallTarget,
@@ -8061,6 +8120,7 @@ fn validate_loan_instruction(
             projection,
             mutable,
             span: _,
+            ..
         } => {
             validate_mir_loan_name(function, loan)?;
             validate_canonical_mir_place(function, source)?;
@@ -10067,16 +10127,18 @@ fn arg_place_mentions<'a>(args: &'a [MirArg], mentions: &mut Vec<&'a str>) {
     }
 }
 
-/// Lowers `program` and states its ownership: the module is explicit.
-/// `aura mir` and the native build path use this form.
+/// Lowers `program` and states its checks and its ownership: the module is
+/// explicit. `aura mir` and the native build path use this form.
 pub fn lower(program: &Program) -> MirModule {
     let mut module = lower_implicit(program);
+    checks::resolve_checks(&mut module);
     ownership::insert_ownership(&mut module);
     module
 }
 
-/// Lowers `program` without the ownership pass, for the interpreter, which
-/// decides ownership itself and gains nothing from the pass.
+/// Lowers `program` without the checks and ownership passes, for the
+/// interpreter. It checks every access and decides ownership itself, so it
+/// gains nothing from either pass.
 pub fn lower_implicit(program: &Program) -> MirModule {
     let mut functions = program
         .functions
@@ -12837,6 +12899,7 @@ impl<'a> Lowerer<'a> {
                 projection,
                 mutable,
                 span,
+                checked: true,
             });
         }
     }
@@ -13520,6 +13583,7 @@ impl<'a> Lowerer<'a> {
                     left: left_value.clone(),
                     right: right_value.clone(),
                     span: condition.span,
+                    trap: ArithmeticTrap::None,
                 },
             });
         }
@@ -13982,6 +14046,7 @@ impl<'a> Lowerer<'a> {
                 projection,
                 mutable: true,
                 span,
+                checked: true,
             });
         }
         let value = if let Some(op) = assign.op {
@@ -16366,6 +16431,7 @@ impl<'a> Lowerer<'a> {
                 left: Operand::Place(length.clone()),
                 right: Operand::Int(fixed as u128),
                 span: pattern.span,
+                trap: ArithmeticTrap::None,
             },
         });
         let elements_block = self.new_block("match_sequence_elements");
@@ -16410,6 +16476,7 @@ impl<'a> Lowerer<'a> {
                             left: Operand::Place(length.clone()),
                             right: Operand::Int(suffix as u128),
                             span: element_span,
+                            trap: ArithmeticTrap::None,
                         },
                     });
                     let slice = self.new_typed_temp(list_ty.clone());
@@ -16460,6 +16527,7 @@ impl<'a> Lowerer<'a> {
                                     left: Operand::Place(length.clone()),
                                     right: Operand::Int(from_end(position) as u128),
                                     span: element_span,
+                                    trap: ArithmeticTrap::None,
                                 },
                             });
                             Operand::Place(index)
@@ -16943,6 +17011,7 @@ impl<'a> Lowerer<'a> {
                 left: scrutinee,
                 right,
                 span,
+                trap: ArithmeticTrap::None,
             },
         });
         Operand::Place(target)
@@ -16969,6 +17038,7 @@ impl<'a> Lowerer<'a> {
                                 op: UnaryOp::Neg,
                                 value: Operand::Int(value.unsigned_abs()),
                                 span,
+                                trap: ArithmeticTrap::None,
                             },
                         });
                         Operand::Place(target)
@@ -17097,6 +17167,7 @@ impl<'a> Lowerer<'a> {
                             left: Operand::Place(range.start.clone()),
                             right: Operand::Place(index.clone()),
                             span: for_stmt.span,
+                            trap: ArithmeticTrap::None,
                         },
                     });
                     absolute
@@ -17166,6 +17237,7 @@ impl<'a> Lowerer<'a> {
                 left: Operand::Place(index.clone()),
                 right: Operand::Int(1),
                 span: for_stmt.span,
+                trap: ArithmeticTrap::None,
             },
         });
 
@@ -17479,6 +17551,7 @@ impl<'a> Lowerer<'a> {
                             left: Operand::Int(0),
                             right: Operand::Int(1),
                             span: for_stmt.span,
+                            trap: ArithmeticTrap::None,
                         }
                     } else {
                         Rvalue::Use(match &span_bounds {
@@ -17542,6 +17615,7 @@ impl<'a> Lowerer<'a> {
                             left: Operand::Place(index),
                             right: Operand::Int(1),
                             span: for_stmt.span,
+                            trap: ArithmeticTrap::None,
                         },
                     });
                     self.terminate(Terminator::Goto(self.label(body_block)));
@@ -17619,6 +17693,7 @@ impl<'a> Lowerer<'a> {
                                 left: Operand::Place(index),
                                 right: Operand::Int(1),
                                 span: for_stmt.span,
+                                trap: ArithmeticTrap::None,
                             },
                         });
                     }
@@ -17721,6 +17796,7 @@ impl<'a> Lowerer<'a> {
                             left: Operand::Place(index),
                             right: Operand::Int(1),
                             span: for_stmt.span,
+                            trap: ArithmeticTrap::None,
                         },
                     });
                 }
@@ -17884,6 +17960,7 @@ impl<'a> Lowerer<'a> {
                 left: Operand::Place(index.clone()),
                 right: length,
                 span,
+                trap: ArithmeticTrap::None,
             },
         });
         self.terminate(Terminator::Branch {
@@ -17967,6 +18044,7 @@ impl<'a> Lowerer<'a> {
                 left: Operand::Place(index),
                 right: Operand::Int(1),
                 span,
+                trap: ArithmeticTrap::None,
             },
         });
         self.emit(Instruction::Safepoint);
@@ -18404,6 +18482,7 @@ impl<'a> Lowerer<'a> {
                         op: UnaryOp::Not,
                         value: Operand::Place(test),
                         span: operator_span,
+                        trap: ArithmeticTrap::None,
                     },
                 });
                 return Operand::Place(result);
@@ -18445,6 +18524,7 @@ impl<'a> Lowerer<'a> {
                 op: UnaryOp::Not,
                 value: Operand::Place(test),
                 span: operator_span,
+                trap: ArithmeticTrap::None,
             },
         });
         Operand::Place(result)
@@ -18783,6 +18863,7 @@ impl<'a> Lowerer<'a> {
                         op: *op,
                         value,
                         span: expr.span,
+                        trap: ArithmeticTrap::None,
                     },
                 });
                 Operand::Place(temp)
@@ -18898,6 +18979,7 @@ impl<'a> Lowerer<'a> {
                         left,
                         right,
                         span: expr.span,
+                        trap: ArithmeticTrap::None,
                     },
                 });
                 Operand::Place(temp)
@@ -19460,6 +19542,7 @@ impl<'a> Lowerer<'a> {
                 left: Operand::Place(attempt.clone()),
                 right: Operand::Place(max_attempts_place),
                 span,
+                trap: ArithmeticTrap::None,
             },
         });
         self.terminate(Terminator::Branch {
@@ -19484,6 +19567,7 @@ impl<'a> Lowerer<'a> {
                 left: Operand::Place(attempt.clone()),
                 right: Operand::Int(1),
                 span,
+                trap: ArithmeticTrap::None,
             },
         });
         self.terminate(Terminator::Branch {
@@ -19515,6 +19599,7 @@ impl<'a> Lowerer<'a> {
                 left: Operand::Place(backoff.clone()),
                 right: Operand::Duration(0),
                 span,
+                trap: ArithmeticTrap::None,
             },
         });
         self.terminate(Terminator::Branch {
@@ -19546,6 +19631,7 @@ impl<'a> Lowerer<'a> {
                 left: Operand::Place(attempt),
                 right: Operand::Int(1),
                 span,
+                trap: ArithmeticTrap::None,
             },
         });
         self.emit(Instruction::Safepoint);
@@ -19801,6 +19887,7 @@ impl<'a> Lowerer<'a> {
                 left: Operand::Place(outer_index.clone()),
                 right: Operand::Place(length),
                 span,
+                trap: ArithmeticTrap::None,
             },
         });
         self.terminate(Terminator::Branch {
@@ -19826,6 +19913,7 @@ impl<'a> Lowerer<'a> {
                 left: Operand::Place(inner_index.clone()),
                 right: Operand::Int(0),
                 span,
+                trap: ArithmeticTrap::None,
             },
         });
         self.terminate(Terminator::Branch {
@@ -19843,6 +19931,7 @@ impl<'a> Lowerer<'a> {
                 left: Operand::Place(inner_index.clone()),
                 right: Operand::Int(1),
                 span,
+                trap: ArithmeticTrap::None,
             },
         });
         let current = self.emit_vec_read(ordering_source.clone(), &inner_index, ordering_ty, span);
@@ -19857,6 +19946,7 @@ impl<'a> Lowerer<'a> {
                 op: UnaryOp::Not,
                 value: reverse.clone(),
                 span,
+                trap: ArithmeticTrap::None,
             },
         });
         let ascending_selected = self.new_typed_temp(Type::named("bool"));
@@ -19867,6 +19957,7 @@ impl<'a> Lowerer<'a> {
                 left: Operand::Place(not_reverse),
                 right: Operand::Place(ascending),
                 span,
+                trap: ArithmeticTrap::None,
             },
         });
         let descending_selected = self.new_typed_temp(Type::named("bool"));
@@ -19877,6 +19968,7 @@ impl<'a> Lowerer<'a> {
                 left: reverse,
                 right: Operand::Place(descending),
                 span,
+                trap: ArithmeticTrap::None,
             },
         });
         let comes_before = self.new_typed_temp(Type::named("bool"));
@@ -19887,6 +19979,7 @@ impl<'a> Lowerer<'a> {
                 left: Operand::Place(ascending_selected),
                 right: Operand::Place(descending_selected),
                 span,
+                trap: ArithmeticTrap::None,
             },
         });
         self.terminate(Terminator::Branch {
@@ -19987,6 +20080,7 @@ impl<'a> Lowerer<'a> {
                 left: Operand::Place(left.to_string()),
                 right: Operand::Place(right.to_string()),
                 span,
+                trap: ArithmeticTrap::None,
             }
         } else {
             Rvalue::Call {
@@ -20062,6 +20156,7 @@ impl<'a> Lowerer<'a> {
                 left: Operand::Place(index.to_string()),
                 right: Operand::Int(1),
                 span,
+                trap: ArithmeticTrap::None,
             },
         });
         self.emit(Instruction::Safepoint);
@@ -20136,6 +20231,7 @@ impl<'a> Lowerer<'a> {
                 op: UnaryOp::Not,
                 value: Operand::Place(contains),
                 span: operator_span,
+                trap: ArithmeticTrap::None,
             },
         });
         Operand::Place(result)
@@ -20179,6 +20275,7 @@ impl<'a> Lowerer<'a> {
                             left: left.clone(),
                             right: right.clone(),
                             span: link.op_span,
+                            trap: ArithmeticTrap::None,
                         },
                     });
                     left = right;
@@ -20354,7 +20451,7 @@ impl<'a> Lowerer<'a> {
                             value: Rvalue::Unary {
                                 op: UnaryOp::Neg,
                                 value: Operand::Int(*value),
-                                span: expr.span,
+                                span: expr.span, trap: ArithmeticTrap::None,
                             },
                         });
                         return Operand::Place(temp);
@@ -24343,6 +24440,7 @@ impl<'a> Lowerer<'a> {
                 projection,
                 mutable,
                 span,
+                checked: true,
             });
         }
         self.view_sources.insert(loan.clone(), collection);
@@ -26625,6 +26723,9 @@ mod ownership_check;
 #[path = "mir_lending.rs"]
 mod lending;
 
+#[path = "mir_checks.rs"]
+pub(crate) mod checks;
+
 pub(crate) use ownership_check::validate_ownership;
 
 /// Why a module failed the checks every execution boundary runs.
@@ -26632,30 +26733,39 @@ pub(crate) use ownership_check::validate_ownership;
 pub(crate) enum BoundaryError {
     LoanFlow(String),
     Ownership(String),
+    Checks(String),
 }
 
 /// The checks both execution boundaries run on a module before they trust
 /// it. An implicit module first passes the loan validator as it came, then
-/// gets the ownership pass; the result passes both validators.
+/// gets the checks and ownership passes; the result passes every validator.
 pub(crate) fn validate_at_boundary(
     module: &mut MirModule,
 ) -> std::result::Result<(), BoundaryError> {
     if module.ownership.is_implicit() {
         validate_loan_flow(module).map_err(BoundaryError::LoanFlow)?;
+        checks::resolve_checks(module);
         ownership::insert_ownership(module);
     }
     validate_loan_flow(module).map_err(BoundaryError::LoanFlow)?;
-    validate_ownership(module).map_err(BoundaryError::Ownership)
+    validate_ownership(module).map_err(BoundaryError::Ownership)?;
+    checks::validate_checks(module).map_err(BoundaryError::Checks)
 }
 
 /// The checks the interpreter runs. It decides ownership itself, so an
 /// implicit module skips the pass and the checker. An explicit module must
-/// still state its ownership correctly.
+/// still state its ownership and its checks correctly. The interpreter
+/// checks every access itself, so an implicit module skips the checks
+/// validator and `aura run` starts no slower.
 pub(crate) fn validate_for_interpreter(
     module: &MirModule,
 ) -> std::result::Result<(), BoundaryError> {
     validate_loan_flow(module).map_err(BoundaryError::LoanFlow)?;
-    validate_ownership(module).map_err(BoundaryError::Ownership)
+    validate_ownership(module).map_err(BoundaryError::Ownership)?;
+    if module.ownership.is_implicit() {
+        return Ok(());
+    }
+    checks::validate_checks(module).map_err(BoundaryError::Checks)
 }
 
 pub(crate) use runtime_ops::{is_builtin_wrapper, resolve_runtime_ops, specialized_member_op};

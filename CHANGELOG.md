@@ -38,6 +38,13 @@ in this file.
   temporary and an `EndLend` that moves it back, instead of a copy.
   Native code lends only where MIR does, and makes each `Retain` where MIR
   states it.
+- `aura mir` shows the check each numeric operation makes as its `trap`:
+  `None`, `Overflow`, `DivisionByZero`, `DivisionByZeroOrOverflow`, or
+  `Runtime`. A loop's element read that `IndexInRange` proves shows as
+  `IndexUnchecked` or `IndexScalarUnchecked`, its index advance as trap
+  `None`, and its element loan as `checked: false`. Native code makes the
+  checks MIR names, and refuses MIR with a wrong trap or an unchecked read
+  that no `IndexInRange` covers. Emitted code is unchanged.
 - Debug builds of the direct runtime stop a task that releases a value it
   does not own.
 - `AURA_RUNTIME_STATS=1` also reports `retains`, `releases`, and `clones`:

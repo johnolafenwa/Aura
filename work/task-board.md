@@ -40,6 +40,13 @@ Last updated: 2026-10-22
   `2026-10-22-batch-7-step-8e2-ownership-pass.md`,
   `2026-10-22-batch-7-step-8e3-emitter-ownership.md`, and
   `2026-10-22-batch-7-step-8e4-transfers-and-lending.md`.
+- In progress: 8f, explicit access and arithmetic checks. Each numeric
+  operation names its trap, and the reads, advances, and element loans an
+  `IndexInRange` covers are unchecked MIR forms. The emitter's
+  proven-access state is gone, the ownership pass no longer glues a fact
+  to its read, and emitted objects are byte-identical. `aura run` skips
+  the checks pass and starts no slower. Details are in
+  `2026-10-22-batch-7-step-8f-explicit-checks.md`.
 
 ## Aura 0.6.0 preview release (complete)
 

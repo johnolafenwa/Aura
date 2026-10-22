@@ -922,6 +922,7 @@ fn adr0038_cfg_view_module(reverse_branch_storage: bool, include_dead_loan: bool
                         left: Operand::Place("left".to_string()),
                         right: Operand::Place("right".to_string()),
                         span: Span::new(1, 1),
+                        trap: aura_compiler::mir::ArithmeticTrap::Overflow,
                     },
                 },
             ],

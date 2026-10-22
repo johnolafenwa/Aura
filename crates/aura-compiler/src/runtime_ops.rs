@@ -936,6 +936,11 @@ pub enum ListOp {
     /// `__index(index, line, column)`: a checked element read.
     Index,
     IndexScalar(ScalarElement),
+    /// The element read an `IndexInRange` fact covers: `Index` with no
+    /// bounds check. Only `mir::checks` makes it, and its validator
+    /// refuses one no fact covers.
+    IndexUnchecked,
+    IndexScalarUnchecked(ScalarElement),
     /// `__set_index(index, value, line, column)`: a checked element write.
     SetIndex,
     /// `__slice(start, has_start, end, has_end, line, column)`.
@@ -971,6 +976,10 @@ impl ListOp {
         ListOp::IndexScalar(ScalarElement::Int64),
         ListOp::IndexScalar(ScalarElement::Float64),
         ListOp::IndexScalar(ScalarElement::Bool),
+        ListOp::IndexUnchecked,
+        ListOp::IndexScalarUnchecked(ScalarElement::Int64),
+        ListOp::IndexScalarUnchecked(ScalarElement::Float64),
+        ListOp::IndexScalarUnchecked(ScalarElement::Bool),
         ListOp::SetIndex,
         ListOp::Slice,
         ListOp::IndexOption,
@@ -998,6 +1007,8 @@ impl ListOp {
             ListOp::Reserve => M::VecReserve,
             ListOp::Index
             | ListOp::IndexScalar(_)
+            | ListOp::IndexUnchecked
+            | ListOp::IndexScalarUnchecked(_)
             | ListOp::SetIndex
             | ListOp::Slice
             | ListOp::IndexOption
@@ -1030,7 +1041,10 @@ impl ListOp {
 
     const fn private_name(self) -> Option<&'static str> {
         Some(match self {
-            ListOp::Index | ListOp::IndexScalar(_) => INDEX_MEMBER,
+            ListOp::Index
+            | ListOp::IndexScalar(_)
+            | ListOp::IndexUnchecked
+            | ListOp::IndexScalarUnchecked(_) => INDEX_MEMBER,
             ListOp::SetIndex => SET_INDEX_MEMBER,
             ListOp::Slice => SLICE_MEMBER,
             ListOp::IndexOption => INDEX_OPTION_MEMBER,
@@ -1052,7 +1066,10 @@ impl ListOp {
 
     const fn private_params(self) -> Option<&'static [CallableParam<'static>]> {
         Some(match self {
-            ListOp::Index | ListOp::IndexScalar(_) => INDEX_PARAMS,
+            ListOp::Index
+            | ListOp::IndexScalar(_)
+            | ListOp::IndexUnchecked
+            | ListOp::IndexScalarUnchecked(_) => INDEX_PARAMS,
             ListOp::SetIndex => SET_INDEX_PARAMS,
             ListOp::Slice => SLICE_PARAMS,
             ListOp::IndexOption | ListOp::TakeIndexOption => INDEX_OPTION_PARAMS,
@@ -1063,9 +1080,39 @@ impl ListOp {
     const fn unspecialized(self) -> Self {
         match self {
             ListOp::PushScalar(_) => ListOp::Push,
-            ListOp::IndexScalar(_) => ListOp::Index,
+            ListOp::IndexScalar(_) | ListOp::IndexUnchecked | ListOp::IndexScalarUnchecked(_) => {
+                ListOp::Index
+            }
             other => other,
         }
+    }
+
+    /// The checked form of an unchecked read, and any other op itself.
+    pub const fn checked(self) -> Self {
+        match self {
+            ListOp::IndexUnchecked => ListOp::Index,
+            ListOp::IndexScalarUnchecked(kind) => ListOp::IndexScalar(kind),
+            other => other,
+        }
+    }
+
+    /// The unchecked form of an element read, if the op is one.
+    pub const fn unchecked(self) -> Option<Self> {
+        match self {
+            ListOp::Index | ListOp::IndexUnchecked => Some(ListOp::IndexUnchecked),
+            ListOp::IndexScalar(kind) | ListOp::IndexScalarUnchecked(kind) => {
+                Some(ListOp::IndexScalarUnchecked(kind))
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether the op is an element read with no bounds check.
+    pub const fn is_unchecked(self) -> bool {
+        matches!(
+            self,
+            ListOp::IndexUnchecked | ListOp::IndexScalarUnchecked(_)
+        )
     }
 
     /// The helper call. A collection operation passes the receiver, a value
@@ -1096,9 +1143,11 @@ impl ListOp {
             ListOp::Reserve => {
                 helper_with(RuntimeFn::CollectionOperation, COLLECTION_RESERVE_WORDS, 1)
             }
-            ListOp::Index => helper(RuntimeFn::VecIndex),
+            ListOp::Index | ListOp::IndexUnchecked => helper(RuntimeFn::VecIndex),
             // The line and column reach only the bounds failure's call.
-            ListOp::IndexScalar(kind) => helper_with(RuntimeFn::VecIndexScalar, kind.words(), 0),
+            ListOp::IndexScalar(kind) | ListOp::IndexScalarUnchecked(kind) => {
+                helper_with(RuntimeFn::VecIndexScalar, kind.words(), 0)
+            }
             ListOp::SetIndex => helper(RuntimeFn::VecSetIndexInPlace),
             ListOp::Slice => helper(RuntimeFn::VecSlice),
             ListOp::IndexOption => helper(RuntimeFn::VecIndexOption),
@@ -1122,7 +1171,12 @@ impl ListOp {
             | ListOp::Reverse
             | ListOp::Reserve
             | ListOp::SetIndex => Type::Unit,
-            ListOp::Pop | ListOp::Set | ListOp::Index | ListOp::IndexScalar(_) => return element,
+            ListOp::Pop
+            | ListOp::Set
+            | ListOp::Index
+            | ListOp::IndexScalar(_)
+            | ListOp::IndexUnchecked
+            | ListOp::IndexScalarUnchecked(_) => return element,
             ListOp::Get | ListOp::IndexOption | ListOp::TakeIndexOption => {
                 lookup_type(element.unwrap_or_else(|| Type::named("Unknown")))
             }
@@ -2539,6 +2593,15 @@ impl RuntimeOp {
         }
     }
 
+    /// The checked form of an unchecked element read, and any other op
+    /// itself.
+    pub fn checked(self) -> Self {
+        match self {
+            RuntimeOp::List(op) => RuntimeOp::List(op.checked()),
+            other => other,
+        }
+    }
+
     /// The specialization of an unspecialized op for a call that passes a
     /// `timeout`, or the op itself when it has no timeout form.
     pub fn with_timeout(self) -> Self {
@@ -2638,6 +2701,8 @@ impl RuntimeOp {
             RuntimeOp::List(
                 ListOp::Index
                 | ListOp::IndexScalar(_)
+                | ListOp::IndexUnchecked
+                | ListOp::IndexScalarUnchecked(_)
                 | ListOp::Slice
                 | ListOp::IndexOption
                 | ListOp::TakeIndexOption,

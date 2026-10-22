@@ -160,6 +160,7 @@ impl Lowerer<'_> {
                 left: Operand::Place(range.start.clone()),
                 right: Operand::Place(range.len.clone()),
                 span,
+                trap: crate::mir::ArithmeticTrap::None,
             },
         });
         stop
@@ -244,6 +245,7 @@ impl Lowerer<'_> {
                 left: Operand::Place(abs_stop),
                 right: Operand::Place(abs_start.clone()),
                 span: colon_span,
+                trap: crate::mir::ArithmeticTrap::None,
             },
         });
         SpanRange {
@@ -628,6 +630,7 @@ impl Lowerer<'_> {
                 op: UnaryOp::Not,
                 value: Operand::Place(value),
                 span,
+                trap: crate::mir::ArithmeticTrap::None,
             },
         });
         Operand::Place(result)
@@ -676,6 +679,7 @@ impl Lowerer<'_> {
                         left: Operand::Int(0),
                         right: Operand::Int(1),
                         span,
+                        trap: crate::mir::ArithmeticTrap::None,
                     },
                 });
                 Operand::Place(negative_one)
@@ -813,6 +817,7 @@ impl Lowerer<'_> {
                 left: Operand::Place(index.to_string()),
                 right: Operand::Place(stop.to_string()),
                 span,
+                trap: crate::mir::ArithmeticTrap::None,
             },
         });
         self.terminate(Terminator::Branch {

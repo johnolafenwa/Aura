@@ -2439,6 +2439,7 @@ def main():
                     left,
                     right,
                     span: Span::new(1, 1),
+                    trap: crate::mir::ArithmeticTrap::None,
                 },
                 &mut env,
             )
@@ -18557,6 +18558,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
                 op: crate::ast::UnaryOp::Not,
                 value: Operand::Bool(true),
                 span: Span::new(1, 1),
+                trap: crate::mir::ArithmeticTrap::None,
             },
             &mut env,
         )
@@ -18571,6 +18573,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
                 op: crate::ast::UnaryOp::Neg,
                 value: Operand::Int(4),
                 span: Span::new(1, 1),
+                trap: crate::mir::ArithmeticTrap::None,
             },
             &mut env,
         )
@@ -18587,6 +18590,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
                 op: crate::ast::UnaryOp::Neg,
                 value: Operand::Float(-1.5),
                 span: Span::new(1, 1),
+                trap: crate::mir::ArithmeticTrap::None,
             },
             &mut env,
         )
@@ -18600,6 +18604,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
             op: crate::ast::UnaryOp::Not,
             value: Operand::Int(1),
             span: Span::new(1, 1),
+            trap: crate::mir::ArithmeticTrap::None,
         },
         &mut env,
     ) {
@@ -18612,6 +18617,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
             op: crate::ast::UnaryOp::Neg,
             value: Operand::String("nope".to_string()),
             span: Span::new(1, 1),
+            trap: crate::mir::ArithmeticTrap::None,
         },
         &mut env,
     ) {
@@ -19542,6 +19548,7 @@ fn mir_function_value_runtime_moves_owned_args_writes_back_mut_args_and_traps_ba
                         left: Operand::Place("value".to_string()),
                         right: Operand::Int(1),
                         span: Span::new(1, 1),
+                        trap: crate::mir::ArithmeticTrap::None,
                     },
                 },
                 Instruction::Assign {
@@ -19983,6 +19990,7 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
                     left: Operand::Place("__capture_offset".to_string()),
                     right: Operand::Place("value".to_string()),
                     span: Span::new(2, 36),
+                    trap: crate::mir::ArithmeticTrap::None,
                 },
             }],
             terminator: Terminator::Return(Operand::Place("sum".to_string())),
@@ -22870,6 +22878,7 @@ fn member_calls_fall_through_length_and_byte_helpers_for_other_receivers() {
                 op: crate::ast::UnaryOp::BitNot,
                 value: Operand::Int(1),
                 span: Span::new(1, 1),
+                trap: crate::mir::ArithmeticTrap::None,
             },
             &mut env,
         )

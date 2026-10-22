@@ -31,7 +31,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::ownership::{glued, root_of, type_needs_drop};
+use super::ownership::{root_of, type_needs_drop};
 use super::{
     mir_place_paths_overlap, substitute_type, BasicBlock, CallTarget, Instruction, MirArg,
     MirFunction, MirLoanValidationContext, MirLocalType, MirReceiverKind, Operand, Rvalue,
@@ -568,9 +568,9 @@ pub(super) fn lend_function(
     for block in &function.blocks {
         let mut instructions = Vec::with_capacity(block.instructions.len());
         for (position, instruction) in block.instructions.iter().enumerate() {
-            // A returned view follows its call at once. The element read an
-            // `IndexInRange` covers stays right after it, so its lends go
-            // before the fact, which then names the temporary.
+            // A returned view follows its call at once. The lends of an
+            // element read an `IndexInRange` covers go before the fact,
+            // which then names the temporary.
             let pinned = matches!(instruction, Instruction::IndexInRange { .. })
                 || matches!(
                     block.instructions.get(position + 1),
@@ -585,9 +585,13 @@ pub(super) fn lend_function(
                 instructions.push(instruction.clone());
                 continue;
             }
-            let covered = (position > 0 && glued(&block.instructions, position - 1))
-                .then(|| instructions.pop())
-                .flatten();
+            let covered = (position > 0
+                && matches!(
+                    block.instructions[position - 1],
+                    Instruction::IndexInRange { .. }
+                ))
+            .then(|| instructions.pop())
+            .flatten();
             let mut call = instruction.clone();
             let mut ends = Vec::with_capacity(lends.len());
             for lend in &lends {
