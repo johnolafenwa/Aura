@@ -164,6 +164,20 @@ fn direct_backend_counts_retains_releases_and_clones() {
     );
 }
 
+const LAST_USE_MOVES: &str = "def keep(text: str) -> int64:\n    return len(text)\n\ndef main():\n    name = f\"ab{1}\"\n    print(keep(name))\n    print(keep(name))\n    last = f\"cd{2}\"\n    print(keep(last))\n";
+
+#[test]
+fn direct_backend_moves_a_value_at_its_last_use() {
+    let (_, direct) = assert_both_backends("repr-last-use", LAST_USE_MOVES, "3\n3\n3\n");
+    // Only the first call retains `name`. Each last use moves its value
+    // into the call, and the callee releases it.
+    assert_eq!(
+        (direct.opaque_boxes, direct.retains, direct.releases),
+        (3, 1, 4),
+        "{direct:?}"
+    );
+}
+
 #[test]
 fn direct_scalar_union_local_allocates_no_union_box() {
     let (mir, direct) = assert_both_backends("repr-scalar-union", SCALAR_UNION_LOCAL, "42\n");
