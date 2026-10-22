@@ -1,11 +1,16 @@
 //! Forged-MIR regressions for validator place typing and metadata lookups.
 
+use aura_compiler::mir::ownership::strip_ownership;
 use aura_compiler::runtime_ops::RuntimeOp;
 use aura_compiler::{emit_host_native_object, lower_source_to_mir, run_mir, MirModule};
 use serde_json::{json, Value};
 
 fn encode(source: &str) -> Value {
-    serde_json::to_value(lower_source_to_mir(source).expect("source should lower")).unwrap()
+    // A forgery edits MIR that states no ownership, which each boundary
+    // then fills in.
+    let mut mir = lower_source_to_mir(source).expect("source should lower");
+    strip_ownership(&mut mir);
+    serde_json::to_value(mir).unwrap()
 }
 
 fn function_mut<'a>(encoded: &'a mut Value, name: &str) -> &'a mut Value {

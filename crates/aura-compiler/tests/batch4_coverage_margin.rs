@@ -2,6 +2,7 @@
 //! validation paths that earlier suites did not pin. Forged-MIR cases assert
 //! that the interpreter and the direct backend reject the same module.
 
+use aura_compiler::mir::ownership::strip_ownership;
 use aura_compiler::runtime_ops::RuntimeOp;
 use aura_compiler::{
     check_source, emit_host_native_object, lower_source_to_mir, run_mir, run_source, MirModule,
@@ -9,7 +10,11 @@ use aura_compiler::{
 use serde_json::{json, Value};
 
 fn encode(source: &str) -> Value {
-    serde_json::to_value(lower_source_to_mir(source).expect("source should lower")).unwrap()
+    // A forgery edits MIR that states no ownership, which each boundary
+    // then fills in.
+    let mut mir = lower_source_to_mir(source).expect("source should lower");
+    strip_ownership(&mut mir);
+    serde_json::to_value(mir).unwrap()
 }
 
 fn main_instructions(encoded: &mut Value) -> impl Iterator<Item = &mut Value> {

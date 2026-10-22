@@ -7697,7 +7697,17 @@ def main() -> int32:
         })
         .expect("worker invocation should use a non-consuming call target");
     *call_target = CallTarget::Value(Operand::MovePlace("worker".to_string()));
-    let consuming_error = emit_host_object(&consuming_target)
+    // `worker` is used again, so the ownership checker refuses the move at
+    // the boundary first. The emitter's own check is what this case pins.
+    let boundary_error = emit_host_object(&consuming_target)
+        .expect_err("the boundary must refuse a use after the move");
+    assert!(
+        boundary_error.contains("uses `worker` after moving it"),
+        "{boundary_error}"
+    );
+    crate::mir::ownership::strip_ownership(&mut consuming_target);
+    let consuming_error = NativeCodegen::new(&consuming_target, "<aura>", "")
+        .and_then(|codegen| codegen.emit())
         .expect_err("indirect call targets must not consume their callable place");
     assert!(
         consuming_error.contains(

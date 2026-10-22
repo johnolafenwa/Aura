@@ -4,8 +4,18 @@
 //! serialized MIR, and expects the same refusal from the interpreter and the
 //! direct backend before anything runs.
 
+use aura_compiler::mir::ownership::strip_ownership;
 use aura_compiler::{emit_host_native_object, lower_source_to_mir, run_mir, MirModule};
+
 use serde_json::Value;
+
+/// Lowers `source` to MIR that states no ownership. A forgery edits it, and
+/// each boundary then fills the ownership in.
+fn lower_implicit(source: &str) -> aura_compiler::Result<MirModule> {
+    let mut mir = lower_source_to_mir(source)?;
+    strip_ownership(&mut mir);
+    Ok(mir)
+}
 
 const FILL_SOURCE: &str = "def main():\n    mut items = [1, 2, 3, 4]\n    view mut a = items[0:2]\n    a.fill(9)\n    print(items)\n";
 
@@ -53,7 +63,7 @@ fn fill_call(instructions: &[Value]) -> usize {
 }
 
 fn lowered_fill() -> Value {
-    let mir = lower_source_to_mir(FILL_SOURCE).expect("the span program lowers");
+    let mir = lower_implicit(FILL_SOURCE).expect("the span program lowers");
     let output = run_mir(&mir).expect("the unforged span program runs");
     assert_eq!(output.stdout, "[9, 9, 3, 4]\n");
     serde_json::to_value(mir).expect("MIR serializes")

@@ -7927,6 +7927,7 @@ fn validate_loan_instruction(
             instruction,
             Instruction::EndLoan { .. }
                 | Instruction::PopCleanup { .. }
+                | Instruction::Retain { .. }
                 | Instruction::Release { .. }
                 | Instruction::Assign {
                     value: Rvalue::Use(_),
@@ -7960,8 +7961,10 @@ fn validate_loan_instruction(
         ..
     } = instruction
     {
+        // The error edge leaves the frame, which ends every loan in it, so
+        // a `try` may release a root that a loan still holds here.
         for place in releases_on_error {
-            validate_released_root(function, place, known_roots, state)?;
+            validate_known_root(function, place, known_roots)?;
         }
         if !releases_on_error.is_sorted_by(|left, right| left < right) {
             return Err(format!(
@@ -9508,6 +9511,15 @@ fn validate_released_root(
     known_roots: &BTreeSet<String>,
     state: &ValidatedLoanState,
 ) -> std::result::Result<(), String> {
+    validate_known_root(function, place, known_roots)?;
+    validate_loan_place_access(function, place, LoanPlaceAccess::Move, state)
+}
+
+fn validate_known_root(
+    function: &MirFunction,
+    place: &str,
+    known_roots: &BTreeSet<String>,
+) -> std::result::Result<(), String> {
     // Every known root is a canonical identifier, so this also refuses a
     // malformed place.
     if !known_roots.contains(place) {
@@ -9516,7 +9528,7 @@ fn validate_released_root(
             function.name
         ));
     }
-    validate_loan_place_access(function, place, LoanPlaceAccess::Move, state)
+    Ok(())
 }
 
 /// Every variant built of a module enum is one the enum declares, with
@@ -10139,6 +10151,7 @@ pub fn lower(program: &Program) -> MirModule {
     crate::union_layout::plan_module_unions(&mut module, |member| {
         type_is_copy_in_program(member, program)
     });
+    ownership::insert_ownership(&mut module);
     module
 }
 
@@ -26520,6 +26533,32 @@ mod runtime_ops;
 
 #[path = "mir_ownership.rs"]
 pub mod ownership;
+
+#[path = "mir_ownership_check.rs"]
+mod ownership_check;
+
+pub(crate) use ownership_check::validate_ownership;
+
+/// Why a module failed the checks every execution boundary runs.
+#[derive(Debug)]
+pub(crate) enum BoundaryError {
+    LoanFlow(String),
+    Ownership(String),
+}
+
+/// The checks both execution boundaries run on a module before they trust
+/// it. An implicit module first passes the loan validator as it came, then
+/// gets the ownership pass; the result passes both validators.
+pub(crate) fn validate_at_boundary(
+    module: &mut MirModule,
+) -> std::result::Result<(), BoundaryError> {
+    if module.ownership.is_implicit() {
+        validate_loan_flow(module).map_err(BoundaryError::LoanFlow)?;
+        ownership::insert_ownership(module);
+    }
+    validate_loan_flow(module).map_err(BoundaryError::LoanFlow)?;
+    validate_ownership(module).map_err(BoundaryError::Ownership)
+}
 
 pub(crate) use runtime_ops::{is_builtin_wrapper, resolve_runtime_ops, specialized_member_op};
 

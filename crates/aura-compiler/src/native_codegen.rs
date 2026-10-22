@@ -53,7 +53,23 @@ pub fn emit_host_object_with_metadata(
     // Hand-built or older MIR may still spell resolved operations as member
     // calls; the pass is idempotent on lowered MIR.
     crate::mir::resolve_runtime_ops(&mut module);
-    let context = NativeCodegen::new(&module, program_path, program_source)?;
+    // The emitter still decides ownership itself (Batch 7 step 8e, PR 2), so
+    // it compiles the module without the instructions that state it. An
+    // implicit module is checked through a copy the pass fills in, and an
+    // explicit one loses what the pass added.
+    let validate = |module: &mut MirModule| {
+        crate::mir::validate_at_boundary(module).map_err(|error| match error {
+            crate::mir::BoundaryError::LoanFlow(error)
+            | crate::mir::BoundaryError::Ownership(error) => error,
+        })
+    };
+    if module.ownership.is_implicit() {
+        validate(&mut module.clone())?;
+    } else {
+        validate(&mut module)?;
+        crate::mir::ownership::strip_ownership(&mut module);
+    }
+    let context = NativeCodegen::with_validated_loans(&module, program_path, program_source)?;
     context.emit()
 }
 
@@ -770,7 +786,18 @@ fn required_direct_field_slice(
 }
 
 impl<'a> NativeCodegen<'a> {
+    #[cfg(test)]
     fn new(
+        module: &'a MirModule,
+        program_path: &str,
+        program_source: &str,
+    ) -> std::result::Result<Self, String> {
+        crate::mir::validate_loan_flow(module)?;
+        Self::with_validated_loans(module, program_path, program_source)
+    }
+
+    /// Prepares to emit `module`, whose loan flow the caller validated.
+    fn with_validated_loans(
         module: &'a MirModule,
         program_path: &str,
         program_source: &str,
@@ -13303,7 +13330,6 @@ fn direct_place_paths_overlap(left: &str, right: &str) -> bool {
 fn validate_module(
     module: &MirModule,
 ) -> std::result::Result<HashMap<String, HashSet<String>>, String> {
-    crate::mir::validate_loan_flow(module)?;
     let mut classes = HashMap::new();
     for class in &module.classes {
         classes.insert(class.name.clone(), class.clone());
