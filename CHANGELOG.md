@@ -10,10 +10,11 @@ in this file.
 ### Changed
 
 - `aura mir` prints built-in calls on files, sockets, processes,
-  `random.Rng`, numbers, `Duration`, `str`, queues, and tasks, and named
-  built-in calls such as `print`, `range`, and `fs.exists`, as resolved
-  `Runtime` calls instead of member or named calls, with `int64` f-string
-  parts marked `Int64`.
+  `random.Rng`, numbers, `Duration`, `str`, queues, tasks, lists, dicts,
+  sets, and arrays, the private reads, writes, slices, and span operations
+  that indexing and iteration lower to, and named built-in calls such as
+  `print`, `range`, and `fs.exists`, as resolved `Runtime` calls instead of
+  member or named calls, with `int64` f-string parts marked `Int64`.
 
 ### Performance
 

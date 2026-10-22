@@ -359,8 +359,9 @@ const POISONED_CALL: &str =
     "invalid MIR indirect call in `main` has no authoritative callable contract";
 
 /// Replaces every `Function`/`Closure`/`Callable` contract inside `main`'s
-/// declared local types with `int64`, leaving the assignment check no
-/// declared callable positions to compare.
+/// declared local types with `str`, leaving the assignment check no
+/// declared callable positions to compare. A `str` element keeps a list's
+/// boxed reads, so the stripped types still match the resolved list ops.
 fn strip_declared_callable_metadata(function: &mut Value) {
     fn strip(value: &mut Value) {
         match value {
@@ -369,7 +370,7 @@ fn strip_declared_callable_metadata(function: &mut Value) {
                     .iter()
                     .any(|kind| object.contains_key(*kind))
                 {
-                    *value = json!({ "Named": ["int64", []] });
+                    *value = json!({ "Named": ["str", []] });
                 } else {
                     for child in object.values_mut() {
                         strip(child);
@@ -407,7 +408,7 @@ fn assert_stripped_merge_is_poisoned(source: &str, stdout: &str, forge: impl Fn(
     );
     let native = emit_host_native_object(&control)
         .expect_err("the direct backend needs the declared indirect function type");
-    // With the declared type stripped to `int64`, the direct backend refuses
+    // With the declared type stripped to `str`, the direct backend refuses
     // either the store of a callable into that slot (the four-word layout
     // cannot coerce to a scalar) or the call through it.
     assert!(

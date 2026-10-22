@@ -18,17 +18,17 @@ use crate::call::BuiltinMember;
 use crate::diag::Span;
 use crate::ffi::FfiType;
 use crate::mir::{
-    BasicBlock, CallTarget, CleanupAction, Instruction, MirArg, MirClass, MirEnum, MirExternCall,
-    MirFormatPart, MirFunction, MirMapEntry, MirMethod, MirModule, MirReceiverKind, MirTraitImpl,
-    Operand, Rvalue, Terminator, NATIVE_LOOP_SAFEPOINT_INTERVAL,
+    BasicBlock, CallTarget, CleanupAction, Instruction, MemberCallParts, MirArg, MirClass, MirEnum,
+    MirExternCall, MirFormatPart, MirFunction, MirMapEntry, MirMethod, MirModule, MirReceiverKind,
+    MirTraitImpl, Operand, Rvalue, Terminator, NATIVE_LOOP_SAFEPOINT_INTERVAL,
 };
 use crate::native_runtime::{
     encode_direct_ffi_call_spec, DirectFfiCallSpec, DirectFfiParam, DirectFfiType,
 };
 use crate::runtime_abi::{AbiType, RuntimeFn, RuntimeTable};
 use crate::runtime_ops::{
-    FunctionOp, HostBuiltin, PrintKind, ResourceOp, RuntimeOp, RuntimeTarget, ScalarOp, StrOp,
-    ValueOp,
+    first_type_arg, ArrayOp, DictOp, FunctionOp, HostBuiltin, ListOp, PrintKind, ResourceOp,
+    RuntimeOp, RuntimeTarget, ScalarElement, ScalarOp, SetOp, SpanOp, StrOp, ValueOp,
 };
 use crate::sema::optional_type;
 use crate::sema::{substitute_type, FunctionParamContract, Type};
@@ -257,22 +257,21 @@ impl ProvenAccess {
             return Self::None;
         };
         match value {
-            Rvalue::Call {
-                callee:
-                    CallTarget::Member {
+            Rvalue::Call { callee, args }
+                if matches!(
+                    callee.member_parts(),
+                    Some(MemberCallParts {
                         object: Operand::Place(object),
-                        field,
+                        field: "__index",
+                        trait_name: None,
                         ..
-                    },
-                args,
-            } if object == list
-                && field == "__index"
-                && target != list
-                && target != index
-                && matches!(
-                    args.first(),
-                    Some(MirArg { value: Operand::Place(place), .. }) if place == index
-                ) =>
+                    }) if object == list
+                ) && target != list
+                    && target != index
+                    && matches!(
+                        args.first(),
+                        Some(MirArg { value: Operand::Place(place), .. }) if place == index
+                    ) =>
             {
                 Self::Read
             }
@@ -715,6 +714,48 @@ fn required_named_arg<'a>(
 fn direct_internal_slice_args(args: &[MirArg]) -> std::result::Result<&[MirArg; 6], String> {
     args.try_into()
         .map_err(|_| DIRECT_INTERNAL_SLICE_ARITY_ERROR.to_string())
+}
+
+/// The word kinds of a slice's arguments: the start, whether it is
+/// present, the end, whether it is present, and the source line and column.
+const SLICE_WORD_KINDS: &[ScalarKind] = &[
+    ScalarKind::Int64,
+    ScalarKind::Bool,
+    ScalarKind::Int64,
+    ScalarKind::Bool,
+    ScalarKind::Int32,
+    ScalarKind::Int32,
+];
+
+/// The arguments of a collection, `Array`, span, or slice op in parameter
+/// order, leaving out an omitted optional one. The shared validator binds
+/// the arguments of a resolved op; a member call this emitter resolves is
+/// bound here.
+fn bound_runtime_op_args(
+    op: RuntimeOp,
+    args: &[MirArg],
+) -> std::result::Result<Vec<&MirArg>, String> {
+    let params = op.params();
+    let mut names = Vec::with_capacity(params.len());
+    for param in &params {
+        names.push(param.name);
+    }
+    let bound = ordered_optional_named_args(&names, args)?;
+    let mut ordered = Vec::with_capacity(bound.len());
+    for (param, argument) in params.iter().zip(bound) {
+        match argument {
+            Some(argument) => ordered.push(argument),
+            None if param.required => {
+                return Err(format!(
+                    "direct backend expected `{}()` to receive `{}`",
+                    op.name(),
+                    param.name
+                ))
+            }
+            None => {}
+        }
+    }
+    Ok(ordered)
 }
 
 fn required_direct_field_slice(
@@ -1997,6 +2038,18 @@ impl<'a> MemberCallee<'a> {
             MemberCallee::Field(field) => field,
             MemberCallee::Runtime(op) => op.name(),
         }
+    }
+
+    /// The runtime op the call makes on a receiver of type `receiver`: a
+    /// resolved op, or the op a member call resolves to, specialized as
+    /// lowering specializes it.
+    fn op(self, receiver: &Type, args: &[MirArg]) -> Option<RuntimeOp> {
+        let field = match self {
+            MemberCallee::Runtime(op) => return Some(op),
+            MemberCallee::Field(field) => field,
+        };
+        let op = RuntimeOp::resolve_member(receiver, field, |_| false)?;
+        Some(crate::mir::specialized_member_op(op, receiver, args))
     }
 }
 
@@ -5983,7 +6036,12 @@ impl<'a> FunctionCompiler<'a> {
             | RuntimeOp::Str(_)
             | RuntimeOp::Queue(_)
             | RuntimeOp::Task(_)
-            | RuntimeOp::TaskGroup(_) => Err(format!(
+            | RuntimeOp::TaskGroup(_)
+            | RuntimeOp::List(_)
+            | RuntimeOp::Dict(_)
+            | RuntimeOp::Set(_)
+            | RuntimeOp::Array(_)
+            | RuntimeOp::Span(_) => Err(format!(
                 "direct backend received runtime operation `{op}` without a receiver"
             )),
         }
@@ -6595,11 +6653,10 @@ impl<'a> FunctionCompiler<'a> {
         receiver_place: Option<&str>,
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
-        let field = callee.field();
-        if let Some(result) = self.compile_borrowed_element_member_call(object, field, args)? {
+        if let Some(result) = self.compile_borrowed_element_member_call(object, callee, args)? {
             return Ok(result);
         }
-        if let Some(lent) = self.lendable_receiver(object, field, args)? {
+        if let Some(lent) = self.lendable_receiver(object, callee, args)? {
             return self.compile_lent_member_call(lent, callee, receiver_place, args);
         }
         let object = self.load_operand(object)?;
@@ -6665,20 +6722,35 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     /// `len()` or `get(key)` on a lent list element, read where it lies (see
-    /// `borrowed_list_element`). Returns `None` for any other call.
+    /// `borrowed_list_element`): a peephole on the resolved `len` of a
+    /// `str`, `list`, `dict`, or `set` and the resolved `get` of a `dict`.
+    /// Returns `None` for any other call.
     fn compile_borrowed_element_member_call(
         &mut self,
         object: &Operand,
-        field: &str,
+        callee: MemberCallee<'_>,
         args: &[MirArg],
     ) -> std::result::Result<Option<ValueRef>, String> {
         let Some(selection) = self.borrowed_list_element(object) else {
             return Ok(None);
         };
-        if !crate::mir_copies::borrowed_element_method(&selection.element_type, field, args.len())
-            || self
-                .find_trait_method(&selection.element_type, field)
-                .is_some()
+        let op = callee.op(&selection.element_type, args);
+        let key = match (op, args) {
+            (Some(RuntimeOp::Dict(DictOp::Get | DictOp::GetStr)), [key]) => Some(key),
+            (
+                Some(
+                    RuntimeOp::Str(StrOp::Len)
+                    | RuntimeOp::List(ListOp::Len)
+                    | RuntimeOp::Dict(DictOp::Len)
+                    | RuntimeOp::Set(SetOp::Len),
+                ),
+                [],
+            ) => None,
+            _ => return Ok(None),
+        };
+        if self
+            .find_trait_method(&selection.element_type, callee.field())
+            .is_some()
             || args
                 .iter()
                 .any(|argument| argument.name.is_some() || argument.writeback_place.is_some())
@@ -6686,43 +6758,44 @@ impl<'a> FunctionCompiler<'a> {
             return Ok(None);
         }
         let (line, column) = self.span_operands(selection.span);
-        match (field, args, &selection.element_type) {
-            ("get", [key], Type::Named(_, entry_types)) => {
-                let inst = if let Some(text) = str_literal_key(&key.value, &entry_types[0]) {
-                    // A literal `str` key is looked up without a box.
-                    let (key_ptr, key_len) = self.string_constant(text.as_bytes())?;
-                    let (list, index) = self.load_borrowed_list_element(&selection)?;
-                    self.builder.ins().call(
-                        self.runtime[RuntimeFn::VecElementMapGetStr],
-                        &[list, index, key_ptr, key_len, line, column],
-                    )
-                } else {
-                    let key_direct_ty =
-                        ensure_direct_type(&entry_types[0], &self.classes, "dict key")?;
-                    let key = self.load_operand_as_opaque_direct(&key.value, &key_direct_ty)?;
-                    let (list, index) = self.load_borrowed_list_element(&selection)?;
-                    self.builder.ins().call(
-                        self.runtime[RuntimeFn::VecElementMapGet],
-                        &[list, index, key.values[0], line, column],
-                    )
-                };
-                Ok(Some(self.owned_opaque_result(
-                    self.builder.inst_results(inst).to_vec(),
-                    optional_type(entry_types[1].clone()),
-                )))
+        let Some(key) = key else {
+            let (list, index) = self.load_borrowed_list_element(&selection)?;
+            let inst = self.builder.ins().call(
+                self.runtime[RuntimeFn::VecElementLen],
+                &[list, index, line, column],
+            );
+            return Ok(Some(ValueRef {
+                values: vec![self.builder.inst_results(inst)[0]],
+                ty: DirectType::Scalar(ScalarKind::Int64),
+            }));
+        };
+        let Type::Named(_, entry_types) = selection.element_type.clone() else {
+            return Ok(None);
+        };
+        let inst = match (op, &key.value) {
+            (Some(RuntimeOp::Dict(DictOp::GetStr)), Operand::String(text)) => {
+                // A literal `str` key is looked up without a box.
+                let (key_ptr, key_len) = self.string_constant(text.as_bytes())?;
+                let (list, index) = self.load_borrowed_list_element(&selection)?;
+                self.builder.ins().call(
+                    self.runtime[RuntimeFn::VecElementMapGetStr],
+                    &[list, index, key_ptr, key_len, line, column],
+                )
             }
             _ => {
+                let key_direct_ty = ensure_direct_type(&entry_types[0], &self.classes, "dict key")?;
+                let key = self.load_operand_as_opaque_direct(&key.value, &key_direct_ty)?;
                 let (list, index) = self.load_borrowed_list_element(&selection)?;
-                let inst = self.builder.ins().call(
-                    self.runtime[RuntimeFn::VecElementLen],
-                    &[list, index, line, column],
-                );
-                Ok(Some(ValueRef {
-                    values: vec![self.builder.inst_results(inst)[0]],
-                    ty: DirectType::Scalar(ScalarKind::Int64),
-                }))
+                self.builder.ins().call(
+                    self.runtime[RuntimeFn::VecElementMapGet],
+                    &[list, index, key.values[0], line, column],
+                )
             }
-        }
+        };
+        Ok(Some(self.owned_opaque_result(
+            self.builder.inst_results(inst).to_vec(),
+            optional_type(entry_types[1].clone()),
+        )))
     }
 
     /// Decides whether a member call's receiver can be lent out of its
@@ -6741,7 +6814,7 @@ impl<'a> FunctionCompiler<'a> {
     fn lendable_receiver(
         &self,
         object: &Operand,
-        field: &str,
+        callee: MemberCallee<'_>,
         args: &[MirArg],
     ) -> std::result::Result<Option<LentReceiver>, String> {
         let Operand::Place(place) = object else {
@@ -6784,11 +6857,19 @@ impl<'a> FunctionCompiler<'a> {
         let Type::Named(receiver_name, _) = &receiver_ty else {
             return Ok(None);
         };
+        let field = callee.field();
         let kind = if matches!(receiver_name.as_str(), "list" | "dict" | "set") {
-            if field == "__take_index_option"
-                || field.starts_with("__span_")
-                || self.find_trait_method(&receiver_ty, field).is_some()
-            {
+            // A consuming read or a span op changes the receiver in place
+            // and stores it back itself.
+            let consumes = matches!(
+                callee.op(&receiver_ty, args),
+                Some(
+                    RuntimeOp::List(ListOp::TakeIndexOption)
+                        | RuntimeOp::Set(SetOp::TakeIndexOption)
+                        | RuntimeOp::Span(_)
+                )
+            );
+            if consumes || self.find_trait_method(&receiver_ty, field).is_some() {
                 return Ok(None);
             }
             LentReceiverKind::Shared
@@ -9359,102 +9440,6 @@ impl<'a> FunctionCompiler<'a> {
         Ok(merged)
     }
 
-    /// A private `Span[T]` range operation on a list (ADR-0061, B2): one
-    /// runtime entry point keyed by opcode, with the integer operands in
-    /// order and at most one value operand.
-    fn emit_vec_span_operation(
-        &mut self,
-        object: &ValueRef,
-        field: &str,
-        args: &[MirArg],
-        receiver_place: Option<&str>,
-        element_ty: &Type,
-        element_direct_ty: &DirectType,
-    ) -> std::result::Result<ValueRef, String> {
-        let opcode = crate::runtime_value::SPAN_OPERATIONS
-            .iter()
-            .position(|operation| *operation == field)
-            .ok_or_else(|| format!("direct backend does not know span operation `{field}`"))?;
-        let value_position = match field {
-            "__span_contains" | "__span_find" | "__span_count" | "__span_eq" | "__span_fill" => {
-                Some(2)
-            }
-            "__span_restore" => Some(1),
-            _ => None,
-        };
-        let mut operands = Vec::new();
-        let mut value_operand = None;
-        for (position, argument) in args.iter().enumerate() {
-            if value_position == Some(position) {
-                let handle = match field {
-                    "__span_eq" => {
-                        let loaded = self.load_operand(&argument.value)?;
-                        self.ensure_opaque(loaded)?.values[0]
-                    }
-                    "__span_restore" => {
-                        let loaded = self.load_operand(&argument.value)?;
-                        let loaded = self.ensure_opaque(loaded)?;
-                        self.transfer_owned_opaque_value(&loaded)
-                    }
-                    _ => {
-                        self.load_operand_as_opaque_direct(&argument.value, element_direct_ty)?
-                            .values[0]
-                    }
-                };
-                value_operand = Some(handle);
-                continue;
-            }
-            let loaded =
-                self.load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
-            let operand = self.coerce_value(loaded, &DirectType::Scalar(ScalarKind::Int64))?;
-            operands.push(operand.values[0]);
-        }
-        if operands.len() > 8 {
-            return Err(format!(
-                "direct backend span operation `{field}` has too many operands"
-            ));
-        }
-        let mut call_args = vec![
-            object.values[0],
-            self.builder.ins().iconst(types::I64, opcode as i64),
-        ];
-        call_args.extend(operands.iter().copied());
-        while call_args.len() < 10 {
-            call_args.push(self.builder.ins().iconst(types::I64, 0));
-        }
-        let value_operand =
-            value_operand.unwrap_or_else(|| self.builder.ins().iconst(types::I64, 0));
-        call_args.push(value_operand);
-        let inst = self
-            .builder
-            .ins()
-            .call(self.runtime[RuntimeFn::VecSpan], &call_args);
-        let result = self.builder.inst_results(inst).to_vec();
-        if crate::mir::span_member_mutates_receiver(field) {
-            if let Some(place) = receiver_place {
-                self.store_place(place, object.clone())?;
-            }
-        }
-        match field {
-            "__span_extract" => Ok(self.owned_opaque_result(
-                result,
-                Type::Named("list".to_string(), vec![element_ty.clone()]),
-            )),
-            "__span_restore" | "__span_fill" => {
-                self.release_opaque_handle(result[0]);
-                Ok(unit_value(&mut self.builder))
-            }
-            "__span_contains" | "__span_eq" => {
-                let boxed = self.owned_opaque_result(result, Type::named("bool"));
-                self.coerce_value(boxed, &DirectType::Scalar(ScalarKind::Bool))
-            }
-            _ => {
-                let boxed = self.owned_opaque_result(result, Type::named("int64"));
-                self.coerce_value(boxed, &DirectType::Scalar(ScalarKind::Int64))
-            }
-        }
-    }
-
     /// Boxes an inline union into the runtime's `Value::Union` for a
     /// container, task, queue, or helper boundary.
     fn box_inline_union(
@@ -10881,14 +10866,28 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         op: RuntimeOp,
         object: ValueRef,
-        _receiver_place: Option<&str>,
+        receiver_place: Option<&str>,
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
         match op {
             RuntimeOp::Scalar(scalar) => self.compile_scalar_runtime_op(scalar, object, args),
             RuntimeOp::Value(value) => self.compile_value_runtime_op(value, object, args),
+            RuntimeOp::Str(StrOp::Slice) => self.compile_slice_runtime_op(op, object, args),
             RuntimeOp::Str(text) if text.is_text_method() => {
                 self.compile_str_text_runtime_op(op, object, args)
+            }
+            RuntimeOp::List(list) => {
+                self.compile_list_runtime_op(list, object, receiver_place, args)
+            }
+            RuntimeOp::Dict(dict) => {
+                self.compile_dict_runtime_op(dict, object, receiver_place, args)
+            }
+            RuntimeOp::Set(set) => self.compile_set_runtime_op(set, object, receiver_place, args),
+            RuntimeOp::Array(array) => {
+                self.compile_array_runtime_op(array, object, receiver_place, args)
+            }
+            RuntimeOp::Span(span) => {
+                self.compile_span_runtime_op(span, object, receiver_place, args)
             }
             RuntimeOp::Resource(_)
             | RuntimeOp::Rng(_)
@@ -11277,6 +11276,738 @@ impl<'a> FunctionCompiler<'a> {
         Ok(self.owned_opaque_result(results, result_ty))
     }
 
+    /// Loads `argument` as one scalar word of `kind`. With `hint`, an
+    /// integer literal loads directly as `kind`.
+    fn load_word(
+        &mut self,
+        argument: &MirArg,
+        kind: ScalarKind,
+        hint: bool,
+    ) -> std::result::Result<Value, String> {
+        let loaded = if hint {
+            self.load_operand_with_integer_hint(&argument.value, Some(kind))?
+        } else {
+            self.load_operand(&argument.value)?
+        };
+        Ok(self.coerce_value(loaded, &DirectType::Scalar(kind))?.values[0])
+    }
+
+    /// Stores a receiver a method changed in place back to its place.
+    fn store_receiver_back(
+        &mut self,
+        receiver_place: Option<&str>,
+        object: &ValueRef,
+    ) -> std::result::Result<(), String> {
+        if let Some(place) = receiver_place {
+            self.store_place(place, object.clone())?;
+        }
+        Ok(())
+    }
+
+    /// A call to the shared collection operation: the receiver, a value
+    /// word, an index word, then the op's operation word. A call that
+    /// passes only one of the two leaves the other zero.
+    fn emit_collection_operation(
+        &mut self,
+        call: crate::runtime_ops::RuntimeCall,
+        collection: Value,
+        value: Option<Value>,
+        index: Option<Value>,
+    ) -> Value {
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let mut words = vec![collection, value.unwrap_or(zero), index.unwrap_or(zero)];
+        self.push_runtime_call_words(call, &mut words);
+        self.runtime_call_results(self.runtime[call.function], &words)[0]
+    }
+
+    /// A slice `items[a:b]` of a `str`, `list`, or `Array`. The bounds and
+    /// their presence flags pass as words, then the source line and column,
+    /// and the result has the receiver's type.
+    fn compile_slice_runtime_op(
+        &mut self,
+        op: RuntimeOp,
+        object: ValueRef,
+        args: &[MirArg],
+    ) -> std::result::Result<ValueRef, String> {
+        let call = op.runtime_call();
+        let receiver_ty = direct_type_to_type(&object.ty);
+        let object = self.ensure_opaque(object)?;
+        let args = bound_runtime_op_args(op, args)?;
+        let mut words = vec![object.values[0]];
+        for (argument, kind) in args.iter().zip(SLICE_WORD_KINDS) {
+            words.push(self.load_word(argument, *kind, true)?);
+        }
+        let results = self.runtime_call_results(self.runtime[call.function], &words);
+        let result_ty = op
+            .result_type(Some(&receiver_ty), &[])
+            .unwrap_or(receiver_ty);
+        Ok(self.owned_opaque_result(results, result_ty))
+    }
+
+    /// `reserve(additional)` on a `list`, `dict`, or `set`, through the
+    /// shared collection operation.
+    fn compile_collection_reserve(
+        &mut self,
+        call: crate::runtime_ops::RuntimeCall,
+        object: &ValueRef,
+        receiver_place: Option<&str>,
+        additional: &MirArg,
+    ) -> std::result::Result<ValueRef, String> {
+        let additional = self.load_word(additional, ScalarKind::Int64, true)?;
+        let result = self.emit_collection_operation(call, object.values[0], None, Some(additional));
+        self.release_opaque_handle(result);
+        self.store_receiver_back(receiver_place, object)?;
+        Ok(unit_value(&mut self.builder))
+    }
+
+    /// A `list` method, or a private read, write, or slice that indexing
+    /// and iteration lower to. The op names the helper and its immediate
+    /// words. The arms here lay out the arguments and the result, and keep
+    /// the inline length and scalar element reads.
+    fn compile_list_runtime_op(
+        &mut self,
+        op: ListOp,
+        object: ValueRef,
+        receiver_place: Option<&str>,
+        mir_args: &[MirArg],
+    ) -> std::result::Result<ValueRef, String> {
+        let runtime_op = RuntimeOp::List(op);
+        let call = runtime_op.runtime_call();
+        let function = self.runtime[call.function];
+        let list_ty = direct_type_to_type(&object.ty);
+        let object = self.ensure_opaque(object)?;
+        let list = object.values[0];
+        let element_ty = first_type_arg(Some(&list_ty)).unwrap_or(Type::named("Unknown"));
+        let element_direct_ty = ensure_direct_type(&element_ty, &self.classes, "Vec element")?;
+        let args = bound_runtime_op_args(runtime_op, mir_args)?;
+        let int64 = ScalarKind::Int64;
+        let int32 = ScalarKind::Int32;
+        match op {
+            ListOp::Slice => self.compile_slice_runtime_op(runtime_op, object, mir_args),
+            ListOp::Len => {
+                let len = self.emit_list_len(list);
+                Ok(ValueRef {
+                    values: vec![len],
+                    ty: DirectType::Scalar(int64),
+                })
+            }
+            ListOp::IsEmpty => Ok(ValueRef {
+                values: self.runtime_call_results(function, &[list]),
+                ty: DirectType::Scalar(ScalarKind::Bool),
+            }),
+            ListOp::PushScalar(kind) => {
+                // A scalar is pushed as its bits, with no box.
+                let loaded = self.load_operand_with_integer_hint(
+                    &args[0].value,
+                    element_direct_ty.scalar_kind(),
+                )?;
+                let value = self.coerce_value(loaded, &element_direct_ty)?.values[0];
+                let bits = if kind == ScalarElement::Float64 {
+                    self.builder
+                        .ins()
+                        .bitcast(types::I64, MemFlags::new(), value)
+                } else {
+                    value
+                };
+                let mut words = vec![list, bits];
+                self.push_runtime_call_words(call, &mut words);
+                self.builder.ins().call(function, &words);
+                if let Some(place) = receiver_place {
+                    if !self.receiver_store_is_redundant(place) {
+                        self.store_place(place, object.clone())?;
+                    }
+                }
+                Ok(unit_value(&mut self.builder))
+            }
+            ListOp::Push => {
+                let value =
+                    self.load_operand_as_opaque_direct(&args[0].value, &element_direct_ty)?;
+                let value = self.transfer_owned_opaque_value(&value);
+                let results = self.runtime_call_results(function, &[list, value]);
+                self.release_opaque_handle(results[0]);
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut self.builder))
+            }
+            ListOp::Pop => {
+                let index = match args.first() {
+                    Some(argument) => self.load_word(argument, int64, true)?,
+                    None => self.builder.ins().iconst(types::I64, -1),
+                };
+                let result = self.emit_collection_operation(call, list, None, Some(index));
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(self.owned_opaque_result(vec![result], element_ty))
+            }
+            ListOp::Get | ListOp::IndexOption => {
+                let index = self.load_word(args[0], int64, false)?;
+                let results = self.runtime_call_results(function, &[list, index]);
+                Ok(self.owned_opaque_result(results, element_ty))
+            }
+            ListOp::TakeIndexOption => {
+                let Some(receiver_place) = receiver_place else {
+                    return Err(
+                        "direct backend expected internal consuming vector indexing to provide its private receiver place"
+                            .to_string(),
+                    );
+                };
+                let index = self.load_word(args[0], int64, false)?;
+                let results = self.runtime_call_results(function, &[list, index]);
+                self.store_place(receiver_place, object.clone())?;
+                Ok(self.owned_opaque_result(results, optional_type(element_ty)))
+            }
+            ListOp::Index | ListOp::IndexScalar(_) => {
+                let index = self.load_word(args[0], int64, false)?;
+                let line = self.load_word(args[1], int32, false)?;
+                let column = self.load_word(args[2], int32, false)?;
+                let proven = self.proven_access == ProvenAccess::Read;
+                if let ListOp::IndexScalar(kind) = op {
+                    // A scalar element comes back as raw bits, with no box.
+                    let bits = self.emit_scalar_list_read(
+                        list,
+                        index,
+                        call.immediates[0],
+                        proven,
+                        line,
+                        column,
+                    )?;
+                    let value = if kind == ScalarElement::Float64 {
+                        self.builder
+                            .ins()
+                            .bitcast(types::F64, MemFlags::new(), bits)
+                    } else {
+                        bits
+                    };
+                    return Ok(ValueRef {
+                        values: vec![value],
+                        ty: element_direct_ty,
+                    });
+                }
+                let index = if proven {
+                    index
+                } else {
+                    self.emit_vec_index_failure_guard(list, index, line, column)?
+                };
+                let results = self.runtime_call_results(function, &[list, index, line, column]);
+                let indexed = self.owned_opaque_result(results, element_ty);
+                self.coerce_value(indexed, &element_direct_ty)
+            }
+            ListOp::Set | ListOp::Insert => {
+                let index = self.load_word(args[0], int64, false)?;
+                let value =
+                    self.load_operand_as_opaque_direct(&args[1].value, &element_direct_ty)?;
+                let value = self.transfer_owned_opaque_value(&value);
+                let results = self.runtime_call_results(function, &[list, index, value]);
+                self.store_receiver_back(receiver_place, &object)?;
+                if op == ListOp::Insert {
+                    return Ok(unit_value(&mut self.builder));
+                }
+                Ok(self.owned_opaque_result(results, optional_type(element_ty)))
+            }
+            ListOp::SetIndex => {
+                let index = self.load_word(args[0], int64, false)?;
+                let value =
+                    self.load_operand_as_opaque_direct(&args[1].value, &element_direct_ty)?;
+                let line = self.load_word(args[2], int32, false)?;
+                let column = self.load_word(args[3], int32, false)?;
+                let index = self.emit_vec_index_failure_guard(list, index, line, column)?;
+                let value = self.transfer_owned_opaque_value(&value);
+                let results =
+                    self.runtime_call_results(function, &[list, index, value, line, column]);
+                self.release_opaque_handle(results[0]);
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut self.builder))
+            }
+            ListOp::Remove | ListOp::IndexOf | ListOp::Count => {
+                let value =
+                    self.load_operand_as_opaque_direct(&args[0].value, &element_direct_ty)?;
+                let result =
+                    self.emit_collection_operation(call, list, Some(value.values[0]), None);
+                if op == ListOp::Remove {
+                    self.store_receiver_back(receiver_place, &object)?;
+                    self.release_opaque_handle(result);
+                    return Ok(unit_value(&mut self.builder));
+                }
+                let boxed = self.owned_opaque_result(vec![result], Type::named("int64"));
+                self.coerce_value(boxed, &DirectType::Scalar(int64))
+            }
+            ListOp::Swap => {
+                let first = self.load_word(args[0], int64, false)?;
+                let second = self.load_word(args[1], int64, false)?;
+                self.builder.ins().call(function, &[list, first, second]);
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut self.builder))
+            }
+            ListOp::Contains => {
+                let value =
+                    self.load_operand_as_opaque_direct(&args[0].value, &element_direct_ty)?;
+                Ok(ValueRef {
+                    values: self.runtime_call_results(function, &[list, value.values[0]]),
+                    ty: DirectType::Scalar(ScalarKind::Bool),
+                })
+            }
+            ListOp::Extend => {
+                let loaded = self.load_operand(&args[0].value)?;
+                let other = self.ensure_opaque(loaded)?;
+                let other = self.transfer_owned_opaque_value(&other);
+                let results = self.runtime_call_results(function, &[list, other]);
+                self.release_opaque_handle(results[0]);
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut self.builder))
+            }
+            ListOp::Clear | ListOp::Reverse => {
+                let results = self.runtime_call_results(function, &[list]);
+                self.release_opaque_handle(results[0]);
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut self.builder))
+            }
+            ListOp::Reserve => {
+                self.compile_collection_reserve(call, &object, receiver_place, args[0])
+            }
+        }
+    }
+
+    /// A `dict` method, or the private element read and write that
+    /// indexing lowers to.
+    fn compile_dict_runtime_op(
+        &mut self,
+        op: DictOp,
+        object: ValueRef,
+        receiver_place: Option<&str>,
+        args: &[MirArg],
+    ) -> std::result::Result<ValueRef, String> {
+        let runtime_op = RuntimeOp::Dict(op);
+        let call = runtime_op.runtime_call();
+        let function = self.runtime[call.function];
+        let dict_ty = direct_type_to_type(&object.ty);
+        let object = self.ensure_opaque(object)?;
+        let map = object.values[0];
+        let (key_ty, value_ty) = match &dict_ty {
+            Type::Named(_, entry_types) => (
+                entry_types
+                    .first()
+                    .cloned()
+                    .unwrap_or(Type::named("Unknown")),
+                entry_types
+                    .get(1)
+                    .cloned()
+                    .unwrap_or(Type::named("Unknown")),
+            ),
+            _ => (Type::named("Unknown"), Type::named("Unknown")),
+        };
+        let key_direct_ty = ensure_direct_type(&key_ty, &self.classes, "dict key")?;
+        let value_direct_ty = ensure_direct_type(&value_ty, &self.classes, "Map value")?;
+        let args = bound_runtime_op_args(runtime_op, args)?;
+        let int32 = ScalarKind::Int32;
+        let list = |element: Type| Type::Named("list".to_string(), vec![element]);
+        match op {
+            DictOp::Len => Ok(ValueRef {
+                values: self.runtime_call_results(function, &[map]),
+                ty: DirectType::Scalar(ScalarKind::Int64),
+            }),
+            DictOp::IsEmpty | DictOp::ContainsKey => {
+                let mut words = vec![map];
+                if let Some(key) = args.first() {
+                    let key = self.load_operand_as_opaque_direct(&key.value, &key_direct_ty)?;
+                    words.push(key.values[0]);
+                }
+                Ok(ValueRef {
+                    values: self.runtime_call_results(function, &words),
+                    ty: DirectType::Scalar(ScalarKind::Bool),
+                })
+            }
+            DictOp::GetStr => {
+                // A literal `str` key is looked up without a box.
+                let Operand::String(text) = &args[0].value else {
+                    return Err(format!(
+                        "direct backend expected `{runtime_op}` to look up a literal key"
+                    ));
+                };
+                let (key_ptr, key_len) = self.string_constant(text.as_bytes())?;
+                let results = self.runtime_call_results(function, &[map, key_ptr, key_len]);
+                Ok(self.owned_opaque_result(results, optional_type(value_ty)))
+            }
+            DictOp::Get | DictOp::Remove => {
+                let key = self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
+                let results = self.runtime_call_results(function, &[map, key.values[0]]);
+                if op == DictOp::Remove {
+                    self.store_receiver_back(receiver_place, &object)?;
+                }
+                Ok(self.owned_opaque_result(results, optional_type(value_ty)))
+            }
+            DictOp::Index => {
+                let key = self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
+                let line = self.load_word(args[1], int32, false)?;
+                let column = self.load_word(args[2], int32, false)?;
+                let results =
+                    self.runtime_call_results(function, &[map, key.values[0], line, column]);
+                let indexed = self.owned_opaque_result(results, value_ty);
+                self.coerce_value(indexed, &value_direct_ty)
+            }
+            DictOp::Set | DictOp::SetIndex => {
+                let key = self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
+                let value = self.load_operand_as_opaque_direct(&args[1].value, &value_direct_ty)?;
+                let mut line_column = Vec::with_capacity(2);
+                for argument in &args[2..] {
+                    line_column.push(self.load_word(argument, int32, false)?);
+                }
+                let key = self.transfer_owned_opaque_value(&key);
+                let value = self.transfer_owned_opaque_value(&value);
+                let mut words = vec![map, key, value];
+                words.extend(line_column);
+                let results = self.runtime_call_results(function, &words);
+                if op == DictOp::SetIndex {
+                    self.release_opaque_handle(results[0]);
+                    self.store_receiver_back(receiver_place, &object)?;
+                    return Ok(unit_value(&mut self.builder));
+                }
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(self.owned_opaque_result(results, optional_type(value_ty)))
+            }
+            DictOp::Keys | DictOp::Values | DictOp::Items => {
+                let result_ty = match op {
+                    DictOp::Keys => list(key_ty),
+                    DictOp::Values => list(value_ty),
+                    _ => list(Type::Tuple(vec![key_ty, value_ty])),
+                };
+                let results = self.runtime_call_results(function, &[map]);
+                Ok(self.owned_opaque_result(results, result_ty))
+            }
+            DictOp::Clear | DictOp::Update => {
+                let mut words = vec![map];
+                if let Some(other) = args.first() {
+                    let loaded = self.load_operand(&other.value)?;
+                    let other = self.ensure_opaque(loaded)?;
+                    words.push(self.transfer_owned_opaque_value(&other));
+                }
+                let results = self.runtime_call_results(function, &words);
+                self.release_opaque_handle(results[0]);
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut self.builder))
+            }
+            DictOp::Reserve => {
+                self.compile_collection_reserve(call, &object, receiver_place, args[0])
+            }
+        }
+    }
+
+    /// A `set` method, or a private iteration read.
+    fn compile_set_runtime_op(
+        &mut self,
+        op: SetOp,
+        object: ValueRef,
+        receiver_place: Option<&str>,
+        args: &[MirArg],
+    ) -> std::result::Result<ValueRef, String> {
+        let runtime_op = RuntimeOp::Set(op);
+        let call = runtime_op.runtime_call();
+        let function = self.runtime[call.function];
+        let set_ty = direct_type_to_type(&object.ty);
+        let object = self.ensure_opaque(object)?;
+        let set = object.values[0];
+        let element_ty = first_type_arg(Some(&set_ty)).unwrap_or(Type::named("Unknown"));
+        let element_direct_ty = ensure_direct_type(&element_ty, &self.classes, "set element")?;
+        let args = bound_runtime_op_args(runtime_op, args)?;
+        match op {
+            SetOp::Len => Ok(ValueRef {
+                values: self.runtime_call_results(function, &[set]),
+                ty: DirectType::Scalar(ScalarKind::Int64),
+            }),
+            SetOp::IsEmpty => Ok(ValueRef {
+                values: self.runtime_call_results(function, &[set]),
+                ty: DirectType::Scalar(ScalarKind::Bool),
+            }),
+            SetOp::Contains | SetOp::ContainsInt64 => {
+                let loaded = self.load_operand_for_target(&args[0].value, &element_direct_ty)?;
+                let value = self.coerce_value(loaded, &element_direct_ty)?;
+                // An `int64` needle is compared without a box.
+                let value = if op == SetOp::ContainsInt64 {
+                    value
+                } else {
+                    self.ensure_opaque(value)?
+                };
+                Ok(ValueRef {
+                    values: self.runtime_call_results(function, &[set, value.values[0]]),
+                    ty: DirectType::Scalar(ScalarKind::Bool),
+                })
+            }
+            SetOp::Add => {
+                let value =
+                    self.load_operand_as_opaque_direct(&args[0].value, &element_direct_ty)?;
+                let value = self.transfer_owned_opaque_value(&value);
+                self.builder.ins().call(function, &[set, value]);
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut self.builder))
+            }
+            SetOp::Remove | SetOp::Discard => {
+                let value =
+                    self.load_operand_as_opaque_direct(&args[0].value, &element_direct_ty)?;
+                let result = self.emit_collection_operation(call, set, Some(value.values[0]), None);
+                self.store_receiver_back(receiver_place, &object)?;
+                self.release_opaque_handle(result);
+                Ok(unit_value(&mut self.builder))
+            }
+            SetOp::Clear => {
+                let result = self.emit_collection_operation(call, set, None, None);
+                self.release_opaque_handle(result);
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut self.builder))
+            }
+            SetOp::Reserve => {
+                self.compile_collection_reserve(call, &object, receiver_place, args[0])
+            }
+            SetOp::IndexOption | SetOp::TakeIndexOption => {
+                let take_place = match (op, receiver_place) {
+                    (SetOp::IndexOption, _) => None,
+                    (_, Some(place)) => Some(place),
+                    (_, None) => {
+                        return Err(
+                            "direct backend expected internal consuming set indexing to provide its private receiver place"
+                                .to_string(),
+                        )
+                    }
+                };
+                let index = self.load_word(args[0], ScalarKind::Int64, false)?;
+                let results = self.runtime_call_results(function, &[set, index]);
+                if let Some(place) = take_place {
+                    self.store_place(place, object.clone())?;
+                }
+                Ok(self.owned_opaque_result(results, optional_type(element_ty)))
+            }
+        }
+    }
+
+    /// An `Array` method, or the private element read, write, or slice that
+    /// indexing lowers to. A public method passes a zero source line and
+    /// column after its words.
+    fn compile_array_runtime_op(
+        &mut self,
+        op: ArrayOp,
+        object: ValueRef,
+        receiver_place: Option<&str>,
+        mir_args: &[MirArg],
+    ) -> std::result::Result<ValueRef, String> {
+        let runtime_op = RuntimeOp::Array(op);
+        let call = runtime_op.runtime_call();
+        let function = self.runtime[call.function];
+        let receiver_ty = direct_type_to_type(&object.ty);
+        let object = self.ensure_opaque(object)?;
+        let array = object.values[0];
+        let element_ty = first_type_arg(Some(&receiver_ty))
+            .ok_or("direct backend expected Array to carry one dtype".to_string())?;
+        let element_direct_ty = ensure_direct_type(&element_ty, &self.classes, "Array dtype")?;
+        let array_ty = Type::Named("Array".to_string(), vec![element_ty.clone()]);
+        let args = bound_runtime_op_args(runtime_op, mir_args)?;
+        let int32 = ScalarKind::Int32;
+        let mut words = vec![array];
+        match op {
+            ArrayOp::Slice => self.compile_slice_runtime_op(runtime_op, object, mir_args),
+            ArrayOp::Shape => {
+                let results = self.runtime_call_results(function, &words);
+                Ok(self.owned_opaque_result(
+                    results,
+                    Type::Named("list".to_string(), vec![Type::named("int64")]),
+                ))
+            }
+            ArrayOp::Len => Ok(ValueRef {
+                values: self.runtime_call_results(function, &words),
+                ty: DirectType::Scalar(ScalarKind::Int64),
+            }),
+            ArrayOp::Clone => {
+                self.push_runtime_call_words(call, &mut words);
+                let results = self.runtime_call_results(function, &words);
+                Ok(self.owned_opaque_result(results, receiver_ty))
+            }
+            ArrayOp::Get | ArrayOp::Set | ArrayOp::Fill => {
+                for (position, argument) in args.iter().enumerate() {
+                    // `get` and `set` take coordinates first; `set` and
+                    // `fill` take an element value last.
+                    let value = if matches!((op, position), (ArrayOp::Set, 1) | (ArrayOp::Fill, 0))
+                    {
+                        self.load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?
+                    } else {
+                        let loaded = self.load_operand(&argument.value)?;
+                        self.ensure_opaque(loaded)?
+                    };
+                    words.push(value.values[0]);
+                }
+                self.push_runtime_call_words(call, &mut words);
+                let results = self.runtime_call_results(function, &words);
+                if op == ArrayOp::Fill {
+                    self.release_opaque_handle(results[0]);
+                    self.store_receiver_back(receiver_place, &object)?;
+                    return Ok(unit_value(&mut self.builder));
+                }
+                if op == ArrayOp::Set {
+                    self.store_receiver_back(receiver_place, &object)?;
+                }
+                Ok(self.owned_opaque_result(results, optional_type(element_ty)))
+            }
+            ArrayOp::Index => {
+                let coordinates = self.load_operand(&args[0].value)?;
+                let line = self.load_word(args[1], int32, true)?;
+                let column = self.load_word(args[2], int32, true)?;
+                if coordinates.ty == DirectType::Scalar(ScalarKind::Int64) {
+                    if let DirectType::Scalar(kind) = element_direct_ty {
+                        return self.emit_array_element_read(
+                            array,
+                            coordinates,
+                            kind,
+                            element_ty,
+                            line,
+                            column,
+                        );
+                    }
+                }
+                let coordinates = self.ensure_opaque(coordinates)?;
+                let results = self
+                    .runtime_call_results(function, &[array, coordinates.values[0], line, column]);
+                let result = self.owned_opaque_result(results, element_ty);
+                self.coerce_value(result, &element_direct_ty)
+            }
+            ArrayOp::SetIndex => {
+                let coordinates = self.load_operand(&args[0].value)?;
+                let coordinates = self.ensure_opaque(coordinates)?;
+                let value =
+                    self.load_operand_as_opaque_direct(&args[1].value, &element_direct_ty)?;
+                let line = self.load_word(args[2], int32, true)?;
+                let column = self.load_word(args[3], int32, true)?;
+                let results = self.runtime_call_results(
+                    function,
+                    &[array, coordinates.values[0], value.values[0], line, column],
+                );
+                self.release_opaque_handle(results[0]);
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut self.builder))
+            }
+            ArrayOp::Map => {
+                let callback = self.load_operand(&args[0].value)?;
+                let result_type = match direct_type_to_type(&callback.ty) {
+                    Type::Function { return_type, .. } | Type::Closure { return_type, .. } => {
+                        *return_type
+                    }
+                    other => {
+                        return Err(format!(
+                            "direct backend expected `Array.map` callback, found `{other}`"
+                        ))
+                    }
+                };
+                let result_dtype = self
+                    .builder
+                    .ins()
+                    .iconst(types::I64, direct_array_dtype_code(&result_type)?);
+                let callback = self.ensure_opaque(callback)?;
+                words.extend([callback.values[0], result_dtype]);
+                self.push_runtime_call_words(call, &mut words);
+                let results = self.runtime_call_results(function, &words);
+                Ok(self.owned_opaque_result(
+                    results,
+                    Type::Named("Array".to_string(), vec![result_type]),
+                ))
+            }
+            ArrayOp::Sum | ArrayOp::Min | ArrayOp::Max | ArrayOp::Mean => {
+                self.push_runtime_call_words(call, &mut words);
+                let results = self.runtime_call_results(function, &words);
+                let target = if op == ArrayOp::Mean {
+                    DirectType::Scalar(ScalarKind::Float64)
+                } else {
+                    element_direct_ty
+                };
+                let boxed = self.owned_opaque_result(results, direct_type_to_type(&target));
+                self.coerce_value(boxed, &target)
+            }
+            ArrayOp::WrappingAdd
+            | ArrayOp::WrappingSub
+            | ArrayOp::WrappingMul
+            | ArrayOp::SaturatingAdd
+            | ArrayOp::SaturatingSub
+            | ArrayOp::SaturatingMul => {
+                let rhs = self.load_operand(&args[0].value)?;
+                let rhs = if direct_array_element_type(&rhs.ty).is_some() {
+                    rhs
+                } else {
+                    self.coerce_value(rhs, &element_direct_ty)?
+                };
+                let rhs = self.ensure_opaque(rhs)?;
+                words.push(rhs.values[0]);
+                self.push_runtime_call_words(call, &mut words);
+                let results = self.runtime_call_results(function, &words);
+                Ok(self.owned_opaque_result(results, array_ty))
+            }
+        }
+    }
+
+    /// A private `Span[T]` range operation on a list (ADR-0061, B2): one
+    /// runtime entry point keyed by the op's opcode word, with the `int64`
+    /// operands in order, padded with zero words, then the value word.
+    fn compile_span_runtime_op(
+        &mut self,
+        op: SpanOp,
+        object: ValueRef,
+        receiver_place: Option<&str>,
+        args: &[MirArg],
+    ) -> std::result::Result<ValueRef, String> {
+        let runtime_op = RuntimeOp::Span(op);
+        let call = runtime_op.runtime_call();
+        let list_ty = direct_type_to_type(&object.ty);
+        let object = self.ensure_opaque(object)?;
+        let element_ty = first_type_arg(Some(&list_ty)).unwrap_or(Type::named("Unknown"));
+        let element_direct_ty = ensure_direct_type(&element_ty, &self.classes, "Vec element")?;
+        let args = bound_runtime_op_args(runtime_op, args)?;
+        let mut operands = Vec::with_capacity(args.len());
+        let mut value_operand = None;
+        for (position, argument) in args.iter().enumerate() {
+            if op.value_position() != Some(position) {
+                operands.push(self.load_word(argument, ScalarKind::Int64, true)?);
+                continue;
+            }
+            value_operand = Some(match op {
+                SpanOp::Eq => {
+                    let loaded = self.load_operand(&argument.value)?;
+                    self.ensure_opaque(loaded)?.values[0]
+                }
+                SpanOp::Restore => {
+                    let loaded = self.load_operand(&argument.value)?;
+                    let loaded = self.ensure_opaque(loaded)?;
+                    self.transfer_owned_opaque_value(&loaded)
+                }
+                _ => {
+                    self.load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?
+                        .values[0]
+                }
+            });
+        }
+        let mut words = vec![object.values[0]];
+        self.push_runtime_call_words(call, &mut words);
+        words.extend(operands);
+        while words.len() < 10 {
+            words.push(self.builder.ins().iconst(types::I64, 0));
+        }
+        let value_operand = match value_operand {
+            Some(value) => value,
+            None => self.builder.ins().iconst(types::I64, 0),
+        };
+        words.push(value_operand);
+        let results = self.runtime_call_results(self.runtime[call.function], &words);
+        if op.mutates_receiver() {
+            self.store_receiver_back(receiver_place, &object)?;
+        }
+        match op {
+            SpanOp::Extract => Ok(self
+                .owned_opaque_result(results, Type::Named("list".to_string(), vec![element_ty]))),
+            SpanOp::Restore | SpanOp::Fill => {
+                self.release_opaque_handle(results[0]);
+                Ok(unit_value(&mut self.builder))
+            }
+            SpanOp::Contains | SpanOp::Eq => {
+                let boxed = self.owned_opaque_result(results, Type::named("bool"));
+                self.coerce_value(boxed, &DirectType::Scalar(ScalarKind::Bool))
+            }
+            SpanOp::Start | SpanOp::Stop | SpanOp::Index | SpanOp::Find | SpanOp::Count => {
+                let boxed = self.owned_opaque_result(results, Type::named("int64"));
+                self.coerce_value(boxed, &DirectType::Scalar(ScalarKind::Int64))
+            }
+        }
+    }
+
     fn compile_opaque_member_call(
         &mut self,
         object_ty: &Type,
@@ -11303,1478 +12034,14 @@ impl<'a> FunctionCompiler<'a> {
             }
         }
         if let Some(op) = RuntimeOp::resolve_member(object_ty, field, |_| false) {
+            let op = crate::mir::specialized_member_op(op, object_ty, args);
             return self.compile_runtime_op(op, object, receiver_place, args);
         }
         if let Type::Named(name, class_args) = object_ty {
-            if name == "str" {
-                let object = self.ensure_opaque(object)?;
-                return match field {
-                    "__slice" => {
-                        let [start_arg, has_start_arg, end_arg, has_end_arg, line_arg, column_arg] =
-                            direct_internal_slice_args(args)?;
-                        let start = self.load_operand_with_integer_hint(
-                            &start_arg.value,
-                            Some(ScalarKind::Int64),
-                        )?;
-                        let start =
-                            self.coerce_value(start, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let has_start = self.load_operand(&has_start_arg.value)?;
-                        let has_start =
-                            self.coerce_value(has_start, &DirectType::Scalar(ScalarKind::Bool))?;
-                        let end = self.load_operand_with_integer_hint(
-                            &end_arg.value,
-                            Some(ScalarKind::Int64),
-                        )?;
-                        let end = self.coerce_value(end, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let has_end = self.load_operand(&has_end_arg.value)?;
-                        let has_end =
-                            self.coerce_value(has_end, &DirectType::Scalar(ScalarKind::Bool))?;
-                        let line = self.load_operand_with_integer_hint(
-                            &line_arg.value,
-                            Some(ScalarKind::Int32),
-                        )?;
-                        let line =
-                            self.coerce_value(line, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let column = self.load_operand_with_integer_hint(
-                            &column_arg.value,
-                            Some(ScalarKind::Int32),
-                        )?;
-                        let column =
-                            self.coerce_value(column, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::StringSlice],
-                            &[
-                                object.values[0],
-                                start.values[0],
-                                has_start.values[0],
-                                end.values[0],
-                                has_end.values[0],
-                                line.values[0],
-                                column.values[0],
-                            ],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::named("str"),
-                        ))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
-            }
-            if name == "Array" {
-                let object = self.ensure_opaque(object)?;
-                let element_ty = class_args
-                    .first()
-                    .cloned()
-                    .ok_or("direct backend expected Array to carry one dtype".to_string())?;
-                let element_direct_ty =
-                    ensure_direct_type(&element_ty, &self.classes, "Array dtype")?;
-                let array_ty = Type::Named("Array".to_string(), vec![element_ty.clone()]);
-                let zero = self.builder.ins().iconst(types::I64, 0);
-                return match field {
-                    "clone" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `clone()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ArrayClone],
-                            &[object.values[0], zero, zero],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            object_ty.clone(),
-                        ))
-                    }
-                    "__slice" => {
-                        let [start_arg, has_start_arg, end_arg, has_end_arg, line_arg, column_arg] =
-                            direct_internal_slice_args(args)?;
-                        let integer_hint = Some(ScalarKind::Int64);
-                        let start =
-                            self.load_operand_with_integer_hint(&start_arg.value, integer_hint)?;
-                        let start =
-                            self.coerce_value(start, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let has_start = self.load_operand(&has_start_arg.value)?;
-                        let has_start =
-                            self.coerce_value(has_start, &DirectType::Scalar(ScalarKind::Bool))?;
-                        let end =
-                            self.load_operand_with_integer_hint(&end_arg.value, integer_hint)?;
-                        let end = self.coerce_value(end, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let has_end = self.load_operand(&has_end_arg.value)?;
-                        let has_end =
-                            self.coerce_value(has_end, &DirectType::Scalar(ScalarKind::Bool))?;
-                        let line = self.load_operand_with_integer_hint(
-                            &line_arg.value,
-                            Some(ScalarKind::Int32),
-                        )?;
-                        let line =
-                            self.coerce_value(line, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let column = self.load_operand_with_integer_hint(
-                            &column_arg.value,
-                            Some(ScalarKind::Int32),
-                        )?;
-                        let column =
-                            self.coerce_value(column, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ArraySlice],
-                            &[
-                                object.values[0],
-                                start.values[0],
-                                has_start.values[0],
-                                end.values[0],
-                                has_end.values[0],
-                                line.values[0],
-                                column.values[0],
-                            ],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            array_ty,
-                        ))
-                    }
-                    "shape" => {
-                        ordered_named_args(&[], args)?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::ArrayShape], &[object.values[0]]);
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named("list".to_string(), vec![Type::named("int64")]),
-                        ))
-                    }
-                    "len" => {
-                        ordered_named_args(&[], args)?;
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::ArrayLen], &[object.values[0]]);
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Int64),
-                        })
-                    }
-                    "get" => {
-                        let ordered = ordered_named_args(&["index"], args)?;
-                        let coordinates = self.load_operand(&ordered[0].value)?;
-                        let coordinates = self.ensure_opaque(coordinates)?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ArrayGet],
-                            &[object.values[0], coordinates.values[0], zero, zero],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            optional_type(element_ty),
-                        ))
-                    }
-                    "set" => {
-                        let ordered = ordered_named_args(&["index", "value"], args)?;
-                        let coordinates = self.load_operand(&ordered[0].value)?;
-                        let coordinates = self.ensure_opaque(coordinates)?;
-                        let value = self
-                            .load_operand_as_opaque_direct(&ordered[1].value, &element_direct_ty)?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ArraySetInPlace],
-                            &[
-                                object.values[0],
-                                coordinates.values[0],
-                                value.values[0],
-                                zero,
-                                zero,
-                            ],
-                        );
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            optional_type(element_ty),
-                        ))
-                    }
-                    "fill" => {
-                        let ordered = ordered_named_args(&["value"], args)?;
-                        let value = self
-                            .load_operand_as_opaque_direct(&ordered[0].value, &element_direct_ty)?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ArrayFillInPlace],
-                            &[object.values[0], value.values[0], zero, zero],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    "__index" => {
-                        let [coordinate_arg, line_arg, column_arg] = <&[MirArg; 3]>::try_from(args)
-                            .expect("MIR lowering emits three arguments for Array indexing");
-                        let coordinates = self.load_operand(&coordinate_arg.value)?;
-                        let integer_hint = Some(ScalarKind::Int32);
-                        let line =
-                            self.load_operand_with_integer_hint(&line_arg.value, integer_hint)?;
-                        let line =
-                            self.coerce_value(line, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let column =
-                            self.load_operand_with_integer_hint(&column_arg.value, integer_hint)?;
-                        let column =
-                            self.coerce_value(column, &DirectType::Scalar(ScalarKind::Int32))?;
-                        if coordinates.ty == DirectType::Scalar(ScalarKind::Int64) {
-                            if let DirectType::Scalar(kind) = element_direct_ty {
-                                return self.emit_array_element_read(
-                                    object.values[0],
-                                    coordinates,
-                                    kind,
-                                    element_ty,
-                                    line.values[0],
-                                    column.values[0],
-                                );
-                            }
-                        }
-                        let coordinates = self.ensure_opaque(coordinates)?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ArrayIndex],
-                            &[
-                                object.values[0],
-                                coordinates.values[0],
-                                line.values[0],
-                                column.values[0],
-                            ],
-                        );
-                        let result = self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            element_ty,
-                        );
-                        self.coerce_value(result, &element_direct_ty)
-                    }
-                    "__set_index" => {
-                        let [coordinate_arg, value_arg, line_arg, column_arg] =
-                            <&[MirArg; 4]>::try_from(args).expect(
-                                "MIR lowering emits four arguments for Array indexed assignment",
-                            );
-                        let coordinates = self.load_operand(&coordinate_arg.value)?;
-                        let coordinates = self.ensure_opaque(coordinates)?;
-                        let value = self
-                            .load_operand_as_opaque_direct(&value_arg.value, &element_direct_ty)?;
-                        let integer_hint = Some(ScalarKind::Int32);
-                        let line =
-                            self.load_operand_with_integer_hint(&line_arg.value, integer_hint)?;
-                        let line =
-                            self.coerce_value(line, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let column =
-                            self.load_operand_with_integer_hint(&column_arg.value, integer_hint)?;
-                        let column =
-                            self.coerce_value(column, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ArraySetIndexInPlace],
-                            &[
-                                object.values[0],
-                                coordinates.values[0],
-                                value.values[0],
-                                line.values[0],
-                                column.values[0],
-                            ],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    "map" => {
-                        let ordered = ordered_named_args(&["f"], args)?;
-                        let callback = self.load_operand(&ordered[0].value)?;
-                        let callback_type = direct_type_to_type(&callback.ty);
-                        let result_type = match callback_type {
-                            Type::Function { return_type, .. }
-                            | Type::Closure { return_type, .. } => *return_type,
-                            other => {
-                                return Err(format!(
-                                    "direct backend expected `Array.map` callback, found `{other}`"
-                                ))
-                            }
-                        };
-                        let result_dtype = self
-                            .builder
-                            .ins()
-                            .iconst(types::I64, direct_array_dtype_code(&result_type)?);
-                        let callback = self.ensure_opaque(callback)?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ArrayMap],
-                            &[
-                                object.values[0],
-                                callback.values[0],
-                                result_dtype,
-                                zero,
-                                zero,
-                            ],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named("Array".to_string(), vec![result_type]),
-                        ))
-                    }
-                    "sum" | "min" | "max" | "mean" => {
-                        ordered_named_args(&[], args)?;
-                        let reduction_code = match field {
-                            "sum" => 0,
-                            "min" => 1,
-                            "max" => 2,
-                            _ => {
-                                debug_assert_eq!(field, "mean");
-                                3
-                            }
-                        };
-                        let reduction = self.builder.ins().iconst(types::I64, reduction_code);
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ArrayReduce],
-                            &[object.values[0], reduction, zero, zero],
-                        );
-                        let target = if field == "mean" {
-                            DirectType::Scalar(ScalarKind::Float64)
-                        } else {
-                            element_direct_ty
-                        };
-                        let boxed = self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            direct_type_to_type(&target),
-                        );
-                        self.coerce_value(boxed, &target)
-                    }
-                    "wrapping_add" | "wrapping_sub" | "wrapping_mul" | "saturating_add"
-                    | "saturating_sub" | "saturating_mul" => {
-                        let ordered = ordered_named_args(&["rhs"], args)?;
-                        let rhs = self.load_operand(&ordered[0].value)?;
-                        let rhs = if direct_array_element_type(&rhs.ty).is_some() {
-                            rhs
-                        } else {
-                            self.coerce_value(rhs, &element_direct_ty)?
-                        };
-                        let rhs = self.ensure_opaque(rhs)?;
-                        let operation_code = match field {
-                            "wrapping_add" | "saturating_add" => 0,
-                            "wrapping_sub" | "saturating_sub" => 1,
-                            _ => {
-                                debug_assert!(matches!(field, "wrapping_mul" | "saturating_mul"));
-                                2
-                            }
-                        };
-                        let arithmetic_mode = if field.starts_with("wrapping_") { 1 } else { 2 };
-                        let operation = self.builder.ins().iconst(types::I64, operation_code);
-                        let arithmetic_mode =
-                            self.builder.ins().iconst(types::I64, arithmetic_mode);
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::ArrayBinary],
-                            &[
-                                object.values[0],
-                                rhs.values[0],
-                                zero,
-                                operation,
-                                arithmetic_mode,
-                                zero,
-                                zero,
-                            ],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            array_ty,
-                        ))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `Array.{field}`"
-                    )),
-                };
-            }
-            if name == "list" {
-                let object = self.ensure_opaque(object)?;
-                let element_ty = class_args
-                    .first()
-                    .cloned()
-                    .unwrap_or(Type::named("Unknown"));
-                let element_direct_ty =
-                    ensure_direct_type(&element_ty, &self.classes, "Vec element")?;
-                if field.starts_with("__span_") {
-                    return self.emit_vec_span_operation(
-                        &object,
-                        field,
-                        args,
-                        receiver_place,
-                        &element_ty,
-                        &element_direct_ty,
-                    );
-                }
-                return match field {
-                    "__slice" => {
-                        let [start_arg, has_start_arg, end_arg, has_end_arg, line_arg, column_arg] =
-                            direct_internal_slice_args(args)?;
-                        let start = self.load_operand_with_integer_hint(
-                            &start_arg.value,
-                            Some(ScalarKind::Int64),
-                        )?;
-                        let start =
-                            self.coerce_value(start, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let has_start = self.load_operand(&has_start_arg.value)?;
-                        let has_start =
-                            self.coerce_value(has_start, &DirectType::Scalar(ScalarKind::Bool))?;
-                        let end = self.load_operand_with_integer_hint(
-                            &end_arg.value,
-                            Some(ScalarKind::Int64),
-                        )?;
-                        let end = self.coerce_value(end, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let has_end = self.load_operand(&has_end_arg.value)?;
-                        let has_end =
-                            self.coerce_value(has_end, &DirectType::Scalar(ScalarKind::Bool))?;
-                        let line = self.load_operand_with_integer_hint(
-                            &line_arg.value,
-                            Some(ScalarKind::Int32),
-                        )?;
-                        let line =
-                            self.coerce_value(line, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let column = self.load_operand_with_integer_hint(
-                            &column_arg.value,
-                            Some(ScalarKind::Int32),
-                        )?;
-                        let column =
-                            self.coerce_value(column, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::VecSlice],
-                            &[
-                                object.values[0],
-                                start.values[0],
-                                has_start.values[0],
-                                end.values[0],
-                                has_end.values[0],
-                                line.values[0],
-                                column.values[0],
-                            ],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named("list".to_string(), vec![element_ty]),
-                        ))
-                    }
-                    "len" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `len()` to take no arguments".to_string()
-                            );
-                        }
-                        let len = self.emit_list_len(object.values[0]);
-                        Ok(ValueRef {
-                            values: vec![len],
-                            ty: DirectType::Scalar(ScalarKind::Int64),
-                        })
-                    }
-                    "is_empty" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `is_empty()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::VecIsEmpty], &[object.values[0]]);
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Bool),
-                        })
-                    }
-                    "append" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected `append()` to receive one argument"
-                                    .to_string(),
-                            );
-                        };
-                        // A scalar is pushed as its bits, with no box.
-                        let scalar_kind = match element_direct_ty {
-                            DirectType::Scalar(ScalarKind::Int64) => Some(0),
-                            DirectType::Scalar(ScalarKind::Float64) => Some(1),
-                            DirectType::Scalar(ScalarKind::Bool) => Some(2),
-                            _ => None,
-                        };
-                        if let Some(kind) = scalar_kind {
-                            let loaded = self.load_operand_with_integer_hint(
-                                &argument.value,
-                                element_direct_ty.scalar_kind(),
-                            )?;
-                            let value = self.coerce_value(loaded, &element_direct_ty)?.values[0];
-                            let bits = if kind == 1 {
-                                self.builder
-                                    .ins()
-                                    .bitcast(types::I64, MemFlags::new(), value)
-                            } else {
-                                value
-                            };
-                            let kind = self.builder.ins().iconst(types::I64, kind);
-                            self.builder.ins().call(
-                                self.runtime[RuntimeFn::VecPushScalar],
-                                &[object.values[0], bits, kind],
-                            );
-                            if let Some(place) = receiver_place {
-                                if !self.receiver_store_is_redundant(place) {
-                                    self.store_place(place, object.clone())?;
-                                }
-                            }
-                            return Ok(unit_value(&mut self.builder));
-                        }
-                        let value = self
-                            .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
-                        let value = self.transfer_owned_opaque_value(&value);
-                        let result = self.builder.ins().call(
-                            self.runtime[RuntimeFn::VecPushInPlace],
-                            &[object.values[0], value],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(result)[0]);
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    "pop" => {
-                        let index = match args {
-                            [] => self.builder.ins().iconst(types::I64, -1),
-                            [argument] => {
-                                let loaded = self.load_operand_with_integer_hint(
-                                    &argument.value,
-                                    Some(ScalarKind::Int64),
-                                )?;
-                                self.coerce_value(loaded, &DirectType::Scalar(ScalarKind::Int64))?
-                                    .values[0]
-                            }
-                            _ => {
-                                return Err(
-                                    "direct backend expected `pop()` to receive at most one index"
-                                        .to_string(),
-                                )
-                            }
-                        };
-                        let zero = self.builder.ins().iconst(types::I64, 0);
-                        let opcode = self.builder.ins().iconst(types::I64, 0);
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::CollectionOperation],
-                            &[object.values[0], zero, index, opcode],
-                        );
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            element_ty,
-                        ))
-                    }
-                    "get" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected `get()` to receive one index argument"
-                                    .to_string(),
-                            );
-                        };
-                        let loaded_index = self.load_operand(&argument.value)?;
-                        let index = self
-                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::VecGet],
-                            &[object.values[0], index.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            class_args
-                                .first()
-                                .cloned()
-                                .unwrap_or(Type::named("Unknown")),
-                        ))
-                    }
-                    "__index_option" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected internal optional vector indexing to receive one argument"
-                                    .to_string(),
-                            );
-                        };
-                        let loaded_index = self.load_operand(&argument.value)?;
-                        let index = self
-                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::VecIndexOption],
-                            &[object.values[0], index.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            element_ty.clone(),
-                        ))
-                    }
-                    "__take_index_option" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected internal consuming vector indexing to receive one argument"
-                                    .to_string(),
-                            );
-                        };
-                        let Some(receiver_place) = receiver_place else {
-                            return Err(
-                                "direct backend expected internal consuming vector indexing to provide its private receiver place"
-                                    .to_string(),
-                            );
-                        };
-                        let loaded_index = self.load_operand(&argument.value)?;
-                        let index = self
-                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::VecTakeIndexInPlace],
-                            &[object.values[0], index.values[0]],
-                        );
-                        self.store_place(receiver_place, object.clone())?;
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            optional_type(element_ty),
-                        ))
-                    }
-                    "__index" => {
-                        let [argument, line_arg, column_arg] = args else {
-                            return Err(
-                                "direct backend expected internal vector indexing to receive index, line, and column"
-                                    .to_string(),
-                            );
-                        };
-                        let loaded_index = self.load_operand(&argument.value)?;
-                        let index = self
-                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let loaded_line = self.load_operand(&line_arg.value)?;
-                        let line =
-                            self.coerce_value(loaded_line, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let loaded_column = self.load_operand(&column_arg.value)?;
-                        let column = self
-                            .coerce_value(loaded_column, &DirectType::Scalar(ScalarKind::Int32))?;
-                        // Scalar elements come back as raw bits, with no box.
-                        let scalar_kind = match element_direct_ty {
-                            DirectType::Scalar(ScalarKind::Int64) => Some(0),
-                            DirectType::Scalar(ScalarKind::Float64) => Some(1),
-                            DirectType::Scalar(ScalarKind::Bool) => Some(2),
-                            _ => None,
-                        };
-                        let proven = self.proven_access == ProvenAccess::Read;
-                        if let Some(kind) = scalar_kind {
-                            let bits = self.emit_scalar_list_read(
-                                object.values[0],
-                                index.values[0],
-                                kind,
-                                proven,
-                                line.values[0],
-                                column.values[0],
-                            )?;
-                            let value = if scalar_kind == Some(1) {
-                                self.builder
-                                    .ins()
-                                    .bitcast(types::F64, MemFlags::new(), bits)
-                            } else {
-                                bits
-                            };
-                            return Ok(ValueRef {
-                                values: vec![value],
-                                ty: element_direct_ty.clone(),
-                            });
-                        }
-                        let normalized_index = if proven {
-                            index.values[0]
-                        } else {
-                            self.emit_vec_index_failure_guard(
-                                object.values[0],
-                                index.values[0],
-                                line.values[0],
-                                column.values[0],
-                            )?
-                        };
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::VecIndex],
-                            &[
-                                object.values[0],
-                                normalized_index,
-                                line.values[0],
-                                column.values[0],
-                            ],
-                        );
-                        let indexed = self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            element_ty,
-                        );
-                        self.coerce_value(indexed, &element_direct_ty)
-                    }
-                    "set" => {
-                        let [index_arg, value_arg] = args else {
-                            return Err(
-                                "direct backend expected `set()` to receive index and value"
-                                    .to_string(),
-                            );
-                        };
-                        let loaded_index = self.load_operand(&index_arg.value)?;
-                        let index = self
-                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let value = self
-                            .load_operand_as_opaque_direct(&value_arg.value, &element_direct_ty)?;
-                        let value = self.transfer_owned_opaque_value(&value);
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::VecSetInPlace],
-                            &[object.values[0], index.values[0], value],
-                        );
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            optional_type(
-                                class_args
-                                    .first()
-                                    .cloned()
-                                    .unwrap_or(Type::named("Unknown")),
-                            ),
-                        ))
-                    }
-                    "__set_index" => {
-                        let [index_arg, value_arg, line_arg, column_arg] = args else {
-                            return Err(
-                                "direct backend expected internal indexed assignment to receive index, value, line, and column"
-                                    .to_string(),
-                            );
-                        };
-                        let loaded_index = self.load_operand(&index_arg.value)?;
-                        let index = self
-                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let value = self
-                            .load_operand_as_opaque_direct(&value_arg.value, &element_direct_ty)?;
-                        let loaded_line = self.load_operand(&line_arg.value)?;
-                        let line =
-                            self.coerce_value(loaded_line, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let loaded_column = self.load_operand(&column_arg.value)?;
-                        let column = self
-                            .coerce_value(loaded_column, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let normalized_index = self.emit_vec_index_failure_guard(
-                            object.values[0],
-                            index.values[0],
-                            line.values[0],
-                            column.values[0],
-                        )?;
-                        let value = self.transfer_owned_opaque_value(&value);
-                        let result = self.builder.ins().call(
-                            self.runtime[RuntimeFn::VecSetIndexInPlace],
-                            &[
-                                object.values[0],
-                                normalized_index,
-                                value,
-                                line.values[0],
-                                column.values[0],
-                            ],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(result)[0]);
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    "remove" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected `remove()` to receive one value argument"
-                                    .to_string(),
-                            );
-                        };
-                        let value = self
-                            .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
-                        let opcode = self.builder.ins().iconst(types::I64, 1);
-                        let zero = self.builder.ins().iconst(types::I64, 0);
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::CollectionOperation],
-                            &[object.values[0], value.values[0], zero, opcode],
-                        );
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    "index" | "count" => {
-                        let [argument] = args else {
-                            return Err(format!(
-                                "direct backend expected `{field}()` to receive one value argument"
-                            ));
-                        };
-                        let value = self
-                            .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
-                        let opcode = self
-                            .builder
-                            .ins()
-                            .iconst(types::I64, if field == "index" { 2 } else { 3 });
-                        let zero = self.builder.ins().iconst(types::I64, 0);
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::CollectionOperation],
-                            &[object.values[0], value.values[0], zero, opcode],
-                        );
-                        let boxed = self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::named("int64"),
-                        );
-                        self.coerce_value(boxed, &DirectType::Scalar(ScalarKind::Int64))
-                    }
-                    "swap" => {
-                        let [first_arg, second_arg] = args else {
-                            return Err(
-                                "direct backend expected `swap()` to receive two index arguments"
-                                    .to_string(),
-                            );
-                        };
-                        let loaded_first = self.load_operand(&first_arg.value)?;
-                        let first = self
-                            .coerce_value(loaded_first, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let loaded_second = self.load_operand(&second_arg.value)?;
-                        let second = self
-                            .coerce_value(loaded_second, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::VecSwapInPlace],
-                            &[object.values[0], first.values[0], second.values[0]],
-                        );
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        let _ = inst;
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    "contains" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected `contains()` to receive one value argument"
-                                    .to_string(),
-                            );
-                        };
-                        let value = self
-                            .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::VecContains],
-                            &[object.values[0], value.values[0]],
-                        );
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Bool),
-                        })
-                    }
-                    "insert" => {
-                        let [index_arg, value_arg] = args else {
-                            return Err(
-                                "direct backend expected `insert()` to receive index and value"
-                                    .to_string(),
-                            );
-                        };
-                        let loaded_index = self.load_operand(&index_arg.value)?;
-                        let index = self
-                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let value = self
-                            .load_operand_as_opaque_direct(&value_arg.value, &element_direct_ty)?;
-                        let value = self.transfer_owned_opaque_value(&value);
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::VecInsertInPlace],
-                            &[object.values[0], index.values[0], value],
-                        );
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        let _ = inst;
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    "clear" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `clear()` to take no arguments"
-                                .to_string());
-                        }
-                        let result = self.builder.ins().call(
-                            self.runtime[RuntimeFn::VecClearInPlace],
-                            &[object.values[0]],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(result)[0]);
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    "reverse" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `reverse()` to take no arguments"
-                                .to_string());
-                        }
-                        let result = self.builder.ins().call(
-                            self.runtime[RuntimeFn::VecReverseInPlace],
-                            &[object.values[0]],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(result)[0]);
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    "extend" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected `extend()` to receive one list argument"
-                                    .to_string(),
-                            );
-                        };
-                        let loaded_value = self.load_operand(&argument.value)?;
-                        let value = self.ensure_opaque(loaded_value)?;
-                        let value = self.transfer_owned_opaque_value(&value);
-                        let result = self.builder.ins().call(
-                            self.runtime[RuntimeFn::VecExtendInPlace],
-                            &[object.values[0], value],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(result)[0]);
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    "reserve" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected `reserve()` to receive one argument"
-                                    .to_string(),
-                            );
-                        };
-                        let additional = self.load_operand_with_integer_hint(
-                            &argument.value,
-                            Some(ScalarKind::Int64),
-                        )?;
-                        let additional =
-                            self.coerce_value(additional, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let zero = self.builder.ins().iconst(types::I64, 0);
-                        let opcode = self.builder.ins().iconst(types::I64, 4);
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::CollectionOperation],
-                            &[object.values[0], zero, additional.values[0], opcode],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
-            }
-            if name == "dict" {
-                let object = self.ensure_opaque(object)?;
-                let key_ty = class_args
-                    .first()
-                    .cloned()
-                    .unwrap_or(Type::named("Unknown"));
-                let value_ty = class_args.get(1).cloned().unwrap_or(Type::named("Unknown"));
-                let key_direct_ty = ensure_direct_type(&key_ty, &self.classes, "dict key")?;
-                let value_direct_ty = ensure_direct_type(&value_ty, &self.classes, "Map value")?;
-                return match field {
-                    "len" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `len()` to take no arguments".to_string()
-                            );
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::MapLen], &[object.values[0]]);
-                        let len = self.builder.inst_results(inst)[0];
-                        Ok(ValueRef {
-                            values: vec![len],
-                            ty: DirectType::Scalar(ScalarKind::Int64),
-                        })
-                    }
-                    "is_empty" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `is_empty()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::MapIsEmpty], &[object.values[0]]);
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Bool),
-                        })
-                    }
-                    "get" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected `get()` to receive one key argument"
-                                    .to_string(),
-                            );
-                        };
-                        let inst = if let Some(text) = str_literal_key(&argument.value, &key_ty) {
-                            // A literal `str` key is looked up without a box.
-                            let (key_ptr, key_len) = self.string_constant(text.as_bytes())?;
-                            self.builder.ins().call(
-                                self.runtime[RuntimeFn::MapGetStr],
-                                &[object.values[0], key_ptr, key_len],
-                            )
-                        } else {
-                            let key = self
-                                .load_operand_as_opaque_direct(&argument.value, &key_direct_ty)?;
-                            self.builder.ins().call(
-                                self.runtime[RuntimeFn::MapGet],
-                                &[object.values[0], key.values[0]],
-                            )
-                        };
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            optional_type(value_ty.clone()),
-                        ))
-                    }
-                    "__index" => {
-                        let [key_arg, line_arg, column_arg] = args else {
-                            return Err(
-                                "direct backend expected internal map indexing to receive key, line, and column"
-                                    .to_string(),
-                            );
-                        };
-                        let key =
-                            self.load_operand_as_opaque_direct(&key_arg.value, &key_direct_ty)?;
-                        let loaded_line = self.load_operand(&line_arg.value)?;
-                        let line =
-                            self.coerce_value(loaded_line, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let loaded_column = self.load_operand(&column_arg.value)?;
-                        let column = self
-                            .coerce_value(loaded_column, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::MapIndex],
-                            &[
-                                object.values[0],
-                                key.values[0],
-                                line.values[0],
-                                column.values[0],
-                            ],
-                        );
-                        let indexed = self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            value_ty.clone(),
-                        );
-                        self.coerce_value(indexed, &value_direct_ty)
-                    }
-                    "set" => {
-                        let [key_arg, value_arg] = args else {
-                            return Err("direct backend expected `set()` to receive key and value"
-                                .to_string());
-                        };
-                        let key =
-                            self.load_operand_as_opaque_direct(&key_arg.value, &key_direct_ty)?;
-                        let value =
-                            self.load_operand_as_opaque_direct(&value_arg.value, &value_direct_ty)?;
-                        let key = self.transfer_owned_opaque_value(&key);
-                        let value = self.transfer_owned_opaque_value(&value);
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::MapSetInPlace],
-                            &[object.values[0], key, value],
-                        );
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            optional_type(value_ty.clone()),
-                        ))
-                    }
-                    "__set_index" => {
-                        let [key_arg, value_arg, line_arg, column_arg] = args else {
-                            return Err(
-                                "direct backend expected internal map indexed assignment to receive key, value, line, and column"
-                                    .to_string(),
-                            );
-                        };
-                        let key =
-                            self.load_operand_as_opaque_direct(&key_arg.value, &key_direct_ty)?;
-                        let value =
-                            self.load_operand_as_opaque_direct(&value_arg.value, &value_direct_ty)?;
-                        let loaded_line = self.load_operand(&line_arg.value)?;
-                        let line =
-                            self.coerce_value(loaded_line, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let loaded_column = self.load_operand(&column_arg.value)?;
-                        let column = self
-                            .coerce_value(loaded_column, &DirectType::Scalar(ScalarKind::Int32))?;
-                        let key = self.transfer_owned_opaque_value(&key);
-                        let value = self.transfer_owned_opaque_value(&value);
-                        let result = self.builder.ins().call(
-                            self.runtime[RuntimeFn::MapSetIndexInPlace],
-                            &[
-                                object.values[0],
-                                key,
-                                value,
-                                line.values[0],
-                                column.values[0],
-                            ],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(result)[0]);
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    "remove" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected `remove()` to receive one key argument"
-                                    .to_string(),
-                            );
-                        };
-                        let key =
-                            self.load_operand_as_opaque_direct(&argument.value, &key_direct_ty)?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::MapRemoveInPlace],
-                            &[object.values[0], key.values[0]],
-                        );
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            optional_type(value_ty.clone()),
-                        ))
-                    }
-                    "contains_key" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected `contains_key()` to receive one key argument"
-                                    .to_string(),
-                            );
-                        };
-                        let key =
-                            self.load_operand_as_opaque_direct(&argument.value, &key_direct_ty)?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::MapContainsKey],
-                            &[object.values[0], key.values[0]],
-                        );
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Bool),
-                        })
-                    }
-                    "keys" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `keys()` to take no arguments".to_string()
-                            );
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::MapKeys], &[object.values[0]]);
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named("list".to_string(), vec![key_ty.clone()]),
-                        ))
-                    }
-                    "values" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `values()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::MapValues], &[object.values[0]]);
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named("list".to_string(), vec![value_ty.clone()]),
-                        ))
-                    }
-                    "items" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `items()` to take no arguments"
-                                .to_string());
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::MapItems], &[object.values[0]]);
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            Type::Named(
-                                "list".to_string(),
-                                vec![Type::Tuple(vec![key_ty.clone(), value_ty.clone()])],
-                            ),
-                        ))
-                    }
-                    "clear" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `clear()` to take no arguments"
-                                .to_string());
-                        }
-                        let result = self.builder.ins().call(
-                            self.runtime[RuntimeFn::MapClearInPlace],
-                            &[object.values[0]],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(result)[0]);
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    "update" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected `update()` to receive one dict argument"
-                                    .to_string(),
-                            );
-                        };
-                        let loaded_value = self.load_operand(&argument.value)?;
-                        let value = self.ensure_opaque(loaded_value)?;
-                        let value = self.transfer_owned_opaque_value(&value);
-                        let result = self.builder.ins().call(
-                            self.runtime[RuntimeFn::MapExtendInPlace],
-                            &[object.values[0], value],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(result)[0]);
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    "reserve" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected `reserve()` to receive one argument"
-                                    .to_string(),
-                            );
-                        };
-                        let additional = self.load_operand_with_integer_hint(
-                            &argument.value,
-                            Some(ScalarKind::Int64),
-                        )?;
-                        let additional =
-                            self.coerce_value(additional, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let zero = self.builder.ins().iconst(types::I64, 0);
-                        let opcode = self.builder.ins().iconst(types::I64, 4);
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::CollectionOperation],
-                            &[object.values[0], zero, additional.values[0], opcode],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
-            }
-            if name == "set" {
-                let object = self.ensure_opaque(object)?;
-                let element_ty = class_args
-                    .first()
-                    .cloned()
-                    .unwrap_or(Type::named("Unknown"));
-                let element_direct_ty =
-                    ensure_direct_type(&element_ty, &self.classes, "set element")?;
-                return match field {
-                    "len" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `len()` to take no arguments".to_string()
-                            );
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::SetLen], &[object.values[0]]);
-                        let len = self.builder.inst_results(inst)[0];
-                        Ok(ValueRef {
-                            values: vec![len],
-                            ty: DirectType::Scalar(ScalarKind::Int64),
-                        })
-                    }
-                    "is_empty" => {
-                        if !args.is_empty() {
-                            return Err(
-                                "direct backend expected `is_empty()` to take no arguments"
-                                    .to_string(),
-                            );
-                        }
-                        let inst = self
-                            .builder
-                            .ins()
-                            .call(self.runtime[RuntimeFn::SetIsEmpty], &[object.values[0]]);
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Bool),
-                        })
-                    }
-                    "contains" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected `contains()` to receive one value argument"
-                                    .to_string(),
-                            );
-                        };
-                        let loaded =
-                            self.load_operand_for_target(&argument.value, &element_direct_ty)?;
-                        let value = self.coerce_value(loaded, &element_direct_ty)?;
-                        let inst = if value.ty == DirectType::Scalar(ScalarKind::Int64) {
-                            // An `int64` needle is compared without a box.
-                            self.builder.ins().call(
-                                self.runtime[RuntimeFn::SetContainsInt64],
-                                &[object.values[0], value.values[0]],
-                            )
-                        } else {
-                            let value = self.ensure_opaque(value)?;
-                            self.builder.ins().call(
-                                self.runtime[RuntimeFn::SetContains],
-                                &[object.values[0], value.values[0]],
-                            )
-                        };
-                        Ok(ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
-                            ty: DirectType::Scalar(ScalarKind::Bool),
-                        })
-                    }
-                    "add" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected `add()` to receive one value argument"
-                                    .to_string(),
-                            );
-                        };
-                        let value = self
-                            .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
-                        let value = self.transfer_owned_opaque_value(&value);
-                        self.builder.ins().call(
-                            self.runtime[RuntimeFn::SetInsertInPlace],
-                            &[object.values[0], value],
-                        );
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    "remove" | "discard" => {
-                        let [argument] = args else {
-                            return Err(format!(
-                                "direct backend expected `{field}()` to receive one value argument"
-                            ));
-                        };
-                        let value = self
-                            .load_operand_as_opaque_direct(&argument.value, &element_direct_ty)?;
-                        let zero = self.builder.ins().iconst(types::I64, 0);
-                        let opcode = self
-                            .builder
-                            .ins()
-                            .iconst(types::I64, if field == "remove" { 5 } else { 6 });
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::CollectionOperation],
-                            &[object.values[0], value.values[0], zero, opcode],
-                        );
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    "clear" => {
-                        if !args.is_empty() {
-                            return Err("direct backend expected `clear()` to take no arguments"
-                                .to_string());
-                        }
-                        let zero = self.builder.ins().iconst(types::I64, 0);
-                        let opcode = self.builder.ins().iconst(types::I64, 7);
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::CollectionOperation],
-                            &[object.values[0], zero, zero, opcode],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    "reserve" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected `reserve()` to receive one argument"
-                                    .to_string(),
-                            );
-                        };
-                        let additional = self.load_operand_with_integer_hint(
-                            &argument.value,
-                            Some(ScalarKind::Int64),
-                        )?;
-                        let additional =
-                            self.coerce_value(additional, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let zero = self.builder.ins().iconst(types::I64, 0);
-                        let opcode = self.builder.ins().iconst(types::I64, 4);
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::CollectionOperation],
-                            &[object.values[0], zero, additional.values[0], opcode],
-                        );
-                        self.release_opaque_handle(self.builder.inst_results(inst)[0]);
-                        if let Some(place) = receiver_place {
-                            self.store_place(place, object.clone())?;
-                        }
-                        Ok(unit_value(&mut self.builder))
-                    }
-                    "__index_option" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected internal optional set indexing to receive one argument"
-                                    .to_string(),
-                            );
-                        };
-                        let loaded_index = self.load_operand(&argument.value)?;
-                        let index = self
-                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::SetIndexOption],
-                            &[object.values[0], index.values[0]],
-                        );
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            optional_type(element_ty),
-                        ))
-                    }
-                    "__take_index_option" => {
-                        let [argument] = args else {
-                            return Err(
-                                "direct backend expected internal consuming set indexing to receive one argument"
-                                    .to_string(),
-                            );
-                        };
-                        let Some(receiver_place) = receiver_place else {
-                            return Err(
-                                "direct backend expected internal consuming set indexing to provide its private receiver place"
-                                    .to_string(),
-                            );
-                        };
-                        let loaded_index = self.load_operand(&argument.value)?;
-                        let index = self
-                            .coerce_value(loaded_index, &DirectType::Scalar(ScalarKind::Int64))?;
-                        let inst = self.builder.ins().call(
-                            self.runtime[RuntimeFn::SetTakeIndexInPlace],
-                            &[object.values[0], index.values[0]],
-                        );
-                        self.store_place(receiver_place, object.clone())?;
-                        Ok(self.owned_opaque_result(
-                            self.builder.inst_results(inst).to_vec(),
-                            optional_type(element_ty),
-                        ))
-                    }
-                    _ => Err(format!(
-                        "direct backend does not know runtime member `{}.{}`",
-                        name, field
-                    )),
-                };
+            if matches!(name.as_str(), "str" | "Array" | "list" | "dict" | "set") {
+                return Err(format!(
+                    "direct backend does not know runtime member `{name}.{field}`"
+                ));
             }
             // These handles own no host resource, so leaving their scope
             // closes nothing.
@@ -15473,14 +14740,6 @@ fn collect_direct_runtime_type_substitutions(
             collect_direct_runtime_type_substitutions(pattern_return, actual_return, substitutions);
         }
         Type::Unit | Type::Module(_) => {}
-    }
-}
-
-/// The text of a `str` literal key for a dictionary whose keys are `str`.
-fn str_literal_key<'a>(key: &'a Operand, key_type: &Type) -> Option<&'a str> {
-    match key {
-        Operand::String(text) if *key_type == Type::named("str") => Some(text),
-        _ => None,
     }
 }
 

@@ -3999,7 +3999,7 @@ fn direct_backend_internal_collection_member_errors_are_reported() {
                 "__index_option",
                 Vec::new(),
             ),
-            "internal optional vector indexing",
+            "expected `__index_option()` to receive `index`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -4017,7 +4017,7 @@ fn direct_backend_internal_collection_member_errors_are_reported() {
                     writeback_place: None,
                 }],
             ),
-            "internal vector indexing",
+            "expected `__index()` to receive `line`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -4042,7 +4042,7 @@ fn direct_backend_internal_collection_member_errors_are_reported() {
                     writeback_place: None,
                 }],
             ),
-            "internal map indexed assignment",
+            "expected `__set_index()` to receive `value`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -4056,7 +4056,7 @@ fn direct_backend_internal_collection_member_errors_are_reported() {
                 "__index_option",
                 Vec::new(),
             ),
-            "internal optional set indexing",
+            "expected `__index_option()` to receive `index`",
         ),
     ];
 
@@ -4103,9 +4103,7 @@ fn malformed_uncalled_array_slice_reports_a_direct_diagnostic_without_panicking(
         .expect("malformed public Array slicing MIR must never panic")
         .expect_err("malformed public Array slicing MIR must be rejected before codegen");
     assert!(
-        error.contains("internal slicing")
-            && error.contains("start presence")
-            && error.contains("end presence"),
+        error.contains("`Array.Slice` in `unused_slice`: expected `__slice()` to receive `start`"),
         "unexpected Array slicing diagnostic: {error}"
     );
 }
@@ -5349,67 +5347,67 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
             vec_int(),
             "append",
             Vec::new(),
-            "expected `append()` to receive one argument",
+            "expected `append()` to receive `value`",
         ),
         (
             vec_int(),
             "pop",
             vec![arg(None, Operand::Int(1)), arg(None, Operand::Int(2))],
-            "expected `pop()` to receive at most one index",
+            "expected `pop()` to take at most 1 argument(s), found 2",
         ),
         (
             vec_int(),
             "get",
             Vec::new(),
-            "expected `get()` to receive one index argument",
+            "expected `get()` to receive `index`",
         ),
         (
             vec_int(),
             "__index_option",
             Vec::new(),
-            "expected internal optional vector indexing to receive one argument",
+            "expected `__index_option()` to receive `index`",
         ),
         (
             vec_int(),
             "__index",
             vec![arg(None, Operand::Int(0))],
-            "expected internal vector indexing to receive index, line, and column",
+            "expected `__index()` to receive `line`",
         ),
         (
             vec_int(),
             "set",
             vec![arg(None, Operand::Int(0))],
-            "expected `set()` to receive index and value",
+            "expected `set()` to receive `value`",
         ),
         (
             vec_int(),
             "__set_index",
             vec![arg(None, Operand::Int(0))],
-            "expected internal indexed assignment to receive index, value, line, and column",
+            "expected `__set_index()` to receive `value`",
         ),
         (
             vec_int(),
             "remove",
             Vec::new(),
-            "expected `remove()` to receive one value argument",
+            "expected `remove()` to receive `value`",
         ),
         (
             vec_int(),
             "swap",
             vec![arg(None, Operand::Int(0))],
-            "expected `swap()` to receive two index arguments",
+            "expected `swap()` to receive `second`",
         ),
         (
             vec_int(),
             "contains",
             Vec::new(),
-            "expected `contains()` to receive one value argument",
+            "expected `contains()` to receive `value`",
         ),
         (
             vec_int(),
             "insert",
             vec![arg(None, Operand::Int(0))],
-            "expected `insert()` to receive index and value",
+            "expected `insert()` to receive `value`",
         ),
         (
             vec_int(),
@@ -5427,7 +5425,7 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
             vec_int(),
             "extend",
             Vec::new(),
-            "expected `extend()` to receive one list argument",
+            "expected `extend()` to receive `other`",
         ),
         (
             vec_int(),
@@ -5451,37 +5449,37 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
             map_string_int(),
             "get",
             Vec::new(),
-            "expected `get()` to receive one key argument",
+            "expected `get()` to receive `key`",
         ),
         (
             map_string_int(),
             "__index",
             vec![arg(None, Operand::String("a".to_string()))],
-            "expected internal map indexing to receive key, line, and column",
+            "expected `__index()` to receive `line`",
         ),
         (
             map_string_int(),
             "set",
             vec![arg(None, Operand::String("a".to_string()))],
-            "expected `set()` to receive key and value",
+            "expected `set()` to receive `value`",
         ),
         (
             map_string_int(),
             "__set_index",
             vec![arg(None, Operand::String("a".to_string()))],
-            "expected internal map indexed assignment to receive key, value, line, and column",
+            "expected `__set_index()` to receive `value`",
         ),
         (
             map_string_int(),
             "remove",
             Vec::new(),
-            "expected `remove()` to receive one key argument",
+            "expected `remove()` to receive `key`",
         ),
         (
             map_string_int(),
             "contains_key",
             Vec::new(),
-            "expected `contains_key()` to receive one key argument",
+            "expected `contains_key()` to receive `key`",
         ),
         (
             map_string_int(),
@@ -5511,7 +5509,7 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
             map_string_int(),
             "update",
             Vec::new(),
-            "expected `update()` to receive one dict argument",
+            "expected `update()` to receive `other`",
         ),
         (
             map_string_int(),
@@ -5535,25 +5533,25 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
             set_string(),
             "contains",
             Vec::new(),
-            "expected `contains()` to receive one value argument",
+            "expected `contains()` to receive `value`",
         ),
         (
             set_string(),
             "add",
             Vec::new(),
-            "expected `add()` to receive one value argument",
+            "expected `add()` to receive `value`",
         ),
         (
             set_string(),
             "remove",
             Vec::new(),
-            "expected `remove()` to receive one value argument",
+            "expected `remove()` to receive `value`",
         ),
         (
             set_string(),
             "__index_option",
             Vec::new(),
-            "expected internal optional set indexing to receive one argument",
+            "expected `__index_option()` to receive `index`",
         ),
         (
             set_string(),
@@ -6200,7 +6198,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "append",
                 Vec::new(),
             ),
-            "expected `append()` to receive one argument",
+            "expected `append()` to receive `value`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6222,7 +6220,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "pop",
                 vec![arg(Operand::Int(1)), arg(Operand::Int(2))],
             ),
-            "expected `pop()` to receive at most one index",
+            "expected `pop()` to take at most 1 argument(s), found 2",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6233,7 +6231,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "get",
                 Vec::new(),
             ),
-            "expected `get()` to receive one index argument",
+            "expected `get()` to receive `index`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6248,7 +6246,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                     writeback_place: None,
                 }],
             ),
-            "expected internal vector indexing",
+            "expected `__index()` to receive `line`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6263,7 +6261,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                     writeback_place: None,
                 }],
             ),
-            "expected internal indexed assignment",
+            "expected `__set_index()` to receive `value`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6278,7 +6276,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                     writeback_place: None,
                 }],
             ),
-            "expected `swap()` to receive two index arguments",
+            "expected `swap()` to receive `second`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6289,7 +6287,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "set",
                 vec![arg(Operand::Int(0))],
             ),
-            "expected `set()` to receive index and value",
+            "expected `set()` to receive `value`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6300,7 +6298,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "remove",
                 Vec::new(),
             ),
-            "expected `remove()` to receive one value argument",
+            "expected `remove()` to receive `value`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6311,7 +6309,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "contains",
                 Vec::new(),
             ),
-            "expected `contains()` to receive one value argument",
+            "expected `contains()` to receive `value`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6333,7 +6331,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "extend",
                 Vec::new(),
             ),
-            "expected `extend()` to receive one list argument",
+            "expected `extend()` to receive `other`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6359,7 +6357,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                     writeback_place: None,
                 }],
             ),
-            "expected internal map indexing",
+            "expected `__index()` to receive `line`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6374,7 +6372,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                     writeback_place: None,
                 }],
             ),
-            "expected internal map indexed assignment",
+            "expected `__set_index()` to receive `value`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6385,7 +6383,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "contains_key",
                 Vec::new(),
             ),
-            "expected `contains_key()` to receive one key argument",
+            "expected `contains_key()` to receive `key`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6407,7 +6405,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "get",
                 Vec::new(),
             ),
-            "expected `get()` to receive one key argument",
+            "expected `get()` to receive `key`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6418,7 +6416,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "remove",
                 Vec::new(),
             ),
-            "expected `remove()` to receive one key argument",
+            "expected `remove()` to receive `key`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6492,7 +6490,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "contains",
                 Vec::new(),
             ),
-            "expected `contains()` to receive one value argument",
+            "expected `contains()` to receive `value`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6514,7 +6512,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "add",
                 Vec::new(),
             ),
-            "expected `add()` to receive one value argument",
+            "expected `add()` to receive `value`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6525,7 +6523,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "remove",
                 Vec::new(),
             ),
-            "expected `remove()` to receive one value argument",
+            "expected `remove()` to receive `value`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6536,7 +6534,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "__index_option",
                 Vec::new(),
             ),
-            "expected internal optional set indexing",
+            "expected `__index_option()` to receive `index`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -9539,7 +9537,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
                 "append",
                 vec![],
             ),
-            "expected `append()` to receive one argument",
+            "expected `append()` to receive `value`",
         ),
         (
             "vec clear extra arg",
@@ -9578,7 +9576,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
                 "set",
                 one_arg.clone(),
             ),
-            "expected `set()` to receive key and value",
+            "expected `set()` to receive `value`",
         ),
         (
             "set contains missing arg",
@@ -9589,7 +9587,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
                 "contains",
                 vec![],
             ),
-            "expected `contains()` to receive one value argument",
+            "expected `contains()` to receive `value`",
         ),
         (
             "queue get extra arg",
@@ -9622,7 +9620,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
                 "swap",
                 one_arg.clone(),
             ),
-            "expected `swap()` to receive two index arguments",
+            "expected `swap()` to receive `second`",
         ),
         (
             "dict update missing arg",
@@ -9636,7 +9634,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
                 "update",
                 vec![],
             ),
-            "expected `update()` to receive one dict argument",
+            "expected `update()` to receive `other`",
         ),
         (
             "set remove missing arg",
@@ -9647,7 +9645,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
                 "remove",
                 vec![],
             ),
-            "expected `remove()` to receive one value argument",
+            "expected `remove()` to receive `value`",
         ),
         (
             "unknown runtime member",
@@ -9691,7 +9689,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
                 "insert",
                 one_arg.clone(),
             ),
-            "expected `insert()` to receive index and value",
+            "expected `insert()` to receive `value`",
         ),
         (
             "map items extra arg",
@@ -13845,5 +13843,127 @@ fn direct_named_runtime_ops_guard_receivers_targets_and_sources() {
     assert!(
         error.contains("expected a Queue, Task, or Duration `select` source, found `int64`"),
         "{error}"
+    );
+}
+
+#[test]
+fn direct_backend_guards_collection_ops_the_validator_did_not_check() {
+    use crate::runtime_ops::{DictOp, ListOp, RuntimeOp};
+    let source = r#"
+def main():
+    mut words: list[str] = ["a"]
+    words.append("b")
+    counts: dict[str, int64] = {"a": 1}
+    print(counts.get("a"))
+"#;
+    let mir = lower_source_to_mir(source).expect("source should lower to MIR");
+    let main = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .cloned()
+        .expect("main function should exist");
+    // Each case forges the first call to `target` in `main`, which the
+    // emitter compiles without the module validator.
+    let forge = |target: RuntimeOp, edit: &dyn Fn(&mut Vec<MirArg>)| {
+        let mut forged = main.clone();
+        let args = forged
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.instructions)
+            .find_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee: CallTarget::Runtime { op, .. },
+                            args,
+                        },
+                    ..
+                } if *op == target => Some(args),
+                _ => None,
+            })
+            .expect("main should call the op");
+        edit(args);
+        let mut codegen = NativeCodegen::new(&mir, "/tmp/direct_collection_guards.au", source)
+            .expect("codegen should initialize");
+        codegen
+            .define_function(&forged)
+            .expect_err("the forged call should be refused")
+    };
+    let missing = forge(RuntimeOp::List(ListOp::Push), &|args| args.clear());
+    assert!(
+        missing.contains("expected `append()` to receive `value`"),
+        "{missing}"
+    );
+    let not_literal = forge(RuntimeOp::Dict(DictOp::GetStr), &|args| {
+        args[0].value = Operand::Place("words".to_string());
+    });
+    assert!(
+        not_literal.contains("expected `Dict.GetStr` to look up a literal key"),
+        "{not_literal}"
+    );
+}
+
+#[test]
+fn member_callee_op_resolves_an_unresolved_member_as_lowering_does() {
+    use super::MemberCallee;
+    use crate::runtime_ops::{DictOp, ListOp, RuntimeOp, SetOp};
+
+    let list = Type::Named("list".to_string(), vec![Type::named("str")]);
+    let dict = Type::Named(
+        "dict".to_string(),
+        vec![Type::named("str"), Type::named("int64")],
+    );
+    let key = MirArg {
+        name: None,
+        value: Operand::String("a".to_string()),
+        writeback_place: None,
+    };
+    assert!(matches!(
+        MemberCallee::Field("__take_index_option").op(&list, &[]),
+        Some(RuntimeOp::List(ListOp::TakeIndexOption))
+    ));
+    assert!(matches!(
+        MemberCallee::Field("get").op(&dict, std::slice::from_ref(&key)),
+        Some(RuntimeOp::Dict(DictOp::GetStr))
+    ));
+    assert!(MemberCallee::Field("sort").op(&list, &[]).is_none());
+    let take = RuntimeOp::Set(SetOp::TakeIndexOption);
+    assert!(matches!(
+        MemberCallee::Runtime(take).op(&list, &[]),
+        Some(RuntimeOp::Set(SetOp::TakeIndexOption))
+    ));
+}
+
+#[test]
+fn native_borrowed_loop_boxes_a_dict_key_that_is_not_a_literal() {
+    let source = r#"
+def scan(docs: list[dict[str, int64]], key: str) -> int64:
+    mut hits = 0
+    for doc in docs:
+        match doc.get(key):
+            case Lookup.Found(age):
+                hits += age
+            case Lookup.Missing:
+                pass
+    return hits
+
+def main():
+    print(scan([{"age": 1}], "age"))
+"#;
+    let mir = lower_source_to_mir(source).expect("borrowed loop source should lower");
+    let object = emit_host_object(&mir).expect("borrowed loop source should emit directly");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        referenced
+            .iter()
+            .any(|name| name.ends_with("aura_direct_vec_element_map_get")),
+        "a place key should be read through the boxed lookup, referenced: {referenced:?}"
+    );
+    assert!(
+        !referenced
+            .iter()
+            .any(|name| name.ends_with("aura_direct_vec_element_map_get_str")),
+        "only a literal key is looked up without a box"
     );
 }

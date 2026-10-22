@@ -1,6 +1,9 @@
 //! Forged-MIR regressions for the direct backend's defensive rejections: each
 //! module passes the shared validator and is refused only by native emission.
+//! The `reserve` arity cases are the exception: the shared validator binds a
+//! resolved op's arguments, so it refuses them first.
 
+use aura_compiler::runtime_ops::RuntimeOp;
 use aura_compiler::{emit_host_native_object, lower_source_to_mir, run_mir, MirModule};
 use serde_json::{json, Value};
 
@@ -17,11 +20,32 @@ fn function_mut<'a>(encoded: &'a mut Value, name: &str) -> &'a mut Value {
         .unwrap_or_else(|| panic!("function `{name}` should exist"))
 }
 
+/// The source member a call names; a resolved runtime operation names the
+/// member it was resolved from.
+fn member_field(instruction: &Value) -> Option<String> {
+    let callee = &instruction["Assign"]["value"]["Call"]["callee"];
+    if let Some(field) = callee["Member"]["field"].as_str() {
+        return Some(field.to_string());
+    }
+    let op: RuntimeOp = serde_json::from_value(callee["Runtime"]["op"].clone()).ok()?;
+    Some(op.name().to_string())
+}
+
+/// The first member call to `field`, with a resolved runtime operation
+/// spelled back as the `Member` call it came from.
 fn member_call_mut<'a>(function: &'a mut Value, field: &str) -> &'a mut Value {
     for block in function["blocks"].as_array_mut().unwrap() {
         for instruction in block["instructions"].as_array_mut().unwrap() {
-            if instruction["Assign"]["value"]["Call"]["callee"]["Member"]["field"] == json!(field) {
-                return &mut instruction["Assign"]["value"]["Call"];
+            if member_field(instruction).as_deref() == Some(field) {
+                let call = &mut instruction["Assign"]["value"]["Call"];
+                if let Some(runtime) = call["callee"].get("Runtime").cloned() {
+                    call["callee"] = json!({ "Member": {
+                        "object": runtime["receiver"],
+                        "field": field,
+                        "receiver_place": runtime["receiver_place"],
+                    }});
+                }
+                return call;
             }
         }
     }
@@ -63,16 +87,13 @@ fn native_backend_requires_one_argument_for_list_reserve() {
     let mut seen = 0;
     for block in main["blocks"].as_array_mut().unwrap() {
         for instruction in block["instructions"].as_array_mut().unwrap() {
-            if instruction["Assign"]["value"]["Call"]["callee"]["Member"]["field"]
-                == json!("reserve")
-                && seen == 0
-            {
+            if member_field(instruction).as_deref() == Some("reserve") && seen == 0 {
                 instruction["Assign"]["value"]["Call"]["args"] = json!([]);
                 seen += 1;
             }
         }
     }
-    assert_native_rejects(encoded, "expected `reserve()` to receive one argument");
+    assert_native_rejects(encoded, "expected `reserve()` to receive `additional`");
 }
 
 #[test]
@@ -83,9 +104,7 @@ fn native_backend_requires_one_argument_for_set_and_dict_reserve() {
         let mut seen = 0;
         for block in main["blocks"].as_array_mut().unwrap() {
             for instruction in block["instructions"].as_array_mut().unwrap() {
-                if instruction["Assign"]["value"]["Call"]["callee"]["Member"]["field"]
-                    == json!("reserve")
-                {
+                if member_field(instruction).as_deref() == Some("reserve") {
                     if seen == index {
                         instruction["Assign"]["value"]["Call"]["args"] = json!([]);
                     }
@@ -93,7 +112,7 @@ fn native_backend_requires_one_argument_for_set_and_dict_reserve() {
                 }
             }
         }
-        assert_native_rejects(encoded, "expected `reserve()` to receive one argument");
+        assert_native_rejects(encoded, "expected `reserve()` to receive `additional`");
     }
 }
 

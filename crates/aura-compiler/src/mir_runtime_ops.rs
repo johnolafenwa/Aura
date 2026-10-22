@@ -3,10 +3,13 @@
 //! `resolve_runtime_ops` rewrites a call to `CallTarget::Runtime` when it
 //! names a resolved runtime operation (see `crate::runtime_ops`):
 //!
-//! - a member call whose receiver has a concrete built-in type. A receiver
-//!   whose type is a type parameter, a union, or a class that declares the
-//!   member keeps its `Member` call. A queue or task call that passes a
-//!   `timeout` takes the op's timeout form.
+//! - a member call whose receiver has a concrete built-in type, including
+//!   the private members that indexing, slicing, iteration, and spans lower
+//!   to. A receiver whose type is a type parameter, a union, or a class that
+//!   declares the member keeps its `Member` call. A queue or task call that
+//!   passes a `timeout` takes the op's timeout form, and a collection op
+//!   takes the scalar or literal-key form its receiver and arguments allow
+//!   (see `specialized_member_op`).
 //! - a `Name` call to a built-in function, such as `print`, `range`, or
 //!   `fs::exists`. A user function with the same name keeps its `Name`
 //!   call. `print` and `wait_any` are specialized by their arguments here.
@@ -22,7 +25,10 @@
 use super::{CallTarget, Instruction, MirFunction, MirLoanValidationContext, MirModule, Rvalue};
 use crate::call::CallableParam;
 use crate::mir::{MirArg, MirFormatPart, Operand};
-use crate::runtime_ops::{builtin_function_for_name, FunctionOp, PrintKind, RuntimeOp};
+use crate::runtime_ops::{
+    builtin_function_for_name, first_type_arg, DictOp, FunctionOp, ListOp, PrintKind, RuntimeOp,
+    ScalarElement, SetOp,
+};
 use crate::sema::Type;
 
 /// Whether `function` is the MIR body lowering gives a runtime-provided
@@ -210,7 +216,7 @@ impl MirLoanValidationContext<'_> {
         let op = RuntimeOp::resolve_member(&receiver, field, |class| {
             self.class_declares_method(class, field)
         })?;
-        Some(specialized_timeout_op(op, args))
+        Some(specialized_member_op(op, &receiver, args))
     }
 
     /// The runtime operation a call to `name` with `args` resolves to.
@@ -261,6 +267,40 @@ impl MirLoanValidationContext<'_> {
 
     fn is_int64_operand(&self, function: &MirFunction, operand: &Operand) -> bool {
         self.layout_type(function, operand) == Some(Type::named("int64"))
+    }
+}
+
+/// The specialization of an unspecialized member op on a receiver of type
+/// `receiver` with `args`:
+///
+/// - `append` and `__index` on a list of `int64`, `float64`, or `bool`
+///   push and read the element without a box;
+/// - `get` with a literal key on a dict with `str` keys looks the key up
+///   without a box;
+/// - `contains` on a set of `int64` searches for the needle without a box;
+/// - a queue or task call that binds `timeout` takes the timeout form.
+pub(crate) fn specialized_member_op(op: RuntimeOp, receiver: &Type, args: &[MirArg]) -> RuntimeOp {
+    let element = first_type_arg(Some(receiver));
+    let scalar = element.as_ref().and_then(ScalarElement::of);
+    match (op, scalar) {
+        (RuntimeOp::List(ListOp::Push), Some(kind)) => RuntimeOp::List(ListOp::PushScalar(kind)),
+        (RuntimeOp::List(ListOp::Index), Some(kind)) => RuntimeOp::List(ListOp::IndexScalar(kind)),
+        (RuntimeOp::Set(SetOp::Contains), Some(ScalarElement::Int64)) => {
+            RuntimeOp::Set(SetOp::ContainsInt64)
+        }
+        (RuntimeOp::Dict(DictOp::Get), _)
+            if element == Some(Type::named("str"))
+                && matches!(
+                    args,
+                    [MirArg {
+                        value: Operand::String(_),
+                        ..
+                    }]
+                ) =>
+        {
+            RuntimeOp::Dict(DictOp::GetStr)
+        }
+        _ => specialized_timeout_op(op, args),
     }
 }
 
@@ -338,7 +378,7 @@ pub(super) fn validate_runtime_ops(
                         function.name
                     ));
                 }
-                if specialized_timeout_op(op.unspecialized(), args) != op {
+                if specialized_member_op(op.unspecialized(), &receiver_type, args) != op {
                     return Err(format!(
                         "invalid MIR runtime operation `{op}` in `{}` does not match the types of its arguments",
                         function.name

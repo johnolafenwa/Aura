@@ -546,11 +546,11 @@ fn native_backend_rejects_malformed_collection_member_arguments() {
 
     let mut encoded = encode(COLLECTIONS);
     member_call_mut(function_mut(&mut encoded, "main"), "index")["args"] = json!([]);
-    assert_native_rejects(encoded, "expected `index()` to receive one value argument");
+    assert_native_rejects(encoded, "expected `index()` to receive `value`");
 
     let mut encoded = encode(COLLECTIONS);
     member_call_mut(function_mut(&mut encoded, "main"), "count")["args"] = json!([]);
-    assert_native_rejects(encoded, "expected `count()` to receive one value argument");
+    assert_native_rejects(encoded, "expected `count()` to receive `value`");
 
     let mut encoded = encode(COLLECTIONS);
     member_call_mut(function_mut(&mut encoded, "main"), "shuffle")["args"][0]["writeback_place"] =
@@ -576,17 +576,17 @@ fn native_backend_rejects_malformed_collection_member_arguments() {
 
     let mut encoded = encode(COLLECTIONS);
     let call = member_call_mut(function_mut(&mut encoded, "main"), "pop");
-    call["callee"]["Member"]["field"] = json!("__take_index_option");
+    call["callee"]["Runtime"]["op"] = json!({ "List": "TakeIndexOption" });
     call["args"] = json!([]);
     assert_native_rejects(
         encoded,
-        "internal consuming vector indexing to receive one argument",
+        "expected `__take_index_option()` to receive `index`",
     );
 
     let mut encoded = encode(COLLECTIONS);
     let call = member_call_mut(function_mut(&mut encoded, "main"), "pop");
-    call["callee"]["Member"]["field"] = json!("__take_index_option");
-    call["callee"]["Member"]["receiver_place"] = json!(null);
+    call["callee"]["Runtime"]["op"] = json!({ "List": "TakeIndexOption" });
+    call["callee"]["Runtime"]["receiver_place"] = json!(null);
     call["args"] = json!([extra]);
     assert_native_rejects(
         encoded,
@@ -595,17 +595,17 @@ fn native_backend_rejects_malformed_collection_member_arguments() {
 
     let mut encoded = encode(COLLECTIONS);
     let call = member_call_mut(function_mut(&mut encoded, "main"), "discard");
-    call["callee"]["Member"]["field"] = json!("__take_index_option");
+    call["callee"]["Runtime"]["op"] = json!({ "Set": "TakeIndexOption" });
     call["args"] = json!([]);
     assert_native_rejects(
         encoded,
-        "internal consuming set indexing to receive one argument",
+        "expected `__take_index_option()` to receive `index`",
     );
 
     let mut encoded = encode(COLLECTIONS);
     let call = member_call_mut(function_mut(&mut encoded, "main"), "discard");
-    call["callee"]["Member"]["field"] = json!("__take_index_option");
-    call["callee"]["Member"]["receiver_place"] = json!(null);
+    call["callee"]["Runtime"]["op"] = json!({ "Set": "TakeIndexOption" });
+    call["callee"]["Runtime"]["receiver_place"] = json!(null);
     call["args"] = json!([extra]);
     assert_native_rejects(
         encoded,
@@ -922,6 +922,6 @@ fn native_backend_rejects_array_clone_with_arguments() {
         json!([{ "name": null, "value": { "Int": 1 }, "writeback_place": null }]);
     assert_native_rejects(
         encoded,
-        "direct backend expected `clone()` to take no arguments",
+        "`Array.Clone` in `main`: expected `clone()` to take no arguments",
     );
 }

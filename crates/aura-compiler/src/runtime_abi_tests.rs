@@ -36,7 +36,7 @@ fn runtime_tables_index_each_helper_in_declaration_order() {
 
 #[test]
 fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
-    use crate::runtime_ops::{RuntimeOp, RuntimeTarget};
+    use crate::runtime_ops::{ListOp, RuntimeOp, RuntimeTarget};
 
     let mut covered = BTreeSet::new();
     let mut host_symbols = BTreeSet::new();
@@ -56,11 +56,15 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             "{op} calls undeclared helper {:?}",
             call.function
         );
+        // A scalar list read's line and column reach only its bounds
+        // failure's call, not the helper.
+        let unpassed = 2 * usize::from(matches!(op, RuntimeOp::List(ListOp::IndexScalar(_))));
         let words = call.layout_words
             + usize::from(op.has_receiver())
             + op.params().len()
             + call.immediates.len()
-            + 2 * usize::from(call.span);
+            + 2 * usize::from(call.span)
+            - unpassed;
         assert_eq!(
             words,
             call.function.params().len(),
@@ -170,6 +174,41 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
     }) {
         assert!(covered.contains(&helper), "{helper:?} has no runtime op");
     }
+    // Every `list`, `dict`, `set`, and `Array` helper a member call makes
+    // has an op. The shared collection operation pops and removes, an
+    // element path checks its index, and a lent element's `len` and `get`
+    // are read in place.
+    let uncovered = RuntimeFn::ALL
+        .iter()
+        .copied()
+        .filter(|helper| {
+            let symbol = helper.symbol();
+            [
+                "aura_direct_vec_",
+                "aura_direct_map_",
+                "aura_direct_set_",
+                "aura_direct_array_",
+            ]
+            .iter()
+            .any(|prefix| symbol.starts_with(prefix))
+                && !covered.contains(helper)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        uncovered,
+        [
+            RuntimeFn::SetReturnedViewProjection,
+            RuntimeFn::SetNextMutableSinks,
+            RuntimeFn::SetNextIndirectMutableSinks,
+            RuntimeFn::VecPopInPlace,
+            RuntimeFn::VecRemoveInPlace,
+            RuntimeFn::VecCheckIndex,
+            RuntimeFn::VecElementLen,
+            RuntimeFn::VecElementMapGet,
+            RuntimeFn::VecElementMapGetStr,
+            RuntimeFn::SetRemoveInPlace,
+        ]
+    );
 }
 
 #[test]
@@ -184,10 +223,14 @@ fn every_runtime_op_round_trips_through_its_builtin_member_or_name() {
                 "{op} does not resolve back from `{}`",
                 op.name()
             ),
-            // A private queue receive resolves by its MIR spelling.
+            // A private member resolves by its MIR spelling.
             None if op.has_receiver() => assert_eq!(
-                RuntimeOp::resolve_member(&crate::sema::Type::named("Queue"), op.name(), |_| false),
-                Some(op),
+                RuntimeOp::resolve_member(
+                    &crate::sema::Type::named(private_receiver(op)),
+                    op.name(),
+                    |_| false
+                ),
+                Some(op.unspecialized()),
                 "{op} does not resolve back from `{}`",
                 op.name()
             ),
@@ -200,5 +243,18 @@ fn every_runtime_op_round_trips_through_its_builtin_member_or_name() {
         }
         let json = serde_json::to_string(&op).unwrap();
         assert_eq!(serde_json::from_str::<RuntimeOp>(&json).unwrap(), op);
+    }
+}
+
+/// The receiver type a private member op is spelled on.
+fn private_receiver(op: crate::runtime_ops::RuntimeOp) -> &'static str {
+    use crate::runtime_ops::RuntimeOp;
+    match op {
+        RuntimeOp::Queue(_) => "Queue",
+        RuntimeOp::Str(_) => "str",
+        RuntimeOp::Dict(_) => "dict",
+        RuntimeOp::Set(_) => "set",
+        RuntimeOp::Array(_) => "Array",
+        _ => "list",
     }
 }
