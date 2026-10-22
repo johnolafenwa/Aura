@@ -47,6 +47,16 @@ Last updated: 2026-10-22
   to its read, and emitted objects are byte-identical. `aura run` skips
   the checks pass and starts no slower. Details are in
   `2026-10-22-batch-7-step-8f-explicit-checks.md`.
+- Done: 8g, measurement, on a branch from 8f. The emitter went from 24,480
+  lines at `v0.6.0-preview` to 16,524. Of those, 1,612 lines still make
+  semantic decisions, most of them method resolution and dispatch. Builds
+  are no slower and runtime is unchanged. Hashing the runtime archive
+  dominates `aura build` on this host. The checkpoint's Step 8 Results
+  section has the numbers. Details are in
+  `2026-10-22-batch-7-step-8g-measure.md`.
+- Next: 8h, recommended by 8g. It moves runtime op argument binding and
+  defaults, generic call type arguments, method resolution, and cleanup
+  callees into MIR, in two PRs. Then step 9.
 
 ## Aura 0.6.0 preview release (complete)
 
