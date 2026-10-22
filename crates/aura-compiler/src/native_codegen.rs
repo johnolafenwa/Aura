@@ -53,22 +53,12 @@ pub fn emit_host_object_with_metadata(
     // Hand-built or older MIR may still spell resolved operations as member
     // calls; the pass is idempotent on lowered MIR.
     crate::mir::resolve_runtime_ops(&mut module);
-    // The emitter still decides ownership itself (Batch 7 step 8e, PR 2), so
-    // it compiles the module without the instructions that state it. An
-    // implicit module is checked through a copy the pass fills in, and an
-    // explicit one loses what the pass added.
-    let validate = |module: &mut MirModule| {
-        crate::mir::validate_at_boundary(module).map_err(|error| match error {
-            crate::mir::BoundaryError::LoanFlow(error)
-            | crate::mir::BoundaryError::Ownership(error) => error,
-        })
-    };
-    if module.ownership.is_implicit() {
-        validate(&mut module.clone())?;
-    } else {
-        validate(&mut module)?;
-        crate::mir::ownership::strip_ownership(&mut module);
-    }
+    // The emitter carries out the ownership the module states. The
+    // boundary gives an implicit module the ownership pass first.
+    crate::mir::validate_at_boundary(&mut module).map_err(|error| match error {
+        crate::mir::BoundaryError::LoanFlow(error)
+        | crate::mir::BoundaryError::Ownership(error) => error,
+    })?;
     let context = NativeCodegen::with_validated_loans(&module, program_path, program_source)?;
     context.emit()
 }
@@ -474,18 +464,22 @@ struct ValueRef {
     ty: DirectType,
 }
 
-/// The temporaries a statement owns: opaque handles, and inline unions
-/// whose active member may hold a handle (keyed by the tag word). They are
-/// ordered by value, so releases come out in the same order in every build.
+/// The layout temporaries one MIR instruction owns while it is emitted:
+/// opaque handles, and inline unions whose active member may hold a handle
+/// (keyed by the tag word). A boxed copy, a projection's fresh copy, or a
+/// call result lives here until a consumer takes it, and the end of the
+/// instruction releases what is left. The set is empty at every
+/// instruction boundary. Its entries are ordered by value, so releases come
+/// out in the same order in every build.
 #[derive(Clone, Default)]
-struct OwnedTemporaries {
+struct LayoutScratch {
     opaque: BTreeSet<Value>,
     unions: BTreeMap<Value, (Vec<Value>, DirectUnionType)>,
     /// Inline callables the statement owns, keyed by the descriptor word.
     callables: BTreeMap<Value, Vec<Value>>,
 }
 
-impl OwnedTemporaries {
+impl LayoutScratch {
     fn contains(&self, value: &Value) -> bool {
         self.opaque.contains(value)
     }
@@ -502,6 +496,10 @@ impl OwnedTemporaries {
         self.opaque.clear();
         self.unions.clear();
         self.callables.clear();
+    }
+
+    fn is_empty(&self) -> bool {
+        self.opaque.is_empty() && self.unions.is_empty() && self.callables.is_empty()
     }
 }
 
@@ -585,6 +583,8 @@ fn function_value_param_types(
 
 struct NativeCodegen<'a> {
     module: &'a MirModule,
+    /// The locals each function states ownership for, by function name.
+    explicit_locals: HashMap<String, crate::mir::ownership::ExplicitLocals>,
     reachable_blocks: HashMap<String, HashSet<String>>,
     safepoints_enabled: bool,
     program_path: String,
@@ -942,6 +942,7 @@ impl<'a> NativeCodegen<'a> {
         )?;
         Ok(Self {
             module,
+            explicit_locals: crate::mir::ownership::explicit_locals(module),
             reachable_blocks,
             safepoints_enabled,
             program_path: program_path.to_string(),
@@ -1317,6 +1318,11 @@ impl<'a> NativeCodegen<'a> {
             }
         }
 
+        let explicit_locals = self
+            .explicit_locals
+            .get(&function.name)
+            .cloned()
+            .unwrap_or_default();
         let current_function_name = public_direct_function_name(&function.name);
         let current_function_path = function
             .source_path
@@ -1345,7 +1351,11 @@ impl<'a> NativeCodegen<'a> {
             union_layouts: self.union_layouts.clone(),
             trait_impls: self.trait_impls.clone(),
             return_type: function.return_type.clone(),
-            owned_opaque_temporaries: OwnedTemporaries::default(),
+            layout_scratch: LayoutScratch::default(),
+            tracked_roots: explicit_locals.tracked,
+            loan_locals: explicit_locals.loans,
+            closed_matches: explicit_locals.closed_matches,
+            emptied_store_root: None,
             last_runtime_type_tag: None,
             proven_access: ProvenAccess::None,
             view_places: HashMap::new(),
@@ -2589,7 +2599,19 @@ struct FunctionCompiler<'a> {
     union_layouts: HashMap<String, crate::union_layout::MirUnionLayout>,
     trait_impls: Vec<MirTraitImpl>,
     return_type: Type,
-    owned_opaque_temporaries: OwnedTemporaries,
+    layout_scratch: LayoutScratch,
+    /// The roots whose values the MIR retains and releases. Any other root
+    /// whose layout owns a handle holds a boxed Copy value, which the
+    /// backend drops itself: see `release_boxed_copy_roots`.
+    tracked_roots: HashSet<String>,
+    /// The loans, whose locals hold nothing.
+    loan_locals: HashSet<String>,
+    /// The match blocks whose fall-through the MIR treats as unreachable.
+    /// It releases nothing there, so the edge traps.
+    closed_matches: HashSet<String>,
+    /// A tracked root the current instruction assigns. The MIR released its
+    /// old value, so the store adds no release.
+    emptied_store_root: Option<String>,
     /// The latest `tag_value_type` call: its instruction, value, and encoded
     /// type, so an identical tag that no other call follows is not repeated.
     last_runtime_type_tag: Option<(cranelift_codegen::ir::Inst, Value, String)>,
@@ -2682,18 +2704,18 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn temporary_owns_opaque(&self, value: &ValueRef) -> bool {
-        self.is_opaque_value(value) && self.owned_opaque_temporaries.contains(&value.values[0])
+        self.is_opaque_value(value) && self.layout_scratch.contains(&value.values[0])
     }
 
     fn mark_temporary_opaque_owned(&mut self, value: &ValueRef) {
         if self.is_opaque_value(value) {
-            self.owned_opaque_temporaries.insert(value.values[0]);
+            self.layout_scratch.insert(value.values[0]);
         }
     }
 
     fn clear_temporary_opaque_owned(&mut self, value: &ValueRef) {
         if self.is_opaque_value(value) {
-            self.owned_opaque_temporaries.remove(&value.values[0]);
+            self.layout_scratch.remove(&value.values[0]);
         }
     }
 
@@ -2714,7 +2736,7 @@ impl<'a> FunctionCompiler<'a> {
 
     fn release_all_temporary_owned(&mut self) {
         let owned = self
-            .owned_opaque_temporaries
+            .layout_scratch
             .opaque
             .iter()
             .copied()
@@ -2722,49 +2744,49 @@ impl<'a> FunctionCompiler<'a> {
         for value in owned {
             self.release_opaque_handle(value);
         }
-        let unions = std::mem::take(&mut self.owned_opaque_temporaries.unions);
+        let unions = std::mem::take(&mut self.layout_scratch.unions);
         for (words, union) in unions.into_values() {
             self.release_union_words(&union, &words);
         }
-        let callables = std::mem::take(&mut self.owned_opaque_temporaries.callables);
+        let callables = std::mem::take(&mut self.layout_scratch.callables);
         for words in callables.into_values() {
             self.release_callable_words(&words);
         }
-        self.owned_opaque_temporaries.clear();
+        self.layout_scratch.clear();
     }
 
-    fn release_temporary_owned_since(&mut self, baseline: &OwnedTemporaries) {
+    fn release_temporary_owned_since(&mut self, baseline: &LayoutScratch) {
         let created = self
-            .owned_opaque_temporaries
+            .layout_scratch
             .opaque
             .difference(&baseline.opaque)
             .copied()
             .collect::<Vec<_>>();
         for value in created {
             self.release_opaque_handle(value);
-            self.owned_opaque_temporaries.remove(&value);
+            self.layout_scratch.remove(&value);
         }
         let created = self
-            .owned_opaque_temporaries
+            .layout_scratch
             .unions
             .keys()
             .filter(|tag| !baseline.unions.contains_key(tag))
             .copied()
             .collect::<Vec<_>>();
         for tag in created {
-            if let Some((words, union)) = self.owned_opaque_temporaries.unions.remove(&tag) {
+            if let Some((words, union)) = self.layout_scratch.unions.remove(&tag) {
                 self.release_union_words(&union, &words);
             }
         }
         let created = self
-            .owned_opaque_temporaries
+            .layout_scratch
             .callables
             .keys()
             .filter(|descriptor| !baseline.callables.contains_key(descriptor))
             .copied()
             .collect::<Vec<_>>();
         for descriptor in created {
-            if let Some(words) = self.owned_opaque_temporaries.callables.remove(&descriptor) {
+            if let Some(words) = self.layout_scratch.callables.remove(&descriptor) {
                 self.release_callable_words(&words);
             }
         }
@@ -2772,16 +2794,13 @@ impl<'a> FunctionCompiler<'a> {
 
     fn temporary_owns_union(&self, value: &ValueRef) -> bool {
         matches!(value.ty, DirectType::Union(_))
-            && self
-                .owned_opaque_temporaries
-                .unions
-                .contains_key(&value.values[0])
+            && self.layout_scratch.unions.contains_key(&value.values[0])
     }
 
     fn mark_temporary_union_owned(&mut self, value: &ValueRef) {
         if let DirectType::Union(union) = &value.ty {
             if union.owns_handles() {
-                self.owned_opaque_temporaries
+                self.layout_scratch
                     .unions
                     .insert(value.values[0], (value.values.clone(), union.clone()));
             }
@@ -2789,9 +2808,7 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn clear_temporary_union_owned(&mut self, value: &ValueRef) {
-        self.owned_opaque_temporaries
-            .unions
-            .remove(&value.values[0]);
+        self.layout_scratch.unions.remove(&value.values[0]);
     }
 
     /// Releases the active member's handle of an inline union, if the active
@@ -2865,15 +2882,12 @@ impl<'a> FunctionCompiler<'a> {
 
     fn temporary_owns_callable(&self, value: &ValueRef) -> bool {
         matches!(value.ty, DirectType::Callable(_))
-            && self
-                .owned_opaque_temporaries
-                .callables
-                .contains_key(&value.values[0])
+            && self.layout_scratch.callables.contains_key(&value.values[0])
     }
 
     fn mark_temporary_callable_owned(&mut self, value: &ValueRef) {
         if matches!(value.ty, DirectType::Callable(_)) {
-            self.owned_opaque_temporaries
+            self.layout_scratch
                 .callables
                 .insert(value.values[0], value.values.clone());
         }
@@ -2881,9 +2895,7 @@ impl<'a> FunctionCompiler<'a> {
 
     fn clear_temporary_callable_owned(&mut self, value: &ValueRef) {
         if matches!(value.ty, DirectType::Callable(_)) {
-            self.owned_opaque_temporaries
-                .callables
-                .remove(&value.values[0]);
+            self.layout_scratch.callables.remove(&value.values[0]);
         }
     }
 
@@ -3014,45 +3026,79 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn release_root_if_opaque(&mut self, name: &str) -> std::result::Result<(), String> {
+    /// Releases the handles the words of root `name` own, by its layout:
+    /// an opaque handle, the active member of an inline union, or the
+    /// captures of an inline callable. A plain class owns no handle. The
+    /// zero words of an empty root release nothing.
+    fn release_root_words(&mut self, name: &str) -> std::result::Result<(), String> {
         let ty = self.local_type(name)?;
-        if let DirectType::Union(union) = &ty {
-            if union.owns_handles() {
+        if !layout_owns_handles(&ty) {
+            return Ok(());
+        }
+        let words = self
+            .local_vars(name)?
+            .iter()
+            .map(|var| self.builder.use_var(*var))
+            .collect::<Vec<_>>();
+        if words
+            .iter()
+            .all(|word| self.integer_constant(*word) == Some(0))
+        {
+            return Ok(());
+        }
+        match &ty {
+            DirectType::Union(union) => {
                 let union = union.clone();
-                let vars = self.local_vars(name)?;
-                let words = vars
-                    .iter()
-                    .map(|var| self.builder.use_var(*var))
-                    .collect::<Vec<_>>();
                 self.release_union_words(&union, &words);
             }
-            return Ok(());
+            DirectType::Callable(_) => self.release_callable_words(&words),
+            _ => self.release_opaque_handle(words[0]),
         }
-        if matches!(ty, DirectType::Callable(_)) {
-            let vars = self.local_vars(name)?;
-            let words = vars
-                .iter()
-                .map(|var| self.builder.use_var(*var))
-                .collect::<Vec<_>>();
-            self.release_callable_words(&words);
-            return Ok(());
-        }
-        if !matches!(ty, DirectType::Opaque(_)) {
-            return Ok(());
-        }
-        let vars = self.local_vars(name)?;
-        let current = self.builder.use_var(vars[0]);
-        self.release_opaque_handle(current);
         Ok(())
     }
 
-    fn release_all_opaque_roots(&mut self) -> std::result::Result<(), String> {
-        // Sorted, so the same program releases its roots in the same order
-        // in every build.
-        let mut names = self.variable_types.keys().cloned().collect::<Vec<_>>();
+    /// Lowers MIR `Release`: drops the root's value by its layout and
+    /// leaves the root empty, with all-zero words.
+    fn release_root(&mut self, name: &str) -> std::result::Result<(), String> {
+        self.release_root_words(name)?;
+        let ty = self.local_type(name)?;
+        if !layout_owns_handles(&ty) {
+            return Ok(());
+        }
+        for (var, abi) in self.local_vars(name)?.into_iter().zip(ty.abi_types()) {
+            let zero = if abi == types::F64 {
+                self.builder.ins().f64const(Ieee64::with_float(0.0))
+            } else {
+                self.builder.ins().iconst(abi, 0)
+            };
+            self.builder.def_var(var, zero);
+        }
+        Ok(())
+    }
+
+    /// Releases, in name order, the roots the MIR does not track whose
+    /// layout owns a handle. They hold boxed Copy values, such as an
+    /// `int8`, a `Duration`, a Copy enum, or a tuple of Copy values: the
+    /// MIR copies them freely and never releases them, and this backend
+    /// boxes them. `mut` parameters go back to the caller instead.
+    fn release_boxed_copy_roots(&mut self) -> std::result::Result<(), String> {
+        let mut names = self
+            .variable_types
+            .iter()
+            .filter(|(name, ty)| {
+                layout_owns_handles(ty)
+                    && !self.tracked_roots.contains(*name)
+                    && !self.loan_locals.contains(*name)
+                    && !self
+                        .writeback_locals
+                        .iter()
+                        .any(|(writeback, _)| writeback == *name)
+            })
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
         names.sort();
         for name in names {
-            self.release_root_if_opaque(&name)?;
+            self.release_root_words(&name)?;
         }
         Ok(())
     }
@@ -3076,27 +3122,6 @@ impl<'a> FunctionCompiler<'a> {
                 .ins()
                 .call(self.runtime[RuntimeFn::CloneValue], &[value.values[0]]);
             self.builder.inst_results(inst)[0]
-        }
-    }
-
-    fn export_return_value(&mut self, value: ValueRef) -> Vec<Value> {
-        if matches!(value.ty, DirectType::Callable(_)) {
-            return self.transfer_callable_words(&value);
-        }
-        if let DirectType::Union(union) = &value.ty {
-            if union.owns_handles() {
-                return self.transfer_union_words(&value);
-            }
-            return value.values;
-        }
-        if !self.is_opaque_value(&value) {
-            return value.values;
-        }
-        if self.temporary_owns_opaque(&value) {
-            self.clear_temporary_opaque_owned(&value);
-            value.values
-        } else {
-            vec![self.retain_opaque_handle(value.values[0])]
         }
     }
 
@@ -3226,7 +3251,11 @@ impl<'a> FunctionCompiler<'a> {
         if self.builder.current_block() != Some(block_id) {
             self.builder.switch_to_block(block_id);
         }
-        self.owned_opaque_temporaries.clear();
+        debug_assert!(
+            self.layout_scratch.is_empty(),
+            "layout temporaries outlived the block before `{}`",
+            block.label
+        );
 
         let mut in_range: Option<(&str, &str)> = None;
         for (instruction_index, instruction) in block.instructions.iter().enumerate() {
@@ -3245,7 +3274,7 @@ impl<'a> FunctionCompiler<'a> {
             self.proven_access = ProvenAccess::None;
             compiled?;
         }
-        self.compile_terminator(&block.terminator, return_ty)?;
+        self.compile_terminator(&block.label, &block.terminator, return_ty)?;
         Ok(())
     }
 
@@ -3255,12 +3284,32 @@ impl<'a> FunctionCompiler<'a> {
         instruction_index: usize,
         instruction: &Instruction,
     ) -> std::result::Result<(), String> {
+        debug_assert!(
+            self.layout_scratch.is_empty(),
+            "layout temporaries outlived the instruction before {instruction:?}"
+        );
+        let compiled = self.compile_instruction_body(block_label, instruction_index, instruction);
+        self.emptied_store_root = None;
+        compiled?;
+        self.release_all_temporary_owned();
+        Ok(())
+    }
+
+    fn compile_instruction_body(
+        &mut self,
+        block_label: &str,
+        instruction_index: usize,
+        instruction: &Instruction,
+    ) -> std::result::Result<(), String> {
         match instruction {
             // `compile_block` reads the fact for the instructions after it.
             Instruction::IndexInRange { .. } => {}
-            // The emitter still decides ownership itself, so it compiles a
-            // retain or a release to nothing.
-            Instruction::Retain { .. } | Instruction::Release { .. } => {}
+            // A retain pays for the consumer that follows. The consumer adds
+            // the reference by layout when it hands the value on, so a
+            // consumer that only borrows, such as a call dispatched on a
+            // boxed generic receiver, adds none.
+            Instruction::Retain { .. } => {}
+            Instruction::Release { place } => self.release_root(place)?,
             Instruction::Safepoint => {
                 let Some(fuel_variable) = self.safepoint_fuel else {
                     return Ok(());
@@ -3461,6 +3510,7 @@ impl<'a> FunctionCompiler<'a> {
                 self.view_places.insert(loan.clone(), source);
             }
             Instruction::ReadLoan { target, loan } => {
+                self.mark_emptied_store_root(target);
                 let loaded = self.load_place(loan)?;
                 let target_ty = self.type_of_place(target)?;
                 let loaded = self.coerce_value(loaded, &target_ty)?;
@@ -3598,12 +3648,14 @@ impl<'a> FunctionCompiler<'a> {
                         }
                     }
                 }
+                self.mark_emptied_store_root(target);
                 if let Rvalue::Try {
-                    value: try_value, ..
+                    value: try_value,
+                    releases_on_error,
                 } = value
                 {
                     let target_ty = self.type_of_place(target)?;
-                    self.compile_try_assign(target, target_ty, try_value)?;
+                    self.compile_try_assign(target, target_ty, try_value, releases_on_error)?;
                 } else {
                     let target_ty = self.type_of_place(target)?;
                     let compiled = self.compile_rvalue_for_target(value, &target_ty)?;
@@ -3636,12 +3688,20 @@ impl<'a> FunctionCompiler<'a> {
                 }
             }
         }
-        self.release_all_temporary_owned();
         Ok(())
+    }
+
+    /// Notes that the instruction assigns `target`, a tracked root the MIR
+    /// left empty, so its store releases nothing.
+    fn mark_emptied_store_root(&mut self, target: &str) {
+        if !target.contains('.') && self.tracked_roots.contains(target) {
+            self.emptied_store_root = Some(target.to_string());
+        }
     }
 
     fn compile_terminator(
         &mut self,
+        block_label: &str,
         terminator: &Terminator,
         return_ty: &DirectType,
     ) -> std::result::Result<(), String> {
@@ -3649,7 +3709,23 @@ impl<'a> FunctionCompiler<'a> {
             Terminator::Return(operand) => {
                 let value = self.load_operand_for_target(operand, return_ty)?;
                 let coerced = self.coerce_value(value, return_ty)?;
-                self.emit_return_value(coerced)?;
+                // A return releases the root it returns from, unless the
+                // root moved out whole or goes back to the caller.
+                let returned_root = match operand {
+                    Operand::Place(place) => Some(place.as_str()),
+                    Operand::MovePlace(place) if place.contains('.') => Some(place.as_str()),
+                    _ => None,
+                }
+                .map(|place| place.split('.').next().unwrap_or(place))
+                .filter(|root| {
+                    self.tracked_roots.contains(*root)
+                        && !self
+                            .writeback_locals
+                            .iter()
+                            .any(|(writeback, _)| writeback == root)
+                })
+                .map(str::to_string);
+                self.emit_return_value(coerced, returned_root.as_slice())?;
             }
             Terminator::Goto(label) => {
                 self.release_all_temporary_owned();
@@ -3705,7 +3781,7 @@ impl<'a> FunctionCompiler<'a> {
                     )?;
                     let arm_block = self.compiled_block(&arm.label)?;
                     let matched_cleanup = self.builder.create_block();
-                    let pending_owned = self.owned_opaque_temporaries.clone();
+                    let pending_owned = self.layout_scratch.clone();
                     self.builder
                         .ins()
                         .brif(matched, matched_cleanup, &[], next_block, &[]);
@@ -3714,11 +3790,15 @@ impl<'a> FunctionCompiler<'a> {
                     self.builder.ins().jump(arm_block, &[]);
                     self.builder.seal_block(matched_cleanup);
                     self.builder.switch_to_block(next_block);
-                    self.owned_opaque_temporaries = pending_owned;
+                    self.layout_scratch = pending_owned;
                 }
                 self.release_all_temporary_owned();
-                let otherwise = self.compiled_block(otherwise)?;
-                self.builder.ins().jump(otherwise, &[]);
+                if self.closed_matches.contains(block_label) {
+                    self.builder.ins().trap(TrapCode::unwrap_user(2));
+                } else {
+                    let otherwise = self.compiled_block(otherwise)?;
+                    self.builder.ins().jump(otherwise, &[]);
+                }
             }
             Terminator::ForRange {
                 binding,
@@ -3788,6 +3868,9 @@ impl<'a> FunctionCompiler<'a> {
                     }
                 }
                 self.builder.ins().trap(TrapCode::unwrap_user(1));
+                // The trap unwinds the task, whose ledger reclaims what the
+                // assertion's operands held.
+                self.layout_scratch.clear();
             }
             // The checker proved this path cannot run (for example the
             // impossible arm of a narrowed module-constant read).
@@ -3814,12 +3897,22 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn emit_return_value(&mut self, value: ValueRef) -> std::result::Result<(), String> {
-        let mut return_values = self.export_return_value(value);
+    /// Returns `value` to the caller with the `mut` parameters' values, after
+    /// the pending cleanups. The MIR released the other tracked roots
+    /// before the exit, except `releases`, which go after the cleanups.
+    fn emit_return_value(
+        &mut self,
+        value: ValueRef,
+        releases: &[String],
+    ) -> std::result::Result<(), String> {
+        let mut return_values = self.transfer_values(&value);
         self.emit_pending_cleanups_for(true, false)?;
         self.append_writeback_return_values(&mut return_values)?;
         self.release_all_temporary_owned();
-        self.release_all_opaque_roots()?;
+        for root in releases {
+            self.release_root_words(root)?;
+        }
+        self.release_boxed_copy_roots()?;
         self.builder
             .ins()
             .call(self.runtime[RuntimeFn::ExitCall], &[]);
@@ -4030,6 +4123,11 @@ impl<'a> FunctionCompiler<'a> {
                     self.builder.inst_results(call).to_vec(),
                     member_type.clone(),
                 );
+                // The take moves the payload out and the MIR counts the
+                // root as moved, so the emptied box goes now.
+                if !place.contains('.') && self.tracked_roots.contains(place) {
+                    self.release_root(place)?;
+                }
                 let member = ensure_direct_type(member_type, &self.classes, "union payload")?;
                 self.coerce_value(payload, &member)
             }
@@ -7549,7 +7647,7 @@ impl<'a> FunctionCompiler<'a> {
                 return Ok(());
             }
         }
-        let baseline = self.owned_opaque_temporaries.clone();
+        let baseline = self.layout_scratch.clone();
         let probe = self.load_place(loan)?;
         drop(probe);
         self.release_temporary_owned_since(&baseline);
@@ -8010,7 +8108,7 @@ impl<'a> FunctionCompiler<'a> {
             self.builder.append_block_param(merge, abi);
         }
 
-        let caller_owned = self.owned_opaque_temporaries.clone();
+        let caller_owned = self.layout_scratch.clone();
         let alternative_count = resolved.alternatives.len();
         let mut merged_owned = None;
         for (index, alternative) in resolved.alternatives.into_iter().enumerate() {
@@ -8022,7 +8120,7 @@ impl<'a> FunctionCompiler<'a> {
                     .ins()
                     .brif(selected, load_block, &[], next_block, &[]);
                 self.builder.switch_to_block(load_block);
-                self.owned_opaque_temporaries = caller_owned.clone();
+                self.layout_scratch = caller_owned.clone();
                 let value = self.load_alternative(&alternative)?;
                 let value = self.coerce_value(value, &target_ty)?;
                 let value_is_owned = self.temporary_owns_opaque(&value);
@@ -8042,7 +8140,7 @@ impl<'a> FunctionCompiler<'a> {
                 self.builder.switch_to_block(next_block);
                 self.builder.seal_block(next_block);
             } else {
-                self.owned_opaque_temporaries = caller_owned.clone();
+                self.layout_scratch = caller_owned.clone();
                 let value = self.load_alternative(&alternative)?;
                 let value = self.coerce_value(value, &target_ty)?;
                 let value_is_owned = self.temporary_owns_opaque(&value);
@@ -8062,7 +8160,7 @@ impl<'a> FunctionCompiler<'a> {
         }
         self.builder.switch_to_block(merge);
         self.builder.seal_block(merge);
-        self.owned_opaque_temporaries = caller_owned;
+        self.layout_scratch = caller_owned;
         let value = ValueRef {
             values: self.builder.block_params(merge).to_vec(),
             ty: target_ty,
@@ -8797,7 +8895,7 @@ impl<'a> FunctionCompiler<'a> {
 
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
-        let caller_owned = self.owned_opaque_temporaries.clone();
+        let caller_owned = self.layout_scratch.clone();
         let coordinates = self.ensure_opaque(coordinate)?;
         let inst = self.builder.ins().call(
             self.runtime[RuntimeFn::ArrayIndex],
@@ -8807,7 +8905,7 @@ impl<'a> FunctionCompiler<'a> {
         let result = self.coerce_value(result, &element_direct_ty)?;
         self.release_temporary_owned_since(&caller_owned);
         self.builder.ins().jump(join_block, &[result.values[0]]);
-        self.owned_opaque_temporaries = caller_owned;
+        self.layout_scratch = caller_owned;
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
@@ -9053,7 +9151,7 @@ impl<'a> FunctionCompiler<'a> {
         value: ValueRef,
     ) -> std::result::Result<(), String> {
         let merge = self.builder.create_block();
-        let caller_owned = self.owned_opaque_temporaries.clone();
+        let caller_owned = self.layout_scratch.clone();
         let value_was_owned = self.temporary_owns_opaque(&value);
         let alternative_count = resolved.alternatives.len();
         for (index, alternative) in resolved.alternatives.into_iter().enumerate() {
@@ -9065,7 +9163,7 @@ impl<'a> FunctionCompiler<'a> {
                     .ins()
                     .brif(selected, store_block, &[], next_block, &[]);
                 self.builder.switch_to_block(store_block);
-                self.owned_opaque_temporaries = caller_owned.clone();
+                self.layout_scratch = caller_owned.clone();
                 self.store_alternative(&alternative, value.clone())?;
                 self.release_temporary_owned_since(&caller_owned);
                 self.builder.ins().jump(merge, &[]);
@@ -9073,7 +9171,7 @@ impl<'a> FunctionCompiler<'a> {
                 self.builder.switch_to_block(next_block);
                 self.builder.seal_block(next_block);
             } else {
-                self.owned_opaque_temporaries = caller_owned.clone();
+                self.layout_scratch = caller_owned.clone();
                 self.store_alternative(&alternative, value.clone())?;
                 self.release_temporary_owned_since(&caller_owned);
                 self.builder.ins().jump(merge, &[]);
@@ -9081,7 +9179,7 @@ impl<'a> FunctionCompiler<'a> {
         }
         self.builder.switch_to_block(merge);
         self.builder.seal_block(merge);
-        self.owned_opaque_temporaries = caller_owned;
+        self.layout_scratch = caller_owned;
         if value_was_owned {
             self.clear_temporary_opaque_owned(&value);
         }
@@ -9169,38 +9267,22 @@ impl<'a> FunctionCompiler<'a> {
         })
     }
 
+    /// Stores `value` into root `name`. The root takes an owned layout
+    /// temporary as it is and copies a value read in place by its layout.
+    /// A store the MIR assigns to an emptied root adds no release; any
+    /// other store, such as a writeback or a field written into an inline
+    /// union, drops the value the root held.
     fn store_root(&mut self, name: &str, value: ValueRef) -> std::result::Result<(), String> {
         let expected = self.local_type(name)?;
         let value = self.coerce_value(value, &expected)?;
         let vars = self.local_vars(name)?;
-        if matches!(&expected, DirectType::Union(union) if union.owns_handles()) {
-            let stored = self.transfer_union_words(&value);
-            self.release_root_if_opaque(name)?;
-            for (var, compiled) in vars.into_iter().zip(stored) {
-                self.builder.def_var(var, compiled);
-            }
-            return Ok(());
+        let stored = self.transfer_values(&value);
+        if self.emptied_store_root.as_deref() == Some(name) {
+            self.emptied_store_root = None;
+        } else {
+            self.release_root_words(name)?;
         }
-        if matches!(expected, DirectType::Callable(_)) {
-            let stored = self.transfer_callable_words(&value);
-            self.release_root_if_opaque(name)?;
-            for (var, compiled) in vars.into_iter().zip(stored) {
-                self.builder.def_var(var, compiled);
-            }
-            return Ok(());
-        }
-        if matches!(expected, DirectType::Opaque(_)) {
-            let stored = if self.temporary_owns_opaque(&value) {
-                self.clear_temporary_opaque_owned(&value);
-                value.values[0]
-            } else {
-                self.retain_opaque_handle(value.values[0])
-            };
-            self.release_root_if_opaque(name)?;
-            self.builder.def_var(vars[0], stored);
-            return Ok(());
-        }
-        for (var, compiled) in vars.into_iter().zip(value.values) {
+        for (var, compiled) in vars.into_iter().zip(stored) {
             self.builder.def_var(var, compiled);
         }
         Ok(())
@@ -9413,7 +9495,7 @@ impl<'a> FunctionCompiler<'a> {
             self.builder.append_block_param(merge, abi);
         }
         let tag = words[0];
-        let caller_owned = self.owned_opaque_temporaries.clone();
+        let caller_owned = self.layout_scratch.clone();
         let member_count = union.members.len();
         let mut merged_union_owned: Option<bool> = None;
         for index in 0..member_count {
@@ -9431,7 +9513,7 @@ impl<'a> FunctionCompiler<'a> {
             }
             self.builder.switch_to_block(matched);
             self.builder.seal_block(matched);
-            self.owned_opaque_temporaries = caller_owned.clone();
+            self.layout_scratch = caller_owned.clone();
             let member = self.union_member_from_words(union, index, words)?;
             let result = body(self, index, member)?;
             let result = self.coerce_value(result, result_ty)?;
@@ -9462,7 +9544,7 @@ impl<'a> FunctionCompiler<'a> {
         }
         self.builder.switch_to_block(merge);
         self.builder.seal_block(merge);
-        self.owned_opaque_temporaries = caller_owned;
+        self.layout_scratch = caller_owned;
         let merged = ValueRef {
             values: self.builder.block_params(merge).to_vec(),
             ty: result_ty.clone(),
@@ -9994,6 +10076,7 @@ impl<'a> FunctionCompiler<'a> {
         target: &str,
         target_ty: DirectType,
         try_value: &Operand,
+        releases_on_error: &[String],
     ) -> std::result::Result<(), String> {
         let loaded = self.load_operand(try_value)?;
         let (source_error_ty, target_error_ty) = match (&loaded.ty, &self.return_type) {
@@ -10074,7 +10157,7 @@ impl<'a> FunctionCompiler<'a> {
                 self.return_type.clone(),
             )?
         };
-        self.emit_return_value(error_result)?;
+        self.emit_return_value(error_result, releases_on_error)?;
         self.builder.seal_block(err_block);
 
         self.builder.switch_to_block(join_block);
@@ -10560,7 +10643,7 @@ impl<'a> FunctionCompiler<'a> {
         // merely because the cleanup branch releases its own results. Track only
         // cleanup-created temporaries while emitting each run block, then restore
         // the caller's owners at the merge.
-        let caller_owned_temporaries = std::mem::take(&mut self.owned_opaque_temporaries);
+        let caller_owned_temporaries = std::mem::take(&mut self.layout_scratch);
         for place in self.cleanup_places.clone().into_iter().rev() {
             let Some(variable) = self.cleanup_active_vars.get(&place).copied() else {
                 continue;
@@ -10582,9 +10665,9 @@ impl<'a> FunctionCompiler<'a> {
             self.builder.seal_block(run_block);
             self.builder.switch_to_block(next_block);
             self.builder.seal_block(next_block);
-            self.owned_opaque_temporaries.clear();
+            self.layout_scratch.clear();
         }
-        self.owned_opaque_temporaries = caller_owned_temporaries;
+        self.layout_scratch = caller_owned_temporaries;
         Ok(())
     }
 
@@ -10592,10 +10675,11 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         values: &mut Vec<Value>,
     ) -> std::result::Result<(), String> {
+        // Each `mut` parameter's words move back to the caller as they are.
         for (name, ty) in self.writeback_locals.clone() {
             let current = self.load_root(&name)?;
-            let coerced = self.coerce_value(current, &ty)?;
-            values.extend(self.export_return_value(coerced));
+            debug_assert_eq!(current.ty, ty, "writeback `{name}`");
+            values.extend(current.values);
         }
         Ok(())
     }
@@ -12177,7 +12261,7 @@ impl<'a> FunctionCompiler<'a> {
         // before jumping here. The restored fallthrough ledger belongs only to
         // the trapping no-match edge and must not be released a second time at
         // the join.
-        self.owned_opaque_temporaries.clear();
+        self.layout_scratch.clear();
         self.load_result_vars(&result_vars, result_ty)
     }
 
@@ -12225,11 +12309,11 @@ impl<'a> FunctionCompiler<'a> {
         self.builder
             .ins()
             .brif(is_union, union_block, &[], plain_block, &[]);
-        let caller_owned = self.owned_opaque_temporaries.clone();
+        let caller_owned = self.layout_scratch.clone();
 
         self.builder.switch_to_block(union_block);
         self.builder.seal_block(union_block);
-        self.owned_opaque_temporaries = caller_owned.clone();
+        self.layout_scratch = caller_owned.clone();
         let mutates_receiver = candidates
             .iter()
             .any(|(_, method)| method.receiver == Some(MirReceiverKind::BorrowMut));
@@ -12277,7 +12361,7 @@ impl<'a> FunctionCompiler<'a> {
 
         self.builder.switch_to_block(plain_block);
         self.builder.seal_block(plain_block);
-        self.owned_opaque_temporaries = caller_owned;
+        self.layout_scratch = caller_owned;
         self.emit_candidate_chain(
             raw,
             receiver_place,
@@ -12292,7 +12376,7 @@ impl<'a> FunctionCompiler<'a> {
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
-        self.owned_opaque_temporaries.clear();
+        self.layout_scratch.clear();
         self.load_result_vars(&result_vars, result_ty)
     }
 
@@ -12318,7 +12402,7 @@ impl<'a> FunctionCompiler<'a> {
         // receiver, but that edge is skipped when control falls through to the
         // next candidate. Keep the compile-time ledger path-local so a later
         // candidate still emits the release owed by its runtime path.
-        let caller_owned = self.owned_opaque_temporaries.clone();
+        let caller_owned = self.layout_scratch.clone();
         for (candidate_ty, _method) in candidates.iter() {
             // Every implementation target is a named type; anything else is
             // forged metadata, refused before a block is left unterminated.
@@ -12328,7 +12412,7 @@ impl<'a> FunctionCompiler<'a> {
                     field, candidate_ty
                 ));
             };
-            self.owned_opaque_temporaries = caller_owned.clone();
+            self.layout_scratch = caller_owned.clone();
             let matched = self.value_matches_runtime_type(object.values[0], candidate_ty)?;
             let then_block = self.builder.create_block();
             let else_block = self.builder.create_block();
@@ -12336,7 +12420,7 @@ impl<'a> FunctionCompiler<'a> {
                 .ins()
                 .brif(matched, then_block, &[], else_block, &[]);
             self.builder.switch_to_block(then_block);
-            self.owned_opaque_temporaries = caller_owned.clone();
+            self.layout_scratch = caller_owned.clone();
             let call_result = self.compile_class_member_call(
                 candidate_name,
                 Some(candidate_ty.clone()),
@@ -12352,7 +12436,7 @@ impl<'a> FunctionCompiler<'a> {
             self.builder.ins().jump(join_block, &[]);
             self.builder.seal_block(then_block);
             self.builder.switch_to_block(else_block);
-            self.owned_opaque_temporaries = caller_owned.clone();
+            self.layout_scratch = caller_owned.clone();
             current_fallthrough = Some(else_block);
         }
         if let Some(else_block) = current_fallthrough {
@@ -13754,6 +13838,16 @@ fn direct_ffi_type_for_source(
         }));
     }
     Err(format!("direct backend cannot lower `{ty}` through FFI v0"))
+}
+
+/// Whether a value of `ty` owns a runtime handle: an opaque value, an inline
+/// callable, or an inline union with an opaque or callable member.
+fn layout_owns_handles(ty: &DirectType) -> bool {
+    match ty {
+        DirectType::Opaque(_) | DirectType::Callable(_) => true,
+        DirectType::Union(union) => union.owns_handles(),
+        DirectType::Scalar(_) | DirectType::PlainClass(_) => false,
+    }
 }
 
 fn direct_type(ty: &Type, classes: &HashMap<String, MirClass>) -> Option<DirectType> {

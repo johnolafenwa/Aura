@@ -816,6 +816,8 @@ pub(super) struct FlowGraph {
     pub(super) successors: Vec<Vec<usize>>,
     pub(super) predecessors: Vec<Vec<usize>>,
     pub(super) entry: usize,
+    /// The blocks whose fall-through edge the graph leaves out.
+    pub(super) closed: Vec<usize>,
 }
 
 impl FlowGraph {
@@ -848,8 +850,10 @@ impl FlowGraph {
             }
             successors.push(targets);
         }
+        let mut closed = Vec::new();
         for (block, otherwise) in exhaustive_matches(function, context, &labels, &successors) {
             successors[block].retain(|target| *target != otherwise);
+            closed.push(block);
         }
         let mut reachable = vec![false; function.blocks.len()];
         let mut pending = vec![entry];
@@ -871,6 +875,7 @@ impl FlowGraph {
             successors,
             predecessors,
             entry,
+            closed,
         })
     }
 
@@ -1144,6 +1149,442 @@ fn insert_ownership_within(module: &mut MirModule, state_cells: usize) {
         }
     }
     module.ownership = MirOwnership::Explicit;
+    cancel_retain_release_pairs(module);
+}
+
+/// One retain the cancellation turns into a move: its block, the retain's
+/// position, the consumer's position (`None` for the terminator), the
+/// release's position (`None` when the consumer is a `Return`), and the
+/// root.
+struct MovePair {
+    block: usize,
+    retain: usize,
+    consumer: Option<usize>,
+    release: Option<usize>,
+    root: String,
+}
+
+/// Turns `Retain(x); <consume Place(x)>; ...; Release(x)` into
+/// `<consume MovePlace(x)>` when nothing between the consumer and the
+/// release uses `x`. A `Return(Place(x))` releases its root, so a retain
+/// right before it becomes a move too. Only whole roots move: a retained
+/// projection leaves its root holding the rest of the value.
+///
+/// The rewrite only takes instructions out, so nothing lands between an
+/// `IndexInRange` and the access it covers.
+///
+/// A move needs owned authority over the root, which the loan validator
+/// decides. Each rewritten function must pass the loan validator and the
+/// ownership checker. A function that fails with every pair keeps only the
+/// pairs that pass one at a time.
+pub(crate) fn cancel_retain_release_pairs(module: &mut MirModule) {
+    if module.ownership != MirOwnership::Explicit {
+        return;
+    }
+    let rewrites = {
+        let Ok(context) = MirLoanValidationContext::new(module) else {
+            return;
+        };
+        let repeatable = repeatable_captures(module);
+        let none = HashSet::new();
+        module
+            .functions
+            .iter()
+            .chain(module.top_level.iter())
+            .enumerate()
+            .filter_map(|(index, function)| {
+                let pinned = repeatable.get(function.name.as_str()).unwrap_or(&none);
+                cancelled_function(function, &context, pinned).map(|function| (index, function))
+            })
+            .collect::<Vec<_>>()
+    };
+    let function_count = module.functions.len();
+    for (index, rewrite) in rewrites {
+        let function = match module.functions.get_mut(index) {
+            Some(function) => function,
+            None => {
+                debug_assert_eq!(index, function_count);
+                module
+                    .top_level
+                    .as_mut()
+                    .expect("a rewrite past the functions is the top level")
+            }
+        };
+        *function = rewrite;
+    }
+}
+
+/// The captures of each closure body that a repeatable closure passes, by
+/// body name. Each call reads them again, so the body never moves them.
+fn repeatable_captures(module: &MirModule) -> HashMap<&str, HashSet<&str>> {
+    let mut captures = HashMap::<&str, HashSet<&str>>::new();
+    for instruction in module
+        .functions
+        .iter()
+        .chain(module.top_level.iter())
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.instructions)
+    {
+        if let Instruction::Assign {
+            value:
+                Rvalue::Closure {
+                    function,
+                    captures: closure_captures,
+                    consuming: false,
+                    ..
+                },
+            ..
+        } = instruction
+        {
+            captures
+                .entry(function.as_str())
+                .or_default()
+                .extend(closure_captures.iter().map(|capture| capture.name.as_str()));
+        }
+    }
+    captures
+}
+
+/// `function` with its pairs cancelled, or `None` when no pair cancels.
+/// A `pinned` root never moves.
+fn cancelled_function(
+    function: &MirFunction,
+    context: &MirLoanValidationContext<'_>,
+    pinned: &HashSet<&str>,
+) -> Option<MirFunction> {
+    let mut pairs = move_pairs(function, context);
+    pairs.retain(|pair| !pinned.contains(pair.root.as_str()));
+    if pairs.is_empty() {
+        return None;
+    }
+    let valid = |candidate: &MirFunction| {
+        super::validate_function_loan_flow(candidate, context).is_ok()
+            && super::ownership_check::check_function(
+                candidate,
+                context,
+                MAX_OWNERSHIP_STATE_CELLS,
+                None,
+            )
+            .is_ok()
+    };
+    let mut candidate = function.clone();
+    apply_move_pairs(&mut candidate, &pairs);
+    if valid(&candidate) {
+        return Some(candidate);
+    }
+    let mut kept = Vec::new();
+    for pair in pairs {
+        kept.push(pair);
+        let mut candidate = function.clone();
+        apply_move_pairs(&mut candidate, &kept);
+        if !valid(&candidate) {
+            kept.pop();
+        }
+    }
+    if kept.is_empty() {
+        return None;
+    }
+    let mut candidate = function.clone();
+    apply_move_pairs(&mut candidate, &kept);
+    Some(candidate)
+}
+
+/// The retains of `function` that cancel against a release.
+fn move_pairs(function: &MirFunction, context: &MirLoanValidationContext<'_>) -> Vec<MovePair> {
+    let mut facts = OwnershipFacts::new(function, context);
+    let mut pairs = Vec::new();
+    if facts.roots.is_empty() {
+        return pairs;
+    }
+    // A value read through a loan, or one that borrows its source, has a
+    // borrowed origin, and the loan validator refuses to move it.
+    let read_from_loans = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::ReadLoan { target, .. } => Some(target.as_str()),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    for (block_index, block) in function.blocks.iter().enumerate() {
+        let instructions = &block.instructions;
+        for (retain, instruction) in instructions.iter().enumerate() {
+            let Instruction::Retain { place } = instruction else {
+                continue;
+            };
+            let Some(root) = facts.tracked(place) else {
+                continue;
+            };
+            if !context.root_allows_owned_take(function, place)
+                || read_from_loans.contains(place.as_str())
+                || !facts.borrowed_by(place).is_empty()
+            {
+                continue;
+            }
+            // The retains of one consumer come right before it.
+            let consumer = (retain + 1..instructions.len())
+                .find(|position| !matches!(instructions[*position], Instruction::Retain { .. }));
+            // An element loan selects with a place it keeps.
+            if consumer.is_some_and(|position| {
+                matches!(
+                    instructions[position],
+                    Instruction::BeginElementLoan { .. } | Instruction::ReborrowElement { .. }
+                )
+            }) {
+                continue;
+            }
+            let accesses = match consumer {
+                Some(position) => instruction_accesses(&instructions[position]),
+                None => terminator_accesses(&block.terminator),
+            };
+            if !sole_consume(&facts, &accesses, place, root) {
+                continue;
+            }
+            let release = match consumer {
+                None if matches!(block.terminator, Terminator::Return(_)) => None,
+                None => continue,
+                Some(position) => {
+                    match later_release(&mut facts, instructions, position + 1, place, root) {
+                        Some(release) => Some(release),
+                        None => continue,
+                    }
+                }
+            };
+            pairs.push(MovePair {
+                block: block_index,
+                retain,
+                consumer,
+                release,
+                root: place.clone(),
+            });
+        }
+    }
+    pairs
+}
+
+/// Whether the only touch of `root` among `accesses` is one consuming
+/// `Place(name)` of the whole root. A loan or a closure that borrows the
+/// root touches it too.
+fn sole_consume(
+    facts: &OwnershipFacts<'_>,
+    accesses: &[(&str, Access)],
+    name: &str,
+    root: usize,
+) -> bool {
+    let mut consumes = 0;
+    for (place, access) in accesses {
+        let touches = root_of(place) == name || facts.borrowed_by(root_of(place)).contains(&root);
+        if !touches {
+            continue;
+        }
+        if *place != name || *access != Access::Consume {
+            return false;
+        }
+        consumes += 1;
+    }
+    consumes == 1
+}
+
+/// The position of the first `Release(name)` from `start` on, when nothing
+/// before it uses the root: no access, no retain, and no `try` that would
+/// release it on its error edge.
+fn later_release(
+    facts: &mut OwnershipFacts<'_>,
+    instructions: &[Instruction],
+    start: usize,
+    name: &str,
+    root: usize,
+) -> Option<usize> {
+    for (position, instruction) in instructions.iter().enumerate().skip(start) {
+        match instruction {
+            Instruction::Release { place } if place == name => return Some(position),
+            Instruction::Release { .. } => continue,
+            Instruction::Retain { place } if root_of(place) == name => return None,
+            _ => {}
+        }
+        if try_releases(instruction).is_some_and(|listed| listed.iter().any(|item| item == name)) {
+            return None;
+        }
+        let touches = instruction_accesses(instruction).iter().any(|(place, _)| {
+            root_of(place) == name || facts.borrowed_by(root_of(place)).contains(&root)
+        });
+        if touches {
+            return None;
+        }
+    }
+    None
+}
+
+/// The error-edge releases of a `try` instruction.
+fn try_releases(instruction: &Instruction) -> Option<&Vec<String>> {
+    match instruction {
+        Instruction::Assign {
+            value: Rvalue::Try {
+                releases_on_error, ..
+            },
+            ..
+        }
+        | Instruction::WriteLoan {
+            value: Rvalue::Try {
+                releases_on_error, ..
+            },
+            ..
+        } => Some(releases_on_error),
+        _ => None,
+    }
+}
+
+fn apply_move_pairs(function: &mut MirFunction, pairs: &[MovePair]) {
+    let mut removed = vec![HashSet::<usize>::new(); function.blocks.len()];
+    for pair in pairs {
+        let block = &mut function.blocks[pair.block];
+        let operand = match pair.consumer {
+            Some(position) => {
+                let consumer = &mut block.instructions[position];
+                // The root moves into a `try`, so its error edge no longer
+                // releases it.
+                if let Some(listed) = try_releases(consumer) {
+                    let kept = listed
+                        .iter()
+                        .filter(|item| **item != pair.root)
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    set_try_releases(consumer, || kept);
+                }
+                place_operand_mut(consumer, &pair.root)
+            }
+            None => match &mut block.terminator {
+                Terminator::Return(operand) => Some(operand),
+                _ => None,
+            },
+        };
+        let Some(operand) = operand else {
+            debug_assert!(false, "a cancelled retain names its consumer's operand");
+            continue;
+        };
+        *operand = Operand::MovePlace(pair.root.clone());
+        removed[pair.block].insert(pair.retain);
+        removed[pair.block].extend(pair.release);
+    }
+    for (block, removed) in function.blocks.iter_mut().zip(removed) {
+        if removed.is_empty() {
+            continue;
+        }
+        let mut position = 0;
+        block.instructions.retain(|_| {
+            position += 1;
+            !removed.contains(&(position - 1))
+        });
+    }
+}
+
+/// The `Place(name)` operand of `instruction`.
+fn place_operand_mut<'a>(instruction: &'a mut Instruction, name: &str) -> Option<&'a mut Operand> {
+    let mut operands = Vec::new();
+    match instruction {
+        Instruction::BeginElementLoan { selector, .. }
+        | Instruction::ReborrowElement { selector, .. } => operands.push(selector),
+        Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. } => {
+            rvalue_operands_mut(value, &mut operands)
+        }
+        Instruction::Eval { value } => operands.push(value),
+        Instruction::Safepoint
+        | Instruction::Retain { .. }
+        | Instruction::Release { .. }
+        | Instruction::IndexInRange { .. }
+        | Instruction::BeginLoan { .. }
+        | Instruction::BeginReturnedLoan { .. }
+        | Instruction::Reborrow { .. }
+        | Instruction::ReadLoan { .. }
+        | Instruction::EndLoan { .. }
+        | Instruction::ReturnLoan { .. }
+        | Instruction::PushCleanup { .. }
+        | Instruction::PopCleanup { .. } => {}
+    }
+    operands
+        .into_iter()
+        .find(|operand| matches!(operand, Operand::Place(place) if place == name))
+}
+
+/// Every operand of `value`, as `rvalue_roles` lists them.
+fn rvalue_operands_mut<'a>(value: &'a mut Rvalue, operands: &mut Vec<&'a mut Operand>) {
+    match value {
+        Rvalue::Use(operand)
+        | Rvalue::CallableAdapt { value: operand, .. }
+        | Rvalue::UnionInject { value: operand, .. }
+        | Rvalue::Try { value: operand, .. }
+        | Rvalue::NoneTest { value: operand }
+        | Rvalue::Unary { value: operand, .. }
+        | Rvalue::Cast { value: operand, .. }
+        | Rvalue::TupleElement { tuple: operand, .. }
+        | Rvalue::VariantPayload {
+            scrutinee: operand, ..
+        }
+        | Rvalue::Member {
+            object: operand, ..
+        } => operands.push(operand),
+        Rvalue::UnionTagTest { .. }
+        | Rvalue::UnionTakePayload { .. }
+        | Rvalue::TupleTakeElement { .. }
+        | Rvalue::ModuleConstant { .. } => {}
+        Rvalue::Closure { captures, .. } => {
+            operands.extend(captures.iter_mut().map(|capture| &mut capture.value))
+        }
+        Rvalue::FormatString { parts } => {
+            for part in parts {
+                match part {
+                    MirFormatPart::Literal(_) => {}
+                    MirFormatPart::Value(operand)
+                    | MirFormatPart::Int64(operand)
+                    | MirFormatPart::Formatted { value: operand, .. } => operands.push(operand),
+                }
+            }
+        }
+        Rvalue::Binary { left, right, .. } => {
+            operands.push(left);
+            operands.push(right);
+        }
+        Rvalue::StartTask {
+            stack_size,
+            task_group,
+            function,
+            args,
+            ..
+        } => {
+            operands.extend(stack_size.iter_mut());
+            operands.push(task_group);
+            operands.push(function);
+            operands.extend(args.iter_mut().map(|arg| &mut arg.value));
+        }
+        Rvalue::Call { callee, args } => {
+            match callee {
+                CallTarget::Name(_) | CallTarget::Extern(_) => {}
+                CallTarget::Value(operand)
+                | CallTarget::Member {
+                    object: operand, ..
+                }
+                | CallTarget::TraitMember {
+                    object: operand, ..
+                } => operands.push(operand),
+                CallTarget::Runtime { receiver, .. } => operands.extend(receiver.iter_mut()),
+            }
+            operands.extend(args.iter_mut().map(|arg| &mut arg.value));
+        }
+        Rvalue::VecLiteral { elements, .. }
+        | Rvalue::TupleLiteral { elements, .. }
+        | Rvalue::SetLiteral { elements, .. } => operands.extend(elements.iter_mut()),
+        Rvalue::MapLiteral { entries, .. } => {
+            for entry in entries {
+                operands.push(&mut entry.key);
+                operands.push(&mut entry.value);
+            }
+        }
+        Rvalue::Construct { fields, .. } => {
+            operands.extend(fields.iter_mut().map(|field| &mut field.value))
+        }
+        Rvalue::EnumVariant { payloads, .. } => operands.extend(payloads.iter_mut()),
+    }
 }
 
 /// Plans one function. `Ok(None)` leaves it as it is, because nothing in it
@@ -1617,9 +2058,56 @@ fn relabel(terminator: &mut Terminator, mut relabel: impl FnMut(&mut String)) {
     }
 }
 
-/// Removes what the ownership pass added, for a backend that still decides
-/// ownership itself: the retains, the releases, the `try` releases, and the
-/// edge blocks that hold only releases.
+/// What a backend needs to know about the locals of one function in an
+/// explicit module.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ExplicitLocals {
+    /// The roots whose values the module retains and releases.
+    pub(crate) tracked: HashSet<String>,
+    /// The loans, which borrow and own nothing.
+    pub(crate) loans: HashSet<String>,
+    /// The match blocks whose fall-through edge the module treats as
+    /// unreachable, because their chain covers every variant.
+    pub(crate) closed_matches: HashSet<String>,
+}
+
+/// The locals each function of an explicit module states ownership for, by
+/// function name. An implicit module states none, so the map is empty.
+pub(crate) fn explicit_locals(module: &MirModule) -> HashMap<String, ExplicitLocals> {
+    if module.ownership != MirOwnership::Explicit {
+        return HashMap::new();
+    }
+    let Ok(context) = MirLoanValidationContext::new(module) else {
+        return HashMap::new();
+    };
+    module
+        .functions
+        .iter()
+        .chain(module.top_level.iter())
+        .map(|function| {
+            let facts = OwnershipFacts::new(function, &context);
+            let locals = ExplicitLocals {
+                tracked: facts.roots.iter().map(|root| root.to_string()).collect(),
+                loans: facts.loans.iter().map(|loan| loan.to_string()).collect(),
+                closed_matches: FlowGraph::new(function, &context)
+                    .map(|graph| {
+                        graph
+                            .closed
+                            .iter()
+                            .map(|block| function.blocks[*block].label.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            };
+            (function.name.clone(), locals)
+        })
+        .collect()
+}
+
+/// Removes what the ownership pass added: the retains, the releases, the
+/// `try` releases, and the edge blocks that hold only releases. A retain
+/// the pass cancelled into a move stays a move. Tests use it to forge
+/// implicit MIR.
 pub fn strip_ownership(module: &mut MirModule) {
     if module.ownership == MirOwnership::Implicit {
         return;

@@ -4649,6 +4649,12 @@ pub extern "C-unwind" fn aura_direct_runtime_init(
 ) {
     initialize_internal_diagnostic_channels();
     crate::runtime_value::representation_stats::start_ownership_counting_if_requested();
+    // Standard output allocates its 1 KiB line buffer on first use. A
+    // program that frees a large structure and then prints its first line
+    // would make that large request on a heap full of freed chunks, and the
+    // allocator would merge all of them first. Set it up while the heap is
+    // empty.
+    let _ = std::io::stdout();
     task_runtime_boundary(|| {
         clear_direct_task_runtime_states();
         clear_direct_module_constants();
@@ -5396,10 +5402,32 @@ pub unsafe extern "C-unwind" fn aura_direct_release_value(value: *mut OpaqueValu
         if !value.is_null() {
             crate::runtime_value::representation_stats::note_release();
         }
-        unregister_direct_owned_value(value);
+        let owned = unregister_direct_owned_value(value);
+        check_released_value_is_owned(value, owned);
         unsafe {
             release_untracked_value(value);
         }
+    })
+}
+
+/// Debug builds refuse a release of a value the task's ledger does not
+/// hold. Generated code releases only what it owns, so such a release is
+/// an over-release: it would drop another owner's reference, or read a box
+/// that is already freed. The ledger is checked before the box is touched.
+fn check_released_value_is_owned(value: *mut OpaqueValue, owned: bool) {
+    if cfg!(debug_assertions) && !owned && !value.is_null() && direct_ownership_tracking_active() {
+        runtime_error("direct task released a value it does not own");
+    }
+}
+
+/// Whether the current task keeps a ledger of the values it owns.
+fn direct_ownership_tracking_active() -> bool {
+    let key = direct_task_runtime_key();
+    DIRECT_TASK_RUNTIME_STATES.with(|states| {
+        states
+            .borrow_mut()
+            .get_mut(key)
+            .is_some_and(|state| state.ownership_tracking_active)
     })
 }
 

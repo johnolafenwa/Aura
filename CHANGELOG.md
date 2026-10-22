@@ -20,20 +20,29 @@ in this file.
 - Lowering states ownership in MIR, so `aura mir` shows `Explicit`, a
   `Retain` before each instruction that consumes a value another local
   still needs, and a `Release` where each value dies. `try` lists the
-  locals its error edge releases. Both backends still decide ownership
-  themselves, and native objects are unchanged.
+  locals its error edge releases. A retain whose release follows the
+  value's last use becomes a move, so `aura mir` shows `MovePlace` there.
 - Both backends check the ownership an explicit module states and refuse
   MIR that releases a value twice, uses it after a release or a move,
   releases it on only some paths, or releases it under a loan or a
   cleanup. Native emission gives MIR that states no ownership the
   ownership pass first. `aura run` skips the pass, so its startup time is
   unchanged.
+- Native code carries out the ownership MIR states. Each value dies where
+  MIR releases it instead of when its function returns, a last use moves
+  the value instead of retaining it, and a `try` error edge releases what
+  its list names. A match that covers every variant traps on its
+  impossible fall-through.
+- Debug builds of the direct runtime stop a task that releases a value it
+  does not own.
 - `AURA_RUNTIME_STATS=1` also reports `retains`, `releases`, and `clones`:
   how often the direct runtime retains, releases, and copies a boxed value.
   The interpreter reports zero for them.
 
 ### Performance
 
+- Native code moves a value into its last use instead of retaining it and
+  releasing it later. The run-pass fixtures make 7% fewer retains.
 - Native code keeps the result of a trait method called on a bounded
   generic receiver, such as `item.total()` for `T: Totals`, as its declared
   type instead of a boxed value. Arithmetic and printing on it no longer go

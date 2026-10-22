@@ -7496,8 +7496,13 @@ def respond_bytes(exchange: mut net.HttpExchange, status: int32, bytes: own list
             .iter()
             .find(|argument| argument.name.as_deref() == Some(name))
             .unwrap_or_else(|| panic!("process.Supervisor.start should retain {name}"));
+        // A copy argument passes a snapshot temporary. The snapshot of a
+        // value that needs drop dies at the call, so the call moves it.
+        let (Operand::Place(snapshot) | Operand::MovePlace(snapshot)) = &argument.value else {
+            panic!("copy process.Supervisor.start argument {name} must use a value snapshot");
+        };
         assert!(
-            matches!(argument.value, Operand::Place(_)),
+            snapshot.starts_with('%'),
             "copy process.Supervisor.start argument {name} must use a value snapshot"
         );
     }

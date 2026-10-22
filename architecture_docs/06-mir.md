@@ -210,12 +210,10 @@ marked. MIR without the mark needs drop. The validator refuses a mark on a
 type with a field or payload that needs drop.
 
 `mir::lower` runs the ownership pass, so the module `aura mir` prints and
-the native build path compiles is explicit. Both backends still decide
-ownership themselves, in shadow mode. The interpreter gains nothing from
-the pass, so `aura run` lowers with `mir::lower_implicit` and skips it.
-The interpreter treats `Retain` and `Release` as no-ops. The native
-boundary strips what the pass added before it emits, so objects do not
-change.
+the native build path compiles is explicit. The native emitter carries out
+what the module states (see Native Lowering below). The interpreter gains
+nothing from the pass, so `aura run` lowers with `mir::lower_implicit` and
+skips it. The interpreter treats `Retain` and `Release` as no-ops.
 
 ### Ownership Pass
 
@@ -248,7 +246,29 @@ builtins, `MirClass.copy`, `MirEnum.copy`, and union plans decide that.
   fall-through edge for the pass or the checker. No value takes it.
 
 A module the pass cannot read stays implicit, and the validator reports
-what is wrong with it. `strip_ownership` takes the pass's output out again.
+what is wrong with it. `strip_ownership` takes the pass's output out again,
+and tests use it to forge implicit MIR. A move the pass made stays a move.
+
+### Pair Cancellation
+
+`cancel_retain_release_pairs` runs last in the pass. It turns
+`Retain(x)`, a consumer of `Place(x)`, and a later `Release(x)` into one
+consumer of `MovePlace(x)`. A retain right before a `Return(Place(x))`
+cancels against the release the return makes. It works on roots only.
+
+- The root must allow an owned take. A `Borrow` or `BorrowMut` parameter
+  never moves.
+- A root read from a loan, or one that another value borrows, never moves.
+- An element-loan selector never moves, because the loan keeps it.
+- A repeatable closure's capture never moves, because each call reads it
+  again.
+- The consumer must touch the root once, by consuming it whole.
+- Nothing between the consumer and the release may touch the root, retain
+  it, or list it in a `try`. A moved `try` operand leaves the `try` list.
+
+Each rewritten function must still pass the loan validator and the
+ownership checker. When it does not, the pass keeps pairs one at a time
+and drops each pair that fails.
 
 ### Ownership Checker
 
@@ -301,6 +321,43 @@ A runtime operation names the role of each argument in
 and value an index write stores and the values a span restore puts back.
 Every other argument borrows. `RuntimeOp::receiver_ownership` borrows the
 receiver of every operation that has one.
+
+### Native Lowering
+
+The native emitter follows an explicit module.
+
+- `Release` drops the root's value by its layout: an opaque handle, the
+  active member of an inline union, or the captures of an inline callable.
+  It then zeroes the root's words. A plain class owns no handle.
+- `Retain` pays for the consumer that follows. The consumer adds the
+  reference by layout when it hands the value on. A consumer that only
+  borrows, such as a call dispatched on a boxed generic receiver, adds
+  none.
+- `MovePlace` takes the value out of its root.
+- A store to a tracked root adds no release, because the module released
+  the old value first.
+- `Return` releases the root it returns from after the pending cleanups.
+  The `try` error edge releases its list after the cleanups. `mut`
+  parameters go back to the caller through the writeback.
+- A match chain that covers every variant traps on its fall-through edge,
+  where the module releases nothing.
+
+The module does not track a Copy value, but this backend boxes some of
+them: narrow integers, `Duration`, Copy enums, and tuples of Copy values.
+The emitter releases such a root before a store over it and at each
+return.
+
+Each instruction's layout temporaries live in `LayoutScratch`: boxed
+copies, fresh copies from projections, and values a consumer has not
+taken yet. The end of the instruction releases what is left, and debug
+builds check that the set is empty at each instruction boundary. Lending,
+borrowed-element fusion, proven-access adjacency, and the tag elision in
+`no_call_since` work as before.
+
+Debug builds of the direct runtime refuse a release of a value that the
+task's ledger does not hold, so every debug run of a native program checks
+for over-releases. The ledger already checks that a completed task holds
+no owned value.
 
 ## Why both backends benefit from MIR
 

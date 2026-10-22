@@ -9492,6 +9492,30 @@ unsafe extern "C-unwind" fn direct_task_violates_owned_ledger_invariant(
     int_value(0)
 }
 
+#[cfg(debug_assertions)]
+static OVER_RELEASED_VALUE: std::sync::atomic::AtomicPtr<OpaqueValue> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+#[cfg(debug_assertions)]
+unsafe extern "C-unwind" fn direct_task_releases_a_value_twice(
+    args: *const i64,
+    arg_count: usize,
+) -> *mut OpaqueValue {
+    assert!(args.is_null() || arg_count == 0);
+    let text = string_value("released twice");
+    // A second reference the ledger does not see keeps the box alive, so
+    // the second release is caught without touching freed memory.
+    unsafe {
+        super::retain_untracked_value(text);
+    }
+    OVER_RELEASED_VALUE.store(text, Ordering::Release);
+    unsafe {
+        super::aura_direct_release_value(text);
+        super::aura_direct_release_value(text);
+    }
+    int_value(0)
+}
+
 unsafe extern "C-unwind" fn direct_task_panics_before_result_handoff(
     args: *const i64,
     arg_count: usize,
@@ -10204,6 +10228,43 @@ fn native_runtime_direct_task_claim_flag_is_released_when_spawn_fails() {
     );
     unsafe {
         release_value(external);
+    }
+}
+
+#[cfg(debug_assertions)]
+#[test]
+fn native_runtime_direct_task_refuses_a_release_it_does_not_own() {
+    let result = run_lightweight_root_task(move || {
+        let args = super::aura_direct_arg_buffer_new(0);
+        let group = super::aura_direct_task_group_new();
+        let task = unsafe {
+            super::aura_direct_start_task_call(
+                direct_task_releases_a_value_twice as *const () as usize as i64,
+                args,
+                0,
+                1,
+                group,
+                1,
+                0,
+                0,
+            )
+        };
+        let joined = super::aura_direct_task_join(task);
+        let error = expect_task_result_error_message(joined);
+        assert!(
+            error.contains("direct task released a value it does not own"),
+            "debug builds refuse an over-release, found {error:?}"
+        );
+        unsafe {
+            release_value(task);
+            release_value(group);
+        }
+        Ok(Value::Unit)
+    });
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+    let text = OVER_RELEASED_VALUE.swap(std::ptr::null_mut(), Ordering::AcqRel);
+    unsafe {
+        super::release_untracked_value(text);
     }
 }
 
@@ -19457,12 +19518,13 @@ fn native_runtime_task_arg_buffer_disarm_transfers_without_releasing() {
             assert!(state.cleanup_stack.is_empty());
         });
         unsafe {
-            let stored = *buffer as *mut OpaqueValue;
-            release_value(stored);
             free_arg_buffer(buffer, 1);
         }
     });
+    // The scope's ledger never held the value, so both references go
+    // outside it.
     unsafe {
+        release_value(value);
         release_value(value);
     }
 }

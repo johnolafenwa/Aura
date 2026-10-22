@@ -407,7 +407,7 @@ fn terminators_return_by_consuming_and_test_by_borrowing() {
 mod pass {
     use super::super::{insert_ownership, insert_ownership_within, strip_ownership, FlowGraph};
     use crate::mir::{
-        validate_loan_flow, validate_ownership, BasicBlock, Instruction, MirFunction,
+        validate_loan_flow, validate_ownership, BasicBlock, CallTarget, Instruction, MirFunction,
         MirLoanValidationContext, MirModule, MirOwnership, Operand, Rvalue, Terminator,
     };
 
@@ -467,7 +467,27 @@ def sum(values: list[str]) -> int64:
         total = total + len(value)
     return total
 
+def show(text: str) -> int64:
+    return len(text)
+
+def twice(text: own str) -> int64:
+    first = show(text)
+    second = show(text)
+    return first + second
+
+class Tag:
+    label: str
+
+class Box:
+    tag: Tag
+
+def label_of(box: Box) -> str:
+    return match box:
+        case Box(tag=Tag(label=label)): f"tag {label}"
+
 def main():
+    print(twice("ab"))
+    print(label_of(Box(tag=Tag(label="t"))))
     print(pick(true))
     print(swap(false))
     print(route("4", true))
@@ -793,6 +813,15 @@ def main():
             .unwrap();
         assert!(!graph.successors[last].contains(&otherwise));
         assert_eq!(graph.successors[last].len(), 1);
+        assert_eq!(graph.closed, [last]);
+        // The emitter traps on the closed edge, since nothing is released
+        // there.
+        let locals = super::super::explicit_locals(&module);
+        assert_eq!(
+            locals["route"].closed_matches,
+            [route.blocks[last].label.clone()].into_iter().collect()
+        );
+        assert!(locals["pick"].closed_matches.is_empty());
     }
 
     #[test]
@@ -819,6 +848,166 @@ def main():
             .position(|block| block.label == head)
             .unwrap();
         assert_eq!(graph.successors[head].len(), 1);
+    }
+
+    fn retained(instructions: &[Instruction]) -> Vec<&str> {
+        instructions
+            .iter()
+            .filter_map(|instruction| match instruction {
+                Instruction::Retain { place } => Some(place.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The operand each call to `callee` in `function` passes first.
+    fn first_arguments<'a>(function: &'a MirFunction, callee: &str) -> Vec<&'a Operand> {
+        function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee: CallTarget::Name(name),
+                            args,
+                        },
+                    ..
+                } if name == callee => args.first().map(|arg| &arg.value),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_retain_before_a_last_use_becomes_a_move() {
+        let module = lowered();
+        checks(&module);
+        // The first call still needs `text`; the second is its last use.
+        let twice = function(&module, "twice");
+        let calls = first_arguments(twice, "show");
+        assert!(matches!(
+            calls[..],
+            [Operand::Place(_), Operand::MovePlace(_)]
+        ));
+        let entry = &block(twice, "entry").instructions;
+        assert_eq!(retained(entry), ["text"]);
+        assert!(!released(entry).contains(&"text"));
+        // A return releases its root, so a retain right before it moves.
+        let swap = function(&module, "swap");
+        assert!(matches!(
+            &swap.blocks[0].terminator,
+            Terminator::Return(Operand::MovePlace(root)) if root == "s"
+        ));
+        assert!(retained(&swap.blocks[0].instructions).is_empty());
+    }
+
+    #[test]
+    fn a_borrowed_parameter_never_moves() {
+        let module = lowered();
+        let double = function(&module, "double");
+        assert!(matches!(
+            first_arguments(double, "parse")[..],
+            [Operand::Place(_)]
+        ));
+        let entry = &block(double, "entry").instructions;
+        assert!(retained(entry).contains(&"text"));
+        assert!(released(entry).contains(&"text"));
+    }
+
+    #[test]
+    fn a_moved_try_operand_leaves_the_error_list() {
+        // `try` reads its operand in place, so the pass retains it and lists
+        // it for the error edge; the move takes it off the list.
+        let mut module = implicit();
+        let double = function_mut(&mut module, "double");
+        for instruction in &mut double.blocks[0].instructions {
+            if let Instruction::Assign {
+                value: Rvalue::Try { value, .. },
+                ..
+            } = instruction
+            {
+                let Operand::MovePlace(root) = value else {
+                    panic!("lowering moves the `try` operand");
+                };
+                *value = Operand::Place(root.clone());
+            }
+        }
+        insert_ownership(&mut module);
+        checks(&module);
+        let double = function(&module, "double");
+        let (operand, listed) = double.blocks[0]
+            .instructions
+            .iter()
+            .find_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Try {
+                            value,
+                            releases_on_error,
+                        },
+                    ..
+                } => Some((value, releases_on_error)),
+                _ => None,
+            })
+            .unwrap();
+        assert!(matches!(operand, Operand::MovePlace(_)));
+        assert_eq!(listed, &["alpha", "zeta"]);
+    }
+
+    #[test]
+    fn a_move_the_loan_validator_refuses_stays_a_retain() {
+        // `label` is read out of a borrowed `box`, so it cannot move, and the
+        // pair that would move it stays.
+        let module = lowered();
+        checks(&module);
+        let label_of = function(&module, "label_of");
+        let kept = label_of
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.windows(3))
+            .any(|window| match window {
+                [Instruction::Retain { place }, Instruction::Assign {
+                    value: Rvalue::Use(Operand::Place(used)),
+                    ..
+                }, Instruction::Release { place: released }] => place == used && used == released,
+                _ => false,
+            });
+        assert!(kept, "{:#?}", label_of.blocks);
+    }
+
+    #[test]
+    fn a_repeatable_closure_never_moves_its_capture() {
+        // Each call of the closure reads `text` again, so the body keeps
+        // its retain even at the last use.
+        let module = crate::lower_source_to_mir(
+            "type Step = Callable[def(n: int64) -> int64]\n\n\
+             def keep(text: str, n: int64) -> int64:\n    return len(text) + n\n\n\
+             def maker(text: own str) -> Step:\n    \
+             return Step(lambda [own text] n: keep(text, n))\n\n\
+             def main():\n    f = maker(\"abc\")\n    print(f(1))\n",
+        )
+        .expect("the program should lower");
+        validate_loan_flow(&module).expect("the capture should stay readable");
+        checks(&module);
+        let body = module
+            .functions
+            .iter()
+            .find(|function| !first_arguments(function, "keep").is_empty())
+            .expect("the closure body calls `keep`");
+        assert!(matches!(
+            first_arguments(body, "keep")[..],
+            [Operand::Place(_)]
+        ));
+    }
+
+    #[test]
+    fn cancellation_leaves_an_implicit_module_alone() {
+        let mut module = implicit();
+        let before = json(&module);
+        super::super::cancel_retain_release_pairs(&mut module);
+        assert_eq!(json(&module), before);
     }
 
     #[test]

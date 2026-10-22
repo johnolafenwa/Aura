@@ -127,7 +127,7 @@ fn states_ownership(function: &MirFunction) -> bool {
         })
 }
 
-fn check_function(
+pub(super) fn check_function(
     function: &MirFunction,
     context: &MirLoanValidationContext<'_>,
     state_cells: usize,
