@@ -303,7 +303,8 @@ Empty collections need a type:
   `values: list[int32] = []`. You can also write `list[int32]()`.
 - An empty dictionary literal needs an expected `dict[K, V]` type, such as
   `counts: dict[str, int32] = {}`. You can also write `dict[K, V]()`.
-- An empty set uses a typed constructor, such as `set[int32]()`.
+- An empty set literal is `{}` with an expected `set[T]` type, such as
+  `seen: set[int32] = {}`. You can also write `set[int32]()`.
 
 ### Operators
 
