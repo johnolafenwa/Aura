@@ -3180,7 +3180,8 @@ fn parse_runtime_identity_memo(memo: &Path) -> Option<(String, NativeRuntimeIden
     ))
 }
 
-fn write_runtime_identity_memos(stamp: &str, identity: &NativeRuntimeIdentity) {
+/// The memo that warm lookups consult for the runtime this executable links.
+fn authoritative_runtime_identity_memo() -> Option<PathBuf> {
     let executable = std::env::current_exe().ok();
     let installed = executable
         .as_deref()
@@ -3190,11 +3191,15 @@ fn write_runtime_identity_memos(stamp: &str, identity: &NativeRuntimeIdentity) {
                 .flatten()
         })
         .is_some();
-    let authoritative = if installed {
+    if installed {
         native_cache_root().map(|root| root.join(RUNTIME_IDENTITY_MEMO))
     } else {
         Some(native_runtime_target_dir().join(RUNTIME_IDENTITY_MEMO))
-    };
+    }
+}
+
+fn write_runtime_identity_memos(stamp: &str, identity: &NativeRuntimeIdentity) {
+    let authoritative = authoritative_runtime_identity_memo();
     if let Some(memo) = authoritative.as_ref() {
         write_runtime_identity_memo(memo, stamp, identity);
     }
@@ -4101,9 +4106,15 @@ fn build_direct_native_binary_with_identity(
     // Return the identity of the exact bytes staged for this link. A Cargo
     // refresh can replace the workspace archive after pre-build lookup, so
     // storing under the earlier identity would make the immediate warm run
-    // miss and could associate the binary with the wrong runtime.
+    // miss and could associate the binary with the wrong runtime. A memo whose
+    // stamp held across the read describes these bytes, exactly as a warm
+    // lookup trusts it, so only a missing or stale memo rehashes the archive.
+    let memo_digest = stable_archive_stamp.as_deref().and_then(|stamp| {
+        let memo = authoritative_runtime_identity_memo()?;
+        read_runtime_identity_memo(&memo, stamp).map(|identity| identity.archive_sha256)
+    });
     let runtime_identity = NativeRuntimeIdentity {
-        archive_sha256: aura_compiler::sha256_hex(&staticlib_bytes),
+        archive_sha256: memo_digest.unwrap_or_else(|| aura_compiler::sha256_hex(&staticlib_bytes)),
         native_link_args: native_runtime.native_link_args.clone(),
     };
     fs::write(&temp_staticlib, &staticlib_bytes).map_err(|error| {
