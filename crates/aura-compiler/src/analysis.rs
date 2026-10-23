@@ -159,16 +159,26 @@ struct ResolvedMember {
 }
 
 pub fn analyze_source(source: &str) -> AnalysisOutput {
-    analyze_with_checker(source, crate::check_source)
+    analyze_with_checker(
+        source,
+        |error| error.render_path.is_none(),
+        crate::check_source,
+    )
 }
 
 pub fn analyze_path_source(path: &Path, source: &str) -> AnalysisOutput {
+    let analyzed = crate::absolutize(path);
+    let is_local = |error: &Diagnostic| {
+        error
+            .render_path
+            .as_deref()
+            .is_none_or(|rendered| crate::absolutize(Path::new(rendered)) == analyzed)
+    };
     let (mut output, reads) = crate::with_source_reads(|| {
-        analyze_with_checker(source, |candidate| {
+        analyze_with_checker(source, is_local, |candidate| {
             crate::check_path_with_source_without_lockfile(path, candidate)
         })
     });
-    let analyzed = crate::absolutize(path);
     output.dependencies = reads
         .into_iter()
         .filter(|read| *read != analyzed)
@@ -209,8 +219,9 @@ pub fn complete_source(
     )
 }
 
-fn analyze_with_checker<F>(source: &str, mut check_program: F) -> AnalysisOutput
+fn analyze_with_checker<L, F>(source: &str, is_local: L, mut check_program: F) -> AnalysisOutput
 where
+    L: Fn(&Diagnostic) -> bool,
     F: FnMut(&str) -> Result<Program>,
 {
     match parser::parse(source) {
@@ -220,6 +231,15 @@ where
             {
                 let mut output = analyze_program(source, &program);
                 output.diagnostics.insert(0, analysis_diagnostic(&error));
+                output
+            } else if let Some((program, later)) =
+                recover_program_for_analysis(source, &error, &is_local, &mut check_program)
+            {
+                let mut output = analyze_program(source, &program);
+                output.diagnostics = std::iter::once(&error)
+                    .chain(&later)
+                    .map(analysis_diagnostic)
+                    .collect();
                 output
             } else {
                 AnalysisOutput {
@@ -233,12 +253,26 @@ where
         Ok(module) => {
             let symbols = symbols_from_module(&module, source);
             match check_program(source) {
-                Err(error) => AnalysisOutput {
-                    diagnostics: vec![analysis_diagnostic(&error)],
-                    symbols,
-                    occurrences: Vec::new(),
-                    dependencies: Vec::new(),
-                },
+                Err(error) => {
+                    // Keep hover, definitions, and references alive in the
+                    // rest of the file while one statement is wrong.
+                    if let Some((program, later)) =
+                        recover_program_for_analysis(source, &error, &is_local, &mut check_program)
+                    {
+                        let mut output = AnalysisBuilder::new(source, &program, symbols).build();
+                        output.diagnostics = std::iter::once(&error)
+                            .chain(&later)
+                            .map(analysis_diagnostic)
+                            .collect();
+                        return output;
+                    }
+                    AnalysisOutput {
+                        diagnostics: vec![analysis_diagnostic(&error)],
+                        symbols,
+                        occurrences: Vec::new(),
+                        dependencies: Vec::new(),
+                    }
+                }
                 Ok(program) => AnalysisBuilder::new(source, &program, symbols).build(),
             }
         }
@@ -8463,6 +8497,17 @@ fn sanitize_member_completion_source(source: &str, line: usize, character: usize
 }
 
 fn replace_dangling_member_stmt_with_recovery_stmt(source: &str, line: usize) -> String {
+    replace_statement_with_recovery_stmt(source, line, true)
+}
+
+/// Replaces the statement ending on `line` with `pass`, or with a `return` of
+/// a placeholder value when `return_placeholder` asks for one and the
+/// enclosing function returns a value.
+fn replace_statement_with_recovery_stmt(
+    source: &str,
+    line: usize,
+    return_placeholder: bool,
+) -> String {
     let mut lines = source.lines().map(str::to_string).collect::<Vec<_>>();
     let start_line = unmatched_delimiter_statement_start_line(source, line).unwrap_or(line);
     let Some(line_text) = lines.get(start_line) else {
@@ -8472,7 +8517,9 @@ fn replace_dangling_member_stmt_with_recovery_stmt(source: &str, line: usize) ->
         .chars()
         .take_while(|ch| ch.is_whitespace())
         .collect::<String>();
-    let replacement = enclosing_function_return_placeholder(source, start_line)
+    let replacement = return_placeholder
+        .then(|| enclosing_function_return_placeholder(source, start_line))
+        .flatten()
         .map(|value| format!("{}{}", indent, value))
         .unwrap_or_else(|| format!("{}pass", indent));
     if start_line == line {
@@ -8487,6 +8534,110 @@ fn replace_dangling_member_stmt_with_recovery_stmt(source: &str, line: usize) ->
         *line_text = replacement;
     }
     lines.join("\n")
+}
+
+/// Replaces each failing statement of this file with a recovery statement
+/// until the program checks, so analysis covers everything else. Returns the
+/// errors found after `first`, leaving out the ones that name a binding a
+/// replaced statement used to introduce.
+fn recover_program_for_analysis<L, F>(
+    source: &str,
+    first: &Diagnostic,
+    is_local: &L,
+    check_program: &mut F,
+) -> Option<(Program, Vec<Diagnostic>)>
+where
+    L: Fn(&Diagnostic) -> bool,
+    F: FnMut(&str) -> Result<Program>,
+{
+    let mut error = first.clone();
+    let mut candidate = source.to_string();
+    let mut later = Vec::new();
+    let mut lost_bindings = BTreeSet::new();
+    let check = |candidate: &str, check_program: &mut F| match parser::parse(candidate) {
+        Ok(_) => check_program(candidate),
+        Err(error) => Err(error),
+    };
+    for _ in 0..32 {
+        if !is_local(&error) {
+            return None;
+        }
+        let line = error.span?.line.checked_sub(1)?;
+        let mut result = None;
+        if cursor_statement_is_block_header(&candidate, line) {
+            // `if ready` missing its colon is the one header fixed in place.
+            if !error.message.starts_with("expected Colon") {
+                return None;
+            }
+            let mut lines = candidate.lines().map(str::to_string).collect::<Vec<_>>();
+            let text = lines.get_mut(line)?;
+            if text.trim_end().ends_with(':') {
+                return None;
+            }
+            text.truncate(text.trim_end().len());
+            text.push(':');
+            candidate = lines.join("\n");
+        } else {
+            let start = unmatched_delimiter_statement_start_line(&candidate, line).unwrap_or(line);
+            for text in source.lines().take(line + 1).skip(start) {
+                if let Some(name) = statement_binding_name(text) {
+                    lost_bindings.insert(name.to_string());
+                }
+            }
+            // `pass` keeps the statements after this one reachable, so their
+            // errors still show; a function left without a return needs one.
+            let passed = replace_statement_with_recovery_stmt(&candidate, line, false);
+            if passed == candidate {
+                return None;
+            }
+            let passed_result = check(&passed, check_program);
+            let header_error = passed_result.as_ref().err().is_some_and(|next| {
+                next.span.is_some_and(|span| {
+                    cursor_statement_is_block_header(&passed, span.line.saturating_sub(1))
+                })
+            });
+            if header_error {
+                candidate = replace_statement_with_recovery_stmt(&candidate, line, true);
+            } else {
+                candidate = passed;
+                result = Some(passed_result);
+            }
+        }
+        match result.unwrap_or_else(|| check(&candidate, check_program)) {
+            Ok(program) => return Some((program, later)),
+            Err(next_error) => {
+                let cascade = lost_bindings
+                    .iter()
+                    .any(|name| next_error.message.contains(&format!("`{name}`")));
+                if !cascade {
+                    later.push(next_error.clone());
+                }
+                error = next_error;
+            }
+        }
+    }
+    None
+}
+
+/// The name a simple `name = ...`, `mut name: T = ...`, or `for name in ...`
+/// statement binds.
+fn statement_binding_name(text: &str) -> Option<&str> {
+    let text = text.trim_start();
+    let text = text
+        .strip_prefix("for ")
+        .or_else(|| text.strip_prefix("mut "))
+        .unwrap_or(text)
+        .trim_start();
+    let end = text
+        .find(|ch: char| !is_identifier_continue(ch))
+        .unwrap_or(text.len());
+    let (name, rest) = text.split_at(end);
+    let rest = rest.trim_start();
+    let binds = rest.starts_with(':')
+        || rest.starts_with(" in")
+        || rest.starts_with("in ")
+        || (rest.starts_with('=') && !rest.starts_with("=="));
+    (!name.is_empty() && binds).then_some(name)
 }
 
 fn cursor_statement_is_block_header(source: &str, line: usize) -> bool {
