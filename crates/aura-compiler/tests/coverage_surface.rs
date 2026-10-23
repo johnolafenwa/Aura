@@ -1019,7 +1019,7 @@ from helpers.factory import describe_user
 
 def main() -> int32:
     user: pkg.user.User = pkg.user.User(label="Ada")
-    outcome = pkg.user.Outcome.Ready(code=7, reason="ok")
+    _outcome = pkg.user.Outcome.Ready(code=7, reason="ok")
     print(describe_user(name=user.label.clone()))
     print(user.name())
     return 0
