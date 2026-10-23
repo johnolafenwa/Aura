@@ -152,6 +152,28 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
         for gate in ("test:llvm", "test:backend-parity:llvm", "check:clippy:llvm"):
             self.assertIn(f"npm run {gate} ", scripts["ci"] + " ")
         self.assertIn("AURA_NATIVE_CODEGEN=llvm", scripts["test:backend-parity:llvm"])
+        # The repeat-build test also runs on LLVM, so its objects stay repeatable.
+        self.assertIn(
+            "AURA_NATIVE_CODEGEN=llvm RUST_MIN_STACK=33554432 cargo test -p aura-compiler"
+            " --lib --features llvm direct_objects_are_identical_across_repeated_builds",
+            scripts["test:llvm"],
+        )
+
+    def test_native_binary_gate_checks_both_code_generators(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        job = workflow[workflow.index("  native-binaries:\n"):]
+        self.assertIn("run: bash scripts/install-llvm.sh\n", job)
+        self.assertIn(
+            "cargo build --release --locked -p aura -p aura-runtime --features aura/llvm\n",
+            job,
+        )
+        self.assertIn(
+            "      - name: Check native executable contents and sizes on LLVM\n"
+            "        run: python3 scripts/check-native-binaries.py\n"
+            "        env:\n"
+            "          AURA_NATIVE_CODEGEN: llvm\n",
+            job,
+        )
 
     def test_linux_coverage_tests_export_process_ffi_symbols(self) -> None:
         self.assertTrue(AURA_COMPILER_BUILD.is_file())

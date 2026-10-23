@@ -226,7 +226,12 @@ whole object to LLVM IR in one context:
 - Every function has an asynchronous unwind table, since a task failure
   unwinds through generated frames to the runtime's task boundary.
 - The target machine uses the host triple, the generic CPU, and PIC, and
-  the module runs `default<O1>`. Step 9c tunes the pipeline and sections.
+  the module runs `default<O3>`.
+- On ELF every defined function gets its own `.text.<symbol>` section after
+  the passes run, so `--gc-sections` drops the ones nothing calls, as with
+  Cranelift's per-function sections. LLVM marks Mach-O objects
+  `MH_SUBSECTIONS_VIA_SYMBOLS`, as Cranelift does, so `-dead_strip` works
+  per symbol there.
 
 [`scripts/install-llvm.sh`](../scripts/install-llvm.sh) installs the
 static LLVM libraries the feature links. See

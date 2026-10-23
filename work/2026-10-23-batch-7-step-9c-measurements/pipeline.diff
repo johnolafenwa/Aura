@@ -1,0 +1,7 @@
+The measurement build added this to LlvmModule::object_for in
+crates/aura-compiler/src/native_backend_llvm.rs, so one release `aura`
+could run every pipeline. It is not in the commit.
+
+-        if let Err(error) = module.run_passes(PASS_PIPELINE, machine, PassBuilderOptions::create())
++        let pipeline = std::env::var("AURA_LLVM_PIPELINE_MEASURE").unwrap_or(PASS_PIPELINE.into());
++        if let Err(error) = module.run_passes(&pipeline, machine, PassBuilderOptions::create())

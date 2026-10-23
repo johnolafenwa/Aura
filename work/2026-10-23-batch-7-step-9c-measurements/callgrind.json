@@ -1,0 +1,44 @@
+{
+  "dict_build_get": {
+    "cranelift": 942038725,
+    "llvm-O1": 936853466,
+    "llvm-O2": 936869100,
+    "llvm-O3": 936864685,
+    "rust": 179017701
+  },
+  "fib30": {
+    "cranelift": 522957063,
+    "llvm-O1": 483914470,
+    "llvm-O2": 483914581,
+    "llvm-O3": 483917200,
+    "rust": 39454411
+  },
+  "int_list_sum": {
+    "cranelift": 73114030,
+    "llvm-O1": 54216441,
+    "llvm-O2": 54213137,
+    "llvm-O3": 42224902,
+    "rust": 13247624
+  },
+  "record_field_reads": {
+    "cranelift": 693079802,
+    "llvm-O1": 690503882,
+    "llvm-O2": 690503090,
+    "llvm-O3": 690501473,
+    "rust": 36000215
+  },
+  "set_insert_contains": {
+    "cranelift": 148262821,
+    "llvm-O1": 144519851,
+    "llvm-O2": 144499177,
+    "llvm-O3": 144514477,
+    "rust": 31558085
+  },
+  "string_list_scan": {
+    "cranelift": 150829915,
+    "llvm-O1": 137463891,
+    "llvm-O2": 137476091,
+    "llvm-O3": 137472648,
+    "rust": 13135652
+  }
+}

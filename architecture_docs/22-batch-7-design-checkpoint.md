@@ -585,6 +585,38 @@ Two build-time fixes help the phase 2 target and do not block step 9:
 memoize the ownership pass's type walks and run it after pruning, and
 stop hashing the full runtime archive on every `aura build`.
 
+### Step 9 Results
+
+Step 9c measured LLVM on the six phase 2 targets with `default<O1>`,
+`default<O2>`, and `default<O3>`, against Cranelift and Rust. The tables and
+method are in
+[the 9c note](../work/2026-10-23-batch-7-step-9c-llvm-tuning.md). The
+container's wall times are noisy, so this table uses callgrind
+instructions for one whole run, in millions:
+
+| Program | Cranelift | LLVM `O3` | Rust | LLVM / Rust | Phase 2 target |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `fib(30)` | 523.0 | 483.9 | 39.5 | 12.3x | 3x |
+| `int_list_sum` | 73.1 | 42.2 | 13.2 | 3.2x | 2x |
+| `string_list_scan` | 150.8 | 137.5 | 13.1 | 10.5x | 4x |
+| `dict_build_get` | 942.0 | 936.9 | 179.0 | 5.2x | 4x |
+| `set_insert_contains` | 148.3 | 144.5 | 31.6 | 4.6x | 3x |
+| `record_field_reads` | 693.1 | 690.5 | 36.0 | 19.2x | 4x |
+
+- The ratios count instructions, not time, so they do not compare with the
+  wall-clock targets directly. They show where the work is.
+- LLVM alone moves little. Generated code was never most of the time:
+  the runtime calls are, and step 10 inlines across that boundary.
+- `O1`, `O2`, and `O3` build the same executable for four targets. `O3`
+  runs `int_list_sum` in 22% fewer instructions, by moving the list's
+  inline layout check out of the loop, so `O3` is the default.
+- A cold reference agent build takes 1.27 s on LLVM and 1.05 s on
+  Cranelift here, inside the 1.5 s target. Hello world takes about 0.7 s
+  on both, over the 0.6 s target, because a cold build still hashes the
+  runtime archive.
+- Every native binaries subject passes the size gate on LLVM, with the
+  Cranelift baselines. The reference agent links 2% smaller.
+
 ## Owner Questions
 
 Each names the recommended default first.

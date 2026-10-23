@@ -15,7 +15,7 @@
     "test:rust": "RUST_MIN_STACK=33554432 cargo test",
     "test:backend-parity": "cargo test -p aura --test backend_parity -- --ignored --test-threads=1 --nocapture",
     "test:backend-parity:llvm": "AURA_NATIVE_CODEGEN=llvm cargo test -p aura --features llvm --test backend_parity -- --ignored --test-threads=1 --nocapture",
-    "test:llvm": "RUST_MIN_STACK=33554432 cargo test -p aura-compiler --lib --features llvm",
+    "test:llvm": "RUST_MIN_STACK=33554432 cargo test -p aura-compiler --lib --features llvm && AURA_NATIVE_CODEGEN=llvm RUST_MIN_STACK=33554432 cargo test -p aura-compiler --lib --features llvm direct_objects_are_identical_across_repeated_builds",
     "test:scheduler-stress": "bash scripts/stress-scheduler.sh",
     "test:scheduler-model": "cargo test -p aura-compiler --test scheduler_model",
     "bench:compiler": "cargo bench -p aura-compiler --bench compiler_pipeline",
