@@ -4,6 +4,7 @@ const vscode = require("vscode");
 const path = require("node:path");
 const { LanguageClient, TransportKind } = require("vscode-languageclient/node");
 const { computeAuraNewlineIndent } = require("./indentation");
+const { registerRunCommands } = require("./commands");
 
 let client;
 
@@ -55,6 +56,7 @@ async function restartClient(context) {
 
 async function activate(context) {
   client = createClient(context);
+  registerRunCommands(vscode, context);
 
   context.subscriptions.push(
     vscode.commands.registerCommand("aura.restartLanguageServer", () => restartClient(context)),
