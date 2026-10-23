@@ -30,7 +30,7 @@ use inkwell::targets::{
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, IntType};
 use inkwell::values::{
     AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
-    IntValue, PhiValue, PointerValue,
+    InstructionValue, IntValue, PhiValue, PointerValue,
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 
@@ -48,6 +48,13 @@ const PASS_PIPELINE: &str = "default<O3>";
 /// The LLVM `uwtable` kind for asynchronous unwind tables. Task failures
 /// unwind through generated frames, so every function needs one.
 const UWTABLE_ASYNC: u64 = 2;
+
+/// The LLVM `memory` attribute value that allows no memory access.
+const MEMORY_NONE: u64 = 0;
+
+/// The `branch_weights` of a branch to a cold block, against the other
+/// edge, as Clang weighs `__builtin_expect`.
+const COLD_BRANCH_WEIGHTS: (u64, u64) = (1, 2000);
 
 /// One object built with LLVM for the host.
 pub(super) struct LlvmModule {
@@ -67,6 +74,7 @@ struct FunctionDecl {
     linkage: Linkage,
     signature: Signature,
     body: Option<FunctionIr>,
+    task_invariant: bool,
 }
 
 struct DataDecl {
@@ -152,6 +160,7 @@ impl ModuleBackend for LlvmModule {
                     linkage,
                     signature: signature.clone(),
                     body: None,
+                    task_invariant: false,
                 });
                 self.names.insert(name.to_string(), Symbol::Function(id));
                 Ok(FuncHandle(id))
@@ -204,6 +213,10 @@ impl ModuleBackend for LlvmModule {
         }
         decl.contents = Some(contents);
         Ok(())
+    }
+
+    fn mark_task_invariant(&mut self, function: FuncHandle) {
+        self.functions[function.0 as usize].task_invariant = true;
     }
 
     fn define_function(
@@ -447,6 +460,7 @@ struct BlockIr {
     params: Vec<Val>,
     insts: Vec<u32>,
     sealed: bool,
+    cold: bool,
     in_layout: bool,
     predecessors: Vec<u32>,
     /// The value each variable last got in this block.
@@ -700,6 +714,10 @@ impl FunctionBackend for LlvmFunction<'_> {
         for block in &mut self.ir.blocks {
             block.sealed = true;
         }
+    }
+
+    fn set_cold_block(&mut self, block: Blk) {
+        self.ir.blocks[block.0 as usize].cold = true;
     }
 
     fn current_block(&self) -> Option<Blk> {
@@ -1217,6 +1235,12 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
     ) -> Result<Self, String> {
         let uwtable = context
             .create_enum_attribute(Attribute::get_named_enum_kind_id("uwtable"), UWTABLE_ASYNC);
+        // A task-invariant helper reads and writes no memory LLVM can see,
+        // cannot unwind, and returns, so LLVM may merge its calls.
+        let task_invariant =
+            [("memory", MEMORY_NONE), ("nounwind", 0), ("willreturn", 0)].map(|(name, value)| {
+                context.create_enum_attribute(Attribute::get_named_enum_kind_id(name), value)
+            });
         let functions = object
             .functions
             .iter()
@@ -1232,6 +1256,11 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
                 );
                 if decl.body.is_some() {
                     function.add_attribute(AttributeLoc::Function, uwtable);
+                }
+                if decl.task_invariant {
+                    for attribute in &task_invariant {
+                        function.add_attribute(AttributeLoc::Function, *attribute);
+                    }
                 }
                 function
             })
@@ -1852,10 +1881,12 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                 if !split_else {
                     self.branch_args(*else_block, else_args)?;
                 }
-                built(
-                    self.builder
-                        .build_conditional_branch(condition, then_target, else_target),
-                )?;
+                let branch = built(self.builder.build_conditional_branch(
+                    condition,
+                    then_target,
+                    else_target,
+                ))?;
+                self.weigh_cold_edges(branch, *then_block, *else_block);
                 if split_else {
                     self.builder.position_at_end(else_target);
                     self.branch_args(*else_block, else_args)?;
@@ -1874,6 +1905,29 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
             Op::Trap => self.build_trap()?,
         }
         Ok(())
+    }
+
+    /// Weighs a branch against the edge to a cold block. A branch whose
+    /// edges are both cold, or neither, keeps LLVM's own estimate.
+    fn weigh_cold_edges(&self, branch: InstructionValue<'ctx>, then_block: Blk, else_block: Blk) {
+        let cold = |block: Blk| self.ir.blocks[block.0 as usize].cold;
+        let (rare, common) = COLD_BRANCH_WEIGHTS;
+        let (then_weight, else_weight) = match (cold(then_block), cold(else_block)) {
+            (true, false) => (rare, common),
+            (false, true) => (common, rare),
+            _ => return,
+        };
+        let weight = |value: u64| self.context.i32_type().const_int(value, false).into();
+        let weights = self.context.metadata_node(&[
+            self.context.metadata_string("branch_weights").into(),
+            weight(then_weight),
+            weight(else_weight),
+        ]);
+        // Only metadata that is not a node fails to attach.
+        let attached = branch
+            .set_metadata(weights, self.context.get_kind_id("prof"))
+            .is_ok();
+        debug_assert!(attached, "branch weights are a metadata node");
     }
 
     fn target(&self, block: Blk) -> Result<BasicBlock<'ctx>, String> {

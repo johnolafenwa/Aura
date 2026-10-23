@@ -36,28 +36,28 @@ use crate::list_elements::ListElements;
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
     append_string_checked, cancel_current_lightweight_task_boundary, cast_numeric_value,
-    claim_task_result_observations, clone_json_codec_source, collect_queue_values,
-    concat_strings_checked, current_lightweight_task_cancellation, current_lightweight_task_id,
-    decode_process_restart_policy, decode_process_stdio, divmod_numeric_values,
-    embedded_nominal_runtime_type_name, fail_current_lightweight_task, float_floor_divmod,
-    float_power, format_runtime_value_with, host_builtins, io_error, io_read_line,
-    json_array_metadata_is_exact, json_dump_error_to_diagnostic, json_int_metadata_is_exact,
-    json_object_metadata_is_exact, json_parse_owned_to_runtime, lookup_found, lookup_missing,
-    nominal_runtime_base_name, optional_absent, optional_bytes_value, optional_present,
-    optional_str_value, optional_value, poll_cancellation, poll_ready, poll_unavailable,
-    prepare_json_codec_source, process_error_cancelled, process_error_io, process_error_no_command,
-    process_error_spawn, process_error_timed_out, process_exit_status, process_stdio_inherit,
-    process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
-    process_supervisor_wait_cancelled, process_supervisor_wait_event,
-    process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
-    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
-    queue_receive_item, queue_receive_timed_out, read_file_limited,
+    claim_task_result_observations, clear_current_task_native_slot, clone_json_codec_source,
+    collect_queue_values, concat_strings_checked, current_lightweight_task_cancellation,
+    current_lightweight_task_id, current_task_native_slot, decode_process_restart_policy,
+    decode_process_stdio, divmod_numeric_values, embedded_nominal_runtime_type_name,
+    fail_current_lightweight_task, float_floor_divmod, float_power, format_runtime_value_with,
+    host_builtins, io_error, io_read_line, json_array_metadata_is_exact,
+    json_dump_error_to_diagnostic, json_int_metadata_is_exact, json_object_metadata_is_exact,
+    json_parse_owned_to_runtime, lookup_found, lookup_missing, nominal_runtime_base_name,
+    optional_absent, optional_bytes_value, optional_present, optional_str_value, optional_value,
+    poll_cancellation, poll_ready, poll_unavailable, prepare_json_codec_source,
+    process_error_cancelled, process_error_io, process_error_no_command, process_error_spawn,
+    process_error_timed_out, process_exit_status, process_stdio_inherit, process_stdio_null,
+    process_stdio_pipe, process_supervisor_event_failed, process_supervisor_wait_cancelled,
+    process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
+    process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
+    queue_receive_closed, queue_receive_item, queue_receive_timed_out, read_file_limited,
     recv_for_registered_producers_iteration, recv_for_task_group_iteration, render_float,
     render_float32, result_err, result_ok, round_numeric_value, run_blocking_io,
     run_lightweight_root_task_with_forced_exit_cleanup, runtime_value_to_json,
     select_runtime_values, send_error_cancelled, send_error_closed, send_error_full,
-    send_error_timed_out, sleep_with_runtime_scheduler, slice_string_owned, slice_vec_owned,
-    spawn_lightweight_task_with_cancellation,
+    send_error_timed_out, set_current_task_native_slot, sleep_with_runtime_scheduler,
+    slice_string_owned, slice_vec_owned, spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability_registered,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
     task_result_timed_out, try_array_buffer, try_clone_array_containing_value, wait_all_cancelled,
@@ -132,6 +132,14 @@ pub struct DirectFfiCallSpec {
     pub params: Vec<DirectFfiParam>,
     pub result: DirectFfiType,
 }
+
+#[path = "native_frame_stack.rs"]
+mod frame_stack;
+
+pub use frame_stack::{direct_frame_stack_layout, DirectFrameStack, DirectFrameStackLayout};
+use frame_stack::{
+    DIRECT_FRAME_FLAG_PENDING_SINKS, DIRECT_FRAME_FLAG_RETURNED_VIEWS, DIRECT_MAX_CALL_DEPTH,
+};
 
 struct DirectCleanupRegistration {
     id: i64,
@@ -465,98 +473,6 @@ impl DirectFrameDescriptor {
     }
 }
 
-/// One active call. Generated code pushes a validated static descriptor, so a
-/// call stores one pointer and builds the frame record only for diagnostics.
-enum DirectCallFrameEntry {
-    Descriptor(NonNull<DirectFrameDescriptor>),
-    Frame(Box<DirectRuntimeCallFrame>),
-}
-
-impl DirectCallFrameEntry {
-    fn frame(&self) -> DirectRuntimeCallFrame {
-        match self {
-            // SAFETY: descriptors are immutable program data that outlive
-            // every call, and entry validated this one before it was pushed.
-            Self::Descriptor(descriptor) => unsafe { descriptor.as_ref() }.frame(),
-            Self::Frame(frame) => frame.as_ref().clone(),
-        }
-    }
-
-    fn materialize(&self) -> RuntimeCallFrame {
-        self.frame().materialize()
-    }
-}
-
-/// The active call stack. A depth-one chain stays inline. Once a deeper call
-/// spills to the heap, the allocation is kept, so recursion that moves
-/// between depths does not allocate and free on each call.
-#[derive(Default)]
-enum DirectCallFrameStorage {
-    #[default]
-    Empty,
-    Inline(DirectCallFrameEntry),
-    Spill(Vec<DirectCallFrameEntry>),
-}
-
-impl DirectCallFrameStorage {
-    #[cfg(test)]
-    fn push(&mut self, frame: DirectRuntimeCallFrame) {
-        self.push_entry(DirectCallFrameEntry::Frame(Box::new(frame)));
-    }
-
-    fn push_entry(&mut self, entry: DirectCallFrameEntry) {
-        if let Self::Spill(frames) = self {
-            frames.push(entry);
-            return;
-        }
-        *self = match std::mem::take(self) {
-            Self::Inline(first) => {
-                let mut frames = Vec::with_capacity(8);
-                frames.push(first);
-                frames.push(entry);
-                Self::Spill(frames)
-            }
-            _ => Self::Inline(entry),
-        };
-    }
-
-    fn pop(&mut self) -> Option<DirectCallFrameEntry> {
-        if let Self::Spill(frames) = self {
-            return frames.pop();
-        }
-        match std::mem::take(self) {
-            Self::Inline(frame) => Some(frame),
-            _ => None,
-        }
-    }
-
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        match self {
-            Self::Empty => 0,
-            Self::Inline(_) => 1,
-            Self::Spill(frames) => frames.len(),
-        }
-    }
-
-    #[cfg(test)]
-    fn has_heap_spill(&self) -> bool {
-        matches!(self, Self::Spill(_))
-    }
-
-    fn materialize_innermost_first(&self) -> Vec<RuntimeCallFrame> {
-        match self {
-            Self::Empty => Vec::new(),
-            Self::Inline(frame) => vec![frame.materialize()],
-            Self::Spill(frames) => frames
-                .iter()
-                .rev()
-                .map(DirectCallFrameEntry::materialize)
-                .collect(),
-        }
-    }
-}
-
 #[cfg(test)]
 thread_local! {
     static DIRECT_RUNTIME_FRAME_MATERIALIZATION_COUNT: Cell<usize> = const { Cell::new(0) };
@@ -616,8 +532,8 @@ struct DirectTaskRuntimeState {
     /// Rendered `Result.Err` values of manager exits that ran while a trap
     /// was unwinding, waiting to be attached to that trap as notes.
     manager_exit_failures: Vec<String>,
-    call_depth: usize,
-    call_frames: DirectCallFrameStorage,
+    /// The active calls, which generated code also updates in place.
+    frames: NonNull<DirectFrameStack>,
     task_ancestry: DirectTaskAncestry,
     fallback_cancellation: CancellationContext,
     returned_views: DirectReturnedViewStack,
@@ -720,7 +636,6 @@ impl DirectReturnedViewStack {
         }
     }
 
-    #[cfg(test)]
     fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -756,8 +671,7 @@ impl Default for DirectTaskRuntimeState {
             cleanup_draining: false,
             primary_runtime_diagnostic: None,
             manager_exit_failures: Vec::new(),
-            call_depth: 0,
-            call_frames: DirectCallFrameStorage::Empty,
+            frames: DirectFrameStack::allocate(),
             task_ancestry: DirectTaskAncestry::default(),
             fallback_cancellation: CancellationContext::default(),
             returned_views: DirectReturnedViewStack::default(),
@@ -765,6 +679,46 @@ impl Default for DirectTaskRuntimeState {
             mutable_sinks: HashMap::new(),
             next_mutable_sink_id: 1,
         }
+    }
+}
+
+impl Drop for DirectTaskRuntimeState {
+    fn drop(&mut self) {
+        // SAFETY: the state owns its stack, and generated code of this task
+        // no longer runs once the state is gone.
+        unsafe { DirectFrameStack::free(self.frames) };
+    }
+}
+
+impl DirectTaskRuntimeState {
+    fn frames(&self) -> &DirectFrameStack {
+        // SAFETY: the state owns its stack. Generated code updates it only
+        // while no runtime code holds this borrow.
+        unsafe { self.frames.as_ref() }
+    }
+
+    fn frames_mut(&mut self) -> &mut DirectFrameStack {
+        // SAFETY: as in `frames`.
+        unsafe { self.frames.as_mut() }
+    }
+
+    /// The calls active above the frame stack's floor.
+    fn call_depth(&self) -> usize {
+        self.frames().depth()
+    }
+
+    /// Sends generated pushes and pops to the runtime while a call hands
+    /// over mutable sinks or holds a returned-view record. Every change to
+    /// either ends with this.
+    fn refresh_frame_flags(&mut self) {
+        let mut flags = 0;
+        if self.pending_mutable_sinks.is_some() {
+            flags |= DIRECT_FRAME_FLAG_PENDING_SINKS;
+        }
+        if !self.returned_views.is_empty() {
+            flags |= DIRECT_FRAME_FLAG_RETURNED_VIEWS;
+        }
+        self.frames_mut().set_runtime_flags(flags);
     }
 }
 
@@ -806,6 +760,13 @@ thread_local! {
     // resumable direct state behind the globally unique task identity instead.
     static DIRECT_TASK_RUNTIME_STATES: RefCell<DirectTaskRuntimeStates> =
         const { RefCell::new(DirectTaskRuntimeStates::new()) };
+}
+
+/// Forgets the frame stack `aura_direct_frame_stack` last returned. The
+/// scheduler forgets it on every task switch, and adding or removing a
+/// task state forgets it here.
+fn forget_direct_current_frame_stack() {
+    clear_current_task_native_slot();
 }
 
 /// Runtime state per task on this worker, with the last entry looked up kept
@@ -859,16 +820,19 @@ impl DirectTaskRuntimeStates {
         state: Box<DirectTaskRuntimeState>,
     ) -> Option<Box<DirectTaskRuntimeState>> {
         self.cached = None;
+        forget_direct_current_frame_stack();
         self.states.insert(key, state)
     }
 
     fn remove(&mut self, key: u64) -> Option<Box<DirectTaskRuntimeState>> {
         self.cached = None;
+        forget_direct_current_frame_stack();
         self.states.remove(&key)
     }
 
     fn take_all(&mut self) -> BTreeMap<u64, Box<DirectTaskRuntimeState>> {
         self.cached = None;
+        forget_direct_current_frame_stack();
         std::mem::take(&mut self.states)
     }
 
@@ -1065,7 +1029,7 @@ fn install_direct_task_runtime_state(
 }
 
 fn direct_runtime_call_frames() -> Vec<RuntimeCallFrame> {
-    with_direct_task_runtime_state(|state| state.call_frames.materialize_innermost_first())
+    with_direct_task_runtime_state(|state| state.frames().materialize_innermost_first())
 }
 
 fn direct_runtime_task_ancestry() -> Vec<RuntimeTaskFrame> {
@@ -1150,7 +1114,7 @@ fn push_direct_cleanup_registration(thunk_ptr: i64, args: *mut i64, arg_count: u
             thunk_ptr,
             args,
             arg_count,
-            call_depth: state.call_depth,
+            call_depth: state.call_depth(),
         });
         id
     })
@@ -1189,7 +1153,7 @@ struct DirectCallDepthGuard {
 impl Drop for DirectCallDepthGuard {
     fn drop(&mut self) {
         with_direct_task_runtime_state_for_key(self.key, |state| {
-            state.call_depth = self.previous;
+            state.frames_mut().set_depth(self.previous);
         });
     }
 }
@@ -1502,7 +1466,6 @@ unsafe fn share_direct_value(ptr: *mut OpaqueValue) {
 pub static DIRECT_VALUE_LIVE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 type NativeThunk = unsafe extern "C-unwind" fn(*const i64, usize) -> *mut OpaqueValue;
-const DIRECT_MAX_CALL_DEPTH: usize = 256;
 const DIRECT_RUNTIME_STACK_SIZE: usize = 64 * 1024 * 1024;
 
 struct ProgramSourceContext {
@@ -3973,8 +3936,8 @@ fn drain_direct_cleanup_stack() {
     }
     let _guard = DirectCleanupDrainGuard { key };
     let previous_depth = with_direct_task_runtime_state_for_key(key, |state| {
-        let previous = state.call_depth;
-        state.call_depth = 0;
+        let previous = state.call_depth();
+        state.frames_mut().set_depth(0);
         previous
     });
     let _depth_guard = DirectCallDepthGuard {
@@ -4830,7 +4793,7 @@ pub unsafe extern "C-unwind" fn aura_direct_enter_call_with_frame(
         span: DirectRuntimeSourceSpan::point(path, start),
     };
     enter_direct_call_frame(
-        DirectCallFrameEntry::Frame(Box::new(frame)),
+        DirectCallEntry::Frame(Box::new(frame)),
         line,
         column,
         &function,
@@ -4854,33 +4817,47 @@ pub unsafe extern "C-unwind" fn aura_direct_enter_frame(descriptor: *const Direc
     let metadata = unsafe { descriptor.as_ref() };
     metadata.ensure_validated();
     enter_direct_call_frame(
-        DirectCallFrameEntry::Descriptor(descriptor),
+        DirectCallEntry::Descriptor(descriptor),
         metadata.line,
         metadata.column,
         &metadata.function(),
     );
 }
 
+/// The record a call pushes: a validated static descriptor, or a frame the
+/// runtime built from loose metadata.
+enum DirectCallEntry {
+    Descriptor(NonNull<DirectFrameDescriptor>),
+    Frame(Box<DirectRuntimeCallFrame>),
+}
+
 fn enter_direct_call_frame(
-    entry: DirectCallFrameEntry,
+    entry: DirectCallEntry,
     line: i64,
     column: i64,
     function: &DirectFrameText,
 ) {
     let (depth_exceeded, invalid_pending_sinks) = with_direct_task_runtime_state(|state| {
-        if state.call_depth >= DIRECT_MAX_CALL_DEPTH {
-            (true, false)
-        } else {
-            let mutable_sinks = match state.pending_mutable_sinks.take() {
-                Some(DirectPendingMutableSinks::Direct(sinks)) => sinks,
-                Some(DirectPendingMutableSinks::Indirect { .. }) => return (false, true),
-                None => Vec::new(),
-            };
-            state.call_depth += 1;
-            state.call_frames.push_entry(entry);
-            state.returned_views.enter(state.call_depth, mutable_sinks);
-            (false, false)
+        if state.call_depth() >= DIRECT_MAX_CALL_DEPTH {
+            return (true, false);
         }
+        let mutable_sinks = match state.pending_mutable_sinks.take() {
+            Some(DirectPendingMutableSinks::Direct(sinks)) => sinks,
+            Some(DirectPendingMutableSinks::Indirect { .. }) => {
+                state.refresh_frame_flags();
+                return (false, true);
+            }
+            None => Vec::new(),
+        };
+        let frames = state.frames_mut();
+        match entry {
+            DirectCallEntry::Descriptor(descriptor) => frames.push_descriptor(descriptor),
+            DirectCallEntry::Frame(frame) => frames.push_owned(frame),
+        }
+        let depth = state.call_depth();
+        state.returned_views.enter(depth, mutable_sinks);
+        state.refresh_frame_flags();
+        (false, false)
     });
     if invalid_pending_sinks {
         runtime_error("direct mutable write-through sinks were not prepared for a concrete call");
@@ -4890,15 +4867,84 @@ fn enter_direct_call_frame(
     }
 }
 
+/// Leaves the innermost generated Aura call. Generated code pops a call
+/// itself unless the frame stack's flags or floor send it here.
 #[cfg_attr(not(coverage), no_mangle)]
 pub unsafe extern "C-unwind" fn aura_direct_exit_call() {
     with_direct_task_runtime_state(|state| {
-        if state.call_depth > 0 {
-            state.returned_views.exit(state.call_depth);
-            state.call_depth -= 1;
-            let _ = state.call_frames.pop();
+        let depth = state.call_depth();
+        if depth > 0 {
+            state.returned_views.exit(depth);
+            state.frames_mut().pop_call();
+            state.refresh_frame_flags();
         }
     });
+}
+
+/// The current task's frame stack, which generated code pushes and pops
+/// in place. Every call from one task returns the same address, because
+/// the stack lives as long as the task's runtime state and a task never
+/// moves to another state.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C" fn aura_direct_frame_stack() -> *mut DirectFrameStack {
+    let stack = current_task_native_slot().cast::<DirectFrameStack>();
+    if !stack.is_null() {
+        return stack;
+    }
+    direct_frame_stack_slow()
+}
+
+/// Looks the current task's stack up and keeps it for the next call. It is
+/// its own C function, so a failure aborts here and the accessor's fast
+/// path needs no unwind guard.
+#[cold]
+#[inline(never)]
+extern "C" fn direct_frame_stack_slow() -> *mut DirectFrameStack {
+    let stack = with_direct_task_runtime_state(|state| state.frames.as_ptr());
+    set_current_task_native_slot(stack.cast());
+    stack
+}
+
+/// Validates every frame descriptor of the program before its first call,
+/// so generated code may push one without checking it. A descriptor with
+/// text that is not UTF-8 stops the program here.
+///
+/// # Safety
+///
+/// `descriptors` must point to `count` descriptor addresses, each meeting
+/// the contract of `aura_direct_enter_frame`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_validate_frame_descriptors(
+    descriptors: *const *const DirectFrameDescriptor,
+    count: i64,
+) {
+    let count = usize::try_from(count).unwrap_or_default();
+    if count == 0 {
+        return;
+    }
+    if descriptors.is_null() {
+        reject_invalid_direct_frame_utf8();
+    }
+    // SAFETY: the caller passes `count` readable addresses.
+    for descriptor in unsafe { slice::from_raw_parts(descriptors, count) } {
+        // SAFETY: each address meets the entry contract, or is null.
+        match unsafe { descriptor.as_ref() } {
+            Some(descriptor) => descriptor.ensure_validated(),
+            None => reject_invalid_direct_frame_utf8(),
+        }
+    }
+}
+
+/// Stops a program whose generated code expects another frame stack layout.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_check_frame_stack_layout(fingerprint: i64) {
+    task_runtime_boundary(|| {
+        if fingerprint != direct_frame_stack_layout().fingerprint() {
+            runtime_error(
+                "this executable was built for a different Aura runtime; rebuild it with `aura build`",
+            )
+        }
+    })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -10445,7 +10491,9 @@ fn replace_direct_cleanup_registration_value(id: i64, root: &Value) {
 
 fn install_pending_direct_mutable_sinks(pending: DirectPendingMutableSinks) {
     let replaced = with_direct_task_runtime_state(|state| {
-        state.pending_mutable_sinks.replace(pending).is_some()
+        let replaced = state.pending_mutable_sinks.replace(pending).is_some();
+        state.refresh_frame_flags();
+        replaced
     });
     if replaced {
         runtime_error("direct mutable write-through sink handoff was overwritten before use");
@@ -10465,7 +10513,11 @@ pub extern "C-unwind" fn aura_direct_claim_indirect_mutable_sinks(capture_count:
 }
 
 fn prepare_indirect_direct_mutable_sinks(capture_count: usize) {
-    let pending = with_direct_task_runtime_state(|state| state.pending_mutable_sinks.take());
+    let pending = with_direct_task_runtime_state(|state| {
+        let pending = state.pending_mutable_sinks.take();
+        state.refresh_frame_flags();
+        pending
+    });
     let Some(pending) = pending else {
         return;
     };
@@ -10570,7 +10622,7 @@ pub extern "C-unwind" fn aura_direct_current_mutable_sink(index: i64) -> i64 {
         with_direct_task_runtime_state(|state| {
             state
                 .returned_views
-                .current(state.call_depth)
+                .current(state.call_depth())
                 .and_then(|frame| frame.mutable_sinks.get(index))
                 .copied()
                 .unwrap_or(0)
@@ -10799,10 +10851,12 @@ pub extern "C-unwind" fn aura_direct_set_returned_view_projection(
     task_runtime_boundary(|| {
         let projection = decode_bytes(projection_ptr, projection_len);
         let installed = with_direct_task_runtime_state(|state| {
-            if state.call_depth == 0 {
+            let depth = state.call_depth();
+            if depth == 0 {
                 return false;
             }
-            state.returned_views.current_mut(state.call_depth).returned = Some(projection);
+            state.returned_views.current_mut(depth).returned = Some(projection);
+            state.refresh_frame_flags();
             true
         });
         if !installed {
@@ -10818,14 +10872,16 @@ pub extern "C-unwind" fn aura_direct_set_returned_view_projection(
 pub extern "C-unwind" fn aura_direct_push_returned_view_selector(word: i64) {
     task_runtime_boundary(|| {
         let installed = with_direct_task_runtime_state(|state| {
-            if state.call_depth == 0 {
+            let depth = state.call_depth();
+            if depth == 0 {
                 return false;
             }
             state
                 .returned_views
-                .current_mut(state.call_depth)
+                .current_mut(depth)
                 .returned_selectors
                 .push(word);
+            state.refresh_frame_flags();
             true
         });
         if !installed {
@@ -10843,7 +10899,7 @@ pub extern "C-unwind" fn aura_direct_take_returned_view_selector(index: i64) -> 
             usize::try_from(index).ok().and_then(|index| {
                 state
                     .returned_views
-                    .current(state.call_depth)
+                    .current(state.call_depth())
                     .and_then(|frame| frame.pending_child_selectors.get(index))
                     .copied()
             })
@@ -10860,7 +10916,7 @@ pub extern "C-unwind" fn aura_direct_take_returned_view_projection(
     task_runtime_boundary(|| {
         let projections = unsafe { slice::from_raw_parts(projections_ptr, projections_len) };
         let selected = with_direct_task_runtime_state(|state| {
-            let depth = state.call_depth;
+            let depth = state.call_depth();
             state.returned_views.take_pending_child(depth)
         })
         .unwrap_or_else(|| runtime_error("direct returned view has no transferred projection"));

@@ -17,7 +17,9 @@ use crate::native_backend::{
 use crate::native_runtime::{
     encode_direct_ffi_call_spec, DirectFfiCallSpec, DirectFfiParam, DirectFfiType,
 };
-use crate::runtime_abi::{AbiType, RuntimeFn, RuntimeTable};
+use crate::runtime_abi::{
+    frame_stack_layout, AbiType, RuntimeFn, RuntimeTable, FRAME_STACK_ENTRY_BYTES,
+};
 use crate::runtime_ops::{
     first_type_arg, ArgDefault, ArrayOp, DictOp, FunctionOp, HostBuiltin, ListOp, PrintKind,
     RuntimeOp, RuntimeTarget, ScalarElement, ScalarOp, SetOp, SpanOp, StrOp, ValueOp,
@@ -524,6 +526,8 @@ struct NativeCodegen<'a> {
     function_writeback_types: HashMap<String, Vec<DirectType>>,
     runtime: RuntimeTable<FuncHandle>,
     string_data: HashMap<Vec<u8>, DataHandle>,
+    /// Every function's frame descriptor, which the main wrapper validates.
+    frame_descriptors: Vec<DataHandle>,
 }
 
 macro_rules! try_or_string_error {
@@ -774,6 +778,7 @@ impl<'a> NativeCodegen<'a> {
             function_writeback_types,
             runtime,
             string_data: HashMap::new(),
+            frame_descriptors: Vec::new(),
         })
     }
 
@@ -904,9 +909,13 @@ impl<'a> NativeCodegen<'a> {
             function_path.as_bytes(),
             public_function_name.as_bytes(),
         )?;
+        self.frame_descriptors.push(descriptor);
         let descriptor = builder.import_data(descriptor);
         let descriptor = builder.symbol_value(types::I64, descriptor);
-        builder.call(runtime_refs[RuntimeFn::EnterCall], &[descriptor]);
+        // The entry block's code continues after the push, in the block
+        // where both of its paths meet.
+        let body = emit_frame_push(builder, &runtime_refs, descriptor);
+        blocks.insert(function.entry.clone(), body);
 
         let mut variable_index = 0usize;
         let mut variables = HashMap::new();
@@ -1704,6 +1713,20 @@ impl<'a> NativeCodegen<'a> {
             aura_runtime::native_runtime::direct_list_layout().fingerprint(),
         );
         builder.call(check_list_layout, &[fingerprint]);
+        // Generated functions push and pop frames at fixed offsets too.
+        let check_frame_stack_layout =
+            builder.import_function(self.runtime[RuntimeFn::CheckFrameStackLayout]);
+        let fingerprint = builder.iconst(types::I64, frame_stack_layout().fingerprint());
+        builder.call(check_frame_stack_layout, &[fingerprint]);
+        // Validating every descriptor now lets each function push its own
+        // without checking it.
+        let descriptors =
+            declare_frame_descriptor_table(builder.module(), &self.frame_descriptors)?;
+        let descriptors = builder.import_data(descriptors);
+        let descriptors = builder.symbol_value(types::I64, descriptors);
+        let count = builder.iconst(types::I64, self.frame_descriptors.len() as i64);
+        let validate = builder.import_function(self.runtime[RuntimeFn::ValidateFrameDescriptors]);
+        builder.call(validate, &[descriptors, count]);
         let display_wrappers = self
             .module
             .functions
@@ -3850,7 +3873,7 @@ impl<'a> FunctionCompiler<'a> {
             self.release_root_words(root)?;
         }
         self.release_boxed_copy_roots()?;
-        self.builder.call(self.runtime[RuntimeFn::ExitCall], &[]);
+        emit_frame_pop(self.builder, &self.runtime);
         self.builder.return_(&return_values);
         Ok(())
     }
@@ -11930,12 +11953,99 @@ fn declare_runtime_helper(
         .iter()
         .map(|param| abi_type(*param))
         .collect::<Vec<_>>();
-    declare_runtime_function(
+    let handle = declare_runtime_function(
         module,
         function.symbol(),
         &params,
         function.result().map(abi_type),
-    )
+    )?;
+    if function.is_task_invariant() {
+        module.mark_task_invariant(handle);
+    }
+    Ok(handle)
+}
+
+/// Pushes a call's frame record the way the runtime's frame stack allows:
+/// store the descriptor's address after the active entries and count it,
+/// unless the stack is full or its flags ask for the runtime. Then
+/// `aura_direct_enter_frame` does the whole push. The main wrapper has
+/// validated every descriptor, so the inline path stores only validated
+/// ones. Returns the block both paths continue in.
+fn emit_frame_push(
+    builder: &mut dyn FunctionBackend,
+    runtime: &RuntimeTable<FuncRef>,
+    descriptor: Val,
+) -> Blk {
+    let layout = frame_stack_layout();
+    let trusted = MemFlags::trusted();
+    let stack = builder.call(runtime[RuntimeFn::FrameStack], &[]).results[0];
+    let len = builder.load(types::I64, trusted, stack, layout.len_offset);
+    let limit = builder.load(types::I64, trusted, stack, layout.limit_offset);
+    let flags = builder.load(types::I64, trusted, stack, layout.flags_offset);
+    let runtime_work = builder.icmp_imm(IntCC::NotEqual, flags, 0);
+    let full = builder.icmp(IntCC::UnsignedGreaterThanOrEqual, len, limit);
+    let slow = builder.bor(full, runtime_work);
+    let (fast_block, slow_block, done) = emit_frame_branch(builder, slow);
+
+    builder.switch_to_block(fast_block);
+    let entries = builder.load(types::I64, trusted, stack, layout.entries_offset);
+    let offset = builder.imul_imm(len, FRAME_STACK_ENTRY_BYTES);
+    let slot = builder.iadd(entries, offset);
+    builder.store(trusted, descriptor, slot, 0);
+    let pushed = builder.iadd_imm(len, 1);
+    builder.store(trusted, pushed, stack, layout.len_offset);
+    builder.jump(done, &[]);
+
+    builder.switch_to_block(slow_block);
+    builder.call(runtime[RuntimeFn::EnterCall], &[descriptor]);
+    builder.jump(done, &[]);
+
+    builder.seal_block(done);
+    builder.switch_to_block(done);
+    done
+}
+
+/// Pops the innermost call's frame record: count one entry fewer, unless
+/// the stack's flags ask for the runtime or no call is above its floor.
+/// Then `aura_direct_exit_call` does the whole pop.
+fn emit_frame_pop(builder: &mut dyn FunctionBackend, runtime: &RuntimeTable<FuncRef>) {
+    let layout = frame_stack_layout();
+    let trusted = MemFlags::trusted();
+    // Calls since the push may have yielded, but the task's stack keeps its
+    // address, so the code generator may reuse the push's address here.
+    let stack = builder.call(runtime[RuntimeFn::FrameStack], &[]).results[0];
+    let len = builder.load(types::I64, trusted, stack, layout.len_offset);
+    let floor = builder.load(types::I64, trusted, stack, layout.floor_offset);
+    let flags = builder.load(types::I64, trusted, stack, layout.flags_offset);
+    let runtime_work = builder.icmp_imm(IntCC::NotEqual, flags, 0);
+    let bottom = builder.icmp(IntCC::UnsignedLessThanOrEqual, len, floor);
+    let slow = builder.bor(bottom, runtime_work);
+    let (fast_block, slow_block, done) = emit_frame_branch(builder, slow);
+
+    builder.switch_to_block(fast_block);
+    let popped = builder.iadd_imm(len, -1);
+    builder.store(trusted, popped, stack, layout.len_offset);
+    builder.jump(done, &[]);
+
+    builder.switch_to_block(slow_block);
+    builder.call(runtime[RuntimeFn::ExitCall], &[]);
+    builder.jump(done, &[]);
+
+    builder.seal_block(done);
+    builder.switch_to_block(done);
+}
+
+/// Branches on `slow` to a cold runtime block or the inline block, and
+/// returns both with the block they rejoin in.
+fn emit_frame_branch(builder: &mut dyn FunctionBackend, slow: Val) -> (Blk, Blk, Blk) {
+    let fast_block = builder.create_block();
+    let slow_block = builder.create_block();
+    let done = builder.create_block();
+    builder.set_cold_block(slow_block);
+    builder.brif(slow, slow_block, &[], fast_block, &[]);
+    builder.seal_block(fast_block);
+    builder.seal_block(slow_block);
+    (fast_block, slow_block, done)
 }
 
 fn declare_runtime_function(
@@ -12010,7 +12120,7 @@ const FRAME_DESCRIPTOR_FUNCTION_LEN: usize = 48;
 const FRAME_DESCRIPTOR_BYTES: usize = 56;
 
 /// Defines one function's static frame descriptor. It is writable because the
-/// runtime marks it validated on the function's first call.
+/// runtime marks it validated when the main wrapper starts.
 fn declare_frame_descriptor(
     object: &mut dyn ModuleBackend,
     string_data: &mut HashMap<Vec<u8>, DataHandle>,
@@ -12041,6 +12151,27 @@ fn declare_frame_descriptor(
     try_or_string_error!(
         object.define_data(id, data),
         "failed to define frame descriptor: {}"
+    );
+    Ok(id)
+}
+
+/// Defines the table of every frame descriptor's address.
+fn declare_frame_descriptor_table(
+    object: &mut dyn ModuleBackend,
+    descriptors: &[DataHandle],
+) -> std::result::Result<DataHandle, String> {
+    let id = try_or_string_error!(
+        object.declare_data("aura_frame_descriptors", Linkage::Local, false),
+        "failed to declare the frame descriptor table: {}"
+    );
+    let mut data = DataDescription::new(vec![0u8; 8 * descriptors.len().max(1)]);
+    data.align = Some(8);
+    for (index, descriptor) in descriptors.iter().enumerate() {
+        data.write_data_addr(8 * index as u32, *descriptor);
+    }
+    try_or_string_error!(
+        object.define_data(id, data),
+        "failed to define the frame descriptor table: {}"
     );
     Ok(id)
 }

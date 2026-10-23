@@ -104,6 +104,11 @@ Last updated: 2026-10-23
   repeat-build test. It runs the six phase targets in 0.4% to 42% fewer
   instructions than Cranelift. Details are in
   `2026-10-23-batch-7-step-9c-llvm-tuning.md`.
+- In progress: 10a, the frame stack fast path. Generated code pushes and
+  pops frames on the task's frame stack inline, on both code generators.
+  `fib(30)` runs in 115 million instructions on LLVM instead of 484
+  million, 2.9 times Rust. Details are in
+  `2026-10-23-batch-7-step-10a-frame-fast-path.md`.
 
 ## Aura 0.6.0 preview release (complete)
 

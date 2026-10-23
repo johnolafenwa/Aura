@@ -617,6 +617,28 @@ instructions for one whole run, in millions:
 - Every native binaries subject passes the size gate on LLVM, with the
   Cranelift baselines. The reference agent links 2% smaller.
 
+### Step 10 Progress
+
+Step 10a records frames inline. Generated code pushes and pops its frame
+descriptor on the task's frame stack, and calls the runtime only for the
+cold cases. The method and tables are in
+[the 10a note](../work/2026-10-23-batch-7-step-10a-frame-fast-path.md).
+Callgrind instructions for one whole run, in millions:
+
+| Program | Cranelift before | Cranelift after | LLVM before | LLVM after | LLVM / Rust |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `fib(30)` | 523.0 | 210.6 | 483.9 | 115.0 | 2.9x |
+| `int_list_sum` | 73.1 | 73.1 | 42.2 | 42.2 | 3.2x |
+| `string_list_scan` | 150.8 | 150.9 | 137.5 | 137.6 | 10.5x |
+| `dict_build_get` | 942.0 | 940.4 | 936.9 | 935.3 | 5.2x |
+| `set_insert_contains` | 148.3 | 148.9 | 144.5 | 144.7 | 4.6x |
+| `record_field_reads` | 693.1 | 693.2 | 690.5 | 690.5 | 19.2x |
+
+- `fib(30)` on LLVM is inside its 3x target by instruction count. The
+  other five barely call Aura functions, so 10a leaves them alone. The
+  later parts of step 10 target their runtime calls.
+- Traces, task ancestry, and the depth limit of 256 calls are unchanged.
+
 ## Owner Questions
 
 Each names the recommended default first.

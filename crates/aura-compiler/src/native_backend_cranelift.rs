@@ -158,6 +158,9 @@ impl ModuleBackend for CraneliftModule {
         }
     }
 
+    /// Cranelift has no attribute for this, and it never merges calls.
+    fn mark_task_invariant(&mut self, _function: FuncHandle) {}
+
     fn define_function(
         &mut self,
         function: FuncHandle,
@@ -308,6 +311,10 @@ impl FunctionBackend for CraneliftFunction<'_> {
 
     fn seal_all_blocks(&mut self) {
         self.builder.seal_all_blocks();
+    }
+
+    fn set_cold_block(&mut self, target: Blk) {
+        self.builder.set_cold_block(block(target));
     }
 
     fn current_block(&self) -> Option<Blk> {

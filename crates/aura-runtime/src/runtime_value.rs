@@ -5316,6 +5316,10 @@ thread_local! {
     // The id of CURRENT_LIGHTWEIGHT_TASK_CONTEXT, kept beside it so the per-call
     // runtime state lookup reads one cell instead of cloning the context.
     static CURRENT_LIGHTWEIGHT_TASK_ID: Cell<Option<u64>> = const { Cell::new(None) };
+    // One address the native runtime keeps for the current task, so its
+    // per-call lookup reads one cell. Every change of task clears it.
+    static CURRENT_LIGHTWEIGHT_TASK_NATIVE_SLOT: Cell<*mut ()> =
+        const { Cell::new(std::ptr::null_mut()) };
     static CURRENT_LIGHTWEIGHT_TASK_CANCELLATION: std::cell::RefCell<Option<CancellationContext>> =
         const { std::cell::RefCell::new(None) };
     static CURRENT_LIGHTWEIGHT_TASK_EXIT: std::cell::RefCell<Option<TaskExecutionResult>> =
@@ -5416,6 +5420,7 @@ impl Drop for LightweightTaskContextGuard {
         let previous = self.previous.take();
         CURRENT_LIGHTWEIGHT_TASK_ID
             .with(|slot| slot.set(previous.as_ref().map(|context| context.task_id)));
+        clear_current_task_native_slot();
         CURRENT_LIGHTWEIGHT_TASK_CONTEXT.with(|slot| *slot.borrow_mut() = previous);
         CURRENT_LIGHTWEIGHT_TASK_CANCELLATION
             .with(|slot| *slot.borrow_mut() = self.previous_cancellation.take());
@@ -5432,6 +5437,7 @@ fn enter_lightweight_task_context(
         previous
     });
     CURRENT_LIGHTWEIGHT_TASK_ID.with(|slot| slot.set(Some(context.task_id)));
+    clear_current_task_native_slot();
     let previous_cancellation = CURRENT_LIGHTWEIGHT_TASK_CANCELLATION.with(|slot| {
         let mut slot = slot.borrow_mut();
         let previous = slot.clone();
@@ -5463,6 +5469,24 @@ pub fn current_lightweight_task_cancellation() -> Option<CancellationContext> {
 
 pub fn current_lightweight_task_id() -> Option<u64> {
     CURRENT_LIGHTWEIGHT_TASK_ID.with(Cell::get)
+}
+
+/// The address the native runtime stored for the current task, or null
+/// after any change of task.
+#[inline]
+pub fn current_task_native_slot() -> *mut () {
+    CURRENT_LIGHTWEIGHT_TASK_NATIVE_SLOT.with(Cell::get)
+}
+
+/// Stores the native runtime's address for the current task, until the
+/// task changes.
+pub fn set_current_task_native_slot(address: *mut ()) {
+    CURRENT_LIGHTWEIGHT_TASK_NATIVE_SLOT.with(|slot| slot.set(address));
+}
+
+/// Forgets the native runtime's address for the current task.
+pub fn clear_current_task_native_slot() {
+    set_current_task_native_slot(std::ptr::null_mut());
 }
 
 #[cfg(test)]

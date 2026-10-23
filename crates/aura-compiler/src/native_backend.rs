@@ -296,6 +296,11 @@ pub(crate) trait ModuleBackend {
 
     fn define_data(&mut self, data: DataHandle, contents: DataDescription) -> Result<(), String>;
 
+    /// Declares that `function`, an import, touches no memory its callers
+    /// see and returns the same value on every call from one task, so the
+    /// code generator may merge its calls. Cranelift ignores this.
+    fn mark_task_invariant(&mut self, function: FuncHandle);
+
     /// Defines `function`, whose body `body` builds. A body that fails
     /// leaves the function undefined.
     fn define_function(
@@ -321,6 +326,9 @@ pub(crate) trait FunctionBackend {
     /// Declares that every branch to `block` is built.
     fn seal_block(&mut self, block: Blk);
     fn seal_all_blocks(&mut self);
+    /// Marks `block` as rarely run, so the code generator lays it out and
+    /// predicts branches to it as cold.
+    fn set_cold_block(&mut self, block: Blk);
     fn current_block(&self) -> Option<Blk>;
     fn block_params(&self, block: Blk) -> Vec<Val>;
     fn append_block_param(&mut self, block: Blk, ty: ScalarType) -> Val;
