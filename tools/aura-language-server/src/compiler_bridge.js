@@ -1,6 +1,7 @@
 "use strict";
 
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { spawn } = require("node:child_process");
@@ -11,6 +12,7 @@ let workspaceRoots = [];
 let compilerService = null;
 let compilerServiceKey = null;
 let compilerSchemaMismatchHandler = null;
+let compilerUnavailableHandler = null;
 let sourceOverlayProvider = null;
 const COMPILER_REQUEST_TIMEOUT_MS = 15_000;
 const COMPILER_RESPONSE_LIMIT_BYTES = 16 * 1024 * 1024;
@@ -45,6 +47,18 @@ function openDocumentOverlays(documentUri, documents) {
     }
   }
   return overlays;
+}
+
+// The handler hears `{ command, error }` when the compiler process cannot be
+// started at all, such as when `aura` is not installed or not on `PATH`.
+function setCompilerUnavailableHandler(handler) {
+  compilerUnavailableHandler = typeof handler === "function" ? handler : null;
+}
+
+function notifyCompilerUnavailable(details) {
+  if (compilerUnavailableHandler) {
+    compilerUnavailableHandler(details);
+  }
 }
 
 function notifyCompilerSchemaMismatch(details) {
@@ -122,7 +136,8 @@ function requestCompiler(method, params, cancellationToken) {
   if (!compilerService || compilerService.closed || compilerServiceKey !== key) {
     disposeCompilerService();
     compilerService = new CompilerService(command, {
-      onSemanticSchemaMismatch: notifyCompilerSchemaMismatch
+      onSemanticSchemaMismatch: notifyCompilerSchemaMismatch,
+      onUnavailable: notifyCompilerUnavailable
     });
     compilerServiceKey = key;
   }
@@ -135,7 +150,8 @@ class CompilerService {
     {
       requestTimeoutMs = COMPILER_REQUEST_TIMEOUT_MS,
       responseLimitBytes = COMPILER_RESPONSE_LIMIT_BYTES,
-      onSemanticSchemaMismatch = () => {}
+      onSemanticSchemaMismatch = () => {},
+      onUnavailable = () => {}
     } = {}
   ) {
     this.command = command;
@@ -157,7 +173,11 @@ class CompilerService {
     this.child.stderr.on("data", (chunk) => {
       this.stderrBuffer = (this.stderrBuffer + chunk).slice(-65_536);
     });
-    this.child.on("error", (error) => this.fail(error));
+    // An `error` event means the process could not be started or signalled.
+    this.child.on("error", (error) => {
+      onUnavailable({ command, error });
+      this.fail(error);
+    });
     this.child.on("close", (code) => {
       this.fail(
         new Error(
@@ -370,6 +390,10 @@ function compilerCompletionToLsp(item, kind) {
   if (item.documentation) {
     result.documentation = { kind: "markdown", value: item.documentation };
   }
+  if (item.kind === "parameter") {
+    // Keyword arguments of the call being written rank above other names.
+    result.sortText = `0${item.name}`;
+  }
   return result;
 }
 
@@ -522,8 +546,48 @@ function symbolKind(kind) {
   }
 }
 
+function expandHome(value) {
+  if (value === "~") {
+    return os.homedir();
+  }
+  if (value.startsWith("~/") || value.startsWith("~\\")) {
+    return path.join(os.homedir(), value.slice(2));
+  }
+  return value;
+}
+
+function isFile(candidate) {
+  try {
+    return fs.statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function findOnPath(name, searchPath = process.env.PATH || "") {
+  for (const directory of searchPath.split(path.delimiter)) {
+    if (directory && isFile(path.join(directory, name))) {
+      return path.join(directory, name);
+    }
+  }
+  return null;
+}
+
+// Editors started from a desktop launcher often do not see the shell's
+// `PATH`, so look where the Aura installer, cargo, and Homebrew put `aura`.
+function installedCompiler(home = os.homedir(), platform = process.platform) {
+  const name = binaryName(platform);
+  const directories = [
+    path.join(home, ".local", "bin"),
+    path.join(home, ".cargo", "bin"),
+    "/opt/homebrew/bin",
+    "/usr/local/bin"
+  ];
+  return directories.map((directory) => path.join(directory, name)).find(isFile) || null;
+}
+
 function resolveCompilerCommand() {
-  const envPath = process.env.AURA_LSP_AURA_PATH;
+  const envPath = process.env.AURA_LSP_AURA_PATH && expandHome(process.env.AURA_LSP_AURA_PATH);
   if (envPath && fs.existsSync(envPath)) {
     return { cmd: envPath, args: [], cwd: undefined };
   }
@@ -532,7 +596,7 @@ function resolveCompilerCommand() {
   // `cargo run` would execute code from any folder the editor opens. Only
   // contributors who ask for it get the checkout's own compiler.
   if (process.env.AURA_LSP_USE_WORKSPACE_COMPILER !== "1") {
-    return { cmd: "aura", args: [], cwd: workspaceRoots[0] };
+    return defaultCompilerCommand();
   }
 
   for (const root of workspaceRoots) {
@@ -556,6 +620,16 @@ function resolveCompilerCommand() {
     }
   }
 
+  return defaultCompilerCommand();
+}
+
+function defaultCompilerCommand() {
+  if (!findOnPath(binaryName())) {
+    const installed = installedCompiler();
+    if (installed) {
+      return { cmd: installed, args: [], cwd: workspaceRoots[0] };
+    }
+  }
   return { cmd: "aura", args: [], cwd: workspaceRoots[0] };
 }
 
@@ -609,10 +683,14 @@ module.exports = {
   findOccurrence,
   disposeCompilerService,
   openDocumentOverlays,
+  expandHome,
+  findOnPath,
+  installedCompiler,
   resolveCompilerCommand,
   runCommand,
   SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION,
   setCompilerSchemaMismatchHandler,
+  setCompilerUnavailableHandler,
   setSourceOverlayProvider,
   setWorkspaceRoots,
   uriToPath

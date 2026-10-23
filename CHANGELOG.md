@@ -110,6 +110,13 @@ in this file.
 
 - A local binding shadows a builtin function name. Calling a local function
   value named `min` or `sum` now calls that value instead of the builtin.
+- The VS Code extension finds `aura` in `~/.local/bin`, `~/.cargo/bin`,
+  `/opt/homebrew/bin`, and `/usr/local/bin` when VS Code does not see it on
+  `PATH`, as when VS Code starts from the Dock. It adds an
+  `aura.compilerPath` setting and an **Aura: Restart Language Server**
+  command, and warns once when it cannot start the compiler or the compiler
+  speaks another editor interface version. It used to fall back silently to
+  keyword-only completion. Untitled Aura files get language features too.
 - A direct runtime helper that takes a boxed value, such as `append`,
   copies the value when another reference still holds the box. It used to
   empty the box under the other reference.
@@ -128,6 +135,17 @@ in this file.
 - A program can call its own function named `list`, `dict`, `set`, or
   `Queue`. Lowering used to give such a call no result type, so both
   backends rejected the program.
+- Completion offers the locals in scope while a name is still being typed,
+  including inside f-string braces such as `f"Limit: {li}"` or an empty
+  `{}`. The compiler used to reject the unfinished name, so the editor fell
+  back to keywords and top-level names only.
+- Completion inside a call offers the parameter names that earlier
+  arguments have not bound yet, as `denominator=` for
+  `is_divisible(4, de`, ranked first in VS Code. Locals and parameters now
+  show with the variable icon instead of plain text.
+- The VS Code extension treats the inside of f-string braces as code, so
+  suggestions appear there as you type. VS Code used to treat it as string
+  text, where it turns suggestions off.
 
 ## VS Code extension 0.6.0 — 2026-10-21
 

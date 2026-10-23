@@ -47,8 +47,16 @@ The extension bundles the JavaScript Language Server Protocol (LSP) transport,
 which starts the semantic service as `aura lsp`. It uses the first compiler
 it finds:
 
-1. `AURA_LSP_AURA_PATH`
+1. The `aura.compilerPath` setting (or `AURA_LSP_AURA_PATH`)
 2. `aura` on `PATH`
+3. `aura` in `~/.local/bin` (where the Aura installer puts it),
+   `~/.cargo/bin`, `/opt/homebrew/bin`, or `/usr/local/bin`
+
+VS Code started from the Dock or a desktop launcher may not see the `PATH` of
+your terminal; the third step covers the usual install locations. If none of
+these finds the compiler, the extension shows a warning and keeps only
+keyword completion and an outline. Set `aura.compilerPath` in your user
+settings, then run **Aura: Restart Language Server**.
 
 The extension never runs a program from the opened folder by default. A
 cloned repository can contain its own `target/debug/aura`, so running it would

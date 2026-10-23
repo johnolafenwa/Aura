@@ -47,12 +47,12 @@ cargo install --path crates/aura --locked --force
 aura --version
 ```
 
-Reload VS Code after you install the CLI, then open any `.au` file. To use a
-specific compiler binary, launch VS Code with:
-
-```bash
-AURA_LSP_AURA_PATH="/absolute/path/to/aura" code /path/to/aura-project
-```
+Reload VS Code after you install the CLI, then open any `.au` file. The
+extension also looks in `~/.local/bin`, `~/.cargo/bin`, `/opt/homebrew/bin`,
+and `/usr/local/bin` when VS Code does not see `aura` on `PATH`. To use a
+specific compiler binary, set **Aura: Compiler Path** (`aura.compilerPath`)
+in your user settings; the server restarts on its own. **Aura: Restart
+Language Server** restarts it by hand.
 
 The [complete installation guide](https://johnolafenwa.github.io/Aura/install/vscode)
 covers command-line installation, WSL remote setup, custom compiler paths, and

@@ -154,6 +154,28 @@ test("extension package includes the assertion-aware Aura grammar", () => {
   assert.match(packagedGrammar, /assert/);
 });
 
+test("f-string interpolations are code, so editor suggestions fire inside braces", async () => {
+  const extensionRoot = path.resolve(__dirname, "..");
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(extensionRoot, "package.json"), "utf8")
+  );
+  const grammarContribution = manifest.contributes.grammars.find(
+    (grammar) => grammar.language === "aura"
+  );
+  // VS Code turns quick suggestions off inside string tokens; the embedded
+  // expression must override the enclosing f-string's token type.
+  assert.deepEqual(grammarContribution.tokenTypes, {
+    "meta.embedded.expression.aura": "other"
+  });
+
+  const tokenized = await tokenizeAura('print(f"Limit: {limits}, name: {na}")\n');
+  for (const [name, occurrence] of [["limits", 0], ["na", 1]]) {
+    const scopes = scopesAt(tokenized, 0, name, occurrence);
+    assert.ok(scopes.includes("string.interpolated.double.aura"), name);
+    assert.ok(scopes.includes("meta.embedded.expression.aura"), name);
+  }
+});
+
 test("extension grammar and snippets cover Aura string forms", () => {
   const extensionRoot = path.resolve(__dirname, "..");
   const grammar = JSON.parse(
@@ -557,14 +579,32 @@ test("syntax grammar highlights maintained builtin function calls", () => {
   assert.equal(builtinPattern.test("user_function("), false);
 });
 
-test("extension activation registers the language client itself as disposable", () => {
+test("extension activation disposes whichever language client is current", () => {
   const extensionRoot = path.resolve(__dirname, "..");
   const source = fs.readFileSync(path.join(extensionRoot, "src", "extension.js"), "utf8");
 
   assert.match(source, /async function activate\(context\)/);
   assert.match(source, /await client\.start\(\)/);
-  assert.match(source, /context\.subscriptions\.push\(client\)/);
+  assert.match(source, /\{ dispose: \(\) => client && client\.stop\(\) \}/);
   assert.doesNotMatch(source, /subscriptions\.push\(client\.start\(\)\)/);
+});
+
+test("extension exposes the compiler path setting, a restart command, and untitled files", () => {
+  const extensionRoot = path.resolve(__dirname, "..");
+  const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, "package.json"), "utf8"));
+  const setting = manifest.contributes.configuration.properties["aura.compilerPath"];
+  assert.equal(setting.type, "string");
+  assert.equal(setting.default, "");
+  assert.equal(setting.scope, "machine", "a workspace must not choose which binary runs");
+  assert.ok(
+    manifest.contributes.commands.some((command) => command.command === "aura.restartLanguageServer")
+  );
+
+  const source = fs.readFileSync(path.join(extensionRoot, "src", "extension.js"), "utf8");
+  assert.match(source, /registerCommand\("aura\.restartLanguageServer"/);
+  assert.match(source, /affectsConfiguration\("aura\.compilerPath"\)/);
+  assert.match(source, /scheme: "untitled"/);
+  assert.match(source, /env\.AURA_LSP_AURA_PATH = configuredPath/);
 });
 
 test("Aura newline indentation inherits the current block indent", () => {
