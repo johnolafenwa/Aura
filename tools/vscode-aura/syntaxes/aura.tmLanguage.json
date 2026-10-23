@@ -501,7 +501,7 @@
       "patterns": [
         {
           "name": "support.function.builtin.aura",
-          "match": "(?<!\\.)\\b(print|range|cancelled|yield_now|sleep|select|wait_any|wait_all|abs|min|max|sqrt|round|divmod|parse_int32|parse_int64|parse_float64|len|str)\\b(?=\\s*\\()"
+          "match": "(?<!\\.)\\b(print|range|cancelled|yield_now|sleep|select|wait_any|wait_all|abs|min|max|sum|any|all|sqrt|round|divmod|parse_int32|parse_int64|parse_float64|len|str)\\b(?=\\s*\\()"
         }
       ]
     },

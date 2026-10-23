@@ -7,6 +7,24 @@ in this file.
 
 ## Unreleased
 
+### Added
+
+- `sum(values)`, `any(values)`, and `all(values)` reduce a `list[T]`,
+  `set[T]`, `Span[T]`, or `Range`. `sum` also takes an `Array[T]`. `sum`
+  adds left to right with checked arithmetic and gives zero for an empty
+  collection. `any` and `all` stop at the first element that decides them.
+- `min(values)` and `max(values)` return the smallest or largest element of
+  the same collections. An empty list, set, span, or `Range` stops the
+  program with `AU4001`.
+- `min` and `max` take two or more numbers of one type, as in
+  `min(3, 1, 2)`.
+
+### Breaking changes
+
+- `sum`, `any`, and `all` are builtin function names, so a top-level
+  function with one of those names is rejected with `AU2007`. Rename it.
+  Methods and local variables with those names are unaffected.
+
 ### Documentation
 
 - The manual and tutorials now show that `{}` is an empty set when the
@@ -108,6 +126,8 @@ in this file.
   `from ` with builtin modules and sibling `.au` files, after `case Color.`
   with the enum's variants, and for a member name typed without the `.`
   trigger, as in `s.up` or `Array[int32].from_`.
+- A local binding shadows a builtin function name. Calling a local function
+  value named `min` or `sum` now calls that value instead of the builtin.
 - The VS Code extension finds `aura` in `~/.local/bin`, `~/.cargo/bin`,
   `/opt/homebrew/bin`, and `/usr/local/bin` when VS Code does not see it on
   `PATH`, as when VS Code starts from the Dock. It adds an

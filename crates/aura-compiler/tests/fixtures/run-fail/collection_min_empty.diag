@@ -1,0 +1,6 @@
+error[AU4001]: `min(...)` of an empty collection
+ --> crates/aura-compiler/tests/fixtures/run-fail/collection_min_empty.au:3:11
+  |
+3 |     print(min(values))
+  |           ^
+  = note: Aura call chain (innermost first): main at 1:1

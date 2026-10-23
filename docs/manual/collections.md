@@ -103,6 +103,44 @@ Nested clauses run in outer-major order, and filters run from left to right. A
 dictionary comprehension evaluates its key before its value. The output owns
 each element, key, and value it produces.
 
+## Reductions
+
+`sum`, `min`, `max`, `any`, and `all` reduce a collection to one value. They
+take a `list[T]`, `set[T]`, `Span[T]`, or `Range`. `sum`, `min`, and `max`
+also take an `Array[T]`.
+
+```aura
+def main():
+    scores: list[int32] = [72, 95, 88]
+    print(sum(scores))                      # 255
+    print(min(scores))                      # 72
+    print(max(scores))                      # 95
+    print(sum(range(1, 11)))                # 55
+    print(all([score >= 70 for score in scores]))  # true
+    print(any([score > 90 for score in scores]))   # true
+```
+
+| Call | Element type | Result | Empty collection |
+| --- | --- | --- | --- |
+| `sum(values)` | numeric `T` | `T` | zero |
+| `min(values)`, `max(values)` | numeric `T` | `T` | stops with `AU4001` |
+| `any(values)` | `bool` | `bool` | `false` |
+| `all(values)` | `bool` | `bool` | `true` |
+
+A `Range` has `int64` elements. The collection is read through shared access
+and stays usable.
+
+`sum` adds from left to right with the checked `+` of `T`, so an overflow stops
+the program with `AU4002`. `min` and `max` compare the same way as
+`min(left, right)` and `max(left, right)`, and the first of equal values wins.
+`any` stops at the first `true` element, and `all` stops at the first `false`
+one. An `Array` argument uses the Array's own `sum()`, `min()`, or `max()`; see
+[Numeric Arrays](/manual/numeric-arrays).
+
+`min` and `max` also take two or more numbers of one exact type, as in
+`min(3, 1, 2)`. A single number is an error: pass a collection or at least two
+values.
+
 ## list[T]
 
 `list[T]` keeps elements in order. `len(values)` and `values.len()` return

@@ -2417,6 +2417,57 @@ def main():
         .any(|occurrence| occurrence.hover.contains("divmod(left:")));
 }
 
+#[test]
+fn compiler_analysis_infers_collection_reduction_results() {
+    let analysis = analyze_source(
+        r#"
+def main():
+    values: list[int32] = [3, 1, 2]
+    flags: list[bool] = [true, false]
+    total = sum(values)
+    lowest = min(values)
+    counted = max(range(4))
+    smallest = min(3, 1, 2)
+    some = any(flags)
+    every = all(flags)
+    print(total)
+    print(lowest)
+    print(counted)
+    print(smallest)
+    print(some)
+    print(every)
+"#,
+    );
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    let hover_for = |name: &str| {
+        analysis
+            .occurrences
+            .iter()
+            .find(|occurrence| occurrence.hover.contains(&format!("{name}:")))
+            .map(|occurrence| occurrence.hover.clone())
+            .unwrap_or_else(|| panic!("hover for `{name}`"))
+    };
+    assert!(hover_for("total").contains("total: int32"));
+    assert!(hover_for("lowest").contains("lowest: int32"));
+    assert!(hover_for("counted").contains("counted: int64"));
+    assert!(hover_for("smallest").contains("smallest: int64"));
+    assert!(hover_for("some").contains("some: bool"));
+    assert!(hover_for("every").contains("every: bool"));
+    assert!(analysis
+        .occurrences
+        .iter()
+        .any(|occurrence| occurrence.hover.contains("sum(values:")));
+    assert_eq!(builtin_function_return_type("sum"), None);
+    assert_eq!(
+        builtin_function_return_type("any"),
+        Some(Type::named("bool"))
+    );
+}
+
 fn completion_names_after_marker(source: &str, marker: &str) -> Vec<String> {
     let line_index = source
         .lines()

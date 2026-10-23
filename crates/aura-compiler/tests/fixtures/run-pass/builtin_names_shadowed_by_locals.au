@@ -1,0 +1,11 @@
+def total(values: list[int64]) -> int64:
+    mut sum = 0
+    for value in values:
+        sum += value
+    return sum
+
+def main():
+    sum: def(int64) -> int64 = lambda value: value + 1
+    min = 10
+    print(sum(min))
+    print(total([1, 2, 3]))

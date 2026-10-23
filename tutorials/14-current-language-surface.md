@@ -552,6 +552,7 @@ can use the result in three ways:
 | Output and sequences | `print`, `range`, `len`, `str` |
 | Tasks and time | `cancelled`, `yield_now`, `sleep`, `select`, `wait_any`, `wait_all` |
 | Math | `abs`, `min`, `max`, `sqrt`, `round`, `divmod` |
+| Reductions | `sum`, `min`, `max`, `any`, `all` over a list, set, span, or range |
 | Parsing | `parse_int32`, `parse_int64`, `parse_float64` |
 
 These names are reserved. A module-level function that redefines one, such

@@ -1,0 +1,5 @@
+error[AU2002]: `any(...)` expects `list[bool]` or `set[bool]`, found `list[int32]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/collection_any_requires_bool.au:3:15
+  |
+3 |     print(any(values))
+  |               ^

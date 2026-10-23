@@ -176,6 +176,20 @@ fn is_float_literal_expr(expr: &Expr) -> bool {
 /// The explicit specialization inside one or more layers of grouping
 /// parentheses, such as `((Wrapped[int64]))`. Repeated parentheses are one
 /// grouped callee to the checker, so lowering peels every layer.
+/// The element type `sum`, `min`, and `max` fold over: a list, set, span,
+/// or Array element, or `int64` for a Range.
+fn reduction_element_type(ty: &Type) -> Option<Type> {
+    match ty {
+        Type::Named(name, args) if name == "Range" && args.is_empty() => Some(Type::named("int64")),
+        Type::Named(name, args)
+            if matches!(name.as_str(), "list" | "set" | "Span" | "Array") && args.len() == 1 =>
+        {
+            Some(args[0].clone())
+        }
+        _ => None,
+    }
+}
+
 fn grouped_specialization(callee: &Expr) -> Option<&Expr> {
     let ExprKind::Group(inner) = &callee.kind else {
         return None;
@@ -13471,14 +13485,7 @@ impl<'a> Lowerer<'a> {
                 true
             }
             Stmt::Break(_) => {
-                self.emit_active_match_writebacks();
-                let loop_labels = self.loop_stack.last().expect("checked loop context");
-                let cleanup_depth = loop_labels.cleanup_depth;
-                let loan_depth = loop_labels.loan_depth;
-                let break_label = loop_labels.break_label.clone();
-                self.emit_loan_cleanup_from(loan_depth, None);
-                self.emit_cleanup_range(cleanup_depth, true);
-                self.terminate(Terminator::Goto(break_label));
+                self.lower_loop_break();
                 false
             }
             Stmt::Continue(_) => {
@@ -13493,6 +13500,19 @@ impl<'a> Lowerer<'a> {
                 false
             }
         }
+    }
+
+    /// Leaves the innermost loop the way `break` does: end its loans and
+    /// cleanups, then jump past the loop.
+    fn lower_loop_break(&mut self) {
+        self.emit_active_match_writebacks();
+        let loop_labels = self.loop_stack.last().expect("checked loop context");
+        let cleanup_depth = loop_labels.cleanup_depth;
+        let loan_depth = loop_labels.loan_depth;
+        let break_label = loop_labels.break_label.clone();
+        self.emit_loan_cleanup_from(loan_depth, None);
+        self.emit_cleanup_range(cleanup_depth, true);
+        self.terminate(Terminator::Goto(break_label));
     }
 
     fn lower_assert(&mut self, assert_stmt: &crate::ast::AssertStmt) {
@@ -23200,6 +23220,52 @@ impl<'a> Lowerer<'a> {
                     },
                 });
             }
+            ExprKind::Name(name)
+                if BuiltinFunction::from_name(name)
+                    .is_some_and(|builtin| builtin.is_collection_reduction(args.len())) =>
+            {
+                let builtin = BuiltinFunction::from_name(name)
+                    .expect("reduction builtins have maintained call metadata");
+                self.lower_collection_reduction(expr, builtin, &args[0], &temp);
+            }
+            ExprKind::Name(name) if matches!(name.as_str(), "min" | "max") && args.len() > 2 => {
+                // `min(a, b, c)` evaluates every argument left to right, then
+                // folds the two-argument builtin over them.
+                let values = args
+                    .iter()
+                    .map(|argument| self.lower_expr_at_sequence_point(&argument.value, None))
+                    .collect::<Vec<_>>();
+                let result_ty = self.local_types.get(&temp).cloned();
+                let mut values = values.into_iter();
+                let mut folded = values.next().expect("variadic min/max has arguments");
+                let last = args.len() - 2;
+                for (index, value) in values.enumerate() {
+                    let target = if index == last {
+                        temp.clone()
+                    } else {
+                        match result_ty.clone() {
+                            Some(ty) => self.new_typed_temp(ty),
+                            None => self.new_temp(),
+                        }
+                    };
+                    self.emit(Instruction::Assign {
+                        target: target.clone(),
+                        value: Rvalue::Call {
+                            callee: CallTarget::Name(name.clone()),
+                            args: [folded, value]
+                                .into_iter()
+                                .map(|value| MirArg {
+                                    name: None,
+                                    value,
+                                    writeback_place: None,
+                                })
+                                .collect(),
+                            type_args: Default::default(),
+                        },
+                    });
+                    folded = Operand::Place(target);
+                }
+            }
             ExprKind::Name(name) if name == "range" => {
                 let lowered_args = args
                     .iter()
@@ -23404,6 +23470,197 @@ impl<'a> Lowerer<'a> {
         }
 
         Operand::Place(temp)
+    }
+
+    /// Lowers `sum`, `any`, `all`, and one-argument `min` or `max` over a
+    /// list, set, span, or Range to a loop that folds each element into
+    /// `result`. An Array argument calls the Array's own reduction instead.
+    fn lower_collection_reduction(
+        &mut self,
+        expr: &Expr,
+        builtin: BuiltinFunction,
+        argument: &Argument,
+        result: &str,
+    ) {
+        let values_ty = self.infer_expr_type(&argument.value);
+        if matches!(&values_ty, Some(Type::Named(name, _)) if name == "Array") {
+            let object = self.lower_expr_at_sequence_point(&argument.value, None);
+            let receiver_place = match &object {
+                Operand::Place(place) | Operand::MovePlace(place) => Some(place.clone()),
+                _ => self.render_place_expr_option(&argument.value),
+            };
+            self.emit(Instruction::Assign {
+                target: result.to_string(),
+                value: Rvalue::Call {
+                    callee: CallTarget::Member {
+                        object,
+                        field: builtin.name().to_string(),
+                        receiver_place,
+                        dispatch: None,
+                    },
+                    args: Vec::new(),
+                    type_args: Default::default(),
+                },
+            });
+            return;
+        }
+        let element_ty = values_ty
+            .as_ref()
+            .and_then(reduction_element_type)
+            .expect("checked reductions take a list, set, span, or Range");
+        let is_float = matches!(
+            &element_ty,
+            Type::Named(name, _) if matches!(name.as_str(), "float32" | "float64")
+        );
+        let zero = if is_float {
+            Operand::Float(0.0)
+        } else {
+            Operand::Int(0)
+        };
+        let initial = match builtin {
+            BuiltinFunction::Any => Operand::Bool(false),
+            BuiltinFunction::All => Operand::Bool(true),
+            _ => zero,
+        };
+        self.emit(Instruction::Assign {
+            target: result.to_string(),
+            value: Rvalue::Use(initial),
+        });
+        let seen = matches!(builtin, BuiltinFunction::Min | BuiltinFunction::Max).then(|| {
+            let seen = self.new_typed_temp(Type::named("bool"));
+            self.emit(Instruction::Assign {
+                target: seen.clone(),
+                value: Rvalue::Use(Operand::Bool(false)),
+            });
+            seen
+        });
+        const ITEM: &str = "%reduce_item";
+        let for_stmt = crate::ast::ForStmt {
+            target: BindingTarget::Name {
+                name: ITEM.to_string(),
+                span: argument.span,
+            },
+            iterable: argument.value.clone(),
+            borrow_mode: None,
+            body: Vec::new(),
+            span: expr.span,
+        };
+        let span = expr.span;
+        let result = result.to_string();
+        let mut lower_body = |lowerer: &mut Self| {
+            let item = Operand::Place(
+                lowerer
+                    .scoped_local_name(ITEM)
+                    .expect("the reduction loop binds its element")
+                    .to_string(),
+            );
+            let assign = |lowerer: &mut Self, target: &str, value: Operand| {
+                lowerer.emit(Instruction::Assign {
+                    target: target.to_string(),
+                    value: Rvalue::Use(value),
+                });
+            };
+            match builtin {
+                BuiltinFunction::Any | BuiltinFunction::All => {
+                    // `any` stops at the first true element, `all` at the
+                    // first false one.
+                    let found = lowerer.new_block("reduce_found");
+                    let next = lowerer.new_block("reduce_next");
+                    let (then_block, else_block) = if builtin == BuiltinFunction::Any {
+                        (found, next)
+                    } else {
+                        (next, found)
+                    };
+                    lowerer.terminate(Terminator::Branch {
+                        condition: item,
+                        then_label: lowerer.label(then_block),
+                        else_label: lowerer.label(else_block),
+                    });
+                    lowerer.switch_to(found);
+                    assign(
+                        lowerer,
+                        &result,
+                        Operand::Bool(builtin == BuiltinFunction::Any),
+                    );
+                    lowerer.lower_loop_break();
+                    lowerer.switch_to(next);
+                }
+                BuiltinFunction::Sum => {
+                    lowerer.emit(Instruction::Assign {
+                        target: result.clone(),
+                        value: Rvalue::Binary {
+                            op: BinaryOp::Add,
+                            left: Operand::Place(result.clone()),
+                            right: item,
+                            span,
+                            trap: ArithmeticTrap::None,
+                        },
+                    });
+                }
+                _ => {
+                    // Fold the two-argument `min` or `max`: the running value
+                    // stays unless it fails `<=` (or `>=`) against the element.
+                    let seen = seen.clone().expect("min and max track a first element");
+                    let first = lowerer.new_block("reduce_first");
+                    let compare = lowerer.new_block("reduce_compare");
+                    let replace = lowerer.new_block("reduce_replace");
+                    let join = lowerer.new_block("reduce_join");
+                    lowerer.terminate(Terminator::Branch {
+                        condition: Operand::Place(seen.clone()),
+                        then_label: lowerer.label(compare),
+                        else_label: lowerer.label(first),
+                    });
+                    lowerer.switch_to(first);
+                    assign(lowerer, &seen, Operand::Bool(true));
+                    lowerer.terminate(Terminator::Goto(lowerer.label(replace)));
+                    lowerer.switch_to(compare);
+                    let keep = lowerer.new_typed_temp(Type::named("bool"));
+                    lowerer.emit(Instruction::Assign {
+                        target: keep.clone(),
+                        value: Rvalue::Binary {
+                            op: if builtin == BuiltinFunction::Min {
+                                BinaryOp::LessEq
+                            } else {
+                                BinaryOp::GreaterEq
+                            },
+                            left: Operand::Place(result.clone()),
+                            right: item.clone(),
+                            span,
+                            trap: ArithmeticTrap::None,
+                        },
+                    });
+                    lowerer.terminate(Terminator::Branch {
+                        condition: Operand::Place(keep),
+                        then_label: lowerer.label(join),
+                        else_label: lowerer.label(replace),
+                    });
+                    lowerer.switch_to(replace);
+                    assign(lowerer, &result, item);
+                    lowerer.terminate(Terminator::Goto(lowerer.label(join)));
+                    lowerer.switch_to(join);
+                }
+            }
+        };
+        self.lower_for_with_body(&for_stmt, None, &mut lower_body);
+        if let Some(seen) = seen {
+            let done = self.new_block("reduce_done");
+            let empty = self.new_block("reduce_empty");
+            self.terminate(Terminator::Branch {
+                condition: Operand::Place(seen),
+                then_label: self.label(done),
+                else_label: self.label(empty),
+            });
+            self.switch_to(empty);
+            self.terminate(Terminator::AssertFail {
+                message: Some(Operand::String(format!(
+                    "`{}(...)` of an empty collection",
+                    builtin.name()
+                ))),
+                captures: Vec::new(),
+                span,
+            });
+            self.switch_to(done);
+        }
     }
 
     fn lower_enum_variant_payloads(
@@ -24986,6 +25243,19 @@ impl<'a> Lowerer<'a> {
                     ExprKind::Name(name) => {
                         if name == "len" {
                             return Some(Type::named("int64"));
+                        }
+                        if let Some(builtin) = BuiltinFunction::from_name(name)
+                            .filter(|builtin| builtin.is_collection_reduction(args.len()))
+                        {
+                            return match builtin {
+                                BuiltinFunction::Any | BuiltinFunction::All => {
+                                    Some(Type::named("bool"))
+                                }
+                                _ => args
+                                    .first()
+                                    .and_then(|argument| self.infer_expr_type(&argument.value))
+                                    .and_then(|ty| reduction_element_type(&ty)),
+                            };
                         }
                         if name == "str" {
                             return Some(Type::named("str"));

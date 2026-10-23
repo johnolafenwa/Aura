@@ -1,0 +1,48 @@
+def total(values: Span[int32]) -> int32:
+    return sum(values)
+
+def main():
+    numbers: list[int32] = [4, 1, 3, 1, 5]
+    print(sum(numbers))
+    print(min(numbers))
+    print(max(numbers))
+    print(sum(values=numbers))
+    print(total(numbers[1:3]))
+
+    empty: list[int32] = []
+    print(sum(empty))
+
+    prices: list[float64] = [1.5, 2.25, 0.25]
+    print(sum(prices))
+    print(min(prices))
+    print(max(prices))
+
+    small: list[uint8] = [200, 50, 5]
+    print(sum(small))
+
+    seen: set[int64] = {7, 2, 9}
+    print(sum(seen))
+    print(max(seen))
+
+    print(sum(range(101)))
+    print(min(range(3, 8)))
+
+    grid = Array[int32].from_list(numbers, [5])
+    print(sum(grid))
+    print(min(grid))
+    print(max(grid))
+
+    print(min(3, 1, 2))
+    print(max(3, 1, 2, 8, 4))
+    print(min(2.5, 0.5, 1.5))
+    print(min(left=4, right=9))
+
+    flags: list[bool] = [false, true, false]
+    print(any(flags))
+    print(all(flags))
+    no_flags: list[bool] = []
+    print(any(no_flags))
+    print(all(no_flags))
+    print(all([x > 0 for x in numbers]))
+    print(any([x > 4 for x in numbers]))
+    print(sum([x * x for x in numbers]))

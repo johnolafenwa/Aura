@@ -267,6 +267,16 @@ print(max(4, 12))     # 12
 print(sqrt(81.0))     # 9.0
 ```
 
+`min` and `max` take any number of arguments of one type. With a single list,
+set, or range they reduce it, and `sum` adds one up:
+
+```aura check-pass
+prices: list[float64] = [4.5, 2.0, 3.25]
+print(min(7, 3, 5))   # 3
+print(sum(prices))    # 9.75
+print(max(prices))    # 4.5
+```
+
 `float64` also has a `.sqrt()` method:
 
 ```aura check-pass
