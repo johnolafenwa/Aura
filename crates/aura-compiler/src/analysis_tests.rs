@@ -10918,3 +10918,46 @@ fn half_typed_name_recovery_leaves_block_headers_alone() {
     ));
     assert!(!cursor_statement_is_block_header("def main():\n", 3));
 }
+
+#[test]
+fn completion_offers_keyword_arguments_the_call_has_not_bound() {
+    let source = [
+        "def is_divisible(numerator: int32, denominator: int32 = 2) -> bool:",
+        "    return (numerator % denominator) == 0",
+        "",
+        "def main() -> int32:",
+        "    print(is_divisible(4, de))",
+        "    print(is_divisible())",
+        "    print(is_divisible(4, denominator=3))",
+        "    print(f\"{is_divisible(4)} is_divisible(\")",
+        "    return 0",
+        "",
+    ]
+    .join("\n");
+    let names_at = |line: usize, needle: &str| {
+        let text = source.lines().nth(line).unwrap();
+        let character = text.find(needle).unwrap() + needle.len();
+        complete_source(&source, line, character, None)
+            .unwrap_or_else(|error| panic!("completion in `{text}` failed: {error:?}"))
+            .into_iter()
+            .filter(|completion| completion.kind == "parameter")
+            .map(|completion| (completion.name, completion.detail))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        names_at(4, "4, de"),
+        vec![("denominator=".to_string(), "int32".to_string())]
+    );
+    assert_eq!(
+        names_at(5, "is_divisible("),
+        vec![
+            ("numerator=".to_string(), "int32".to_string()),
+            ("denominator=".to_string(), "int32".to_string())
+        ]
+    );
+    // A value after `=` is not a parameter name, and text inside a string is
+    // not a call.
+    assert!(names_at(6, "denominator=").is_empty());
+    assert!(names_at(7, "} is_divisible(").is_empty());
+}

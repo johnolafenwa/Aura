@@ -101,6 +101,10 @@ in this file.
   including inside f-string braces such as `f"Limit: {li}"` or an empty
   `{}`. The compiler used to reject the unfinished name, so the editor fell
   back to keywords and top-level names only.
+- Completion inside a call offers the parameter names that earlier
+  arguments have not bound yet, as `denominator=` for
+  `is_divisible(4, de`, ranked first in VS Code. Locals and parameters now
+  show with the variable icon instead of plain text.
 - The VS Code extension treats the inside of f-string braces as code, so
   suggestions appear there as you type. VS Code used to treat it as string
   text, where it turns suggestions off.

@@ -6480,6 +6480,13 @@ test("compiler completions carry docstring summaries as Markdown documentation",
   assert.deepEqual(compilerCompletionToLsp({ name: "side" }, 5), { label: "side", kind: 5, detail: "" });
 });
 
+test("keyword-argument completions rank ahead of other names", () => {
+  assert.deepEqual(
+    compilerCompletionToLsp({ name: "denominator=", kind: "parameter", detail: "int32" }, 6),
+    { label: "denominator=", kind: 6, detail: "int32", sortText: "0denominator=" }
+  );
+});
+
 test("compiler hover shows imported docstrings from a real example", async () => {
   const documentedPath = path.join(repoRoot, "examples/modules/documented_api.au");
   const documentedSource = fs.readFileSync(documentedPath, "utf8");

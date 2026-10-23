@@ -640,7 +640,10 @@ impl<'a> AnalysisBuilder<'a> {
         }
 
         let scope = self.scope_for_position(line, character);
-        let mut completions = self.top_level_completions();
+        let source = self.source_lines.join("\n");
+        let mut completions =
+            requests::keyword_argument_completions(self, &source, line, character, &scope);
+        completions.extend(self.top_level_completions());
         completions.retain(|completion| {
             (completion.kind != "constant" || scope.contains_key(&completion.name))
                 && !is_decorator_generated(&completion.name)
