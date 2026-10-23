@@ -2,6 +2,13 @@
 
 Last updated: 2026-10-23
 
+## Collection reduction builtins (complete)
+
+- `sum`, `any`, `all`, collection `min`/`max`, and variadic `min`/`max`,
+  specified in ADR-0065 at John's request on 2026-10-23. A local binding
+  now shadows a builtin function name. Details are in
+  `2026-10-23-collection-reduction-builtins.md`.
+
 ## Batch 7 step 8: semantics in MIR (in progress)
 
 - Target: move the direct emitter's semantic decisions into MIR before the

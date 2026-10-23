@@ -280,6 +280,8 @@ const MIN_MAX_PARAMS: [BuiltinParam; 2] = [
     builtin_param!(required, "left", ReceiverKind::Borrow),
     builtin_param!(required, "right", ReceiverKind::Borrow),
 ];
+const REDUCTION_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "values", ReceiverKind::Borrow)];
 const SQRT_PARAMS: [BuiltinParam; 1] = [builtin_param!(required, "value", ReceiverKind::Borrow)];
 const PARSE_TEXT_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "text", ReceiverKind::Borrow)];
@@ -470,6 +472,9 @@ pub enum BuiltinFunction {
     ParseFloat64,
     Len,
     Str,
+    Sum,
+    Any,
+    All,
 }
 
 pub const ALL_BUILTIN_FUNCTIONS: &[BuiltinFunction] = &[
@@ -483,6 +488,9 @@ pub const ALL_BUILTIN_FUNCTIONS: &[BuiltinFunction] = &[
     BuiltinFunction::WaitAll,
     BuiltinFunction::Len,
     BuiltinFunction::Str,
+    BuiltinFunction::Sum,
+    BuiltinFunction::Any,
+    BuiltinFunction::All,
     BuiltinFunction::Abs,
     BuiltinFunction::Min,
     BuiltinFunction::Max,
@@ -516,6 +524,9 @@ impl BuiltinFunction {
             "parse_float64" => Some(Self::ParseFloat64),
             "len" => Some(Self::Len),
             "str" => Some(Self::Str),
+            "sum" => Some(Self::Sum),
+            "any" => Some(Self::Any),
+            "all" => Some(Self::All),
             _ => None,
         }
     }
@@ -541,6 +552,9 @@ impl BuiltinFunction {
             Self::ParseFloat64 => "parse_float64",
             Self::Len => "len",
             Self::Str => "str",
+            Self::Sum => "sum",
+            Self::Any => "any",
+            Self::All => "all",
         }
     }
 
@@ -561,8 +575,12 @@ impl BuiltinFunction {
                 "wait_all(tasks: list[Task[T]], timeout: Duration = ...) -> WaitAll[T] [consumes tasks when T is non-repeatable]"
             }
             Self::Abs => "abs(value: number) -> number",
-            Self::Min => "min(left: number, right: number) -> number",
-            Self::Max => "max(left: number, right: number) -> number",
+            Self::Min => {
+                "min(left: number, right: number, ...) -> number; min(values: list[T]|set[T]|Range|Array[T]) -> T"
+            }
+            Self::Max => {
+                "max(left: number, right: number, ...) -> number; max(values: list[T]|set[T]|Range|Array[T]) -> T"
+            }
             Self::Sqrt => "sqrt(value: float32|float64) -> float32|float64",
             Self::Round => "round(value: integer|float32|float64) -> integer|int64",
             Self::Divmod => "divmod(left: number, right: number) -> (number, number)",
@@ -571,6 +589,9 @@ impl BuiltinFunction {
             Self::ParseFloat64 => "parse_float64(text: str) -> Result[float64, str]",
             Self::Len => "len(value: str|list[T]|dict[K, V]|set[T]) -> int64",
             Self::Str => "str(value) -> str",
+            Self::Sum => "sum(values: list[T]|set[T]|Range|Array[T]) -> T",
+            Self::Any => "any(values: list[bool]|set[bool]) -> bool",
+            Self::All => "all(values: list[bool]|set[bool]) -> bool",
         }
     }
 
@@ -595,8 +616,12 @@ impl BuiltinFunction {
                 "Waits for every task to complete and reports either the collected results, the failing task index/error message, a timeout, or cancellation. Observing non-repeatable `T` consumes the whole `list[Task[T]]` observation right; repeatable `T` leaves the list reusable."
             }
             Self::Abs => "Returns the absolute value of an integer or float.",
-            Self::Min => "Returns the smaller of two numeric values of the same type.",
-            Self::Max => "Returns the larger of two numeric values of the same type.",
+            Self::Min => {
+                "Returns the smallest of two or more numeric values of the same type, or the smallest element of a numeric collection. An empty collection stops the program."
+            }
+            Self::Max => {
+                "Returns the largest of two or more numeric values of the same type, or the largest element of a numeric collection. An empty collection stops the program."
+            }
             Self::Sqrt => "Returns the square root of a `float32` or `float64` value.",
             Self::Round => "Returns an integer unchanged, or rounds a float to the nearest `int64` using ties-to-even.",
             Self::Divmod => "Returns the paired floor quotient and divisor-signed remainder for two values of one exact numeric type.",
@@ -605,6 +630,11 @@ impl BuiltinFunction {
             Self::ParseFloat64 => "Parses a `str` into a `float64`, returning `Result.Err(str)` on failure.",
             Self::Len => "Returns the length of a value that has a `len()` member, delegating to that member.",
             Self::Str => "Renders a value the way `print` and f-string interpolation render it.",
+            Self::Sum => {
+                "Adds the elements of a numeric collection left to right with checked arithmetic. An empty collection sums to zero."
+            }
+            Self::Any => "Returns true when some element of a `bool` collection is true. An empty collection gives false.",
+            Self::All => "Returns true when every element of a `bool` collection is true. An empty collection gives true.",
         }
     }
 
@@ -647,9 +677,31 @@ impl BuiltinFunction {
                         .bind_args("`range`", args, span)
                 }
             }
+            Self::Min | Self::Max => {
+                let callee = format!("`{}`", self.name());
+                if args.len() == 1 && args[0].name.as_deref() != Some("left") {
+                    BuiltinCallShape::fixed(&REDUCTION_PARAMS, CallConvention::PositionalOrNamed)
+                        .bind_args(&callee, args, span)
+                } else if args.len() > 2 {
+                    BuiltinCallShape::variadic(&MIN_MAX_PARAMS, ReceiverKind::Borrow)
+                        .bind_args(&callee, args, span)
+                } else {
+                    self.call_shape().bind_args(&callee, args, span)
+                }
+            }
             _ => self
                 .call_shape()
                 .bind_args(&format!("`{}`", self.name()), args, span),
+        }
+    }
+
+    /// Whether this call takes one collection and reduces its elements:
+    /// `sum`, `any`, `all`, and `min` or `max` with a single argument.
+    pub fn is_collection_reduction(self, arg_count: usize) -> bool {
+        match self {
+            Self::Sum | Self::Any | Self::All => true,
+            Self::Min | Self::Max => arg_count == 1,
+            _ => false,
         }
     }
 
@@ -681,6 +733,9 @@ impl BuiltinFunction {
 
     const fn call_shape(self) -> BuiltinCallShape {
         match self {
+            Self::Sum | Self::Any | Self::All => {
+                BuiltinCallShape::fixed(&REDUCTION_PARAMS, CallConvention::PositionalOrNamed)
+            }
             Self::Print | Self::Len | Self::Str => {
                 BuiltinCallShape::fixed(&PRINT_PARAMS, CallConvention::PositionalOrNamed)
             }

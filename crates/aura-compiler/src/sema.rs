@@ -10319,7 +10319,11 @@ impl<'a> FunctionChecker<'a> {
         }
 
         match &base_callee.kind {
-            ExprKind::Name(name) if BuiltinFunction::from_name(name).is_some() => {
+            // A local binding shadows a builtin function name, so calling a
+            // local function value named `sum` or `min` calls that value.
+            ExprKind::Name(name)
+                if !locals.contains_key(name) && BuiltinFunction::from_name(name).is_some() =>
+            {
                 let Some(builtin) = BuiltinFunction::from_name(name) else {
                     unreachable!("builtin lookup is stable during call checking");
                 };
@@ -10331,6 +10335,71 @@ impl<'a> FunctionChecker<'a> {
                     locals,
                 )?;
                 match builtin {
+                    _ if builtin.is_collection_reduction(ordered_args.len()) => {
+                        let values_arg = required_ordered_arg(
+                            &ordered_args,
+                            0,
+                            span,
+                            format!(
+                                "internal error: `{}` should bind one collection",
+                                builtin.name()
+                            ),
+                        )?;
+                        let values_ty =
+                            span_as_list_type(self.type_of_expr(&values_arg.value, locals)?);
+                        self.apply_builtin_function_argument_passing(
+                            builtin, 0, values_arg, locals,
+                        )?;
+                        let element_ty = match &values_ty {
+                            Type::Named(name, args) if name == "Range" && args.is_empty() => {
+                                Some(Type::named("int64"))
+                            }
+                            Type::Named(name, args)
+                                if matches!(name.as_str(), "list" | "set" | "Array")
+                                    && args.len() == 1 =>
+                            {
+                                Some(args[0].clone())
+                            }
+                            _ => None,
+                        };
+                        let is_array = matches!(
+                            &values_ty,
+                            Type::Named(name, _) if name == "Array"
+                        );
+                        match (builtin, element_ty) {
+                            (BuiltinFunction::Any | BuiltinFunction::All, Some(element))
+                                if !is_array && element == Type::named("bool") =>
+                            {
+                                Ok(element)
+                            }
+                            (BuiltinFunction::Any | BuiltinFunction::All, _) => {
+                                Err(Diagnostic::coded_at(
+                                    "AU2002",
+                                    values_arg.span,
+                                    format!(
+                                        "`{}(...)` expects `list[bool]` or `set[bool]`, found `{values_ty}`",
+                                        builtin.name()
+                                    ),
+                                ))
+                            }
+                            (_, Some(element)) if is_numeric_type(&element) => Ok(element),
+                            _ => Err(Diagnostic::coded_at(
+                                "AU2002",
+                                values_arg.span,
+                                format!(
+                                    "`{}(...)` expects a list, set, Range, or Array of numbers, found `{values_ty}`",
+                                    builtin.name()
+                                ),
+                            )
+                            .with_help(format!(
+                                "`{}` reduces a collection of one numeric type; pass two or more numbers to compare values directly",
+                                builtin.name()
+                            ))),
+                        }
+                    }
+                    BuiltinFunction::Sum | BuiltinFunction::Any | BuiltinFunction::All => {
+                        unreachable!("`sum`, `any`, and `all` always reduce a collection")
+                    }
                     BuiltinFunction::Print => {
                         let value_arg = required_ordered_arg(
                             &ordered_args,
@@ -10690,7 +10759,7 @@ impl<'a> FunctionChecker<'a> {
                             ));
                         }
                         self.apply_builtin_function_argument_passing(builtin, 0, left_arg, locals)?;
-                        let right_arg = required_ordered_arg(
+                        required_ordered_arg(
                             &ordered_args,
                             1,
                             span,
@@ -10699,22 +10768,31 @@ impl<'a> FunctionChecker<'a> {
                                 builtin.name()
                             ),
                         )?;
-                        let right_ty =
-                            self.type_of_expr_hint(&right_arg.value, locals, Some(&left_ty))?;
-                        if right_ty != left_ty {
-                            return Err(Diagnostic::at(
-                                right_arg.span,
-                                format!(
-                                    "`{}` arguments must match, found `{}` and `{}`",
-                                    builtin.name(),
-                                    left_ty,
-                                    right_ty
-                                ),
-                            ));
+                        for (index, right_arg) in ordered_args.iter().enumerate().skip(1) {
+                            let Some(right_arg) = right_arg else {
+                                continue;
+                            };
+                            let right_ty =
+                                self.type_of_expr_hint(&right_arg.value, locals, Some(&left_ty))?;
+                            if right_ty != left_ty {
+                                return Err(Diagnostic::at(
+                                    right_arg.span,
+                                    format!(
+                                        "`{}` arguments must match, found `{}` and `{}`",
+                                        builtin.name(),
+                                        left_ty,
+                                        right_ty
+                                    ),
+                                ));
+                            }
+                            // Every argument after `left` passes like `right`.
+                            self.apply_builtin_function_argument_passing(
+                                builtin,
+                                index.min(1),
+                                right_arg,
+                                locals,
+                            )?;
                         }
-                        self.apply_builtin_function_argument_passing(
-                            builtin, 1, right_arg, locals,
-                        )?;
                         Ok(left_ty)
                     }
                     BuiltinFunction::Sqrt => {

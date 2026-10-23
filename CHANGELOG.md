@@ -7,6 +7,24 @@ in this file.
 
 ## Unreleased
 
+### Added
+
+- `sum(values)`, `any(values)`, and `all(values)` reduce a `list[T]`,
+  `set[T]`, `Span[T]`, or `Range`. `sum` also takes an `Array[T]`. `sum`
+  adds left to right with checked arithmetic and gives zero for an empty
+  collection. `any` and `all` stop at the first element that decides them.
+- `min(values)` and `max(values)` return the smallest or largest element of
+  the same collections. An empty list, set, span, or `Range` stops the
+  program with `AU4001`.
+- `min` and `max` take two or more numbers of one type, as in
+  `min(3, 1, 2)`.
+
+### Breaking changes
+
+- `sum`, `any`, and `all` are builtin function names, so a top-level
+  function with one of those names is rejected with `AU2007`. Rename it.
+  Methods and local variables with those names are unaffected.
+
 ### Documentation
 
 - The manual and tutorials now show that `{}` is an empty set when the
@@ -90,6 +108,8 @@ in this file.
 
 ### Fixed
 
+- A local binding shadows a builtin function name. Calling a local function
+  value named `min` or `sum` now calls that value instead of the builtin.
 - A direct runtime helper that takes a boxed value, such as `append`,
   copies the value when another reference still holds the box. It used to
   empty the box under the other reference.

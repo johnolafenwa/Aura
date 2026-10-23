@@ -471,7 +471,7 @@ def area(shape: Shape, note: str) -> int64:
         case Shape.Square(side):
             return side
 
-def sum(values: list[str]) -> int64:
+def total_len(values: list[str]) -> int64:
     mut total = 0
     for value in values:
         total = total + len(value)
@@ -502,7 +502,7 @@ def main():
     print(swap(false))
     print(route("4", true))
     print(area(Shape.Circle(2), "n"))
-    print(sum(["a", "bc"]))
+    print(total_len(["a", "bc"]))
     match double("4"):
         case Result.Ok(value):
             print(value)
@@ -759,7 +759,7 @@ def main():
     fn nothing_comes_between_an_index_proof_and_its_access() {
         let module = lowered();
         checks(&module);
-        let sum = function(&module, "sum");
+        let sum = function(&module, "total_len");
         let mut proofs = 0;
         for block in &sum.blocks {
             for (index, instruction) in block.instructions.iter().enumerate() {

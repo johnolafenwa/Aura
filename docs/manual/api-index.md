@@ -22,8 +22,11 @@ message evaluation, `AU4001`, cleanup, and matching behavior across backends.
 | `wait_any` | `wait_any(tasks: list[Task[T]], timeout: Duration = ...) -> WaitAny[T]` | Waits for the first task outcome. When `T` is non-repeatable, it consumes the list and abandons the rights of the tasks it does not choose. `wait_any([])` returns `TimedOut` immediately. |
 | `wait_all` | `wait_all(tasks: list[Task[T]], timeout: Duration = ...) -> WaitAll[T]` | Waits for all tasks, the first task error, the timeout, or cancellation. When `T` is non-repeatable, it consumes the list. |
 | `abs` | `abs(value: number) -> number` | Absolute value of an integer or a float. |
-| `min` | `min(left: number, right: number) -> number` | The smaller of two values of the same numeric type. |
-| `max` | `max(left: number, right: number) -> number` | The larger of two values of the same numeric type. |
+| `min` | `min(left: number, right: number, ...) -> number`; `min(values: list[T]\|set[T]\|Span[T]\|Range\|Array[T]) -> T` | The smallest of two or more values of one numeric type, or the smallest element of a collection. An empty list, set, span, or Range is `AU4001`. |
+| `max` | `max(left: number, right: number, ...) -> number`; `max(values: list[T]\|set[T]\|Span[T]\|Range\|Array[T]) -> T` | The largest of two or more values of one numeric type, or the largest element of a collection. An empty list, set, span, or Range is `AU4001`. |
+| `sum` | `sum(values: list[T]\|set[T]\|Span[T]\|Range\|Array[T]) -> T` | Adds the elements left to right with checked arithmetic. An empty collection gives zero. |
+| `any` | `any(values: list[bool]\|set[bool]\|Span[bool]) -> bool` | Whether some element is `true`. Stops at the first `true`. |
+| `all` | `all(values: list[bool]\|set[bool]\|Span[bool]) -> bool` | Whether every element is `true`. Stops at the first `false`. |
 | `sqrt` | `sqrt(value: float32|float64) -> float32|float64` | Square root. |
 | `round` | `round(value: T) -> T` for integers; `round(value: float32\|float64) -> int64` | Returns an integer unchanged. Rounds a float to the nearest integer, with ties to even. |
 | `divmod` | `divmod(left: T, right: T) -> (T, T)` for one exact integer or float type | Returns the floor quotient and the remainder. The remainder takes the sign of the divisor. |
