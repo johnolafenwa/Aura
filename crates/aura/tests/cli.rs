@@ -6288,6 +6288,110 @@ fn installed_direct_run_keeps_native_cache_optional_for_build_locking() {
 
 #[cfg(unix)]
 #[test]
+fn native_build_reuses_the_runtime_identity_memo_while_the_archive_stamp_holds() {
+    let bootstrap_cache = TempDir::new("aura-build-memo-bootstrap");
+    let (_source, source_path) = write_temp_source(
+        "aura-build-memo-source",
+        "def main() -> int32:\n    print(\"memo\")\n    return 0\n",
+    );
+    let bootstrap = Command::new(aura_bin())
+        .env("AURA_CACHE_DIR", bootstrap_cache.path())
+        .args(["run", "--backend", "direct"])
+        .arg(&source_path)
+        .output()
+        .expect("failed to establish installable runtime artifacts");
+    assert!(
+        bootstrap.status.success(),
+        "runtime bootstrap failed, stderr was:\n{}",
+        String::from_utf8_lossy(&bootstrap.stderr)
+    );
+
+    let prefix = TempDir::new("aura-build-memo-prefix");
+    let bin_dir = prefix.path().join("bin");
+    let runtime_dir = prefix.path().join("lib").join("aura");
+    fs::create_dir_all(&bin_dir).expect("installed bin directory should be creatable");
+    fs::create_dir_all(&runtime_dir).expect("installed runtime directory should be creatable");
+    let installed_aura = bin_dir.join("aura");
+    fs::copy(aura_bin(), &installed_aura).expect("aura executable should be installable");
+    let archive = runtime_dir.join("libaura_runtime.a");
+    fs::copy(native_runtime_archive(), &archive)
+        .expect("native runtime archive should be installable");
+    let bootstrap_memo = fs::read_to_string(bootstrap_cache.path().join("runtime-identity"))
+        .expect("bootstrap should record native link arguments");
+    let native_link_args = bootstrap_memo
+        .lines()
+        .nth(2)
+        .expect("runtime memo should contain native link arguments");
+    fs::write(
+        runtime_dir.join("native-link-args.json"),
+        format!("{native_link_args}\n"),
+    )
+    .expect("installed native-link manifest should be writable");
+
+    let cache = TempDir::new("aura-build-memo-cache");
+    let output_dir = TempDir::new("aura-build-memo-output");
+    let build = |label: &str| {
+        let output = Command::new(&installed_aura)
+            .env("AURA_CACHE_DIR", cache.path())
+            .args(["build", "--backend", "direct", "-o"])
+            .arg(output_dir.path().join(label))
+            .arg(&source_path)
+            .output()
+            .expect("failed to run installed aura build");
+        assert!(
+            output.status.success(),
+            "{label} build failed, stderr was:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let program = generated_binary(&output_dir.path().join(label))
+            .output()
+            .expect("built program should run");
+        assert_eq!(String::from_utf8_lossy(&program.stdout), "memo\n");
+    };
+    let memo_path = cache.path().join("runtime-identity");
+    let memo_digest = || {
+        fs::read_to_string(&memo_path)
+            .expect("a build should record the runtime identity")
+            .lines()
+            .nth(1)
+            .expect("runtime memo should contain the archive digest")
+            .to_string()
+    };
+
+    build("first");
+    let real_digest = memo_digest();
+    assert_ne!(real_digest, "0".repeat(64));
+
+    // A memo whose stamp still matches the archive stands for its bytes, so
+    // the next build must take its digest instead of rehashing the archive.
+    let memo = fs::read_to_string(&memo_path).expect("runtime memo should be readable");
+    let marked: Vec<String> = memo
+        .lines()
+        .enumerate()
+        .map(|(index, line)| {
+            if index == 1 {
+                "0".repeat(64)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect();
+    fs::write(&memo_path, format!("{}\n", marked.join("\n")))
+        .expect("runtime memo should be writable");
+    build("reused");
+    assert_eq!(memo_digest(), "0".repeat(64));
+
+    // Restamping the archive invalidates the memo, so the digest is
+    // recomputed from the archive bytes.
+    let contents = fs::read(&archive).expect("installed archive should be readable");
+    fs::remove_file(&archive).expect("installed archive should be removable");
+    fs::write(&archive, contents).expect("installed archive should be rewritable");
+    build("rehashed");
+    assert_eq!(memo_digest(), real_digest);
+}
+
+#[cfg(unix)]
+#[test]
 fn native_run_cache_rejects_symlink_and_fifo_members_without_blocking_or_leaking() {
     use std::os::unix::fs::symlink;
 
