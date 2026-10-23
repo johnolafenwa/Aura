@@ -497,12 +497,7 @@ pub fn run_path_entry_with_stdout_sink_and_program_args(
 ) -> Result<RunOutput> {
     let program = check_path(path)?;
     let mir = mir::lower_implicit(&program);
-    mir_runtime::run_entry_with_stdout_sink_and_program_args_trusted(
-        &mir,
-        entry,
-        stdout_sink,
-        program_args,
-    )
+    mir_runtime::run_lowered_entry(&mir, entry, stdout_sink, program_args)
 }
 
 /// Runs one parameterless entry from a previously path-checked MIR module.
@@ -516,12 +511,7 @@ pub fn run_checked_mir_entry_with_stdout_sink_and_program_args(
     stdout_sink: Option<StdoutSink>,
     program_args: Vec<String>,
 ) -> Result<RunOutput> {
-    mir_runtime::run_entry_with_stdout_sink_and_program_args_trusted(
-        &module.0,
-        entry,
-        stdout_sink,
-        program_args,
-    )
+    mir_runtime::run_lowered_entry(&module.0, entry, stdout_sink, program_args)
 }
 
 /// Loads, manifest-checks, semantically checks, and lowers a path into opaque

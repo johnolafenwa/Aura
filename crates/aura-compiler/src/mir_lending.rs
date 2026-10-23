@@ -247,11 +247,11 @@ fn call_of(instruction: &Instruction) -> Option<(&str, &CallTarget, &[MirArg])> 
     match instruction {
         Instruction::Assign {
             target,
-            value: Rvalue::Call { callee, args },
+            value: Rvalue::Call { callee, args, .. },
         }
         | Instruction::WriteLoan {
             loan: target,
-            value: Rvalue::Call { callee, args },
+            value: Rvalue::Call { callee, args, .. },
         } => Some((target, callee, args)),
         _ => None,
     }
@@ -260,11 +260,11 @@ fn call_of(instruction: &Instruction) -> Option<(&str, &CallTarget, &[MirArg])> 
 fn call_of_mut(instruction: &mut Instruction) -> Option<(&mut CallTarget, &mut Vec<MirArg>)> {
     match instruction {
         Instruction::Assign {
-            value: Rvalue::Call { callee, args },
+            value: Rvalue::Call { callee, args, .. },
             ..
         }
         | Instruction::WriteLoan {
-            value: Rvalue::Call { callee, args },
+            value: Rvalue::Call { callee, args, .. },
             ..
         } => Some((callee, args)),
         _ => None,

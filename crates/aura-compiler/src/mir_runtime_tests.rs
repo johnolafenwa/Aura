@@ -1,9 +1,9 @@
 use super::{
-    bind_args, bind_builtin_args, bind_optional_builtin_args, build_range, bytes_vec_value,
-    collect_queue_handles, collect_runtime_type_substitutions, collect_type_params_from_type,
-    eval_ordering, evaluate_named_args, result_err, result_ok, run_serialized_mir,
-    send_error_closed, task_result_ready, CancellationContext, Env, EvaluatedMirArg, MirRuntime,
-    TaskGroupValue, TaskValue,
+    bind_args, bind_builtin_args, build_range, bytes_vec_value, collect_queue_handles,
+    collect_runtime_type_substitutions, collect_type_params_from_type, eval_ordering,
+    evaluate_named_args, result_err, result_ok, run_serialized_mir, send_error_closed,
+    task_result_ready, CancellationContext, Env, EvaluatedMirArg, MirRuntime, TaskGroupValue,
+    TaskValue,
 };
 use crate::diag::{Diagnostic, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span};
 use crate::integer::{IntegerKind, IntegerValue};
@@ -2677,6 +2677,7 @@ fn public_mir_execution_rejects_caller_supplied_ffi_metadata() {
                             return_type: Type::named("int32"),
                         }),
                         args: Vec::new(),
+                        type_args: Default::default(),
                     },
                 }],
                 terminator: Terminator::Return(Operand::Place("process_id".to_string())),
@@ -4043,7 +4044,7 @@ def measure(values: list[str]) -> int64:
         .flat_map(|block| &block.instructions)
         .find_map(|instruction| {
             let Instruction::Assign {
-                value: Rvalue::Call { callee, args },
+                value: Rvalue::Call { callee, args, .. },
                 ..
             } = instruction
             else {
@@ -5176,6 +5177,7 @@ def main():
                                     op, receiver: None, ..
                                 },
                             args,
+                            ..
                         },
                     ..
                 } if op.name() == "str.to_bytes" => args.first().map(|argument| &argument.value),
@@ -8991,7 +8993,7 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
     .expect_err("extra positional MIR arguments should fail");
     assert!(too_many.message.contains("too many MIR arguments"));
 
-    let optional_named_then_positional = bind_optional_builtin_args(
+    let named_then_positional = bind_builtin_args(
         &["left", "right"],
         vec![
             EvaluatedMirArg {
@@ -9008,56 +9010,15 @@ fn mir_runtime_argument_binding_helpers_cover_named_and_positional_cases() {
             },
         ],
     )
-    .expect("optional MIR args should skip pre-filled named slots");
+    .expect("positional MIR args should skip pre-filled named slots");
     assert_eq!(
-        optional_named_then_positional[0]
-            .as_ref()
-            .expect("left should be bound")
-            .value,
+        named_then_positional[0].value,
         Value::Int(IntegerValue::from_signed(1))
     );
     assert_eq!(
-        optional_named_then_positional[1]
-            .as_ref()
-            .expect("right should be bound")
-            .value,
+        named_then_positional[1].value,
         Value::Int(IntegerValue::from_signed(2))
     );
-
-    let optional_unknown = bind_optional_builtin_args(
-        &["value"],
-        vec![EvaluatedMirArg {
-            ty: None,
-            name: Some("other".to_string()),
-            value: Value::Int(IntegerValue::from_signed(1)),
-            writeback_place: None,
-        }],
-    )
-    .map(|_| ())
-    .expect_err("unknown optional MIR arguments should fail");
-    assert!(optional_unknown.message.contains("unknown MIR argument"));
-
-    let optional_too_many = match bind_optional_builtin_args(
-        &["value"],
-        vec![
-            EvaluatedMirArg {
-                ty: None,
-                name: Some("value".to_string()),
-                value: Value::Int(IntegerValue::from_signed(1)),
-                writeback_place: None,
-            },
-            EvaluatedMirArg {
-                ty: None,
-                name: None,
-                value: Value::Int(IntegerValue::from_signed(2)),
-                writeback_place: None,
-            },
-        ],
-    ) {
-        Ok(_) => panic!("extra optional MIR args should fail"),
-        Err(error) => error,
-    };
-    assert!(optional_too_many.message.contains("too many MIR arguments"));
 
     let missing_required = bind_builtin_args(
         &["left", "right"],
@@ -9543,6 +9504,7 @@ fn mir_runtime_task_detection_helpers_cover_task_and_process_shapes() {
                         receiver_place: Some("service".to_string()),
                     },
                     args: Vec::new(),
+                    type_args: Default::default(),
                 },
             },
             Instruction::Assign {
@@ -9550,6 +9512,7 @@ fn mir_runtime_task_detection_helpers_cover_task_and_process_shapes() {
                 value: Rvalue::Call {
                     callee: CallTarget::Name("print".to_string()),
                     args: Vec::new(),
+                    type_args: Default::default(),
                 },
             },
         ],
@@ -9580,6 +9543,7 @@ fn mir_runtime_task_detection_helpers_cover_task_and_process_shapes() {
             value: Rvalue::Call {
                 callee: CallTarget::Name("process::run".to_string()),
                 args: Vec::new(),
+                type_args: Default::default(),
             },
         }],
     );
@@ -10763,11 +10727,11 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
             .evaluate_process_supervisor_method(
                 supervisor.clone(),
                 "start",
-                &[
+                &start_args(&[
                     mir_arg(Some("name"), Operand::String("invalid-backoff".to_string())),
                     mir_arg(Some("command"), Operand::Place("exit_command".to_string())),
                     mir_arg(Some("backoff"), Operand::Duration(-1)),
-                ],
+                ]),
                 &mut env,
             )
             .expect("invalid supervisor backoff should use Result.Err"),
@@ -10783,19 +10747,17 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
             &mut env,
         )
         .expect_err("supervisor start should require a command");
-    assert!(missing_command
-        .message
-        .contains("missing MIR argument `command`"));
+    assert_eq!(missing_command.message, "missing MIR argument");
     assert_eq!(
         result_ok_payload(
             runtime
                 .evaluate_process_supervisor_method(
                     supervisor.clone(),
                     "start",
-                    &[
+                    &start_args(&[
                         mir_arg(Some("name"), Operand::String("oneshot".to_string())),
                         mir_arg(Some("command"), Operand::Place("exit_command".to_string())),
-                    ],
+                    ]),
                     &mut env,
                 )
                 .expect("supervisor start should succeed with defaulted optional args")
@@ -10830,7 +10792,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
                 .evaluate_process_supervisor_method(
                     supervisor.clone(),
                     "start",
-                    &[
+                    &start_args(&[
                         mir_arg(Some("name"), Operand::String("configured".to_string())),
                         mir_arg(Some("command"), Operand::Place("exit_command".to_string())),
                         mir_arg(Some("cwd"), Operand::Place("supervisor_cwd".to_string())),
@@ -10842,7 +10804,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
                         mir_arg(Some("backoff"), Operand::Duration(1_000_000)),
                         mir_arg(Some("max_restarts"), Operand::Int(1)),
                         mir_arg(Some("group"), Operand::Bool(false)),
-                    ],
+                    ]),
                     &mut env,
                 )
                 .expect("supervisor start should accept all optional args")
@@ -10866,10 +10828,10 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
                 .evaluate_process_supervisor_method(
                     supervisor.clone(),
                     "start",
-                    &[
+                    &start_args(&[
                         mir_arg(Some("name"), Operand::String("dupe".to_string())),
                         mir_arg(Some("command"), Operand::Place("sleep_command".to_string())),
-                    ],
+                    ]),
                     &mut env,
                 )
                 .expect("supervisor start should accept a long-running child")
@@ -10881,10 +10843,10 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
             .evaluate_process_supervisor_method(
                 supervisor.clone(),
                 "start",
-                &[
+                &start_args(&[
                     mir_arg(Some("name"), Operand::String("dupe".to_string())),
                     mir_arg(Some("command"), Operand::Place("sleep_command".to_string())),
-                ],
+                ]),
                 &mut env,
             )
             .expect("duplicate supervisor starts should return Result.Err"),
@@ -10931,10 +10893,10 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
                 .evaluate_process_supervisor_method(
                     cancelled_supervisor.clone(),
                     "start",
-                    &[
+                    &start_args(&[
                         mir_arg(Some("name"), Operand::String("cancelled".to_string())),
                         mir_arg(Some("command"), Operand::Place("sleep_command".to_string())),
-                    ],
+                    ]),
                     &mut env,
                 )
                 .expect("cancelled-runtime supervisor start should still register children")
@@ -20746,6 +20708,7 @@ fn coverage_member_call(place: &str, field: &str, args: Vec<MirArg>) -> Rvalue {
             receiver_place: Some(place.to_string()),
         },
         args,
+        type_args: Default::default(),
     }
 }
 
@@ -20973,6 +20936,7 @@ fn trait_member_calls_diagnose_unresolvable_receivers_and_missing_impls() {
             receiver_place: Some(place.to_string()),
         },
         args: Vec::new(),
+        type_args: Default::default(),
     };
     let unresolved = runtime
         .evaluate_rvalue(&call("namespace"), &mut env)
@@ -21597,6 +21561,7 @@ fn builtin_constructors_reject_malformed_duration_and_capacity_arguments() {
     let call = |name: &str, args: Vec<MirArg>| Rvalue::Call {
         callee: CallTarget::Name(name.to_string()),
         args,
+        type_args: Default::default(),
     };
     let error = runtime
         .evaluate_rvalue(
@@ -22608,10 +22573,7 @@ fn process_child_and_supervisor_methods_cover_optional_waits_and_missing_argumen
             &mut env,
         )
         .expect_err("start needs a name");
-    assert_eq!(
-        missing_name.message,
-        "missing MIR argument `name` for `start(...)`"
-    );
+    assert_eq!(missing_name.message, "missing MIR argument");
     let missing_command = runtime
         .evaluate_process_supervisor_method(
             supervisor.clone(),
@@ -22620,10 +22582,7 @@ fn process_child_and_supervisor_methods_cover_optional_waits_and_missing_argumen
             &mut env,
         )
         .expect_err("start needs a command");
-    assert_eq!(
-        missing_command.message,
-        "missing MIR argument `command` for `start(...)`"
-    );
+    assert_eq!(missing_command.message, "missing MIR argument");
     assert!(runtime
         .evaluate_process_supervisor_method(
             supervisor.clone(),
@@ -22666,6 +22625,19 @@ fn process_child_and_supervisor_methods_cover_optional_waits_and_missing_argumen
             "too many MIR arguments"
         );
     }
+}
+
+/// `args` bound to `process.Supervisor.start`'s parameters, with the
+/// defaults MIR fills in, as `resolve_runtime_ops` leaves them.
+fn start_args(args: &[MirArg]) -> Vec<MirArg> {
+    crate::mir::bind_runtime_op_args(
+        crate::runtime_ops::RuntimeOp::Resource(
+            crate::runtime_ops::ResourceOp::ProcessSupervisorStart,
+        ),
+        args,
+    )
+    .expect("the arguments should bind")
+    .unwrap_or_else(|| args.to_vec())
 }
 
 trait CoverageExpectErr {
@@ -22858,6 +22830,7 @@ fn member_calls_fall_through_length_and_byte_helpers_for_other_receivers() {
         .into_iter()
         .map(|operand| mir_arg(None, operand))
         .collect(),
+        type_args: Default::default(),
     };
     match runtime.evaluate_rvalue(&slice, &mut env) {
         Ok(super::RvalueOutcome::Value(Value::Vec(sliced))) => {

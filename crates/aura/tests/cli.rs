@@ -813,6 +813,7 @@ fn adr0038_cfg_view_module(reverse_branch_storage: bool, include_dead_loan: bool
                     writeback_place: None,
                 },
             ],
+            type_args: Default::default(),
         },
     };
     let main = MirFunction {
@@ -895,6 +896,7 @@ fn adr0038_cfg_view_module(reverse_branch_storage: bool, include_dead_loan: bool
                             value: Operand::Place("left".to_string()),
                             writeback_place: None,
                         }],
+                        type_args: Default::default(),
                     },
                 },
                 Instruction::Assign {
@@ -913,6 +915,7 @@ fn adr0038_cfg_view_module(reverse_branch_storage: bool, include_dead_loan: bool
                             value: Operand::Place("right".to_string()),
                             writeback_place: None,
                         }],
+                        type_args: Default::default(),
                     },
                 },
                 Instruction::Assign {
@@ -1127,6 +1130,7 @@ fn adr0038_closure_branch_module(flag: bool, reverse_branch_storage: bool) -> Mi
                 value: Rvalue::Call {
                     callee: CallTarget::Value(Operand::Place("callback".to_string())),
                     args: Vec::new(),
+                    type_args: Default::default(),
                 },
             },
             Instruction::Assign {
@@ -1138,6 +1142,7 @@ fn adr0038_closure_branch_module(flag: bool, reverse_branch_storage: bool) -> Mi
                         value: Operand::Place("left".to_string()),
                         writeback_place: None,
                     }],
+                    type_args: Default::default(),
                 },
             },
             Instruction::Assign {
@@ -1149,6 +1154,7 @@ fn adr0038_closure_branch_module(flag: bool, reverse_branch_storage: bool) -> Mi
                         value: Operand::Place("right".to_string()),
                         writeback_place: None,
                     }],
+                    type_args: Default::default(),
                 },
             },
         ],
@@ -1252,6 +1258,7 @@ fn adr0038_call_choose_pair_field(left: bool) -> Vec<Instruction> {
                         writeback_place: None,
                     },
                 ],
+                type_args: Default::default(),
             },
         },
         Instruction::BeginReturnedLoan {
@@ -1316,6 +1323,7 @@ fn adr0038_selector_reuse_module() -> MirModule {
             value: Rvalue::Call {
                 callee: CallTarget::Value(Operand::Place("callback".to_string())),
                 args: Vec::new(),
+                type_args: Default::default(),
             },
         },
         Instruction::Assign {
@@ -1327,6 +1335,7 @@ fn adr0038_selector_reuse_module() -> MirModule {
                     value: Operand::Place("pair.left".to_string()),
                     writeback_place: None,
                 }],
+                type_args: Default::default(),
             },
         },
         Instruction::Assign {
@@ -1338,6 +1347,7 @@ fn adr0038_selector_reuse_module() -> MirModule {
                     value: Operand::Place("pair.right".to_string()),
                     writeback_place: None,
                 }],
+                type_args: Default::default(),
             },
         },
     ]);

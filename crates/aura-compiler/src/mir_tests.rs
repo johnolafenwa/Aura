@@ -388,7 +388,7 @@ def main():
         .flat_map(|block| &mut block.instructions)
         .find_map(|instruction| match instruction {
             Instruction::Assign {
-                value: Rvalue::Call { callee, args },
+                value: Rvalue::Call { callee, args, .. },
                 ..
             } if matches!(&*callee, CallTarget::Name(name) if name == "borrow_pair") => {
                 Some((callee, args))
@@ -444,6 +444,7 @@ def main():
                         Rvalue::Call {
                             callee: CallTarget::Name(name),
                             args,
+                            ..
                         },
                     ..
                 } if name == "choose" => Some(args),
@@ -695,6 +696,7 @@ def main():
                     receiver_place: None,
                 },
                 args: Vec::new(),
+                type_args: Default::default(),
             },
         },
     );
@@ -836,7 +838,7 @@ def main():
                 .flat_map(|block| &mut block.instructions)
                 .find_map(|instruction| match instruction {
                     Instruction::Assign {
-                        value: Rvalue::Call { callee, args },
+                        value: Rvalue::Call { callee, args, .. },
                         ..
                     } if matches!(&*callee, CallTarget::Name(name) if name == "inspect") => {
                         Some((callee, args))
@@ -943,6 +945,7 @@ def main():
                     Rvalue::Call {
                         callee: CallTarget::Member { field, .. },
                         args,
+                        ..
                     },
                 ..
             } if field == "inspect" => Some(args),
@@ -1545,6 +1548,7 @@ fn adr0038_returned_loan_handoffs_may_narrow_authorized_projection_alternatives(
                     value: Operand::Place("root".to_string()),
                     writeback_place: None,
                 }],
+                type_args: Default::default(),
             },
         },
         Instruction::BeginReturnedLoan {
@@ -2306,6 +2310,7 @@ fn adr0038_return_loan_is_linear_and_returned_paths_are_bounded() {
                     }),
                     writeback_place: None,
                 }],
+                type_args: Default::default(),
             },
         });
         main.blocks[0]
@@ -3165,6 +3170,7 @@ fn adr0038_mir_reborrow_and_returned_projections_are_canonical_and_type_valid() 
                             value: Operand::Place("origin".to_string()),
                             writeback_place: None,
                         }],
+                        type_args: Default::default(),
                     },
                 },
                 Instruction::BeginReturnedLoan {
@@ -3273,6 +3279,7 @@ fn adr0038_reborrow_expansion_has_cumulative_work_and_active_state_budgets() {
                     value: Operand::Place("origin".to_string()),
                     writeback_place: None,
                 }],
+                type_args: Default::default(),
             },
         },
         Instruction::BeginReturnedLoan {
@@ -4348,6 +4355,7 @@ def main():
                     Rvalue::Call {
                         callee: CallTarget::Extern(call),
                         args,
+                        ..
                     },
                 ..
             } if call.symbol == "close" => Some((call, args)),
@@ -4381,6 +4389,7 @@ def main():
                     Rvalue::Call {
                         callee: CallTarget::Extern(call),
                         args,
+                        ..
                     },
                 ..
             } => Some((call, args)),
@@ -4444,6 +4453,7 @@ def main():
                     Rvalue::Call {
                         callee: CallTarget::Extern(call),
                         args,
+                        ..
                     },
                 ..
             } if call.symbol == "inspect" => Some((call, args)),
@@ -5984,6 +5994,7 @@ fn owned_slice_lowering_preserves_endpoint_presence_and_source_order() {
                             ..
                         },
                     args,
+                    ..
                 },
             ..
         } => (object, receiver_place, args),
@@ -6311,7 +6322,7 @@ def render(value: json.Value) -> str:
                 Instruction::Assign {
                     value: Rvalue::Call {
                         callee,
-                        args,
+                        args, ..
                     },
                     ..
                 } if call_name(callee) == "json::dumps" && args.len() == 2
@@ -6423,7 +6434,7 @@ def extract(value: own json.Value) -> str | None:
         .flat_map(|block| &block.instructions)
         .find_map(|instruction| match instruction {
             Instruction::Assign {
-                value: Rvalue::Call { callee, args },
+                value: Rvalue::Call { callee, args, .. },
                 ..
             } if call_name(callee) == "json::into_string" => args.first(),
             _ => None,
@@ -6544,7 +6555,7 @@ def main():
             rvalue,
             Rvalue::Call {
                 callee: CallTarget::Name(name),
-                args,
+                args, ..
             } if name == "relay"
                 && args.first().is_some_and(|argument| {
                     argument.value == Operand::MovePlace("holder.value".to_string())
@@ -7271,7 +7282,7 @@ def main():
         .flat_map(|block| &block.instructions)
         .filter_map(|instruction| match instruction {
             Instruction::Assign {
-                value: Rvalue::Call { callee, args },
+                value: Rvalue::Call { callee, args, .. },
                 ..
             } if matches!(call_name(callee), "wait_any" | "wait_all") => {
                 Some((call_name(callee), &args[0].value))
@@ -7314,7 +7325,7 @@ def main():
         .flat_map(|block| &block.instructions)
         .find_map(|instruction| match instruction {
             Instruction::Assign {
-                value: Rvalue::Call { callee, args },
+                value: Rvalue::Call { callee, args, .. },
                 ..
             } if call_name(callee) == "select" => Some(args),
             _ => None,
@@ -7423,6 +7434,22 @@ def main() -> int32:
     );
 }
 
+/// The arguments of a resolved op's call, named after the parameters MIR
+/// binds them to.
+fn named_bound_args(callee: &CallTarget, args: &[MirArg]) -> Vec<MirArg> {
+    let CallTarget::Runtime { op, .. } = callee else {
+        return args.to_vec();
+    };
+    op.params()
+        .iter()
+        .zip(args)
+        .map(|(param, argument)| MirArg {
+            name: Some(param.name.to_string()),
+            ..argument.clone()
+        })
+        .collect()
+}
+
 #[test]
 fn retained_process_and_http_builtin_arguments_lower_with_owned_operands() {
     let module = crate::lower_source_to_mir(
@@ -7453,13 +7480,13 @@ def respond_bytes(exchange: mut net.HttpExchange, status: int32, bytes: own list
             .flat_map(|block| &block.instructions)
             .find_map(|instruction| match instruction {
                 Instruction::Assign {
-                    value: Rvalue::Call { callee, args },
+                    value: Rvalue::Call { callee, args, .. },
                     ..
                 } if callee
                     .member_parts()
                     .is_some_and(|parts| parts.field == member_name) =>
                 {
-                    Some(args)
+                    Some(named_bound_args(callee, args))
                 }
                 _ => None,
             })
@@ -7605,7 +7632,7 @@ def main() -> int32:
         .flat_map(|block| block.instructions.iter())
         .find_map(|instruction| match instruction {
             Instruction::Assign {
-                value: Rvalue::Call { callee, args },
+                value: Rvalue::Call { callee, args, .. },
                 ..
             } => callee
                 .member_parts()
@@ -7616,7 +7643,8 @@ def main() -> int32:
         .expect("shuffle call should lower");
     assert_eq!(shuffle.0, Some("rng"));
     assert_eq!(shuffle.1.len(), 1);
-    assert_eq!(shuffle.1[0].name.as_deref(), Some("values"));
+    // MIR binds the `values` argument by position.
+    assert_eq!(shuffle.1[0].name, None);
     assert_eq!(
         shuffle.1[0].writeback_place.as_deref(),
         Some("holder.values")
@@ -9808,6 +9836,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
                 receiver_place: Some("items".to_string()),
             },
             args: Vec::new(),
+            type_args: Default::default()
         },
         "items"
     ));
@@ -9819,6 +9848,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
                 value: Operand::Place("items".to_string()),
                 writeback_place: Some("items.length".to_string()),
             }],
+            type_args: Default::default()
         },
         "items"
     ));
@@ -11093,6 +11123,7 @@ type Unary = def(int32) -> int32
                     Rvalue::Call {
                         callee: CallTarget::Value(_),
                         args,
+                        ..
                     },
                 ..
             } => Some(args),
@@ -11136,7 +11167,7 @@ type Unary = def(int32) -> int32
                 Instruction::Assign {
                     value: Rvalue::Call {
                         callee: CallTarget::Value(Operand::Place(place)),
-                        args,
+                        args, ..
                     },
                     ..
                 } if place == dynamic_capture
@@ -11314,7 +11345,7 @@ def main():
                 Instruction::Assign {
                     value: Rvalue::Call {
                         callee: CallTarget::Value(_),
-                        args,
+                        args, ..
                     },
                     ..
                 } if args.len() == 1
@@ -11495,7 +11526,7 @@ def main() -> int32:
             .iter()
             .find_map(|instruction| match instruction {
                 Instruction::Assign {
-                    value: Rvalue::Call { callee, args },
+                    value: Rvalue::Call { callee, args, .. },
                     ..
                 } => {
                     let parts = callee.member_parts()?;
@@ -11544,7 +11575,7 @@ def main() -> int32:
         Instruction::Assign {
             value: Rvalue::Call {
                 callee,
-                args,
+                args, ..
             },
             ..
         } if call_name(callee) == "list.with_capacity" && args.len() == 1
@@ -11567,7 +11598,7 @@ def main() -> int32:
         Instruction::Assign {
             value: Rvalue::Call {
                 callee: CallTarget::Value(Operand::Function { name, .. }),
-                args,
+                args, ..
             },
             ..
         } if name == "constant_key" && args.len() == 1
@@ -11730,7 +11761,7 @@ def main() -> int32:
             target,
             value: Rvalue::Call {
                 callee,
-                args,
+                args, ..
             },
         } if call_name(callee) == "divmod"
             && main.local_types.iter().any(|local| {
@@ -11746,7 +11777,7 @@ def main() -> int32:
             target,
             value: Rvalue::Call {
                 callee,
-                args,
+                args, ..
             },
         } if call_name(callee) == "round"
             && main.local_types.iter().any(|local| {
@@ -13828,7 +13859,7 @@ def main():
                 let reads = matches!(
                     &window[1],
                     Instruction::Assign {
-                        value: Rvalue::Call { callee, args },
+                        value: Rvalue::Call { callee, args, ..  },
                         ..
                     } if matches!(
                         callee.member_parts(),
@@ -14301,7 +14332,7 @@ fn first_runtime_call(module: &mut MirModule) -> (&mut CallTarget, &mut Vec<MirA
         .flat_map(|block| &mut block.instructions)
         .find_map(|instruction| match instruction {
             Instruction::Assign {
-                value: Rvalue::Call { callee, args },
+                value: Rvalue::Call { callee, args, .. },
                 ..
             } if matches!(
                 callee,
@@ -14559,7 +14590,7 @@ fn first_call_in_main(
         .flat_map(|block| &mut block.instructions)
         .find_map(|instruction| match instruction {
             Instruction::Assign {
-                value: Rvalue::Call { callee, args },
+                value: Rvalue::Call { callee, args, .. },
                 ..
             } if matches(callee) => Some((callee, args)),
             _ => None,
@@ -14826,7 +14857,7 @@ fn first_receiver_op_call<'a>(
         .flat_map(|block| &mut block.instructions)
         .find_map(|instruction| match instruction {
             Instruction::Assign {
-                value: Rvalue::Call { callee, args },
+                value: Rvalue::Call { callee, args, .. },
                 ..
             } if matches!(
                 &*callee,
@@ -15215,4 +15246,118 @@ fn step8d_validator_rejects_forged_collection_ops() {
     });
     args.truncate(1);
     assert_public_boundaries_reject(&short, "expected `__index()` to receive `line`");
+}
+
+const FORGED_RUNTIME_ARGS: &str = r#"
+def helper(value: int64) -> int64:
+    return value
+
+def main():
+    mut values: list[str] = ["a"]
+    values.append("b")
+    print(values.pop())
+    print(helper(1))
+"#;
+
+fn is_list_op(op: crate::runtime_ops::ListOp) -> impl Fn(&CallTarget) -> bool {
+    move |callee| {
+        matches!(
+            callee,
+            CallTarget::Runtime {
+                op: crate::runtime_ops::RuntimeOp::List(found),
+                ..
+            } if *found == op
+        )
+    }
+}
+
+#[test]
+fn public_boundaries_reject_runtime_ops_with_missing_or_extra_arguments() {
+    use crate::runtime_ops::ListOp;
+    let lowered = crate::lower_source_to_mir(FORGED_RUNTIME_ARGS).expect("source should lower");
+    let push = crate::runtime_ops::RuntimeOp::List(ListOp::Push);
+
+    let mut missing = lowered.clone();
+    first_call_in_main(&mut missing, is_list_op(ListOp::Push))
+        .1
+        .clear();
+    assert_public_boundaries_reject(
+        &missing,
+        &format!("expected `{}()` to receive `value`", push.name()),
+    );
+
+    let mut extra = lowered.clone();
+    let (_, args) = first_call_in_main(&mut extra, is_list_op(ListOp::Push));
+    args.push(args[0].clone());
+    assert_public_boundaries_reject(
+        &extra,
+        &format!(
+            "expected `{}()` to take at most 1 argument(s), found 2",
+            push.name()
+        ),
+    );
+
+    let mut wrong_default = lowered.clone();
+    first_call_in_main(&mut wrong_default, is_list_op(ListOp::Pop)).1[0].value =
+        Operand::Default(crate::runtime_ops::ArgDefault::StdioNull);
+    assert_public_boundaries_reject(
+        &wrong_default,
+        "`pop()` does not take that default for `index`",
+    );
+
+    let mut user_default = lowered;
+    first_call_in_main(
+        &mut user_default,
+        |callee| matches!(callee, CallTarget::Name(name) if name == "helper"),
+    )
+    .1[0]
+        .value = Operand::Default(crate::runtime_ops::ArgDefault::Int64(-1));
+    assert_public_boundaries_reject(
+        &user_default,
+        "invalid MIR call in `main` passes a default argument to a callee that is not a runtime operation",
+    );
+}
+
+#[test]
+fn an_omitted_argument_outside_a_runtime_call_has_no_value() {
+    let mut module = crate::lower_source_to_mir(FORGED_RUNTIME_ARGS).expect("source should lower");
+    let (_, args) = first_call_in_main(
+        &mut module,
+        |callee| matches!(callee, CallTarget::Name(name) if name == "helper"),
+    );
+    let Operand::Place(place) = args[0].value.clone() else {
+        panic!("the call should pass a place");
+    };
+    let main = module
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let value = main
+        .blocks
+        .iter_mut()
+        .flat_map(|block| &mut block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                target,
+                value: Rvalue::Use(value),
+            } if *target == place => Some(value),
+            _ => None,
+        })
+        .expect("main should assign the argument");
+    *value = Operand::Default(crate::runtime_ops::ArgDefault::Omitted);
+    let runtime = crate::run_mir(&module).expect_err("the interpreter has no value to read");
+    assert!(
+        runtime
+            .message
+            .contains("an omitted MIR argument has no value outside a runtime operation call"),
+        "{}",
+        runtime.message
+    );
+    let direct = crate::native_codegen::emit_host_object(&module)
+        .expect_err("the direct backend has no value to load");
+    assert_eq!(
+        direct,
+        "direct backend received an omitted argument outside a runtime operation"
+    );
 }

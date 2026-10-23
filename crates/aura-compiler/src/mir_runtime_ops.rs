@@ -23,8 +23,9 @@
 //! bind.
 
 use super::{CallTarget, Instruction, MirFunction, MirLoanValidationContext, MirModule, Rvalue};
+use crate::ast::BinaryOp;
 use crate::call::CallableParam;
-use crate::mir::{MirArg, MirFormatPart, Operand};
+use crate::mir::{ArithmeticTrap, MirArg, MirFormatPart, Operand};
 use crate::runtime_ops::{
     builtin_function_for_name, first_type_arg, DictOp, FunctionOp, ListOp, PrintKind, RuntimeOp,
     ScalarElement, SetOp,
@@ -74,12 +75,12 @@ pub(crate) fn resolve_runtime_ops(module: &mut MirModule) {
         if let Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. } =
             instruction
         {
-            apply_rewrite(value, rewrite.kind);
+            apply_rewrite(value, rewrite.kind, rewrite.bound_args);
         }
     }
 }
 
-fn apply_rewrite(value: &mut Rvalue, kind: RewriteKind) {
+fn apply_rewrite(value: &mut Rvalue, kind: RewriteKind, bound_args: Option<Vec<MirArg>>) {
     if let Rvalue::FormatString { parts } = value {
         if let RewriteKind::FormatInt64(index) = kind {
             if let MirFormatPart::Value(operand) = &mut parts[index] {
@@ -89,7 +90,26 @@ fn apply_rewrite(value: &mut Rvalue, kind: RewriteKind) {
         }
         return;
     }
-    if let Rvalue::Call { callee, .. } = value {
+    if let (RewriteKind::ScalarLeftArray(op), Rvalue::Call { callee, args, .. }) =
+        (kind, &mut *value)
+    {
+        let (CallTarget::Member { object, .. }, [argument]) = (callee, args.as_mut_slice()) else {
+            return;
+        };
+        *value = Rvalue::Binary {
+            op,
+            left: std::mem::replace(object, Operand::Unit),
+            right: std::mem::replace(&mut argument.value, Operand::Unit),
+            // A member call names no source position.
+            span: crate::diag::Span::new(0, 0),
+            trap: ArithmeticTrap::Runtime,
+        };
+        return;
+    }
+    if let Rvalue::Call { callee, args, .. } = value {
+        if let Some(bound_args) = bound_args {
+            *args = bound_args;
+        }
         let receiver = match (kind, &mut *callee) {
             (
                 RewriteKind::Member(_),
@@ -122,6 +142,9 @@ struct Rewrite {
     block: usize,
     instruction: usize,
     kind: RewriteKind,
+    /// The call's arguments bound to the op's parameters, when they are
+    /// not in that form yet.
+    bound_args: Option<Vec<MirArg>>,
 }
 
 #[derive(Clone, Copy)]
@@ -132,6 +155,11 @@ enum RewriteKind {
     Named(RuntimeOp),
     /// The f-string part at this index appends an `int64`.
     FormatInt64(usize),
+    /// A resolved op's call binds its arguments.
+    Bind,
+    /// A scalar's arithmetic member call with an `Array` argument becomes
+    /// this `Array` binary operation, scalar on the left.
+    ScalarLeftArray(BinaryOp),
 }
 
 fn collect_rewrites(
@@ -147,36 +175,54 @@ fn collect_rewrites(
             else {
                 continue;
             };
-            let mut push = |kind| {
+            let mut push = |kind, op: Option<RuntimeOp>, args: &[MirArg]| {
+                // Arguments that do not bind stay as they are, and the
+                // validator reports them.
+                let bound_args = op.and_then(|op| bind_runtime_op_args(op, args).ok().flatten());
+                if matches!(kind, RewriteKind::Bind) && bound_args.is_none() {
+                    return;
+                }
                 rewrites.push(Rewrite {
                     function: function_index,
                     block: block_index,
                     instruction: instruction_index,
                     kind,
+                    bound_args,
                 })
             };
             match value {
                 Rvalue::Call {
                     callee: CallTarget::Member { object, field, .. },
                     args,
+                    ..
                 } => {
                     if let Some(op) = context.resolved_runtime_op(function, object, field, args) {
-                        push(RewriteKind::Member(op));
+                        push(RewriteKind::Member(op), Some(op), args);
+                    } else if let Some(op) =
+                        context.scalar_left_array_op(function, object, field, args)
+                    {
+                        push(RewriteKind::ScalarLeftArray(op), None, args);
                     }
                 }
                 Rvalue::Call {
                     callee: CallTarget::Name(name),
                     args,
+                    ..
                 } => {
                     if let Some(op) = context.resolved_named_op(function, name, args) {
-                        push(RewriteKind::Named(op));
+                        push(RewriteKind::Named(op), Some(op), args);
                     }
                 }
+                Rvalue::Call {
+                    callee: CallTarget::Runtime { op, .. },
+                    args,
+                    ..
+                } => push(RewriteKind::Bind, Some(*op), args),
                 Rvalue::FormatString { parts } => {
                     for (index, part) in parts.iter().enumerate() {
                         if let MirFormatPart::Value(value) = part {
                             if context.is_int64_operand(function, value) {
-                                push(RewriteKind::FormatInt64(index));
+                                push(RewriteKind::FormatInt64(index), None, &[]);
                             }
                         }
                     }
@@ -263,6 +309,48 @@ impl MirLoanValidationContext<'_> {
             Operand::Int(value) => i64::try_from(*value).is_ok().then(|| Type::named("int64")),
             other => self.operand_type(function, other).ok().flatten(),
         }
+    }
+
+    /// The `Array` binary operation a member call `object.field(array)`
+    /// makes when `object` is a number, `field` is `add`, `sub`, `mul`, or
+    /// `div`, and `array` is an `Array`: lowering writes `2.0 * values` as
+    /// a binary operation, and MIR spells it that way. A trait method the
+    /// number's type implements keeps its call.
+    fn scalar_left_array_op(
+        &self,
+        function: &MirFunction,
+        object: &Operand,
+        field: &str,
+        args: &[MirArg],
+    ) -> Option<BinaryOp> {
+        let op = match field {
+            "add" => BinaryOp::Add,
+            "sub" => BinaryOp::Sub,
+            "mul" => BinaryOp::Mul,
+            "div" => BinaryOp::Div,
+            _ => return None,
+        };
+        let [argument] = args else {
+            return None;
+        };
+        let receiver = self.layout_type(function, object)?;
+        let Type::Named(name, type_args) = &receiver else {
+            return None;
+        };
+        let numeric = type_args.is_empty()
+            && matches!(
+                name.as_str(),
+                "int32" | "int64" | "uint64" | "float32" | "float64"
+            );
+        let array = matches!(
+            self.layout_type(function, &argument.value),
+            Some(Type::Named(name, _)) if name == "Array"
+        );
+        let trait_method = self.trait_impls.iter().any(|trait_impl| {
+            trait_impl.for_type == receiver
+                && trait_impl.methods.iter().any(|method| method.name == field)
+        });
+        (numeric && array && !trait_method).then_some(op)
     }
 
     fn is_int64_operand(&self, function: &MirFunction, operand: &Operand) -> bool {
@@ -352,12 +440,26 @@ pub(super) fn validate_runtime_ops(
             validate_format_parts(function, parts, context)?;
             continue;
         }
-        let Rvalue::Call {
-            callee: CallTarget::Runtime { op, receiver, .. },
-            args,
-        } = value
-        else {
-            continue;
+        let (op, receiver, args) = match value {
+            Rvalue::Call {
+                callee: CallTarget::Runtime { op, receiver, .. },
+                args,
+                ..
+            } => (op, receiver, args),
+            // Only a resolved op's call fills a default it names.
+            Rvalue::Call { args, .. } => {
+                if args
+                    .iter()
+                    .any(|argument| matches!(argument.value, Operand::Default(_)))
+                {
+                    return Err(format!(
+                        "invalid MIR call in `{}` passes a default argument to a callee that is not a runtime operation",
+                        function.name
+                    ));
+                }
+                continue;
+            }
+            _ => continue,
         };
         let op = *op;
         match (op.has_receiver(), receiver) {
@@ -447,59 +549,80 @@ fn validate_format_parts(
     Ok(())
 }
 
-/// Binds `args` to `op`'s parameters as a call binds them: named arguments
-/// by name, the rest in order, with every required parameter bound once.
-/// `select` takes one or more positional sources, and `range` with one
-/// argument binds it to `stop`. The messages name the call as the direct
-/// emitter's arity checks did.
-fn validate_runtime_op_args(
-    function: &MirFunction,
-    op: RuntimeOp,
-    args: &[MirArg],
-) -> std::result::Result<(), String> {
-    let member = op.name();
-    let invalid = |detail: String| {
-        format!(
-            "invalid MIR runtime operation `{op}` in `{}`: {detail}",
-            function.name
-        )
-    };
-    let params = match op {
-        RuntimeOp::Function(FunctionOp::Select) => {
-            if args.is_empty() || args.iter().any(|argument| argument.name.is_some()) {
-                return Err(invalid(
-                    "expected `select(source, ...)` to receive one or more positional sources"
-                        .to_string(),
-                ));
-            }
-            return Ok(());
-        }
-        // As in the checker, one argument binds `stop` unless it names
-        // `start`.
+/// The parameters a call of `op` with `args` binds. `range` with one
+/// argument binds it to `stop` unless it names `start`, as in the checker.
+fn bound_params(op: RuntimeOp, args: &[MirArg]) -> Vec<CallableParam<'static>> {
+    match op {
         RuntimeOp::Function(FunctionOp::Range)
             if args.len() == 1 && args[0].name.as_deref() != Some("start") =>
         {
             vec![CallableParam::required("stop")]
         }
         _ => op.params(),
+    }
+}
+
+/// Binds `args` to `op`'s parameters as a call binds them: named arguments
+/// by name, the rest in order, with every required parameter bound once.
+/// The bound form has one positional argument per parameter, in parameter
+/// order. An optional parameter the call leaves out gets the op's default,
+/// a constant or an `Operand::Default` (see `RuntimeOp::default_arg`).
+/// `select` takes one or more positional sources and binds nothing.
+///
+/// Returns `Ok(None)` when `args` are already in the bound form, the bound
+/// arguments when they are not, and what is wrong when they do not bind.
+/// The messages name the call as the direct emitter's arity checks did.
+pub(crate) fn bind_runtime_op_args(
+    op: RuntimeOp,
+    args: &[MirArg],
+) -> std::result::Result<Option<Vec<MirArg>>, String> {
+    let member = op.name();
+    if op == RuntimeOp::Function(FunctionOp::Select) {
+        if args.is_empty() || args.iter().any(|argument| argument.name.is_some()) {
+            return Err(
+                "expected `select(source, ...)` to receive one or more positional sources"
+                    .to_string(),
+            );
+        }
+        return Ok(None);
+    }
+    let params = bound_params(op, args);
+    // A default may stand only in the slot of the optional parameter whose
+    // default it is.
+    let check_default = |param: &CallableParam<'_>, argument: &MirArg| {
+        if matches!(argument.value, Operand::Default(_))
+            && (param.required || op.default_arg(param.name) != argument.value)
+        {
+            return Err(format!(
+                "`{member}()` does not take that default for `{}`",
+                param.name
+            ));
+        }
+        Ok(())
     };
-    let mut bound = vec![false; params.len()];
+    if args.len() == params.len() && args.iter().all(|argument| argument.name.is_none()) {
+        for (param, argument) in params.iter().zip(args) {
+            check_default(param, argument)?;
+        }
+        return Ok(None);
+    }
+    let mut slots: Vec<Option<&MirArg>> = vec![None; params.len()];
     let mut next_positional = 0usize;
     for argument in args {
         let index = match argument.name.as_deref() {
             Some(name) => match params.iter().position(|param| param.name == name) {
                 Some(index) => index,
-                None => return Err(invalid(format!("`{member}()` has no parameter `{name}`"))),
+                None => return Err(format!("`{member}()` has no parameter `{name}`")),
             },
             None => {
-                while next_positional < bound.len() && bound[next_positional] {
+                while next_positional < slots.len() && slots[next_positional].is_some() {
                     next_positional += 1;
                 }
                 next_positional
             }
         };
-        if index >= bound.len() {
-            return Err(invalid(if params.is_empty() {
+        if index >= slots.len() {
+            return Err(if params.is_empty() {
                 format!("expected `{member}()` to take no arguments")
             } else {
                 format!(
@@ -507,23 +630,61 @@ fn validate_runtime_op_args(
                     params.len(),
                     args.len()
                 )
-            }));
+            });
         }
-        if bound[index] {
-            return Err(invalid(format!(
+        if slots[index].is_some() {
+            return Err(format!(
                 "`{member}()` receives `{}` twice",
                 params[index].name
-            )));
+            ));
         }
-        bound[index] = true;
+        slots[index] = Some(argument);
     }
-    for (param, bound) in params.iter().zip(&bound) {
-        if param.required && !bound {
-            return Err(invalid(format!(
-                "expected `{member}()` to receive `{}`",
-                param.name
-            )));
-        }
+    let mut bound = Vec::with_capacity(params.len());
+    for (param, slot) in params.iter().zip(slots) {
+        bound.push(match slot {
+            Some(argument) => {
+                check_default(param, argument)?;
+                MirArg {
+                    name: None,
+                    ..argument.clone()
+                }
+            }
+            None if param.required => {
+                return Err(format!("expected `{member}()` to receive `{}`", param.name))
+            }
+            None => MirArg {
+                name: None,
+                value: op.default_arg(param.name),
+                writeback_place: None,
+            },
+        });
     }
-    Ok(())
+    Ok(Some(bound))
 }
+
+/// Checks that a runtime op call's arguments are in the bound form.
+fn validate_runtime_op_args(
+    function: &MirFunction,
+    op: RuntimeOp,
+    args: &[MirArg],
+) -> std::result::Result<(), String> {
+    let invalid = |detail: String| {
+        format!(
+            "invalid MIR runtime operation `{op}` in `{}`: {detail}",
+            function.name
+        )
+    };
+    match bind_runtime_op_args(op, args) {
+        Ok(None) => Ok(()),
+        Ok(Some(_)) => Err(invalid(format!(
+            "its arguments do not bind `{}()`'s parameters in order",
+            op.name()
+        ))),
+        Err(detail) => Err(invalid(detail)),
+    }
+}
+
+#[cfg(test)]
+#[path = "mir_runtime_ops_tests.rs"]
+mod tests;

@@ -27,8 +27,8 @@ use crate::native_runtime::{
 };
 use crate::runtime_abi::{AbiType, RuntimeFn, RuntimeTable};
 use crate::runtime_ops::{
-    first_type_arg, ArrayOp, DictOp, FunctionOp, HostBuiltin, ListOp, PrintKind, ResourceOp,
-    RuntimeOp, RuntimeTarget, ScalarElement, ScalarOp, SetOp, SpanOp, StrOp, ValueOp,
+    first_type_arg, ArgDefault, ArrayOp, DictOp, FunctionOp, HostBuiltin, ListOp, PrintKind,
+    ResourceOp, RuntimeOp, RuntimeTarget, ScalarElement, ScalarOp, SetOp, SpanOp, StrOp, ValueOp,
 };
 use crate::sema::optional_type;
 use crate::sema::{substitute_type, FunctionParamContract, Type};
@@ -574,102 +574,28 @@ fn split_field_path_segments<'a>(
     }
 }
 
-fn ordered_named_args<'a>(
-    expected_names: &[&str],
-    args: &'a [MirArg],
-) -> std::result::Result<Vec<&'a MirArg>, String> {
-    let mut values = vec![None; expected_names.len()];
-    let mut next_positional = 0usize;
-    for argument in args {
-        if let Some(name) = argument.name.as_deref() {
-            let mut index = None;
-            for (candidate_index, candidate) in expected_names.iter().enumerate() {
-                if *candidate == name {
-                    index = Some(candidate_index);
-                    break;
-                }
-            }
-            let Some(index) = index else {
-                return Err(format!(
-                    "direct backend does not recognize builtin argument `{}`",
-                    name
-                ));
-            };
-            if values[index].is_some() {
-                return Err(format!(
-                    "direct backend received duplicate builtin argument `{}`",
-                    name
-                ));
-            }
-            values[index] = Some(argument);
-            continue;
-        }
-        while next_positional < values.len() && values[next_positional].is_some() {
-            next_positional += 1;
-        }
-        if next_positional >= values.len() {
-            return Err("direct backend received too many builtin arguments".to_string());
-        }
-        values[next_positional] = Some(argument);
-        next_positional += 1;
+/// The arguments of a member call this emitter resolves to `op`, such as
+/// one on a member of a union, bound as MIR binds a resolved op's.
+fn bind_member_call_args(
+    op: RuntimeOp,
+    args: &[MirArg],
+) -> std::result::Result<std::borrow::Cow<'_, [MirArg]>, String> {
+    match crate::mir::bind_runtime_op_args(op, args) {
+        Ok(None) => Ok(std::borrow::Cow::Borrowed(args)),
+        Ok(Some(bound)) => Ok(std::borrow::Cow::Owned(bound)),
+        Err(detail) => Err(format!("direct backend {detail}")),
     }
-    let mut ordered = Vec::with_capacity(values.len());
-    for value in values {
-        let Some(value) = value else {
-            return Err("direct backend is missing a builtin argument".to_string());
-        };
-        ordered.push(value);
-    }
-    Ok(ordered)
 }
 
-fn ordered_optional_named_args<'a>(
-    expected_names: &[&str],
-    args: &'a [MirArg],
-) -> std::result::Result<Vec<Option<&'a MirArg>>, String> {
-    let mut values = vec![None; expected_names.len()];
-    let mut next_positional = 0usize;
-    for argument in args {
-        if let Some(name) = argument.name.as_deref() {
-            let mut index = None;
-            for (candidate_index, candidate) in expected_names.iter().enumerate() {
-                if *candidate == name {
-                    index = Some(candidate_index);
-                    break;
-                }
-            }
-            let Some(index) = index else {
-                return Err(format!(
-                    "direct backend does not recognize builtin argument `{}`",
-                    name
-                ));
-            };
-            if values[index].is_some() {
-                return Err(format!(
-                    "direct backend received duplicate builtin argument `{}`",
-                    name
-                ));
-            }
-            values[index] = Some(argument);
-            continue;
-        }
-        while next_positional < values.len() && values[next_positional].is_some() {
-            next_positional += 1;
-        }
-        if next_positional >= values.len() {
-            return Err("direct backend received too many builtin arguments".to_string());
-        }
-        values[next_positional] = Some(argument);
-        next_positional += 1;
+/// Refuses a resolved op's call whose arguments are not in the bound form
+/// MIR gives them, as when a caller skips the module validator.
+fn require_bound_args(op: RuntimeOp, args: &[MirArg]) -> std::result::Result<(), String> {
+    match bind_member_call_args(op, args)? {
+        std::borrow::Cow::Borrowed(_) => Ok(()),
+        std::borrow::Cow::Owned(_) => Err(format!(
+            "direct backend expected the arguments of `{op}` in parameter order"
+        )),
     }
-    Ok(values)
-}
-
-fn required_named_arg<'a>(
-    argument: Option<&'a MirArg>,
-    message: &str,
-) -> std::result::Result<&'a MirArg, String> {
-    argument.ok_or(message.to_string())
 }
 
 fn direct_internal_slice_args(args: &[MirArg]) -> std::result::Result<&[MirArg; 6], String> {
@@ -687,37 +613,6 @@ const SLICE_WORD_KINDS: &[ScalarKind] = &[
     ScalarKind::Int32,
     ScalarKind::Int32,
 ];
-
-/// The arguments of a collection, `Array`, span, or slice op in parameter
-/// order, leaving out an omitted optional one. The shared validator binds
-/// the arguments of a resolved op; a member call this emitter resolves is
-/// bound here.
-fn bound_runtime_op_args(
-    op: RuntimeOp,
-    args: &[MirArg],
-) -> std::result::Result<Vec<&MirArg>, String> {
-    let params = op.params();
-    let mut names = Vec::with_capacity(params.len());
-    for param in &params {
-        names.push(param.name);
-    }
-    let bound = ordered_optional_named_args(&names, args)?;
-    let mut ordered = Vec::with_capacity(bound.len());
-    for (param, argument) in params.iter().zip(bound) {
-        match argument {
-            Some(argument) => ordered.push(argument),
-            None if param.required => {
-                return Err(format!(
-                    "direct backend expected `{}()` to receive `{}`",
-                    op.name(),
-                    param.name
-                ))
-            }
-            None => {}
-        }
-    }
-    Ok(ordered)
-}
 
 fn required_direct_field_slice(
     ty: &DirectType,
@@ -4178,7 +4073,11 @@ impl<'a> FunctionCompiler<'a> {
                 let right = self.load_operand_with_integer_hint(right, right_integer_hint)?;
                 self.compile_binary(*op, left, right, Some(*span), *trap)
             }
-            Rvalue::Call { callee, args } => self.compile_call(callee, args, target),
+            Rvalue::Call {
+                callee,
+                args,
+                type_args,
+            } => self.compile_call(callee, args, type_args, target),
             Rvalue::VecLiteral {
                 elements,
                 element_type,
@@ -5593,10 +5492,11 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         callee: &CallTarget,
         args: &[MirArg],
+        type_args: &BTreeMap<String, Type>,
         target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
         match callee {
-            CallTarget::Name(name) => self.compile_named_call(name, args, target),
+            CallTarget::Name(name) => self.compile_named_call(name, args, type_args),
             CallTarget::Value(function) => self.compile_function_value_call(function, args, target),
             CallTarget::Extern(call) => self.compile_extern_call(call, args, target),
             CallTarget::Member {
@@ -6006,8 +5906,7 @@ impl<'a> FunctionCompiler<'a> {
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
         let op = RuntimeOp::Print(kind);
-        let bound = self.bind_named_runtime_op_args(op, args)?;
-        let Some(argument) = bound[0] else {
+        let [argument] = args else {
             return Err("direct backend expected `print` to receive one argument".to_string());
         };
         let argument = self.load_operand(&argument.value)?;
@@ -6124,12 +6023,14 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     /// A direct call to a function of the program. Lowering resolves calls
-    /// to built-in functions to runtime ops.
+    /// to built-in functions to runtime ops. An argument whose parameter
+    /// names a type parameter loads as its type at this call, which MIR
+    /// records, and passes in the parameter's boxed layout.
     fn compile_named_call(
         &mut self,
         name: &str,
         args: &[MirArg],
-        target: &DirectType,
+        type_args: &BTreeMap<String, Type>,
     ) -> std::result::Result<ValueRef, String> {
         let func_ref = *self
             .function_refs
@@ -6141,25 +6042,10 @@ impl<'a> FunctionCompiler<'a> {
             .get(name)
             .cloned()
             .unwrap_or_default();
-        let mut substitutions = HashMap::new();
-        if let Some(return_type) = self.function_return_types.get(name) {
-            collect_direct_runtime_type_substitutions(
-                &direct_type_to_type(return_type),
-                &direct_type_to_type(target),
-                &mut substitutions,
-            );
-        }
-        for (expected_ty, argument) in expected.iter().zip(args.iter()) {
-            if let Some(actual_ty) =
-                infer_operand_type(&argument.value, &self.variable_types, &self.classes)
-            {
-                collect_direct_runtime_type_substitutions(
-                    &direct_type_to_type(expected_ty),
-                    &direct_type_to_type(&actual_ty),
-                    &mut substitutions,
-                );
-            }
-        }
+        let substitutions = type_args
+            .iter()
+            .map(|(name, ty)| (name.clone(), ty.clone()))
+            .collect::<HashMap<_, _>>();
         let mut writeback_places = Vec::new();
         let mut mutable_sink_places = vec![None; expected.len()];
         // The shared validator binds one argument to each parameter.
@@ -6211,18 +6097,6 @@ impl<'a> FunctionCompiler<'a> {
         Ok(result)
     }
 
-    /// Binds the arguments of a named op to its parameters, in declaration
-    /// order. The validator has already checked them.
-    fn bind_named_runtime_op_args<'args>(
-        &self,
-        op: RuntimeOp,
-        args: &'args [MirArg],
-    ) -> std::result::Result<Vec<Option<&'args MirArg>>, String> {
-        let params = op.params();
-        let names = params.iter().map(|param| param.name).collect::<Vec<_>>();
-        ordered_optional_named_args(&names, args)
-    }
-
     /// Emits a resolved op with no receiver: a named built-in function,
     /// `print`, or a host builtin.
     fn compile_named_runtime_op(
@@ -6231,6 +6105,12 @@ impl<'a> FunctionCompiler<'a> {
         args: &[MirArg],
         target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
+        if matches!(
+            op,
+            RuntimeOp::Print(_) | RuntimeOp::Host(_) | RuntimeOp::Function(_)
+        ) {
+            require_bound_args(op, args)?;
+        }
         match op {
             RuntimeOp::Print(kind) => self.compile_print(kind, args),
             RuntimeOp::Host(builtin) => self.compile_host_builtin_call(builtin, args),
@@ -6291,20 +6171,17 @@ impl<'a> FunctionCompiler<'a> {
         let runtime_op = RuntimeOp::Function(op);
         let call = runtime_op.runtime_call();
         let params = runtime_op.params();
-        let bound = self.bind_named_runtime_op_args(runtime_op, args)?;
         let mut words = Vec::with_capacity(params.len() + call.immediates.len());
         // `abs`, `min`, `max`, `sqrt`, and `round` return their first
         // argument's layout.
         let mut first_layout = None;
-        for (param, argument) in params.iter().zip(bound) {
-            let Some(argument) = argument else {
-                // The shared validator binds every required parameter, so
-                // only an omitted timeout or queue capacity is absent. It
-                // passes no value.
-                debug_assert!(!param.required, "`{}` binds `{}`", op.name(), param.name);
+        // MIR binds one argument to each parameter, in order. An omitted
+        // timeout or queue capacity passes no value.
+        for argument in args {
+            if argument.value == Operand::Default(ArgDefault::Omitted) {
                 words.push(self.builder.ins().iconst(types::I64, 0));
                 continue;
-            };
+            }
             let word = match function_op_arg_layout(op) {
                 FunctionOpArgLayout::Int64 => {
                     let value = self
@@ -6390,14 +6267,7 @@ impl<'a> FunctionCompiler<'a> {
         let zero = self.builder.ins().iconst(types::I64, 0);
         let shape_ty =
             DirectType::Opaque(Type::Named("list".to_string(), vec![Type::named("int64")]));
-        let ordered = ordered_named_args(
-            &runtime_op
-                .params()
-                .iter()
-                .map(|param| param.name)
-                .collect::<Vec<_>>(),
-            args,
-        )?;
+        let ordered = args;
         let mut words = vec![dtype];
         match op {
             FunctionOp::ArrayZeros => {
@@ -6440,7 +6310,7 @@ impl<'a> FunctionCompiler<'a> {
         args: &[MirArg],
         target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
-        let ordered = ordered_named_args(&["minimum"], args)?;
+        let ordered = args;
         let minimum =
             self.load_operand_with_integer_hint(&ordered[0].value, Some(ScalarKind::Int64))?;
         let minimum = self.coerce_value(minimum, &DirectType::Scalar(ScalarKind::Int64))?;
@@ -6557,14 +6427,10 @@ impl<'a> FunctionCompiler<'a> {
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
         let runtime_op = RuntimeOp::Function(op);
-        let bound = self.bind_named_runtime_op_args(runtime_op, args)?;
-        let tasks_arg = required_named_arg(
-            bound[0],
-            &format!(
-                "direct backend expected `{}(tasks, timeout=...)`",
-                op.name()
-            ),
-        )?;
+        let tasks_arg = args.first().ok_or(format!(
+            "direct backend expected `{}(tasks, timeout=...)`",
+            op.name()
+        ))?;
         let tasks = self.load_operand(&tasks_arg.value)?;
         let tasks = self.ensure_opaque(tasks)?;
         let task_payload_ty =
@@ -6582,7 +6448,7 @@ impl<'a> FunctionCompiler<'a> {
                 })
                 .unwrap_or(Type::named("Unknown"));
         let mut words = vec![tasks.values[0]];
-        if let Some(timeout_arg) = bound.get(1).copied().flatten() {
+        if let Some(timeout_arg) = args.get(1) {
             let timeout = self.load_operand(&timeout_arg.value)?;
             let timeout = self.ensure_opaque(timeout)?;
             words.push(timeout.values[0]);
@@ -6602,7 +6468,7 @@ impl<'a> FunctionCompiler<'a> {
     /// `divmod(left, right)`: the left operand is tagged with its static
     /// type, which the helper's quotient and remainder take.
     fn compile_divmod(&mut self, args: &[MirArg]) -> std::result::Result<ValueRef, String> {
-        let ordered = ordered_named_args(&["left", "right"], args)?;
+        let ordered = args;
         let left = self.load_operand(&ordered[0].value)?;
         let operand_ty = direct_type_to_type(&left.ty);
         let left = self.ensure_opaque(left)?;
@@ -6629,16 +6495,14 @@ impl<'a> FunctionCompiler<'a> {
         let name = builtin.name();
         // Checked MIR materializes builtin defaults before direct code generation, so
         // optional metadata parameters are present in this argument list too.
-        let bound = self.bind_named_runtime_op_args(RuntimeOp::Host(builtin), args)?;
-        let mut loaded_args = Vec::with_capacity(bound.len());
-        for (index, argument) in bound.into_iter().enumerate() {
-            let argument = required_named_arg(
-                argument,
-                &format!(
+        let mut loaded_args = Vec::with_capacity(args.len());
+        for (index, argument) in args.iter().enumerate() {
+            if argument.value == Operand::Default(ArgDefault::Omitted) {
+                return Err(format!(
                     "direct backend is missing argument {} for `{name}`",
                     index + 1
-                ),
-            )?;
+                ));
+            }
             let loaded = self.load_operand(&argument.value)?;
             let loaded = self.ensure_opaque(loaded)?;
             loaded_args.push(loaded);
@@ -6701,14 +6565,14 @@ impl<'a> FunctionCompiler<'a> {
 
     fn compile_range(&mut self, args: &[MirArg]) -> std::result::Result<ValueRef, String> {
         let int_ty = DirectType::Scalar(ScalarKind::Int64);
-        // The shared validator binds one argument to `stop` and two to
-        // `start, stop`.
+        // MIR binds one argument to `stop` and two to `start, stop`.
         let (start_arg, stop_arg) = match args {
-            [stop] if stop.name.as_deref() != Some("start") => (None, Some(stop)),
+            [stop] => (None, stop),
+            [start, stop] => (Some(start), stop),
             _ => {
-                let bound =
-                    self.bind_named_runtime_op_args(RuntimeOp::Function(FunctionOp::Range), args)?;
-                (bound[0], bound[1])
+                return Err(
+                    "direct backend expected `range()` to receive a `stop` argument".to_string(),
+                )
             }
         };
 
@@ -6721,10 +6585,6 @@ impl<'a> FunctionCompiler<'a> {
                 ty: int_ty.clone(),
             }
         };
-        let stop_arg = required_named_arg(
-            stop_arg,
-            "direct backend expected `range()` to receive a `stop` argument",
-        )?;
         let stop = self.load_operand(&stop_arg.value)?;
         let stop = self.coerce_value(stop, &int_ty)?;
         let inst = self.builder.ins().call(
@@ -7067,49 +6927,6 @@ impl<'a> FunctionCompiler<'a> {
         receiver_place: Option<&str>,
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
-        if object.ty.scalar_kind().is_some()
-            && matches!(field, "add" | "sub" | "mul" | "div")
-            && args.len() == 1
-        {
-            let right = self.load_operand(&args[0].value)?;
-            if let Some(element_type) = direct_array_element_type(&right.ty).cloned() {
-                let element_direct =
-                    ensure_direct_type(&element_type, &self.classes, "Array scalar operand")?;
-                let left = self.coerce_value(object, &element_direct)?;
-                let left = self.ensure_opaque(left)?;
-                let array_ty = direct_type_to_type(&right.ty);
-                let right = self.ensure_opaque(right)?;
-                let scalar_left = self.builder.ins().iconst(types::I64, 1);
-                let operation_code = match field {
-                    "add" => 0,
-                    "sub" => 1,
-                    "mul" => 2,
-                    _ => {
-                        debug_assert_eq!(field, "div");
-                        3
-                    }
-                };
-                let operation = self.builder.ins().iconst(types::I64, operation_code);
-                let checked_mode = self.builder.ins().iconst(types::I64, 0);
-                let zero = self.builder.ins().iconst(types::I64, 0);
-                let inst = self.builder.ins().call(
-                    self.runtime[RuntimeFn::ArrayBinary],
-                    &[
-                        left.values[0],
-                        right.values[0],
-                        scalar_left,
-                        operation,
-                        checked_mode,
-                        zero,
-                        zero,
-                    ],
-                );
-                return Ok(
-                    self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), array_ty)
-                );
-            }
-        }
-
         match object.ty.clone() {
             DirectType::Callable(_) => Err(format!(
                 "direct backend cannot call `.{field}` on a callable value"
@@ -7147,7 +6964,8 @@ impl<'a> FunctionCompiler<'a> {
             DirectType::Scalar(_) => {
                 let receiver_ty = direct_type_to_type(&object.ty);
                 if let Some(op) = RuntimeOp::resolve_member(&receiver_ty, field, |_| false) {
-                    return self.compile_runtime_op(op, object, receiver_place, args);
+                    let args = bind_member_call_args(op, args)?;
+                    return self.compile_runtime_op(op, object, receiver_place, &args);
                 }
                 if self.find_trait_method(&receiver_ty, field).is_some() {
                     return self.compile_class_member_call(
@@ -7421,6 +7239,7 @@ impl<'a> FunctionCompiler<'a> {
                 ty: DirectType::Scalar(ScalarKind::Bool),
             }),
             Operand::Unit => Ok(unit_value(&mut self.builder)),
+            Operand::Default(default) => self.load_default_arg(*default),
         }
     }
 
@@ -7435,7 +7254,8 @@ impl<'a> FunctionCompiler<'a> {
             | Operand::String(_)
             | Operand::Duration(_)
             | Operand::Bool(_)
-            | Operand::Unit => return None,
+            | Operand::Unit
+            | Operand::Default(_) => return None,
         };
         kind.is_integer().then_some(kind)
     }
@@ -10952,6 +10772,12 @@ impl<'a> FunctionCompiler<'a> {
         receiver_place: Option<&str>,
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
+        if !matches!(
+            op,
+            RuntimeOp::Print(_) | RuntimeOp::Host(_) | RuntimeOp::Function(_)
+        ) {
+            require_bound_args(op, args)?;
+        }
         match op {
             RuntimeOp::Scalar(scalar) => self.compile_scalar_runtime_op(scalar, object, args),
             RuntimeOp::Value(value) => self.compile_value_runtime_op(value, object, args),
@@ -11014,18 +10840,14 @@ impl<'a> FunctionCompiler<'a> {
         let receiver_ty = direct_type_to_type(&object.ty);
         let object = self.ensure_opaque(object)?;
         let params = op.params();
-        let names = params.iter().map(|param| param.name).collect::<Vec<_>>();
-        let bound = ordered_optional_named_args(&names, args)?;
         let mut lowered = Vec::with_capacity(params.len());
         let mut writeback = None;
-        for (index, param) in params.iter().enumerate() {
-            let Some(argument) = bound[index] else {
-                // The shared validator binds every required parameter of a
-                // resolved op, so only an optional one is absent here.
-                let default = self.default_runtime_op_arg(op, param.name)?;
-                lowered.push(default);
+        // MIR binds one argument to each parameter, in order.
+        for (param, argument) in params.iter().zip(args) {
+            if argument.value == Operand::Default(ArgDefault::Omitted) {
+                lowered.push(RuntimeOpArg::Word(self.builder.ins().iconst(types::I64, 0)));
                 continue;
-            };
+            }
             let value = match runtime_op_arg_layout(op, param.name) {
                 RuntimeOpArgLayout::Boxed => {
                     let loaded = self.load_operand(&argument.value)?;
@@ -11133,11 +10955,8 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         let call = op.runtime_call();
         let object = self.ensure_opaque(object)?;
-        let params = op.params();
-        let names = params.iter().map(|param| param.name).collect::<Vec<_>>();
-        let ordered = ordered_named_args(&names, args)?;
         let zero = self.builder.ins().iconst(types::I64, 0);
-        let (argument, count) = match (op, ordered.first()) {
+        let (argument, count) = match (op, args.first()) {
             (RuntimeOp::Str(StrOp::Repeat), Some(argument)) => {
                 let count =
                     self.load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
@@ -11164,47 +10983,50 @@ impl<'a> FunctionCompiler<'a> {
         self.coerce_value(result, &target)
     }
 
-    /// The value an omitted optional argument of a handle op passes.
-    fn default_runtime_op_arg(
-        &mut self,
-        op: RuntimeOp,
-        name: &str,
-    ) -> std::result::Result<RuntimeOpArg, String> {
+    /// The value of a default argument MIR names. An omitted one has no
+    /// value: the op passes a zero word in its place.
+    fn load_default_arg(&mut self, default: ArgDefault) -> std::result::Result<ValueRef, String> {
         let stdio = || Type::Named("process.Stdio".to_string(), Vec::new());
-        Ok(match name {
-            // An absent timeout waits without a deadline.
-            "timeout" => RuntimeOpArg::Word(self.builder.ins().iconst(types::I64, 0)),
-            "cwd" => {
-                let unit = unit_value(&mut self.builder);
-                RuntimeOpArg::Boxed(self.ensure_opaque(unit)?)
+        let int = |builder: &mut FunctionBuilder<'_>, value: i64, kind| ValueRef {
+            values: vec![builder.ins().iconst(types::I64, value)],
+            ty: DirectType::Scalar(kind),
+        };
+        Ok(match default {
+            ArgDefault::Omitted => {
+                return Err(
+                    "direct backend received an omitted argument outside a runtime operation"
+                        .to_string(),
+                )
             }
-            "env" => {
+            ArgDefault::Int64(value) => int(&mut self.builder, value, ScalarKind::Int64),
+            ArgDefault::Int32(value) => int(&mut self.builder, value.into(), ScalarKind::Int32),
+            ArgDefault::EmptyStrDict => {
                 let results = self.runtime_call_results(self.runtime[RuntimeFn::MapEmpty], &[]);
-                RuntimeOpArg::Boxed(self.owned_opaque_result(
+                self.owned_opaque_result(
                     results,
                     Type::Named(
                         "dict".to_string(),
                         vec![Type::named("str"), Type::named("str")],
                     ),
-                ))
+                )
             }
-            "stdin" => {
+            ArgDefault::StdioNull => {
                 let results = self.runtime_call_results(self.runtime[RuntimeFn::ProcessNull], &[]);
-                RuntimeOpArg::Boxed(self.owned_opaque_result(results, stdio()))
+                self.owned_opaque_result(results, stdio())
             }
-            "stdout" | "stderr" => {
+            ArgDefault::StdioInherit => {
                 let results =
                     self.runtime_call_results(self.runtime[RuntimeFn::ProcessInherit], &[]);
-                RuntimeOpArg::Boxed(self.owned_opaque_result(results, stdio()))
+                self.owned_opaque_result(results, stdio())
             }
-            "restart" => RuntimeOpArg::Boxed(self.compile_enum_variant_for_target(
+            ArgDefault::RestartOnFailure => self.compile_enum_variant_for_target(
                 "process.RestartPolicy",
                 "OnFailure",
                 &[],
                 None,
-            )?),
-            "backoff" => {
-                let milliseconds = self.builder.ins().iconst(types::I64, 100);
+            )?,
+            ArgDefault::Milliseconds(value) => {
+                let milliseconds = self.builder.ins().iconst(types::I64, value);
                 let unit_nanoseconds = self.builder.ins().iconst(
                     types::I64,
                     crate::runtime_value::NANOS_PER_MILLISECOND as i64,
@@ -11213,26 +11035,7 @@ impl<'a> FunctionCompiler<'a> {
                     self.runtime[RuntimeFn::DurationFromI64],
                     &[milliseconds, unit_nanoseconds],
                 );
-                RuntimeOpArg::Boxed(self.owned_opaque_result(results, Type::named("Duration")))
-            }
-            "max_restarts" => {
-                let minus_one = self.builder.ins().iconst(types::I64, -1);
-                RuntimeOpArg::Boxed(self.ensure_opaque(ValueRef {
-                    values: vec![minus_one],
-                    ty: DirectType::Scalar(ScalarKind::Int32),
-                })?)
-            }
-            "group" => {
-                let one = self.builder.ins().iconst(types::I64, 1);
-                RuntimeOpArg::Boxed(self.ensure_opaque(ValueRef {
-                    values: vec![one],
-                    ty: DirectType::Scalar(ScalarKind::Bool),
-                })?)
-            }
-            _ => {
-                return Err(format!(
-                    "direct backend has no default for argument `{name}` of `{op}`"
-                ))
+                self.owned_opaque_result(results, Type::named("Duration"))
             }
         })
     }
@@ -11308,13 +11111,7 @@ impl<'a> FunctionCompiler<'a> {
             | ScalarOp::WrappingShr
             | ScalarOp::SaturatingShl
             | ScalarOp::SaturatingShr => {
-                let names = runtime_op
-                    .params()
-                    .iter()
-                    .map(|param| param.name)
-                    .collect::<Vec<_>>();
-                let ordered = ordered_named_args(&names, args)?;
-                let argument = ordered[0];
+                let argument = &args[0];
                 let (target, result_ty) = match &object.ty {
                     DirectType::Opaque(ty) => (
                         ensure_direct_type(ty, &self.classes, "integer receiver")?,
@@ -11415,7 +11212,7 @@ impl<'a> FunctionCompiler<'a> {
         let call = op.runtime_call();
         let receiver_ty = direct_type_to_type(&object.ty);
         let object = self.ensure_opaque(object)?;
-        let args = bound_runtime_op_args(op, args)?;
+        let args = args.iter().collect::<Vec<_>>();
         let mut words = vec![object.values[0]];
         for (argument, kind) in args.iter().zip(SLICE_WORD_KINDS) {
             words.push(self.load_word(argument, *kind, true)?);
@@ -11462,7 +11259,7 @@ impl<'a> FunctionCompiler<'a> {
         let list = object.values[0];
         let element_ty = first_type_arg(Some(&list_ty)).unwrap_or(Type::named("Unknown"));
         let element_direct_ty = ensure_direct_type(&element_ty, &self.classes, "Vec element")?;
-        let args = bound_runtime_op_args(runtime_op, mir_args)?;
+        let args = mir_args.iter().collect::<Vec<_>>();
         let int64 = ScalarKind::Int64;
         let int32 = ScalarKind::Int32;
         match op {
@@ -11512,10 +11309,7 @@ impl<'a> FunctionCompiler<'a> {
                 Ok(unit_value(&mut self.builder))
             }
             ListOp::Pop => {
-                let index = match args.first() {
-                    Some(argument) => self.load_word(argument, int64, true)?,
-                    None => self.builder.ins().iconst(types::I64, -1),
-                };
+                let index = self.load_word(args[0], int64, true)?;
                 let result = self.emit_collection_operation(call, list, None, Some(index));
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(self.owned_opaque_result(vec![result], element_ty))
@@ -11681,7 +11475,7 @@ impl<'a> FunctionCompiler<'a> {
         };
         let key_direct_ty = ensure_direct_type(&key_ty, &self.classes, "dict key")?;
         let value_direct_ty = ensure_direct_type(&value_ty, &self.classes, "Map value")?;
-        let args = bound_runtime_op_args(runtime_op, args)?;
+        let args = args.iter().collect::<Vec<_>>();
         let int32 = ScalarKind::Int32;
         let list = |element: Type| Type::Named("list".to_string(), vec![element]);
         match op {
@@ -11791,7 +11585,7 @@ impl<'a> FunctionCompiler<'a> {
         let set = object.values[0];
         let element_ty = first_type_arg(Some(&set_ty)).unwrap_or(Type::named("Unknown"));
         let element_direct_ty = ensure_direct_type(&element_ty, &self.classes, "set element")?;
-        let args = bound_runtime_op_args(runtime_op, args)?;
+        let args = args.iter().collect::<Vec<_>>();
         match op {
             SetOp::Len => Ok(ValueRef {
                 values: self.runtime_call_results(function, &[set]),
@@ -11881,7 +11675,7 @@ impl<'a> FunctionCompiler<'a> {
             .ok_or("direct backend expected Array to carry one dtype".to_string())?;
         let element_direct_ty = ensure_direct_type(&element_ty, &self.classes, "Array dtype")?;
         let array_ty = Type::Named("Array".to_string(), vec![element_ty.clone()]);
-        let args = bound_runtime_op_args(runtime_op, mir_args)?;
+        let args = mir_args.iter().collect::<Vec<_>>();
         let int32 = ScalarKind::Int32;
         let mut words = vec![array];
         match op {
@@ -12037,7 +11831,7 @@ impl<'a> FunctionCompiler<'a> {
         let object = self.ensure_opaque(object)?;
         let element_ty = first_type_arg(Some(&list_ty)).unwrap_or(Type::named("Unknown"));
         let element_direct_ty = ensure_direct_type(&element_ty, &self.classes, "Vec element")?;
-        let args = bound_runtime_op_args(runtime_op, args)?;
+        let args = args.iter().collect::<Vec<_>>();
         let mut operands = Vec::with_capacity(args.len());
         let mut value_operand = None;
         for (position, argument) in args.iter().enumerate() {
@@ -12121,7 +11915,8 @@ impl<'a> FunctionCompiler<'a> {
         }
         if let Some(op) = RuntimeOp::resolve_member(object_ty, field, |_| false) {
             let op = crate::mir::specialized_member_op(op, object_ty, args);
-            return self.compile_runtime_op(op, object, receiver_place, args);
+            let args = bind_member_call_args(op, args)?;
+            return self.compile_runtime_op(op, object, receiver_place, &args);
         }
         if let Type::Named(name, class_args) = object_ty {
             if matches!(name.as_str(), "str" | "Array" | "list" | "dict" | "set") {
@@ -13515,7 +13310,7 @@ fn validate_rvalue(
             validate_non_consuming_operand(left, "the left side of a binary expression")?;
             validate_non_consuming_operand(right, "the right side of a binary expression")
         }
-        Rvalue::Call { callee, args } => {
+        Rvalue::Call { callee, args, .. } => {
             if matches!(callee, CallTarget::Member { field, .. } if field == "__slice") {
                 direct_internal_slice_args(args)?;
             }
@@ -13664,7 +13459,8 @@ fn validate_operand(operand: &Operand) -> std::result::Result<(), String> {
         | Operand::Unit
         | Operand::Float(_)
         | Operand::String(_)
-        | Operand::Duration(_) => Ok(()),
+        | Operand::Duration(_)
+        | Operand::Default(_) => Ok(()),
     }
 }
 
@@ -14139,6 +13935,7 @@ fn infer_operand_type(
         Operand::Function { signature, .. } => Some(DirectType::Callable(DirectCallableType::new(
             signature.as_ref().clone(),
         ))),
+        Operand::Default(default) => direct_type(&default.ty()?, classes),
     }
 }
 
@@ -14681,145 +14478,6 @@ fn direct_type_to_type(ty: &DirectType) -> Type {
         DirectType::Union(union) => union.union_type.clone(),
         DirectType::Callable(callable) => callable.signature.clone(),
         DirectType::Opaque(ty) => ty.clone(),
-    }
-}
-
-fn collect_direct_runtime_type_substitutions(
-    pattern: &Type,
-    actual: &Type,
-    substitutions: &mut HashMap<String, Type>,
-) {
-    match pattern {
-        Type::Union(_) => {}
-        Type::TypeParam(name) => {
-            substitutions
-                .entry(name.clone())
-                .or_insert_with(|| actual.clone());
-        }
-        Type::Named(name, pattern_args) => {
-            let Type::Named(actual_name, actual_args) = actual else {
-                return;
-            };
-            if name != actual_name || pattern_args.len() != actual_args.len() {
-                return;
-            }
-            for (pattern_arg, actual_arg) in pattern_args.iter().zip(actual_args.iter()) {
-                collect_direct_runtime_type_substitutions(pattern_arg, actual_arg, substitutions);
-            }
-        }
-        Type::Tuple(pattern_elements) => {
-            let Type::Tuple(actual_elements) = actual else {
-                return;
-            };
-            if pattern_elements.len() != actual_elements.len() {
-                return;
-            }
-            for (pattern_element, actual_element) in
-                pattern_elements.iter().zip(actual_elements.iter())
-            {
-                collect_direct_runtime_type_substitutions(
-                    pattern_element,
-                    actual_element,
-                    substitutions,
-                );
-            }
-        }
-        Type::Function {
-            params: pattern_params,
-            return_type: pattern_return,
-        } => {
-            let Type::Function {
-                params: actual_params,
-                return_type: actual_return,
-            } = actual
-            else {
-                return;
-            };
-            if pattern_params.len() != actual_params.len() {
-                return;
-            }
-            for (pattern_param, actual_param) in pattern_params.iter().zip(actual_params.iter()) {
-                if pattern_param.passing != actual_param.passing {
-                    return;
-                }
-                collect_direct_runtime_type_substitutions(
-                    &pattern_param.ty,
-                    &actual_param.ty,
-                    substitutions,
-                );
-            }
-            collect_direct_runtime_type_substitutions(pattern_return, actual_return, substitutions);
-        }
-        Type::ReturnedView(view) => {
-            if let Type::ReturnedView(actual_view) = actual {
-                collect_direct_runtime_type_substitutions(
-                    &view.pointee,
-                    &actual_view.pointee,
-                    substitutions,
-                );
-            }
-        }
-        Type::Callable(pattern_callable) => {
-            let Type::Callable(actual_callable) = actual else {
-                return;
-            };
-            if pattern_callable.params.len() != actual_callable.params.len() {
-                return;
-            }
-            for (pattern_param, actual_param) in
-                pattern_callable.params.iter().zip(&actual_callable.params)
-            {
-                collect_direct_runtime_type_substitutions(
-                    &pattern_param.ty,
-                    &actual_param.ty,
-                    substitutions,
-                );
-            }
-            collect_direct_runtime_type_substitutions(
-                &pattern_callable.return_type,
-                &actual_callable.return_type,
-                substitutions,
-            );
-        }
-        Type::Closure {
-            params: pattern_params,
-            return_type: pattern_return,
-            captures: pattern_captures,
-            ..
-        } => {
-            let Type::Closure {
-                params: actual_params,
-                return_type: actual_return,
-                captures: actual_captures,
-                ..
-            } = actual
-            else {
-                return;
-            };
-            if pattern_params.len() != actual_params.len()
-                || pattern_captures.len() != actual_captures.len()
-            {
-                return;
-            }
-            for (pattern_param, actual_param) in pattern_params.iter().zip(actual_params.iter()) {
-                collect_direct_runtime_type_substitutions(
-                    &pattern_param.ty,
-                    &actual_param.ty,
-                    substitutions,
-                );
-            }
-            for (pattern_capture, actual_capture) in
-                pattern_captures.iter().zip(actual_captures.iter())
-            {
-                collect_direct_runtime_type_substitutions(
-                    &pattern_capture.ty,
-                    &actual_capture.ty,
-                    substitutions,
-                );
-            }
-            collect_direct_runtime_type_substitutions(pattern_return, actual_return, substitutions);
-        }
-        Type::Unit | Type::Module(_) => {}
     }
 }
 

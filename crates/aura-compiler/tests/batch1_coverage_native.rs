@@ -772,7 +772,12 @@ fn native_backend_rejects_malformed_task_starts_and_waits() {
     let mut encoded = encode(TASKS);
     let call = named_call_mut(function_mut(&mut encoded, "main"), "wait_all");
     call["args"].as_array_mut().unwrap().remove(0);
-    assert_native_rejects(encoded, "expected `wait_all()` to receive `tasks`");
+    // MIR binds the arguments by position, so the timeout alone binds as
+    // the form without a timeout.
+    assert_native_rejects(
+        encoded,
+        "`Function.WaitAllTimeout` in `main` does not match the types of its arguments",
+    );
 
     let mut encoded = encode(TASKS);
     let main = function_mut(&mut encoded, "main");
@@ -838,8 +843,8 @@ fn unresolvable_goto_labels_are_rejected_by_the_shared_validator() {
 #[test]
 fn native_backend_compiles_array_arithmetic_with_a_scalar_receiver() {
     // Source lowers `values * 2` to a binary rvalue; a forged member call with
-    // the scalar as the receiver reaches the backend's scalar-receiver Array
-    // kernel path, which must emit exactly like the array-receiver form.
+    // the scalar as the receiver resolves to the same binary rvalue, with
+    // the scalar on the left.
     let source = "def main():\n    values = Array[int64].from_list([1, 2, 3], [3])\n    doubled = values * 2\n    print(doubled.len())\n";
     let mut encoded = encode(source);
     let main = function_mut(&mut encoded, "main");

@@ -57,11 +57,11 @@ pub fn borrowed_receiver(
     place_type: impl Fn(&str) -> Option<Type>,
 ) -> Option<&Operand> {
     let (Instruction::Assign {
-        value: Rvalue::Call { callee, args },
+        value: Rvalue::Call { callee, args, .. },
         ..
     }
     | Instruction::WriteLoan {
-        value: Rvalue::Call { callee, args },
+        value: Rvalue::Call { callee, args, .. },
         ..
     }) = instruction
     else {
@@ -209,7 +209,7 @@ fn rvalue_roles<'a>(value: &'a Rvalue, roles: &mut Vec<(&'a Operand, OperandRole
                 roles.push((&arg.value, Borrow));
             }
         }
-        Rvalue::Call { callee, args } => call_roles(callee, args, roles),
+        Rvalue::Call { callee, args, .. } => call_roles(callee, args, roles),
         Rvalue::VecLiteral { elements, .. }
         | Rvalue::TupleLiteral { elements, .. }
         | Rvalue::SetLiteral { elements, .. } => {
@@ -261,7 +261,7 @@ fn call_roles<'a>(
                 roles.push((receiver, role));
             }
             for (position, arg) in args.iter().enumerate() {
-                roles.push((&arg.value, runtime_arg_role(*op, arg, position)));
+                roles.push((&arg.value, runtime_arg_role(*op, position)));
             }
             return;
         }
@@ -271,38 +271,24 @@ fn call_roles<'a>(
     }
 }
 
-/// The role of a runtime op's argument: the ownership of the parameter it
-/// binds by name, or by position when it has no name. An argument the op
-/// does not declare borrows, as a variadic `select` source does.
+/// The role of a runtime op's argument: the ownership of the parameter at
+/// its position, since MIR binds a resolved op's arguments in parameter
+/// order. An argument the op does not declare borrows, as a variadic
+/// `select` source does.
 ///
 /// An op's parameter table is costly to build, and every pass and check
 /// asks for it, so each thread keeps the answers it has found.
-fn runtime_arg_role(op: RuntimeOp, arg: &MirArg, position: usize) -> OperandRole {
-    type Names = HashMap<RuntimeOp, Box<[&'static str]>>;
+fn runtime_arg_role(op: RuntimeOp, position: usize) -> OperandRole {
     type Roles = HashMap<(RuntimeOp, usize), Option<OperandRole>>;
     thread_local! {
-        static NAMES: RefCell<Names> = RefCell::new(HashMap::new());
         static ROLES: RefCell<Roles> = RefCell::new(HashMap::new());
     }
-    let index = match &arg.name {
-        Some(name) => NAMES.with(|names| {
-            names
+    ROLES
+        .with(|roles| {
+            *roles
                 .borrow_mut()
-                .entry(op)
-                .or_insert_with(|| op.params().iter().map(|param| param.name).collect())
-                .iter()
-                .position(|param| param == name)
-        }),
-        None => Some(position),
-    };
-    index
-        .and_then(|index| {
-            ROLES.with(|roles| {
-                *roles
-                    .borrow_mut()
-                    .entry((op, index))
-                    .or_insert_with(|| op.arg_ownership(index))
-            })
+                .entry((op, position))
+                .or_insert_with(|| op.arg_ownership(position))
         })
         .unwrap_or(OperandRole::Borrow)
 }
@@ -510,7 +496,7 @@ fn push_rvalue_places<'a>(value: &'a Rvalue, accesses: &mut Vec<(&'a str, Access
         Rvalue::UnionTagTest { place, .. } => accesses.push((place, Access::Read)),
         Rvalue::UnionTakePayload { place, .. } => accesses.push((place, Access::Move)),
         Rvalue::TupleTakeElement { place, .. } => accesses.push((place, Access::TakePart)),
-        Rvalue::Call { callee, args } => {
+        Rvalue::Call { callee, args, .. } => {
             let receiver_place = match callee {
                 CallTarget::Member { receiver_place, .. }
                 | CallTarget::TraitMember { receiver_place, .. }
@@ -1715,7 +1701,7 @@ fn rvalue_operands_mut<'a>(value: &'a mut Rvalue, operands: &mut Vec<&'a mut Ope
             operands.push(function);
             operands.extend(args.iter_mut().map(|arg| &mut arg.value));
         }
-        Rvalue::Call { callee, args } => {
+        Rvalue::Call { callee, args, .. } => {
             match callee {
                 CallTarget::Name(_) | CallTarget::Extern(_) => {}
                 CallTarget::Value(operand)

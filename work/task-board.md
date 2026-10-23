@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-10-22
+Last updated: 2026-10-23
 
 ## Batch 7 step 8: semantics in MIR (in progress)
 
@@ -54,9 +54,13 @@ Last updated: 2026-10-22
   dominates `aura build` on this host. The checkpoint's Step 8 Results
   section has the numbers. Details are in
   `2026-10-22-batch-7-step-8g-measure.md`.
-- Next: 8h, recommended by 8g. It moves runtime op argument binding and
-  defaults, generic call type arguments, method resolution, and cleanup
-  callees into MIR, in two PRs. Then step 9.
+- In progress: 8h, recommended by 8g, in two PRs. PR 1 binds each runtime
+  op call's arguments in MIR, in parameter order with every default
+  filled in, and records each generic call's type arguments. It also
+  resolves a number method with an `Array` argument in MIR. Objects are
+  byte-identical, and the emitter shrinks from 14,942 to 14,600 lines.
+  Details are in `2026-10-23-batch-7-step-8h1-arguments.md`. PR 2 moves
+  method resolution and cleanup callees. Then step 9.
 
 ## Aura 0.6.0 preview release (complete)
 
