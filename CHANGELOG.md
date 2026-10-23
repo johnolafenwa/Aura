@@ -110,6 +110,13 @@ in this file.
   `from ` with builtin modules and sibling `.au` files, after `case Color.`
   with the enum's variants, and for a member name typed without the `.`
   trigger, as in `s.up` or `Array[int32].from_`.
+- The VS Code extension finds `aura` in `~/.local/bin`, `~/.cargo/bin`,
+  `/opt/homebrew/bin`, and `/usr/local/bin` when VS Code does not see it on
+  `PATH`, as when VS Code starts from the Dock. It adds an
+  `aura.compilerPath` setting and an **Aura: Restart Language Server**
+  command, and warns once when it cannot start the compiler or the compiler
+  speaks another editor interface version. It used to fall back silently to
+  keyword-only completion. Untitled Aura files get language features too.
 - A direct runtime helper that takes a boxed value, such as `append`,
   copies the value when another reference still holds the box. It used to
   empty the box under the other reference.
