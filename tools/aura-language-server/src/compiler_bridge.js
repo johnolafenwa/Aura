@@ -370,6 +370,10 @@ function compilerCompletionToLsp(item, kind) {
   if (item.documentation) {
     result.documentation = { kind: "markdown", value: item.documentation };
   }
+  if (item.kind === "parameter") {
+    // Keyword arguments of the call being written rank above other names.
+    result.sortText = `0${item.name}`;
+  }
   return result;
 }
 

@@ -72,7 +72,10 @@
       {
         "language": "aura",
         "scopeName": "source.aura",
-        "path": "./syntaxes/aura.tmLanguage.json"
+        "path": "./syntaxes/aura.tmLanguage.json",
+        "tokenTypes": {
+          "meta.embedded.expression.aura": "other"
+        }
       }
     ],
     "snippets": [

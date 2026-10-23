@@ -154,6 +154,28 @@ test("extension package includes the assertion-aware Aura grammar", () => {
   assert.match(packagedGrammar, /assert/);
 });
 
+test("f-string interpolations are code, so editor suggestions fire inside braces", async () => {
+  const extensionRoot = path.resolve(__dirname, "..");
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(extensionRoot, "package.json"), "utf8")
+  );
+  const grammarContribution = manifest.contributes.grammars.find(
+    (grammar) => grammar.language === "aura"
+  );
+  // VS Code turns quick suggestions off inside string tokens; the embedded
+  // expression must override the enclosing f-string's token type.
+  assert.deepEqual(grammarContribution.tokenTypes, {
+    "meta.embedded.expression.aura": "other"
+  });
+
+  const tokenized = await tokenizeAura('print(f"Limit: {limits}, name: {na}")\n');
+  for (const [name, occurrence] of [["limits", 0], ["na", 1]]) {
+    const scopes = scopesAt(tokenized, 0, name, occurrence);
+    assert.ok(scopes.includes("string.interpolated.double.aura"), name);
+    assert.ok(scopes.includes("meta.embedded.expression.aura"), name);
+  }
+});
+
 test("extension grammar and snippets cover Aura string forms", () => {
   const extensionRoot = path.resolve(__dirname, "..");
   const grammar = JSON.parse(
