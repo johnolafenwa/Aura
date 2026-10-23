@@ -1,0 +1,6 @@
+error[AU2002]: `sum(...)` expects a list, set, Range, or Array of numbers, found `list[str]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/collection_sum_requires_numbers.au:3:15
+  |
+3 |     print(sum(names))
+  |               ^
+  = help: `sum` reduces a collection of one numeric type; pass two or more numbers to compare values directly

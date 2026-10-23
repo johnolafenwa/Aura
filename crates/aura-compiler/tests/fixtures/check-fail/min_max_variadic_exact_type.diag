@@ -1,0 +1,5 @@
+error[AU2004]: `max` arguments must match, found `int64` and `float64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/min_max_variadic_exact_type.au:2:21
+  |
+2 |     print(max(1, 2, 3.5))
+  |                     ^

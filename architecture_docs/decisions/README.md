@@ -90,3 +90,4 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 62. [ADR-0062: Typed serialization, validation, and schemas](0062-typed-serialization-validation-and-schemas.md) — Accepted direction; compile-time opt-in and shared metadata; detailed design pending
 63. [ADR-0063: Everyday syntax and pattern ergonomics](0063-everyday-syntax-and-pattern-ergonomics.md) — Accepted roadmap direction; syntax/pattern/API details pending
 64. [ADR-0064: Native backend strategy and codegen boundary](0064-native-backend-strategy-and-codegen-boundary.md) — Accepted; pre-Batch-1 measurements, incremental thin boundary, and the Batch 7 decision: LLVM replaces Cranelift as the only native backend
+65. [ADR-0065: Collection reduction builtins](0065-collection-reduction-builtins.md) — Accepted; `sum`, `any`, `all`, and collection and variadic `min`/`max`

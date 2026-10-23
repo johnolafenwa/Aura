@@ -1266,8 +1266,11 @@ message evaluation, `AU4001`, cleanup, and matching behavior across backends.
 | `wait_any` | `wait_any(tasks: list[Task[T]], timeout: Duration = ...) -> WaitAny[T]` | Waits for the first task outcome. When `T` is non-repeatable, it consumes the list and abandons the rights of the tasks it does not choose. `wait_any([])` returns `TimedOut` immediately. |
 | `wait_all` | `wait_all(tasks: list[Task[T]], timeout: Duration = ...) -> WaitAll[T]` | Waits for all tasks, the first task error, the timeout, or cancellation. When `T` is non-repeatable, it consumes the list. |
 | `abs` | `abs(value: number) -> number` | Absolute value of an integer or a float. |
-| `min` | `min(left: number, right: number) -> number` | The smaller of two values of the same numeric type. |
-| `max` | `max(left: number, right: number) -> number` | The larger of two values of the same numeric type. |
+| `min` | `min(left: number, right: number, ...) -> number`; `min(values: list[T]\|set[T]\|Span[T]\|Range\|Array[T]) -> T` | The smallest of two or more values of one numeric type, or the smallest element of a collection. An empty list, set, span, or Range is `AU4001`. |
+| `max` | `max(left: number, right: number, ...) -> number`; `max(values: list[T]\|set[T]\|Span[T]\|Range\|Array[T]) -> T` | The largest of two or more values of one numeric type, or the largest element of a collection. An empty list, set, span, or Range is `AU4001`. |
+| `sum` | `sum(values: list[T]\|set[T]\|Span[T]\|Range\|Array[T]) -> T` | Adds the elements left to right with checked arithmetic. An empty collection gives zero. |
+| `any` | `any(values: list[bool]\|set[bool]\|Span[bool]) -> bool` | Whether some element is `true`. Stops at the first `true`. |
+| `all` | `all(values: list[bool]\|set[bool]\|Span[bool]) -> bool` | Whether every element is `true`. Stops at the first `false`. |
 | `sqrt` | `sqrt(value: float32|float64) -> float32|float64` | Square root. |
 | `round` | `round(value: T) -> T` for integers; `round(value: float32\|float64) -> int64` | Returns an integer unchanged. Rounds a float to the nearest integer, with ties to even. |
 | `divmod` | `divmod(left: T, right: T) -> (T, T)` for one exact integer or float type | Returns the floor quotient and the remainder. The remainder takes the sign of the divisor. |
@@ -4241,6 +4244,44 @@ collections:
 Nested clauses run in outer-major order, and filters run from left to right. A
 dictionary comprehension evaluates its key before its value. The output owns
 each element, key, and value it produces.
+
+## Reductions
+
+`sum`, `min`, `max`, `any`, and `all` reduce a collection to one value. They
+take a `list[T]`, `set[T]`, `Span[T]`, or `Range`. `sum`, `min`, and `max`
+also take an `Array[T]`.
+
+```aura
+def main():
+    scores: list[int32] = [72, 95, 88]
+    print(sum(scores))                      # 255
+    print(min(scores))                      # 72
+    print(max(scores))                      # 95
+    print(sum(range(1, 11)))                # 55
+    print(all([score >= 70 for score in scores]))  # true
+    print(any([score > 90 for score in scores]))   # true
+```
+
+| Call | Element type | Result | Empty collection |
+| --- | --- | --- | --- |
+| `sum(values)` | numeric `T` | `T` | zero |
+| `min(values)`, `max(values)` | numeric `T` | `T` | stops with `AU4001` |
+| `any(values)` | `bool` | `bool` | `false` |
+| `all(values)` | `bool` | `bool` | `true` |
+
+A `Range` has `int64` elements. The collection is read through shared access
+and stays usable.
+
+`sum` adds from left to right with the checked `+` of `T`, so an overflow stops
+the program with `AU4002`. `min` and `max` compare the same way as
+`min(left, right)` and `max(left, right)`, and the first of equal values wins.
+`any` stops at the first `true` element, and `all` stops at the first `false`
+one. An `Array` argument uses the Array's own `sum()`, `min()`, or `max()`; see
+[Numeric Arrays](/manual/numeric-arrays).
+
+`min` and `max` also take two or more numbers of one exact type, as in
+`min(3, 1, 2)`. A single number is an error: pass a collection or at least two
+values.
 
 ## list[T]
 
@@ -15109,7 +15150,7 @@ An identifier starts with an ASCII letter or `_`. The rest may be ASCII letters,
 
 `copy`, `self`, `None`, and `_` are contextual identifiers. Their special meaning depends on where they appear in the grammar.
 
-User items cannot redefine builtin type names or builtin top-level function names. `Self` is reserved in trait and implementation type contexts. It cannot be declared as a type parameter.
+User items cannot redefine builtin type names or builtin top-level function names. A local binding can still use a builtin function name. Inside its scope, calling that name calls the local value. `Self` is reserved in trait and implementation type contexts. It cannot be declared as a type parameter.
 
 ## Module Scope
 
@@ -27905,6 +27946,16 @@ print(max(4, 12))     # 12
 print(sqrt(81.0))     # 9.0
 ```
 
+`min` and `max` take any number of arguments of one type. With a single list,
+set, or range they reduce it, and `sum` adds one up:
+
+```aura check-pass
+prices: list[float64] = [4.5, 2.0, 3.25]
+print(min(7, 3, 5))   # 3
+print(sum(prices))    # 9.75
+print(max(prices))    # 4.5
+```
+
 `float64` also has a `.sqrt()` method:
 
 ```aura check-pass
@@ -30332,6 +30383,7 @@ can use the result in three ways:
 | Output and sequences | `print`, `range`, `len`, `str` |
 | Tasks and time | `cancelled`, `yield_now`, `sleep`, `select`, `wait_any`, `wait_all` |
 | Math | `abs`, `min`, `max`, `sqrt`, `round`, `divmod` |
+| Reductions | `sum`, `min`, `max`, `any`, `all` over a list, set, span, or range |
 | Parsing | `parse_int32`, `parse_int64`, `parse_float64` |
 
 These names are reserved. A module-level function that redefines one, such
