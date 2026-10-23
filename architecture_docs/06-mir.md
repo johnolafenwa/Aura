@@ -243,8 +243,7 @@ builtins, `MirClass.copy`, `MirEnum.copy`, and union plans decide that.
   returns from.
 - A `try` lists the roots that hold a value there, except `mut` parameters.
 - Releases at one point come out in name order.
-- Nothing goes between `IndexInRange` and the access it covers, or between
-  a call and the returned loan that follows it.
+- Nothing goes between a call and the returned loan that follows it.
 - A block that ends in `Unreachable` or `AssertFail` releases nothing. The
   abort reclaims every value.
 - A match chain whose arms cover every variant of an enum has no
@@ -423,14 +422,77 @@ Each instruction's layout temporaries live in `LayoutScratch`: boxed
 copies, fresh copies from projections, and values a consumer has not
 taken yet. The end of the instruction releases what is left, and debug
 builds check that the set is empty at each instruction boundary.
-Borrowed-element fusion, proven-access adjacency, and the tag elision in
-`no_call_since` work as before. Fusion reads an element of a local list
-where it lies, so it moves nothing and needs no lend.
+Borrowed-element fusion and the tag elision in `no_call_since` work as
+before. Fusion reads an element of a local list where it lies, so it moves
+nothing and needs no lend.
 
 Debug builds of the direct runtime refuse a release of a value that the
 task's ledger does not hold, so every debug run of a native program checks
 for over-releases. The ledger already checks that a completed task holds
 no owned value.
+
+## Checks in MIR
+
+MIR states every check a backend makes on a numeric operation or an element
+access. `mir::checks` owns the rules.
+
+### Arithmetic Traps
+
+Each `Rvalue::Binary` and `Rvalue::Unary` names its `trap`. The operator and
+the operand types decide it. An integer literal takes the type of the target
+or the other operand, as each backend loads it.
+
+| Trap | Check | Operations |
+| --- | --- | --- |
+| `None` | none | comparisons, `and`, `or`, `not`, float `+`, `-`, `*`, and negation |
+| `Overflow` | the result fits its type | `int32`, `int64`, and `uint64` `+`, `-`, `*`, and negation |
+| `DivisionByZero` | the divisor is not zero | float `/`, integer `%`, and `uint64` `//` |
+| `DivisionByZeroOrOverflow` | the divisor, then the quotient | `int32` and `int64` `//` |
+| `Runtime` | a runtime helper computes and checks | `**`, bitwise operators and bitwise not, shifts, float `//` and `%`, and any operand that is not `int32`, `int64`, `uint64`, `float32`, `float64`, or `bool` |
+
+A backend emits the check the trap names. The native emitter keeps
+`int32` values in 64-bit words, so it checks the range of every `int32`
+result and every store to an `int32` slot. That is how it raises an
+`int32` overflow. A `Cast` names no trap: a conversion that can fail calls
+a runtime helper, which reports a value that does not fit.
+
+### Proven Accesses
+
+An `IndexInRange { list, index }` fact states `0 <= index < list.len()`. A
+`for` loop over a whole list or a span emits it after its bound check. The
+accesses it covers say so themselves:
+
+- an element read `list.__index(index, ..)` uses `ListOp::IndexUnchecked`
+  or `ListOp::IndexScalarUnchecked` instead of `Index` or `IndexScalar`;
+- the advance `index = index + 1` has trap `None`;
+- an element loan of `list[index]` with no projection has
+  `checked: false`.
+
+```text
+IndexInRange { list: "xs", index: "%t3" }
+%t1 = Runtime List(IndexScalarUnchecked(Int64)) xs(%t3, 3, 5)
+%t3 = Binary Add %t3 1 trap None
+```
+
+A fact stays in force across retains, releases, lends, other facts, and the
+reads it covers. Any other instruction ends it. A release or a lend that
+names the list or the index ends what it covers of that place: a read needs
+the list unchanged since the fact, and an advance needs only the index. So
+the ownership pass may put a release between a fact and its read.
+
+`resolve_checks` runs just before the ownership pass: in `lower`, and at
+the native boundary for an implicit module. It names each trap and marks
+what each fact covers. `lower_implicit` skips it. The interpreter checks
+every access itself, so `aura run` pays nothing for the pass. The native boundary
+runs `mark_covered_accesses` after it resolves runtime operations, so a
+hand-built read spelled as a member call gets the same mark. A mark only
+drops a check that a fact proves.
+
+`validate_checks` runs at the native boundary, and on an explicit module at
+the interpreter's. It refuses a trap the table does not give, except `None`
+on an advance a fact covers. It refuses an unchecked read or loan that no
+fact covers. The interpreter reads an unchecked read as a checked one and
+checks each fact.
 
 ## Why both backends benefit from MIR
 

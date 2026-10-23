@@ -18,7 +18,7 @@ use crate::call::BuiltinMember;
 use crate::diag::Span;
 use crate::ffi::FfiType;
 use crate::mir::{
-    BasicBlock, CallTarget, CleanupAction, Instruction, MemberCallParts, MirArg, MirClass, MirEnum,
+    ArithmeticTrap, BasicBlock, CallTarget, CleanupAction, Instruction, MirArg, MirClass, MirEnum,
     MirExternCall, MirFormatPart, MirFunction, MirMapEntry, MirMethod, MirModule, MirReceiverKind,
     MirTraitImpl, Operand, Rvalue, Terminator, NATIVE_LOOP_SAFEPOINT_INTERVAL,
 };
@@ -53,11 +53,13 @@ pub fn emit_host_object_with_metadata(
     // Hand-built or older MIR may still spell resolved operations as member
     // calls; the pass is idempotent on lowered MIR.
     crate::mir::resolve_runtime_ops(&mut module);
+    crate::mir::checks::mark_covered_accesses(&mut module);
     // The emitter carries out the ownership the module states. The
     // boundary gives an implicit module the ownership pass first.
     crate::mir::validate_at_boundary(&mut module).map_err(|error| match error {
         crate::mir::BoundaryError::LoanFlow(error)
-        | crate::mir::BoundaryError::Ownership(error) => error,
+        | crate::mir::BoundaryError::Ownership(error)
+        | crate::mir::BoundaryError::Checks(error) => error,
     })?;
     let context = NativeCodegen::with_validated_loans(&module, program_path, program_source)?;
     context.emit()
@@ -227,70 +229,6 @@ enum DirectType {
 
 /// The words after a callable's descriptor.
 const CALLABLE_ENVIRONMENT_WORDS: usize = 3;
-
-/// What an `IndexInRange { list, index }` fact proves about the
-/// instruction after it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ProvenAccess {
-    None,
-    /// `list.__index(index, ..)`: the element exists, so the read needs no
-    /// bounds check.
-    Read,
-    /// `index = index + 1`: `index` is below a list length, so the sum
-    /// cannot overflow.
-    Advance,
-    /// An element loan of `list[index]`: the element exists, so the loan
-    /// begins without a bounds check.
-    Lend,
-}
-
-impl ProvenAccess {
-    fn of(instruction: &Instruction, list: &str, index: &str) -> Self {
-        if let Instruction::BeginElementLoan {
-            source,
-            selector: Operand::Place(selected),
-            projection,
-            ..
-        } = instruction
-        {
-            return if source == list && selected == index && projection.is_empty() {
-                Self::Lend
-            } else {
-                Self::None
-            };
-        }
-        let Instruction::Assign { target, value } = instruction else {
-            return Self::None;
-        };
-        match value {
-            Rvalue::Call { callee, args }
-                if matches!(
-                    callee.member_parts(),
-                    Some(MemberCallParts {
-                        object: Operand::Place(object),
-                        field: "__index",
-                        trait_name: None,
-                        ..
-                    }) if object == list
-                ) && target != list
-                    && target != index
-                    && matches!(
-                        args.first(),
-                        Some(MirArg { value: Operand::Place(place), .. }) if place == index
-                    ) =>
-            {
-                Self::Read
-            }
-            Rvalue::Binary {
-                op: BinaryOp::Add,
-                left: Operand::Place(left),
-                right: Operand::Int(1),
-                ..
-            } if target == index && left == index => Self::Advance,
-            _ => Self::None,
-        }
-    }
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DirectCallableType {
@@ -1358,7 +1296,6 @@ impl<'a> NativeCodegen<'a> {
             callable_retains: HashMap::new(),
             retained_unions: HashSet::new(),
             last_runtime_type_tag: None,
-            proven_access: ProvenAccess::None,
             view_places: HashMap::new(),
             view_element_keys: HashMap::new(),
             view_selector_vars,
@@ -2616,9 +2553,6 @@ struct FunctionCompiler<'a> {
     /// The latest `tag_value_type` call: its instruction, value, and encoded
     /// type, so an identical tag that no other call follows is not repeated.
     last_runtime_type_tag: Option<(cranelift_codegen::ir::Inst, Value, String)>,
-    /// What an `IndexInRange` fact proves about the instruction being
-    /// compiled.
-    proven_access: ProvenAccess,
     view_places: HashMap<String, DirectViewPlace>,
     view_selector_vars: HashMap<String, Variable>,
     /// Owned dictionary keys held by entry loans, released at `EndLoan`.
@@ -3284,31 +3218,13 @@ impl<'a> FunctionCompiler<'a> {
             block.label
         );
 
-        let mut in_range: Option<(&str, &str)> = None;
         for (instruction_index, instruction) in block.instructions.iter().enumerate() {
-            if let Instruction::IndexInRange { list, index } = instruction {
-                in_range = Some((list, index));
+            // A fact emits nothing. The accesses it covers say so, and a
+            // retain before it stays for the read that follows.
+            if matches!(instruction, Instruction::IndexInRange { .. }) {
                 continue;
             }
-            // A lend's moves keep the fact for the read and the advance
-            // around them.
-            if matches!(
-                instruction,
-                Instruction::Lend { .. } | Instruction::EndLend { .. }
-            ) {
-                self.compile_instruction(&block.label, instruction_index, instruction)?;
-                continue;
-            }
-            self.proven_access = in_range.map_or(ProvenAccess::None, |(list, index)| {
-                ProvenAccess::of(instruction, list, index)
-            });
-            // The fact covers the element read and then the one advance.
-            if self.proven_access != ProvenAccess::Read {
-                in_range = None;
-            }
-            let compiled = self.compile_instruction(&block.label, instruction_index, instruction);
-            self.proven_access = ProvenAccess::None;
-            compiled?;
+            self.compile_instruction(&block.label, instruction_index, instruction)?;
         }
         // A retain before the terminator pays for the value a `Return`
         // hands back.
@@ -3515,13 +3431,12 @@ impl<'a> FunctionCompiler<'a> {
         instruction: &Instruction,
     ) -> std::result::Result<(), String> {
         match instruction {
-            // `compile_block` reads the fact for the instructions after it.
-            Instruction::IndexInRange { .. } => {}
-            // A retain pays for the consumer that follows. The consumer adds
-            // the reference by layout when it hands the value on, so a
-            // consumer that only borrows, such as a call dispatched on a
-            // boxed generic receiver, adds none.
-            Instruction::Retain { .. } => {}
+            // A fact emits nothing: the accesses it covers say so. A retain
+            // pays for the consumer that follows. The consumer adds the
+            // reference by layout when it hands the value on, so a consumer
+            // that only borrows, such as a call dispatched on a boxed
+            // generic receiver, adds none.
+            Instruction::IndexInRange { .. } | Instruction::Retain { .. } => {}
             Instruction::Release { place } => self.release_root(place)?,
             Instruction::Lend {
                 place,
@@ -3574,9 +3489,12 @@ impl<'a> FunctionCompiler<'a> {
                 selector,
                 projection,
                 span,
+                checked,
                 ..
+            } => {
+                self.begin_element_loan(loan, source, selector, projection, *span, *checked)?;
             }
-            | Instruction::ReborrowElement {
+            Instruction::ReborrowElement {
                 loan,
                 parent: source,
                 selector,
@@ -3584,7 +3502,7 @@ impl<'a> FunctionCompiler<'a> {
                 span,
                 ..
             } => {
-                self.begin_element_loan(loan, source, selector, projection, *span)?;
+                self.begin_element_loan(loan, source, selector, projection, *span, true)?;
             }
             Instruction::BeginReturnedLoan {
                 loan,
@@ -4198,7 +4116,12 @@ impl<'a> FunctionCompiler<'a> {
                 mutable: _,
             } => self.compile_closure(function, signature, captures, *consuming),
             Rvalue::FormatString { parts } => self.compile_format_string(parts),
-            Rvalue::Unary { op, value, span } => {
+            Rvalue::Unary {
+                op,
+                value,
+                span,
+                trap,
+            } => {
                 let integer_hint = target.scalar_kind().filter(|kind| kind.is_integer());
                 if matches!(op, UnaryOp::Neg)
                     && matches!(integer_hint, Some(ScalarKind::Int64))
@@ -4210,7 +4133,7 @@ impl<'a> FunctionCompiler<'a> {
                     });
                 }
                 let value = self.load_operand_with_integer_hint(value, integer_hint)?;
-                self.compile_unary(*op, value, Some(*span))
+                self.compile_unary(*op, value, Some(*span), *trap)
             }
             Rvalue::Cast { value, ty, span } => {
                 let cast_target = ensure_direct_type(ty, &self.classes, "cast target")?;
@@ -4222,6 +4145,7 @@ impl<'a> FunctionCompiler<'a> {
                 left,
                 right,
                 span,
+                trap,
             } => {
                 let target_integer_hint = target.scalar_kind().filter(|kind| kind.is_integer());
                 let left_integer_hint = target_integer_hint
@@ -4252,7 +4176,7 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 let left = self.load_operand_with_integer_hint(left, left_integer_hint)?;
                 let right = self.load_operand_with_integer_hint(right, right_integer_hint)?;
-                self.compile_binary(*op, left, right, Some(*span))
+                self.compile_binary(*op, left, right, Some(*span), *trap)
             }
             Rvalue::Call { callee, args } => self.compile_call(callee, args, target),
             Rvalue::VecLiteral {
@@ -4623,11 +4547,15 @@ impl<'a> FunctionCompiler<'a> {
         Ok(set)
     }
 
+    /// Lowers `op value` with the check `trap` names. A boxed operand goes
+    /// to the runtime helper, which checks it. An `int32` value is checked
+    /// where it is stored, since it lives in a 64-bit word.
     fn compile_unary(
         &mut self,
         op: UnaryOp,
         value: ValueRef,
         span: Option<Span>,
+        trap: ArithmeticTrap,
     ) -> std::result::Result<ValueRef, String> {
         if matches!(value.ty, DirectType::Opaque(_)) || op == UnaryOp::BitNot {
             let target_ty = value.ty.clone();
@@ -4662,11 +4590,13 @@ impl<'a> FunctionCompiler<'a> {
                 WideIntegerKind::Int64,
                 value.values[0],
                 span,
+                trap,
             ),
             (UnaryOp::Neg, Some(ScalarKind::Uint64)) => self.compile_wide_integer_negation(
                 WideIntegerKind::Uint64,
                 value.values[0],
                 span,
+                trap,
             ),
             (UnaryOp::Neg, Some(kind)) if kind.is_float() => Ok(ValueRef {
                 values: vec![self.builder.ins().fneg(value.values[0])],
@@ -4692,25 +4622,53 @@ impl<'a> FunctionCompiler<'a> {
         kind: WideIntegerKind,
         value: Value,
         span: Option<Span>,
+        trap: ArithmeticTrap,
     ) -> std::result::Result<ValueRef, String> {
         let zero = self.builder.ins().iconst(types::I64, 0);
-        let (result, overflow) = if kind.is_signed() {
-            self.builder.ins().ssub_overflow(zero, value)
-        } else {
-            self.builder.ins().usub_overflow(zero, value)
-        };
-        self.emit_integer_overflow_failure_branch(
-            overflow,
+        let result = self.compile_wide_integer_overflowing(
             kind,
             WideOverflowOp::Sub,
             zero,
             value,
             span,
+            trap,
         )?;
         Ok(ValueRef {
             values: vec![result],
             ty: DirectType::Scalar(kind.scalar_kind()),
         })
+    }
+
+    /// `left op right` for `+`, `-`, or `*` on a 64-bit integer, with the
+    /// overflow check when `trap` names one.
+    fn compile_wide_integer_overflowing(
+        &mut self,
+        kind: WideIntegerKind,
+        op: WideOverflowOp,
+        left: Value,
+        right: Value,
+        span: Option<Span>,
+        trap: ArithmeticTrap,
+    ) -> std::result::Result<Value, String> {
+        let ins = self.builder.ins();
+        if !trap.checks_overflow() {
+            return Ok(match op {
+                WideOverflowOp::Add => ins.iadd(left, right),
+                WideOverflowOp::Sub => ins.isub(left, right),
+                // `Div` names only a floor division's failure.
+                WideOverflowOp::Mul | WideOverflowOp::Div => ins.imul(left, right),
+            });
+        }
+        let (result, overflow) = match (op, kind.is_signed()) {
+            (WideOverflowOp::Add, true) => ins.sadd_overflow(left, right),
+            (WideOverflowOp::Add, false) => ins.uadd_overflow(left, right),
+            (WideOverflowOp::Sub, true) => ins.ssub_overflow(left, right),
+            (WideOverflowOp::Sub, false) => ins.usub_overflow(left, right),
+            (WideOverflowOp::Mul | WideOverflowOp::Div, true) => ins.smul_overflow(left, right),
+            (WideOverflowOp::Mul | WideOverflowOp::Div, false) => ins.umul_overflow(left, right),
+        };
+        self.emit_integer_overflow_failure_branch(overflow, kind, op, left, right, span)?;
+        Ok(result)
     }
 
     fn compile_cast(
@@ -4875,13 +4833,19 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 let other = codegen.union_member_from_words(&union, index, &right_words)?;
                 if matches!(member.ty, DirectType::Scalar(_)) {
-                    return codegen.compile_binary(BinaryOp::Eq, member, other, span);
+                    return codegen.compile_binary(
+                        BinaryOp::Eq,
+                        member,
+                        other,
+                        span,
+                        ArithmeticTrap::None,
+                    );
                 }
                 // A plain-class member compares under the runtime's shared
                 // structural rule, exactly as the interpreter compares it.
                 let member = codegen.ensure_opaque(member)?;
                 let other = codegen.ensure_opaque(other)?;
-                codegen.compile_binary(BinaryOp::Eq, member, other, span)
+                codegen.compile_binary(BinaryOp::Eq, member, other, span, ArithmeticTrap::None)
             })?;
         self.builder
             .ins()
@@ -4989,7 +4953,10 @@ impl<'a> FunctionCompiler<'a> {
             } else {
                 (loaded, literal_value)
             };
-            return self.compile_binary(op, left, right, Some(span)).map(Some);
+            // A comparison makes no check.
+            return self
+                .compile_binary(op, left, right, Some(span), ArithmeticTrap::None)
+                .map(Some);
         }
         let (literal_ptr, literal_len) = self.string_constant(literal.as_bytes())?;
         let opcode = self
@@ -5016,12 +4983,16 @@ impl<'a> FunctionCompiler<'a> {
         }))
     }
 
+    /// Lowers `left op right` with the check `trap` names. A boxed operand,
+    /// a power, a bitwise operator, and a shift go to a runtime helper,
+    /// which checks them.
     fn compile_binary(
         &mut self,
         op: BinaryOp,
         left: ValueRef,
         right: ValueRef,
         span: Option<Span>,
+        trap: ArithmeticTrap,
     ) -> std::result::Result<ValueRef, String> {
         if let (DirectType::Union(left_union), DirectType::Union(right_union)) =
             (&left.ty, &right.ty)
@@ -5037,7 +5008,7 @@ impl<'a> FunctionCompiler<'a> {
         if matches!(left.ty, DirectType::Union(_)) || matches!(right.ty, DirectType::Union(_)) {
             let left = self.ensure_opaque(left)?;
             let right = self.ensure_opaque(right)?;
-            return self.compile_binary(op, left, right, span);
+            return self.compile_binary(op, left, right, span, trap);
         }
         if matches!(
             op,
@@ -5166,7 +5137,7 @@ impl<'a> FunctionCompiler<'a> {
         }
         match (left.ty.scalar_kind(), right.ty.scalar_kind()) {
             (Some(ScalarKind::Int32), Some(ScalarKind::Int32)) => {
-                self.compile_int32_binary(op, left.values[0], right.values[0], span)
+                self.compile_int32_binary(op, left.values[0], right.values[0], span, trap)
             }
             (Some(ScalarKind::Int64), Some(ScalarKind::Int64)) => self
                 .compile_wide_integer_binary(
@@ -5175,6 +5146,7 @@ impl<'a> FunctionCompiler<'a> {
                     left.values[0],
                     right.values[0],
                     span,
+                    trap,
                 ),
             (Some(ScalarKind::Uint64), Some(ScalarKind::Uint64)) => self
                 .compile_wide_integer_binary(
@@ -5183,9 +5155,10 @@ impl<'a> FunctionCompiler<'a> {
                     left.values[0],
                     right.values[0],
                     span,
+                    trap,
                 ),
             (Some(lhs), Some(rhs)) if lhs.is_float() && rhs.is_float() => {
-                self.compile_float_binary(op, left.values[0], right.values[0], lhs, span)
+                self.compile_float_binary(op, left.values[0], right.values[0], lhs, span, trap)
             }
             (Some(ScalarKind::Bool), Some(ScalarKind::Bool)) => {
                 self.compile_bool_binary(op, left.values[0], right.values[0])
@@ -5202,12 +5175,16 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
+    /// `int32` arithmetic. Every `int32` result is range-checked, since the
+    /// value lives in a 64-bit word: that check is how `trap`'s overflow
+    /// is raised. The divisor is checked when `trap` names it.
     fn compile_int32_binary(
         &mut self,
         op: BinaryOp,
         left: Value,
         right: Value,
         span: Option<Span>,
+        trap: ArithmeticTrap,
     ) -> std::result::Result<ValueRef, String> {
         let ty = DirectType::Scalar(ScalarKind::Int32);
         let value = match op {
@@ -5224,14 +5201,14 @@ impl<'a> FunctionCompiler<'a> {
                 ty,
             },
             BinaryOp::FloorDiv => {
-                self.emit_int_division_guard(right, span)?;
+                self.emit_int_division_guard_for(trap, right, span)?;
                 ValueRef {
                     values: vec![self.compile_signed_floor_divmod(left, right, true)],
                     ty,
                 }
             }
             BinaryOp::Mod => {
-                self.emit_int_division_guard(right, span)?;
+                self.emit_int_division_guard_for(trap, right, span)?;
                 ValueRef {
                     values: vec![self.compile_signed_floor_divmod(left, right, false)],
                     ty,
@@ -5293,6 +5270,7 @@ impl<'a> FunctionCompiler<'a> {
         left: Value,
         right: Value,
         span: Option<Span>,
+        trap: ArithmeticTrap,
     ) -> std::result::Result<ValueRef, String> {
         let ty = DirectType::Scalar(kind.scalar_kind());
         let arithmetic = |value| ValueRef {
@@ -5300,82 +5278,47 @@ impl<'a> FunctionCompiler<'a> {
             ty: ty.clone(),
         };
         let value = match op {
-            // An index below a list length advances without overflow.
-            BinaryOp::Add if self.proven_access == ProvenAccess::Advance => {
-                arithmetic(self.builder.ins().iadd(left, right))
-            }
-            BinaryOp::Add => {
-                let (result, overflow) = if kind.is_signed() {
-                    self.builder.ins().sadd_overflow(left, right)
-                } else {
-                    self.builder.ins().uadd_overflow(left, right)
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul => {
+                let overflow_op = match op {
+                    BinaryOp::Add => WideOverflowOp::Add,
+                    BinaryOp::Sub => WideOverflowOp::Sub,
+                    _ => WideOverflowOp::Mul,
                 };
-                self.emit_integer_overflow_failure_branch(
-                    overflow,
+                arithmetic(self.compile_wide_integer_overflowing(
                     kind,
-                    WideOverflowOp::Add,
+                    overflow_op,
                     left,
                     right,
                     span,
-                )?;
-                arithmetic(result)
-            }
-            BinaryOp::Sub => {
-                let (result, overflow) = if kind.is_signed() {
-                    self.builder.ins().ssub_overflow(left, right)
-                } else {
-                    self.builder.ins().usub_overflow(left, right)
-                };
-                self.emit_integer_overflow_failure_branch(
-                    overflow,
-                    kind,
-                    WideOverflowOp::Sub,
-                    left,
-                    right,
-                    span,
-                )?;
-                arithmetic(result)
-            }
-            BinaryOp::Mul => {
-                let (result, overflow) = if kind.is_signed() {
-                    self.builder.ins().smul_overflow(left, right)
-                } else {
-                    self.builder.ins().umul_overflow(left, right)
-                };
-                self.emit_integer_overflow_failure_branch(
-                    overflow,
-                    kind,
-                    WideOverflowOp::Mul,
-                    left,
-                    right,
-                    span,
-                )?;
-                arithmetic(result)
+                    trap,
+                )?)
             }
             BinaryOp::FloorDiv => {
-                self.emit_int_division_guard(right, span)?;
+                self.emit_int_division_guard_for(trap, right, span)?;
                 if kind.is_signed() {
-                    let min = self.builder.ins().iconst(types::I64, i64::MIN);
-                    let negative_one = self.builder.ins().iconst(types::I64, -1);
-                    let is_min = self.builder.ins().icmp(IntCC::Equal, left, min);
-                    let is_negative_one =
-                        self.builder.ins().icmp(IntCC::Equal, right, negative_one);
-                    let overflow = self.builder.ins().band(is_min, is_negative_one);
-                    self.emit_integer_overflow_failure_branch(
-                        overflow,
-                        kind,
-                        WideOverflowOp::Div,
-                        left,
-                        right,
-                        span,
-                    )?;
+                    if trap.checks_overflow() {
+                        let min = self.builder.ins().iconst(types::I64, i64::MIN);
+                        let negative_one = self.builder.ins().iconst(types::I64, -1);
+                        let is_min = self.builder.ins().icmp(IntCC::Equal, left, min);
+                        let is_negative_one =
+                            self.builder.ins().icmp(IntCC::Equal, right, negative_one);
+                        let overflow = self.builder.ins().band(is_min, is_negative_one);
+                        self.emit_integer_overflow_failure_branch(
+                            overflow,
+                            kind,
+                            WideOverflowOp::Div,
+                            left,
+                            right,
+                            span,
+                        )?;
+                    }
                     arithmetic(self.compile_signed_floor_divmod(left, right, true))
                 } else {
                     arithmetic(self.builder.ins().udiv(left, right))
                 }
             }
             BinaryOp::Mod => {
-                self.emit_int_division_guard(right, span)?;
+                self.emit_int_division_guard_for(trap, right, span)?;
                 if kind.is_signed() {
                     let min = self.builder.ins().iconst(types::I64, i64::MIN);
                     let negative_one = self.builder.ins().iconst(types::I64, -1);
@@ -5455,6 +5398,7 @@ impl<'a> FunctionCompiler<'a> {
         right: Value,
         kind: ScalarKind,
         span: Option<Span>,
+        trap: ArithmeticTrap,
     ) -> std::result::Result<ValueRef, String> {
         let ty = DirectType::Scalar(kind);
         match op {
@@ -5471,7 +5415,9 @@ impl<'a> FunctionCompiler<'a> {
                 ty,
             }),
             BinaryOp::Div => {
-                self.emit_float_division_guard(right, span)?;
+                if trap.checks_divisor() {
+                    self.emit_float_division_guard(right, span)?;
+                }
                 Ok(ValueRef {
                     values: vec![self.builder.ins().fdiv(left, right)],
                     ty,
@@ -5565,11 +5511,16 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn emit_int_division_guard(
+    /// The zero-divisor check of an integer division, when `trap` names it.
+    fn emit_int_division_guard_for(
         &mut self,
+        trap: ArithmeticTrap,
         divisor: Value,
         span: Option<Span>,
     ) -> std::result::Result<(), String> {
+        if !trap.checks_divisor() {
+            return Ok(());
+        }
         let zero = self.builder.ins().iconst(types::I64, 0);
         let is_zero = self.builder.ins().icmp(IntCC::Equal, divisor, zero);
         self.emit_division_failure_branch(is_zero, span)
@@ -7543,7 +7494,8 @@ impl<'a> FunctionCompiler<'a> {
     /// is evaluated once into its own variable (a non-Copy key is owned by
     /// the loan and released with it), the collection is probed so a
     /// missing position or key traps now, and every alternative of the
-    /// collection's view place gains the selection.
+    /// collection's view place gains the selection. An unchecked loan of a
+    /// local list element skips the probe.
     fn begin_element_loan(
         &mut self,
         loan: &str,
@@ -7551,6 +7503,7 @@ impl<'a> FunctionCompiler<'a> {
         selector: &Operand,
         projection: &str,
         span: Span,
+        checked: bool,
     ) -> std::result::Result<(), String> {
         let collection_ty = direct_type_to_type(&self.type_of_place(source)?);
         let (kind, selector_ty) = match &collection_ty {
@@ -7601,7 +7554,7 @@ impl<'a> FunctionCompiler<'a> {
         // unconditional selection is probed in place; otherwise probe the
         // selected slot through the loan and drop the copy.
         if let Some(selection) = self.borrowed_list_element(&Operand::Place(loan.to_string())) {
-            if self.proven_access == ProvenAccess::Lend {
+            if !checked {
                 return Ok(());
             }
             let (list, index) = self.load_borrowed_list_element(&selection)?;
@@ -11584,12 +11537,15 @@ impl<'a> FunctionCompiler<'a> {
                 self.store_place(receiver_place, object.clone())?;
                 Ok(self.owned_opaque_result(results, optional_type(element_ty)))
             }
-            ListOp::Index | ListOp::IndexScalar(_) => {
+            ListOp::Index
+            | ListOp::IndexScalar(_)
+            | ListOp::IndexUnchecked
+            | ListOp::IndexScalarUnchecked(_) => {
                 let index = self.load_word(args[0], int64, false)?;
                 let line = self.load_word(args[1], int32, false)?;
                 let column = self.load_word(args[2], int32, false)?;
-                let proven = self.proven_access == ProvenAccess::Read;
-                if let ListOp::IndexScalar(kind) = op {
+                let proven = op.is_unchecked();
+                if let ListOp::IndexScalar(kind) | ListOp::IndexScalarUnchecked(kind) = op {
                     // A scalar element comes back as raw bits, with no box.
                     let bits = self.emit_scalar_list_read(
                         list,

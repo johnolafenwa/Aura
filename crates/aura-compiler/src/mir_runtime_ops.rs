@@ -378,7 +378,9 @@ pub(super) fn validate_runtime_ops(
                         function.name
                     ));
                 }
-                if specialized_member_op(op.unspecialized(), &receiver_type, args) != op {
+                // An unchecked read is the checked read's form; the
+                // checks validator decides whether a fact covers it.
+                if specialized_member_op(op.unspecialized(), &receiver_type, args) != op.checked() {
                     return Err(format!(
                         "invalid MIR runtime operation `{op}` in `{}` does not match the types of its arguments",
                         function.name

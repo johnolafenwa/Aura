@@ -58,7 +58,10 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
         );
         // A scalar list read's line and column reach only its bounds
         // failure's call, not the helper.
-        let unpassed = 2 * usize::from(matches!(op, RuntimeOp::List(ListOp::IndexScalar(_))));
+        let unpassed = 2 * usize::from(matches!(
+            op,
+            RuntimeOp::List(ListOp::IndexScalar(_) | ListOp::IndexScalarUnchecked(_))
+        ));
         let words = call.layout_words
             + usize::from(op.has_receiver())
             + op.params().len()

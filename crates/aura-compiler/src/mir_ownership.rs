@@ -1329,9 +1329,6 @@ struct MovePair {
 /// right before it becomes a move too. Only whole roots move: a retained
 /// projection leaves its root holding the rest of the value.
 ///
-/// The rewrite only takes instructions out, so nothing lands between an
-/// `IndexInRange` and the access it covers.
-///
 /// A move needs owned authority over the root, which the loan validator
 /// decides. Each rewritten function must pass the loan validator and the
 /// ownership checker. A function that fails with every pair keeps only the
@@ -2151,34 +2148,21 @@ fn set_try_releases(instruction: &mut Instruction, releases: impl FnOnce() -> Ve
 }
 
 /// Whether nothing may come between instruction `position` and the next
-/// one. A backend reads an `IndexInRange` fact for the instruction right
-/// after it, and for one advance after an element read. A returned-view
-/// loan must follow its call at once.
-pub(super) fn glued(instructions: &[Instruction], position: usize) -> bool {
+/// one: a returned-view loan must follow its call at once. An
+/// `IndexInRange` fact needs no glue, because the accesses it covers say
+/// so themselves and a release between them keeps the fact (see
+/// `mir_checks.rs`).
+fn glued(instructions: &[Instruction], position: usize) -> bool {
     let Some(next) = instructions.get(position + 1) else {
         return false;
     };
-    let current = &instructions[position];
-    let element_read = |instruction: &Instruction| {
-        matches!(
-            instruction,
-            Instruction::Assign {
-                value: Rvalue::Call { callee, .. },
-                ..
-            } if callee.member_parts().is_some_and(|parts| parts.field == "__index")
-        )
-    };
-    matches!(current, Instruction::IndexInRange { .. })
-        || (position > 0
-            && matches!(instructions[position - 1], Instruction::IndexInRange { .. })
-            && element_read(current))
-        || (matches!(
-            current,
-            Instruction::Assign {
-                value: Rvalue::Call { .. },
-                ..
-            }
-        ) && matches!(next, Instruction::BeginReturnedLoan { .. }))
+    matches!(
+        instructions[position],
+        Instruction::Assign {
+            value: Rvalue::Call { .. },
+            ..
+        }
+    ) && matches!(next, Instruction::BeginReturnedLoan { .. })
 }
 
 /// Points every edge of `terminator` to `from` at `to` instead.

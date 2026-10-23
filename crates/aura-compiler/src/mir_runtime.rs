@@ -160,6 +160,9 @@ pub(crate) fn run_entry_with_stdout_sink_and_program_args_trusted(
         crate::mir::BoundaryError::Ownership(error) => {
             Diagnostic::coded("AU4001", format!("invalid MIR ownership: {error}"))
         }
+        crate::mir::BoundaryError::Checks(error) => {
+            Diagnostic::coded("AU4001", format!("invalid MIR checks: {error}"))
+        }
     })?;
     crate::runtime_config::validate_runtime_configuration()?;
     let entry = entry.map(|name| name.to_string());
@@ -3694,6 +3697,7 @@ impl MirRuntime {
                 projection,
                 mutable,
                 span,
+                ..
             }
             | Instruction::ReborrowElement {
                 loan,
@@ -4353,7 +4357,9 @@ impl MirRuntime {
                 }
                 Ok(RvalueOutcome::Value(Value::String(rendered)))
             }
-            Rvalue::Unary { op, value, span } => {
+            Rvalue::Unary {
+                op, value, span, ..
+            } => {
                 let value = self.evaluate_operand(value, env)?;
                 let value = if *op == UnaryOp::BitNot {
                     match expected_type {
@@ -4492,6 +4498,7 @@ impl MirRuntime {
                 left,
                 right,
                 span,
+                ..
             } => {
                 if mir_operand_is_array(left, env)? || mir_operand_is_array(right, env)? {
                     let left = borrow_mir_operand(left, env)?;

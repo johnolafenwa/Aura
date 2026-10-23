@@ -3940,6 +3940,7 @@ fn direct_backend_scalar_bool_range_and_coercion_paths_compile() {
                             left: Operand::Place("test_left".to_string()),
                             right: Operand::Place("test_right".to_string()),
                             span: Span::new(1, 1),
+                            trap: crate::mir::ArithmeticTrap::None,
                         },
                     },
                     Instruction::Assign {
@@ -3949,6 +3950,7 @@ fn direct_backend_scalar_bool_range_and_coercion_paths_compile() {
                             left: Operand::Place("test_left".to_string()),
                             right: Operand::Place("test_right".to_string()),
                             span: Span::new(1, 1),
+                            trap: crate::mir::ArithmeticTrap::None,
                         },
                     },
                     Instruction::Assign {
@@ -8390,6 +8392,7 @@ def main() -> int32:
                     op: UnaryOp::Not,
                     value: Operand::String("truthy".to_string()),
                     span: Span::new(1, 1),
+                    trap: crate::mir::ArithmeticTrap::Runtime,
                 },
                 Type::named("bool"),
             ),
@@ -8453,6 +8456,7 @@ def main() -> int32:
                     left: Operand::Bool(true),
                     right: Operand::Bool(false),
                     span: Span::new(1, 1),
+                    trap: crate::mir::ArithmeticTrap::None,
                 },
                 Type::named("bool"),
             ),
@@ -8465,6 +8469,7 @@ def main() -> int32:
                     left: Operand::Bool(true),
                     right: Operand::Bool(false),
                     span: Span::new(1, 1),
+                    trap: crate::mir::ArithmeticTrap::None,
                 },
                 Type::named("bool"),
             ),
@@ -10031,6 +10036,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
                 left: Operand::Int(1),
                 right: Operand::Int(2),
                 span: Span::new(1, 1),
+                trap: crate::mir::ArithmeticTrap::None,
             }),
             "direct backend does not support integer binary operation `And`",
         ),
@@ -10042,6 +10048,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
                     left: Operand::Float(1.0),
                     right: Operand::Float(2.0),
                     span: Span::new(1, 1),
+                    trap: crate::mir::ArithmeticTrap::None,
                 },
                 Type::named("float64"),
             ),
@@ -10055,6 +10062,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
                     left: Operand::Bool(true),
                     right: Operand::Bool(false),
                     span: Span::new(1, 1),
+                    trap: crate::mir::ArithmeticTrap::None,
                 },
                 Type::named("bool"),
             ),
@@ -10923,6 +10931,7 @@ fn direct_validation_rejects_move_place_in_non_consuming_expressions() {
                     op: UnaryOp::Neg,
                     value: Operand::MovePlace("value".to_string()),
                     span: Span::new(1, 1),
+                    trap: crate::mir::ArithmeticTrap::None,
                 },
             }],
             terminator: Terminator::Return(Operand::Int(0)),
@@ -14072,4 +14081,85 @@ fn an_unresolved_internal_slice_needs_all_six_arguments() {
     call.1.truncate(2);
     let error = super::validate_module(&module).expect_err("a short internal slice must fail");
     assert_eq!(error, super::DIRECT_INTERNAL_SLICE_ARITY_ERROR);
+}
+
+#[test]
+fn native_emission_refuses_an_unchecked_read_no_fact_covers() {
+    let source = r#"
+def main():
+    values: list[int64] = [1, 2, 3]
+    mut sum = 0
+    for value in values:
+        sum = sum.wrapping_add(value)
+    print(sum)
+"#;
+    let mut mir = lower_source_to_mir(source).expect("a list loop should lower");
+    let main = mir
+        .functions
+        .iter_mut()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    for block in &mut main.blocks {
+        block
+            .instructions
+            .retain(|instruction| !matches!(instruction, Instruction::IndexInRange { .. }));
+    }
+    let error = emit_host_object(&mir).expect_err("an uncovered unchecked read should be refused");
+    assert!(
+        error.contains("without a bounds check, but no `IndexInRange` covers it"),
+        "{error}"
+    );
+}
+
+#[test]
+fn the_emitter_emits_only_the_checks_mir_names() {
+    let source = r#"
+def arithmetic(a: int64, b: int64, c: int32, d: float64) -> float64:
+    wide = (a - b) * -a // b + a % b
+    narrow = c // 2 + c % 3
+    return d / 2.0 + (wide + (narrow as int64)) as float64
+
+def main():
+    print(arithmetic(7, 2, 9, 1.5))
+"#;
+    let named = lower_source_to_mir(source).expect("arithmetic should lower");
+    let checked = emit_host_object(&named).expect("arithmetic should emit");
+    let referenced = object_referenced_symbols(&checked);
+    for helper in [
+        "aura_direct_fail_integer_overflow",
+        "aura_direct_fail_division_by_zero",
+    ] {
+        assert!(
+            referenced.iter().any(|name| name.ends_with(helper)),
+            "the named traps call `{helper}`, referenced: {referenced:?}"
+        );
+    }
+    // With every trap removed, the emitter checks nothing it was not told
+    // to. The validator would refuse this module, so it is emitted as is.
+    let mut unchecked = super::reachability::prune_unreachable_functions(&named);
+    for instruction in unchecked
+        .functions
+        .iter_mut()
+        .flat_map(|function| &mut function.blocks)
+        .flat_map(|block| &mut block.instructions)
+    {
+        if let Instruction::Assign {
+            value: Rvalue::Binary { trap, .. } | Rvalue::Unary { trap, .. },
+            ..
+        } = instruction
+        {
+            *trap = crate::mir::ArithmeticTrap::None;
+        }
+    }
+    let object = NativeCodegen::with_validated_loans(&unchecked, "<aura>", "")
+        .and_then(|context| context.emit())
+        .expect("unchecked arithmetic should emit");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        !referenced
+            .iter()
+            .any(|name| name.ends_with("aura_direct_fail_integer_overflow")
+                || name.ends_with("aura_direct_fail_division_by_zero")),
+        "no trap is named, referenced: {referenced:?}"
+    );
 }

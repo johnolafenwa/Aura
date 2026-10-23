@@ -36,9 +36,11 @@ fn sample_receiver(op: RuntimeOp) -> Type {
         RuntimeOp::Queue(_) => named("Queue", vec![Type::named("int64")]),
         RuntimeOp::Task(_) => named("Task", vec![Type::named("str")]),
         RuntimeOp::TaskGroup(_) => Type::named("TaskGroup"),
-        RuntimeOp::List(ListOp::PushScalar(kind) | ListOp::IndexScalar(kind)) => {
-            named("list", vec![scalar_element_type(kind)])
-        }
+        RuntimeOp::List(
+            ListOp::PushScalar(kind)
+            | ListOp::IndexScalar(kind)
+            | ListOp::IndexScalarUnchecked(kind),
+        ) => named("list", vec![scalar_element_type(kind)]),
         RuntimeOp::List(_) | RuntimeOp::Span(_) => named("list", vec![Type::named("str")]),
         RuntimeOp::Dict(_) => named("dict", vec![Type::named("str"), Type::named("int64")]),
         RuntimeOp::Set(SetOp::ContainsInt64) => named("set", vec![Type::named("int64")]),

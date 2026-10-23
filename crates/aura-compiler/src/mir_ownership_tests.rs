@@ -134,6 +134,7 @@ fn a_target_takes_what_it_is_given() {
             projection: String::new(),
             mutable: false,
             span: Span::new(1, 1),
+            checked: true,
         }),
         expect(&[("key", Consume)]),
         "the loan owns its selector"
@@ -153,6 +154,7 @@ fn reads_and_projections_borrow() {
             left: place("a"),
             right: place("b"),
             span,
+            trap: crate::mir::ArithmeticTrap::None,
         })),
         expect(&[("a", Borrow), ("b", Borrow)])
     );
@@ -161,6 +163,7 @@ fn reads_and_projections_borrow() {
             op: UnaryOp::Neg,
             value: place("a"),
             span,
+            trap: crate::mir::ArithmeticTrap::None,
         })),
         expect(&[("a", Borrow)])
     );

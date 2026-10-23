@@ -807,7 +807,9 @@ fn forged_binary(op: &str, left: Value, right: Value, keep_type: bool) -> MirMod
     let assign = find_instruction(main, |instruction| {
         rvalue_kind(instruction) == Some("Binary")
     });
-    assign["Assign"]["value"] = json!({ "Binary": { "op": op, "left": left, "right": right, "span": { "line": 4, "column": 11 } } });
+    // Each forged operator here goes to a runtime helper, so the trap is
+    // the one the checks table gives it.
+    assign["Assign"]["value"] = json!({ "Binary": { "op": op, "left": left, "right": right, "span": { "line": 4, "column": 11 }, "trap": "Runtime" } });
     let target = assign["Assign"]["target"].clone();
     if !keep_type {
         main["local_types"]
@@ -862,7 +864,7 @@ fn interpreter_rejects_bitwise_not_on_a_non_integer() {
     let assign = find_instruction(main, |instruction| {
         rvalue_kind(instruction) == Some("Binary")
     });
-    assign["Assign"]["value"] = json!({ "Unary": { "op": "BitNot", "value": { "Bool": true }, "span": { "line": 4, "column": 11 } } });
+    assign["Assign"]["value"] = json!({ "Unary": { "op": "BitNot", "value": { "Bool": true }, "span": { "line": 4, "column": 11 }, "trap": "Runtime" } });
     let mir: MirModule = serde_json::from_value(encoded).unwrap();
     let error = run_mir(&mir).expect_err("bitwise not on a bool must not run");
     assert!(error.message.contains("integer"), "{}", error.message);
@@ -1113,7 +1115,7 @@ fn native_backend_rejects_unsupported_unary_operand_types() {
     let assign = find_instruction(main, |instruction| {
         rvalue_kind(instruction) == Some("Binary")
     });
-    assign["Assign"]["value"] = json!({ "Unary": { "op": "BitNot", "value": { "Float": 1.5 }, "span": { "line": 4, "column": 11 } } });
+    assign["Assign"]["value"] = json!({ "Unary": { "op": "BitNot", "value": { "Float": 1.5 }, "span": { "line": 4, "column": 11 }, "trap": "Runtime" } });
     assert_native_rejects(encoded, "unsupported value coercion");
 }
 
