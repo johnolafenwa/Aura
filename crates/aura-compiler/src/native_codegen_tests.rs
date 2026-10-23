@@ -2,11 +2,6 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use cranelift_codegen::ir::types;
-use cranelift_codegen::ir::InstBuilder;
-use cranelift_codegen::settings::Flags;
-use cranelift_codegen::Context;
-use cranelift_frontend::FunctionBuilderContext;
 use cranelift_object::object::{Object, ObjectSection, ObjectSymbol, RelocationTarget};
 
 use super::{
@@ -14,11 +9,11 @@ use super::{
     direct_field_type, direct_type, direct_type_to_type, emit_host_object,
     emit_host_object_with_metadata, ensure_direct_type, enum_variant_payload_types_for_target,
     infer_operand_type, is_numeric_type_name, main_signature, mangle_default_binder_symbol,
-    mangle_symbol, mangle_thunk_symbol, native_codegen_flags, release_direct_call_results,
-    release_direct_values, render_direct_type, runtime_type_is_wildcard, signature_for,
-    thunk_signature, thunk_string_constant, unbox_thunk_value, validate_function, validate_operand,
-    validate_rvalue, validate_tuple_projection_operand, validate_tuple_take_place, DirectType,
-    DirectViewPlace, NativeCodegen, PlainClassField, PlainClassType, ScalarKind,
+    mangle_symbol, mangle_thunk_symbol, release_direct_call_results, release_direct_values,
+    render_direct_type, runtime_type_is_wildcard, signature_for, thunk_signature,
+    thunk_string_constant, unbox_thunk_value, validate_function, validate_operand, validate_rvalue,
+    validate_tuple_projection_operand, validate_tuple_take_place, DirectType, DirectViewPlace,
+    NativeCodegen, PlainClassField, PlainClassType, ScalarKind,
 };
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::Span;
@@ -27,23 +22,23 @@ use crate::mir::{
     AssertionCapture, BasicBlock, CallTarget, Instruction, MirArg, MirExternCall, MirExternParam,
     MirFunction, MirLocalType, MirMapEntry, MirMatchArm, MirParam, Operand, Rvalue, Terminator,
 };
+use crate::native_backend::{types, CallConv, FunctionBackend, Signature, Var};
 use crate::sema::Type;
 use crate::{lower_path_to_mir, lower_source_to_mir};
 
 #[test]
 fn adr0038_direct_view_fixed_point_comparison_ignores_order_not_authority() {
     use super::{direct_view_maps_equivalent, DirectViewAlternative};
-    use cranelift_frontend::Variable;
     let a = DirectViewAlternative {
         union_payloads: Vec::new(),
         place: "owner.left".into(),
-        conditions: vec![(Variable::from_u32(1), 0), (Variable::from_u32(2), 1)],
+        conditions: vec![(Var(1), 0), (Var(2), 1)],
         elements: Vec::new(),
     };
     let b = DirectViewAlternative {
         union_payloads: Vec::new(),
         place: "owner.right".into(),
-        conditions: vec![(Variable::from_u32(1), 1)],
+        conditions: vec![(Var(1), 1)],
         elements: Vec::new(),
     };
     let left = HashMap::from([(
@@ -83,7 +78,7 @@ fn adr0038_direct_view_fixed_point_comparison_ignores_order_not_authority() {
             DirectViewAlternative {
                 union_payloads: Vec::new(),
                 place: b.place,
-                conditions: vec![(Variable::from_u32(1), 0)],
+                conditions: vec![(Var(1), 0)],
                 elements: Vec::new(),
             },
         ],
@@ -192,15 +187,13 @@ fn adr0038_direct_cfg_helpers_validate_reachability_order_and_selector_tags() {
 fn adr0038_direct_view_and_closure_metadata_helpers_preserve_dataflow_invariants() {
     use std::collections::HashSet;
 
-    use cranelift_frontend::Variable;
-
     use super::{
         direct_closure_metadata_uses, direct_closure_writeback_live_ins,
         merge_direct_closure_writebacks, DirectClosureCaptureWriteback, DirectViewAlternative,
     };
     use crate::sema::ClosureCallKind;
 
-    let selector = Variable::from_u32(7);
+    let selector = Var(7);
     let projected = DirectViewPlace::static_place("owner".to_string())
         .project("")
         .project("field")
@@ -2379,21 +2372,6 @@ fn direct_backend_emits_object_for_supported_scalar_program() {
     let object = emit_host_object(&mir).expect("direct backend should emit an object");
 
     assert!(!object.is_empty());
-}
-
-#[test]
-fn direct_backend_enables_stack_returns_for_flattened_mutable_writeback() {
-    let flags: Flags = native_codegen_flags().expect("native flags should configure");
-    assert!(flags.is_pic());
-    assert!(flags.unwind_info());
-    assert_eq!(
-        flags.opt_level(),
-        cranelift_codegen::settings::OptLevel::Speed
-    );
-    assert!(
-        flags.enable_multi_ret_implicit_sret(),
-        "flattened mutable receiver writeback can exceed x86-64's return registers"
-    );
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -10249,6 +10227,32 @@ def main() -> int32:
     );
 }
 
+const SCRATCH_BODY: &str = "scratch body";
+
+/// Runs `body` in one block of a scratch function, which `codegen` never
+/// defines.
+fn with_scratch_function<'a>(
+    codegen: &mut NativeCodegen<'a>,
+    body: impl FnOnce(&mut NativeCodegen<'a>, &mut dyn FunctionBackend),
+) {
+    let id = codegen.functions["main"];
+    let error = codegen
+        .define_body(
+            id,
+            &Signature::new(CallConv::C),
+            "scratch function",
+            |codegen, builder| {
+                let block = builder.create_block();
+                builder.switch_to_block(block);
+                builder.seal_block(block);
+                body(codegen, builder);
+                Err(SCRATCH_BODY.to_string())
+            },
+        )
+        .expect_err("a scratch function stays undefined");
+    assert_eq!(error, SCRATCH_BODY);
+}
+
 #[test]
 fn native_codegen_thunk_helpers_cover_roundtrip_paths() {
     let source =
@@ -10257,154 +10261,137 @@ fn native_codegen_thunk_helpers_cover_roundtrip_paths() {
     let mut codegen = NativeCodegen::new(&mir, "/tmp/thunk_helpers.au", source)
         .expect("codegen should initialize");
 
-    let mut ctx = Context::new();
-    ctx.func.signature = cranelift_codegen::ir::Signature::new(codegen.call_conv);
-    let mut builder_ctx = FunctionBuilderContext::new();
-    let mut builder = cranelift_frontend::FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
-    let block = builder.create_block();
-    builder.switch_to_block(block);
-    builder.seal_block(block);
+    with_scratch_function(&mut codegen, |codegen, builder| {
+        let (_first_ptr, _first_len) = thunk_string_constant(codegen, builder, b"aura")
+            .expect("first string constant should lower");
+        let (_second_ptr, _second_len) = thunk_string_constant(codegen, builder, b"aura")
+            .expect("duplicate string constant should reuse existing data");
+        assert_eq!(codegen.string_data.len(), 1);
 
-    let (_first_ptr, _first_len) = thunk_string_constant(&mut codegen, &mut builder, b"aura")
-        .expect("first string constant should lower");
-    let (_second_ptr, _second_len) = thunk_string_constant(&mut codegen, &mut builder, b"aura")
-        .expect("duplicate string constant should reuse existing data");
-    assert_eq!(codegen.string_data.len(), 1);
+        let opaque_raw = builder.iconst(types::I64, 7);
+        let int_raw = builder.iconst(types::I64, 11);
+        let bool_raw = builder.iconst(types::I64, 1);
+        let float_raw = builder.f64const(3.5);
 
-    let opaque_raw = builder.ins().iconst(types::I64, 7);
-    let int_raw = builder.ins().iconst(types::I64, 11);
-    let bool_raw = builder.ins().iconst(types::I64, 1);
-    let float_raw = builder.ins().f64const(3.5);
-
-    let opaque_boxed = box_thunk_value(
-        &mut codegen,
-        &mut builder,
-        &[opaque_raw],
-        &DirectType::Opaque(Type::named("str")),
-    )
-    .expect("opaque thunk values should pass through");
-    let opaque_unboxed = unbox_thunk_value(
-        &mut codegen,
-        &mut builder,
-        opaque_boxed,
-        &DirectType::Opaque(Type::named("str")),
-    )
-    .expect("opaque thunk values should unbox directly");
-    assert_eq!(opaque_unboxed.len(), 1);
-
-    let boxed_int = box_thunk_value(
-        &mut codegen,
-        &mut builder,
-        &[int_raw],
-        &DirectType::Scalar(ScalarKind::Int32),
-    )
-    .expect("int thunk values should box");
-    let unboxed_int = unbox_thunk_value(
-        &mut codegen,
-        &mut builder,
-        boxed_int,
-        &DirectType::Scalar(ScalarKind::Int32),
-    )
-    .expect("int thunk values should unbox");
-    assert_eq!(unboxed_int.len(), 1);
-
-    for (label, kind) in [("int64", ScalarKind::Int64), ("uint64", ScalarKind::Uint64)] {
-        let boxed = box_thunk_value(
-            &mut codegen,
-            &mut builder,
-            &[int_raw],
-            &DirectType::Scalar(kind),
+        let opaque_boxed = box_thunk_value(
+            codegen,
+            builder,
+            &[opaque_raw],
+            &DirectType::Opaque(Type::named("str")),
         )
-        .unwrap_or_else(|error| panic!("{label} thunk values should box: {error}"));
-        let unboxed =
-            unbox_thunk_value(&mut codegen, &mut builder, boxed, &DirectType::Scalar(kind))
+        .expect("opaque thunk values should pass through");
+        let opaque_unboxed = unbox_thunk_value(
+            codegen,
+            builder,
+            opaque_boxed,
+            &DirectType::Opaque(Type::named("str")),
+        )
+        .expect("opaque thunk values should unbox directly");
+        assert_eq!(opaque_unboxed.len(), 1);
+
+        let boxed_int = box_thunk_value(
+            codegen,
+            builder,
+            &[int_raw],
+            &DirectType::Scalar(ScalarKind::Int32),
+        )
+        .expect("int thunk values should box");
+        let unboxed_int = unbox_thunk_value(
+            codegen,
+            builder,
+            boxed_int,
+            &DirectType::Scalar(ScalarKind::Int32),
+        )
+        .expect("int thunk values should unbox");
+        assert_eq!(unboxed_int.len(), 1);
+
+        for (label, kind) in [("int64", ScalarKind::Int64), ("uint64", ScalarKind::Uint64)] {
+            let boxed = box_thunk_value(codegen, builder, &[int_raw], &DirectType::Scalar(kind))
+                .unwrap_or_else(|error| panic!("{label} thunk values should box: {error}"));
+            let unboxed = unbox_thunk_value(codegen, builder, boxed, &DirectType::Scalar(kind))
                 .unwrap_or_else(|error| panic!("{label} thunk values should unbox: {error}"));
-        assert_eq!(unboxed.len(), 1, "{label} should have one ABI value");
-        assert_eq!(
-            builder.func.dfg.value_type(unboxed[0]),
-            types::I64,
-            "{label} thunk round trips must use the I64 ABI"
-        );
-    }
+            assert_eq!(unboxed.len(), 1, "{label} should have one ABI value");
+            assert_eq!(
+                builder.value_type(unboxed[0]),
+                types::I64,
+                "{label} thunk round trips must use the I64 ABI"
+            );
+        }
 
-    let boxed_float = box_thunk_value(
-        &mut codegen,
-        &mut builder,
-        &[float_raw],
-        &DirectType::Scalar(ScalarKind::Float64),
-    )
-    .expect("float thunk values should box");
-    let unboxed_float = unbox_thunk_value(
-        &mut codegen,
-        &mut builder,
-        boxed_float,
-        &DirectType::Scalar(ScalarKind::Float64),
-    )
-    .expect("float thunk values should unbox");
-    assert_eq!(unboxed_float.len(), 1);
+        let boxed_float = box_thunk_value(
+            codegen,
+            builder,
+            &[float_raw],
+            &DirectType::Scalar(ScalarKind::Float64),
+        )
+        .expect("float thunk values should box");
+        let unboxed_float = unbox_thunk_value(
+            codegen,
+            builder,
+            boxed_float,
+            &DirectType::Scalar(ScalarKind::Float64),
+        )
+        .expect("float thunk values should unbox");
+        assert_eq!(unboxed_float.len(), 1);
 
-    let boxed_bool = box_thunk_value(
-        &mut codegen,
-        &mut builder,
-        &[bool_raw],
-        &DirectType::Scalar(ScalarKind::Bool),
-    )
-    .expect("bool thunk values should box");
-    let unboxed_bool = unbox_thunk_value(
-        &mut codegen,
-        &mut builder,
-        boxed_bool,
-        &DirectType::Scalar(ScalarKind::Bool),
-    )
-    .expect("bool thunk values should unbox");
-    assert_eq!(unboxed_bool.len(), 1);
+        let boxed_bool = box_thunk_value(
+            codegen,
+            builder,
+            &[bool_raw],
+            &DirectType::Scalar(ScalarKind::Bool),
+        )
+        .expect("bool thunk values should box");
+        let unboxed_bool = unbox_thunk_value(
+            codegen,
+            builder,
+            boxed_bool,
+            &DirectType::Scalar(ScalarKind::Bool),
+        )
+        .expect("bool thunk values should unbox");
+        assert_eq!(unboxed_bool.len(), 1);
 
-    let boxed_unit = box_thunk_value(
-        &mut codegen,
-        &mut builder,
-        &[],
-        &DirectType::Scalar(ScalarKind::Unit),
-    )
-    .expect("unit thunk values should box");
-    let unboxed_unit = unbox_thunk_value(
-        &mut codegen,
-        &mut builder,
-        boxed_unit,
-        &DirectType::Scalar(ScalarKind::Unit),
-    )
-    .expect("unit thunk values should unbox");
-    assert_eq!(unboxed_unit.len(), 1);
-    let opaque_missing = box_thunk_value(
-        &mut codegen,
-        &mut builder,
-        &[],
-        &DirectType::Opaque(Type::named("str")),
-    )
-    .expect_err("opaque thunk boxing should require a raw value");
-    assert!(opaque_missing.contains("task-start thunk expected an opaque value"));
+        let boxed_unit =
+            box_thunk_value(codegen, builder, &[], &DirectType::Scalar(ScalarKind::Unit))
+                .expect("unit thunk values should box");
+        let unboxed_unit = unbox_thunk_value(
+            codegen,
+            builder,
+            boxed_unit,
+            &DirectType::Scalar(ScalarKind::Unit),
+        )
+        .expect("unit thunk values should unbox");
+        assert_eq!(unboxed_unit.len(), 1);
+        let opaque_missing = box_thunk_value(
+            codegen,
+            builder,
+            &[],
+            &DirectType::Opaque(Type::named("str")),
+        )
+        .expect_err("opaque thunk boxing should require a raw value");
+        assert!(opaque_missing.contains("task-start thunk expected an opaque value"));
 
-    let pair_ty = DirectType::PlainClass(PlainClassType {
-        class_name: "Pair".to_string(),
-        fields: vec![
-            PlainClassField {
-                name: "left".to_string(),
-                ty: DirectType::Scalar(ScalarKind::Int32),
-            },
-            PlainClassField {
-                name: "right".to_string(),
-                ty: DirectType::Scalar(ScalarKind::Bool),
-            },
-        ],
+        let pair_ty = DirectType::PlainClass(PlainClassType {
+            class_name: "Pair".to_string(),
+            fields: vec![
+                PlainClassField {
+                    name: "left".to_string(),
+                    ty: DirectType::Scalar(ScalarKind::Int32),
+                },
+                PlainClassField {
+                    name: "right".to_string(),
+                    ty: DirectType::Scalar(ScalarKind::Bool),
+                },
+            ],
+        });
+        let boxed_pair = box_thunk_value(codegen, builder, &[int_raw, bool_raw], &pair_ty)
+            .expect("plain class thunk values should box recursively");
+        let unboxed_pair = unbox_thunk_value(codegen, builder, boxed_pair, &pair_ty)
+            .expect("plain class thunk values should unbox recursively");
+        assert_eq!(unboxed_pair.len(), 2);
+        assert!(codegen.string_data.len() >= 3);
+
+        builder.return_(&[]);
     });
-    let boxed_pair = box_thunk_value(&mut codegen, &mut builder, &[int_raw, bool_raw], &pair_ty)
-        .expect("plain class thunk values should box recursively");
-    let unboxed_pair = unbox_thunk_value(&mut codegen, &mut builder, boxed_pair, &pair_ty)
-        .expect("plain class thunk values should unbox recursively");
-    assert_eq!(unboxed_pair.len(), 2);
-    assert!(codegen.string_data.len() >= 3);
-
-    builder.ins().return_(&[]);
-    builder.finalize();
 }
 
 #[test]
@@ -10414,91 +10401,73 @@ fn native_codegen_release_helpers_cover_cleanup_error_paths() {
     let mut codegen = NativeCodegen::new(&mir, "/tmp/release_helpers.au", source)
         .expect("codegen should initialize");
 
-    let mut ctx = Context::new();
-    ctx.func.signature = cranelift_codegen::ir::Signature::new(codegen.call_conv);
-    let mut builder_ctx = FunctionBuilderContext::new();
-    let mut builder = cranelift_frontend::FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
-    let block = builder.create_block();
-    builder.switch_to_block(block);
-    builder.seal_block(block);
+    with_scratch_function(&mut codegen, |codegen, builder| {
+        let raw_opaque = builder.iconst(types::I64, 7);
+        let raw_unit = builder.iconst(types::I64, 0);
+        let raw_bool = builder.iconst(types::I64, 1);
+        let opaque_string = DirectType::Opaque(Type::named("str"));
+        let plain_pair = DirectType::PlainClass(PlainClassType {
+            class_name: "Pair".to_string(),
+            fields: vec![
+                PlainClassField {
+                    name: "text".to_string(),
+                    ty: opaque_string.clone(),
+                },
+                PlainClassField {
+                    name: "flag".to_string(),
+                    ty: DirectType::Scalar(ScalarKind::Bool),
+                },
+            ],
+        });
 
-    let raw_opaque = builder.ins().iconst(types::I64, 7);
-    let raw_unit = builder.ins().iconst(types::I64, 0);
-    let raw_bool = builder.ins().iconst(types::I64, 1);
-    let opaque_string = DirectType::Opaque(Type::named("str"));
-    let plain_pair = DirectType::PlainClass(PlainClassType {
-        class_name: "Pair".to_string(),
-        fields: vec![
-            PlainClassField {
-                name: "text".to_string(),
-                ty: opaque_string.clone(),
-            },
-            PlainClassField {
-                name: "flag".to_string(),
-                ty: DirectType::Scalar(ScalarKind::Bool),
-            },
-        ],
-    });
+        let unknown_return_error =
+            release_direct_call_results(codegen, builder, "missing", &[raw_opaque])
+                .expect_err("unknown cleanup return types should fail");
+        assert!(unknown_return_error.contains("does not know return type for `missing`"));
 
-    let unknown_return_error =
-        release_direct_call_results(&mut codegen, &mut builder, "missing", &[raw_opaque])
-            .expect_err("unknown cleanup return types should fail");
-    assert!(unknown_return_error.contains("does not know return type for `missing`"));
-
-    codegen
-        .function_return_types
-        .insert("needs_opaque".to_string(), opaque_string.clone());
-    let too_few_error =
-        release_direct_call_results(&mut codegen, &mut builder, "needs_opaque", &[])
+        codegen
+            .function_return_types
+            .insert("needs_opaque".to_string(), opaque_string.clone());
+        let too_few_error = release_direct_call_results(codegen, builder, "needs_opaque", &[])
             .expect_err("too few cleanup return values should fail");
-    assert!(too_few_error.contains("cleanup call `needs_opaque` returned too few values"));
+        assert!(too_few_error.contains("cleanup call `needs_opaque` returned too few values"));
 
-    let missing_opaque_error =
-        release_direct_values(&mut codegen, &mut builder, &[], &opaque_string)
+        let missing_opaque_error = release_direct_values(codegen, builder, &[], &opaque_string)
             .expect_err("opaque cleanup release should require one value");
-    assert!(missing_opaque_error.contains("expected an opaque `str` result"));
+        assert!(missing_opaque_error.contains("expected an opaque `str` result"));
 
-    codegen.function_return_types.insert(
-        "unit_with_writeback".to_string(),
-        DirectType::Scalar(ScalarKind::Unit),
-    );
-    codegen.function_writeback_types.insert(
-        "unit_with_writeback".to_string(),
-        vec![opaque_string.clone()],
-    );
-    let incomplete_writeback_error = release_direct_call_results(
-        &mut codegen,
-        &mut builder,
-        "unit_with_writeback",
-        &[raw_unit],
-    )
-    .expect_err("missing cleanup writeback values should fail");
-    assert!(incomplete_writeback_error
-        .contains("cleanup call `unit_with_writeback` returned incomplete writeback values"));
+        codegen.function_return_types.insert(
+            "unit_with_writeback".to_string(),
+            DirectType::Scalar(ScalarKind::Unit),
+        );
+        codegen.function_writeback_types.insert(
+            "unit_with_writeback".to_string(),
+            vec![opaque_string.clone()],
+        );
+        let incomplete_writeback_error =
+            release_direct_call_results(codegen, builder, "unit_with_writeback", &[raw_unit])
+                .expect_err("missing cleanup writeback values should fail");
+        assert!(incomplete_writeback_error
+            .contains("cleanup call `unit_with_writeback` returned incomplete writeback values"));
 
-    release_direct_call_results(
-        &mut codegen,
-        &mut builder,
-        "unit_with_writeback",
-        &[raw_unit, raw_opaque],
-    )
-    .expect("complete cleanup writeback values should release");
+        release_direct_call_results(
+            codegen,
+            builder,
+            "unit_with_writeback",
+            &[raw_unit, raw_opaque],
+        )
+        .expect("complete cleanup writeback values should release");
 
-    let incomplete_plain_class_error =
-        release_direct_values(&mut codegen, &mut builder, &[raw_opaque], &plain_pair)
-            .expect_err("plain class cleanup release should require every field value");
-    assert!(incomplete_plain_class_error.contains("expected `2` values for `Pair`"));
+        let incomplete_plain_class_error =
+            release_direct_values(codegen, builder, &[raw_opaque], &plain_pair)
+                .expect_err("plain class cleanup release should require every field value");
+        assert!(incomplete_plain_class_error.contains("expected `2` values for `Pair`"));
 
-    release_direct_values(
-        &mut codegen,
-        &mut builder,
-        &[raw_opaque, raw_bool],
-        &plain_pair,
-    )
-    .expect("complete plain class values should release recursively");
+        release_direct_values(codegen, builder, &[raw_opaque, raw_bool], &plain_pair)
+            .expect("complete plain class values should release recursively");
 
-    builder.ins().return_(&[]);
-    builder.finalize();
+        builder.return_(&[]);
+    });
 }
 
 #[test]
@@ -10727,29 +10696,11 @@ def main() -> int32:
         .iter()
         .find(|function| function.name == "wide_identity")
         .expect("wide_identity should be present in MIR");
-    let signature = signature_for(
-        function,
-        &classes,
-        cranelift_codegen::isa::CallConv::SystemV,
-    )
-    .expect("int64 and uint64 should have direct signatures");
+    let signature =
+        signature_for(function, &classes).expect("int64 and uint64 should have direct signatures");
 
-    assert_eq!(
-        signature
-            .params
-            .iter()
-            .map(|parameter| parameter.value_type)
-            .collect::<Vec<_>>(),
-        vec![types::I64, types::I64]
-    );
-    assert_eq!(
-        signature
-            .returns
-            .iter()
-            .map(|result| result.value_type)
-            .collect::<Vec<_>>(),
-        vec![types::I64]
-    );
+    assert_eq!(signature.params, vec![types::I64, types::I64]);
+    assert_eq!(signature.returns, vec![types::I64]);
 }
 
 #[test]
@@ -11034,20 +10985,16 @@ fn signature_helpers_flatten_plain_class_abi_types() {
         blocks: Vec::new(),
     };
 
-    let sig = signature_for(
-        &function,
-        &classes,
-        cranelift_codegen::isa::CallConv::SystemV,
-    )
-    .expect("signature should flatten point receiver and param");
-    let main_sig = main_signature(cranelift_codegen::isa::CallConv::SystemV);
+    let sig = signature_for(&function, &classes)
+        .expect("signature should flatten point receiver and param");
+    let main_sig = main_signature();
 
     assert_eq!(sig.params.len(), 4);
     assert_eq!(sig.returns.len(), 1);
     assert_eq!(main_sig.returns.len(), 1);
 
     let bool_ty = DirectType::Scalar(ScalarKind::Bool);
-    assert_eq!(bool_ty.abi_types(), vec![cranelift_codegen::ir::types::I64]);
+    assert_eq!(bool_ty.abi_types(), vec![types::I64]);
     assert_eq!(bool_ty.value_count(), 1);
     assert_eq!(bool_ty.scalar_kind(), Some(ScalarKind::Bool));
     assert!(!ScalarKind::Bool.is_float());
@@ -11066,13 +11013,7 @@ fn signature_helpers_flatten_plain_class_abi_types() {
             },
         ],
     });
-    assert_eq!(
-        point_ty.abi_types(),
-        vec![
-            cranelift_codegen::ir::types::F64,
-            cranelift_codegen::ir::types::I64,
-        ]
-    );
+    assert_eq!(point_ty.abi_types(), vec![types::F64, types::I64,]);
     assert_eq!(point_ty.value_count(), 2);
     assert_eq!(
         point_ty.field_slice("x"),
@@ -11468,12 +11409,11 @@ fn native_codegen_variant_payload_helpers_cover_builtin_result_shapes() {
 
 #[test]
 fn native_codegen_helper_utilities_cover_signatures_wildcards_and_metadata() {
-    let call_conv = cranelift_codegen::isa::CallConv::SystemV;
-    let main_sig = main_signature(call_conv);
+    let main_sig = main_signature();
     assert_eq!(main_sig.params.len(), 0);
     assert_eq!(main_sig.returns.len(), 1);
 
-    let thunk_sig = thunk_signature(call_conv);
+    let thunk_sig = thunk_signature();
     assert_eq!(thunk_sig.params.len(), 2);
     assert_eq!(thunk_sig.returns.len(), 1);
 
@@ -11536,11 +11476,11 @@ fn native_codegen_helper_utilities_cover_signatures_wildcards_and_metadata() {
     assert!(ScalarKind::Float32.is_float());
     assert_eq!(
         DirectType::Scalar(ScalarKind::Float64).abi_types(),
-        vec![cranelift_codegen::ir::types::F64]
+        vec![types::F64]
     );
     assert_eq!(
         DirectType::Opaque(Type::named("str")).abi_types(),
-        vec![cranelift_codegen::ir::types::I64]
+        vec![types::I64]
     );
     let flat_class = DirectType::PlainClass(PlainClassType {
         class_name: "Pair".to_string(),
@@ -11555,13 +11495,7 @@ fn native_codegen_helper_utilities_cover_signatures_wildcards_and_metadata() {
             },
         ],
     });
-    assert_eq!(
-        flat_class.abi_types(),
-        vec![
-            cranelift_codegen::ir::types::I64,
-            cranelift_codegen::ir::types::F64,
-        ]
-    );
+    assert_eq!(flat_class.abi_types(), vec![types::I64, types::F64]);
     assert_eq!(flat_class.value_count(), 2);
     assert_eq!(
         flat_class.field_slice("right"),
@@ -11569,22 +11503,19 @@ fn native_codegen_helper_utilities_cover_signatures_wildcards_and_metadata() {
     );
     assert_eq!(flat_class.field_slice("missing"), None);
 
-    let mut ctx = Context::new();
-    ctx.func.signature = cranelift_codegen::ir::Signature::new(call_conv);
-    let mut builder_ctx = FunctionBuilderContext::new();
-    let mut builder = cranelift_frontend::FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
-    let block = builder.create_block();
-    builder.switch_to_block(block);
-    builder.seal_block(block);
-
-    let scalar_zero = DirectType::Scalar(ScalarKind::Int32).zero_values(&mut builder);
-    let opaque_zero = DirectType::Opaque(Type::named("str")).zero_values(&mut builder);
-    let class_zero = flat_class.zero_values(&mut builder);
-    assert_eq!(scalar_zero.len(), 1);
-    assert_eq!(opaque_zero.len(), 1);
-    assert_eq!(class_zero.len(), 2);
-    builder.ins().return_(&[]);
-    builder.finalize();
+    let source = "def main() -> int32:\n    return 0\n";
+    let mir = lower_source_to_mir(source).expect("zero value source should lower");
+    let mut codegen =
+        NativeCodegen::new(&mir, "/tmp/zero_values.au", source).expect("codegen should initialize");
+    with_scratch_function(&mut codegen, |_, builder| {
+        let scalar_zero = DirectType::Scalar(ScalarKind::Int32).zero_values(builder);
+        let opaque_zero = DirectType::Opaque(Type::named("str")).zero_values(builder);
+        let class_zero = flat_class.zero_values(builder);
+        assert_eq!(scalar_zero.len(), 1);
+        assert_eq!(opaque_zero.len(), 1);
+        assert_eq!(class_zero.len(), 2);
+        builder.return_(&[]);
+    });
 
     assert!(is_numeric_type_name(&Type::named("uint64")));
     assert!(is_numeric_type_name(&Type::named("float32")));
@@ -12596,58 +12527,51 @@ fn native_codegen_release_helpers_release_owning_union_handles_by_tag() {
     let mut codegen = NativeCodegen::new(&mir, "/tmp/release_owning_union.au", source)
         .expect("codegen should initialize");
 
-    let mut ctx = Context::new();
-    ctx.func.signature = cranelift_codegen::ir::Signature::new(codegen.call_conv);
-    let mut builder_ctx = FunctionBuilderContext::new();
-    let mut builder = cranelift_frontend::FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
-    let block = builder.create_block();
-    builder.switch_to_block(block);
-    builder.seal_block(block);
+    with_scratch_function(&mut codegen, |codegen, builder| {
+        let text = DirectType::Opaque(Type::named("str"));
+        let optional_text = super::DirectUnionType::new(
+            crate::sema::optional_type(Type::named("str")),
+            vec![text.clone(), DirectType::Scalar(ScalarKind::Unit)],
+        );
+        assert!(optional_text.owns_handles());
+        assert_eq!(optional_text.owning, vec![0]);
+        let inline_pair = super::DirectUnionType::new(
+            crate::sema::optional_type(Type::named("int64")),
+            vec![
+                DirectType::Scalar(ScalarKind::Int64),
+                DirectType::Scalar(ScalarKind::Unit),
+            ],
+        );
+        assert!(!inline_pair.owns_handles());
 
-    let text = DirectType::Opaque(Type::named("str"));
-    let optional_text = super::DirectUnionType::new(
-        crate::sema::optional_type(Type::named("str")),
-        vec![text.clone(), DirectType::Scalar(ScalarKind::Unit)],
-    );
-    assert!(optional_text.owns_handles());
-    assert_eq!(optional_text.owning, vec![0]);
-    let inline_pair = super::DirectUnionType::new(
-        crate::sema::optional_type(Type::named("int64")),
-        vec![
-            DirectType::Scalar(ScalarKind::Int64),
-            DirectType::Scalar(ScalarKind::Unit),
-        ],
-    );
-    assert!(!inline_pair.owns_handles());
+        let tag = builder.iconst(types::I64, 0);
+        let handle = builder.iconst(types::I64, 7);
+        let instructions_before = builder.instruction_count();
+        release_direct_values(
+            codegen,
+            builder,
+            &[tag, handle],
+            &DirectType::Union(optional_text),
+        )
+        .expect("an owning union releases its active handle under a tag switch");
+        let owning_instructions = builder.instruction_count() - instructions_before;
+        assert!(
+            owning_instructions >= 4,
+            "the owning member needs a compare, a branch, a release call, and a jump"
+        );
 
-    let tag = builder.ins().iconst(types::I64, 0);
-    let handle = builder.ins().iconst(types::I64, 7);
-    let instructions_before = builder.func.dfg.num_insts();
-    release_direct_values(
-        &mut codegen,
-        &mut builder,
-        &[tag, handle],
-        &DirectType::Union(optional_text),
-    )
-    .expect("an owning union releases its active handle under a tag switch");
-    let owning_instructions = builder.func.dfg.num_insts() - instructions_before;
-    assert!(
-        owning_instructions >= 4,
-        "the owning member needs a compare, a branch, a release call, and a jump"
-    );
+        let instructions_before = builder.instruction_count();
+        release_direct_values(
+            codegen,
+            builder,
+            &[tag, handle],
+            &DirectType::Union(inline_pair),
+        )
+        .expect("an all-inline union releases nothing");
+        assert_eq!(builder.instruction_count(), instructions_before);
 
-    let instructions_before = builder.func.dfg.num_insts();
-    release_direct_values(
-        &mut codegen,
-        &mut builder,
-        &[tag, handle],
-        &DirectType::Union(inline_pair),
-    )
-    .expect("an all-inline union releases nothing");
-    assert_eq!(builder.func.dfg.num_insts(), instructions_before);
-
-    builder.ins().return_(&[]);
-    builder.finalize();
+        builder.return_(&[]);
+    });
 }
 
 #[test]
@@ -12815,122 +12739,112 @@ fn native_codegen_retain_and_release_helpers_cover_every_callable_bearing_shape(
     let mir = lower_source_to_mir(source).expect("release helper source should lower");
     let mut codegen = NativeCodegen::new(&mir, "/tmp/callable_release_helpers.au", source)
         .expect("codegen should initialize");
-    let mut ctx = Context::new();
-    ctx.func.signature = cranelift_codegen::ir::Signature::new(codegen.call_conv);
-    let mut builder_ctx = FunctionBuilderContext::new();
-    let mut builder = cranelift_frontend::FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
-    let block = builder.create_block();
-    builder.switch_to_block(block);
-    builder.seal_block(block);
+    with_scratch_function(&mut codegen, |codegen, builder| {
+        let word = builder.iconst(types::I64, 0);
+        let callable_ty = DirectType::Callable(super::DirectCallableType::new(callable_signature(
+            vec![],
+            Type::named("int64"),
+        )));
+        let text = DirectType::Opaque(Type::named("str"));
+        let pair = DirectType::PlainClass(PlainClassType {
+            class_name: "Pair".to_string(),
+            fields: vec![
+                PlainClassField {
+                    name: "text".to_string(),
+                    ty: text.clone(),
+                },
+                PlainClassField {
+                    name: "count".to_string(),
+                    ty: DirectType::Scalar(ScalarKind::Int64),
+                },
+            ],
+        });
+        let optional_callable = DirectType::Union(super::DirectUnionType::new(
+            crate::sema::optional_type(callable_signature(vec![], Type::named("int64"))),
+            vec![callable_ty.clone(), DirectType::Scalar(ScalarKind::Unit)],
+        ));
+        let optional_text = DirectType::Union(super::DirectUnionType::new(
+            crate::sema::optional_type(Type::named("str")),
+            vec![text.clone(), DirectType::Scalar(ScalarKind::Unit)],
+        ));
+        let plain_optional = DirectType::Union(super::DirectUnionType::new(
+            crate::sema::optional_type(Type::named("int64")),
+            vec![
+                DirectType::Scalar(ScalarKind::Int64),
+                DirectType::Scalar(ScalarKind::Unit),
+            ],
+        ));
 
-    let word = builder.ins().iconst(types::I64, 0);
-    let callable_ty = DirectType::Callable(super::DirectCallableType::new(callable_signature(
-        vec![],
-        Type::named("int64"),
-    )));
-    let text = DirectType::Opaque(Type::named("str"));
-    let pair = DirectType::PlainClass(PlainClassType {
-        class_name: "Pair".to_string(),
-        fields: vec![
-            PlainClassField {
-                name: "text".to_string(),
-                ty: text.clone(),
-            },
-            PlainClassField {
-                name: "count".to_string(),
-                ty: DirectType::Scalar(ScalarKind::Int64),
-            },
-        ],
-    });
-    let optional_callable = DirectType::Union(super::DirectUnionType::new(
-        crate::sema::optional_type(callable_signature(vec![], Type::named("int64"))),
-        vec![callable_ty.clone(), DirectType::Scalar(ScalarKind::Unit)],
-    ));
-    let optional_text = DirectType::Union(super::DirectUnionType::new(
-        crate::sema::optional_type(Type::named("str")),
-        vec![text.clone(), DirectType::Scalar(ScalarKind::Unit)],
-    ));
-    let plain_optional = DirectType::Union(super::DirectUnionType::new(
-        crate::sema::optional_type(Type::named("int64")),
-        vec![
-            DirectType::Scalar(ScalarKind::Int64),
-            DirectType::Scalar(ScalarKind::Unit),
-        ],
-    ));
-
-    for (ty, count) in [
-        (DirectType::Scalar(ScalarKind::Int64), 1),
-        (text.clone(), 1),
-        (pair.clone(), 2),
-        (optional_text.clone(), 2),
-        (optional_callable.clone(), 5),
-        (plain_optional.clone(), 2),
-        (callable_ty.clone(), 4),
-    ] {
-        let values = vec![word; count];
-        super::callables::retain_direct_values(&mut codegen, &mut builder, &values, &ty)
-            .unwrap_or_else(|error| {
+        for (ty, count) in [
+            (DirectType::Scalar(ScalarKind::Int64), 1),
+            (text.clone(), 1),
+            (pair.clone(), 2),
+            (optional_text.clone(), 2),
+            (optional_callable.clone(), 5),
+            (plain_optional.clone(), 2),
+            (callable_ty.clone(), 4),
+        ] {
+            let values = vec![word; count];
+            super::callables::retain_direct_values(codegen, builder, &values, &ty).unwrap_or_else(
+                |error| {
+                    panic!(
+                        "retain of {} should compile: {error}",
+                        render_direct_type(&ty)
+                    )
+                },
+            );
+            release_direct_values(codegen, builder, &values, &ty).unwrap_or_else(|error| {
                 panic!(
-                    "retain of {} should compile: {error}",
+                    "release of {} should compile: {error}",
                     render_direct_type(&ty)
                 )
             });
-        release_direct_values(&mut codegen, &mut builder, &values, &ty).unwrap_or_else(|error| {
-            panic!(
-                "release of {} should compile: {error}",
-                render_direct_type(&ty)
-            )
-        });
-    }
+        }
 
-    let retain_error =
-        super::callables::retain_direct_values(&mut codegen, &mut builder, &[], &text)
+        let retain_error = super::callables::retain_direct_values(codegen, builder, &[], &text)
             .expect_err("an opaque retain needs its handle");
-    assert!(
-        retain_error.contains("retain expected an opaque `str` value"),
-        "{retain_error}"
-    );
-    let retain_error =
-        super::callables::retain_direct_values(&mut codegen, &mut builder, &[word], &pair)
+        assert!(
+            retain_error.contains("retain expected an opaque `str` value"),
+            "{retain_error}"
+        );
+        let retain_error = super::callables::retain_direct_values(codegen, builder, &[word], &pair)
             .expect_err("a plain class retain needs every field word");
-    assert!(
-        retain_error.contains("retain expected `2` values for `Pair`"),
-        "{retain_error}"
-    );
-    let retain_error =
-        super::callables::retain_direct_values(&mut codegen, &mut builder, &[word], &optional_text)
-            .expect_err("a union retain needs its payload word");
-    assert!(
-        retain_error.contains("retain expected union words"),
-        "{retain_error}"
-    );
-    let adapter_error = super::callables::call_callable_unary_adapter(
-        &mut codegen,
-        &mut builder,
-        &[word, word],
-        super::callables::DESCRIPTOR_DROP,
-    )
-    .expect_err("a callable adapter call needs four words");
-    assert!(
-        adapter_error.contains("expected 4 callable words, found 2"),
-        "{adapter_error}"
-    );
-    let box_error =
-        super::callables::call_callable_box_adapter(&mut codegen, &mut builder, &[word])
+        assert!(
+            retain_error.contains("retain expected `2` values for `Pair`"),
+            "{retain_error}"
+        );
+        let retain_error =
+            super::callables::retain_direct_values(codegen, builder, &[word], &optional_text)
+                .expect_err("a union retain needs its payload word");
+        assert!(
+            retain_error.contains("retain expected union words"),
+            "{retain_error}"
+        );
+        let adapter_error = super::callables::call_callable_unary_adapter(
+            builder,
+            &[word, word],
+            super::callables::DESCRIPTOR_DROP,
+        )
+        .expect_err("a callable adapter call needs four words");
+        assert!(
+            adapter_error.contains("expected 4 callable words, found 2"),
+            "{adapter_error}"
+        );
+        let box_error = super::callables::call_callable_box_adapter(builder, &[word])
             .expect_err("a callable box call needs four words");
-    assert!(
-        box_error.contains("expected 4 callable words, found 1"),
-        "{box_error}"
-    );
-    let parts_error = super::callables::contract_parts(&Type::named("int64"))
-        .expect_err("an int64 has no callable contract");
-    assert!(
-        parts_error.contains("expected a callable contract, found `int64`"),
-        "{parts_error}"
-    );
+        assert!(
+            box_error.contains("expected 4 callable words, found 1"),
+            "{box_error}"
+        );
+        let parts_error = super::callables::contract_parts(&Type::named("int64"))
+            .expect_err("an int64 has no callable contract");
+        assert!(
+            parts_error.contains("expected a callable contract, found `int64`"),
+            "{parts_error}"
+        );
 
-    builder.ins().return_(&[]);
-    builder.finalize();
+        builder.return_(&[]);
+    });
 }
 
 fn shape_test_function(name: &str, param_names: &[&str]) -> MirFunction {
@@ -13016,10 +12930,11 @@ fn direct_callable_shape_declaration_reports_unknown_functions_and_mismatched_ca
     );
     let error = super::callables::declare_callable_shapes(
         &missing,
-        &mut codegen.object,
+        codegen
+            .module_backend()
+            .expect("the module backend is idle"),
         &param_types,
         &classes,
-        codegen.call_conv,
     )
     .expect_err("a reference must name a lowered function");
     assert!(
@@ -13048,10 +12963,11 @@ fn direct_callable_shape_declaration_reports_unknown_functions_and_mismatched_ca
     );
     let error = super::callables::declare_callable_shapes(
         &too_many_captures,
-        &mut codegen.object,
+        codegen
+            .module_backend()
+            .expect("the module backend is idle"),
         &param_types,
         &classes,
-        codegen.call_conv,
     )
     .expect_err("a closure cannot capture more values than its function takes");
     assert!(
@@ -13068,10 +12984,11 @@ fn direct_callable_shape_declaration_reports_unknown_functions_and_mismatched_ca
     );
     let error = super::callables::declare_callable_shapes(
         &contract_mismatch,
-        &mut codegen.object,
+        codegen
+            .module_backend()
+            .expect("the module backend is idle"),
         &param_types,
         &classes,
-        codegen.call_conv,
     )
     .expect_err("a reference's contract must match the function's public parameters");
     assert!(
@@ -13088,10 +13005,11 @@ fn direct_callable_shape_declaration_reports_unknown_functions_and_mismatched_ca
     );
     let shapes = super::callables::declare_callable_shapes(
         &matching,
-        &mut codegen.object,
+        codegen
+            .module_backend()
+            .expect("the module backend is idle"),
         &param_types,
         &classes,
-        codegen.call_conv,
     )
     .expect("a matching contract declares its shape");
     assert_eq!(shapes.len(), 1);
@@ -13189,12 +13107,11 @@ fn adr0061_direct_view_place_projection_reaches_inside_an_element() {
     use super::{
         DirectElementKind, DirectElementSelector, DirectType, DirectViewPlace, ScalarKind,
     };
-    use cranelift_frontend::Variable;
     let mut element = DirectViewPlace::static_place("items".to_string());
     element.alternatives[0]
         .elements
         .push(DirectElementSelector {
-            variable: Variable::from_u32(9),
+            variable: Var(9),
             selector_ty: DirectType::Scalar(ScalarKind::Int64),
             element_type: Type::named("Profile"),
             kind: DirectElementKind::List,

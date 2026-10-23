@@ -1,18 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
-use cranelift_codegen::ir::immediates::Ieee64;
-use cranelift_codegen::ir::TrapCode;
-use cranelift_codegen::ir::{
-    types, AbiParam, FuncRef, InstBuilder, MemFlags, Signature, StackSlotData, StackSlotKind,
-    UserFuncName, Value,
-};
-use cranelift_codegen::isa::CallConv;
-use cranelift_codegen::settings::{self, Configurable};
-use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
-use cranelift_module::{default_libcall_names, DataDescription, DataId, FuncId, Linkage, Module};
-use cranelift_object::{ObjectBuilder, ObjectModule};
-
 use crate::ast::{BinaryOp, ReceiverKind, UnaryOp};
 use crate::diag::Span;
 use crate::ffi::FfiType;
@@ -21,6 +8,11 @@ use crate::mir::{
     MethodCandidate, MethodDispatch, MirArg, MirClass, MirEnum, MirExternCall, MirFormatPart,
     MirFunction, MirMapEntry, MirModule, MirReceiverKind, Operand, Rvalue, Terminator,
     NATIVE_LOOP_SAFEPOINT_INTERVAL,
+};
+use crate::native_backend::{
+    types, Blk, CallConv, DataDescription, DataHandle, DefineError, FloatCC, FuncHandle, FuncRef,
+    FunctionBackend, Inst, IntCC, Linkage, MemFlags, ModuleBackend, ScalarType, Signature,
+    TrapCode, Val, Var,
 };
 use crate::native_runtime::{
     encode_direct_ffi_call_spec, DirectFfiCallSpec, DirectFfiParam, DirectFfiType,
@@ -35,6 +27,8 @@ use crate::sema::{substitute_type, FunctionParamContract, Type};
 
 use callables::{CallableShape, CallableShapeKey};
 
+const MODULE_BACKEND_BUSY_ERROR: &str =
+    "internal error: direct backend module is defining another function";
 const WIDE_INTEGER_BINARY_ERROR: &str =
     "direct backend does not support wide integer binary operation";
 const DIRECT_INTERNAL_SLICE_ARITY_ERROR: &str =
@@ -65,31 +59,6 @@ pub fn emit_host_object_with_metadata(
     context.emit()
 }
 
-fn set_native_codegen_flag(
-    flag_builder: &mut settings::Builder,
-    name: &str,
-    value: &str,
-) -> std::result::Result<(), String> {
-    match flag_builder.set(name, value) {
-        Ok(()) => Ok(()),
-        Err(error) => Err(format!("failed to configure native backend: {error}")),
-    }
-}
-
-fn native_codegen_flags() -> std::result::Result<settings::Flags, String> {
-    let mut flag_builder = settings::builder();
-    set_native_codegen_flag(&mut flag_builder, "opt_level", "speed")?;
-    set_native_codegen_flag(&mut flag_builder, "is_pic", "true")?;
-    set_native_codegen_flag(&mut flag_builder, "unwind_info", "true")?;
-    // Aura's direct-call ABI is private to one generated object and flattens
-    // mutable receiver/parameter writeback into additional result values. On
-    // x86-64 that can exceed the two integer return registers. Cranelift must
-    // lower the overflow through its implicit return area so every Aura
-    // caller and callee keeps the same internal signature.
-    set_native_codegen_flag(&mut flag_builder, "enable_multi_ret_implicit_sret", "true")?;
-    Ok(settings::Flags::new(flag_builder))
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScalarKind {
     Int32,
@@ -102,7 +71,7 @@ enum ScalarKind {
 }
 
 impl ScalarKind {
-    fn signature_type(self) -> cranelift_codegen::ir::Type {
+    fn signature_type(self) -> ScalarType {
         match self {
             ScalarKind::Int32
             | ScalarKind::Int64
@@ -113,16 +82,14 @@ impl ScalarKind {
         }
     }
 
-    fn zero_value(self, builder: &mut FunctionBuilder<'_>) -> Value {
+    fn zero_value(self, builder: &mut dyn FunctionBackend) -> Val {
         match self {
             ScalarKind::Int32
             | ScalarKind::Int64
             | ScalarKind::Uint64
             | ScalarKind::Bool
-            | ScalarKind::Unit => builder.ins().iconst(types::I64, 0),
-            ScalarKind::Float32 | ScalarKind::Float64 => {
-                builder.ins().f64const(Ieee64::with_float(0.0))
-            }
+            | ScalarKind::Unit => builder.iconst(types::I64, 0),
+            ScalarKind::Float32 | ScalarKind::Float64 => builder.f64const(0.0),
         }
     }
 
@@ -314,7 +281,7 @@ struct PlainClassField {
 }
 
 impl DirectType {
-    fn abi_types(&self) -> Vec<cranelift_codegen::ir::Type> {
+    fn abi_types(&self) -> Vec<ScalarType> {
         match self {
             DirectType::Scalar(kind) => vec![kind.signature_type()],
             DirectType::Union(union) => {
@@ -348,7 +315,7 @@ impl DirectType {
         }
     }
 
-    fn zero_values(&self, builder: &mut FunctionBuilder<'_>) -> Vec<Value> {
+    fn zero_values(&self, builder: &mut dyn FunctionBackend) -> Vec<Val> {
         match self {
             DirectType::Scalar(kind) => vec![kind.zero_value(builder)],
             DirectType::PlainClass(class) => {
@@ -359,16 +326,16 @@ impl DirectType {
                 values
             }
             DirectType::Union(union) => {
-                let mut values = vec![builder.ins().iconst(types::I64, 0)];
+                let mut values = vec![builder.iconst(types::I64, 0)];
                 for _ in 0..union.payload_words {
-                    values.push(builder.ins().iconst(types::I64, 0));
+                    values.push(builder.iconst(types::I64, 0));
                 }
                 values
             }
             DirectType::Callable(_) => (0..1 + CALLABLE_ENVIRONMENT_WORDS)
-                .map(|_| builder.ins().iconst(types::I64, 0))
+                .map(|_| builder.iconst(types::I64, 0))
                 .collect(),
-            DirectType::Opaque(_) => vec![builder.ins().iconst(types::I64, 0)],
+            DirectType::Opaque(_) => vec![builder.iconst(types::I64, 0)],
         }
     }
 
@@ -398,7 +365,7 @@ impl DirectType {
 
 #[derive(Clone)]
 struct ValueRef {
-    values: Vec<Value>,
+    values: Vec<Val>,
     ty: DirectType,
 }
 
@@ -411,10 +378,10 @@ struct ValueRef {
 /// out in the same order in every build.
 #[derive(Clone, Default)]
 struct LayoutScratch {
-    opaque: BTreeSet<Value>,
-    unions: BTreeMap<Value, (Vec<Value>, DirectUnionType)>,
+    opaque: BTreeSet<Val>,
+    unions: BTreeMap<Val, (Vec<Val>, DirectUnionType)>,
     /// Inline callables the statement owns, keyed by the descriptor word.
-    callables: BTreeMap<Value, Vec<Value>>,
+    callables: BTreeMap<Val, Vec<Val>>,
     /// The references MIR `Retain`s made for the instruction that follows,
     /// in order, each with its place. A consuming operand of that place
     /// takes the first one; the end of the instruction releases any left.
@@ -426,15 +393,15 @@ struct LayoutScratch {
 }
 
 impl LayoutScratch {
-    fn contains(&self, value: &Value) -> bool {
+    fn contains(&self, value: &Val) -> bool {
         self.opaque.contains(value)
     }
 
-    fn insert(&mut self, value: Value) -> bool {
+    fn insert(&mut self, value: Val) -> bool {
         self.opaque.insert(value)
     }
 
-    fn remove(&mut self, value: &Value) -> bool {
+    fn remove(&mut self, value: &Val) -> bool {
         self.opaque.remove(value)
     }
 
@@ -537,13 +504,16 @@ struct NativeCodegen<'a> {
     safepoints_enabled: bool,
     program_path: String,
     program_source: String,
-    object: ObjectModule,
-    functions: HashMap<String, FuncId>,
-    function_thunks: HashMap<String, FuncId>,
-    function_default_binders: HashMap<String, FuncId>,
+    /// The module backend. A function definition holds it while the
+    /// function's body is built, and the body reaches it through its
+    /// function backend.
+    object: Option<Box<dyn ModuleBackend>>,
+    functions: HashMap<String, FuncHandle>,
+    function_thunks: HashMap<String, FuncHandle>,
+    function_default_binders: HashMap<String, FuncHandle>,
     callable_shapes: HashMap<CallableShapeKey, CallableShape>,
     contract_descriptors: HashMap<String, callables::ContractDescriptor>,
-    cleanup_thunks: HashMap<(String, String), FuncId>,
+    cleanup_thunks: HashMap<(String, String), FuncHandle>,
     classes: HashMap<String, MirClass>,
     enums: HashMap<String, MirEnum>,
     union_layouts: HashMap<String, crate::union_layout::MirUnionLayout>,
@@ -552,9 +522,8 @@ struct NativeCodegen<'a> {
     function_return_types: HashMap<String, DirectType>,
     function_param_types: HashMap<String, Vec<DirectType>>,
     function_writeback_types: HashMap<String, Vec<DirectType>>,
-    call_conv: CallConv,
-    runtime: RuntimeTable<FuncId>,
-    string_data: HashMap<Vec<u8>, DataId>,
+    runtime: RuntimeTable<FuncHandle>,
+    string_data: HashMap<Vec<u8>, DataHandle>,
 }
 
 macro_rules! try_or_string_error {
@@ -665,22 +634,10 @@ impl<'a> NativeCodegen<'a> {
             .map(|method| (method.function_name.clone(), method.receiver))
             .collect();
 
-        let flags = native_codegen_flags()?;
-        let isa_builder =
-            try_or_string_error!(cranelift_native::builder(), "failed to detect host ISA: {}");
-        let isa = try_or_string_error!(isa_builder.finish(flags), "failed to build host ISA: {}");
-        let call_conv = isa.default_call_conv();
-        let mut builder = try_or_string_error!(
-            ObjectBuilder::new(isa, "aura_direct".to_string(), default_libcall_names()),
-            "failed to initialize object builder: {}"
-        );
-        // One section per function lets ELF linkers drop unused generated
-        // functions with `--gc-sections`; Mach-O already strips per symbol.
-        builder.per_function_section(true);
-        let mut object = ObjectModule::new(builder);
+        let mut object = crate::native_backend::host_module_backend()?;
 
         let runtime =
-            RuntimeTable::try_build(|function| declare_runtime_helper(&mut object, function))?;
+            RuntimeTable::try_build(|function| declare_runtime_helper(&mut *object, function))?;
 
         let mut functions = HashMap::new();
         let mut function_thunks = HashMap::new();
@@ -696,14 +653,14 @@ impl<'a> NativeCodegen<'a> {
                     function.name
                 )
             })?;
-            let signature = signature_for(function, &classes, call_conv)?;
+            let signature = signature_for(function, &classes)?;
             let func_id = try_or_string_error!(
                 object.declare_function(&mangle_symbol(&function.name), Linkage::Local, &signature),
                 "failed to declare function `{}`: {}",
                 function.name
             );
             functions.insert(function.name.clone(), func_id);
-            let thunk_signature = thunk_signature(call_conv);
+            let thunk_signature = thunk_signature();
             let thunk_id = try_or_string_error!(
                 object.declare_function(
                     &mangle_thunk_symbol(&function.name),
@@ -714,7 +671,7 @@ impl<'a> NativeCodegen<'a> {
                 function.name
             );
             function_thunks.insert(function.name.clone(), thunk_id);
-            let binder_signature = default_binder_signature(call_conv);
+            let binder_signature = default_binder_signature();
             let binder_id = try_or_string_error!(
                 object.declare_function(
                     &mangle_default_binder_symbol(&function.name),
@@ -777,10 +734,9 @@ impl<'a> NativeCodegen<'a> {
 
         let callable_shapes = callables::declare_callable_shapes(
             module,
-            &mut object,
+            &mut *object,
             &function_param_types,
             &classes,
-            call_conv,
         )?;
         Ok(Self {
             module,
@@ -789,7 +745,7 @@ impl<'a> NativeCodegen<'a> {
             safepoints_enabled,
             program_path: program_path.to_string(),
             program_source: program_source.to_string(),
-            object,
+            object: Some(object),
             functions,
             function_thunks,
             function_default_binders,
@@ -816,7 +772,6 @@ impl<'a> NativeCodegen<'a> {
             function_return_types,
             function_param_types,
             function_writeback_types,
-            call_conv,
             runtime,
             string_data: HashMap::new(),
         })
@@ -846,22 +801,66 @@ impl<'a> NativeCodegen<'a> {
             self.define_cleanup_thunks(function)?;
         }
         self.define_main_wrapper()?;
-        let product = self.object.finish();
-        match product.emit() {
+        match self.take_module_backend()?.finish() {
             Ok(bytes) => Ok(bytes),
             Err(error) => Err(format!("failed to emit direct backend object: {}", error)),
         }
     }
 
+    /// The module backend, out of `self`.
+    fn take_module_backend(&mut self) -> std::result::Result<Box<dyn ModuleBackend>, String> {
+        match self.object.take() {
+            Some(object) => Ok(object),
+            None => Err(MODULE_BACKEND_BUSY_ERROR.to_string()),
+        }
+    }
+
+    /// The module backend, between function definitions.
+    fn module_backend(&mut self) -> std::result::Result<&mut dyn ModuleBackend, String> {
+        match self.object.as_deref_mut() {
+            Some(object) => Ok(object),
+            None => Err(MODULE_BACKEND_BUSY_ERROR.to_string()),
+        }
+    }
+
+    /// Defines `id` with the body `emit` builds. The module backend is out of
+    /// `self` while `emit` runs, which reaches it through the function
+    /// backend. `what` names the function in a code generator error.
+    fn define_body(
+        &mut self,
+        id: FuncHandle,
+        signature: &Signature,
+        what: &str,
+        emit: impl FnOnce(&mut Self, &mut dyn FunctionBackend) -> std::result::Result<(), String>,
+    ) -> std::result::Result<(), String> {
+        let mut object = self.take_module_backend()?;
+        let defined =
+            object.define_function(id, signature, Box::new(|builder| emit(self, builder)));
+        self.object = Some(object);
+        match defined {
+            Ok(()) => Ok(()),
+            Err(DefineError::Body(error)) => Err(error),
+            Err(DefineError::Backend(error)) => Err(format!("failed to define {what}: {error}")),
+        }
+    }
+
     fn define_function(&mut self, function: &MirFunction) -> std::result::Result<(), String> {
         let func_id = self.functions[&function.name];
-        let mut ctx = self.object.make_context();
-        ctx.func.signature = signature_for(function, &self.classes, self.call_conv)?;
-        ctx.func.name = UserFuncName::user(0, func_id.as_u32());
+        let signature = signature_for(function, &self.classes)?;
+        self.define_body(
+            func_id,
+            &signature,
+            &format!("direct function `{}`", function.name),
+            |codegen, builder| codegen.emit_function(builder, function, func_id),
+        )
+    }
 
-        let mut builder_ctx = FunctionBuilderContext::new();
-        let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
-
+    fn emit_function(
+        &mut self,
+        builder: &mut dyn FunctionBackend,
+        function: &MirFunction,
+        func_id: FuncHandle,
+    ) -> std::result::Result<(), String> {
         let reachable_blocks = self
             .reachable_blocks
             .get(&function.name)
@@ -891,39 +890,35 @@ impl<'a> NativeCodegen<'a> {
         };
         builder.append_block_params_for_function_params(entry);
         builder.switch_to_block(entry);
-        let runtime_refs = self
-            .runtime
-            .map(|id| self.object.declare_func_in_func(*id, builder.func));
+        let runtime_refs = self.runtime.map(|id| builder.import_function(*id));
         let public_function_name = public_direct_function_name(&function.name);
         let function_path = function
             .source_path
             .as_deref()
             .unwrap_or(&self.program_path);
         let descriptor = declare_frame_descriptor(
-            &mut self.object,
+            builder.module(),
             &mut self.string_data,
-            &format!("aura_frame_{}", func_id.as_u32()),
+            &format!("aura_frame_{}", func_id.0),
             function.span,
             function_path.as_bytes(),
             public_function_name.as_bytes(),
         )?;
-        let descriptor = self.object.declare_data_in_func(descriptor, builder.func);
-        let descriptor = builder.ins().symbol_value(types::I64, descriptor);
-        builder
-            .ins()
-            .call(runtime_refs[RuntimeFn::EnterCall], &[descriptor]);
+        let descriptor = builder.import_data(descriptor);
+        let descriptor = builder.symbol_value(types::I64, descriptor);
+        builder.call(runtime_refs[RuntimeFn::EnterCall], &[descriptor]);
 
         let mut variable_index = 0usize;
         let mut variables = HashMap::new();
         let mut variable_types = HashMap::new();
-        let entry_values = builder.block_params(entry).to_vec();
+        let entry_values = builder.block_params(entry);
         let mut entry_index = 0usize;
 
         if function.receiver.is_some() {
             let receiver_ty = receiver_type(function, &self.classes)?;
             let end = entry_index + receiver_ty.value_count();
             declare_root_variables(
-                &mut builder,
+                builder,
                 &mut variable_index,
                 &mut variables,
                 &mut variable_types,
@@ -942,7 +937,7 @@ impl<'a> NativeCodegen<'a> {
             )?;
             let end = entry_index + ty.value_count();
             declare_root_variables(
-                &mut builder,
+                builder,
                 &mut variable_index,
                 &mut variables,
                 &mut variable_types,
@@ -963,7 +958,7 @@ impl<'a> NativeCodegen<'a> {
                 &format!("local `{}` on `{}`", local.name, function.name),
             )?;
             declare_root_variables(
-                &mut builder,
+                builder,
                 &mut variable_index,
                 &mut variables,
                 &mut variable_types,
@@ -1020,17 +1015,17 @@ impl<'a> NativeCodegen<'a> {
         let mut cleanup_active_vars = HashMap::new();
         let mut cleanup_registration_vars = HashMap::new();
         for place in &cleanup_places {
-            let variable = Variable::from_u32(variable_index as u32);
+            let variable = Var(variable_index as u32);
             variable_index += 1;
             builder.declare_var(variable, types::I64);
-            let zero = builder.ins().iconst(types::I64, 0);
+            let zero = builder.iconst(types::I64, 0);
             builder.def_var(variable, zero);
             cleanup_active_vars.insert(place.clone(), variable);
 
-            let registration_variable = Variable::from_u32(variable_index as u32);
+            let registration_variable = Var(variable_index as u32);
             variable_index += 1;
             builder.declare_var(registration_variable, types::I64);
-            let zero = builder.ins().iconst(types::I64, 0);
+            let zero = builder.iconst(types::I64, 0);
             builder.def_var(registration_variable, zero);
             cleanup_registration_vars.insert(place.clone(), registration_variable);
         }
@@ -1043,12 +1038,10 @@ impl<'a> NativeCodegen<'a> {
                         .iter()
                         .any(|instruction| matches!(instruction, Instruction::Safepoint))
             }) {
-            let variable = Variable::from_u32(variable_index as u32);
+            let variable = Var(variable_index as u32);
             variable_index += 1;
             builder.declare_var(variable, types::I64);
-            let initial = builder
-                .ins()
-                .iconst(types::I64, NATIVE_LOOP_SAFEPOINT_INTERVAL as i64);
+            let initial = builder.iconst(types::I64, NATIVE_LOOP_SAFEPOINT_INTERVAL as i64);
             builder.def_var(variable, initial);
             Some(variable)
         } else {
@@ -1060,10 +1053,10 @@ impl<'a> NativeCodegen<'a> {
         let mut selector_loans = view_selector_tags.keys().cloned().collect::<Vec<_>>();
         selector_loans.sort();
         for loan in selector_loans {
-            let variable = Variable::from_u32(variable_index as u32);
+            let variable = Var(variable_index as u32);
             variable_index += 1;
             builder.declare_var(variable, types::I64);
-            let zero = builder.ins().iconst(types::I64, 0);
+            let zero = builder.iconst(types::I64, 0);
             builder.def_var(variable, zero);
             view_selector_vars.insert(loan, variable);
         }
@@ -1103,10 +1096,10 @@ impl<'a> NativeCodegen<'a> {
         let mut closure_roots = closure_selector_counts.into_keys().collect::<Vec<_>>();
         closure_roots.sort();
         for root in closure_roots {
-            let variable = Variable::from_u32(variable_index as u32);
+            let variable = Var(variable_index as u32);
             variable_index += 1;
             builder.declare_var(variable, types::I64);
-            let unset = builder.ins().iconst(types::I64, -1);
+            let unset = builder.iconst(types::I64, -1);
             builder.def_var(variable, unset);
             closure_selector_vars.insert(root, variable);
         }
@@ -1147,14 +1140,14 @@ impl<'a> NativeCodegen<'a> {
         let mut functions = self.functions.iter().collect::<Vec<_>>();
         functions.sort_by(|left, right| left.0.cmp(right.0));
         for (name, func_id) in functions {
-            let func_ref = self.object.declare_func_in_func(*func_id, builder.func);
+            let func_ref = builder.import_function(*func_id);
             function_refs.insert(name.clone(), func_ref);
         }
         let mut function_thunk_refs = HashMap::new();
         let mut function_thunks = self.function_thunks.iter().collect::<Vec<_>>();
         function_thunks.sort_by(|left, right| left.0.cmp(right.0));
         for (name, func_id) in function_thunks {
-            let func_ref = self.object.declare_func_in_func(*func_id, builder.func);
+            let func_ref = builder.import_function(*func_id);
             function_thunk_refs.insert(name.clone(), func_ref);
         }
         let mut cleanup_thunk_refs = HashMap::new();
@@ -1163,7 +1156,7 @@ impl<'a> NativeCodegen<'a> {
                 .cleanup_thunks
                 .get(&(function.name.clone(), place.clone()))
             {
-                let func_ref = self.object.declare_func_in_func(*func_id, builder.func);
+                let func_ref = builder.import_function(*func_id);
                 cleanup_thunk_refs.insert(place.clone(), func_ref);
             }
         }
@@ -1219,12 +1212,10 @@ impl<'a> NativeCodegen<'a> {
             closure_selector_vars,
             closure_selector_tags,
             closure_capture_writebacks: HashMap::new(),
-            object: &mut self.object,
             host_builtin_refs: HashMap::new(),
             string_data: &mut self.string_data,
             callable_shapes: &self.callable_shapes,
             contract_descriptors: &mut self.contract_descriptors,
-            call_conv: self.call_conv,
             cleanup_places,
             cleanup_actions,
             cleanup_callees,
@@ -1242,15 +1233,8 @@ impl<'a> NativeCodegen<'a> {
         compiler.compile_reachable_blocks(function, &return_ty)?;
 
         compiler.builder.seal_all_blocks();
-        compiler.builder.finalize();
         try_or_string_error!(
-            ctx.verify(self.object.isa()),
-            "failed to define direct function `{}`: {}\n{}",
-            function.name,
-            ctx.func.display()
-        );
-        try_or_string_error!(
-            self.object.define_function(func_id, &mut ctx),
+            compiler.builder.verify(),
             "failed to define direct function `{}`: {}",
             function.name
         );
@@ -1267,42 +1251,36 @@ impl<'a> NativeCodegen<'a> {
 
         let thunk_id = self.function_thunks[&function.name];
         let target_id = self.functions[&function.name];
-        let mut ctx = self.object.make_context();
-        ctx.func.signature = thunk_signature(self.call_conv);
-        ctx.func.name = UserFuncName::user(0, thunk_id.as_u32());
+        self.define_body(
+            thunk_id,
+            &thunk_signature(),
+            &format!("direct function thunk `{}`", function.name),
+            |codegen, builder| codegen.emit_function_thunk(builder, function, target_id),
+        )
+    }
 
-        let mut builder_ctx = FunctionBuilderContext::new();
-        let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
+    fn emit_function_thunk(
+        &mut self,
+        builder: &mut dyn FunctionBackend,
+        function: &MirFunction,
+        target_id: FuncHandle,
+    ) -> std::result::Result<(), String> {
         let entry = builder.create_block();
         builder.append_block_params_for_function_params(entry);
         builder.switch_to_block(entry);
         builder.seal_block(entry);
 
         let args_ptr = builder.block_params(entry)[0];
-        let target_ref = self.object.declare_func_in_func(target_id, builder.func);
-        let unbox_i64 = self
-            .object
-            .declare_func_in_func(self.runtime[RuntimeFn::UnboxI64], builder.func);
-        let unbox_int64 = self
-            .object
-            .declare_func_in_func(self.runtime[RuntimeFn::UnboxInt64], builder.func);
-        let unbox_u64 = self
-            .object
-            .declare_func_in_func(self.runtime[RuntimeFn::UnboxU64], builder.func);
-        let unbox_f64 = self
-            .object
-            .declare_func_in_func(self.runtime[RuntimeFn::UnboxF64], builder.func);
-        let unbox_bool = self
-            .object
-            .declare_func_in_func(self.runtime[RuntimeFn::UnboxBool], builder.func);
-        let release_value = self
-            .object
-            .declare_func_in_func(self.runtime[RuntimeFn::ReleaseValue], builder.func);
+        let target_ref = builder.import_function(target_id);
+        let unbox_i64 = builder.import_function(self.runtime[RuntimeFn::UnboxI64]);
+        let unbox_int64 = builder.import_function(self.runtime[RuntimeFn::UnboxInt64]);
+        let unbox_u64 = builder.import_function(self.runtime[RuntimeFn::UnboxU64]);
+        let unbox_f64 = builder.import_function(self.runtime[RuntimeFn::UnboxF64]);
+        let unbox_bool = builder.import_function(self.runtime[RuntimeFn::UnboxBool]);
+        let release_value = builder.import_function(self.runtime[RuntimeFn::ReleaseValue]);
 
         if matches!(function.name.as_str(), "main" | "__script") {
-            let module_constant = self
-                .object
-                .declare_func_in_func(self.runtime[RuntimeFn::ModuleConstant], builder.func);
+            let module_constant = builder.import_function(self.runtime[RuntimeFn::ModuleConstant]);
             for constant in &self.module.constants {
                 let initializer =
                     self.function_thunks
@@ -1313,82 +1291,75 @@ impl<'a> NativeCodegen<'a> {
                                 constant.initializer
                             )
                         })?;
-                let initializer = self.object.declare_func_in_func(*initializer, builder.func);
-                let initializer = builder.ins().func_addr(types::I64, initializer);
+                let initializer = builder.import_function(*initializer);
+                let initializer = builder.func_addr(types::I64, initializer);
                 let (key_ptr, key_len) = declare_string_constant(
-                    &mut self.object,
                     &mut self.string_data,
-                    &mut builder,
+                    builder,
                     constant.key.as_bytes(),
                 )?;
-                let call = builder
-                    .ins()
-                    .call(module_constant, &[key_ptr, key_len, initializer]);
-                let value = builder.inst_results(call)[0];
-                builder.ins().call(release_value, &[value]);
+                let call = builder.call(module_constant, &[key_ptr, key_len, initializer]);
+                let value = call.results[0];
+                builder.call(release_value, &[value]);
             }
         }
 
         let mut lowered_args = Vec::new();
         let param_types = self.function_param_types[&function.name].clone();
         for (index, param_ty) in param_types.iter().enumerate() {
-            let raw = builder
-                .ins()
-                .load(types::I64, MemFlags::new(), args_ptr, (index as i32) * 8);
+            let raw = builder.load(types::I64, MemFlags::new(), args_ptr, (index as i32) * 8);
             // The uniform function-value buffer is an in/out ownership
             // channel. Clear each incoming slot before transferring its
             // retained handle into the concrete function ABI; mutable
             // parameter writebacks are installed into their original slots
             // after the call.
-            let zero = builder.ins().iconst(types::I64, 0);
-            builder
-                .ins()
-                .store(MemFlags::new(), zero, args_ptr, (index as i32) * 8);
+            let zero = builder.iconst(types::I64, 0);
+            builder.store(MemFlags::new(), zero, args_ptr, (index as i32) * 8);
             match param_ty {
                 DirectType::Callable(_) => {
                     // The boxed handle is adopted into the callable's words.
-                    lowered_args.extend(unbox_thunk_value(self, &mut builder, raw, param_ty)?);
+                    lowered_args.extend(unbox_thunk_value(self, builder, raw, param_ty)?);
                 }
                 DirectType::Opaque(_) => lowered_args.push(raw),
                 DirectType::Scalar(ScalarKind::Int32) => {
-                    let inst = builder.ins().call(unbox_i64, &[raw]);
-                    lowered_args.push(builder.inst_results(inst)[0]);
-                    let _ = builder.ins().call(release_value, &[raw]);
+                    let inst = builder.call(unbox_i64, &[raw]);
+                    lowered_args.push(inst.results[0]);
+                    let _ = builder.call(release_value, &[raw]);
                 }
                 DirectType::Scalar(ScalarKind::Int64) => {
-                    let inst = builder.ins().call(unbox_int64, &[raw]);
-                    lowered_args.push(builder.inst_results(inst)[0]);
-                    let _ = builder.ins().call(release_value, &[raw]);
+                    let inst = builder.call(unbox_int64, &[raw]);
+                    lowered_args.push(inst.results[0]);
+                    let _ = builder.call(release_value, &[raw]);
                 }
                 DirectType::Scalar(ScalarKind::Uint64) => {
-                    let inst = builder.ins().call(unbox_u64, &[raw]);
-                    lowered_args.push(builder.inst_results(inst)[0]);
-                    let _ = builder.ins().call(release_value, &[raw]);
+                    let inst = builder.call(unbox_u64, &[raw]);
+                    lowered_args.push(inst.results[0]);
+                    let _ = builder.call(release_value, &[raw]);
                 }
                 DirectType::Scalar(ScalarKind::Float32)
                 | DirectType::Scalar(ScalarKind::Float64) => {
-                    let inst = builder.ins().call(unbox_f64, &[raw]);
-                    lowered_args.push(builder.inst_results(inst)[0]);
-                    let _ = builder.ins().call(release_value, &[raw]);
+                    let inst = builder.call(unbox_f64, &[raw]);
+                    lowered_args.push(inst.results[0]);
+                    let _ = builder.call(release_value, &[raw]);
                 }
                 DirectType::Scalar(ScalarKind::Bool) => {
-                    let inst = builder.ins().call(unbox_bool, &[raw]);
-                    lowered_args.push(builder.inst_results(inst)[0]);
-                    let _ = builder.ins().call(release_value, &[raw]);
+                    let inst = builder.call(unbox_bool, &[raw]);
+                    lowered_args.push(inst.results[0]);
+                    let _ = builder.call(release_value, &[raw]);
                 }
                 DirectType::Scalar(ScalarKind::Unit) => {
-                    lowered_args.push(builder.ins().iconst(types::I64, 0));
-                    let _ = builder.ins().call(release_value, &[raw]);
+                    lowered_args.push(builder.iconst(types::I64, 0));
+                    let _ = builder.call(release_value, &[raw]);
                 }
                 DirectType::PlainClass(_) | DirectType::Union(_) => {
-                    lowered_args.extend(unbox_thunk_value(self, &mut builder, raw, param_ty)?);
-                    let _ = builder.ins().call(release_value, &[raw]);
+                    lowered_args.extend(unbox_thunk_value(self, builder, raw, param_ty)?);
+                    let _ = builder.call(release_value, &[raw]);
                 }
             }
         }
 
-        let inst = builder.ins().call(target_ref, &lowered_args);
-        let results = builder.inst_results(inst).to_vec();
+        let inst = builder.call(target_ref, &lowered_args);
+        let results = inst.results;
         let return_ty = match self.function_return_types.get(&function.name).cloned() {
             Some(return_ty) => return_ty,
             None => {
@@ -1411,11 +1382,11 @@ impl<'a> NativeCodegen<'a> {
             let writeback_count = writeback_ty.value_count();
             let boxed_writeback = callables::box_owned_thunk_value(
                 self,
-                &mut builder,
+                builder,
                 &results[cursor..cursor + writeback_count],
                 writeback_ty,
             )?;
-            builder.ins().store(
+            builder.store(
                 MemFlags::new(),
                 boxed_writeback,
                 args_ptr,
@@ -1423,20 +1394,9 @@ impl<'a> NativeCodegen<'a> {
             );
             cursor += writeback_count;
         }
-        let boxed = callables::box_owned_thunk_value(
-            self,
-            &mut builder,
-            &results[..return_count],
-            &return_ty,
-        )?;
-        builder.ins().return_(&[boxed]);
-        builder.finalize();
-
-        try_or_string_error!(
-            self.object.define_function(thunk_id, &mut ctx),
-            "failed to define direct function thunk `{}`: {}",
-            function.name
-        );
+        let boxed =
+            callables::box_owned_thunk_value(self, builder, &results[..return_count], &return_ty)?;
+        builder.return_(&[boxed]);
         Ok(())
     }
 
@@ -1451,21 +1411,26 @@ impl<'a> NativeCodegen<'a> {
             ));
         }
         let binder_id = self.function_default_binders[&function.name];
-        let mut ctx = self.object.make_context();
-        ctx.func.signature = default_binder_signature(self.call_conv);
-        ctx.func.name = UserFuncName::user(0, binder_id.as_u32());
+        self.define_body(
+            binder_id,
+            &default_binder_signature(),
+            &format!("direct default binder `{}`", function.name),
+            |codegen, builder| codegen.emit_function_default_binder(builder, function),
+        )
+    }
 
-        let mut builder_ctx = FunctionBuilderContext::new();
-        let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
+    fn emit_function_default_binder(
+        &mut self,
+        builder: &mut dyn FunctionBackend,
+        function: &MirFunction,
+    ) -> std::result::Result<(), String> {
         let entry = builder.create_block();
         builder.append_block_params_for_function_params(entry);
         builder.switch_to_block(entry);
         builder.seal_block(entry);
         let args_ptr = builder.block_params(entry)[0];
         let transfer_defaults = builder.block_params(entry)[2];
-        let store_owned = self
-            .object
-            .declare_func_in_func(self.runtime[RuntimeFn::ArgBufferStoreOwned], builder.func);
+        let store_owned = builder.import_function(self.runtime[RuntimeFn::ArgBufferStoreOwned]);
         let param_types = self
             .function_param_types
             .get(&function.name)
@@ -1476,15 +1441,11 @@ impl<'a> NativeCodegen<'a> {
             let Some(default_name) = param.default_function.as_ref() else {
                 continue;
             };
-            let raw = builder
-                .ins()
-                .load(types::I64, MemFlags::new(), args_ptr, (index as i32) * 8);
-            let missing = builder.ins().icmp_imm(IntCC::Equal, raw, 0);
+            let raw = builder.load(types::I64, MemFlags::new(), args_ptr, (index as i32) * 8);
+            let missing = builder.icmp_imm(IntCC::Equal, raw, 0);
             let default_block = builder.create_block();
             let next_block = builder.create_block();
-            builder
-                .ins()
-                .brif(missing, default_block, &[], next_block, &[]);
+            builder.brif(missing, default_block, &[], next_block, &[]);
             builder.switch_to_block(default_block);
             let default_id = *self.functions.get(default_name).ok_or_else(|| {
                 format!(
@@ -1492,9 +1453,9 @@ impl<'a> NativeCodegen<'a> {
                     function.name
                 )
             })?;
-            let default_ref = self.object.declare_func_in_func(default_id, builder.func);
-            let call = builder.ins().call(default_ref, &[]);
-            let results = builder.inst_results(call).to_vec();
+            let default_ref = builder.import_function(default_id);
+            let call = builder.call(default_ref, &[]);
+            let results = call.results;
             let param_ty = param_types.get(index).ok_or_else(|| {
                 format!(
                     "direct backend is missing parameter {} metadata for `{}`",
@@ -1502,39 +1463,25 @@ impl<'a> NativeCodegen<'a> {
                     function.name
                 )
             })?;
-            let boxed = box_thunk_value(self, &mut builder, &results, param_ty)?;
-            let transfer = builder
-                .ins()
-                .icmp_imm(IntCC::NotEqual, transfer_defaults, 0);
+            let boxed = box_thunk_value(self, builder, &results, param_ty)?;
+            let transfer = builder.icmp_imm(IntCC::NotEqual, transfer_defaults, 0);
             let transfer_block = builder.create_block();
             let retain_block = builder.create_block();
-            builder
-                .ins()
-                .brif(transfer, transfer_block, &[], retain_block, &[]);
+            builder.brif(transfer, transfer_block, &[], retain_block, &[]);
             builder.switch_to_block(transfer_block);
-            let index_value = builder.ins().iconst(types::I64, index as i64);
-            builder
-                .ins()
-                .call(store_owned, &[args_ptr, index_value, boxed]);
-            builder.ins().jump(next_block, &[]);
+            let index_value = builder.iconst(types::I64, index as i64);
+            builder.call(store_owned, &[args_ptr, index_value, boxed]);
+            builder.jump(next_block, &[]);
             builder.seal_block(transfer_block);
             builder.switch_to_block(retain_block);
-            builder
-                .ins()
-                .store(MemFlags::new(), boxed, args_ptr, (index as i32) * 8);
-            builder.ins().jump(next_block, &[]);
+            builder.store(MemFlags::new(), boxed, args_ptr, (index as i32) * 8);
+            builder.jump(next_block, &[]);
             builder.seal_block(retain_block);
             builder.seal_block(default_block);
             builder.switch_to_block(next_block);
             builder.seal_block(next_block);
         }
-        builder.ins().return_(&[]);
-        builder.finalize();
-        try_or_string_error!(
-            self.object.define_function(binder_id, &mut ctx),
-            "failed to define direct default binder `{}`: {}",
-            function.name
-        );
+        builder.return_(&[]);
         Ok(())
     }
 
@@ -1569,6 +1516,21 @@ impl<'a> NativeCodegen<'a> {
                     place, function.name
                 )
             })?;
+
+        self.define_body(
+            thunk_id,
+            &thunk_signature(),
+            &format!("cleanup thunk for `{}` in `{}`", place, function.name),
+            |codegen, builder| codegen.emit_cleanup_thunk(builder, function, place),
+        )
+    }
+
+    fn emit_cleanup_thunk(
+        &mut self,
+        builder: &mut dyn FunctionBackend,
+        function: &MirFunction,
+        place: &str,
+    ) -> std::result::Result<(), String> {
         let place_ty = cleanup_place_type(function, &self.classes, place)?;
 
         let action = cleanup_action_for_place(function, place);
@@ -1578,19 +1540,13 @@ impl<'a> NativeCodegen<'a> {
             _ => None,
         };
 
-        let mut ctx = self.object.make_context();
-        ctx.func.signature = thunk_signature(self.call_conv);
-        ctx.func.name = UserFuncName::user(0, thunk_id.as_u32());
-
-        let mut builder_ctx = FunctionBuilderContext::new();
-        let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
         let entry = builder.create_block();
         builder.append_block_params_for_function_params(entry);
         builder.switch_to_block(entry);
         builder.seal_block(entry);
 
         let args_ptr = builder.block_params(entry)[0];
-        let raw = builder.ins().load(types::I64, MemFlags::new(), args_ptr, 0);
+        let raw = builder.load(types::I64, MemFlags::new(), args_ptr, 0);
         match &place_ty {
             DirectType::Callable(_) => {}
             DirectType::Union(_) => {}
@@ -1601,27 +1557,27 @@ impl<'a> NativeCodegen<'a> {
                             "direct backend could not find cleanup close method `{exit_function}`"
                         )
                     })?;
-                    let target_ref = self.object.declare_func_in_func(target_id, builder.func);
-                    let lowered = unbox_thunk_value(self, &mut builder, raw, &place_ty)?;
-                    let inst = builder.ins().call(target_ref, &lowered);
-                    let results = builder.inst_results(inst).to_vec();
+                    let target_ref = builder.import_function(target_id);
+                    let lowered = unbox_thunk_value(self, builder, raw, &place_ty)?;
+                    let inst = builder.call(target_ref, &lowered);
+                    let results = inst.results;
                     release_cleanup_thunk_results(
                         self,
-                        &mut builder,
+                        builder,
                         action.as_ref(),
                         &class_ty.class_name,
                         exit_function,
                         &results,
                     )?;
                 }
-                let zero = builder.ins().iconst(types::I64, 0);
+                let zero = builder.iconst(types::I64, 0);
                 let unit = box_thunk_value(
                     self,
-                    &mut builder,
+                    builder,
                     &[zero],
                     &DirectType::Scalar(ScalarKind::Unit),
                 )?;
-                builder.ins().return_(&[unit]);
+                builder.return_(&[unit]);
             }
             DirectType::Opaque(ty) => {
                 if let Some(exit_function) = &exit_function {
@@ -1630,34 +1586,33 @@ impl<'a> NativeCodegen<'a> {
                             "direct backend could not find cleanup close method `{exit_function}`"
                         )
                     })?;
-                    let target_ref = self.object.declare_func_in_func(target_id, builder.func);
-                    let retain_value = self
-                        .object
-                        .declare_func_in_func(self.runtime[RuntimeFn::RetainValue], builder.func);
-                    let retained = builder.ins().call(retain_value, &[raw]);
-                    let retained = builder.inst_results(retained)[0];
-                    let inst = builder.ins().call(target_ref, &[retained]);
-                    let results = builder.inst_results(inst).to_vec();
+                    let target_ref = builder.import_function(target_id);
+                    let retain_value =
+                        builder.import_function(self.runtime[RuntimeFn::RetainValue]);
+                    let retained = builder.call(retain_value, &[raw]);
+                    let retained = retained.results[0];
+                    let inst = builder.call(target_ref, &[retained]);
+                    let results = inst.results;
                     let class_name = match ty {
                         Type::Named(class_name, _) => class_name.clone(),
                         _ => String::new(),
                     };
                     release_cleanup_thunk_results(
                         self,
-                        &mut builder,
+                        builder,
                         action.as_ref(),
                         &class_name,
                         exit_function,
                         &results,
                     )?;
-                    let zero = builder.ins().iconst(types::I64, 0);
+                    let zero = builder.iconst(types::I64, 0);
                     let unit = box_thunk_value(
                         self,
-                        &mut builder,
+                        builder,
                         &[zero],
                         &DirectType::Scalar(ScalarKind::Unit),
                     )?;
-                    builder.ins().return_(&[unit]);
+                    builder.return_(&[unit]);
                 } else {
                     // A resource whose static type is known closes through its
                     // own entry, so the program links only that close path.
@@ -1667,39 +1622,31 @@ impl<'a> NativeCodegen<'a> {
                     };
                     let close_id = match typed_close {
                         Some(symbol) => declare_runtime_function(
-                            &mut self.object,
+                            builder.module(),
                             symbol,
                             &[types::I64, types::I64],
                             Some(types::I64),
                         )?,
                         None => self.runtime[RuntimeFn::CloseValue],
                     };
-                    let close_value = self.object.declare_func_in_func(close_id, builder.func);
-                    let cancel_before = builder.ins().iconst(types::I64, 1);
-                    let inst = builder.ins().call(close_value, &[raw, cancel_before]);
-                    let result = builder.inst_results(inst)[0];
-                    builder.ins().return_(&[result]);
+                    let close_value = builder.import_function(close_id);
+                    let cancel_before = builder.iconst(types::I64, 1);
+                    let inst = builder.call(close_value, &[raw, cancel_before]);
+                    let result = inst.results[0];
+                    builder.return_(&[result]);
                 }
             }
             DirectType::Scalar(_) => {
-                let zero = builder.ins().iconst(types::I64, 0);
+                let zero = builder.iconst(types::I64, 0);
                 let unit = box_thunk_value(
                     self,
-                    &mut builder,
+                    builder,
                     &[zero],
                     &DirectType::Scalar(ScalarKind::Unit),
                 )?;
-                builder.ins().return_(&[unit]);
+                builder.return_(&[unit]);
             }
         }
-        builder.finalize();
-
-        try_or_string_error!(
-            self.object.define_function(thunk_id, &mut ctx),
-            "failed to define cleanup thunk for `{}` in `{}`: {}",
-            place,
-            function.name
-        );
         Ok(())
     }
 
@@ -1715,55 +1662,48 @@ impl<'a> NativeCodegen<'a> {
         };
         let entry_thunk_id = self.function_thunks[&entry_name];
 
-        let mut ctx = self.object.make_context();
-        ctx.func.signature = main_signature(self.call_conv);
+        let signature = main_signature();
         let wrapper_id = try_or_string_error!(
-            self.object
-                .declare_function("main", Linkage::Export, &ctx.func.signature),
+            self.module_backend()?
+                .declare_function("main", Linkage::Export, &signature),
             "failed to declare main wrapper: {}"
         );
-        ctx.func.name = UserFuncName::user(0, wrapper_id.as_u32());
+        self.define_body(
+            wrapper_id,
+            &signature,
+            "main wrapper",
+            |codegen, builder| codegen.emit_main_wrapper(builder, entry_thunk_id),
+        )
+    }
 
-        let mut builder_ctx = FunctionBuilderContext::new();
-        let mut builder = FunctionBuilder::new(&mut ctx.func, &mut builder_ctx);
+    fn emit_main_wrapper(
+        &mut self,
+        builder: &mut dyn FunctionBackend,
+        entry_thunk_id: FuncHandle,
+    ) -> std::result::Result<(), String> {
         let entry_block = builder.create_block();
         builder.switch_to_block(entry_block);
         builder.seal_block(entry_block);
 
-        let runtime_init = self
-            .object
-            .declare_func_in_func(self.runtime[RuntimeFn::RuntimeInit], builder.func);
-        let run_root = self
-            .object
-            .declare_func_in_func(self.runtime[RuntimeFn::RunRoot], builder.func);
-        let entry_thunk_ref = self
-            .object
-            .declare_func_in_func(entry_thunk_id, builder.func);
-        let (path_ptr, path_len) = declare_string_constant(
-            &mut self.object,
-            &mut self.string_data,
-            &mut builder,
-            self.program_path.as_bytes(),
-        )?;
+        let runtime_init = builder.import_function(self.runtime[RuntimeFn::RuntimeInit]);
+        let run_root = builder.import_function(self.runtime[RuntimeFn::RunRoot]);
+        let entry_thunk_ref = builder.import_function(entry_thunk_id);
+        let (path_ptr, path_len) =
+            declare_string_constant(&mut self.string_data, builder, self.program_path.as_bytes())?;
         let (source_ptr, source_len) = declare_string_constant(
-            &mut self.object,
             &mut self.string_data,
-            &mut builder,
+            builder,
             self.program_source.as_bytes(),
         )?;
-        builder
-            .ins()
-            .call(runtime_init, &[path_ptr, path_len, source_ptr, source_len]);
+        builder.call(runtime_init, &[path_ptr, path_len, source_ptr, source_len]);
         // Generated code reads list elements at fixed offsets, so a runtime
         // built with another layout stops here instead of misreading them.
-        let check_list_layout = self
-            .object
-            .declare_func_in_func(self.runtime[RuntimeFn::CheckListLayout], builder.func);
-        let fingerprint = builder.ins().iconst(
+        let check_list_layout = builder.import_function(self.runtime[RuntimeFn::CheckListLayout]);
+        let fingerprint = builder.iconst(
             types::I64,
             aura_runtime::native_runtime::direct_list_layout().fingerprint(),
         );
-        builder.ins().call(check_list_layout, &[fingerprint]);
+        builder.call(check_list_layout, &[fingerprint]);
         let display_wrappers = self
             .module
             .functions
@@ -1774,34 +1714,21 @@ impl<'a> NativeCodegen<'a> {
             })
             .collect::<Vec<_>>();
         if !display_wrappers.is_empty() {
-            let register_display = self
-                .object
-                .declare_func_in_func(self.runtime[RuntimeFn::RegisterDisplay], builder.func);
+            let register_display =
+                builder.import_function(self.runtime[RuntimeFn::RegisterDisplay]);
             for (type_name, function_name) in display_wrappers {
                 let thunk_id = self.function_thunks[&function_name];
-                let thunk_ref = self.object.declare_func_in_func(thunk_id, builder.func);
-                let thunk_addr = builder.ins().func_addr(types::I64, thunk_ref);
-                let (name_ptr, name_len) = declare_string_constant(
-                    &mut self.object,
-                    &mut self.string_data,
-                    &mut builder,
-                    type_name.as_bytes(),
-                )?;
-                builder
-                    .ins()
-                    .call(register_display, &[name_ptr, name_len, thunk_addr]);
+                let thunk_ref = builder.import_function(thunk_id);
+                let thunk_addr = builder.func_addr(types::I64, thunk_ref);
+                let (name_ptr, name_len) =
+                    declare_string_constant(&mut self.string_data, builder, type_name.as_bytes())?;
+                builder.call(register_display, &[name_ptr, name_len, thunk_addr]);
             }
         }
-        let thunk_ptr = builder.ins().func_addr(types::I64, entry_thunk_ref);
-        let result = builder.ins().call(run_root, &[thunk_ptr]);
-        let return_code = builder.inst_results(result)[0];
-        builder.ins().return_(&[return_code]);
-        builder.finalize();
-
-        try_or_string_error!(
-            self.object.define_function(wrapper_id, &mut ctx),
-            "failed to define main wrapper: {}"
-        );
+        let thunk_ptr = builder.func_addr(types::I64, entry_thunk_ref);
+        let result = builder.call(run_root, &[thunk_ptr]);
+        let return_code = result.results[0];
+        builder.return_(&[return_code]);
         Ok(())
     }
 }
@@ -1817,7 +1744,7 @@ struct BorrowedListElement {
     /// The local holding the list.
     list: String,
     /// The variable holding the element's position.
-    index: Variable,
+    index: Var,
     element_type: Type,
     /// The index expression a bounds trap names.
     span: Span,
@@ -1867,7 +1794,7 @@ fn runtime_op_returns_boxed_payload(op: RuntimeOp) -> bool {
 /// One lowered argument of a handle runtime operation.
 enum RuntimeOpArg {
     Boxed(ValueRef),
-    Word(Value),
+    Word(Val),
 }
 
 /// What a member call on a receiver runs: a member and the dispatch MIR
@@ -1976,7 +1903,7 @@ fn function_op_result_layout(op: FunctionOp) -> FunctionOpResultLayout {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DirectViewAlternative {
     place: String,
-    conditions: Vec<(Variable, i64)>,
+    conditions: Vec<(Var, i64)>,
     union_payloads: Vec<DirectUnionPayload>,
     /// Element or entry selections applied, in order, after the static
     /// place is loaded: a view of `items[i]` names the list place plus one
@@ -1988,12 +1915,12 @@ struct DirectViewAlternative {
 /// The runtime operands of one selection chain (see
 /// `FunctionCompiler::element_path_operands`).
 struct DirectElementPathOperands {
-    path_ptr: Value,
-    path_len: Value,
-    selectors_ptr: Value,
-    count: Value,
-    line: Value,
-    column: Value,
+    path_ptr: Val,
+    path_len: Val,
+    selectors_ptr: Val,
+    count: Val,
+    line: Val,
+    column: Val,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2004,7 +1931,7 @@ enum DirectElementKind {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DirectElementSelector {
-    variable: Variable,
+    variable: Var,
     selector_ty: DirectType,
     /// The type the selection reaches: the element, or its `projection`.
     element_type: Type,
@@ -2067,7 +1994,7 @@ impl DirectViewPlace {
         self
     }
 
-    fn conditioned(mut self, selector: Variable, expected: i64) -> Self {
+    fn conditioned(mut self, selector: Var, expected: i64) -> Self {
         for alternative in &mut self.alternatives {
             let condition = (selector, expected);
             if !alternative.conditions.contains(&condition) {
@@ -2391,14 +2318,14 @@ fn direct_reverse_postorder(
 }
 
 struct FunctionCompiler<'a> {
-    builder: FunctionBuilder<'a>,
-    blocks: HashMap<String, cranelift_codegen::ir::Block>,
-    variables: HashMap<String, Vec<Variable>>,
+    builder: &'a mut dyn FunctionBackend,
+    blocks: HashMap<String, Blk>,
+    variables: HashMap<String, Vec<Var>>,
     variable_types: HashMap<String, DirectType>,
     next_variable_index: usize,
-    function_refs: HashMap<String, cranelift_codegen::ir::FuncRef>,
-    function_thunk_refs: HashMap<String, cranelift_codegen::ir::FuncRef>,
-    cleanup_thunk_refs: HashMap<String, cranelift_codegen::ir::FuncRef>,
+    function_refs: HashMap<String, FuncRef>,
+    function_thunk_refs: HashMap<String, FuncRef>,
+    cleanup_thunk_refs: HashMap<String, FuncRef>,
     function_return_types: HashMap<String, DirectType>,
     function_param_types: HashMap<String, Vec<DirectType>>,
     function_writeback_types: HashMap<String, Vec<DirectType>>,
@@ -2432,60 +2359,49 @@ struct FunctionCompiler<'a> {
     /// Each retained handle with the retain that made it and the handle it
     /// retained. A consumer that copies the value into its slot turns the
     /// retain into the copy.
-    retain_calls: HashMap<Value, (cranelift_codegen::ir::Inst, Value)>,
+    retain_calls: HashMap<Val, (Inst, Val)>,
     /// The releases of each retained handle, and the handles a consumer
     /// took. A handle no consumer took was only read: its retain and its
     /// releases cancel at the end of the instruction.
-    retain_releases: HashMap<Value, Vec<cranelift_codegen::ir::Inst>>,
-    consumed_retains: HashSet<Value>,
+    retain_releases: HashMap<Val, Vec<Inst>>,
+    consumed_retains: HashSet<Val>,
     /// The retain adapter call of each callable a `Retain` made, by its
     /// first word, with the drop calls that release it. A consumer that
     /// takes the callable removes it; the rest cancel like opaque retains.
-    callable_retains: HashMap<
-        Value,
-        (
-            cranelift_codegen::ir::Inst,
-            Vec<cranelift_codegen::ir::Inst>,
-        ),
-    >,
+    callable_retains: HashMap<Val, (Inst, Vec<Inst>)>,
     /// The tag words of inline unions a `Retain` made. Their handle stays
     /// shared with the root, so boxing one copies the payload.
-    retained_unions: HashSet<Value>,
+    retained_unions: HashSet<Val>,
     /// The latest `tag_value_type` call: its instruction, value, and encoded
     /// type, so an identical tag that no other call follows is not repeated.
-    last_runtime_type_tag: Option<(cranelift_codegen::ir::Inst, Value, String)>,
+    last_runtime_type_tag: Option<(Inst, Val, String)>,
     view_places: HashMap<String, DirectViewPlace>,
-    view_selector_vars: HashMap<String, Variable>,
+    view_selector_vars: HashMap<String, Var>,
     /// Owned dictionary keys held by entry loans, released at `EndLoan`.
-    view_element_keys: HashMap<String, Vec<Variable>>,
+    view_element_keys: HashMap<String, Vec<Var>>,
     view_selector_tags: HashMap<String, HashMap<String, i64>>,
-    closure_selector_vars: HashMap<String, Variable>,
+    closure_selector_vars: HashMap<String, Var>,
     closure_selector_tags: HashMap<(String, usize), i64>,
     closure_capture_writebacks: HashMap<String, Vec<DirectClosureCaptureWriteback>>,
-    object: &'a mut ObjectModule,
     /// Host builtin entries this function calls, declared on first use so the
     /// object imports only the builtins the program calls.
-    host_builtin_refs: HashMap<&'static str, cranelift_codegen::ir::FuncRef>,
-    string_data: &'a mut HashMap<Vec<u8>, DataId>,
+    host_builtin_refs: HashMap<&'static str, FuncRef>,
+    string_data: &'a mut HashMap<Vec<u8>, DataHandle>,
     callable_shapes: &'a HashMap<CallableShapeKey, CallableShape>,
     contract_descriptors: &'a mut HashMap<String, callables::ContractDescriptor>,
-    call_conv: CallConv,
     cleanup_places: Vec<String>,
     /// The typed exit action each cleanup place registers.
     cleanup_actions: HashMap<String, CleanupAction>,
     /// What each cleanup place's action runs, as MIR names it.
     cleanup_callees: HashMap<String, CleanupCallee>,
-    cleanup_active_vars: HashMap<String, Variable>,
-    cleanup_registration_vars: HashMap<String, Variable>,
-    safepoint_fuel: Option<Variable>,
-    runtime: RuntimeTable<cranelift_codegen::ir::FuncRef>,
+    cleanup_active_vars: HashMap<String, Var>,
+    cleanup_registration_vars: HashMap<String, Var>,
+    safepoint_fuel: Option<Var>,
+    runtime: RuntimeTable<FuncRef>,
 }
 
 impl<'a> FunctionCompiler<'a> {
-    fn compiled_block(
-        &self,
-        label: &str,
-    ) -> std::result::Result<cranelift_codegen::ir::Block, String> {
+    fn compiled_block(&self, label: &str) -> std::result::Result<Blk, String> {
         self.blocks.get(label).copied().ok_or_else(|| {
             format!(
                 "direct backend could not find MIR block `{label}` in `{}`",
@@ -2498,7 +2414,7 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         mut place: DirectViewPlace,
     ) -> std::result::Result<DirectViewPlace, String> {
-        let mut snapshots = Vec::<(Variable, Variable)>::new();
+        let mut snapshots = Vec::<(Var, Var)>::new();
         for alternative in &mut place.alternatives {
             for (selector, _) in &mut alternative.conditions {
                 let snapshot = if let Some((_, snapshot)) =
@@ -2506,7 +2422,7 @@ impl<'a> FunctionCompiler<'a> {
                 {
                     *snapshot
                 } else {
-                    let snapshot = Variable::from_u32(self.next_variable_index as u32);
+                    let snapshot = Var(self.next_variable_index as u32);
                     self.next_variable_index =
                         self.next_variable_index.checked_add(1).ok_or_else(|| {
                             "direct backend exhausted selector snapshot variables".to_string()
@@ -2530,7 +2446,7 @@ impl<'a> FunctionCompiler<'a> {
         ))
     }
 
-    fn local_vars(&self, name: &str) -> std::result::Result<Vec<Variable>, String> {
+    fn local_vars(&self, name: &str) -> std::result::Result<Vec<Var>, String> {
         self.variables
             .get(name)
             .cloned()
@@ -2560,21 +2476,22 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn retain_opaque_handle(&mut self, value: Value) -> Value {
-        let inst = self
+    fn retain_opaque_handle(&mut self, value: Val) -> Val {
+        let call = self
             .builder
-            .ins()
             .call(self.runtime[RuntimeFn::RetainValue], &[value]);
-        self.builder.inst_results(inst)[0]
+        call.results[0]
     }
 
-    fn release_opaque_handle(&mut self, value: Value) {
-        let inst = self
+    fn release_opaque_handle(&mut self, value: Val) {
+        let call = self
             .builder
-            .ins()
             .call(self.runtime[RuntimeFn::ReleaseValue], &[value]);
         if self.retain_calls.contains_key(&value) {
-            self.retain_releases.entry(value).or_default().push(inst);
+            self.retain_releases
+                .entry(value)
+                .or_default()
+                .push(call.inst);
         }
     }
 
@@ -2659,16 +2576,12 @@ impl<'a> FunctionCompiler<'a> {
     /// Releases the active member's handle of an inline union, if the active
     /// member owns one; a null handle (a moved-from local) is skipped by the
     /// runtime.
-    fn release_union_words(&mut self, union: &DirectUnionType, words: &[Value]) {
+    fn release_union_words(&mut self, union: &DirectUnionType, words: &[Val]) {
         for &index in &union.owning {
-            let active = self
-                .builder
-                .ins()
-                .icmp_imm(IntCC::Equal, words[0], index as i64);
+            let active = self.builder.icmp_imm(IntCC::Equal, words[0], index as i64);
             let release_block = self.builder.create_block();
             let continue_block = self.builder.create_block();
             self.builder
-                .ins()
                 .brif(active, release_block, &[], continue_block, &[]);
             self.builder.switch_to_block(release_block);
             self.builder.seal_block(release_block);
@@ -2678,7 +2591,7 @@ impl<'a> FunctionCompiler<'a> {
             } else {
                 self.release_opaque_handle(words[1]);
             }
-            self.builder.ins().jump(continue_block, &[]);
+            self.builder.jump(continue_block, &[]);
             self.builder.switch_to_block(continue_block);
             self.builder.seal_block(continue_block);
         }
@@ -2686,16 +2599,12 @@ impl<'a> FunctionCompiler<'a> {
 
     /// Retains the active member's handle of an inline union, if the active
     /// member owns one.
-    fn retain_union_words(&mut self, union: &DirectUnionType, words: &[Value]) {
+    fn retain_union_words(&mut self, union: &DirectUnionType, words: &[Val]) {
         for &index in &union.owning {
-            let active = self
-                .builder
-                .ins()
-                .icmp_imm(IntCC::Equal, words[0], index as i64);
+            let active = self.builder.icmp_imm(IntCC::Equal, words[0], index as i64);
             let retain_block = self.builder.create_block();
             let continue_block = self.builder.create_block();
             self.builder
-                .ins()
                 .brif(active, retain_block, &[], continue_block, &[]);
             self.builder.switch_to_block(retain_block);
             self.builder.seal_block(retain_block);
@@ -2705,7 +2614,7 @@ impl<'a> FunctionCompiler<'a> {
             } else {
                 let _ = self.retain_opaque_handle(words[1]);
             }
-            self.builder.ins().jump(continue_block, &[]);
+            self.builder.jump(continue_block, &[]);
             self.builder.switch_to_block(continue_block);
             self.builder.seal_block(continue_block);
         }
@@ -2713,7 +2622,7 @@ impl<'a> FunctionCompiler<'a> {
 
     /// The words of an inline union handed to a new owner: an owned
     /// temporary moves, a borrowed value retains its active handle.
-    fn transfer_union_words(&mut self, value: &ValueRef) -> Vec<Value> {
+    fn transfer_union_words(&mut self, value: &ValueRef) -> Vec<Val> {
         if self.temporary_owns_union(value) {
             self.clear_temporary_union_owned(value);
             return value.values.clone();
@@ -2748,21 +2657,16 @@ impl<'a> FunctionCompiler<'a> {
     /// Calls the `drop` or `retain` adapter named by an inline callable's
     /// descriptor on its four words; a zero descriptor (a moved-from or
     /// never-assigned value) names no shape and is skipped.
-    fn call_callable_adapter_on_words(
-        &mut self,
-        words: &[Value],
-        descriptor_offset: i32,
-    ) -> cranelift_codegen::ir::Inst {
-        let live = self.builder.ins().icmp_imm(IntCC::NotEqual, words[0], 0);
+    fn call_callable_adapter_on_words(&mut self, words: &[Val], descriptor_offset: i32) -> Inst {
+        let live = self.builder.icmp_imm(IntCC::NotEqual, words[0], 0);
         let call_block = self.builder.create_block();
         let continue_block = self.builder.create_block();
         self.builder
-            .ins()
             .brif(live, call_block, &[], continue_block, &[]);
         self.builder.switch_to_block(call_block);
         self.builder.seal_block(call_block);
         let call = self.call_callable_adapter_on_live_words(words, descriptor_offset);
-        self.builder.ins().jump(continue_block, &[]);
+        self.builder.jump(continue_block, &[]);
         self.builder.switch_to_block(continue_block);
         self.builder.seal_block(continue_block);
         call
@@ -2770,48 +2674,40 @@ impl<'a> FunctionCompiler<'a> {
 
     fn call_callable_adapter_on_live_words(
         &mut self,
-        words: &[Value],
+        words: &[Val],
         descriptor_offset: i32,
-    ) -> cranelift_codegen::ir::Inst {
-        let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
-            StackSlotKind::ExplicitSlot,
-            (8 * (1 + CALLABLE_ENVIRONMENT_WORDS)) as u32,
-            3,
-        ));
-        let callable_ptr = self.builder.ins().stack_addr(types::I64, slot, 0);
+    ) -> Inst {
+        let slot = self
+            .builder
+            .create_sized_stack_slot((8 * (1 + CALLABLE_ENVIRONMENT_WORDS)) as u32, 3);
+        let callable_ptr = self.builder.stack_addr(types::I64, slot, 0);
         for (index, word) in words.iter().enumerate() {
             self.builder
-                .ins()
                 .store(MemFlags::new(), *word, callable_ptr, (index as i32) * 8);
         }
-        let adapter =
-            self.builder
-                .ins()
-                .load(types::I64, MemFlags::new(), words[0], descriptor_offset);
+        let adapter = self
+            .builder
+            .load(types::I64, MemFlags::new(), words[0], descriptor_offset);
         let signature = self
             .builder
-            .func
-            .import_signature(callables::callable_unary_signature(self.call_conv));
+            .import_signature(callables::callable_unary_signature());
         self.builder
-            .ins()
             .call_indirect(signature, adapter, &[callable_ptr])
+            .inst
     }
 
     /// Boxes an inline callable through its descriptor's `box` adapter and
     /// returns the owned handle; the inline value stays alive.
-    fn call_callable_box_on_words(&mut self, words: &[Value]) -> Value {
-        let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
-            StackSlotKind::ExplicitSlot,
-            (8 * (1 + CALLABLE_ENVIRONMENT_WORDS)) as u32,
-            3,
-        ));
-        let callable_ptr = self.builder.ins().stack_addr(types::I64, slot, 0);
+    fn call_callable_box_on_words(&mut self, words: &[Val]) -> Val {
+        let slot = self
+            .builder
+            .create_sized_stack_slot((8 * (1 + CALLABLE_ENVIRONMENT_WORDS)) as u32, 3);
+        let callable_ptr = self.builder.stack_addr(types::I64, slot, 0);
         for (index, word) in words.iter().enumerate() {
             self.builder
-                .ins()
                 .store(MemFlags::new(), *word, callable_ptr, (index as i32) * 8);
         }
-        let adapter = self.builder.ins().load(
+        let adapter = self.builder.load(
             types::I64,
             MemFlags::new(),
             words[0],
@@ -2819,52 +2715,47 @@ impl<'a> FunctionCompiler<'a> {
         );
         let signature = self
             .builder
-            .func
-            .import_signature(callables::callable_box_signature(self.call_conv));
+            .import_signature(callables::callable_box_signature());
         let call = self
             .builder
-            .ins()
             .call_indirect(signature, adapter, &[callable_ptr]);
-        self.builder.inst_results(call)[0]
+        call.results[0]
     }
 
     /// The four words of a boxed function value re-entering as an inline
     /// callable of `signature`.
     fn boxed_callable_words(
         &mut self,
-        handle: Value,
+        handle: Val,
         signature: &Type,
-    ) -> std::result::Result<Vec<Value>, String> {
+    ) -> std::result::Result<Vec<Val>, String> {
         let contract = callables::declare_contract_descriptor(
-            &mut *self.object,
+            self.builder.module(),
             &mut *self.contract_descriptors,
             &self.classes,
-            self.call_conv,
             signature,
         )?;
-        let global = self
-            .object
-            .declare_data_in_func(contract.descriptor, self.builder.func);
-        let descriptor = self.builder.ins().symbol_value(types::I64, global);
-        let zero = self.builder.ins().iconst(types::I64, 0);
+        let global = self.builder.import_data(contract.descriptor);
+        let descriptor = self.builder.symbol_value(types::I64, global);
+        let zero = self.builder.iconst(types::I64, 0);
         Ok(vec![descriptor, handle, zero, zero])
     }
 
     /// Releases the captures an inline callable owns.
-    fn release_callable_words(&mut self, words: &[Value]) {
+    fn release_callable_words(&mut self, words: &[Val]) {
         let release = self.call_callable_adapter_on_words(words, callables::DESCRIPTOR_DROP);
         if let Some((_, releases)) = self.callable_retains.get_mut(&words[0]) {
             releases.push(release);
         }
     }
 
-    fn retain_callable_words(&mut self, words: &[Value]) {
+    fn retain_callable_words(&mut self, words: &[Val]) {
         self.call_callable_adapter_on_words(words, callables::DESCRIPTOR_RETAIN);
     }
 
     /// The words of an inline callable handed to a new owner: an owned
     /// temporary moves, a borrowed value retains its captures.
-    fn transfer_callable_words(&mut self, value: &ValueRef) -> Vec<Value> {
+    fn transfer_callable_words(&mut self, value: &ValueRef) -> Vec<Val> {
         if self.temporary_owns_callable(value) {
             self.clear_temporary_callable_owned(value);
             return value.values.clone();
@@ -2875,7 +2766,7 @@ impl<'a> FunctionCompiler<'a> {
 
     /// Argument or field words for any direct value: opaque handles,
     /// owning unions, and inline callables transfer, everything else copies.
-    fn transfer_values(&mut self, value: &ValueRef) -> Vec<Value> {
+    fn transfer_values(&mut self, value: &ValueRef) -> Vec<Val> {
         match &value.ty {
             DirectType::Opaque(_) => vec![self.transfer_opaque_arg(value)],
             DirectType::Union(union) if union.owns_handles() => self.transfer_union_words(value),
@@ -2925,9 +2816,9 @@ impl<'a> FunctionCompiler<'a> {
         }
         for (var, abi) in self.local_vars(name)?.into_iter().zip(ty.abi_types()) {
             let zero = if abi == types::F64 {
-                self.builder.ins().f64const(Ieee64::with_float(0.0))
+                self.builder.f64const(0.0)
             } else {
-                self.builder.ins().iconst(abi, 0)
+                self.builder.iconst(abi, 0)
             };
             self.builder.def_var(var, zero);
         }
@@ -2961,7 +2852,7 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    fn transfer_opaque_arg(&mut self, value: &ValueRef) -> Value {
+    fn transfer_opaque_arg(&mut self, value: &ValueRef) -> Val {
         if self.temporary_owns_opaque(value) {
             self.clear_temporary_opaque_owned(value);
             value.values[0]
@@ -2970,26 +2861,25 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn transfer_owned_opaque_value(&mut self, value: &ValueRef) -> Value {
+    fn transfer_owned_opaque_value(&mut self, value: &ValueRef) -> Val {
         if self.temporary_owns_opaque(value) {
             self.clear_temporary_opaque_owned(value);
             // A slot that holds its value inline needs a copy, not a second
             // reference, so the retain becomes the copy.
             if let Some((inst, handle)) = self.retain_calls.remove(&value.values[0]) {
                 let clone = self.runtime[RuntimeFn::CloneValue];
-                self.builder.func.dfg.replace(inst).call(clone, &[handle]);
+                self.builder.replace_with_call(inst, clone, &[handle]);
             }
             value.values[0]
         } else {
             let inst = self
                 .builder
-                .ins()
                 .call(self.runtime[RuntimeFn::CloneValue], &[value.values[0]]);
-            self.builder.inst_results(inst)[0]
+            inst.results[0]
         }
     }
 
-    fn owned_opaque_result(&mut self, values: Vec<Value>, ty: Type) -> ValueRef {
+    fn owned_opaque_result(&mut self, values: Vec<Val>, ty: Type) -> ValueRef {
         let value = ValueRef {
             values,
             ty: DirectType::Opaque(ty),
@@ -2998,9 +2888,9 @@ impl<'a> FunctionCompiler<'a> {
         value
     }
 
-    fn runtime_call_results(&mut self, callee: FuncRef, args: &[Value]) -> Vec<Value> {
-        let inst = self.builder.ins().call(callee, args);
-        self.builder.inst_results(inst).to_vec()
+    fn runtime_call_results(&mut self, callee: FuncRef, args: &[Val]) -> Vec<Val> {
+        let inst = self.builder.call(callee, args);
+        inst.results
     }
 
     fn compile_reachable_blocks(
@@ -3188,12 +3078,12 @@ impl<'a> FunctionCompiler<'a> {
             }
             DirectType::Opaque(ty) => {
                 let ty = ty.clone();
-                let inst = self
+                let call = self
                     .builder
-                    .ins()
                     .call(self.runtime[RuntimeFn::RetainValue], &[value.values[0]]);
-                let handle = self.builder.inst_results(inst)[0];
-                self.retain_calls.insert(handle, (inst, value.values[0]));
+                let handle = call.results[0];
+                self.retain_calls
+                    .insert(handle, (call.inst, value.values[0]));
                 ValueRef {
                     values: vec![handle],
                     ty: DirectType::Opaque(ty),
@@ -3244,8 +3134,8 @@ impl<'a> FunctionCompiler<'a> {
             .values
             .iter()
             .map(|word| {
-                if self.builder.func.dfg.value_type(*word) == types::I64 {
-                    self.builder.ins().iadd_imm(*word, 0)
+                if self.builder.value_type(*word) == types::I64 {
+                    self.builder.iadd_imm(*word, 0)
                 } else {
                     *word
                 }
@@ -3292,16 +3182,16 @@ impl<'a> FunctionCompiler<'a> {
         // A callable a consumer took left this map; the rest were only read.
         for (retain, releases) in std::mem::take(&mut self.callable_retains).into_values() {
             for inst in std::iter::once(retain).chain(releases) {
-                self.builder.func.dfg.replace(inst).nop();
+                self.builder.replace_with_nop(inst);
             }
         }
         for (handle, (retain, retained)) in retains {
             if consumed.contains(&handle) {
                 continue;
             }
-            self.builder.func.dfg.replace(retain).iadd_imm(retained, 0);
+            self.builder.replace_with_copy(retain, retained);
             for release in releases.remove(&handle).unwrap_or_default() {
-                self.builder.func.dfg.replace(release).nop();
+                self.builder.replace_with_nop(release);
             }
         }
     }
@@ -3360,25 +3250,21 @@ impl<'a> FunctionCompiler<'a> {
                     return Ok(());
                 };
                 let fuel = self.builder.use_var(fuel_variable);
-                let remaining = self.builder.ins().iadd_imm(fuel, -1);
+                let remaining = self.builder.iadd_imm(fuel, -1);
                 self.builder.def_var(fuel_variable, remaining);
-                let exhausted = self.builder.ins().icmp_imm(IntCC::Equal, remaining, 0);
+                let exhausted = self.builder.icmp_imm(IntCC::Equal, remaining, 0);
                 let slow_block = self.builder.create_block();
                 let continue_block = self.builder.create_block();
                 self.builder
-                    .ins()
                     .brif(exhausted, slow_block, &[], continue_block, &[]);
 
                 self.builder.switch_to_block(slow_block);
                 let reset = self
                     .builder
-                    .ins()
                     .iconst(types::I64, NATIVE_LOOP_SAFEPOINT_INTERVAL as i64);
                 self.builder.def_var(fuel_variable, reset);
-                self.builder
-                    .ins()
-                    .call(self.runtime[RuntimeFn::YieldNow], &[]);
-                self.builder.ins().jump(continue_block, &[]);
+                self.builder.call(self.runtime[RuntimeFn::YieldNow], &[]);
+                self.builder.jump(continue_block, &[]);
 
                 self.builder.switch_to_block(continue_block);
             }
@@ -3421,11 +3307,11 @@ impl<'a> FunctionCompiler<'a> {
                     encoded.extend_from_slice(projection.as_bytes());
                 }
                 let (projections_ptr, projections_len) = self.string_constant(&encoded)?;
-                let selected = self.builder.ins().call(
+                let selected = self.builder.call(
                     self.runtime[RuntimeFn::TakeReturnedViewProjection],
                     &[projections_ptr, projections_len],
                 );
-                let selected = self.builder.inst_results(selected)[0];
+                let selected = selected.results[0];
                 let selector_var = *self.view_selector_vars.get(loan).ok_or_else(|| {
                     format!(
                         "direct backend has no returned-view selector storage for loan `{loan}`"
@@ -3437,14 +3323,14 @@ impl<'a> FunctionCompiler<'a> {
                             "direct backend has no returned-view selector tags for loan `{loan}`"
                         )
                     })?;
-                let mut canonical_selector = self.builder.ins().iconst(types::I64, -1);
+                let mut canonical_selector = self.builder.iconst(types::I64, -1);
                 for (index, projection) in projections.iter().enumerate() {
                     let tag = *selector_tags.get(projection).ok_or_else(|| {
                         format!(
                             "direct backend has no selector tag for projection `{projection}` on loan `{loan}`"
                         )
                     })?;
-                    let matches = self.builder.ins().icmp_imm(
+                    let matches = self.builder.icmp_imm(
                         IntCC::Equal,
                         selected,
                         i64::try_from(index).map_err(|_| {
@@ -3453,9 +3339,8 @@ impl<'a> FunctionCompiler<'a> {
                             )
                         })?,
                     );
-                    let tag = self.builder.ins().iconst(types::I64, tag);
-                    canonical_selector =
-                        self.builder.ins().select(matches, tag, canonical_selector);
+                    let tag = self.builder.iconst(types::I64, tag);
+                    canonical_selector = self.builder.select(matches, tag, canonical_selector);
                 }
                 self.builder.def_var(selector_var, canonical_selector);
                 let origin = self.resolve_view_place(origin)?;
@@ -3474,12 +3359,11 @@ impl<'a> FunctionCompiler<'a> {
                     .unwrap_or(0);
                 let selector_words = (0..element_steps)
                     .map(|step| {
-                        let index = self.builder.ins().iconst(types::I64, step as i64);
+                        let index = self.builder.iconst(types::I64, step as i64);
                         let inst = self
                             .builder
-                            .ins()
                             .call(self.runtime[RuntimeFn::TakeReturnedViewSelector], &[index]);
-                        self.builder.inst_results(inst)[0]
+                        inst.results[0]
                     })
                     .collect::<Vec<_>>();
                 let mut alternatives = Vec::new();
@@ -3619,7 +3503,7 @@ impl<'a> FunctionCompiler<'a> {
                                     "direct backend has no closure writeback tag for instruction {instruction_index} in `{block_label}`"
                                 )
                             })?;
-                        let selected = self.builder.ins().iconst(types::I64, tag);
+                        let selected = self.builder.iconst(types::I64, tag);
                         self.builder.def_var(selector, selected);
                         Some((selector, tag))
                     } else {
@@ -3786,7 +3670,7 @@ impl<'a> FunctionCompiler<'a> {
             Terminator::Goto(label) => {
                 self.release_all_temporary_owned();
                 let block = self.compiled_block(label)?;
-                self.builder.ins().jump(block, &[]);
+                self.builder.jump(block, &[]);
             }
             Terminator::Branch {
                 condition,
@@ -3799,7 +3683,6 @@ impl<'a> FunctionCompiler<'a> {
                 let else_block = self.compiled_block(else_label)?;
                 self.release_all_temporary_owned();
                 self.builder
-                    .ins()
                     .brif(condition, then_block, &[], else_block, &[]);
             }
             Terminator::Match {
@@ -3826,7 +3709,7 @@ impl<'a> FunctionCompiler<'a> {
                     if arm.wildcard {
                         self.release_all_temporary_owned();
                         let arm_block = self.compiled_block(&arm.label)?;
-                        self.builder.ins().jump(arm_block, &[]);
+                        self.builder.jump(arm_block, &[]);
                         return Ok(());
                     }
                     let next_block = self.builder.create_block();
@@ -3839,21 +3722,20 @@ impl<'a> FunctionCompiler<'a> {
                     let matched_cleanup = self.builder.create_block();
                     let pending_owned = self.layout_scratch.clone();
                     self.builder
-                        .ins()
                         .brif(matched, matched_cleanup, &[], next_block, &[]);
                     self.builder.switch_to_block(matched_cleanup);
                     self.release_all_temporary_owned();
-                    self.builder.ins().jump(arm_block, &[]);
+                    self.builder.jump(arm_block, &[]);
                     self.builder.seal_block(matched_cleanup);
                     self.builder.switch_to_block(next_block);
                     self.layout_scratch = pending_owned;
                 }
                 self.release_all_temporary_owned();
                 if self.closed_matches.contains(block_label) {
-                    self.builder.ins().trap(TrapCode::unwrap_user(2));
+                    self.builder.trap(TrapCode::User(2));
                 } else {
                     let otherwise = self.compiled_block(otherwise)?;
-                    self.builder.ins().jump(otherwise, &[]);
+                    self.builder.jump(otherwise, &[]);
                 }
             }
             Terminator::ForRange {
@@ -3885,13 +3767,12 @@ impl<'a> FunctionCompiler<'a> {
                         }
                         message.values[0]
                     }
-                    None => self.builder.ins().iconst(types::I64, 0),
+                    None => self.builder.iconst(types::I64, 0),
                 };
                 let (line, column) = self.span_values(Some(*span));
                 match captures.as_slice() {
                     [] => {
                         self.builder
-                            .ins()
                             .call(self.runtime[RuntimeFn::AssertFail], &[message, line, column]);
                     }
                     [left, right] => {
@@ -3901,7 +3782,7 @@ impl<'a> FunctionCompiler<'a> {
                         let right_label = self.string_value(&right.label)?.values[0];
                         let right_type = self.string_value(&right.ty.to_string())?.values[0];
                         let right_value = self.load_assertion_capture_value(&right.value)?;
-                        self.builder.ins().call(
+                        self.builder.call(
                             self.runtime[RuntimeFn::AssertFailDetailed],
                             &[
                                 message,
@@ -3923,7 +3804,7 @@ impl<'a> FunctionCompiler<'a> {
                         )
                     }
                 }
-                self.builder.ins().trap(TrapCode::unwrap_user(1));
+                self.builder.trap(TrapCode::User(1));
                 // The trap unwinds the task, whose ledger reclaims what the
                 // assertion's operands held.
                 self.layout_scratch.clear();
@@ -3931,7 +3812,7 @@ impl<'a> FunctionCompiler<'a> {
             // The checker proved this path cannot run (for example the
             // impossible arm of a narrowed module-constant read).
             Terminator::Unreachable => {
-                self.builder.ins().trap(TrapCode::unwrap_user(2));
+                self.builder.trap(TrapCode::User(2));
             }
         }
         Ok(())
@@ -3940,7 +3821,7 @@ impl<'a> FunctionCompiler<'a> {
     fn load_assertion_capture_value(
         &mut self,
         operand: &Operand,
-    ) -> std::result::Result<Value, String> {
+    ) -> std::result::Result<Val, String> {
         let value = self.load_operand(operand)?;
         match &value.ty {
             DirectType::Opaque(Type::Named(name, args)) if name == "str" && args.is_empty() => {
@@ -3969,10 +3850,8 @@ impl<'a> FunctionCompiler<'a> {
             self.release_root_words(root)?;
         }
         self.release_boxed_copy_roots()?;
-        self.builder
-            .ins()
-            .call(self.runtime[RuntimeFn::ExitCall], &[]);
-        self.builder.ins().return_(&return_values);
+        self.builder.call(self.runtime[RuntimeFn::ExitCall], &[]);
+        self.builder.return_(&return_values);
         Ok(())
     }
 
@@ -3993,10 +3872,9 @@ impl<'a> FunctionCompiler<'a> {
                 let loaded = self.ensure_opaque(loaded)?;
                 let call = self
                     .builder
-                    .ins()
                     .call(self.runtime[RuntimeFn::NoneTest], &[loaded.values[0]]);
                 Ok(ValueRef {
-                    values: self.builder.inst_results(call).to_vec(),
+                    values: call.results,
                     ty: DirectType::Scalar(ScalarKind::Bool),
                 })
             }
@@ -4006,16 +3884,13 @@ impl<'a> FunctionCompiler<'a> {
                         "direct backend cannot find module constant initializer `{initializer}`"
                     )
                 })?;
-                let thunk_ptr = self.builder.ins().func_addr(types::I64, thunk);
+                let thunk_ptr = self.builder.func_addr(types::I64, thunk);
                 let (key_ptr, key_len) = self.string_constant(key.as_bytes())?;
-                let call = self.builder.ins().call(
+                let call = self.builder.call(
                     self.runtime[RuntimeFn::ModuleConstant],
                     &[key_ptr, key_len, thunk_ptr],
                 );
-                let value = self.owned_opaque_result(
-                    self.builder.inst_results(call).to_vec(),
-                    Type::named("Unknown"),
-                );
+                let value = self.owned_opaque_result(call.results, Type::named("Unknown"));
                 self.coerce_value(value, target)
             }
             Rvalue::Closure {
@@ -4038,7 +3913,7 @@ impl<'a> FunctionCompiler<'a> {
                     && matches!(value, Operand::Int(magnitude) if *magnitude == (i64::MAX as u128) + 1)
                 {
                     return Ok(ValueRef {
-                        values: vec![self.builder.ins().iconst(types::I64, i64::MIN)],
+                        values: vec![self.builder.iconst(types::I64, i64::MIN)],
                         ty: DirectType::Scalar(ScalarKind::Int64),
                     });
                 }
@@ -4143,12 +4018,10 @@ impl<'a> FunctionCompiler<'a> {
                 self.require_union_plan(union_type)?;
                 let value = self.load_operand(&Operand::Place(place.clone()))?;
                 if let DirectType::Union(_) = &value.ty {
-                    let matched = self.builder.ins().icmp_imm(
-                        IntCC::Equal,
-                        value.values[0],
-                        *member_index as i64,
-                    );
-                    let matched = self.builder.ins().uextend(types::I64, matched);
+                    let matched =
+                        self.builder
+                            .icmp_imm(IntCC::Equal, value.values[0], *member_index as i64);
+                    let matched = self.builder.uextend(types::I64, matched);
                     return Ok(ValueRef {
                         values: vec![matched],
                         ty: DirectType::Scalar(ScalarKind::Bool),
@@ -4157,13 +4030,13 @@ impl<'a> FunctionCompiler<'a> {
                 let value = self.ensure_opaque(value)?;
                 let encoded = crate::native_runtime::canonical_runtime_type_name(union_type);
                 let (ptr, len) = self.string_constant(encoded.as_bytes())?;
-                let index = self.builder.ins().iconst(types::I64, *member_index as i64);
-                let call = self.builder.ins().call(
+                let index = self.builder.iconst(types::I64, *member_index as i64);
+                let call = self.builder.call(
                     self.runtime[RuntimeFn::UnionTagTest],
                     &[value.values[0], ptr, len, index],
                 );
                 Ok(ValueRef {
-                    values: self.builder.inst_results(call).to_vec(),
+                    values: call.results,
                     ty: DirectType::Scalar(ScalarKind::Bool),
                 })
             }
@@ -4180,15 +4053,12 @@ impl<'a> FunctionCompiler<'a> {
                 let value = self.ensure_opaque(value)?;
                 let encoded = crate::native_runtime::canonical_runtime_type_name(union_type);
                 let (ptr, len) = self.string_constant(encoded.as_bytes())?;
-                let index = self.builder.ins().iconst(types::I64, *member_index as i64);
-                let call = self.builder.ins().call(
+                let index = self.builder.iconst(types::I64, *member_index as i64);
+                let call = self.builder.call(
                     self.runtime[RuntimeFn::UnionTakePayload],
                     &[value.values[0], ptr, len, index],
                 );
-                let payload = self.owned_opaque_result(
-                    self.builder.inst_results(call).to_vec(),
-                    member_type.clone(),
-                );
+                let payload = self.owned_opaque_result(call.results, member_type.clone());
                 // The take moves the payload out and the MIR counts the
                 // root as moved, so the emptied box goes now.
                 if !place.contains('.') && self.tracked_roots.contains(place) {
@@ -4220,15 +4090,12 @@ impl<'a> FunctionCompiler<'a> {
                 let transferred = self.transfer_owned_opaque_value(&payload);
                 let encoded = crate::native_runtime::canonical_runtime_type_name(union_type);
                 let (ptr, len) = self.string_constant(encoded.as_bytes())?;
-                let tag = self.builder.ins().iconst(types::I64, *member_index as i64);
-                let call = self.builder.ins().call(
+                let tag = self.builder.iconst(types::I64, *member_index as i64);
+                let call = self.builder.call(
                     self.runtime[RuntimeFn::UnionInject],
                     &[ptr, len, tag, transferred],
                 );
-                Ok(self.owned_opaque_result(
-                    self.builder.inst_results(call).to_vec(),
-                    union_type.clone(),
-                ))
+                Ok(self.owned_opaque_result(call.results, union_type.clone()))
             }
             Rvalue::EnumVariant {
                 enum_name,
@@ -4302,19 +4169,15 @@ impl<'a> FunctionCompiler<'a> {
             let transferred = self.transfer_values(&value);
             for (word, abi) in transferred.iter().zip(capture_ty.abi_types()) {
                 words.push(if abi == types::F64 {
-                    self.builder
-                        .ins()
-                        .bitcast(types::I64, MemFlags::new(), *word)
+                    self.builder.bitcast(types::I64, *word)
                 } else {
                     *word
                 });
             }
         }
-        let global = self
-            .object
-            .declare_data_in_func(shape.descriptor, self.builder.func);
-        let descriptor = self.builder.ins().symbol_value(types::I64, global);
-        let zero = self.builder.ins().iconst(types::I64, 0);
+        let global = self.builder.import_data(shape.descriptor);
+        let descriptor = self.builder.symbol_value(types::I64, global);
+        let zero = self.builder.iconst(types::I64, 0);
         let mut values = vec![descriptor];
         if shape.inline() {
             values.extend(words.iter().copied());
@@ -4322,18 +4185,13 @@ impl<'a> FunctionCompiler<'a> {
                 values.push(zero);
             }
         } else {
-            let size = self
-                .builder
-                .ins()
-                .iconst(types::I64, shape.env_words as i64);
+            let size = self.builder.iconst(types::I64, shape.env_words as i64);
             let call = self
                 .builder
-                .ins()
                 .call(self.runtime[RuntimeFn::CallableEnvAlloc], &[size]);
-            let block = self.builder.inst_results(call)[0];
+            let block = call.results[0];
             for (index, word) in words.iter().enumerate() {
                 self.builder
-                    .ins()
                     .store(MemFlags::new(), *word, block, (index as i32) * 8);
             }
             values.push(block);
@@ -4364,22 +4222,19 @@ impl<'a> FunctionCompiler<'a> {
         };
         let element_direct_ty =
             ensure_direct_type(&resolved_element_type, &self.classes, "Vec element")?;
-        let init = self
-            .builder
-            .ins()
-            .call(self.runtime[RuntimeFn::VecEmpty], &[]);
+        let init = self.builder.call(self.runtime[RuntimeFn::VecEmpty], &[]);
         let vector = self.owned_opaque_result(
-            self.builder.inst_results(init).to_vec(),
+            init.results,
             Type::Named("list".to_string(), vec![resolved_element_type]),
         );
         for element in elements {
             let value = self.load_operand_as_opaque_direct(element, &element_direct_ty)?;
             let value = self.transfer_owned_opaque_value(&value);
-            let result = self.builder.ins().call(
+            let result = self.builder.call(
                 self.runtime[RuntimeFn::VecPushInPlace],
                 &[vector.values[0], value],
             );
-            self.release_opaque_handle(self.builder.inst_results(result)[0]);
+            self.release_opaque_handle(result.results[0]);
         }
         Ok(vector)
     }
@@ -4401,12 +4256,9 @@ impl<'a> FunctionCompiler<'a> {
         };
         let key_direct_ty = ensure_direct_type(&resolved_key_type, &self.classes, "dict key")?;
         let value_direct_ty = ensure_direct_type(&resolved_value_type, &self.classes, "Map value")?;
-        let init = self
-            .builder
-            .ins()
-            .call(self.runtime[RuntimeFn::MapEmpty], &[]);
+        let init = self.builder.call(self.runtime[RuntimeFn::MapEmpty], &[]);
         let map = self.owned_opaque_result(
-            self.builder.inst_results(init).to_vec(),
+            init.results,
             Type::Named(
                 "dict".to_string(),
                 vec![resolved_key_type, resolved_value_type],
@@ -4417,11 +4269,11 @@ impl<'a> FunctionCompiler<'a> {
             let value = self.load_operand_as_opaque_direct(&entry.value, &value_direct_ty)?;
             let key = self.transfer_owned_opaque_value(&key);
             let value = self.transfer_owned_opaque_value(&value);
-            let result = self.builder.ins().call(
+            let result = self.builder.call(
                 self.runtime[RuntimeFn::MapSetInPlace],
                 &[map.values[0], key, value],
             );
-            self.release_opaque_handle(self.builder.inst_results(result)[0]);
+            self.release_opaque_handle(result.results[0]);
         }
         Ok(map)
     }
@@ -4442,18 +4294,15 @@ impl<'a> FunctionCompiler<'a> {
         };
         let element_direct_ty =
             ensure_direct_type(&resolved_element_type, &self.classes, "set element")?;
-        let init = self
-            .builder
-            .ins()
-            .call(self.runtime[RuntimeFn::SetEmpty], &[]);
+        let init = self.builder.call(self.runtime[RuntimeFn::SetEmpty], &[]);
         let set = self.owned_opaque_result(
-            self.builder.inst_results(init).to_vec(),
+            init.results,
             Type::Named("set".to_string(), vec![resolved_element_type]),
         );
         for element in elements {
             let value = self.load_operand_as_opaque_direct(element, &element_direct_ty)?;
             let value = self.transfer_owned_opaque_value(&value);
-            let _ = self.builder.ins().call(
+            let _ = self.builder.call(
                 self.runtime[RuntimeFn::SetInsertInPlace],
                 &[set.values[0], value],
             );
@@ -4479,16 +4328,13 @@ impl<'a> FunctionCompiler<'a> {
                 UnaryOp::Not => 1,
                 UnaryOp::BitNot => 2,
             };
-            let opcode = self.builder.ins().iconst(types::I64, opcode);
+            let opcode = self.builder.iconst(types::I64, opcode);
             let (line, column) = self.span_values(span);
-            let inst = self.builder.ins().call(
+            let inst = self.builder.call(
                 self.runtime[RuntimeFn::UnaryValue],
                 &[opcode, value.values[0], line, column],
             );
-            let result = self.owned_opaque_result(
-                self.builder.inst_results(inst).to_vec(),
-                Type::named("Unknown"),
-            );
+            let result = self.owned_opaque_result(inst.results, Type::named("Unknown"));
             return if matches!(target_ty, DirectType::Opaque(_)) {
                 Ok(result)
             } else {
@@ -4497,7 +4343,7 @@ impl<'a> FunctionCompiler<'a> {
         }
         match (op, value.ty.scalar_kind()) {
             (UnaryOp::Neg, Some(ScalarKind::Int32)) => Ok(ValueRef {
-                values: vec![self.builder.ins().ineg(value.values[0])],
+                values: vec![self.builder.ineg(value.values[0])],
                 ty: DirectType::Scalar(ScalarKind::Int32),
             }),
             (UnaryOp::Neg, Some(ScalarKind::Int64)) => self.compile_wide_integer_negation(
@@ -4513,14 +4359,14 @@ impl<'a> FunctionCompiler<'a> {
                 trap,
             ),
             (UnaryOp::Neg, Some(kind)) if kind.is_float() => Ok(ValueRef {
-                values: vec![self.builder.ins().fneg(value.values[0])],
+                values: vec![self.builder.fneg(value.values[0])],
                 ty: DirectType::Scalar(kind),
             }),
             (UnaryOp::Not, Some(ScalarKind::Bool)) => {
-                let zero = self.builder.ins().iconst(types::I64, 0);
-                let cmp = self.builder.ins().icmp(IntCC::Equal, value.values[0], zero);
+                let zero = self.builder.iconst(types::I64, 0);
+                let cmp = self.builder.icmp(IntCC::Equal, value.values[0], zero);
                 Ok(ValueRef {
-                    values: vec![self.builder.ins().uextend(types::I64, cmp)],
+                    values: vec![self.builder.uextend(types::I64, cmp)],
                     ty: DirectType::Scalar(ScalarKind::Bool),
                 })
             }
@@ -4534,11 +4380,11 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_wide_integer_negation(
         &mut self,
         kind: WideIntegerKind,
-        value: Value,
+        value: Val,
         span: Option<Span>,
         trap: ArithmeticTrap,
     ) -> std::result::Result<ValueRef, String> {
-        let zero = self.builder.ins().iconst(types::I64, 0);
+        let zero = self.builder.iconst(types::I64, 0);
         let result = self.compile_wide_integer_overflowing(
             kind,
             WideOverflowOp::Sub,
@@ -4559,27 +4405,30 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         kind: WideIntegerKind,
         op: WideOverflowOp,
-        left: Value,
-        right: Value,
+        left: Val,
+        right: Val,
         span: Option<Span>,
         trap: ArithmeticTrap,
-    ) -> std::result::Result<Value, String> {
-        let ins = self.builder.ins();
+    ) -> std::result::Result<Val, String> {
         if !trap.checks_overflow() {
             return Ok(match op {
-                WideOverflowOp::Add => ins.iadd(left, right),
-                WideOverflowOp::Sub => ins.isub(left, right),
+                WideOverflowOp::Add => self.builder.iadd(left, right),
+                WideOverflowOp::Sub => self.builder.isub(left, right),
                 // `Div` names only a floor division's failure.
-                WideOverflowOp::Mul | WideOverflowOp::Div => ins.imul(left, right),
+                WideOverflowOp::Mul | WideOverflowOp::Div => self.builder.imul(left, right),
             });
         }
         let (result, overflow) = match (op, kind.is_signed()) {
-            (WideOverflowOp::Add, true) => ins.sadd_overflow(left, right),
-            (WideOverflowOp::Add, false) => ins.uadd_overflow(left, right),
-            (WideOverflowOp::Sub, true) => ins.ssub_overflow(left, right),
-            (WideOverflowOp::Sub, false) => ins.usub_overflow(left, right),
-            (WideOverflowOp::Mul | WideOverflowOp::Div, true) => ins.smul_overflow(left, right),
-            (WideOverflowOp::Mul | WideOverflowOp::Div, false) => ins.umul_overflow(left, right),
+            (WideOverflowOp::Add, true) => self.builder.sadd_overflow(left, right),
+            (WideOverflowOp::Add, false) => self.builder.uadd_overflow(left, right),
+            (WideOverflowOp::Sub, true) => self.builder.ssub_overflow(left, right),
+            (WideOverflowOp::Sub, false) => self.builder.usub_overflow(left, right),
+            (WideOverflowOp::Mul | WideOverflowOp::Div, true) => {
+                self.builder.smul_overflow(left, right)
+            }
+            (WideOverflowOp::Mul | WideOverflowOp::Div, false) => {
+                self.builder.umul_overflow(left, right)
+            }
         };
         self.emit_integer_overflow_failure_branch(overflow, kind, op, left, right, span)?;
         Ok(result)
@@ -4596,12 +4445,11 @@ impl<'a> FunctionCompiler<'a> {
             let boxed = self.ensure_opaque(value)?;
             let (target_ptr, target_len) = self.string_constant(target.to_string().as_bytes())?;
             let (line, column) = self.span_values(span);
-            let inst = self.builder.ins().call(
+            let inst = self.builder.call(
                 self.runtime[RuntimeFn::CastValue],
                 &[boxed.values[0], target_ptr, target_len, line, column],
             );
-            let boxed =
-                self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), target.clone());
+            let boxed = self.owned_opaque_result(inst.results, target.clone());
             return self.coerce_value(boxed, target_ty);
         }
         let Some(target_kind) = target_ty.scalar_kind() else {
@@ -4621,7 +4469,7 @@ impl<'a> FunctionCompiler<'a> {
         let result = match (source_kind, target_kind) {
             (_, _) if source_kind == target_kind => source,
             (source_kind, target_kind) if source_kind.is_integer() && target_kind.is_integer() => {
-                let source_code = self.builder.ins().iconst(
+                let source_code = self.builder.iconst(
                     types::I64,
                     if matches!(source_kind, ScalarKind::Uint64) {
                         1
@@ -4629,7 +4477,7 @@ impl<'a> FunctionCompiler<'a> {
                         0
                     },
                 );
-                let target_code = self.builder.ins().iconst(
+                let target_code = self.builder.iconst(
                     types::I64,
                     match target_kind {
                         ScalarKind::Int32 => 0,
@@ -4639,14 +4487,14 @@ impl<'a> FunctionCompiler<'a> {
                     },
                 );
                 let (line, column) = self.span_values(span);
-                let inst = self.builder.ins().call(
+                let inst = self.builder.call(
                     self.runtime[RuntimeFn::CastIntegerToInteger],
                     &[source, source_code, target_code, line, column],
                 );
-                self.builder.inst_results(inst)[0]
+                inst.results[0]
             }
             (source_kind, target_kind) if source_kind.is_integer() && target_kind.is_float() => {
-                let source_code = self.builder.ins().iconst(
+                let source_code = self.builder.iconst(
                     types::I64,
                     if matches!(source_kind, ScalarKind::Uint64) {
                         1
@@ -4654,7 +4502,7 @@ impl<'a> FunctionCompiler<'a> {
                         0
                     },
                 );
-                let target_code = self.builder.ins().iconst(
+                let target_code = self.builder.iconst(
                     types::I64,
                     if matches!(target_kind, ScalarKind::Float32) {
                         0
@@ -4663,14 +4511,14 @@ impl<'a> FunctionCompiler<'a> {
                     },
                 );
                 let (line, column) = self.span_values(span);
-                let inst = self.builder.ins().call(
+                let inst = self.builder.call(
                     self.runtime[RuntimeFn::CastIntegerToFloat],
                     &[source, source_code, target_code, line, column],
                 );
-                self.builder.inst_results(inst)[0]
+                inst.results[0]
             }
             (source_kind, target_kind) if source_kind.is_float() && target_kind.is_integer() => {
-                let target_code = self.builder.ins().iconst(
+                let target_code = self.builder.iconst(
                     types::I64,
                     match target_kind {
                         ScalarKind::Int32 => 0,
@@ -4680,11 +4528,11 @@ impl<'a> FunctionCompiler<'a> {
                     },
                 );
                 let (line, column) = self.span_values(span);
-                let inst = self.builder.ins().call(
+                let inst = self.builder.call(
                     self.runtime[RuntimeFn::CastFloatToInteger],
                     &[source, target_code, line, column],
                 );
-                self.builder.inst_results(inst)[0]
+                inst.results[0]
             }
             (lhs, rhs) if lhs.is_float() && rhs.is_float() => source,
             _ => {
@@ -4717,7 +4565,6 @@ impl<'a> FunctionCompiler<'a> {
         };
         let same_tag = self
             .builder
-            .ins()
             .icmp(IntCC::Equal, left.values[0], right.values[0]);
         let bool_ty = DirectType::Scalar(ScalarKind::Bool);
         let right_words = right.values.clone();
@@ -4729,19 +4576,18 @@ impl<'a> FunctionCompiler<'a> {
         let merge_block = self.builder.create_block();
         self.builder.append_block_param(merge_block, types::I64);
         self.builder
-            .ins()
             .brif(same_tag, compare_block, &[], differ_block, &[]);
         self.builder.switch_to_block(differ_block);
         self.builder.seal_block(differ_block);
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        self.builder.ins().jump(merge_block, &[zero]);
+        let zero = self.builder.iconst(types::I64, 0);
+        self.builder.jump(merge_block, &[zero]);
         self.builder.switch_to_block(compare_block);
         self.builder.seal_block(compare_block);
         let members_equal =
             self.switch_on_union_tag(&union, &left.values, &bool_ty, |codegen, index, member| {
                 if matches!(member.ty, DirectType::Scalar(ScalarKind::Unit)) {
                     return Ok(ValueRef {
-                        values: vec![codegen.builder.ins().iconst(types::I64, 1)],
+                        values: vec![codegen.builder.iconst(types::I64, 1)],
                         ty: DirectType::Scalar(ScalarKind::Bool),
                     });
                 }
@@ -4761,16 +4607,14 @@ impl<'a> FunctionCompiler<'a> {
                 let other = codegen.ensure_opaque(other)?;
                 codegen.compile_binary(BinaryOp::Eq, member, other, span, ArithmeticTrap::None)
             })?;
-        self.builder
-            .ins()
-            .jump(merge_block, &[members_equal.values[0]]);
+        self.builder.jump(merge_block, &[members_equal.values[0]]);
         self.builder.switch_to_block(merge_block);
         self.builder.seal_block(merge_block);
         let equal = self.builder.block_params(merge_block)[0];
         let result = if op == BinaryOp::Eq {
             equal
         } else {
-            self.builder.ins().bxor_imm(equal, 1)
+            self.builder.bxor_imm(equal, 1)
         };
         Ok(ValueRef {
             values: vec![result],
@@ -4795,17 +4639,14 @@ impl<'a> FunctionCompiler<'a> {
             } else {
                 return Ok(None);
             };
-        let opcode = self
-            .builder
-            .ins()
-            .iconst(types::I64, Self::binary_opcode(op));
+        let opcode = self.builder.iconst(types::I64, Self::binary_opcode(op));
         let (line, column) = self.span_values(Some(span));
         let inst = match other {
             Operand::String(literal) => {
                 let (list, index) = self.load_borrowed_list_element(&selection)?;
                 let (literal_ptr, literal_len) = self.string_constant(literal.as_bytes())?;
-                let literal_on_left = self.builder.ins().iconst(types::I64, 1 - element_on_left);
-                self.builder.ins().call(
+                let literal_on_left = self.builder.iconst(types::I64, 1 - element_on_left);
+                self.builder.call(
                     self.runtime[RuntimeFn::CompareStrLiteralAt],
                     &[
                         opcode,
@@ -4823,8 +4664,8 @@ impl<'a> FunctionCompiler<'a> {
                 let other = self.load_operand(other)?;
                 let other = self.ensure_opaque(other)?;
                 let (list, index) = self.load_borrowed_list_element(&selection)?;
-                let element_on_left = self.builder.ins().iconst(types::I64, element_on_left);
-                self.builder.ins().call(
+                let element_on_left = self.builder.iconst(types::I64, element_on_left);
+                self.builder.call(
                     self.runtime[RuntimeFn::CompareValuesAt],
                     &[
                         opcode,
@@ -4839,7 +4680,7 @@ impl<'a> FunctionCompiler<'a> {
             }
         };
         Ok(Some(ValueRef {
-            values: vec![self.builder.inst_results(inst)[0]],
+            values: vec![inst.results[0]],
             ty: DirectType::Scalar(ScalarKind::Bool),
         }))
     }
@@ -4873,13 +4714,10 @@ impl<'a> FunctionCompiler<'a> {
                 .map(Some);
         }
         let (literal_ptr, literal_len) = self.string_constant(literal.as_bytes())?;
-        let opcode = self
-            .builder
-            .ins()
-            .iconst(types::I64, Self::binary_opcode(op));
-        let literal_on_left = self.builder.ins().iconst(types::I64, literal_on_left);
+        let opcode = self.builder.iconst(types::I64, Self::binary_opcode(op));
+        let literal_on_left = self.builder.iconst(types::I64, literal_on_left);
         let (line, column) = self.span_values(Some(span));
-        let inst = self.builder.ins().call(
+        let inst = self.builder.call(
             self.runtime[RuntimeFn::CompareStrLiteral],
             &[
                 opcode,
@@ -4892,7 +4730,7 @@ impl<'a> FunctionCompiler<'a> {
             ],
         );
         Ok(Some(ValueRef {
-            values: vec![self.builder.inst_results(inst)[0]],
+            values: vec![inst.results[0]],
             ty: DirectType::Scalar(ScalarKind::Bool),
         }))
     }
@@ -4942,10 +4780,10 @@ impl<'a> FunctionCompiler<'a> {
             let left = self.ensure_opaque(left)?;
             let right = self.ensure_opaque(right)?;
             let opcode_value = Self::binary_opcode(op);
-            let opcode = self.builder.ins().iconst(types::I64, opcode_value);
-            let float_width = self.builder.ins().iconst(types::I64, float_width);
+            let opcode = self.builder.iconst(types::I64, opcode_value);
+            let float_width = self.builder.iconst(types::I64, float_width);
             let (line, column) = self.span_values(span);
-            let inst = self.builder.ins().call(
+            let inst = self.builder.call(
                 self.runtime[RuntimeFn::BinaryValue],
                 &[
                     opcode,
@@ -4956,10 +4794,7 @@ impl<'a> FunctionCompiler<'a> {
                     column,
                 ],
             );
-            let result = self.owned_opaque_result(
-                self.builder.inst_results(inst).to_vec(),
-                Type::named("Unknown"),
-            );
+            let result = self.owned_opaque_result(inst.results, Type::named("Unknown"));
             return if matches!(target_ty, DirectType::Opaque(_)) {
                 Ok(result)
             } else {
@@ -4993,14 +4828,13 @@ impl<'a> FunctionCompiler<'a> {
             };
             let left = self.ensure_opaque(left)?;
             let right = self.ensure_opaque(right)?;
-            let scalar_left = self.builder.ins().iconst(types::I64, scalar_left);
+            let scalar_left = self.builder.iconst(types::I64, scalar_left);
             let operation = self
                 .builder
-                .ins()
                 .iconst(types::I64, direct_array_binary_opcode(op)?);
-            let checked_mode = self.builder.ins().iconst(types::I64, 0);
+            let checked_mode = self.builder.iconst(types::I64, 0);
             let (line, column) = self.span_values(span);
-            let inst = self.builder.ins().call(
+            let inst = self.builder.call(
                 self.runtime[RuntimeFn::ArrayBinary],
                 &[
                     left.values[0],
@@ -5012,28 +4846,28 @@ impl<'a> FunctionCompiler<'a> {
                     column,
                 ],
             );
-            return Ok(self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), array_ty));
+            return Ok(self.owned_opaque_result(inst.results, array_ty));
         }
         if matches!(left.ty, DirectType::Opaque(_)) || matches!(right.ty, DirectType::Opaque(_)) {
             let left = self.ensure_opaque(left)?;
             let right = self.ensure_opaque(right)?;
             let binary_opcode = Self::binary_opcode(op);
-            let opcode = self.builder.ins().iconst(types::I64, binary_opcode);
+            let opcode = self.builder.iconst(types::I64, binary_opcode);
             if is_comparison_op(op) {
                 // The result is a machine `bool`, so no box is built for it.
                 let (line, column) = self.span_values(span);
-                let inst = self.builder.ins().call(
+                let inst = self.builder.call(
                     self.runtime[RuntimeFn::CompareValues],
                     &[opcode, left.values[0], right.values[0], line, column],
                 );
                 return Ok(ValueRef {
-                    values: vec![self.builder.inst_results(inst)[0]],
+                    values: vec![inst.results[0]],
                     ty: DirectType::Scalar(ScalarKind::Bool),
                 });
             }
-            let float_width = self.builder.ins().iconst(types::I64, 0);
+            let float_width = self.builder.iconst(types::I64, 0);
             let (line, column) = self.span_values(span);
-            let inst = self.builder.ins().call(
+            let inst = self.builder.call(
                 self.runtime[RuntimeFn::BinaryValue],
                 &[
                     opcode,
@@ -5044,10 +4878,7 @@ impl<'a> FunctionCompiler<'a> {
                     column,
                 ],
             );
-            return Ok(self.owned_opaque_result(
-                self.builder.inst_results(inst).to_vec(),
-                Type::named("Unknown"),
-            ));
+            return Ok(self.owned_opaque_result(inst.results, Type::named("Unknown")));
         }
         match (left.ty.scalar_kind(), right.ty.scalar_kind()) {
             (Some(ScalarKind::Int32), Some(ScalarKind::Int32)) => {
@@ -5095,23 +4926,23 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_int32_binary(
         &mut self,
         op: BinaryOp,
-        left: Value,
-        right: Value,
+        left: Val,
+        right: Val,
         span: Option<Span>,
         trap: ArithmeticTrap,
     ) -> std::result::Result<ValueRef, String> {
         let ty = DirectType::Scalar(ScalarKind::Int32);
         let value = match op {
             BinaryOp::Add => ValueRef {
-                values: vec![self.builder.ins().iadd(left, right)],
+                values: vec![self.builder.iadd(left, right)],
                 ty,
             },
             BinaryOp::Sub => ValueRef {
-                values: vec![self.builder.ins().isub(left, right)],
+                values: vec![self.builder.isub(left, right)],
                 ty,
             },
             BinaryOp::Mul => ValueRef {
-                values: vec![self.builder.ins().imul(left, right)],
+                values: vec![self.builder.imul(left, right)],
                 ty,
             },
             BinaryOp::FloorDiv => {
@@ -5150,30 +4981,25 @@ impl<'a> FunctionCompiler<'a> {
         Ok(value)
     }
 
-    fn compile_signed_floor_divmod(&mut self, left: Value, right: Value, quotient: bool) -> Value {
-        let truncating_quotient = self.builder.ins().sdiv(left, right);
-        let truncating_remainder = self.builder.ins().srem(left, right);
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        let remainder_nonzero =
-            self.builder
-                .ins()
-                .icmp(IntCC::NotEqual, truncating_remainder, zero);
-        let left_negative = self.builder.ins().icmp(IntCC::SignedLessThan, left, zero);
-        let right_negative = self.builder.ins().icmp(IntCC::SignedLessThan, right, zero);
-        let signs_differ = self.builder.ins().bxor(left_negative, right_negative);
-        let adjust = self.builder.ins().band(remainder_nonzero, signs_differ);
+    fn compile_signed_floor_divmod(&mut self, left: Val, right: Val, quotient: bool) -> Val {
+        let truncating_quotient = self.builder.sdiv(left, right);
+        let truncating_remainder = self.builder.srem(left, right);
+        let zero = self.builder.iconst(types::I64, 0);
+        let remainder_nonzero = self
+            .builder
+            .icmp(IntCC::NotEqual, truncating_remainder, zero);
+        let left_negative = self.builder.icmp(IntCC::SignedLessThan, left, zero);
+        let right_negative = self.builder.icmp(IntCC::SignedLessThan, right, zero);
+        let signs_differ = self.builder.bxor(left_negative, right_negative);
+        let adjust = self.builder.band(remainder_nonzero, signs_differ);
 
         if quotient {
-            let one = self.builder.ins().iconst(types::I64, 1);
-            let adjusted = self.builder.ins().isub(truncating_quotient, one);
-            self.builder
-                .ins()
-                .select(adjust, adjusted, truncating_quotient)
+            let one = self.builder.iconst(types::I64, 1);
+            let adjusted = self.builder.isub(truncating_quotient, one);
+            self.builder.select(adjust, adjusted, truncating_quotient)
         } else {
-            let adjusted = self.builder.ins().iadd(truncating_remainder, right);
-            self.builder
-                .ins()
-                .select(adjust, adjusted, truncating_remainder)
+            let adjusted = self.builder.iadd(truncating_remainder, right);
+            self.builder.select(adjust, adjusted, truncating_remainder)
         }
     }
 
@@ -5181,8 +5007,8 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         kind: WideIntegerKind,
         op: BinaryOp,
-        left: Value,
-        right: Value,
+        left: Val,
+        right: Val,
         span: Option<Span>,
         trap: ArithmeticTrap,
     ) -> std::result::Result<ValueRef, String> {
@@ -5211,12 +5037,11 @@ impl<'a> FunctionCompiler<'a> {
                 self.emit_int_division_guard_for(trap, right, span)?;
                 if kind.is_signed() {
                     if trap.checks_overflow() {
-                        let min = self.builder.ins().iconst(types::I64, i64::MIN);
-                        let negative_one = self.builder.ins().iconst(types::I64, -1);
-                        let is_min = self.builder.ins().icmp(IntCC::Equal, left, min);
-                        let is_negative_one =
-                            self.builder.ins().icmp(IntCC::Equal, right, negative_one);
-                        let overflow = self.builder.ins().band(is_min, is_negative_one);
+                        let min = self.builder.iconst(types::I64, i64::MIN);
+                        let negative_one = self.builder.iconst(types::I64, -1);
+                        let is_min = self.builder.icmp(IntCC::Equal, left, min);
+                        let is_negative_one = self.builder.icmp(IntCC::Equal, right, negative_one);
+                        let overflow = self.builder.band(is_min, is_negative_one);
                         self.emit_integer_overflow_failure_branch(
                             overflow,
                             kind,
@@ -5228,23 +5053,22 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     arithmetic(self.compile_signed_floor_divmod(left, right, true))
                 } else {
-                    arithmetic(self.builder.ins().udiv(left, right))
+                    arithmetic(self.builder.udiv(left, right))
                 }
             }
             BinaryOp::Mod => {
                 self.emit_int_division_guard_for(trap, right, span)?;
                 if kind.is_signed() {
-                    let min = self.builder.ins().iconst(types::I64, i64::MIN);
-                    let negative_one = self.builder.ins().iconst(types::I64, -1);
-                    let is_min = self.builder.ins().icmp(IntCC::Equal, left, min);
-                    let is_negative_one =
-                        self.builder.ins().icmp(IntCC::Equal, right, negative_one);
-                    let exceptional = self.builder.ins().band(is_min, is_negative_one);
+                    let min = self.builder.iconst(types::I64, i64::MIN);
+                    let negative_one = self.builder.iconst(types::I64, -1);
+                    let is_min = self.builder.icmp(IntCC::Equal, left, min);
+                    let is_negative_one = self.builder.icmp(IntCC::Equal, right, negative_one);
+                    let exceptional = self.builder.band(is_min, is_negative_one);
                     let normal_block = self.builder.create_block();
                     let continue_block = self.builder.create_block();
                     self.builder.append_block_param(continue_block, types::I64);
-                    let zero_remainder = self.builder.ins().iconst(types::I64, 0);
-                    self.builder.ins().brif(
+                    let zero_remainder = self.builder.iconst(types::I64, 0);
+                    self.builder.brif(
                         exceptional,
                         continue_block,
                         &[zero_remainder],
@@ -5253,13 +5077,13 @@ impl<'a> FunctionCompiler<'a> {
                     );
                     self.builder.switch_to_block(normal_block);
                     let remainder = self.compile_signed_floor_divmod(left, right, false);
-                    self.builder.ins().jump(continue_block, &[remainder]);
+                    self.builder.jump(continue_block, &[remainder]);
                     self.builder.seal_block(normal_block);
                     self.builder.switch_to_block(continue_block);
                     self.builder.seal_block(continue_block);
                     arithmetic(self.builder.block_params(continue_block)[0])
                 } else {
-                    arithmetic(self.builder.ins().urem(left, right))
+                    arithmetic(self.builder.urem(left, right))
                 }
             }
             BinaryOp::Eq => self.boolean_from_icmp(IntCC::Equal, left, right),
@@ -5308,8 +5132,8 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_float_binary(
         &mut self,
         op: BinaryOp,
-        left: Value,
-        right: Value,
+        left: Val,
+        right: Val,
         kind: ScalarKind,
         span: Option<Span>,
         trap: ArithmeticTrap,
@@ -5317,15 +5141,15 @@ impl<'a> FunctionCompiler<'a> {
         let ty = DirectType::Scalar(kind);
         match op {
             BinaryOp::Add => Ok(ValueRef {
-                values: vec![self.builder.ins().fadd(left, right)],
+                values: vec![self.builder.fadd(left, right)],
                 ty,
             }),
             BinaryOp::Sub => Ok(ValueRef {
-                values: vec![self.builder.ins().fsub(left, right)],
+                values: vec![self.builder.fsub(left, right)],
                 ty,
             }),
             BinaryOp::Mul => Ok(ValueRef {
-                values: vec![self.builder.ins().fmul(left, right)],
+                values: vec![self.builder.fmul(left, right)],
                 ty,
             }),
             BinaryOp::Div => {
@@ -5333,37 +5157,30 @@ impl<'a> FunctionCompiler<'a> {
                     self.emit_float_division_guard(right, span)?;
                 }
                 Ok(ValueRef {
-                    values: vec![self.builder.ins().fdiv(left, right)],
+                    values: vec![self.builder.fdiv(left, right)],
                     ty,
                 })
             }
             BinaryOp::FloorDiv | BinaryOp::Mod => {
                 let opcode_value = Self::binary_opcode(op);
-                let left_box = self
-                    .builder
-                    .ins()
-                    .call(self.runtime[RuntimeFn::BoxF64], &[left]);
-                let right_box = self
-                    .builder
-                    .ins()
-                    .call(self.runtime[RuntimeFn::BoxF64], &[right]);
-                let left_boxed = self.builder.inst_results(left_box)[0];
-                let right_boxed = self.builder.inst_results(right_box)[0];
-                let opcode = self.builder.ins().iconst(types::I64, opcode_value);
-                let float_width = self.builder.ins().iconst(types::I64, 0);
+                let left_box = self.builder.call(self.runtime[RuntimeFn::BoxF64], &[left]);
+                let right_box = self.builder.call(self.runtime[RuntimeFn::BoxF64], &[right]);
+                let left_boxed = left_box.results[0];
+                let right_boxed = right_box.results[0];
+                let opcode = self.builder.iconst(types::I64, opcode_value);
+                let float_width = self.builder.iconst(types::I64, 0);
                 let (line, column) = self.span_values(span);
-                let result = self.builder.ins().call(
+                let result = self.builder.call(
                     self.runtime[RuntimeFn::BinaryValue],
                     &[opcode, left_boxed, right_boxed, float_width, line, column],
                 );
-                let result_boxed = self.builder.inst_results(result)[0];
+                let result_boxed = result.results[0];
                 self.release_opaque_handle(left_boxed);
                 self.release_opaque_handle(right_boxed);
                 let unboxed = self
                     .builder
-                    .ins()
                     .call(self.runtime[RuntimeFn::UnboxF64], &[result_boxed]);
-                let value = self.builder.inst_results(unboxed)[0];
+                let value = unboxed.results[0];
                 self.release_opaque_handle(result_boxed);
                 Ok(ValueRef {
                     values: vec![value],
@@ -5388,18 +5205,18 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_bool_binary(
         &mut self,
         op: BinaryOp,
-        left: Value,
-        right: Value,
+        left: Val,
+        right: Val,
     ) -> std::result::Result<ValueRef, String> {
         match op {
             BinaryOp::Eq => Ok(self.boolean_from_icmp(IntCC::Equal, left, right)),
             BinaryOp::NotEq => Ok(self.boolean_from_icmp(IntCC::NotEqual, left, right)),
             BinaryOp::And => Ok(ValueRef {
-                values: vec![self.builder.ins().band(left, right)],
+                values: vec![self.builder.band(left, right)],
                 ty: DirectType::Scalar(ScalarKind::Bool),
             }),
             BinaryOp::Or => Ok(ValueRef {
-                values: vec![self.builder.ins().bor(left, right)],
+                values: vec![self.builder.bor(left, right)],
                 ty: DirectType::Scalar(ScalarKind::Bool),
             }),
             other => Err(format!(
@@ -5409,18 +5226,18 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn boolean_from_icmp(&mut self, cc: IntCC, left: Value, right: Value) -> ValueRef {
-        let cmp = self.builder.ins().icmp(cc, left, right);
+    fn boolean_from_icmp(&mut self, cc: IntCC, left: Val, right: Val) -> ValueRef {
+        let cmp = self.builder.icmp(cc, left, right);
         ValueRef {
-            values: vec![self.builder.ins().uextend(types::I64, cmp)],
+            values: vec![self.builder.uextend(types::I64, cmp)],
             ty: DirectType::Scalar(ScalarKind::Bool),
         }
     }
 
-    fn boolean_from_fcmp(&mut self, cc: FloatCC, left: Value, right: Value) -> ValueRef {
-        let cmp = self.builder.ins().fcmp(cc, left, right);
+    fn boolean_from_fcmp(&mut self, cc: FloatCC, left: Val, right: Val) -> ValueRef {
+        let cmp = self.builder.fcmp(cc, left, right);
         ValueRef {
-            values: vec![self.builder.ins().uextend(types::I64, cmp)],
+            values: vec![self.builder.uextend(types::I64, cmp)],
             ty: DirectType::Scalar(ScalarKind::Bool),
         }
     }
@@ -5429,41 +5246,40 @@ impl<'a> FunctionCompiler<'a> {
     fn emit_int_division_guard_for(
         &mut self,
         trap: ArithmeticTrap,
-        divisor: Value,
+        divisor: Val,
         span: Option<Span>,
     ) -> std::result::Result<(), String> {
         if !trap.checks_divisor() {
             return Ok(());
         }
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        let is_zero = self.builder.ins().icmp(IntCC::Equal, divisor, zero);
+        let zero = self.builder.iconst(types::I64, 0);
+        let is_zero = self.builder.icmp(IntCC::Equal, divisor, zero);
         self.emit_division_failure_branch(is_zero, span)
     }
 
     fn emit_integer_overflow_failure_branch(
         &mut self,
-        overflow: Value,
+        overflow: Val,
         kind: WideIntegerKind,
         op: WideOverflowOp,
-        left: Value,
-        right: Value,
+        left: Val,
+        right: Val,
         span: Option<Span>,
     ) -> std::result::Result<(), String> {
         let fail_block = self.builder.create_block();
         let continue_block = self.builder.create_block();
         self.builder
-            .ins()
             .brif(overflow, fail_block, &[], continue_block, &[]);
         self.builder.switch_to_block(fail_block);
         self.emit_pending_cleanups(true)?;
-        let kind_code = self.builder.ins().iconst(types::I64, kind as i64);
-        let op_code = self.builder.ins().iconst(types::I64, op as i64);
+        let kind_code = self.builder.iconst(types::I64, kind as i64);
+        let op_code = self.builder.iconst(types::I64, op as i64);
         let (line, column) = self.span_values(span);
-        self.builder.ins().call(
+        self.builder.call(
             self.runtime[RuntimeFn::FailIntegerOverflow],
             &[kind_code, op_code, left, right, line, column],
         );
-        self.builder.ins().trap(TrapCode::INTEGER_OVERFLOW);
+        self.builder.trap(TrapCode::IntegerOverflow);
         self.builder.seal_block(fail_block);
         self.builder.switch_to_block(continue_block);
         self.builder.seal_block(continue_block);
@@ -5472,31 +5288,29 @@ impl<'a> FunctionCompiler<'a> {
 
     fn emit_float_division_guard(
         &mut self,
-        divisor: Value,
+        divisor: Val,
         span: Option<Span>,
     ) -> std::result::Result<(), String> {
-        let zero = self.builder.ins().f64const(Ieee64::with_float(0.0));
-        let is_zero = self.builder.ins().fcmp(FloatCC::Equal, divisor, zero);
+        let zero = self.builder.f64const(0.0);
+        let is_zero = self.builder.fcmp(FloatCC::Equal, divisor, zero);
         self.emit_division_failure_branch(is_zero, span)
     }
 
     fn emit_division_failure_branch(
         &mut self,
-        is_zero: Value,
+        is_zero: Val,
         span: Option<Span>,
     ) -> std::result::Result<(), String> {
         let fail_block = self.builder.create_block();
         let continue_block = self.builder.create_block();
         self.builder
-            .ins()
             .brif(is_zero, fail_block, &[], continue_block, &[]);
         self.builder.switch_to_block(fail_block);
         self.emit_pending_cleanups(true)?;
         let (line, column) = self.span_values(span);
         self.builder
-            .ins()
             .call(self.runtime[RuntimeFn::FailDivisionByZero], &[line, column]);
-        self.builder.ins().trap(TrapCode::INTEGER_DIVISION_BY_ZERO);
+        self.builder.trap(TrapCode::IntegerDivisionByZero);
         self.builder.seal_block(fail_block);
         self.builder.switch_to_block(continue_block);
         self.builder.seal_block(continue_block);
@@ -5604,12 +5418,8 @@ impl<'a> FunctionCompiler<'a> {
             Ok(buffer_size) => buffer_size,
             Err(_) => return Err("direct backend FFI argument buffer is too large".to_string()),
         };
-        let buffer_slot = self.builder.create_sized_stack_slot(StackSlotData::new(
-            StackSlotKind::ExplicitSlot,
-            buffer_size,
-            3,
-        ));
-        let buffer = self.builder.ins().stack_addr(types::I64, buffer_slot, 0);
+        let buffer_slot = self.builder.create_sized_stack_slot(buffer_size, 3);
+        let buffer = self.builder.stack_addr(types::I64, buffer_slot, 0);
         let mut writebacks = Vec::new();
         for (index, ((argument, param), expected)) in args
             .iter()
@@ -5621,7 +5431,6 @@ impl<'a> FunctionCompiler<'a> {
             let coerced = self.coerce_value(loaded, expected)?;
             let boxed = self.ensure_opaque(coerced)?;
             self.builder
-                .ins()
                 .store(MemFlags::new(), boxed.values[0], buffer, (index as i32) * 8);
             match (param.passing, argument.writeback_place.as_ref()) {
                 (MirReceiverKind::BorrowMut, Some(place)) => {
@@ -5642,15 +5451,12 @@ impl<'a> FunctionCompiler<'a> {
                 (_, None) => {}
             }
         }
-        let count = self
-            .builder
-            .ins()
-            .iconst(types::I64, call.params.len() as i64);
-        let invocation = self.builder.ins().call(
+        let count = self.builder.iconst(types::I64, call.params.len() as i64);
+        let invocation = self.builder.call(
             self.runtime[RuntimeFn::FfiCall],
             &[spec_ptr, spec_len, buffer, count],
         );
-        let raw_result = self.builder.inst_results(invocation)[0];
+        let raw_result = invocation.results[0];
 
         for (place, boxed, expected) in writebacks {
             let writeback = self.coerce_value(boxed, &expected)?;
@@ -5737,19 +5543,16 @@ impl<'a> FunctionCompiler<'a> {
         let callee_ty = DirectType::Callable(DirectCallableType::new(signature.clone()));
         let callee = self.coerce_value(loaded, &callee_ty)?;
         let callee_owned = self.temporary_owns_callable(&callee);
-        let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
-            StackSlotKind::ExplicitSlot,
-            (8 * (1 + CALLABLE_ENVIRONMENT_WORDS)) as u32,
-            3,
-        ));
-        let callable_ptr = self.builder.ins().stack_addr(types::I64, slot, 0);
+        let slot = self
+            .builder
+            .create_sized_stack_slot((8 * (1 + CALLABLE_ENVIRONMENT_WORDS)) as u32, 3);
+        let callable_ptr = self.builder.stack_addr(types::I64, slot, 0);
         for (index, word) in callee.values.iter().enumerate() {
             self.builder
-                .ins()
                 .store(MemFlags::new(), *word, callable_ptr, (index as i32) * 8);
         }
 
-        let mut supplied: Vec<Option<Vec<Value>>> = vec![None; params.len()];
+        let mut supplied: Vec<Option<Vec<Val>>> = vec![None; params.len()];
         let mut mask_bits = 0i64;
         let mut writebacks = Vec::new();
         for (argument, index) in args.iter().zip(&binding.source_slots) {
@@ -5783,7 +5586,7 @@ impl<'a> FunctionCompiler<'a> {
         let mut capture_sinks = Vec::new();
         if !writebacks.is_empty() || !closure_writebacks.is_empty() {
             public_sinks = (0..params.len())
-                .map(|_| self.builder.ins().iconst(types::I64, 0))
+                .map(|_| self.builder.iconst(types::I64, 0))
                 .collect();
             for (index, place, _) in &writebacks {
                 public_sinks[*index] = self.mutable_sink_for_place(place)?;
@@ -5796,34 +5599,31 @@ impl<'a> FunctionCompiler<'a> {
             }
             self.install_indirect_mutable_sinks(&public_sinks, &capture_sinks)?;
         }
-        let mask = self.builder.ins().iconst(types::I64, mask_bits);
+        let mask = self.builder.iconst(types::I64, mask_bits);
         let mut lowered = vec![callable_ptr, mask];
         for (index, expected) in param_types.iter().enumerate() {
             match supplied[index].take() {
                 Some(values) => lowered.extend(values),
-                None => lowered.extend(expected.zero_values(&mut self.builder)),
+                None => lowered.extend(expected.zero_values(&mut *self.builder)),
             }
         }
-        let invoke = self.builder.ins().load(
+        let invoke = self.builder.load(
             types::I64,
             MemFlags::new(),
             callee.values[0],
             callables::DESCRIPTOR_INVOKE,
         );
-        let invoke_signature =
-            self.builder
-                .func
-                .import_signature(callables::contract_invoke_signature(
-                    &param_types,
-                    &mutable_params,
-                    &return_direct,
-                    self.call_conv,
-                ));
+        let invoke_signature = self
+            .builder
+            .import_signature(callables::contract_invoke_signature(
+                &param_types,
+                &mutable_params,
+                &return_direct,
+            ));
         let inst = self
             .builder
-            .ins()
             .call_indirect(invoke_signature, invoke, &lowered);
-        let results = self.builder.inst_results(inst).to_vec();
+        let results = inst.results;
         self.release_mutable_sinks(public_sinks.iter().copied());
         self.release_mutable_sinks(capture_sinks.iter().map(|(_, sink)| *sink));
 
@@ -5831,7 +5631,7 @@ impl<'a> FunctionCompiler<'a> {
         // callee's words are read back into its local or owned temporary.
         let reloaded = (0..1 + CALLABLE_ENVIRONMENT_WORDS)
             .map(|index| {
-                self.builder.ins().load(
+                self.builder.load(
                     types::I64,
                     MemFlags::new(),
                     callable_ptr,
@@ -5874,22 +5674,20 @@ impl<'a> FunctionCompiler<'a> {
         }
         for writeback in closure_writebacks {
             let env_base = if writeback.inline {
-                self.builder.ins().iadd_imm(callable_ptr, 8)
+                self.builder.iadd_imm(callable_ptr, 8)
             } else {
                 reloaded[1]
             };
             let mut values = Vec::new();
             for (offset, abi) in writeback.ty.abi_types().into_iter().enumerate() {
-                let word = self.builder.ins().load(
+                let word = self.builder.load(
                     types::I64,
                     MemFlags::new(),
                     env_base,
                     ((writeback.env_offset + offset) as i32) * 8,
                 );
                 values.push(if abi == types::F64 {
-                    self.builder
-                        .ins()
-                        .bitcast(types::F64, MemFlags::new(), word)
+                    self.builder.bitcast(types::F64, word)
                 } else {
                     word
                 });
@@ -5944,8 +5742,8 @@ impl<'a> FunctionCompiler<'a> {
             let argument = self.ensure_opaque(argument)?;
             (RuntimeFn::PrintValue, argument.values[0])
         };
-        self.builder.ins().call(self.runtime[function], &[word]);
-        Ok(unit_value(&mut self.builder))
+        self.builder.call(self.runtime[function], &[word]);
+        Ok(unit_value(&mut *self.builder))
     }
 
     /// Builds an f-string in one `str` box: the leading literal starts it and
@@ -5962,23 +5760,20 @@ impl<'a> FunctionCompiler<'a> {
         let (ptr, len) = self.string_constant(leading.as_bytes())?;
         let call = self
             .builder
-            .ins()
             .call(self.runtime[RuntimeFn::FormatBegin], &[ptr, len]);
-        let builder =
-            self.owned_opaque_result(self.builder.inst_results(call).to_vec(), Type::named("str"));
+        let builder = self.owned_opaque_result(call.results, Type::named("str"));
         let handle = builder.values[0];
         for part in rest {
             match part {
                 MirFormatPart::Literal(text) => {
                     let (ptr, len) = self.string_constant(text.as_bytes())?;
                     self.builder
-                        .ins()
                         .call(self.runtime[RuntimeFn::FormatPushStr], &[handle, ptr, len]);
                 }
                 MirFormatPart::Int64(value) => {
                     let value = self.load_operand(value)?;
                     if value.ty == DirectType::Scalar(ScalarKind::Int64) {
-                        self.builder.ins().call(
+                        self.builder.call(
                             self.runtime[RuntimeFn::FormatPushI64],
                             &[handle, value.values[0]],
                         );
@@ -6000,7 +5795,7 @@ impl<'a> FunctionCompiler<'a> {
                     let (spec_ptr, spec_len) = self.string_constant(spec.as_bytes())?;
                     let type_name = value_type.to_string();
                     let (type_ptr, type_len) = self.string_constant(type_name.as_bytes())?;
-                    self.builder.ins().call(
+                    self.builder.call(
                         self.runtime[RuntimeFn::FormatPushFormatted],
                         &[
                             handle,
@@ -6020,11 +5815,11 @@ impl<'a> FunctionCompiler<'a> {
     /// Appends a boxed f-string part.
     fn push_format_value(
         &mut self,
-        handle: Value,
+        handle: Val,
         value: ValueRef,
     ) -> std::result::Result<(), String> {
         let value = self.ensure_opaque(value)?;
-        self.builder.ins().call(
+        self.builder.call(
             self.runtime[RuntimeFn::FormatPushValue],
             &[handle, value.values[0]],
         );
@@ -6035,9 +5830,8 @@ impl<'a> FunctionCompiler<'a> {
         let (ptr, len) = self.string_constant(text.as_bytes())?;
         let call = self
             .builder
-            .ins()
             .call(self.runtime[RuntimeFn::StringLiteral], &[ptr, len]);
-        Ok(self.owned_opaque_result(self.builder.inst_results(call).to_vec(), Type::named("str")))
+        Ok(self.owned_opaque_result(call.results, Type::named("str")))
     }
 
     /// A direct call to a function of the program. Lowering resolves calls
@@ -6099,7 +5893,7 @@ impl<'a> FunctionCompiler<'a> {
             for place in &mutable_sink_places {
                 sinks.push(match place {
                     Some(place) => self.mutable_sink_for_place(place)?,
-                    None => self.builder.ins().iconst(types::I64, 0),
+                    None => self.builder.iconst(types::I64, 0),
                 });
             }
             self.install_direct_mutable_sinks(&sinks)?;
@@ -6107,8 +5901,8 @@ impl<'a> FunctionCompiler<'a> {
         } else {
             Vec::new()
         };
-        let inst = self.builder.ins().call(func_ref, &lowered_args);
-        let results = self.builder.inst_results(inst).to_vec();
+        let inst = self.builder.call(func_ref, &lowered_args);
+        let results = inst.results;
         self.release_mutable_sinks(mutable_sinks);
         let (result, writebacks) = self.split_call_results(name, results)?;
         self.apply_writeback_places(&writeback_places, writebacks)?;
@@ -6197,7 +5991,7 @@ impl<'a> FunctionCompiler<'a> {
         // timeout or queue capacity passes no value.
         for argument in args {
             if argument.value == Operand::Default(ArgDefault::Omitted) {
-                words.push(self.builder.ins().iconst(types::I64, 0));
+                words.push(self.builder.iconst(types::I64, 0));
                 continue;
             }
             let word = match function_op_arg_layout(op) {
@@ -6219,7 +6013,7 @@ impl<'a> FunctionCompiler<'a> {
         self.push_runtime_call_words(call, &mut words);
         let results = self.runtime_call_results(self.runtime[call.function], &words);
         match function_op_result_layout(op) {
-            FunctionOpResultLayout::Unit => Ok(unit_value(&mut self.builder)),
+            FunctionOpResultLayout::Unit => Ok(unit_value(&mut *self.builder)),
             FunctionOpResultLayout::Scalar(kind) => Ok(ValueRef {
                 values: results,
                 ty: DirectType::Scalar(kind),
@@ -6280,9 +6074,8 @@ impl<'a> FunctionCompiler<'a> {
         };
         let dtype = self
             .builder
-            .ins()
             .iconst(types::I64, direct_array_dtype_code(&element_type)?);
-        let zero = self.builder.ins().iconst(types::I64, 0);
+        let zero = self.builder.iconst(types::I64, 0);
         let shape_ty =
             DirectType::Opaque(Type::Named("list".to_string(), vec![Type::named("int64")]));
         let ordered = args;
@@ -6335,14 +6128,14 @@ impl<'a> FunctionCompiler<'a> {
         let empty = op
             .empty_collection_fn()
             .expect("a capacity constructor names its empty collection");
-        let empty_call = self.builder.ins().call(self.runtime[empty], &[]);
-        let collection = self.builder.inst_results(empty_call)[0];
+        let empty_call = self.builder.call(self.runtime[empty], &[]);
+        let collection = empty_call.results[0];
         let call = RuntimeOp::Function(op).runtime_call();
-        let zero = self.builder.ins().iconst(types::I64, 0);
+        let zero = self.builder.iconst(types::I64, 0);
         let mut words = vec![collection, zero, minimum.values[0]];
         self.push_runtime_call_words(call, &mut words);
-        let reserve = self.builder.ins().call(self.runtime[call.function], &words);
-        self.release_opaque_handle(self.builder.inst_results(reserve)[0]);
+        let reserve = self.builder.call(self.runtime[call.function], &words);
+        self.release_opaque_handle(reserve.results[0]);
         let result_ty = direct_type_to_type(target);
         Ok(self.owned_opaque_result(vec![collection], result_ty))
     }
@@ -6419,7 +6212,7 @@ impl<'a> FunctionCompiler<'a> {
         let function = RuntimeOp::Function(FunctionOp::Select)
             .runtime_call()
             .function;
-        let inst = self.builder.ins().call(self.runtime[function], &[tuple]);
+        let inst = self.builder.call(self.runtime[function], &[tuple]);
         let inferred_result_type = Type::Named(
             "SelectOutcome".to_string(),
             vec![
@@ -6435,7 +6228,7 @@ impl<'a> FunctionCompiler<'a> {
             }
             _ => inferred_result_type,
         };
-        Ok(self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), result_type))
+        Ok(self.owned_opaque_result(inst.results, result_type))
     }
 
     /// `wait_any` or `wait_all`, with or without a timeout.
@@ -6472,13 +6265,13 @@ impl<'a> FunctionCompiler<'a> {
             words.push(timeout.values[0]);
         }
         let function = runtime_op.runtime_call().function;
-        let inst = self.builder.ins().call(self.runtime[function], &words);
+        let inst = self.builder.call(self.runtime[function], &words);
         let enum_name = match op.unspecialized() {
             FunctionOp::WaitAny => "WaitAny",
             _ => "WaitAll",
         };
         Ok(self.owned_opaque_result(
-            self.builder.inst_results(inst).to_vec(),
+            inst.results,
             Type::Named(enum_name.to_string(), vec![task_payload_ty]),
         ))
     }
@@ -6498,10 +6291,9 @@ impl<'a> FunctionCompiler<'a> {
             .function;
         let inst = self
             .builder
-            .ins()
             .call(self.runtime[function], &[left.values[0], right.values[0]]);
         let result_ty = Type::Tuple(vec![operand_ty.clone(), operand_ty]);
-        Ok(self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), result_ty))
+        Ok(self.owned_opaque_result(inst.results, result_ty))
     }
 
     /// A host builtin: its arguments pass boxed in an argument buffer.
@@ -6525,32 +6317,25 @@ impl<'a> FunctionCompiler<'a> {
             let loaded = self.ensure_opaque(loaded)?;
             loaded_args.push(loaded);
         }
-        let count = self
-            .builder
-            .ins()
-            .iconst(types::I64, loaded_args.len() as i64);
+        let count = self.builder.iconst(types::I64, loaded_args.len() as i64);
         let buffer_call = self
             .builder
-            .ins()
             .call(self.runtime[RuntimeFn::ArgBufferNew], &[count]);
-        let buffer = self.builder.inst_results(buffer_call)[0];
+        let buffer = buffer_call.results[0];
         for (index, loaded) in loaded_args.iter().enumerate() {
-            let index = self.builder.ins().iconst(types::I64, index as i64);
-            self.builder.ins().call(
+            let index = self.builder.iconst(types::I64, index as i64);
+            self.builder.call(
                 self.runtime[RuntimeFn::ArgBufferStore],
                 &[buffer, index, loaded.values[0]],
             );
         }
         let entry = self.host_builtin_ref(builtin)?;
-        let call = self.builder.ins().call(entry, &[buffer, count]);
+        let call = self.builder.call(entry, &[buffer, count]);
 
         let semantic_type = RuntimeOp::Host(builtin)
             .result_type(None, &[])
             .expect("a host builtin names its result type");
-        let result = self.owned_opaque_result(
-            self.builder.inst_results(call).to_vec(),
-            semantic_type.clone(),
-        );
+        let result = self.owned_opaque_result(call.results, semantic_type.clone());
         let target = ensure_direct_type(
             &semantic_type,
             &self.classes,
@@ -6560,10 +6345,7 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     /// The runtime entry for one host builtin, imported on first use.
-    fn host_builtin_ref(
-        &mut self,
-        builtin: HostBuiltin,
-    ) -> std::result::Result<cranelift_codegen::ir::FuncRef, String> {
+    fn host_builtin_ref(&mut self, builtin: HostBuiltin) -> std::result::Result<FuncRef, String> {
         let RuntimeTarget::Host(symbol) = RuntimeOp::Host(builtin).runtime_target() else {
             unreachable!("a host builtin calls its own entry");
         };
@@ -6571,12 +6353,12 @@ impl<'a> FunctionCompiler<'a> {
             return Ok(*entry);
         }
         let id = declare_runtime_function(
-            self.object,
+            self.builder.module(),
             symbol,
             &[types::I64, types::I64],
             Some(types::I64),
         )?;
-        let entry = self.object.declare_func_in_func(id, self.builder.func);
+        let entry = self.builder.import_function(id);
         self.host_builtin_refs.insert(symbol, entry);
         Ok(entry)
     }
@@ -6599,20 +6381,17 @@ impl<'a> FunctionCompiler<'a> {
             self.coerce_value(loaded, &int_ty)?
         } else {
             ValueRef {
-                values: vec![self.builder.ins().iconst(types::I64, 0)],
+                values: vec![self.builder.iconst(types::I64, 0)],
                 ty: int_ty.clone(),
             }
         };
         let stop = self.load_operand(&stop_arg.value)?;
         let stop = self.coerce_value(stop, &int_ty)?;
-        let inst = self.builder.ins().call(
+        let inst = self.builder.call(
             self.runtime[RuntimeFn::RangeNew],
             &[start.values[0], stop.values[0]],
         );
-        Ok(self.owned_opaque_result(
-            self.builder.inst_results(inst).to_vec(),
-            Type::named("Range"),
-        ))
+        Ok(self.owned_opaque_result(inst.results, Type::named("Range")))
     }
 
     fn compile_for_range(
@@ -6631,21 +6410,18 @@ impl<'a> FunctionCompiler<'a> {
         let range = self.ensure_opaque(range)?;
         let current_inst = self
             .builder
-            .ins()
             .call(self.runtime[RuntimeFn::RangeCurrent], &[range.values[0]]);
-        let current = self.builder.inst_results(current_inst)[0];
+        let current = current_inst.results[0];
         let end_inst = self
             .builder
-            .ins()
             .call(self.runtime[RuntimeFn::RangeEnd], &[range.values[0]]);
-        let end = self.builder.inst_results(end_inst)[0];
-        let has_next = self.builder.ins().icmp(IntCC::SignedLessThan, current, end);
+        let end = end_inst.results[0];
+        let has_next = self.builder.icmp(IntCC::SignedLessThan, current, end);
 
         let next_block = self.builder.create_block();
         let body_block = self.compiled_block(body_label)?;
         let exit_block = self.compiled_block(exit_label)?;
         self.builder
-            .ins()
             .brif(has_next, next_block, &[], exit_block, &[]);
 
         self.builder.switch_to_block(next_block);
@@ -6659,14 +6435,10 @@ impl<'a> FunctionCompiler<'a> {
         )?;
         let advanced_inst = self
             .builder
-            .ins()
             .call(self.runtime[RuntimeFn::RangeAdvance], &[range.values[0]]);
-        let advanced = self.owned_opaque_result(
-            self.builder.inst_results(advanced_inst).to_vec(),
-            Type::named("Range"),
-        );
+        let advanced = self.owned_opaque_result(advanced_inst.results, Type::named("Range"));
         self.store_place(iterable_place, advanced)?;
-        self.builder.ins().jump(body_block, &[]);
+        self.builder.jump(body_block, &[]);
         self.builder.seal_block(next_block);
         let _ = binding_ty;
         Ok(())
@@ -6769,7 +6541,7 @@ impl<'a> FunctionCompiler<'a> {
     fn load_borrowed_list_element(
         &mut self,
         selection: &BorrowedListElement,
-    ) -> std::result::Result<(Value, Value), String> {
+    ) -> std::result::Result<(Val, Val), String> {
         let list = self.load_root(&selection.list)?;
         let index = self.builder.use_var(selection.index);
         Ok((list.values[0], index))
@@ -6813,12 +6585,12 @@ impl<'a> FunctionCompiler<'a> {
         let (line, column) = self.span_operands(selection.span);
         let Some(key) = key else {
             let (list, index) = self.load_borrowed_list_element(&selection)?;
-            let inst = self.builder.ins().call(
+            let inst = self.builder.call(
                 self.runtime[RuntimeFn::VecElementLen],
                 &[list, index, line, column],
             );
             return Ok(Some(ValueRef {
-                values: vec![self.builder.inst_results(inst)[0]],
+                values: vec![inst.results[0]],
                 ty: DirectType::Scalar(ScalarKind::Int64),
             }));
         };
@@ -6830,7 +6602,7 @@ impl<'a> FunctionCompiler<'a> {
                 // A literal `str` key is looked up without a box.
                 let (key_ptr, key_len) = self.string_constant(text.as_bytes())?;
                 let (list, index) = self.load_borrowed_list_element(&selection)?;
-                self.builder.ins().call(
+                self.builder.call(
                     self.runtime[RuntimeFn::VecElementMapGetStr],
                     &[list, index, key_ptr, key_len, line, column],
                 )
@@ -6839,14 +6611,14 @@ impl<'a> FunctionCompiler<'a> {
                 let key_direct_ty = ensure_direct_type(&entry_types[0], &self.classes, "dict key")?;
                 let key = self.load_operand_as_opaque_direct(&key.value, &key_direct_ty)?;
                 let (list, index) = self.load_borrowed_list_element(&selection)?;
-                self.builder.ins().call(
+                self.builder.call(
                     self.runtime[RuntimeFn::VecElementMapGet],
                     &[list, index, key.values[0], line, column],
                 )
             }
         };
         Ok(Some(self.owned_opaque_result(
-            self.builder.inst_results(inst).to_vec(),
+            inst.results,
             optional_type(entry_types[1].clone()),
         )))
     }
@@ -6876,7 +6648,7 @@ impl<'a> FunctionCompiler<'a> {
         let elements = alternative.elements.clone();
         let (collection, projection) = self.load_element_path_root(&alternative.place.clone())?;
         let path = self.element_path_operands(&projection, &elements)?;
-        let inst = self.builder.ins().call(
+        let inst = self.builder.call(
             self.runtime[RuntimeFn::ElementPathTake],
             &[
                 collection.values[0],
@@ -6888,8 +6660,7 @@ impl<'a> FunctionCompiler<'a> {
                 path.column,
             ],
         );
-        let taken =
-            self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), element_type);
+        let taken = self.owned_opaque_result(inst.results, element_type);
         let ty = self.type_of_place(place)?;
         self.coerce_value(taken, &ty)
     }
@@ -6913,7 +6684,7 @@ impl<'a> FunctionCompiler<'a> {
             }
             MethodDispatch::Nothing => {
                 let _ = self.ensure_opaque(object)?;
-                Ok(unit_value(&mut self.builder))
+                Ok(unit_value(&mut *self.builder))
             }
             MethodDispatch::Union(arms) => {
                 let DirectType::Union(union) = object.ty.clone() else {
@@ -6991,7 +6762,7 @@ impl<'a> FunctionCompiler<'a> {
                     // writes every other field before any read, so the slot
                     // holds inert zero words until then (ADR-0059).
                     let Some(operand) = by_name.get(&field.name) else {
-                        values.extend(field.ty.zero_values(&mut self.builder));
+                        values.extend(field.ty.zero_values(&mut *self.builder));
                         continue;
                     };
                     let value = self.load_operand_for_target(operand, &field.ty)?;
@@ -7148,11 +6919,9 @@ impl<'a> FunctionCompiler<'a> {
                 let shape = self.callable_shapes.get(&key).cloned().ok_or(format!(
                     "direct backend does not know a callable shape for `{name}`"
                 ))?;
-                let global = self
-                    .object
-                    .declare_data_in_func(shape.descriptor, self.builder.func);
-                let descriptor = self.builder.ins().symbol_value(types::I64, global);
-                let zero = self.builder.ins().iconst(types::I64, 0);
+                let global = self.builder.import_data(shape.descriptor);
+                let descriptor = self.builder.symbol_value(types::I64, global);
+                let zero = self.builder.iconst(types::I64, 0);
                 Ok(ValueRef {
                     values: vec![descriptor, zero, zero, zero],
                     ty: DirectType::Callable(DirectCallableType::new(signature.as_ref().clone())),
@@ -7161,55 +6930,40 @@ impl<'a> FunctionCompiler<'a> {
             Operand::Int(value) => {
                 if let Ok(narrowed) = i64::try_from(*value) {
                     return Ok(ValueRef {
-                        values: vec![self.builder.ins().iconst(types::I64, narrowed)],
+                        values: vec![self.builder.iconst(types::I64, narrowed)],
                         ty: DirectType::Scalar(ScalarKind::Int64),
                     });
                 }
                 let (ptr, len) = self.string_constant(value.to_string().as_bytes())?;
                 let inst = self
                     .builder
-                    .ins()
                     .call(self.runtime[RuntimeFn::BoxUintLiteral], &[ptr, len]);
-                Ok(self.owned_opaque_result(
-                    self.builder.inst_results(inst).to_vec(),
-                    Type::named("Unknown"),
-                ))
+                Ok(self.owned_opaque_result(inst.results, Type::named("Unknown")))
             }
             Operand::Float(value) => Ok(ValueRef {
-                values: vec![self.builder.ins().f64const(Ieee64::with_float(*value))],
+                values: vec![self.builder.f64const(*value)],
                 ty: DirectType::Scalar(ScalarKind::Float64),
             }),
             Operand::String(value) => {
                 let (ptr, len) = self.string_constant(value.as_bytes())?;
                 let inst = self
                     .builder
-                    .ins()
                     .call(self.runtime[RuntimeFn::StringLiteral], &[ptr, len]);
-                Ok(self.owned_opaque_result(
-                    self.builder.inst_results(inst).to_vec(),
-                    Type::named("str"),
-                ))
+                Ok(self.owned_opaque_result(inst.results, Type::named("str")))
             }
             Operand::Duration(value) => {
-                let low = self.builder.ins().iconst(types::I64, *value as i64);
-                let high = self.builder.ins().iconst(types::I64, (*value >> 64) as i64);
+                let low = self.builder.iconst(types::I64, *value as i64);
+                let high = self.builder.iconst(types::I64, (*value >> 64) as i64);
                 let inst = self
                     .builder
-                    .ins()
                     .call(self.runtime[RuntimeFn::DurationLiteral], &[low, high]);
-                Ok(self.owned_opaque_result(
-                    self.builder.inst_results(inst).to_vec(),
-                    Type::named("Duration"),
-                ))
+                Ok(self.owned_opaque_result(inst.results, Type::named("Duration")))
             }
             Operand::Bool(value) => Ok(ValueRef {
-                values: vec![self
-                    .builder
-                    .ins()
-                    .iconst(types::I64, if *value { 1 } else { 0 })],
+                values: vec![self.builder.iconst(types::I64, if *value { 1 } else { 0 })],
                 ty: DirectType::Scalar(ScalarKind::Bool),
             }),
-            Operand::Unit => Ok(unit_value(&mut self.builder)),
+            Operand::Unit => Ok(unit_value(&mut *self.builder)),
             Operand::Default(default) => self.load_default_arg(*default),
         }
     }
@@ -7246,7 +7000,7 @@ impl<'a> FunctionCompiler<'a> {
             };
             if let Some(raw) = raw {
                 return Ok(ValueRef {
-                    values: vec![self.builder.ins().iconst(types::I64, raw)],
+                    values: vec![self.builder.iconst(types::I64, raw)],
                     ty: DirectType::Scalar(kind),
                 });
             }
@@ -7318,7 +7072,7 @@ impl<'a> FunctionCompiler<'a> {
         let selected = self.coerce_value(loaded, &selector_ty)?;
         let words = self.transfer_values(&selected);
         let abi = selector_ty.abi_types()[0];
-        let variable = Variable::from_u32(self.next_variable_index as u32);
+        let variable = Var(self.next_variable_index as u32);
         self.next_variable_index += 1;
         self.builder.declare_var(variable, abi);
         self.builder.def_var(variable, words[0]);
@@ -7350,7 +7104,7 @@ impl<'a> FunctionCompiler<'a> {
             }
             let (list, index) = self.load_borrowed_list_element(&selection)?;
             let (line, column) = self.span_operands(selection.span);
-            self.builder.ins().call(
+            self.builder.call(
                 self.runtime[RuntimeFn::VecCheckIndex],
                 &[list, index, line, column],
             );
@@ -7361,7 +7115,7 @@ impl<'a> FunctionCompiler<'a> {
             if alternative.conditions.is_empty() && !alternative.elements.is_empty() {
                 let (collection, projection) = self.load_element_path_root(&alternative.place)?;
                 let path = self.element_path_operands(&projection, &alternative.elements)?;
-                let inst = self.builder.ins().call(
+                let inst = self.builder.call(
                     self.runtime[RuntimeFn::ElementPathProbe],
                     &[
                         collection.values[0],
@@ -7373,7 +7127,7 @@ impl<'a> FunctionCompiler<'a> {
                         path.column,
                     ],
                 );
-                self.release_opaque_handle(self.builder.inst_results(inst)[0]);
+                self.release_opaque_handle(inst.results[0]);
                 return Ok(());
             }
         }
@@ -7386,9 +7140,9 @@ impl<'a> FunctionCompiler<'a> {
 
     /// A span as the line and column words the runtime's indexing helpers
     /// take.
-    fn span_operands(&mut self, span: Span) -> (Value, Value) {
-        let line = self.builder.ins().iconst(types::I64, span.line as i64);
-        let column = self.builder.ins().iconst(types::I64, span.column as i64);
+    fn span_operands(&mut self, span: Span) -> (Val, Val) {
+        let line = self.builder.iconst(types::I64, span.line as i64);
+        let column = self.builder.iconst(types::I64, span.column as i64);
         (line, column)
     }
 
@@ -7405,7 +7159,7 @@ impl<'a> FunctionCompiler<'a> {
         let element_type = last.element_type.clone();
         let (collection, projection) = self.load_element_path_root(&alternative.place)?;
         let path = self.element_path_operands(&projection, &alternative.elements)?;
-        let inst = self.builder.ins().call(
+        let inst = self.builder.call(
             self.runtime[RuntimeFn::ElementPathLoad],
             &[
                 collection.values[0],
@@ -7417,7 +7171,7 @@ impl<'a> FunctionCompiler<'a> {
                 path.column,
             ],
         );
-        Ok(self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), element_type))
+        Ok(self.owned_opaque_result(inst.results, element_type))
     }
 
     /// Stores through one view alternative: a static place directly, or the
@@ -7435,7 +7189,7 @@ impl<'a> FunctionCompiler<'a> {
         let path = self.element_path_operands(&projection, &alternative.elements)?;
         let stored = self.ensure_opaque(value)?;
         let stored = self.transfer_owned_opaque_value(&stored);
-        let result = self.builder.ins().call(
+        let result = self.builder.call(
             self.runtime[RuntimeFn::ElementPathStore],
             &[
                 collection.values[0],
@@ -7448,7 +7202,7 @@ impl<'a> FunctionCompiler<'a> {
                 path.column,
             ],
         );
-        self.release_opaque_handle(self.builder.inst_results(result)[0]);
+        self.release_opaque_handle(result.results[0]);
         Ok(())
     }
 
@@ -7496,12 +7250,10 @@ impl<'a> FunctionCompiler<'a> {
             }
         }
         let (path_ptr, path_len) = self.string_constant(path.as_bytes())?;
-        let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
-            StackSlotKind::ExplicitSlot,
-            (8 * elements.len()) as u32,
-            3,
-        ));
-        let selectors_ptr = self.builder.ins().stack_addr(types::I64, slot, 0);
+        let slot = self
+            .builder
+            .create_sized_stack_slot((8 * elements.len()) as u32, 3);
+        let selectors_ptr = self.builder.stack_addr(types::I64, slot, 0);
         for (index, selector) in elements.iter().enumerate() {
             let selected = self.builder.use_var(selector.variable);
             let word = match selector.kind {
@@ -7515,10 +7267,9 @@ impl<'a> FunctionCompiler<'a> {
                 }
             };
             self.builder
-                .ins()
                 .store(MemFlags::new(), word, selectors_ptr, (index as i32) * 8);
         }
-        let count = self.builder.ins().iconst(types::I64, elements.len() as i64);
+        let count = self.builder.iconst(types::I64, elements.len() as i64);
         let span = elements
             .last()
             .map(|selector| selector.span)
@@ -7546,23 +7297,17 @@ impl<'a> FunctionCompiler<'a> {
         Ok(value)
     }
 
-    fn view_alternative_condition(&mut self, alternative: &DirectViewAlternative) -> Value {
+    fn view_alternative_condition(&mut self, alternative: &DirectViewAlternative) -> Val {
         let mut conditions = alternative.conditions.iter();
         let Some((selector, expected)) = conditions.next() else {
-            return self.builder.ins().iconst(types::I64, 1);
+            return self.builder.iconst(types::I64, 1);
         };
         let selector = self.builder.use_var(*selector);
-        let mut matches = self
-            .builder
-            .ins()
-            .icmp_imm(IntCC::Equal, selector, *expected);
+        let mut matches = self.builder.icmp_imm(IntCC::Equal, selector, *expected);
         for (selector, expected) in conditions {
             let selector = self.builder.use_var(*selector);
-            let next = self
-                .builder
-                .ins()
-                .icmp_imm(IntCC::Equal, selector, *expected);
-            matches = self.builder.ins().band(matches, next);
+            let next = self.builder.icmp_imm(IntCC::Equal, selector, *expected);
+            matches = self.builder.band(matches, next);
         }
         matches
     }
@@ -7574,8 +7319,7 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<(), String> {
         let sources = self.resolve_view_place(loan)?;
         let origins = self.resolve_view_place(origin)?;
-        let mut alternatives =
-            Vec::<(String, Vec<(Variable, i64)>, Vec<DirectElementSelector>)>::new();
+        let mut alternatives = Vec::<(String, Vec<(Var, i64)>, Vec<DirectElementSelector>)>::new();
         for source in &sources.alternatives {
             for origin in &origins.alternatives {
                 let projection = if source.place == origin.place {
@@ -7648,20 +7392,18 @@ impl<'a> FunctionCompiler<'a> {
                 });
                 let set_block = self.builder.create_block();
                 let next_block = self.builder.create_block();
-                self.builder
-                    .ins()
-                    .brif(selected, set_block, &[], next_block, &[]);
+                self.builder.brif(selected, set_block, &[], next_block, &[]);
                 self.builder.switch_to_block(set_block);
                 self.set_returned_view_projection_value(&projection)?;
                 self.push_returned_view_selectors(&steps);
-                self.builder.ins().jump(merge, &[]);
+                self.builder.jump(merge, &[]);
                 self.builder.seal_block(set_block);
                 self.builder.switch_to_block(next_block);
                 self.builder.seal_block(next_block);
             } else {
                 self.set_returned_view_projection_value(&projection)?;
                 self.push_returned_view_selectors(&steps);
-                self.builder.ins().jump(merge, &[]);
+                self.builder.jump(merge, &[]);
             }
         }
         self.builder.switch_to_block(merge);
@@ -7678,24 +7420,17 @@ impl<'a> FunctionCompiler<'a> {
                 word = self.retain_opaque_handle(word);
             } else {
                 // A float key travels as its bit pattern.
-                let word_ty = self.builder.func.dfg.value_type(word);
+                let word_ty = self.builder.value_type(word);
                 if word_ty == types::F64 {
-                    word = self
-                        .builder
-                        .ins()
-                        .bitcast(types::I64, MemFlags::new(), word);
+                    word = self.builder.bitcast(types::I64, word);
                 } else if word_ty == types::F32 {
-                    word = self
-                        .builder
-                        .ins()
-                        .bitcast(types::I32, MemFlags::new(), word);
+                    word = self.builder.bitcast(types::I32, word);
                 }
-                if self.builder.func.dfg.value_type(word) != types::I64 {
-                    word = self.builder.ins().uextend(types::I64, word);
+                if self.builder.value_type(word) != types::I64 {
+                    word = self.builder.uextend(types::I64, word);
                 }
             }
             self.builder
-                .ins()
                 .call(self.runtime[RuntimeFn::PushReturnedViewSelector], &[word]);
         }
     }
@@ -7708,8 +7443,8 @@ impl<'a> FunctionCompiler<'a> {
         loan: &str,
         origin: &DirectViewAlternative,
         projection: &str,
-        conditions: Vec<(Variable, i64)>,
-        selector_words: &[Value],
+        conditions: Vec<(Var, i64)>,
+        selector_words: &[Val],
     ) -> std::result::Result<DirectViewAlternative, String> {
         let mut groups = projection.split(crate::mir::RETURNED_ELEMENT_STEP);
         let prefix = groups
@@ -7777,18 +7512,14 @@ impl<'a> FunctionCompiler<'a> {
             let word = if abi == types::I64 {
                 word
             } else if abi == types::F64 {
-                self.builder
-                    .ins()
-                    .bitcast(types::F64, MemFlags::new(), word)
+                self.builder.bitcast(types::F64, word)
             } else if abi == types::F32 {
-                let bits = self.builder.ins().ireduce(types::I32, word);
-                self.builder
-                    .ins()
-                    .bitcast(types::F32, MemFlags::new(), bits)
+                let bits = self.builder.ireduce(types::I32, word);
+                self.builder.bitcast(types::F32, bits)
             } else {
-                self.builder.ins().ireduce(abi, word)
+                self.builder.ireduce(abi, word)
             };
-            let variable = Variable::from_u32(self.next_variable_index as u32);
+            let variable = Var(self.next_variable_index as u32);
             self.next_variable_index += 1;
             self.builder.declare_var(variable, abi);
             self.builder.def_var(variable, word);
@@ -7820,7 +7551,7 @@ impl<'a> FunctionCompiler<'a> {
         projection: &str,
     ) -> std::result::Result<(), String> {
         let (projection_ptr, projection_len) = self.string_constant(projection.as_bytes())?;
-        self.builder.ins().call(
+        self.builder.call(
             self.runtime[RuntimeFn::SetReturnedViewProjection],
             &[projection_ptr, projection_len],
         );
@@ -7847,7 +7578,6 @@ impl<'a> FunctionCompiler<'a> {
                 let load_block = self.builder.create_block();
                 let next_block = self.builder.create_block();
                 self.builder
-                    .ins()
                     .brif(selected, load_block, &[], next_block, &[]);
                 self.builder.switch_to_block(load_block);
                 self.layout_scratch = caller_owned.clone();
@@ -7865,7 +7595,7 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 self.clear_temporary_opaque_owned(&value);
                 self.release_temporary_owned_since(&caller_owned);
-                self.builder.ins().jump(merge, &value.values);
+                self.builder.jump(merge, &value.values);
                 self.builder.seal_block(load_block);
                 self.builder.switch_to_block(next_block);
                 self.builder.seal_block(next_block);
@@ -7885,14 +7615,14 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 self.clear_temporary_opaque_owned(&value);
                 self.release_temporary_owned_since(&caller_owned);
-                self.builder.ins().jump(merge, &value.values);
+                self.builder.jump(merge, &value.values);
             }
         }
         self.builder.switch_to_block(merge);
         self.builder.seal_block(merge);
         self.restore_scratch_after_branches(caller_owned);
         let value = ValueRef {
-            values: self.builder.block_params(merge).to_vec(),
+            values: self.builder.block_params(merge),
             ty: target_ty,
         };
         if merged_owned == Some(true) {
@@ -7915,9 +7645,9 @@ impl<'a> FunctionCompiler<'a> {
                 .collect::<Vec<_>>();
             for (var, abi) in vars.into_iter().zip(root_ty.abi_types()) {
                 let zero = if abi == types::F64 {
-                    self.builder.ins().f64const(Ieee64::with_float(0.0))
+                    self.builder.f64const(0.0)
                 } else {
-                    self.builder.ins().iconst(abi, 0)
+                    self.builder.iconst(abi, 0)
                 };
                 self.builder.def_var(var, zero);
             }
@@ -7936,12 +7666,12 @@ impl<'a> FunctionCompiler<'a> {
             let root_value = self.load_root(root)?;
             let path = segments[1..].join(".");
             let (field_ptr, field_len) = self.string_constant(path.as_bytes())?;
-            let inst = self.builder.ins().call(
+            let inst = self.builder.call(
                 self.runtime[RuntimeFn::InstanceTakeField],
                 &[root_value.values[0], field_ptr, field_len],
             );
             let moved = ValueRef {
-                values: self.builder.inst_results(inst).to_vec(),
+                values: inst.results,
                 ty: DirectType::Opaque(direct_type_to_type(&moved_ty)),
             };
             self.mark_temporary_opaque_owned(&moved);
@@ -7965,9 +7695,9 @@ impl<'a> FunctionCompiler<'a> {
             .collect::<Vec<_>>();
         for (var, abi) in vars[start..end].iter().copied().zip(current_ty.abi_types()) {
             let zero = if abi == types::F64 {
-                self.builder.ins().f64const(Ieee64::with_float(0.0))
+                self.builder.f64const(0.0)
             } else {
-                self.builder.ins().iconst(abi, 0)
+                self.builder.iconst(abi, 0)
             };
             self.builder.def_var(var, zero);
         }
@@ -8022,27 +7752,24 @@ impl<'a> FunctionCompiler<'a> {
                         elements.len()
                     )
                 })?;
-                let index_value = self.builder.ins().iconst(types::I64, index as i64);
-                let inst = self.builder.ins().call(
+                let index_value = self.builder.iconst(types::I64, index as i64);
+                let inst = self.builder.call(
                     self.runtime[RuntimeFn::TupleElement],
                     &[object.values[0], index_value],
                 );
-                let element = self.owned_opaque_result(
-                    self.builder.inst_results(inst).to_vec(),
-                    element_type.clone(),
-                );
+                let element = self.owned_opaque_result(inst.results, element_type.clone());
                 let direct_type =
                     ensure_direct_type(&element_type, &self.classes, "tuple view element")?;
                 self.coerce_value(element, &direct_type)
             }
             DirectType::Opaque(_) => {
                 let (field_ptr, field_len) = self.string_constant(field.as_bytes())?;
-                let inst = self.builder.ins().call(
+                let inst = self.builder.call(
                     self.runtime[RuntimeFn::InstanceGetField],
                     &[object.values[0], field_ptr, field_len],
                 );
                 let loaded = ValueRef {
-                    values: self.builder.inst_results(inst).to_vec(),
+                    values: inst.results,
                     ty: DirectType::Opaque(Type::named("Unknown")),
                 };
                 self.mark_temporary_opaque_owned(&loaded);
@@ -8098,7 +7825,7 @@ impl<'a> FunctionCompiler<'a> {
             // checked path returns a callable) is the absent callable: all
             // words zero, which releases and retains skip.
             return Ok(ValueRef {
-                values: target.zero_values(&mut self.builder),
+                values: target.zero_values(&mut *self.builder),
                 ty: target.clone(),
             });
         }
@@ -8195,14 +7922,11 @@ impl<'a> FunctionCompiler<'a> {
                 let (target_ptr, target_len) =
                     self.string_constant(target_ty.to_string().as_bytes())?;
                 let (line, column) = self.span_values(span);
-                let inst = self.builder.ins().call(
+                let inst = self.builder.call(
                     self.runtime[RuntimeFn::CastValue],
                     &[boxed.values[0], target_ptr, target_len, line, column],
                 );
-                let casted = self.owned_opaque_result(
-                    self.builder.inst_results(inst).to_vec(),
-                    direct_type_to_type(target),
-                );
+                let casted = self.owned_opaque_result(inst.results, direct_type_to_type(target));
                 self.tag_opaque_runtime_type(&casted, target_ty)?;
                 return Ok(casted);
             }
@@ -8227,30 +7951,27 @@ impl<'a> FunctionCompiler<'a> {
                 DirectType::Scalar(ScalarKind::Int32) => {
                     let inst = self
                         .builder
-                        .ins()
                         .call(self.runtime[RuntimeFn::UnboxI64], &[value.values[0]]);
                     ValueRef {
-                        values: self.builder.inst_results(inst).to_vec(),
+                        values: inst.results,
                         ty: target.clone(),
                     }
                 }
                 DirectType::Scalar(ScalarKind::Int64) => {
                     let inst = self
                         .builder
-                        .ins()
                         .call(self.runtime[RuntimeFn::UnboxInt64], &[value.values[0]]);
                     ValueRef {
-                        values: self.builder.inst_results(inst).to_vec(),
+                        values: inst.results,
                         ty: target.clone(),
                     }
                 }
                 DirectType::Scalar(ScalarKind::Uint64) => {
                     let inst = self
                         .builder
-                        .ins()
                         .call(self.runtime[RuntimeFn::UnboxU64], &[value.values[0]]);
                     ValueRef {
-                        values: self.builder.inst_results(inst).to_vec(),
+                        values: inst.results,
                         ty: target.clone(),
                     }
                 }
@@ -8258,24 +7979,22 @@ impl<'a> FunctionCompiler<'a> {
                 | DirectType::Scalar(ScalarKind::Float64) => {
                     let inst = self
                         .builder
-                        .ins()
                         .call(self.runtime[RuntimeFn::UnboxF64], &[value.values[0]]);
                     self.normalize_scalar_value(ValueRef {
-                        values: self.builder.inst_results(inst).to_vec(),
+                        values: inst.results,
                         ty: target.clone(),
                     })?
                 }
                 DirectType::Scalar(ScalarKind::Bool) => {
                     let inst = self
                         .builder
-                        .ins()
                         .call(self.runtime[RuntimeFn::UnboxBool], &[value.values[0]]);
                     ValueRef {
-                        values: self.builder.inst_results(inst).to_vec(),
+                        values: inst.results,
                         ty: target.clone(),
                     }
                 }
-                DirectType::Scalar(ScalarKind::Unit) => unit_value(&mut self.builder),
+                DirectType::Scalar(ScalarKind::Unit) => unit_value(&mut *self.builder),
                 DirectType::Union(union) => {
                     let union = union.clone();
                     self.unbox_inline_union(&union, value.values[0])?
@@ -8284,12 +8003,12 @@ impl<'a> FunctionCompiler<'a> {
                     let mut values = Vec::new();
                     for field in &class.fields {
                         let (field_ptr, field_len) = self.string_constant(field.name.as_bytes())?;
-                        let inst = self.builder.ins().call(
+                        let inst = self.builder.call(
                             self.runtime[RuntimeFn::InstanceGetField],
                             &[value.values[0], field_ptr, field_len],
                         );
                         let field_value = ValueRef {
-                            values: self.builder.inst_results(inst).to_vec(),
+                            values: inst.results,
                             ty: DirectType::Opaque(Type::named("Unknown")),
                         };
                         self.mark_temporary_opaque_owned(&field_value);
@@ -8335,7 +8054,7 @@ impl<'a> FunctionCompiler<'a> {
                 ty: target.clone(),
             }),
             (Some(ScalarKind::Unit), Some(ScalarKind::Int32)) => Ok(ValueRef {
-                values: vec![self.builder.ins().iconst(types::I64, 0)],
+                values: vec![self.builder.iconst(types::I64, 0)],
                 ty: target.clone(),
             }),
             _ => Err(format!(
@@ -8349,8 +8068,8 @@ impl<'a> FunctionCompiler<'a> {
     fn normalize_scalar_value(&mut self, value: ValueRef) -> std::result::Result<ValueRef, String> {
         match value.ty.scalar_kind() {
             Some(ScalarKind::Float32) => {
-                let narrowed = self.builder.ins().fdemote(types::F32, value.values[0]);
-                let widened = self.builder.ins().fpromote(types::F64, narrowed);
+                let narrowed = self.builder.fdemote(types::F32, value.values[0]);
+                let widened = self.builder.fpromote(types::F64, narrowed);
                 Ok(ValueRef {
                     values: vec![widened],
                     ty: value.ty,
@@ -8379,7 +8098,7 @@ impl<'a> FunctionCompiler<'a> {
     /// Tags `raw` with `ty`. A tag repeats nothing when the same value got the
     /// same tag earlier in this block and no call ran since, because only a
     /// call can change a box.
-    fn emit_runtime_type_tag(&mut self, raw: Value, ty: &Type) -> std::result::Result<(), String> {
+    fn emit_runtime_type_tag(&mut self, raw: Val, ty: &Type) -> std::result::Result<(), String> {
         let encoded = crate::native_runtime::canonical_runtime_type_name(ty);
         if let Some((inst, tagged, tagged_type)) = &self.last_runtime_type_tag {
             // A retained handle names the box it retained.
@@ -8393,11 +8112,11 @@ impl<'a> FunctionCompiler<'a> {
             }
         }
         let (type_ptr, type_len) = self.string_constant(encoded.as_bytes())?;
-        let inst = self.builder.ins().call(
+        let call = self.builder.call(
             self.runtime[RuntimeFn::TagValueType],
             &[raw, type_ptr, type_len],
         );
-        self.last_runtime_type_tag = Some((inst, raw, encoded));
+        self.last_runtime_type_tag = Some((call.inst, raw, encoded));
         Ok(())
     }
 
@@ -8405,34 +8124,19 @@ impl<'a> FunctionCompiler<'a> {
     /// a box follows it there. A retain or a release changes only the count
     /// of the value it names, and a tag of `raw` is never followed by a
     /// release of `raw` that frees it.
-    fn no_call_since(&self, inst: cranelift_codegen::ir::Inst) -> bool {
-        let Some(block) = self.builder.current_block() else {
-            return false;
-        };
-        let func = &self.builder.func;
-        if func.layout.inst_block(inst) != Some(block) {
-            return false;
-        }
-        let mut cursor = func.layout.last_inst(block);
-        while let Some(current) = cursor {
-            if current == inst {
-                return true;
-            }
-            match func.dfg.insts[current] {
-                cranelift_codegen::ir::InstructionData::Call { func_ref, .. }
-                    if func_ref == self.runtime[RuntimeFn::RetainValue]
-                        || func_ref == self.runtime[RuntimeFn::ReleaseValue] => {}
-                ref data if data.opcode().is_call() => return false,
-                _ => {}
-            }
-            cursor = func.layout.prev_inst(current);
-        }
-        false
+    fn no_call_since(&self, inst: Inst) -> bool {
+        self.builder.only_calls_since(
+            inst,
+            &[
+                self.runtime[RuntimeFn::RetainValue],
+                self.runtime[RuntimeFn::ReleaseValue],
+            ],
+        )
     }
 
     fn tag_raw_opaque_runtime_type(
         &mut self,
-        raw: Value,
+        raw: Val,
         ty: &DirectType,
     ) -> std::result::Result<(), String> {
         let DirectType::Opaque(ty) = ty else {
@@ -8445,23 +8149,13 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     /// The value of `value` when an `iconst` defines it.
-    fn integer_constant(&self, value: Value) -> Option<i64> {
-        let dfg = &self.builder.func.dfg;
-        let cranelift_codegen::ir::ValueDef::Result(inst, _) = dfg.value_def(value) else {
-            return None;
-        };
-        match dfg.insts[inst] {
-            cranelift_codegen::ir::InstructionData::UnaryImm {
-                opcode: cranelift_codegen::ir::Opcode::Iconst,
-                imm,
-            } => Some(imm.bits()),
-            _ => None,
-        }
+    fn integer_constant(&self, value: Val) -> Option<i64> {
+        self.builder.integer_constant(value)
     }
 
     fn emit_int32_bounds_check(
         &mut self,
-        value: Value,
+        value: Val,
         span: Option<Span>,
     ) -> std::result::Result<(), String> {
         // `value` is an `int32` iff biasing it by `-i32::MIN` lands inside the
@@ -8475,24 +8169,22 @@ impl<'a> FunctionCompiler<'a> {
                 return Ok(());
             }
         }
-        let biased = self.builder.ins().iadd_imm(value, -(i32::MIN as i64));
-        let overflow =
-            self.builder
-                .ins()
-                .icmp_imm(IntCC::UnsignedGreaterThan, biased, u32::MAX as i64);
+        let biased = self.builder.iadd_imm(value, -(i32::MIN as i64));
+        let overflow = self
+            .builder
+            .icmp_imm(IntCC::UnsignedGreaterThan, biased, u32::MAX as i64);
         let fail_block = self.builder.create_block();
         let continue_block = self.builder.create_block();
         self.builder
-            .ins()
             .brif(overflow, fail_block, &[], continue_block, &[]);
         self.builder.switch_to_block(fail_block);
         self.emit_pending_cleanups(true)?;
         let (line, column) = self.span_values(span);
-        self.builder.ins().call(
+        self.builder.call(
             self.runtime[RuntimeFn::FailInt32Overflow],
             &[value, line, column],
         );
-        self.builder.ins().trap(TrapCode::INTEGER_OVERFLOW);
+        self.builder.trap(TrapCode::IntegerOverflow);
         self.builder.seal_block(fail_block);
         self.builder.switch_to_block(continue_block);
         self.builder.seal_block(continue_block);
@@ -8501,7 +8193,7 @@ impl<'a> FunctionCompiler<'a> {
 
     /// The length of `list`, read from its list view when the value is
     /// confined to this thread (see `aura_runtime::native_runtime::DirectListLayout`).
-    fn emit_list_len(&mut self, list: Value) -> Value {
+    fn emit_list_len(&mut self, list: Val) -> Val {
         let layout = aura_runtime::native_runtime::direct_list_layout();
         let slow_block = self.builder.create_block();
         let fast_block = self.builder.create_block();
@@ -8509,35 +8201,29 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.append_block_param(join_block, types::I64);
         // Every list form keeps its length in the view.
         let access = self.emit_list_access(list, &layout);
-        let form = self.builder.ins().iadd_imm(
+        let form = self.builder.iadd_imm(
             access,
             -(aura_runtime::native_runtime::DirectListAccess::Values as i64),
         );
-        let is_list = self.builder.ins().icmp_imm(
+        let is_list = self.builder.icmp_imm(
             IntCC::UnsignedLessThan,
             form,
             i64::from(aura_runtime::native_runtime::DirectListAccess::LIST_FORMS),
         );
-        self.builder
-            .ins()
-            .brif(is_list, fast_block, &[], slow_block, &[]);
+        self.builder.brif(is_list, fast_block, &[], slow_block, &[]);
 
         self.builder.switch_to_block(fast_block);
         self.builder.seal_block(fast_block);
         let len = self
             .builder
-            .ins()
             .load(types::I64, MemFlags::trusted(), list, layout.len_offset);
-        self.builder.ins().jump(join_block, &[len]);
+        self.builder.jump(join_block, &[len]);
 
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
-        let inst = self
-            .builder
-            .ins()
-            .call(self.runtime[RuntimeFn::VecLen], &[list]);
-        let len = self.builder.inst_results(inst)[0];
-        self.builder.ins().jump(join_block, &[len]);
+        let inst = self.builder.call(self.runtime[RuntimeFn::VecLen], &[list]);
+        let len = inst.results[0];
+        self.builder.jump(join_block, &[len]);
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
@@ -8550,11 +8236,10 @@ impl<'a> FunctionCompiler<'a> {
     /// enough.
     fn emit_list_access(
         &mut self,
-        list: Value,
+        list: Val,
         layout: &aura_runtime::native_runtime::DirectListLayout,
-    ) -> Value {
+    ) -> Val {
         self.builder
-            .ins()
             .uload32(MemFlags::trusted(), list, layout.access_offset)
     }
 
@@ -8563,20 +8248,15 @@ impl<'a> FunctionCompiler<'a> {
     /// thread, and to `slow_block` otherwise.
     fn emit_list_access_check(
         &mut self,
-        list: Value,
+        list: Val,
         access: aura_runtime::native_runtime::DirectListAccess,
         layout: &aura_runtime::native_runtime::DirectListLayout,
-        slow_block: cranelift_codegen::ir::Block,
-        fast_block: cranelift_codegen::ir::Block,
+        slow_block: Blk,
+        fast_block: Blk,
     ) {
         let actual = self.emit_list_access(list, layout);
-        let matches = self
-            .builder
-            .ins()
-            .icmp_imm(IntCC::Equal, actual, access as i64);
-        self.builder
-            .ins()
-            .brif(matches, fast_block, &[], slow_block, &[]);
+        let matches = self.builder.icmp_imm(IntCC::Equal, actual, access as i64);
+        self.builder.brif(matches, fast_block, &[], slow_block, &[]);
     }
 
     /// Reads one element of an `Array` indexed by one `int64`. A confined
@@ -8585,12 +8265,12 @@ impl<'a> FunctionCompiler<'a> {
     /// range diagnostic.
     fn emit_array_element_read(
         &mut self,
-        array: Value,
+        array: Val,
         coordinate: ValueRef,
         kind: ScalarKind,
         element_ty: Type,
-        line: Value,
-        column: Value,
+        line: Val,
+        column: Val,
     ) -> std::result::Result<ValueRef, String> {
         use aura_runtime::native_runtime::DirectListAccess;
         let (size, load_ty, access) = match kind {
@@ -8613,34 +8293,33 @@ impl<'a> FunctionCompiler<'a> {
         let flags = MemFlags::trusted();
         let elements = self
             .builder
-            .ins()
             .load(types::I64, flags, array, layout.elements_offset);
         let position =
             self.emit_list_view_bounds_check(array, coordinate.values[0], &layout, slow_block);
-        let offset = self.builder.ins().imul_imm(position, size);
-        let element = self.builder.ins().iadd(elements, offset);
+        let offset = self.builder.imul_imm(position, size);
+        let element = self.builder.iadd(elements, offset);
         let value = match kind {
-            ScalarKind::Int32 => self.builder.ins().sload32(flags, element, 0),
+            ScalarKind::Int32 => self.builder.sload32(flags, element, 0),
             ScalarKind::Float32 => {
-                let narrow = self.builder.ins().load(load_ty, flags, element, 0);
-                self.builder.ins().fpromote(types::F64, narrow)
+                let narrow = self.builder.load(load_ty, flags, element, 0);
+                self.builder.fpromote(types::F64, narrow)
             }
-            _ => self.builder.ins().load(load_ty, flags, element, 0),
+            _ => self.builder.load(load_ty, flags, element, 0),
         };
-        self.builder.ins().jump(join_block, &[value]);
+        self.builder.jump(join_block, &[value]);
 
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
         let caller_owned = self.layout_scratch.clone();
         let coordinates = self.ensure_opaque(coordinate)?;
-        let inst = self.builder.ins().call(
+        let inst = self.builder.call(
             self.runtime[RuntimeFn::ArrayIndex],
             &[array, coordinates.values[0], line, column],
         );
-        let result = self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), element_ty);
+        let result = self.owned_opaque_result(inst.results, element_ty);
         let result = self.coerce_value(result, &element_direct_ty)?;
         self.release_temporary_owned_since(&caller_owned);
-        self.builder.ins().jump(join_block, &[result.values[0]]);
+        self.builder.jump(join_block, &[result.values[0]]);
         self.layout_scratch = caller_owned;
 
         self.builder.switch_to_block(join_block);
@@ -8658,13 +8337,13 @@ impl<'a> FunctionCompiler<'a> {
     /// takes the runtime call, which reports the same diagnostic as before.
     fn emit_scalar_list_read(
         &mut self,
-        list: Value,
-        index: Value,
+        list: Val,
+        index: Val,
         kind: i64,
         proven: bool,
-        line: Value,
-        column: Value,
-    ) -> std::result::Result<Value, String> {
+        line: Val,
+        column: Val,
+    ) -> std::result::Result<Val, String> {
         use aura_runtime::native_runtime::DirectListAccess;
         let layout = aura_runtime::native_runtime::direct_list_layout();
         let (access, stride) = match kind {
@@ -8682,7 +8361,6 @@ impl<'a> FunctionCompiler<'a> {
         let flags = MemFlags::trusted();
         let elements = self
             .builder
-            .ins()
             .load(types::I64, flags, list, layout.elements_offset);
         let position = if proven {
             index
@@ -8692,26 +8370,26 @@ impl<'a> FunctionCompiler<'a> {
         let offset = if stride == 1 {
             position
         } else {
-            self.builder.ins().imul_imm(position, stride)
+            self.builder.imul_imm(position, stride)
         };
-        let element = self.builder.ins().iadd(elements, offset);
+        let element = self.builder.iadd(elements, offset);
         let bits = if stride == 1 {
-            self.builder.ins().uload8(types::I64, flags, element, 0)
+            self.builder.uload8(types::I64, flags, element, 0)
         } else {
-            self.builder.ins().load(types::I64, flags, element, 0)
+            self.builder.load(types::I64, flags, element, 0)
         };
-        self.builder.ins().jump(join_block, &[bits]);
+        self.builder.jump(join_block, &[bits]);
 
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
         let normalized = self.emit_vec_index_failure_guard(list, index, line, column)?;
-        let kind = self.builder.ins().iconst(types::I64, kind);
-        let inst = self.builder.ins().call(
+        let kind = self.builder.iconst(types::I64, kind);
+        let inst = self.builder.call(
             self.runtime[RuntimeFn::VecIndexScalar],
             &[list, normalized, kind],
         );
-        let bits = self.builder.inst_results(inst)[0];
-        self.builder.ins().jump(join_block, &[bits]);
+        let bits = inst.results[0];
+        self.builder.jump(join_block, &[bits]);
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
@@ -8723,28 +8401,24 @@ impl<'a> FunctionCompiler<'a> {
     /// when it is not.
     fn emit_list_view_bounds_check(
         &mut self,
-        list: Value,
-        index: Value,
+        list: Val,
+        index: Val,
         layout: &aura_runtime::native_runtime::DirectListLayout,
-        slow: cranelift_codegen::ir::Block,
-    ) -> Value {
+        slow: Blk,
+    ) -> Val {
         let len = self
             .builder
-            .ins()
             .load(types::I64, MemFlags::trusted(), list, layout.len_offset);
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        let negative = self.builder.ins().icmp(IntCC::SignedLessThan, index, zero);
-        let from_end = self.builder.ins().iadd(len, index);
-        let position = self.builder.ins().select(negative, from_end, index);
+        let zero = self.builder.iconst(types::I64, 0);
+        let negative = self.builder.icmp(IntCC::SignedLessThan, index, zero);
+        let from_end = self.builder.iadd(len, index);
+        let position = self.builder.select(negative, from_end, index);
         // One unsigned compare also rejects a position below zero.
-        let out_of_range =
-            self.builder
-                .ins()
-                .icmp(IntCC::UnsignedGreaterThanOrEqual, position, len);
+        let out_of_range = self
+            .builder
+            .icmp(IntCC::UnsignedGreaterThanOrEqual, position, len);
         let in_range = self.builder.create_block();
-        self.builder
-            .ins()
-            .brif(out_of_range, slow, &[], in_range, &[]);
+        self.builder.brif(out_of_range, slow, &[], in_range, &[]);
         self.builder.switch_to_block(in_range);
         self.builder.seal_block(in_range);
         position
@@ -8752,62 +8426,53 @@ impl<'a> FunctionCompiler<'a> {
 
     fn emit_vec_index_failure_guard(
         &mut self,
-        object: Value,
-        index: Value,
-        line: Value,
-        column: Value,
-    ) -> std::result::Result<Value, String> {
+        object: Val,
+        index: Val,
+        line: Val,
+        column: Val,
+    ) -> std::result::Result<Val, String> {
         let len_inst = self
             .builder
-            .ins()
             .call(self.runtime[RuntimeFn::VecLen], &[object]);
-        let len = self.builder.inst_results(len_inst)[0];
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        let negative = self.builder.ins().icmp(IntCC::SignedLessThan, index, zero);
-        let from_end = self.builder.ins().iadd(len, index);
-        let normalized = self.builder.ins().select(negative, from_end, index);
-        let below = self
-            .builder
-            .ins()
-            .icmp(IntCC::SignedLessThan, normalized, zero);
+        let len = len_inst.results[0];
+        let zero = self.builder.iconst(types::I64, 0);
+        let negative = self.builder.icmp(IntCC::SignedLessThan, index, zero);
+        let from_end = self.builder.iadd(len, index);
+        let normalized = self.builder.select(negative, from_end, index);
+        let below = self.builder.icmp(IntCC::SignedLessThan, normalized, zero);
         let above = self
             .builder
-            .ins()
             .icmp(IntCC::SignedGreaterThanOrEqual, normalized, len);
-        let out_of_bounds = self.builder.ins().bor(below, above);
+        let out_of_bounds = self.builder.bor(below, above);
         let fail_block = self.builder.create_block();
         let continue_block = self.builder.create_block();
         self.builder
-            .ins()
             .brif(out_of_bounds, fail_block, &[], continue_block, &[]);
         self.builder.switch_to_block(fail_block);
         self.emit_pending_cleanups(true)?;
-        self.builder.ins().call(
+        self.builder.call(
             self.runtime[RuntimeFn::VecIndex],
             &[object, index, line, column],
         );
-        self.builder.ins().trap(TrapCode::unwrap_user(2));
+        self.builder.trap(TrapCode::User(2));
         self.builder.seal_block(fail_block);
         self.builder.switch_to_block(continue_block);
         self.builder.seal_block(continue_block);
         Ok(normalized)
     }
 
-    fn as_bool_value(&mut self, value: ValueRef) -> std::result::Result<Value, String> {
+    fn as_bool_value(&mut self, value: ValueRef) -> std::result::Result<Val, String> {
         match value.ty.scalar_kind() {
             Some(ScalarKind::Bool) | Some(ScalarKind::Int32) | Some(ScalarKind::Unit) => {
-                let zero = self.builder.ins().iconst(types::I64, 0);
-                Ok(self
-                    .builder
-                    .ins()
-                    .icmp(IntCC::NotEqual, value.values[0], zero))
+                let zero = self.builder.iconst(types::I64, 0);
+                Ok(self.builder.icmp(IntCC::NotEqual, value.values[0], zero))
             }
             None if matches!(value.ty, DirectType::Opaque(_)) => {
-                let inst = self.builder.ins().call(
+                let inst = self.builder.call(
                     self.runtime[RuntimeFn::ValueAsCondition],
                     &[value.values[0]],
                 );
-                Ok(self.builder.inst_results(inst)[0])
+                Ok(inst.results[0])
             }
             other => Err(format!(
                 "direct backend cannot use `{}` as a branch condition",
@@ -8866,7 +8531,7 @@ impl<'a> FunctionCompiler<'a> {
             let updated_value = self.transfer_owned_opaque_value(&updated_value);
             let field_path = segments.join(".");
             let (field_ptr, field_len) = self.string_constant(field_path.as_bytes())?;
-            self.builder.ins().call(
+            self.builder.call(
                 self.runtime[RuntimeFn::InstanceSetFieldOwned],
                 &[current.values[0], field_ptr, field_len, updated_value],
             );
@@ -8896,13 +8561,12 @@ impl<'a> FunctionCompiler<'a> {
                 let store_block = self.builder.create_block();
                 let next_block = self.builder.create_block();
                 self.builder
-                    .ins()
                     .brif(selected, store_block, &[], next_block, &[]);
                 self.builder.switch_to_block(store_block);
                 self.layout_scratch = caller_owned.clone();
                 self.store_alternative(&alternative, value.clone())?;
                 self.release_temporary_owned_since(&caller_owned);
-                self.builder.ins().jump(merge, &[]);
+                self.builder.jump(merge, &[]);
                 self.builder.seal_block(store_block);
                 self.builder.switch_to_block(next_block);
                 self.builder.seal_block(next_block);
@@ -8910,7 +8574,7 @@ impl<'a> FunctionCompiler<'a> {
                 self.layout_scratch = caller_owned.clone();
                 self.store_alternative(&alternative, value.clone())?;
                 self.release_temporary_owned_since(&caller_owned);
-                self.builder.ins().jump(merge, &[]);
+                self.builder.jump(merge, &[]);
             }
         }
         self.builder.switch_to_block(merge);
@@ -8945,7 +8609,7 @@ impl<'a> FunctionCompiler<'a> {
                 let updated_value = self.transfer_owned_opaque_value(&updated_value);
                 let field_path = rest.join(".");
                 let (field_ptr, field_len) = self.string_constant(field_path.as_bytes())?;
-                self.builder.ins().call(
+                self.builder.call(
                     self.runtime[RuntimeFn::InstanceSetFieldOwned],
                     &[member.values[0], field_ptr, field_len, updated_value],
                 );
@@ -9030,7 +8694,7 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_union_clone(
         &mut self,
         union: &DirectUnionType,
-        words: &[Value],
+        words: &[Val],
     ) -> std::result::Result<ValueRef, String> {
         let result_ty = DirectType::Union(union.clone());
         let cloned =
@@ -9038,10 +8702,9 @@ impl<'a> FunctionCompiler<'a> {
                 let member = if matches!(member.ty, DirectType::Opaque(_)) {
                     let inst = codegen
                         .builder
-                        .ins()
                         .call(codegen.runtime[RuntimeFn::CloneValue], &[member.values[0]]);
                     ValueRef {
-                        values: codegen.builder.inst_results(inst).to_vec(),
+                        values: inst.results,
                         ty: member.ty.clone(),
                     }
                 } else {
@@ -9064,7 +8727,7 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_union_member_call(
         &mut self,
         union: &DirectUnionType,
-        words: &[Value],
+        words: &[Val],
         field: &str,
         arms: &[MethodDispatch],
         receiver_place: Option<&str>,
@@ -9133,21 +8796,19 @@ impl<'a> FunctionCompiler<'a> {
         union: &DirectUnionType,
         index: usize,
         member: ValueRef,
-    ) -> std::result::Result<Vec<Value>, String> {
+    ) -> std::result::Result<Vec<Val>, String> {
         let member_ty = union.member(index)?.clone();
         let member = self.coerce_value(member, &member_ty)?;
-        let mut words = vec![self.builder.ins().iconst(types::I64, index as i64)];
+        let mut words = vec![self.builder.iconst(types::I64, index as i64)];
         for (value, abi) in member.values.iter().zip(member_ty.abi_types()) {
             words.push(if abi == types::F64 {
-                self.builder
-                    .ins()
-                    .bitcast(types::I64, MemFlags::new(), *value)
+                self.builder.bitcast(types::I64, *value)
             } else {
                 *value
             });
         }
         while words.len() < union.payload_words + 1 {
-            words.push(self.builder.ins().iconst(types::I64, 0));
+            words.push(self.builder.iconst(types::I64, 0));
         }
         Ok(words)
     }
@@ -9157,15 +8818,13 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         union: &DirectUnionType,
         index: usize,
-        words: &[Value],
+        words: &[Val],
     ) -> std::result::Result<ValueRef, String> {
         let member_ty = union.member(index)?.clone();
         let mut values = Vec::new();
         for (word, abi) in words[1..].iter().zip(member_ty.abi_types()) {
             values.push(if abi == types::F64 {
-                self.builder
-                    .ins()
-                    .bitcast(types::F64, MemFlags::new(), *word)
+                self.builder.bitcast(types::F64, *word)
             } else {
                 *word
             });
@@ -9182,7 +8841,7 @@ impl<'a> FunctionCompiler<'a> {
     fn switch_on_union_tag(
         &mut self,
         union: &DirectUnionType,
-        words: &[Value],
+        words: &[Val],
         result_ty: &DirectType,
         mut body: impl FnMut(&mut Self, usize, ValueRef) -> std::result::Result<ValueRef, String>,
     ) -> std::result::Result<ValueRef, String> {
@@ -9202,10 +8861,10 @@ impl<'a> FunctionCompiler<'a> {
                 None
             };
             if let Some(next) = next {
-                let selected = self.builder.ins().icmp_imm(IntCC::Equal, tag, index as i64);
-                self.builder.ins().brif(selected, matched, &[], next, &[]);
+                let selected = self.builder.icmp_imm(IntCC::Equal, tag, index as i64);
+                self.builder.brif(selected, matched, &[], next, &[]);
             } else {
-                self.builder.ins().jump(matched, &[]);
+                self.builder.jump(matched, &[]);
             }
             self.builder.switch_to_block(matched);
             self.builder.seal_block(matched);
@@ -9232,7 +8891,7 @@ impl<'a> FunctionCompiler<'a> {
             self.clear_temporary_opaque_owned(&result);
             self.clear_temporary_union_owned(&result);
             self.release_temporary_owned_since(&caller_owned);
-            self.builder.ins().jump(merge, &result.values);
+            self.builder.jump(merge, &result.values);
             if let Some(next) = next {
                 self.builder.switch_to_block(next);
                 self.builder.seal_block(next);
@@ -9242,7 +8901,7 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(merge);
         self.restore_scratch_after_branches(caller_owned);
         let merged = ValueRef {
-            values: self.builder.block_params(merge).to_vec(),
+            values: self.builder.block_params(merge),
             ty: result_ty.clone(),
         };
         if merged_union_owned == Some(true) {
@@ -9256,7 +8915,7 @@ impl<'a> FunctionCompiler<'a> {
     fn box_inline_union(
         &mut self,
         union: &DirectUnionType,
-        words: &[Value],
+        words: &[Val],
     ) -> std::result::Result<ValueRef, String> {
         let union_type = union.union_type.clone();
         let encoded = crate::native_runtime::canonical_runtime_type_name(&union_type);
@@ -9299,13 +8958,10 @@ impl<'a> FunctionCompiler<'a> {
                         codegen.transfer_owned_opaque_value(&payload),
                     )
                 };
-                let tag = codegen.builder.ins().iconst(types::I64, index as i64);
-                let call = codegen
-                    .builder
-                    .ins()
-                    .call(inject, &[ptr, len, tag, transferred]);
+                let tag = codegen.builder.iconst(types::I64, index as i64);
+                let call = codegen.builder.call(inject, &[ptr, len, tag, transferred]);
                 Ok(ValueRef {
-                    values: codegen.builder.inst_results(call).to_vec(),
+                    values: call.results,
                     ty: DirectType::Opaque(union_type.clone()),
                 })
             })?;
@@ -9317,30 +8973,27 @@ impl<'a> FunctionCompiler<'a> {
     fn unbox_inline_union(
         &mut self,
         union: &DirectUnionType,
-        handle: Value,
+        handle: Val,
     ) -> std::result::Result<ValueRef, String> {
         let tag_call = self
             .builder
-            .ins()
             .call(self.runtime[RuntimeFn::UnionTag], &[handle]);
-        let tag = self.builder.inst_results(tag_call)[0];
+        let tag = tag_call.results[0];
         let mut probe = vec![tag];
         for _ in 0..union.payload_words {
-            probe.push(self.builder.ins().iconst(types::I64, 0));
+            probe.push(self.builder.iconst(types::I64, 0));
         }
         let result_ty = DirectType::Union(union.clone());
         let unboxed =
             self.switch_on_union_tag(union, &probe, &result_ty, |codegen, index, _| {
                 let member_ty = union.member(index)?.clone();
-                let index_value = codegen.builder.ins().iconst(types::I64, index as i64);
-                let call = codegen.builder.ins().call(
+                let index_value = codegen.builder.iconst(types::I64, index as i64);
+                let call = codegen.builder.call(
                     codegen.runtime[RuntimeFn::UnionPayloadCopy],
                     &[handle, index_value],
                 );
-                let payload = codegen.owned_opaque_result(
-                    codegen.builder.inst_results(call).to_vec(),
-                    direct_type_to_type(&member_ty),
-                );
+                let payload =
+                    codegen.owned_opaque_result(call.results, direct_type_to_type(&member_ty));
                 let member = codegen.coerce_value(payload, &member_ty)?;
                 // The payload copy is owned; an opaque member's handle (or a
                 // callable member's boxed words) leaves the statement's
@@ -9377,10 +9030,9 @@ impl<'a> FunctionCompiler<'a> {
             DirectType::Scalar(ScalarKind::Int32) => {
                 let inst = self
                     .builder
-                    .ins()
                     .call(self.runtime[RuntimeFn::BoxI32], &[value.values[0]]);
                 let boxed = ValueRef {
-                    values: self.builder.inst_results(inst).to_vec(),
+                    values: inst.results,
                     ty: DirectType::Opaque(Type::named("int32")),
                 };
                 self.mark_temporary_opaque_owned(&boxed);
@@ -9389,10 +9041,9 @@ impl<'a> FunctionCompiler<'a> {
             DirectType::Scalar(ScalarKind::Int64) => {
                 let inst = self
                     .builder
-                    .ins()
                     .call(self.runtime[RuntimeFn::BoxI64], &[value.values[0]]);
                 let boxed = ValueRef {
-                    values: self.builder.inst_results(inst).to_vec(),
+                    values: inst.results,
                     ty: DirectType::Opaque(Type::named("int64")),
                 };
                 self.mark_temporary_opaque_owned(&boxed);
@@ -9401,10 +9052,9 @@ impl<'a> FunctionCompiler<'a> {
             DirectType::Scalar(ScalarKind::Uint64) => {
                 let inst = self
                     .builder
-                    .ins()
                     .call(self.runtime[RuntimeFn::BoxU64], &[value.values[0]]);
                 let boxed = ValueRef {
-                    values: self.builder.inst_results(inst).to_vec(),
+                    values: inst.results,
                     ty: DirectType::Opaque(Type::named("uint64")),
                 };
                 self.mark_temporary_opaque_owned(&boxed);
@@ -9413,10 +9063,9 @@ impl<'a> FunctionCompiler<'a> {
             DirectType::Scalar(ScalarKind::Float32) | DirectType::Scalar(ScalarKind::Float64) => {
                 let inst = self
                     .builder
-                    .ins()
                     .call(self.runtime[RuntimeFn::BoxF64], &[value.values[0]]);
                 let boxed = ValueRef {
-                    values: self.builder.inst_results(inst).to_vec(),
+                    values: inst.results,
                     ty: DirectType::Opaque(Type::named("float64")),
                 };
                 self.mark_temporary_opaque_owned(&boxed);
@@ -9425,22 +9074,18 @@ impl<'a> FunctionCompiler<'a> {
             DirectType::Scalar(ScalarKind::Bool) => {
                 let inst = self
                     .builder
-                    .ins()
                     .call(self.runtime[RuntimeFn::BoxBool], &[value.values[0]]);
                 let boxed = ValueRef {
-                    values: self.builder.inst_results(inst).to_vec(),
+                    values: inst.results,
                     ty: DirectType::Opaque(Type::named("bool")),
                 };
                 self.mark_temporary_opaque_owned(&boxed);
                 Ok(boxed)
             }
             DirectType::Scalar(ScalarKind::Unit) => {
-                let inst = self
-                    .builder
-                    .ins()
-                    .call(self.runtime[RuntimeFn::BoxUnit], &[]);
+                let inst = self.builder.call(self.runtime[RuntimeFn::BoxUnit], &[]);
                 let boxed = ValueRef {
-                    values: self.builder.inst_results(inst).to_vec(),
+                    values: inst.results,
                     ty: DirectType::Opaque(Type::Unit),
                 };
                 self.mark_temporary_opaque_owned(&boxed);
@@ -9448,11 +9093,11 @@ impl<'a> FunctionCompiler<'a> {
             }
             DirectType::PlainClass(class) => {
                 let (class_ptr, class_len) = self.string_constant(class.class_name.as_bytes())?;
-                let init = self.builder.ins().call(
+                let init = self.builder.call(
                     self.runtime[RuntimeFn::InstanceEmpty],
                     &[class_ptr, class_len],
                 );
-                let current = self.builder.inst_results(init)[0];
+                let current = init.results[0];
                 let mut start = 0usize;
                 for field in &class.fields {
                     let end = start + field.ty.value_count();
@@ -9463,7 +9108,7 @@ impl<'a> FunctionCompiler<'a> {
                     let field_value = self.ensure_opaque(field_value)?;
                     let field_value = self.transfer_owned_opaque_value(&field_value);
                     let (field_ptr, field_len) = self.string_constant(field.name.as_bytes())?;
-                    self.builder.ins().call(
+                    self.builder.call(
                         self.runtime[RuntimeFn::InstanceSetFieldOwned],
                         &[current, field_ptr, field_len, field_value],
                     );
@@ -9504,8 +9149,8 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn string_constant(&mut self, bytes: &[u8]) -> std::result::Result<(Value, Value), String> {
-        declare_string_constant(self.object, self.string_data, &mut self.builder, bytes)
+    fn string_constant(&mut self, bytes: &[u8]) -> std::result::Result<(Val, Val), String> {
+        declare_string_constant(self.string_data, &mut *self.builder, bytes)
     }
 
     /// Compiles a tuple literal as one opaque aggregate handle.
@@ -9523,23 +9168,22 @@ impl<'a> FunctionCompiler<'a> {
         tuple_type: Type,
     ) -> std::result::Result<ValueRef, String> {
         debug_assert_eq!(elements.len(), element_types.len());
-        let count = self.builder.ins().iconst(types::I64, elements.len() as i64);
+        let count = self.builder.iconst(types::I64, elements.len() as i64);
         let buffer = if elements.is_empty() {
-            self.builder.ins().iconst(types::I64, 0)
+            self.builder.iconst(types::I64, 0)
         } else {
             let buffer_inst = self
                 .builder
-                .ins()
                 .call(self.runtime[RuntimeFn::ArgBufferNew], &[count]);
-            let buffer = self.builder.inst_results(buffer_inst)[0];
+            let buffer = buffer_inst.results[0];
             for (index, (element, element_type)) in elements.iter().zip(element_types).enumerate() {
                 let direct_type = ensure_direct_type(element_type, &self.classes, "tuple element")?;
                 let value = self.load_operand_for_target(element, &direct_type)?;
                 let value = self.coerce_value(value, &direct_type)?;
                 let value = self.ensure_opaque(value)?;
                 let transferred = self.transfer_owned_opaque_value(&value);
-                let index = self.builder.ins().iconst(types::I64, index as i64);
-                self.builder.ins().call(
+                let index = self.builder.iconst(types::I64, index as i64);
+                self.builder.call(
                     self.runtime[RuntimeFn::ArgBufferStoreOwned],
                     &[buffer, index, transferred],
                 );
@@ -9548,10 +9192,8 @@ impl<'a> FunctionCompiler<'a> {
         };
         let inst = self
             .builder
-            .ins()
             .call(self.runtime[RuntimeFn::TupleNew], &[buffer, count]);
-        let tuple =
-            self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), tuple_type.clone());
+        let tuple = self.owned_opaque_result(inst.results, tuple_type.clone());
         self.tag_opaque_runtime_type(&tuple, &tuple_type)?;
         Ok(tuple)
     }
@@ -9570,15 +9212,12 @@ impl<'a> FunctionCompiler<'a> {
         validate_tuple_projection_operand(tuple)?;
         let tuple = self.load_operand(tuple)?;
         let tuple = self.ensure_opaque(tuple)?;
-        let index = self.builder.ins().iconst(types::I64, index as i64);
-        let inst = self.builder.ins().call(
+        let index = self.builder.iconst(types::I64, index as i64);
+        let inst = self.builder.call(
             self.runtime[RuntimeFn::TupleElement],
             &[tuple.values[0], index],
         );
-        let element = self.owned_opaque_result(
-            self.builder.inst_results(inst).to_vec(),
-            element_type.clone(),
-        );
+        let element = self.owned_opaque_result(inst.results, element_type.clone());
         let direct_type = ensure_direct_type(element_type, &self.classes, "tuple element")?;
         self.coerce_value(element, &direct_type)
     }
@@ -9597,15 +9236,12 @@ impl<'a> FunctionCompiler<'a> {
         validate_tuple_take_place(place)?;
         let tuple = self.load_place(place)?;
         let tuple = self.ensure_opaque(tuple)?;
-        let index = self.builder.ins().iconst(types::I64, index as i64);
-        let inst = self.builder.ins().call(
+        let index = self.builder.iconst(types::I64, index as i64);
+        let inst = self.builder.call(
             self.runtime[RuntimeFn::TupleTakeElement],
             &[tuple.values[0], index],
         );
-        let element = self.owned_opaque_result(
-            self.builder.inst_results(inst).to_vec(),
-            element_type.clone(),
-        );
+        let element = self.owned_opaque_result(inst.results, element_type.clone());
         let direct_type = ensure_direct_type(element_type, &self.classes, "tuple element")?;
         self.coerce_value(element, &direct_type)
     }
@@ -9623,14 +9259,13 @@ impl<'a> FunctionCompiler<'a> {
             enum_variant_payload_types_for_target(enum_name, variant_name, target_ty, &self.classes)
         });
         let payload_buffer = if payloads.is_empty() {
-            self.builder.ins().iconst(types::I64, 0)
+            self.builder.iconst(types::I64, 0)
         } else {
-            let count = self.builder.ins().iconst(types::I64, payloads.len() as i64);
+            let count = self.builder.iconst(types::I64, payloads.len() as i64);
             let buffer_inst = self
                 .builder
-                .ins()
                 .call(self.runtime[RuntimeFn::ArgBufferNew], &[count]);
-            let buffer = self.builder.inst_results(buffer_inst)[0];
+            let buffer = buffer_inst.results[0];
             for (index, payload) in payloads.iter().enumerate() {
                 let loaded = if let Some(expected_ty) = expected_payload_types
                     .as_ref()
@@ -9651,16 +9286,16 @@ impl<'a> FunctionCompiler<'a> {
                 };
                 let payload = self.ensure_opaque(loaded)?;
                 let transferred = self.transfer_owned_opaque_value(&payload);
-                let index_value = self.builder.ins().iconst(types::I64, index as i64);
-                self.builder.ins().call(
+                let index_value = self.builder.iconst(types::I64, index as i64);
+                self.builder.call(
                     self.runtime[RuntimeFn::ArgBufferStoreOwned],
                     &[buffer, index_value, transferred],
                 );
             }
             buffer
         };
-        let payload_count = self.builder.ins().iconst(types::I64, payloads.len() as i64);
-        let inst = self.builder.ins().call(
+        let payload_count = self.builder.iconst(types::I64, payloads.len() as i64);
+        let inst = self.builder.call(
             self.runtime[RuntimeFn::EnumVariant],
             &[
                 enum_ptr,
@@ -9672,7 +9307,7 @@ impl<'a> FunctionCompiler<'a> {
             ],
         );
         Ok(self.owned_opaque_result(
-            self.builder.inst_results(inst).to_vec(),
+            inst.results,
             target
                 .map(direct_type_to_type)
                 .unwrap_or_else(|| Type::named(enum_name)),
@@ -9688,46 +9323,45 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         let (enum_ptr, enum_len) = self.string_constant(enum_name.as_bytes())?;
         let (variant_ptr, variant_len) = self.string_constant(variant_name.as_bytes())?;
-        let count = self.builder.ins().iconst(types::I64, payloads.len() as i64);
+        let count = self.builder.iconst(types::I64, payloads.len() as i64);
         let buffer = if payloads.is_empty() {
-            self.builder.ins().iconst(types::I64, 0)
+            self.builder.iconst(types::I64, 0)
         } else {
             let buffer_inst = self
                 .builder
-                .ins()
                 .call(self.runtime[RuntimeFn::ArgBufferNew], &[count]);
-            let buffer = self.builder.inst_results(buffer_inst)[0];
+            let buffer = buffer_inst.results[0];
             for (index, payload) in payloads.into_iter().enumerate() {
                 let payload = self.ensure_opaque(payload)?;
                 let transferred = self.transfer_owned_opaque_value(&payload);
-                let index = self.builder.ins().iconst(types::I64, index as i64);
-                self.builder.ins().call(
+                let index = self.builder.iconst(types::I64, index as i64);
+                self.builder.call(
                     self.runtime[RuntimeFn::ArgBufferStoreOwned],
                     &[buffer, index, transferred],
                 );
             }
             buffer
         };
-        let inst = self.builder.ins().call(
+        let inst = self.builder.call(
             self.runtime[RuntimeFn::EnumVariant],
             &[enum_ptr, enum_len, variant_ptr, variant_len, buffer, count],
         );
-        Ok(self.owned_opaque_result(self.builder.inst_results(inst).to_vec(), target))
+        Ok(self.owned_opaque_result(inst.results, target))
     }
 
     fn variant_matches_value(
         &mut self,
-        value: Value,
+        value: Val,
         enum_name: &str,
         variant_name: &str,
-    ) -> std::result::Result<Value, String> {
+    ) -> std::result::Result<Val, String> {
         let (enum_ptr, enum_len) = self.string_constant(enum_name.as_bytes())?;
         let (variant_ptr, variant_len) = self.string_constant(variant_name.as_bytes())?;
-        let inst = self.builder.ins().call(
+        let inst = self.builder.call(
             self.runtime[RuntimeFn::VariantMatches],
             &[value, enum_ptr, enum_len, variant_ptr, variant_len],
         );
-        Ok(self.builder.inst_results(inst)[0])
+        Ok(inst.results[0])
     }
 
     fn compile_variant_payload(
@@ -9736,13 +9370,13 @@ impl<'a> FunctionCompiler<'a> {
         index: usize,
     ) -> std::result::Result<ValueRef, String> {
         let scrutinee = self.ensure_opaque(scrutinee)?;
-        let index = self.builder.ins().iconst(types::I64, index as i64);
-        let inst = self.builder.ins().call(
+        let index = self.builder.iconst(types::I64, index as i64);
+        let inst = self.builder.call(
             self.runtime[RuntimeFn::VariantPayload],
             &[scrutinee.values[0], index],
         );
         let payload = ValueRef {
-            values: self.builder.inst_results(inst).to_vec(),
+            values: inst.results,
             ty: DirectType::Opaque(Type::named("Unknown")),
         };
         self.mark_temporary_opaque_owned(&payload);
@@ -9764,15 +9398,12 @@ impl<'a> FunctionCompiler<'a> {
         index: usize,
     ) -> std::result::Result<ValueRef, String> {
         let scrutinee = self.ensure_opaque(scrutinee)?;
-        let index = self.builder.ins().iconst(types::I64, index as i64);
-        let inst = self.builder.ins().call(
+        let index = self.builder.iconst(types::I64, index as i64);
+        let inst = self.builder.call(
             self.runtime[RuntimeFn::VariantTakePayload],
             &[scrutinee.values[0], index],
         );
-        Ok(self.owned_opaque_result(
-            self.builder.inst_results(inst).to_vec(),
-            Type::named("Unknown"),
-        ))
+        Ok(self.owned_opaque_result(inst.results, Type::named("Unknown")))
     }
 
     fn compile_try_assign(
@@ -9816,7 +9447,7 @@ impl<'a> FunctionCompiler<'a> {
         let ok_block = self.builder.create_block();
         let err_block = self.builder.create_block();
         let join_block = self.builder.create_block();
-        self.builder.ins().brif(ok, ok_block, &[], err_block, &[]);
+        self.builder.brif(ok, ok_block, &[], err_block, &[]);
 
         self.builder.switch_to_block(ok_block);
         if source_is_owned {
@@ -9834,7 +9465,7 @@ impl<'a> FunctionCompiler<'a> {
         let coerced = self.coerce_value(payload, &target_ty)?;
         self.store_place(target, coerced)?;
         self.release_all_temporary_owned();
-        self.builder.ins().jump(join_block, &[]);
+        self.builder.jump(join_block, &[]);
         self.builder.seal_block(ok_block);
 
         self.builder.switch_to_block(err_block);
@@ -9899,8 +9530,8 @@ impl<'a> FunctionCompiler<'a> {
                 "direct backend does not know From function `{function_name}`"
             ));
         };
-        let inst = self.builder.ins().call(function, &arguments);
-        let results = self.builder.inst_results(inst).to_vec();
+        let inst = self.builder.call(function, &arguments);
+        let results = inst.results;
         let (converted, writebacks) = self.split_call_results(&function_name, results)?;
         if !writebacks.is_empty() {
             return Err(
@@ -9910,21 +9541,20 @@ impl<'a> FunctionCompiler<'a> {
         Ok(converted)
     }
 
-    fn mutable_sink_for_static_place(&mut self, place: &str) -> std::result::Result<Value, String> {
+    fn mutable_sink_for_static_place(&mut self, place: &str) -> std::result::Result<Val, String> {
         let (root, projection) = place.split_once('.').unwrap_or((place, ""));
         if let Some(index) = self.mutable_param_indices.get(root).copied() {
-            let index = self.builder.ins().iconst(types::I64, index as i64);
+            let index = self.builder.iconst(types::I64, index as i64);
             let current = self
                 .builder
-                .ins()
                 .call(self.runtime[RuntimeFn::CurrentMutableSink], &[index]);
-            let parent = self.builder.inst_results(current)[0];
+            let parent = current.results[0];
             let (projection_ptr, projection_len) = self.string_constant(projection.as_bytes())?;
-            let projected = self.builder.ins().call(
+            let projected = self.builder.call(
                 self.runtime[RuntimeFn::MutableSinkProject],
                 &[parent, projection_ptr, projection_len],
             );
-            return Ok(self.builder.inst_results(projected)[0]);
+            return Ok(projected.results[0]);
         }
 
         let cleanup_place = self
@@ -9941,7 +9571,7 @@ impl<'a> FunctionCompiler<'a> {
             })
             .max_by_key(|(cleanup_place, _)| cleanup_place.len());
         let Some((cleanup_place, projection)) = cleanup_place else {
-            return Ok(self.builder.ins().iconst(types::I64, 0));
+            return Ok(self.builder.iconst(types::I64, 0));
         };
         let registration_variable = self
             .cleanup_registration_vars
@@ -9955,32 +9585,28 @@ impl<'a> FunctionCompiler<'a> {
         let root = self.ensure_opaque(root)?;
         let root = self.transfer_owned_opaque_value(&root);
         let (projection_ptr, projection_len) = self.string_constant(projection.as_bytes())?;
-        let sink = self.builder.ins().call(
+        let sink = self.builder.call(
             self.runtime[RuntimeFn::MutableSinkNew],
             &[registration_id, root, projection_ptr, projection_len],
         );
-        Ok(self.builder.inst_results(sink)[0])
+        Ok(sink.results[0])
     }
 
     fn mutable_sink_for_resolved_place(
         &mut self,
         resolved: DirectViewPlace,
-    ) -> std::result::Result<Value, String> {
+    ) -> std::result::Result<Val, String> {
         if resolved.alternatives.is_empty() {
-            return Ok(self.builder.ins().iconst(types::I64, 0));
+            return Ok(self.builder.iconst(types::I64, 0));
         }
         if resolved.alternatives.len() == 1 && resolved.alternatives[0].conditions.is_empty() {
             return self.mutable_sink_for_static_place(&resolved.alternatives[0].place);
         }
 
-        let sink_slot = self.builder.create_sized_stack_slot(StackSlotData::new(
-            StackSlotKind::ExplicitSlot,
-            8,
-            3,
-        ));
-        let sink_ptr = self.builder.ins().stack_addr(types::I64, sink_slot, 0);
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        self.builder.ins().store(MemFlags::new(), zero, sink_ptr, 0);
+        let sink_slot = self.builder.create_sized_stack_slot(8, 3);
+        let sink_ptr = self.builder.stack_addr(types::I64, sink_slot, 0);
+        let zero = self.builder.iconst(types::I64, 0);
+        self.builder.store(MemFlags::new(), zero, sink_ptr, 0);
         let merge = self.builder.create_block();
         let alternative_count = resolved.alternatives.len();
         for (index, alternative) in resolved.alternatives.into_iter().enumerate() {
@@ -9989,55 +9615,46 @@ impl<'a> FunctionCompiler<'a> {
                 let create_block = self.builder.create_block();
                 let next_block = self.builder.create_block();
                 self.builder
-                    .ins()
                     .brif(selected, create_block, &[], next_block, &[]);
                 self.builder.switch_to_block(create_block);
                 let sink = self.mutable_sink_for_static_place(&alternative.place)?;
-                self.builder.ins().store(MemFlags::new(), sink, sink_ptr, 0);
-                self.builder.ins().jump(merge, &[]);
+                self.builder.store(MemFlags::new(), sink, sink_ptr, 0);
+                self.builder.jump(merge, &[]);
                 self.builder.seal_block(create_block);
                 self.builder.switch_to_block(next_block);
                 self.builder.seal_block(next_block);
             } else {
                 let sink = self.mutable_sink_for_static_place(&alternative.place)?;
-                self.builder.ins().store(MemFlags::new(), sink, sink_ptr, 0);
-                self.builder.ins().jump(merge, &[]);
+                self.builder.store(MemFlags::new(), sink, sink_ptr, 0);
+                self.builder.jump(merge, &[]);
             }
         }
         self.builder.switch_to_block(merge);
         self.builder.seal_block(merge);
-        Ok(self
-            .builder
-            .ins()
-            .load(types::I64, MemFlags::new(), sink_ptr, 0))
+        Ok(self.builder.load(types::I64, MemFlags::new(), sink_ptr, 0))
     }
 
-    fn mutable_sink_for_place(&mut self, place: &str) -> std::result::Result<Value, String> {
+    fn mutable_sink_for_place(&mut self, place: &str) -> std::result::Result<Val, String> {
         let resolved = self.resolve_view_place(place)?;
         self.mutable_sink_for_resolved_place(resolved)
     }
 
-    fn install_direct_mutable_sinks(&mut self, sinks: &[Value]) -> std::result::Result<(), String> {
-        let count = self.builder.ins().iconst(types::I64, sinks.len() as i64);
+    fn install_direct_mutable_sinks(&mut self, sinks: &[Val]) -> std::result::Result<(), String> {
+        let count = self.builder.iconst(types::I64, sinks.len() as i64);
         let pointer = if sinks.is_empty() {
-            self.builder.ins().iconst(types::I64, 0)
+            self.builder.iconst(types::I64, 0)
         } else {
             let byte_len = u32::try_from(sinks.len().saturating_mul(8))
                 .map_err(|_| "direct mutable sink buffer is too large".to_string())?;
-            let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
-                StackSlotKind::ExplicitSlot,
-                byte_len,
-                3,
-            ));
-            let pointer = self.builder.ins().stack_addr(types::I64, slot, 0);
+            let slot = self.builder.create_sized_stack_slot(byte_len, 3);
+            let pointer = self.builder.stack_addr(types::I64, slot, 0);
             for (index, sink) in sinks.iter().copied().enumerate() {
                 self.builder
-                    .ins()
                     .store(MemFlags::new(), sink, pointer, (index as i32) * 8);
             }
             pointer
         };
-        self.builder.ins().call(
+        self.builder.call(
             self.runtime[RuntimeFn::SetNextMutableSinks],
             &[pointer, count],
         );
@@ -10051,35 +9668,29 @@ impl<'a> FunctionCompiler<'a> {
     /// parameters through the sinks before cleanup.
     fn install_indirect_mutable_sinks(
         &mut self,
-        public_sinks: &[Value],
-        capture_sinks: &[(usize, Value)],
+        public_sinks: &[Val],
+        capture_sinks: &[(usize, Val)],
     ) -> std::result::Result<(), String> {
-        let store_buffer = |compiler: &mut Self,
-                            values: &[Value]|
-         -> std::result::Result<Value, String> {
-            if values.is_empty() {
-                return Ok(compiler.builder.ins().iconst(types::I64, 0));
-            }
-            let byte_len = u32::try_from(values.len().saturating_mul(8))
-                .map_err(|_| "direct mutable sink buffer is too large".to_string())?;
-            let slot = compiler.builder.create_sized_stack_slot(StackSlotData::new(
-                StackSlotKind::ExplicitSlot,
-                byte_len,
-                3,
-            ));
-            let pointer = compiler.builder.ins().stack_addr(types::I64, slot, 0);
-            for (index, value) in values.iter().copied().enumerate() {
-                compiler
-                    .builder
-                    .ins()
-                    .store(MemFlags::new(), value, pointer, (index as i32) * 8);
-            }
-            Ok(pointer)
-        };
+        let store_buffer =
+            |compiler: &mut Self, values: &[Val]| -> std::result::Result<Val, String> {
+                if values.is_empty() {
+                    return Ok(compiler.builder.iconst(types::I64, 0));
+                }
+                let byte_len = u32::try_from(values.len().saturating_mul(8))
+                    .map_err(|_| "direct mutable sink buffer is too large".to_string())?;
+                let slot = compiler.builder.create_sized_stack_slot(byte_len, 3);
+                let pointer = compiler.builder.stack_addr(types::I64, slot, 0);
+                for (index, value) in values.iter().copied().enumerate() {
+                    compiler
+                        .builder
+                        .store(MemFlags::new(), value, pointer, (index as i32) * 8);
+                }
+                Ok(pointer)
+            };
         let public_ptr = store_buffer(self, public_sinks)?;
         let capture_indices = capture_sinks
             .iter()
-            .map(|(index, _)| self.builder.ins().iconst(types::I64, *index as i64))
+            .map(|(index, _)| self.builder.iconst(types::I64, *index as i64))
             .collect::<Vec<_>>();
         let capture_values = capture_sinks
             .iter()
@@ -10087,15 +9698,9 @@ impl<'a> FunctionCompiler<'a> {
             .collect::<Vec<_>>();
         let capture_indices_ptr = store_buffer(self, &capture_indices)?;
         let capture_values_ptr = store_buffer(self, &capture_values)?;
-        let public_count = self
-            .builder
-            .ins()
-            .iconst(types::I64, public_sinks.len() as i64);
-        let capture_count = self
-            .builder
-            .ins()
-            .iconst(types::I64, capture_sinks.len() as i64);
-        self.builder.ins().call(
+        let public_count = self.builder.iconst(types::I64, public_sinks.len() as i64);
+        let capture_count = self.builder.iconst(types::I64, capture_sinks.len() as i64);
+        self.builder.call(
             self.runtime[RuntimeFn::SetNextIndirectMutableSinks],
             &[
                 public_ptr,
@@ -10108,10 +9713,9 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    fn release_mutable_sinks(&mut self, sinks: impl IntoIterator<Item = Value>) {
+    fn release_mutable_sinks(&mut self, sinks: impl IntoIterator<Item = Val>) {
         for sink in sinks {
             self.builder
-                .ins()
                 .call(self.runtime[RuntimeFn::MutableSinkRelease], &[sink]);
         }
     }
@@ -10123,26 +9727,25 @@ impl<'a> FunctionCompiler<'a> {
         let Some(index) = self.mutable_param_indices.get(root).copied() else {
             return Ok(());
         };
-        let index = self.builder.ins().iconst(types::I64, index as i64);
+        let index = self.builder.iconst(types::I64, index as i64);
         let sink = self
             .builder
-            .ins()
             .call(self.runtime[RuntimeFn::CurrentMutableSink], &[index]);
-        let sink = self.builder.inst_results(sink)[0];
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        let active = self.builder.ins().icmp(IntCC::NotEqual, sink, zero);
+        let sink = sink.results[0];
+        let zero = self.builder.iconst(types::I64, 0);
+        let active = self.builder.icmp(IntCC::NotEqual, sink, zero);
         let publish = self.builder.create_block();
         let done = self.builder.create_block();
-        self.builder.ins().brif(active, publish, &[], done, &[]);
+        self.builder.brif(active, publish, &[], done, &[]);
         self.builder.switch_to_block(publish);
         let current = self.load_root(root)?;
         let current = self.ensure_opaque(current)?;
         let current = self.transfer_owned_opaque_value(&current);
-        self.builder.ins().call(
+        self.builder.call(
             self.runtime[RuntimeFn::MutableSinkStoreOwned],
             &[sink, current],
         );
-        self.builder.ins().jump(done, &[]);
+        self.builder.jump(done, &[]);
         self.builder.seal_block(publish);
         self.builder.switch_to_block(done);
         self.builder.seal_block(done);
@@ -10156,10 +9759,7 @@ impl<'a> FunctionCompiler<'a> {
                 place
             ));
         };
-        let value = self
-            .builder
-            .ins()
-            .iconst(types::I64, if active { 1 } else { 0 });
+        let value = self.builder.iconst(types::I64, if active { 1 } else { 0 });
         self.builder.def_var(variable, value);
         Ok(())
     }
@@ -10180,14 +9780,13 @@ impl<'a> FunctionCompiler<'a> {
 
         let loaded = self.load_place(place)?;
         let boxed = self.ensure_opaque(loaded)?;
-        let count = self.builder.ins().iconst(types::I64, 1);
+        let count = self.builder.iconst(types::I64, 1);
         let buffer = self
             .builder
-            .ins()
             .call(self.runtime[RuntimeFn::ArgBufferNew], &[count]);
-        let buffer = self.builder.inst_results(buffer)[0];
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        self.builder.ins().call(
+        let buffer = buffer.results[0];
+        let zero = self.builder.iconst(types::I64, 0);
+        self.builder.call(
             self.runtime[RuntimeFn::ArgBufferStore],
             &[buffer, zero, boxed.values[0]],
         );
@@ -10195,12 +9794,12 @@ impl<'a> FunctionCompiler<'a> {
             self.clear_temporary_opaque_owned(&boxed);
             self.release_opaque_handle(boxed.values[0]);
         }
-        let thunk_ptr = self.builder.ins().func_addr(types::I64, thunk_ref);
-        let registration = self.builder.ins().call(
+        let thunk_ptr = self.builder.func_addr(types::I64, thunk_ref);
+        let registration = self.builder.call(
             self.runtime[RuntimeFn::RegisterCleanup],
             &[thunk_ptr, buffer, count],
         );
-        let registration_id = self.builder.inst_results(registration)[0];
+        let registration_id = registration.results[0];
         self.builder.def_var(registration_variable, registration_id);
         Ok(())
     }
@@ -10213,11 +9812,11 @@ impl<'a> FunctionCompiler<'a> {
             ));
         };
         let registration_id = self.builder.use_var(variable);
-        self.builder.ins().call(
+        self.builder.call(
             self.runtime[RuntimeFn::UnregisterCleanup],
             &[registration_id],
         );
-        let zero = self.builder.ins().iconst(types::I64, 0);
+        let zero = self.builder.iconst(types::I64, 0);
         self.builder.def_var(variable, zero);
         Ok(())
     }
@@ -10247,14 +9846,13 @@ impl<'a> FunctionCompiler<'a> {
 
         let loaded = self.load_place(place)?;
         let boxed = self.ensure_opaque(loaded)?;
-        let count = self.builder.ins().iconst(types::I64, 1);
+        let count = self.builder.iconst(types::I64, 1);
         let buffer = self
             .builder
-            .ins()
             .call(self.runtime[RuntimeFn::ArgBufferNew], &[count]);
-        let buffer = self.builder.inst_results(buffer)[0];
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        self.builder.ins().call(
+        let buffer = buffer.results[0];
+        let zero = self.builder.iconst(types::I64, 0);
+        self.builder.call(
             self.runtime[RuntimeFn::ArgBufferStore],
             &[buffer, zero, boxed.values[0]],
         );
@@ -10264,12 +9862,12 @@ impl<'a> FunctionCompiler<'a> {
         }
         let active = self.builder.use_var(active_variable);
         let registration_id = self.builder.use_var(registration_variable);
-        let thunk_ptr = self.builder.ins().func_addr(types::I64, thunk_ref);
-        let refreshed = self.builder.ins().call(
+        let thunk_ptr = self.builder.func_addr(types::I64, thunk_ref);
+        let refreshed = self.builder.call(
             self.runtime[RuntimeFn::RefreshCleanup],
             &[active, registration_id, thunk_ptr, buffer, count],
         );
-        let refreshed_id = self.builder.inst_results(refreshed)[0];
+        let refreshed_id = refreshed.results[0];
         self.builder.def_var(registration_variable, refreshed_id);
         Ok(())
     }
@@ -10317,19 +9915,18 @@ impl<'a> FunctionCompiler<'a> {
                 continue;
             };
             let active = self.builder.use_var(variable);
-            let zero = self.builder.ins().iconst(types::I64, 0);
-            let should_run = self.builder.ins().icmp(IntCC::NotEqual, active, zero);
+            let zero = self.builder.iconst(types::I64, 0);
+            let should_run = self.builder.icmp(IntCC::NotEqual, active, zero);
             let run_block = self.builder.create_block();
             let next_block = self.builder.create_block();
             self.builder
-                .ins()
                 .brif(should_run, run_block, &[], next_block, &[]);
             self.builder.switch_to_block(run_block);
             self.unregister_cleanup_for_place(&place)?;
             self.builder.def_var(variable, zero);
             self.emit_cleanup_for_place_recording(&place, cancel_before_cleanup, trapping)?;
             self.release_all_temporary_owned();
-            self.builder.ins().jump(next_block, &[]);
+            self.builder.jump(next_block, &[]);
             self.builder.seal_block(run_block);
             self.builder.switch_to_block(next_block);
             self.builder.seal_block(next_block);
@@ -10341,7 +9938,7 @@ impl<'a> FunctionCompiler<'a> {
 
     fn append_writeback_return_values(
         &mut self,
-        values: &mut Vec<Value>,
+        values: &mut Vec<Val>,
     ) -> std::result::Result<(), String> {
         // Each `mut` parameter's words move back to the caller as they are.
         for (name, ty) in self.writeback_locals.clone() {
@@ -10355,7 +9952,7 @@ impl<'a> FunctionCompiler<'a> {
     fn split_call_results(
         &mut self,
         function_name: &str,
-        results: Vec<Value>,
+        results: Vec<Val>,
     ) -> std::result::Result<(ValueRef, Vec<ValueRef>), String> {
         let result_ty = self.call_result_type(function_name)?;
         let result_count = result_ty.value_count();
@@ -10498,13 +10095,12 @@ impl<'a> FunctionCompiler<'a> {
                         let loaded = self.ensure_opaque(loaded)?;
                         let cancel_before = self
                             .builder
-                            .ins()
                             .iconst(types::I64, if cancel_before_cleanup { 1 } else { 0 });
-                        let result = self.builder.ins().call(
+                        let result = self.builder.call(
                             self.runtime[RuntimeFn::TaskGroupClose],
                             &[loaded.values[0], cancel_before],
                         );
-                        self.release_opaque_handle(self.builder.inst_results(result)[0]);
+                        self.release_opaque_handle(result.results[0]);
                     }
                     CleanupCallee::Nothing => {
                         let _ = self.ensure_opaque(loaded)?;
@@ -10523,7 +10119,7 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<(), String> {
         let boxed = self.ensure_opaque(result)?;
         let (class_ptr, class_len) = self.string_constant(class_name.as_bytes())?;
-        self.builder.ins().call(
+        self.builder.call(
             self.runtime[RuntimeFn::RecordManagerExitFailure],
             &[boxed.values[0], class_ptr, class_len],
         );
@@ -10601,7 +10197,7 @@ impl<'a> FunctionCompiler<'a> {
             for place in &mutable_sink_places {
                 sinks.push(match place {
                     Some(place) => self.mutable_sink_for_place(place)?,
-                    None => self.builder.ins().iconst(types::I64, 0),
+                    None => self.builder.iconst(types::I64, 0),
                 });
             }
             self.install_direct_mutable_sinks(&sinks)?;
@@ -10609,8 +10205,8 @@ impl<'a> FunctionCompiler<'a> {
         } else {
             Vec::new()
         };
-        let inst = self.builder.ins().call(func_ref, &lowered_args);
-        let results = self.builder.inst_results(inst).to_vec();
+        let inst = self.builder.call(func_ref, &lowered_args);
+        let results = inst.results;
         self.release_mutable_sinks(mutable_sinks);
         let (result, writebacks) = self.split_call_results(&method_function_name, results)?;
         self.apply_writeback_places(&writeback_places, writebacks)?;
@@ -10671,13 +10267,13 @@ impl<'a> FunctionCompiler<'a> {
     fn push_runtime_call_words(
         &mut self,
         call: crate::runtime_ops::RuntimeCall,
-        words: &mut Vec<Value>,
+        words: &mut Vec<Val>,
     ) {
         for immediate in call.immediates {
-            words.push(self.builder.ins().iconst(types::I64, *immediate));
+            words.push(self.builder.iconst(types::I64, *immediate));
         }
         if call.span {
-            let zero = self.builder.ins().iconst(types::I64, 0);
+            let zero = self.builder.iconst(types::I64, 0);
             words.extend([zero, zero]);
         }
     }
@@ -10700,7 +10296,7 @@ impl<'a> FunctionCompiler<'a> {
         // MIR binds one argument to each parameter, in order.
         for (param, argument) in params.iter().zip(args) {
             if argument.value == Operand::Default(ArgDefault::Omitted) {
-                lowered.push(RuntimeOpArg::Word(self.builder.ins().iconst(types::I64, 0)));
+                lowered.push(RuntimeOpArg::Word(self.builder.iconst(types::I64, 0)));
                 continue;
             }
             let value = match runtime_op_arg_layout(op, param.name) {
@@ -10762,7 +10358,7 @@ impl<'a> FunctionCompiler<'a> {
                 ));
             };
             self.store_place(place, value)?;
-            return Ok(unit_value(&mut self.builder));
+            return Ok(unit_value(&mut *self.builder));
         }
         let result_ty = op
             .result_type(Some(&receiver_ty), &[])
@@ -10774,7 +10370,7 @@ impl<'a> FunctionCompiler<'a> {
             // A close helper returns the handle's last reference.
             Type::Unit => {
                 self.release_opaque_handle(results[0]);
-                return Ok(unit_value(&mut self.builder));
+                return Ok(unit_value(&mut *self.builder));
             }
             Type::Named(name, type_args) if type_args.is_empty() => match name.as_str() {
                 "bool" => Some(ScalarKind::Bool),
@@ -10810,7 +10406,7 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         let call = op.runtime_call();
         let object = self.ensure_opaque(object)?;
-        let zero = self.builder.ins().iconst(types::I64, 0);
+        let zero = self.builder.iconst(types::I64, 0);
         let (argument, count) = match (op, args.first()) {
             (RuntimeOp::Str(StrOp::Repeat), Some(argument)) => {
                 let count =
@@ -10842,8 +10438,8 @@ impl<'a> FunctionCompiler<'a> {
     /// value: the op passes a zero word in its place.
     fn load_default_arg(&mut self, default: ArgDefault) -> std::result::Result<ValueRef, String> {
         let stdio = || Type::Named("process.Stdio".to_string(), Vec::new());
-        let int = |builder: &mut FunctionBuilder<'_>, value: i64, kind| ValueRef {
-            values: vec![builder.ins().iconst(types::I64, value)],
+        let int = |builder: &mut dyn FunctionBackend, value: i64, kind| ValueRef {
+            values: vec![builder.iconst(types::I64, value)],
             ty: DirectType::Scalar(kind),
         };
         Ok(match default {
@@ -10853,8 +10449,8 @@ impl<'a> FunctionCompiler<'a> {
                         .to_string(),
                 )
             }
-            ArgDefault::Int64(value) => int(&mut self.builder, value, ScalarKind::Int64),
-            ArgDefault::Int32(value) => int(&mut self.builder, value.into(), ScalarKind::Int32),
+            ArgDefault::Int64(value) => int(&mut *self.builder, value, ScalarKind::Int64),
+            ArgDefault::Int32(value) => int(&mut *self.builder, value.into(), ScalarKind::Int32),
             ArgDefault::EmptyStrDict => {
                 let results = self.runtime_call_results(self.runtime[RuntimeFn::MapEmpty], &[]);
                 self.owned_opaque_result(
@@ -10881,8 +10477,8 @@ impl<'a> FunctionCompiler<'a> {
                 None,
             )?,
             ArgDefault::Milliseconds(value) => {
-                let milliseconds = self.builder.ins().iconst(types::I64, value);
-                let unit_nanoseconds = self.builder.ins().iconst(
+                let milliseconds = self.builder.iconst(types::I64, value);
+                let unit_nanoseconds = self.builder.iconst(
                     types::I64,
                     crate::runtime_value::NANOS_PER_MILLISECOND as i64,
                 );
@@ -10935,13 +10531,9 @@ impl<'a> FunctionCompiler<'a> {
                 // helper.
                 if let Some(kind) = object.ty.scalar_kind() {
                     let value = if kind == ScalarKind::Uint64 {
-                        self.builder
-                            .ins()
-                            .fcvt_from_uint(types::F64, object.values[0])
+                        self.builder.fcvt_from_uint(types::F64, object.values[0])
                     } else {
-                        self.builder
-                            .ins()
-                            .fcvt_from_sint(types::F64, object.values[0])
+                        self.builder.fcvt_from_sint(types::F64, object.values[0])
                     };
                     return Ok(ValueRef {
                         values: vec![value],
@@ -11018,7 +10610,7 @@ impl<'a> FunctionCompiler<'a> {
         argument: &MirArg,
         kind: ScalarKind,
         hint: bool,
-    ) -> std::result::Result<Value, String> {
+    ) -> std::result::Result<Val, String> {
         let loaded = if hint {
             self.load_operand_with_integer_hint(&argument.value, Some(kind))?
         } else {
@@ -11045,11 +10637,11 @@ impl<'a> FunctionCompiler<'a> {
     fn emit_collection_operation(
         &mut self,
         call: crate::runtime_ops::RuntimeCall,
-        collection: Value,
-        value: Option<Value>,
-        index: Option<Value>,
-    ) -> Value {
-        let zero = self.builder.ins().iconst(types::I64, 0);
+        collection: Val,
+        value: Option<Val>,
+        index: Option<Val>,
+    ) -> Val {
+        let zero = self.builder.iconst(types::I64, 0);
         let mut words = vec![collection, value.unwrap_or(zero), index.unwrap_or(zero)];
         self.push_runtime_call_words(call, &mut words);
         self.runtime_call_results(self.runtime[call.function], &words)[0]
@@ -11092,7 +10684,7 @@ impl<'a> FunctionCompiler<'a> {
         let result = self.emit_collection_operation(call, object.values[0], None, Some(additional));
         self.release_opaque_handle(result);
         self.store_receiver_back(receiver_place, object)?;
-        Ok(unit_value(&mut self.builder))
+        Ok(unit_value(&mut *self.builder))
     }
 
     /// A `list` method, or a private read, write, or slice that indexing
@@ -11138,21 +10730,19 @@ impl<'a> FunctionCompiler<'a> {
                 )?;
                 let value = self.coerce_value(loaded, &element_direct_ty)?.values[0];
                 let bits = if kind == ScalarElement::Float64 {
-                    self.builder
-                        .ins()
-                        .bitcast(types::I64, MemFlags::new(), value)
+                    self.builder.bitcast(types::I64, value)
                 } else {
                     value
                 };
                 let mut words = vec![list, bits];
                 self.push_runtime_call_words(call, &mut words);
-                self.builder.ins().call(function, &words);
+                self.builder.call(function, &words);
                 if let Some(place) = receiver_place {
                     if !self.receiver_store_is_redundant(place) {
                         self.store_place(place, object.clone())?;
                     }
                 }
-                Ok(unit_value(&mut self.builder))
+                Ok(unit_value(&mut *self.builder))
             }
             ListOp::Push => {
                 let value =
@@ -11161,7 +10751,7 @@ impl<'a> FunctionCompiler<'a> {
                 let results = self.runtime_call_results(function, &[list, value]);
                 self.release_opaque_handle(results[0]);
                 self.store_receiver_back(receiver_place, &object)?;
-                Ok(unit_value(&mut self.builder))
+                Ok(unit_value(&mut *self.builder))
             }
             ListOp::Pop => {
                 let index = self.load_word(args[0], int64, true)?;
@@ -11205,9 +10795,7 @@ impl<'a> FunctionCompiler<'a> {
                         column,
                     )?;
                     let value = if kind == ScalarElement::Float64 {
-                        self.builder
-                            .ins()
-                            .bitcast(types::F64, MemFlags::new(), bits)
+                        self.builder.bitcast(types::F64, bits)
                     } else {
                         bits
                     };
@@ -11233,7 +10821,7 @@ impl<'a> FunctionCompiler<'a> {
                 let results = self.runtime_call_results(function, &[list, index, value]);
                 self.store_receiver_back(receiver_place, &object)?;
                 if op == ListOp::Insert {
-                    return Ok(unit_value(&mut self.builder));
+                    return Ok(unit_value(&mut *self.builder));
                 }
                 Ok(self.owned_opaque_result(results, optional_type(element_ty)))
             }
@@ -11249,7 +10837,7 @@ impl<'a> FunctionCompiler<'a> {
                     self.runtime_call_results(function, &[list, index, value, line, column]);
                 self.release_opaque_handle(results[0]);
                 self.store_receiver_back(receiver_place, &object)?;
-                Ok(unit_value(&mut self.builder))
+                Ok(unit_value(&mut *self.builder))
             }
             ListOp::Remove | ListOp::IndexOf | ListOp::Count => {
                 let value =
@@ -11259,7 +10847,7 @@ impl<'a> FunctionCompiler<'a> {
                 if op == ListOp::Remove {
                     self.store_receiver_back(receiver_place, &object)?;
                     self.release_opaque_handle(result);
-                    return Ok(unit_value(&mut self.builder));
+                    return Ok(unit_value(&mut *self.builder));
                 }
                 let boxed = self.owned_opaque_result(vec![result], Type::named("int64"));
                 self.coerce_value(boxed, &DirectType::Scalar(int64))
@@ -11267,9 +10855,9 @@ impl<'a> FunctionCompiler<'a> {
             ListOp::Swap => {
                 let first = self.load_word(args[0], int64, false)?;
                 let second = self.load_word(args[1], int64, false)?;
-                self.builder.ins().call(function, &[list, first, second]);
+                self.builder.call(function, &[list, first, second]);
                 self.store_receiver_back(receiver_place, &object)?;
-                Ok(unit_value(&mut self.builder))
+                Ok(unit_value(&mut *self.builder))
             }
             ListOp::Contains => {
                 let value =
@@ -11286,13 +10874,13 @@ impl<'a> FunctionCompiler<'a> {
                 let results = self.runtime_call_results(function, &[list, other]);
                 self.release_opaque_handle(results[0]);
                 self.store_receiver_back(receiver_place, &object)?;
-                Ok(unit_value(&mut self.builder))
+                Ok(unit_value(&mut *self.builder))
             }
             ListOp::Clear | ListOp::Reverse => {
                 let results = self.runtime_call_results(function, &[list]);
                 self.release_opaque_handle(results[0]);
                 self.store_receiver_back(receiver_place, &object)?;
-                Ok(unit_value(&mut self.builder))
+                Ok(unit_value(&mut *self.builder))
             }
             ListOp::Reserve => {
                 self.compile_collection_reserve(call, &object, receiver_place, args[0])
@@ -11392,7 +10980,7 @@ impl<'a> FunctionCompiler<'a> {
                 if op == DictOp::SetIndex {
                     self.release_opaque_handle(results[0]);
                     self.store_receiver_back(receiver_place, &object)?;
-                    return Ok(unit_value(&mut self.builder));
+                    return Ok(unit_value(&mut *self.builder));
                 }
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(self.owned_opaque_result(results, optional_type(value_ty)))
@@ -11416,7 +11004,7 @@ impl<'a> FunctionCompiler<'a> {
                 let results = self.runtime_call_results(function, &words);
                 self.release_opaque_handle(results[0]);
                 self.store_receiver_back(receiver_place, &object)?;
-                Ok(unit_value(&mut self.builder))
+                Ok(unit_value(&mut *self.builder))
             }
             DictOp::Reserve => {
                 self.compile_collection_reserve(call, &object, receiver_place, args[0])
@@ -11468,9 +11056,9 @@ impl<'a> FunctionCompiler<'a> {
                 let value =
                     self.load_operand_as_opaque_direct(&args[0].value, &element_direct_ty)?;
                 let value = self.transfer_owned_opaque_value(&value);
-                self.builder.ins().call(function, &[set, value]);
+                self.builder.call(function, &[set, value]);
                 self.store_receiver_back(receiver_place, &object)?;
-                Ok(unit_value(&mut self.builder))
+                Ok(unit_value(&mut *self.builder))
             }
             SetOp::Remove | SetOp::Discard => {
                 let value =
@@ -11478,13 +11066,13 @@ impl<'a> FunctionCompiler<'a> {
                 let result = self.emit_collection_operation(call, set, Some(value.values[0]), None);
                 self.store_receiver_back(receiver_place, &object)?;
                 self.release_opaque_handle(result);
-                Ok(unit_value(&mut self.builder))
+                Ok(unit_value(&mut *self.builder))
             }
             SetOp::Clear => {
                 let result = self.emit_collection_operation(call, set, None, None);
                 self.release_opaque_handle(result);
                 self.store_receiver_back(receiver_place, &object)?;
-                Ok(unit_value(&mut self.builder))
+                Ok(unit_value(&mut *self.builder))
             }
             SetOp::Reserve => {
                 self.compile_collection_reserve(call, &object, receiver_place, args[0])
@@ -11569,7 +11157,7 @@ impl<'a> FunctionCompiler<'a> {
                 if op == ArrayOp::Fill {
                     self.release_opaque_handle(results[0]);
                     self.store_receiver_back(receiver_place, &object)?;
-                    return Ok(unit_value(&mut self.builder));
+                    return Ok(unit_value(&mut *self.builder));
                 }
                 if op == ArrayOp::Set {
                     self.store_receiver_back(receiver_place, &object)?;
@@ -11611,7 +11199,7 @@ impl<'a> FunctionCompiler<'a> {
                 );
                 self.release_opaque_handle(results[0]);
                 self.store_receiver_back(receiver_place, &object)?;
-                Ok(unit_value(&mut self.builder))
+                Ok(unit_value(&mut *self.builder))
             }
             ArrayOp::Map => {
                 let callback = self.load_operand(&args[0].value)?;
@@ -11627,7 +11215,6 @@ impl<'a> FunctionCompiler<'a> {
                 };
                 let result_dtype = self
                     .builder
-                    .ins()
                     .iconst(types::I64, direct_array_dtype_code(&result_type)?);
                 let callback = self.ensure_opaque(callback)?;
                 words.extend([callback.values[0], result_dtype]);
@@ -11714,11 +11301,11 @@ impl<'a> FunctionCompiler<'a> {
         self.push_runtime_call_words(call, &mut words);
         words.extend(operands);
         while words.len() < 10 {
-            words.push(self.builder.ins().iconst(types::I64, 0));
+            words.push(self.builder.iconst(types::I64, 0));
         }
         let value_operand = match value_operand {
             Some(value) => value,
-            None => self.builder.ins().iconst(types::I64, 0),
+            None => self.builder.iconst(types::I64, 0),
         };
         words.push(value_operand);
         let results = self.runtime_call_results(self.runtime[call.function], &words);
@@ -11730,7 +11317,7 @@ impl<'a> FunctionCompiler<'a> {
                 .owned_opaque_result(results, Type::Named("list".to_string(), vec![element_ty]))),
             SpanOp::Restore | SpanOp::Fill => {
                 self.release_opaque_handle(results[0]);
-                Ok(unit_value(&mut self.builder))
+                Ok(unit_value(&mut *self.builder))
             }
             SpanOp::Contains | SpanOp::Eq => {
                 let boxed = self.owned_opaque_result(results, Type::named("bool"));
@@ -11811,13 +11398,11 @@ impl<'a> FunctionCompiler<'a> {
         let result_vars = self.declare_temporary_result_storage(&result_ty)?;
         let probe = self
             .builder
-            .ins()
             .call(self.runtime[RuntimeFn::ValueIsUnion], &[raw.values[0]]);
-        let is_union = self.builder.inst_results(probe)[0];
+        let is_union = probe.results[0];
         let union_block = self.builder.create_block();
         let plain_block = self.builder.create_block();
         self.builder
-            .ins()
             .brif(is_union, union_block, &[], plain_block, &[]);
         let caller_owned = self.layout_scratch.clone();
 
@@ -11839,23 +11424,20 @@ impl<'a> FunctionCompiler<'a> {
             // behind an erased place; refuse at run time rather than mutate
             // a detached copy.
             self.emit_pending_cleanups(true)?;
-            let line = self.builder.ins().iconst(types::I64, 0);
-            let column = self.builder.ins().iconst(types::I64, 0);
-            self.builder.ins().call(
+            let line = self.builder.iconst(types::I64, 0);
+            let column = self.builder.iconst(types::I64, 0);
+            self.builder.call(
                 self.runtime[RuntimeFn::FailErasedUnionMutableReceiver],
                 &[line, column],
             );
-            self.builder.ins().trap(TrapCode::unwrap_user(1));
+            self.builder.trap(TrapCode::User(1));
         } else {
-            let consume_flag = self.builder.ins().iconst(types::I64, i64::from(consumes));
-            let inst = self.builder.ins().call(
+            let consume_flag = self.builder.iconst(types::I64, i64::from(consumes));
+            let inst = self.builder.call(
                 self.runtime[RuntimeFn::UnionActivePayload],
                 &[raw.values[0], consume_flag],
             );
-            let payload = self.owned_opaque_result(
-                self.builder.inst_results(inst).to_vec(),
-                Type::named("Unknown"),
-            );
+            let payload = self.owned_opaque_result(inst.results, Type::named("Unknown"));
             let union_receiver_place = receiver_place.map(|place| {
                 format!(
                     "{place}.{}",
@@ -11903,8 +11485,8 @@ impl<'a> FunctionCompiler<'a> {
         candidates: &[MethodCandidate],
         args: &[MirArg],
         result_ty: &DirectType,
-        result_vars: &[Variable],
-        join_block: cranelift_codegen::ir::Block,
+        result_vars: &[Var],
+        join_block: Blk,
     ) -> std::result::Result<(), String> {
         let mut current_fallthrough = None;
         // Every runtime candidate starts from the same ownership state. Emitting
@@ -11918,9 +11500,7 @@ impl<'a> FunctionCompiler<'a> {
             let matched = self.value_matches_runtime_type(object.values[0], &candidate.ty)?;
             let then_block = self.builder.create_block();
             let else_block = self.builder.create_block();
-            self.builder
-                .ins()
-                .brif(matched, then_block, &[], else_block, &[]);
+            self.builder.brif(matched, then_block, &[], else_block, &[]);
             self.builder.switch_to_block(then_block);
             self.layout_scratch = caller_owned.clone();
             let call_result = self.compile_method_call(
@@ -11932,7 +11512,7 @@ impl<'a> FunctionCompiler<'a> {
             let coerced_result = self.coerce_value(call_result, result_ty)?;
             self.store_result_vars(result_vars, &coerced_result)?;
             self.release_all_temporary_owned();
-            self.builder.ins().jump(join_block, &[]);
+            self.builder.jump(join_block, &[]);
             self.builder.seal_block(then_block);
             self.builder.switch_to_block(else_block);
             self.layout_scratch = caller_owned.clone();
@@ -11941,7 +11521,7 @@ impl<'a> FunctionCompiler<'a> {
         if let Some(else_block) = current_fallthrough {
             self.builder.switch_to_block(else_block);
             self.emit_pending_cleanups(true)?;
-            self.builder.ins().trap(TrapCode::unwrap_user(1));
+            self.builder.trap(TrapCode::User(1));
             self.builder.seal_block(else_block);
         }
         Ok(())
@@ -11958,12 +11538,11 @@ impl<'a> FunctionCompiler<'a> {
             class_name
         ))?;
         let (class_ptr, class_len) = self.string_constant(class_name.as_bytes())?;
-        let init = self.builder.ins().call(
+        let init = self.builder.call(
             self.runtime[RuntimeFn::InstanceEmpty],
             &[class_ptr, class_len],
         );
-        let current =
-            self.owned_opaque_result(self.builder.inst_results(init).to_vec(), target_ty.clone());
+        let current = self.owned_opaque_result(init.results, target_ty.clone());
         let substitutions = match target_ty {
             Type::Named(name, args) if name == class_name => class
                 .type_params
@@ -11995,7 +11574,7 @@ impl<'a> FunctionCompiler<'a> {
             let loaded = self.ensure_opaque(loaded)?;
             let loaded = self.transfer_owned_opaque_value(&loaded);
             let (field_ptr, field_len) = self.string_constant(field.name.as_bytes())?;
-            self.builder.ins().call(
+            self.builder.call(
                 self.runtime[RuntimeFn::InstanceSetFieldOwned],
                 &[current.values[0], field_ptr, field_len, loaded],
             );
@@ -12024,18 +11603,16 @@ impl<'a> FunctionCompiler<'a> {
             };
         let arg_count_value = self
             .builder
-            .ins()
             .iconst(types::I64, function_params.len() as i64);
         let buffer_call = self
             .builder
-            .ins()
             .call(self.runtime[RuntimeFn::ArgBufferNew], &[arg_count_value]);
-        let buffer = self.builder.inst_results(buffer_call)[0];
-        let guard_call = self.builder.ins().call(
+        let buffer = buffer_call.results[0];
+        let guard_call = self.builder.call(
             self.runtime[RuntimeFn::TaskArgBufferGuard],
             &[buffer, arg_count_value],
         );
-        let buffer_guard = self.builder.inst_results(guard_call)[0];
+        let buffer_guard = guard_call.results[0];
         let expected = function_value_param_types(
             &function_params,
             &self.classes,
@@ -12058,14 +11635,14 @@ impl<'a> FunctionCompiler<'a> {
             let loaded = self.load_operand_for_target(&arg.value, expected_ty)?;
             let value = self.coerce_value(loaded, expected_ty)?;
             let value = self.ensure_opaque(value)?;
-            let index_value = self.builder.ins().iconst(types::I64, index as i64);
-            self.builder.ins().call(
+            let index_value = self.builder.iconst(types::I64, index as i64);
+            self.builder.call(
                 self.runtime[RuntimeFn::ArgBufferStore],
                 &[buffer, index_value, value.values[0]],
             );
         }
-        let transfer_defaults = self.builder.ins().iconst(types::I64, 1);
-        self.builder.ins().call(
+        let transfer_defaults = self.builder.iconst(types::I64, 1);
+        self.builder.call(
             self.runtime[RuntimeFn::FunctionBindDefaults],
             &[
                 function_value.values[0],
@@ -12078,32 +11655,29 @@ impl<'a> FunctionCompiler<'a> {
             if supplied.is_some() {
                 continue;
             }
-            let raw =
-                self.builder
-                    .ins()
-                    .load(types::I64, MemFlags::new(), buffer, (index as i32) * 8);
+            let raw = self
+                .builder
+                .load(types::I64, MemFlags::new(), buffer, (index as i32) * 8);
             self.tag_raw_opaque_runtime_type(raw, &expected[index])?;
         }
         let returns_handle_value = self
             .builder
-            .ins()
             .iconst(types::I64, if mode.returns_handle { 1 } else { 0 });
         let result_is_copy_value = self
             .builder
-            .ins()
             .iconst(types::I64, if mode.result_is_copy { 1 } else { 0 });
         let (stack_size_present_value, stack_size_value) = match stack_size {
             Some(stack_size) => {
                 let target = DirectType::Scalar(ScalarKind::Int64);
                 let value = self.load_operand_for_target(stack_size, &target)?;
                 (
-                    self.builder.ins().iconst(types::I64, 1),
+                    self.builder.iconst(types::I64, 1),
                     self.coerce_value(value, &target)?.values[0],
                 )
             }
             None => (
-                self.builder.ins().iconst(types::I64, 0),
-                self.builder.ins().iconst(types::I64, 0),
+                self.builder.iconst(types::I64, 0),
+                self.builder.iconst(types::I64, 0),
             ),
         };
         let group = self.load_operand(task_group)?;
@@ -12115,22 +11689,16 @@ impl<'a> FunctionCompiler<'a> {
             self.string_constant(current_function_name.as_bytes())?;
         let (spawn_path_ptr, spawn_path_len) =
             self.string_constant(current_function_path.as_bytes())?;
-        let spawn_line = self
-            .builder
-            .ins()
-            .iconst(types::I64, spawn_span.line as i64);
-        let spawn_column = self
-            .builder
-            .ins()
-            .iconst(types::I64, spawn_span.column as i64);
+        let spawn_line = self.builder.iconst(types::I64, spawn_span.line as i64);
+        let spawn_column = self.builder.iconst(types::I64, spawn_span.column as i64);
         // Every operation that can trap after raw allocation has completed.
         // Transfer the buffer from the direct cleanup stack to the task runtime
         // only across this allocation-free call boundary.
-        self.builder.ins().call(
+        self.builder.call(
             self.runtime[RuntimeFn::TaskArgBufferDisarm],
             &[buffer_guard],
         );
-        let call = self.builder.ins().call(
+        let call = self.builder.call(
             self.runtime[RuntimeFn::StartTaskCall],
             &[
                 function_value.values[0],
@@ -12159,40 +11727,38 @@ impl<'a> FunctionCompiler<'a> {
             DirectType::Scalar(ScalarKind::Unit)
         };
         match ty {
-            DirectType::Opaque(ty) => {
-                Ok(self.owned_opaque_result(self.builder.inst_results(call).to_vec(), ty))
-            }
+            DirectType::Opaque(ty) => Ok(self.owned_opaque_result(call.results, ty)),
             _ => {
-                self.release_opaque_handle(self.builder.inst_results(call)[0]);
-                Ok(unit_value(&mut self.builder))
+                self.release_opaque_handle(call.results[0]);
+                Ok(unit_value(&mut *self.builder))
             }
         }
     }
 
     fn value_matches_type(
         &mut self,
-        value: Value,
+        value: Val,
         type_name: &str,
-    ) -> std::result::Result<Value, String> {
+    ) -> std::result::Result<Val, String> {
         let (ptr, len) = self.string_constant(type_name.as_bytes())?;
-        let inst = self.builder.ins().call(
+        let inst = self.builder.call(
             self.runtime[RuntimeFn::ValueTypeMatches],
             &[value, ptr, len],
         );
-        Ok(self.builder.inst_results(inst)[0])
+        Ok(inst.results[0])
     }
 
     fn value_matches_runtime_type(
         &mut self,
-        value: Value,
+        value: Val,
         ty: &Type,
-    ) -> std::result::Result<Value, String> {
+    ) -> std::result::Result<Val, String> {
         match ty {
             Type::Union(_) => {
                 let pattern = crate::native_runtime::canonical_runtime_type_name(ty);
                 self.value_matches_type(value, &pattern)
             }
-            Type::TypeParam(_) => Ok(self.builder.ins().iconst(types::I64, 1)),
+            Type::TypeParam(_) => Ok(self.builder.iconst(types::I64, 1)),
             Type::ReturnedView(_) => Err(
                 "direct backend cannot test a value against a returned-view contract".to_string(),
             ),
@@ -12224,15 +11790,12 @@ impl<'a> FunctionCompiler<'a> {
                 let structural_block = self.builder.create_block();
                 let tagged = self
                     .builder
-                    .ins()
                     .call(self.runtime[RuntimeFn::ValueHasRuntimeType], &[value]);
-                let tagged = self.builder.inst_results(tagged)[0];
+                let tagged = tagged.results[0];
                 self.builder
-                    .ins()
                     .brif(tagged, join_block, &[exact], structural_block, &[]);
                 self.builder.switch_to_block(structural_block);
                 self.builder
-                    .ins()
                     .brif(base_matches, inspect_block, &[], join_block, &[exact]);
                 self.builder.seal_block(structural_block);
                 self.builder.switch_to_block(inspect_block);
@@ -12250,17 +11813,17 @@ impl<'a> FunctionCompiler<'a> {
                         continue;
                     }
                     let (field_ptr, field_len) = self.string_constant(field.name.as_bytes())?;
-                    let inst = self.builder.ins().call(
+                    let inst = self.builder.call(
                         self.runtime[RuntimeFn::InstanceGetField],
                         &[value, field_ptr, field_len],
                     );
-                    let field_value = self.builder.inst_results(inst)[0];
+                    let field_value = inst.results[0];
                     let field_matches = self.value_matches_runtime_type(field_value, &field_ty)?;
                     self.release_opaque_handle(field_value);
-                    structural = self.builder.ins().band(structural, field_matches);
+                    structural = self.builder.band(structural, field_matches);
                 }
-                let matched = self.builder.ins().bor(exact, structural);
-                self.builder.ins().jump(join_block, &[matched]);
+                let matched = self.builder.bor(exact, structural);
+                self.builder.jump(join_block, &[matched]);
                 self.builder.seal_block(inspect_block);
                 self.builder.switch_to_block(join_block);
                 self.builder.seal_block(join_block);
@@ -12269,28 +11832,28 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn span_values(&mut self, span: Option<Span>) -> (Value, Value) {
+    fn span_values(&mut self, span: Option<Span>) -> (Val, Val) {
         let (line, column) = span
             .map(|span| (span.line as i64, span.column as i64))
             .unwrap_or((0, 0));
         (
-            self.builder.ins().iconst(types::I64, line),
-            self.builder.ins().iconst(types::I64, column),
+            self.builder.iconst(types::I64, line),
+            self.builder.iconst(types::I64, column),
         )
     }
 
     fn declare_temporary_result_storage(
         &mut self,
         ty: &DirectType,
-    ) -> std::result::Result<Vec<Variable>, String> {
+    ) -> std::result::Result<Vec<Var>, String> {
         let mut vars = Vec::new();
         for abi in ty.abi_types() {
-            let variable = Variable::from_u32(self.next_variable_index as u32);
+            let variable = Var(self.next_variable_index as u32);
             self.next_variable_index += 1;
             self.builder.declare_var(variable, abi);
             let zero = match abi {
-                t if t == types::F64 => self.builder.ins().f64const(Ieee64::with_float(0.0)),
-                _ => self.builder.ins().iconst(abi, 0),
+                t if t == types::F64 => self.builder.f64const(0.0),
+                _ => self.builder.iconst(abi, 0),
             };
             self.builder.def_var(variable, zero);
             vars.push(variable);
@@ -12300,7 +11863,7 @@ impl<'a> FunctionCompiler<'a> {
 
     fn store_result_vars(
         &mut self,
-        vars: &[Variable],
+        vars: &[Var],
         value: &ValueRef,
     ) -> std::result::Result<(), String> {
         if matches!(value.ty, DirectType::Opaque(_)) {
@@ -12325,7 +11888,7 @@ impl<'a> FunctionCompiler<'a> {
 
     fn load_result_vars(
         &mut self,
-        vars: &[Variable],
+        vars: &[Var],
         ty: DirectType,
     ) -> std::result::Result<ValueRef, String> {
         let values = vars.iter().map(|var| self.builder.use_var(*var)).collect();
@@ -12337,9 +11900,9 @@ impl<'a> FunctionCompiler<'a> {
     }
 }
 
-fn unit_value(builder: &mut FunctionBuilder<'_>) -> ValueRef {
+fn unit_value(builder: &mut dyn FunctionBackend) -> ValueRef {
     ValueRef {
-        values: vec![builder.ins().iconst(types::I64, 0)],
+        values: vec![builder.iconst(types::I64, 0)],
         ty: DirectType::Scalar(ScalarKind::Unit),
     }
 }
@@ -12359,9 +11922,9 @@ fn consuming_operands(
 }
 
 fn declare_runtime_helper(
-    module: &mut ObjectModule,
+    module: &mut dyn ModuleBackend,
     function: RuntimeFn,
-) -> std::result::Result<FuncId, String> {
+) -> std::result::Result<FuncHandle, String> {
     let params = function
         .params()
         .iter()
@@ -12376,17 +11939,15 @@ fn declare_runtime_helper(
 }
 
 fn declare_runtime_function(
-    module: &mut ObjectModule,
+    module: &mut dyn ModuleBackend,
     name: &str,
-    params: &[cranelift_codegen::ir::Type],
-    result: Option<cranelift_codegen::ir::Type>,
-) -> std::result::Result<FuncId, String> {
-    let mut sig = module.make_signature();
-    for param in params {
-        sig.params.push(AbiParam::new(*param));
-    }
+    params: &[ScalarType],
+    result: Option<ScalarType>,
+) -> std::result::Result<FuncHandle, String> {
+    let mut sig = Signature::new(CallConv::C);
+    sig.params.extend_from_slice(params);
     if let Some(result) = result {
-        sig.returns.push(AbiParam::new(result));
+        sig.returns.push(result);
     }
     match module.declare_function(name, Linkage::Import, &sig) {
         Ok(id) => Ok(id),
@@ -12397,7 +11958,7 @@ fn declare_runtime_function(
     }
 }
 
-fn abi_type(ty: AbiType) -> cranelift_codegen::ir::Type {
+fn abi_type(ty: AbiType) -> ScalarType {
     match ty {
         AbiType::I32 => types::I32,
         AbiType::I64 => types::I64,
@@ -12406,35 +11967,32 @@ fn abi_type(ty: AbiType) -> cranelift_codegen::ir::Type {
 }
 
 fn declare_string_constant(
-    object: &mut ObjectModule,
-    string_data: &mut HashMap<Vec<u8>, DataId>,
-    builder: &mut FunctionBuilder<'_>,
+    string_data: &mut HashMap<Vec<u8>, DataHandle>,
+    builder: &mut dyn FunctionBackend,
     bytes: &[u8],
-) -> std::result::Result<(Value, Value), String> {
-    let id = string_data_id(object, string_data, bytes)?;
-    let global = object.declare_data_in_func(id, builder.func);
-    let ptr = builder.ins().symbol_value(types::I64, global);
-    let len = builder.ins().iconst(types::I64, bytes.len() as i64);
+) -> std::result::Result<(Val, Val), String> {
+    let id = string_data_id(builder.module(), string_data, bytes)?;
+    let global = builder.import_data(id);
+    let ptr = builder.symbol_value(types::I64, global);
+    let len = builder.iconst(types::I64, bytes.len() as i64);
     Ok((ptr, len))
 }
 
 fn string_data_id(
-    object: &mut ObjectModule,
-    string_data: &mut HashMap<Vec<u8>, DataId>,
+    object: &mut dyn ModuleBackend,
+    string_data: &mut HashMap<Vec<u8>, DataHandle>,
     bytes: &[u8],
-) -> std::result::Result<DataId, String> {
+) -> std::result::Result<DataHandle, String> {
     if let Some(id) = string_data.get(bytes) {
         return Ok(*id);
     }
     let name = format!("aura_data_{}", string_data.len());
     let id = try_or_string_error!(
-        object.declare_data(&name, Linkage::Local, false, false),
+        object.declare_data(&name, Linkage::Local, false),
         "failed to declare string data: {}"
     );
-    let mut data = DataDescription::new();
-    data.define(bytes.to_vec().into_boxed_slice());
     try_or_string_error!(
-        object.define_data(id, &data),
+        object.define_data(id, DataDescription::new(bytes.to_vec())),
         "failed to define string data: {}"
     );
     string_data.insert(bytes.to_vec(), id);
@@ -12454,17 +12012,17 @@ const FRAME_DESCRIPTOR_BYTES: usize = 56;
 /// Defines one function's static frame descriptor. It is writable because the
 /// runtime marks it validated on the function's first call.
 fn declare_frame_descriptor(
-    object: &mut ObjectModule,
-    string_data: &mut HashMap<Vec<u8>, DataId>,
+    object: &mut dyn ModuleBackend,
+    string_data: &mut HashMap<Vec<u8>, DataHandle>,
     name: &str,
     span: Span,
     path: &[u8],
     function: &[u8],
-) -> std::result::Result<DataId, String> {
+) -> std::result::Result<DataHandle, String> {
     let path_id = string_data_id(object, string_data, path)?;
     let function_id = string_data_id(object, string_data, function)?;
     let id = try_or_string_error!(
-        object.declare_data(name, Linkage::Local, true, false),
+        object.declare_data(name, Linkage::Local, true),
         "failed to declare frame descriptor: {}"
     );
     let mut bytes = vec![0u8; FRAME_DESCRIPTOR_BYTES];
@@ -12476,15 +12034,12 @@ fn declare_frame_descriptor(
     ] {
         bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
     }
-    let mut data = DataDescription::new();
-    data.define(bytes.into_boxed_slice());
-    data.set_align(8);
-    let path_global = object.declare_data_in_data(path_id, &mut data);
-    data.write_data_addr(FRAME_DESCRIPTOR_PATH_PTR, path_global, 0);
-    let function_global = object.declare_data_in_data(function_id, &mut data);
-    data.write_data_addr(FRAME_DESCRIPTOR_FUNCTION_PTR, function_global, 0);
+    let mut data = DataDescription::new(bytes);
+    data.align = Some(8);
+    data.write_data_addr(FRAME_DESCRIPTOR_PATH_PTR, path_id);
+    data.write_data_addr(FRAME_DESCRIPTOR_FUNCTION_PTR, function_id);
     try_or_string_error!(
-        object.define_data(id, &data),
+        object.define_data(id, data),
         "failed to define frame descriptor: {}"
     );
     Ok(id)
@@ -12493,14 +12048,13 @@ fn declare_frame_descriptor(
 fn signature_for(
     function: &MirFunction,
     classes: &HashMap<String, MirClass>,
-    call_conv: CallConv,
 ) -> std::result::Result<Signature, String> {
-    let mut signature = Signature::new(call_conv);
+    let mut signature = Signature::new(CallConv::Aura);
     let mut writeback_types = Vec::new();
     if function.receiver.is_some() {
         let receiver_ty = receiver_type(function, classes)?;
         for abi in receiver_ty.abi_types() {
-            signature.params.push(AbiParam::new(abi));
+            signature.params.push(abi);
         }
         if function.receiver == Some(MirReceiverKind::BorrowMut) {
             writeback_types.push(receiver_ty);
@@ -12513,7 +12067,7 @@ fn signature_for(
             &format!("parameter `{}` on `{}`", param.name, function.name),
         )?;
         for abi in ty.abi_types() {
-            signature.params.push(AbiParam::new(abi));
+            signature.params.push(abi);
         }
         if param.passing == MirReceiverKind::BorrowMut {
             writeback_types.push(ty);
@@ -12525,11 +12079,11 @@ fn signature_for(
         &format!("return type of `{}`", function.name),
     )?;
     for abi in return_ty.abi_types() {
-        signature.returns.push(AbiParam::new(abi));
+        signature.returns.push(abi);
     }
     for ty in writeback_types {
         for abi in ty.abi_types() {
-            signature.returns.push(AbiParam::new(abi));
+            signature.returns.push(abi);
         }
     }
     Ok(signature)
@@ -12621,13 +12175,13 @@ fn cleanup_place_type(
 }
 
 fn declare_root_variables(
-    builder: &mut FunctionBuilder<'_>,
+    builder: &mut dyn FunctionBackend,
     variable_index: &mut usize,
-    variables: &mut HashMap<String, Vec<Variable>>,
+    variables: &mut HashMap<String, Vec<Var>>,
     variable_types: &mut HashMap<String, DirectType>,
     name: String,
     ty: DirectType,
-    initial: Option<&[Value]>,
+    initial: Option<&[Val]>,
 ) {
     let initial_values = if let Some(values) = initial {
         values.to_vec()
@@ -12637,7 +12191,7 @@ fn declare_root_variables(
     let abi_types = ty.abi_types();
     let mut declared = Vec::new();
     for (offset, abi_ty) in abi_types.into_iter().enumerate() {
-        let variable = Variable::from_u32(*variable_index as u32);
+        let variable = Var(*variable_index as u32);
         *variable_index += 1;
         builder.declare_var(variable, abi_ty);
         builder.def_var(variable, initial_values[offset]);
@@ -12689,11 +12243,11 @@ fn cleanup_callee_for_place(function: &MirFunction, place: &str) -> Option<Clean
 /// for the trap being unwound (checkpoint F5).
 fn release_cleanup_thunk_results(
     codegen: &mut NativeCodegen<'_>,
-    builder: &mut FunctionBuilder<'_>,
+    builder: &mut dyn FunctionBackend,
     action: Option<&CleanupAction>,
     class_name: &str,
     function_name: &str,
-    results: &[Value],
+    results: &[Val],
 ) -> std::result::Result<(), String> {
     let returns_result = matches!(
         action,
@@ -12716,15 +12270,10 @@ fn release_cleanup_thunk_results(
         let boxed = box_thunk_value(codegen, builder, &results[..return_count], &return_ty)?;
         let (class_ptr, class_len) =
             thunk_string_constant(codegen, builder, class_name.as_bytes())?;
-        let record = codegen.object.declare_func_in_func(
-            codegen.runtime[RuntimeFn::RecordManagerExitFailure],
-            builder.func,
-        );
-        builder.ins().call(record, &[boxed, class_ptr, class_len]);
-        let release = codegen
-            .object
-            .declare_func_in_func(codegen.runtime[RuntimeFn::ReleaseValue], builder.func);
-        builder.ins().call(release, &[boxed]);
+        let record = builder.import_function(codegen.runtime[RuntimeFn::RecordManagerExitFailure]);
+        builder.call(record, &[boxed, class_ptr, class_len]);
+        let release = builder.import_function(codegen.runtime[RuntimeFn::ReleaseValue]);
+        builder.call(release, &[boxed]);
         let mut cursor = return_count;
         for writeback_ty in codegen
             .function_writeback_types
@@ -13559,43 +13108,41 @@ fn render_direct_type(ty: &DirectType) -> String {
 
 fn thunk_string_constant(
     codegen: &mut NativeCodegen<'_>,
-    builder: &mut FunctionBuilder<'_>,
+    builder: &mut dyn FunctionBackend,
     bytes: &[u8],
-) -> std::result::Result<(Value, Value), String> {
+) -> std::result::Result<(Val, Val), String> {
     let id = if let Some(id) = codegen.string_data.get(bytes) {
         *id
     } else {
         let name = format!("aura_data_{}", codegen.string_data.len());
-        let id = match codegen
-            .object
-            .declare_data(&name, Linkage::Local, false, false)
-        {
+        let id = match builder.module().declare_data(&name, Linkage::Local, false) {
             Ok(id) => id,
             Err(error) => return Err(format!("failed to declare string data: {}", error)),
         };
-        let mut data = DataDescription::new();
-        data.define(bytes.to_vec().into_boxed_slice());
-        if let Err(error) = codegen.object.define_data(id, &data) {
+        if let Err(error) = builder
+            .module()
+            .define_data(id, DataDescription::new(bytes.to_vec()))
+        {
             return Err(format!("failed to define string data: {}", error));
         }
         codegen.string_data.insert(bytes.to_vec(), id);
         id
     };
-    let global = codegen.object.declare_data_in_func(id, builder.func);
-    let ptr = builder.ins().symbol_value(types::I64, global);
-    let len = builder.ins().iconst(types::I64, bytes.len() as i64);
+    let global = builder.import_data(id);
+    let ptr = builder.symbol_value(types::I64, global);
+    let len = builder.iconst(types::I64, bytes.len() as i64);
     Ok((ptr, len))
 }
 
 /// A tag switch in a thunk's own builder: `body` runs once per member and
 /// its results, typed `result_types`, merge into one block.
 fn thunk_switch_on_tag(
-    builder: &mut FunctionBuilder<'_>,
-    tag: Value,
+    builder: &mut dyn FunctionBackend,
+    tag: Val,
     member_count: usize,
-    result_types: &[cranelift_codegen::ir::Type],
-    mut body: impl FnMut(&mut FunctionBuilder<'_>, usize) -> std::result::Result<Vec<Value>, String>,
-) -> std::result::Result<Vec<Value>, String> {
+    result_types: &[ScalarType],
+    mut body: impl FnMut(&mut dyn FunctionBackend, usize) -> std::result::Result<Vec<Val>, String>,
+) -> std::result::Result<Vec<Val>, String> {
     let merge = builder.create_block();
     for abi in result_types {
         builder.append_block_param(merge, *abi);
@@ -13604,15 +13151,15 @@ fn thunk_switch_on_tag(
         let matched = builder.create_block();
         let next = (index + 1 < member_count).then(|| builder.create_block());
         if let Some(next) = next {
-            let selected = builder.ins().icmp_imm(IntCC::Equal, tag, index as i64);
-            builder.ins().brif(selected, matched, &[], next, &[]);
+            let selected = builder.icmp_imm(IntCC::Equal, tag, index as i64);
+            builder.brif(selected, matched, &[], next, &[]);
         } else {
-            builder.ins().jump(matched, &[]);
+            builder.jump(matched, &[]);
         }
         builder.switch_to_block(matched);
         builder.seal_block(matched);
         let results = body(builder, index)?;
-        builder.ins().jump(merge, &results);
+        builder.jump(merge, &results);
         if let Some(next) = next {
             builder.switch_to_block(next);
             builder.seal_block(next);
@@ -13620,21 +13167,19 @@ fn thunk_switch_on_tag(
     }
     builder.switch_to_block(merge);
     builder.seal_block(merge);
-    Ok(builder.block_params(merge).to_vec())
+    Ok(builder.block_params(merge))
 }
 
 fn box_thunk_value(
     codegen: &mut NativeCodegen<'_>,
-    builder: &mut FunctionBuilder<'_>,
-    values: &[Value],
+    builder: &mut dyn FunctionBackend,
+    values: &[Val],
     ty: &DirectType,
-) -> std::result::Result<Value, String> {
+) -> std::result::Result<Val, String> {
     match ty {
-        DirectType::Callable(_) => callables::call_callable_box_adapter(codegen, builder, values),
+        DirectType::Callable(_) => callables::call_callable_box_adapter(builder, values),
         DirectType::Union(union) => {
-            let union_inject = codegen
-                .object
-                .declare_func_in_func(codegen.runtime[RuntimeFn::UnionInject], builder.func);
+            let union_inject = builder.import_function(codegen.runtime[RuntimeFn::UnionInject]);
             let encoded = crate::native_runtime::canonical_runtime_type_name(&union.union_type);
             let (ptr, len) = thunk_string_constant(codegen, builder, encoded.as_bytes())?;
             let tag = values[0];
@@ -13649,17 +13194,15 @@ fn box_thunk_value(
                     let mut member_values = Vec::new();
                     for (word, abi) in words.iter().zip(member_ty.abi_types()) {
                         member_values.push(if abi == types::F64 {
-                            builder.ins().bitcast(types::F64, MemFlags::new(), *word)
+                            builder.bitcast(types::F64, *word)
                         } else {
                             *word
                         });
                     }
                     let payload = box_thunk_value(codegen, builder, &member_values, member_ty)?;
-                    let index_value = builder.ins().iconst(types::I64, index as i64);
-                    let inst = builder
-                        .ins()
-                        .call(union_inject, &[ptr, len, index_value, payload]);
-                    Ok(vec![builder.inst_results(inst)[0]])
+                    let index_value = builder.iconst(types::I64, index as i64);
+                    let inst = builder.call(union_inject, &[ptr, len, index_value, payload]);
+                    Ok(vec![inst.results[0]])
                 },
             )
             .map(|values| values[0])
@@ -13671,59 +13214,43 @@ fn box_thunk_value(
             )
         }),
         DirectType::Scalar(ScalarKind::Int32) => {
-            let box_i32 = codegen
-                .object
-                .declare_func_in_func(codegen.runtime[RuntimeFn::BoxI32], builder.func);
-            let inst = builder.ins().call(box_i32, &[values[0]]);
-            Ok(builder.inst_results(inst)[0])
+            let box_i32 = builder.import_function(codegen.runtime[RuntimeFn::BoxI32]);
+            let inst = builder.call(box_i32, &[values[0]]);
+            Ok(inst.results[0])
         }
         DirectType::Scalar(ScalarKind::Int64) => {
-            let box_i64 = codegen
-                .object
-                .declare_func_in_func(codegen.runtime[RuntimeFn::BoxI64], builder.func);
-            let inst = builder.ins().call(box_i64, &[values[0]]);
-            Ok(builder.inst_results(inst)[0])
+            let box_i64 = builder.import_function(codegen.runtime[RuntimeFn::BoxI64]);
+            let inst = builder.call(box_i64, &[values[0]]);
+            Ok(inst.results[0])
         }
         DirectType::Scalar(ScalarKind::Uint64) => {
-            let box_u64 = codegen
-                .object
-                .declare_func_in_func(codegen.runtime[RuntimeFn::BoxU64], builder.func);
-            let inst = builder.ins().call(box_u64, &[values[0]]);
-            Ok(builder.inst_results(inst)[0])
+            let box_u64 = builder.import_function(codegen.runtime[RuntimeFn::BoxU64]);
+            let inst = builder.call(box_u64, &[values[0]]);
+            Ok(inst.results[0])
         }
         DirectType::Scalar(ScalarKind::Float32) | DirectType::Scalar(ScalarKind::Float64) => {
-            let box_f64 = codegen
-                .object
-                .declare_func_in_func(codegen.runtime[RuntimeFn::BoxF64], builder.func);
-            let inst = builder.ins().call(box_f64, &[values[0]]);
-            Ok(builder.inst_results(inst)[0])
+            let box_f64 = builder.import_function(codegen.runtime[RuntimeFn::BoxF64]);
+            let inst = builder.call(box_f64, &[values[0]]);
+            Ok(inst.results[0])
         }
         DirectType::Scalar(ScalarKind::Bool) => {
-            let box_bool = codegen
-                .object
-                .declare_func_in_func(codegen.runtime[RuntimeFn::BoxBool], builder.func);
-            let inst = builder.ins().call(box_bool, &[values[0]]);
-            Ok(builder.inst_results(inst)[0])
+            let box_bool = builder.import_function(codegen.runtime[RuntimeFn::BoxBool]);
+            let inst = builder.call(box_bool, &[values[0]]);
+            Ok(inst.results[0])
         }
         DirectType::Scalar(ScalarKind::Unit) => {
-            let box_unit = codegen
-                .object
-                .declare_func_in_func(codegen.runtime[RuntimeFn::BoxUnit], builder.func);
-            let inst = builder.ins().call(box_unit, &[]);
-            Ok(builder.inst_results(inst)[0])
+            let box_unit = builder.import_function(codegen.runtime[RuntimeFn::BoxUnit]);
+            let inst = builder.call(box_unit, &[]);
+            Ok(inst.results[0])
         }
         DirectType::PlainClass(class) => {
-            let instance_empty = codegen
-                .object
-                .declare_func_in_func(codegen.runtime[RuntimeFn::InstanceEmpty], builder.func);
-            let instance_set_field_owned = codegen.object.declare_func_in_func(
-                codegen.runtime[RuntimeFn::InstanceSetFieldOwned],
-                builder.func,
-            );
+            let instance_empty = builder.import_function(codegen.runtime[RuntimeFn::InstanceEmpty]);
+            let instance_set_field_owned =
+                builder.import_function(codegen.runtime[RuntimeFn::InstanceSetFieldOwned]);
             let (class_ptr, class_len) =
                 thunk_string_constant(codegen, builder, class.class_name.as_bytes())?;
-            let init = builder.ins().call(instance_empty, &[class_ptr, class_len]);
-            let current = builder.inst_results(init)[0];
+            let init = builder.call(instance_empty, &[class_ptr, class_len]);
+            let current = init.results[0];
             let mut start = 0usize;
             for field in &class.fields {
                 let end = start + field.ty.value_count();
@@ -13731,7 +13258,7 @@ fn box_thunk_value(
                     box_thunk_value(codegen, builder, &values[start..end], &field.ty)?;
                 let (field_ptr, field_len) =
                     thunk_string_constant(codegen, builder, field.name.as_bytes())?;
-                builder.ins().call(
+                builder.call(
                     instance_set_field_owned,
                     &[current, field_ptr, field_len, field_value],
                 );
@@ -13744,26 +13271,21 @@ fn box_thunk_value(
 
 fn unbox_thunk_value(
     codegen: &mut NativeCodegen<'_>,
-    builder: &mut FunctionBuilder<'_>,
-    raw: Value,
+    builder: &mut dyn FunctionBackend,
+    raw: Val,
     ty: &DirectType,
-) -> std::result::Result<Vec<Value>, String> {
+) -> std::result::Result<Vec<Val>, String> {
     match ty {
         DirectType::Callable(callable) => {
             callables::boxed_callable_words(codegen, builder, raw, &callable.signature)
         }
         DirectType::Union(union) => {
-            let union_tag = codegen
-                .object
-                .declare_func_in_func(codegen.runtime[RuntimeFn::UnionTag], builder.func);
-            let union_payload_copy = codegen
-                .object
-                .declare_func_in_func(codegen.runtime[RuntimeFn::UnionPayloadCopy], builder.func);
-            let release_value = codegen
-                .object
-                .declare_func_in_func(codegen.runtime[RuntimeFn::ReleaseValue], builder.func);
-            let tag_inst = builder.ins().call(union_tag, &[raw]);
-            let tag = builder.inst_results(tag_inst)[0];
+            let union_tag = builder.import_function(codegen.runtime[RuntimeFn::UnionTag]);
+            let union_payload_copy =
+                builder.import_function(codegen.runtime[RuntimeFn::UnionPayloadCopy]);
+            let release_value = builder.import_function(codegen.runtime[RuntimeFn::ReleaseValue]);
+            let tag_inst = builder.call(union_tag, &[raw]);
+            let tag = tag_inst.results[0];
             let result_types = ty.abi_types();
             thunk_switch_on_tag(
                 builder,
@@ -13772,26 +13294,26 @@ fn unbox_thunk_value(
                 &result_types,
                 |builder, index| {
                     let member_ty = &union.members[index].ty;
-                    let index_value = builder.ins().iconst(types::I64, index as i64);
-                    let copy = builder.ins().call(union_payload_copy, &[raw, index_value]);
-                    let payload = builder.inst_results(copy)[0];
+                    let index_value = builder.iconst(types::I64, index as i64);
+                    let copy = builder.call(union_payload_copy, &[raw, index_value]);
+                    let payload = copy.results[0];
                     let member_values = unbox_thunk_value(codegen, builder, payload, member_ty)?;
                     // A scalar or plain-class member was read out of the copy,
                     // so the copy is released; a runtime-object member's handle
                     // is the copy itself and travels with the union words.
                     if !matches!(member_ty, DirectType::Opaque(_) | DirectType::Callable(_)) {
-                        let _ = builder.ins().call(release_value, &[payload]);
+                        let _ = builder.call(release_value, &[payload]);
                     }
-                    let mut words = vec![builder.ins().iconst(types::I64, index as i64)];
+                    let mut words = vec![builder.iconst(types::I64, index as i64)];
                     for (value, abi) in member_values.iter().zip(member_ty.abi_types()) {
                         words.push(if abi == types::F64 {
-                            builder.ins().bitcast(types::I64, MemFlags::new(), *value)
+                            builder.bitcast(types::I64, *value)
                         } else {
                             *value
                         });
                     }
                     while words.len() < union.payload_words + 1 {
-                        words.push(builder.ins().iconst(types::I64, 0));
+                        words.push(builder.iconst(types::I64, 0));
                     }
                     Ok(words)
                 },
@@ -13799,60 +13321,45 @@ fn unbox_thunk_value(
         }
         DirectType::Opaque(_) => Ok(vec![raw]),
         DirectType::Scalar(ScalarKind::Int32) => {
-            let unbox_i64 = codegen
-                .object
-                .declare_func_in_func(codegen.runtime[RuntimeFn::UnboxI64], builder.func);
-            let inst = builder.ins().call(unbox_i64, &[raw]);
-            Ok(builder.inst_results(inst).to_vec())
+            let unbox_i64 = builder.import_function(codegen.runtime[RuntimeFn::UnboxI64]);
+            let inst = builder.call(unbox_i64, &[raw]);
+            Ok(inst.results)
         }
         DirectType::Scalar(ScalarKind::Int64) => {
-            let unbox_int64 = codegen
-                .object
-                .declare_func_in_func(codegen.runtime[RuntimeFn::UnboxInt64], builder.func);
-            let inst = builder.ins().call(unbox_int64, &[raw]);
-            Ok(builder.inst_results(inst).to_vec())
+            let unbox_int64 = builder.import_function(codegen.runtime[RuntimeFn::UnboxInt64]);
+            let inst = builder.call(unbox_int64, &[raw]);
+            Ok(inst.results)
         }
         DirectType::Scalar(ScalarKind::Uint64) => {
-            let unbox_u64 = codegen
-                .object
-                .declare_func_in_func(codegen.runtime[RuntimeFn::UnboxU64], builder.func);
-            let inst = builder.ins().call(unbox_u64, &[raw]);
-            Ok(builder.inst_results(inst).to_vec())
+            let unbox_u64 = builder.import_function(codegen.runtime[RuntimeFn::UnboxU64]);
+            let inst = builder.call(unbox_u64, &[raw]);
+            Ok(inst.results)
         }
         DirectType::Scalar(ScalarKind::Float32) | DirectType::Scalar(ScalarKind::Float64) => {
-            let unbox_f64 = codegen
-                .object
-                .declare_func_in_func(codegen.runtime[RuntimeFn::UnboxF64], builder.func);
-            let inst = builder.ins().call(unbox_f64, &[raw]);
-            Ok(builder.inst_results(inst).to_vec())
+            let unbox_f64 = builder.import_function(codegen.runtime[RuntimeFn::UnboxF64]);
+            let inst = builder.call(unbox_f64, &[raw]);
+            Ok(inst.results)
         }
         DirectType::Scalar(ScalarKind::Bool) => {
-            let unbox_bool = codegen
-                .object
-                .declare_func_in_func(codegen.runtime[RuntimeFn::UnboxBool], builder.func);
-            let inst = builder.ins().call(unbox_bool, &[raw]);
-            Ok(builder.inst_results(inst).to_vec())
+            let unbox_bool = builder.import_function(codegen.runtime[RuntimeFn::UnboxBool]);
+            let inst = builder.call(unbox_bool, &[raw]);
+            Ok(inst.results)
         }
-        DirectType::Scalar(ScalarKind::Unit) => Ok(vec![builder.ins().iconst(types::I64, 0)]),
+        DirectType::Scalar(ScalarKind::Unit) => Ok(vec![builder.iconst(types::I64, 0)]),
         DirectType::PlainClass(class) => {
-            let instance_get_field = codegen
-                .object
-                .declare_func_in_func(codegen.runtime[RuntimeFn::InstanceGetField], builder.func);
+            let instance_get_field =
+                builder.import_function(codegen.runtime[RuntimeFn::InstanceGetField]);
             let mut values = Vec::new();
             for field in &class.fields {
                 let (field_ptr, field_len) =
                     thunk_string_constant(codegen, builder, field.name.as_bytes())?;
-                let inst = builder
-                    .ins()
-                    .call(instance_get_field, &[raw, field_ptr, field_len]);
-                let field_raw = builder.inst_results(inst)[0];
+                let inst = builder.call(instance_get_field, &[raw, field_ptr, field_len]);
+                let field_raw = inst.results[0];
                 values.extend(unbox_thunk_value(codegen, builder, field_raw, &field.ty)?);
                 if !matches!(field.ty, DirectType::Opaque(_) | DirectType::Callable(_)) {
-                    let release_value = codegen.object.declare_func_in_func(
-                        codegen.runtime[RuntimeFn::ReleaseValue],
-                        builder.func,
-                    );
-                    builder.ins().call(release_value, &[field_raw]);
+                    let release_value =
+                        builder.import_function(codegen.runtime[RuntimeFn::ReleaseValue]);
+                    builder.call(release_value, &[field_raw]);
                 }
             }
             Ok(values)
@@ -13862,9 +13369,9 @@ fn unbox_thunk_value(
 
 fn release_direct_call_results(
     codegen: &mut NativeCodegen<'_>,
-    builder: &mut FunctionBuilder<'_>,
+    builder: &mut dyn FunctionBackend,
     function_name: &str,
-    results: &[Value],
+    results: &[Val],
 ) -> std::result::Result<(), String> {
     let return_ty = codegen
         .function_return_types
@@ -13911,46 +13418,37 @@ fn release_direct_call_results(
 
 fn release_direct_values(
     codegen: &mut NativeCodegen<'_>,
-    builder: &mut FunctionBuilder<'_>,
-    values: &[Value],
+    builder: &mut dyn FunctionBackend,
+    values: &[Val],
     ty: &DirectType,
 ) -> std::result::Result<(), String> {
     match ty {
         DirectType::Callable(_) => {
-            callables::call_callable_unary_adapter(
-                codegen,
-                builder,
-                values,
-                callables::DESCRIPTOR_DROP,
-            )?;
+            callables::call_callable_unary_adapter(builder, values, callables::DESCRIPTOR_DROP)?;
         }
         DirectType::Union(union) => {
             if union.owns_handles() {
-                let release_value = codegen
-                    .object
-                    .declare_func_in_func(codegen.runtime[RuntimeFn::ReleaseValue], builder.func);
+                let release_value =
+                    builder.import_function(codegen.runtime[RuntimeFn::ReleaseValue]);
                 let tag = values[0];
                 let handle = values[1];
                 for &index in &union.owning {
-                    let active = builder.ins().icmp_imm(IntCC::Equal, tag, index as i64);
+                    let active = builder.icmp_imm(IntCC::Equal, tag, index as i64);
                     let release_block = builder.create_block();
                     let continue_block = builder.create_block();
-                    builder
-                        .ins()
-                        .brif(active, release_block, &[], continue_block, &[]);
+                    builder.brif(active, release_block, &[], continue_block, &[]);
                     builder.switch_to_block(release_block);
                     builder.seal_block(release_block);
                     if matches!(union.member(index), Ok(DirectType::Callable(_))) {
                         callables::call_callable_unary_adapter(
-                            codegen,
                             builder,
                             &values[1..2 + CALLABLE_ENVIRONMENT_WORDS],
                             callables::DESCRIPTOR_DROP,
                         )?;
                     } else {
-                        builder.ins().call(release_value, &[handle]);
+                        builder.call(release_value, &[handle]);
                     }
-                    builder.ins().jump(continue_block, &[]);
+                    builder.jump(continue_block, &[]);
                     builder.switch_to_block(continue_block);
                     builder.seal_block(continue_block);
                 }
@@ -13963,10 +13461,8 @@ fn release_direct_values(
                     render_direct_type(ty)
                 ));
             };
-            let release_value = codegen
-                .object
-                .declare_func_in_func(codegen.runtime[RuntimeFn::ReleaseValue], builder.func);
-            builder.ins().call(release_value, &[value]);
+            let release_value = builder.import_function(codegen.runtime[RuntimeFn::ReleaseValue]);
+            builder.call(release_value, &[value]);
         }
         DirectType::PlainClass(class) => {
             let mut start = 0usize;
@@ -13988,25 +13484,25 @@ fn release_direct_values(
     Ok(())
 }
 
-fn main_signature(call_conv: CallConv) -> Signature {
-    let mut signature = Signature::new(call_conv);
-    signature.returns.push(AbiParam::new(types::I32));
+fn main_signature() -> Signature {
+    let mut signature = Signature::new(CallConv::C);
+    signature.returns.push(types::I32);
     signature
 }
 
-fn thunk_signature(call_conv: CallConv) -> Signature {
-    let mut signature = Signature::new(call_conv);
-    signature.params.push(AbiParam::new(types::I64));
-    signature.params.push(AbiParam::new(types::I64));
-    signature.returns.push(AbiParam::new(types::I64));
+fn thunk_signature() -> Signature {
+    let mut signature = Signature::new(CallConv::C);
+    signature.params.push(types::I64);
+    signature.params.push(types::I64);
+    signature.returns.push(types::I64);
     signature
 }
 
-fn default_binder_signature(call_conv: CallConv) -> Signature {
-    let mut signature = Signature::new(call_conv);
-    signature.params.push(AbiParam::new(types::I64));
-    signature.params.push(AbiParam::new(types::I64));
-    signature.params.push(AbiParam::new(types::I64));
+fn default_binder_signature() -> Signature {
+    let mut signature = Signature::new(CallConv::C);
+    signature.params.push(types::I64);
+    signature.params.push(types::I64);
+    signature.params.push(types::I64);
     signature
 }
 
