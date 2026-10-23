@@ -30,12 +30,15 @@ empty: dict[str, int32] = {}
 other = dict[str, int32]()
 ```
 
-A set literal uses braces when the context expects a `set[T]`. `{}` is a
-dictionary literal, so an empty set needs its typed constructor.
+A set literal uses braces when the context expects a `set[T]`. Without that
+context `{}` is a dictionary literal, so an empty set takes its type from an
+annotation, a parameter, a field, or a return type, or from the typed
+constructor.
 
 ```aura
 seen: set[int32] = {1, 2, 3}
-empty = set[int32]()
+empty: set[int32] = {}
+other = set[int32]()
 ```
 
 Every literal is homogeneous in each type position. The checker rejects mixed

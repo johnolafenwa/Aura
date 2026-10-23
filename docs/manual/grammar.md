@@ -1117,8 +1117,8 @@ expressions require parentheses. An unparenthesized comma is accepted only in
 an unpack target. `()` is rejected.
 
 A nonempty brace literal is a dictionary when its first element is followed by
-`:`, and a set otherwise. `{}` is an empty dictionary. An empty set uses the
-typed `set[T]()` constructor.
+`:`, and a set otherwise. `{}` is an empty set when the expected type is
+`set[T]`, and an empty dictionary otherwise.
 
 ### Comprehensions
 

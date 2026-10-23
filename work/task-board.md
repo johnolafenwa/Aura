@@ -60,12 +60,18 @@ Last updated: 2026-10-23
   argument in MIR. Objects are byte-identical, and the emitter shrinks
   from 14,942 to 14,600 lines. Details are in
   `2026-10-23-batch-7-step-8h1-arguments.md`.
-- In review: 8h part 2. Each member call names its `MethodDispatch`, each
-  `try` its `From` method, and each `with` cleanup its callee. The
+- Done: 8h part 2, merged as PR #115. Each member call names its
+  `MethodDispatch`, each `try` its `From` method, and each `with` cleanup
+  its callee. The
   validator keys container mutations on runtime ops, which fixes a class
   method named like one. Objects are byte-identical, and the emitter
   shrinks from 14,600 to 14,202 lines. Details are in
   `2026-10-23-batch-7-step-8h2-methods-and-cleanups.md`. Next: step 9.
+- Done: faster repeat builds, found by 8g. `aura build` takes the runtime
+  archive's digest from the identity memo while the archive's file stamp
+  holds, instead of hashing 62 MB every build. Repeat builds of hello
+  world drop from 0.66 s to 0.35 s on Linux. Details are in
+  `2026-10-23-faster-builds-runtime-digest.md`.
 
 ## Aura 0.6.0 preview release (complete)
 

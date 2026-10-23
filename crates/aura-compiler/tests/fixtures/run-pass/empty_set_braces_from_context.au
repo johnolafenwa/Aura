@@ -1,0 +1,13 @@
+def make() -> set[str]:
+    return {}
+
+class Bag:
+    items: set[int32]
+
+def main():
+    mut s = make()
+    s.add("a")
+    b = Bag(items={})
+    mut seen: set[int32] = {1}
+    seen = {}
+    print(f"{len(s)} {len(b.items)} {len(seen)}")
