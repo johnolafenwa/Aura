@@ -1,5 +1,6 @@
 "use strict";
 
+const fs = require("node:fs");
 const {
   createConnection,
   DiagnosticSeverity,
@@ -31,6 +32,8 @@ const {
   compilerSymbolsToLsp,
   openDocumentOverlays,
   setCompilerSchemaMismatchHandler,
+  setCompilerUnavailableHandler,
+  expandHome,
   setSourceOverlayProvider,
   setWorkspaceRoots
 } = require("./compiler_bridge");
@@ -50,8 +53,32 @@ const validationTimers = new Map();
 // The compiler checks each document against the unsaved text of the others.
 setSourceOverlayProvider((uri) => openDocumentOverlays(uri, documents.all()));
 
-setCompilerSchemaMismatchHandler(() => {
+// Without the compiler the server can only offer keywords and an outline, so
+// say why once instead of leaving completion and hover quietly empty.
+const shownNotices = new Set();
+function showNoticeOnce(key, message) {
+  if (shownNotices.has(key)) {
+    return;
+  }
+  shownNotices.add(key);
+  void connection.window.showWarningMessage(message);
+}
+
+setCompilerSchemaMismatchHandler(({ actual, expected }) => {
   documentStateCache.invalidateAll();
+  showNoticeOnce(
+    "schema",
+    `Aura: the installed compiler speaks editor interface ${actual}, but this extension needs ${expected}. ` +
+      "Update both to the same release (rerun the Aura installer and update the extension); until then completion and hover are limited."
+  );
+});
+
+setCompilerUnavailableHandler(({ command }) => {
+  showNoticeOnce(
+    "unavailable",
+    `Aura: could not start the compiler (\`${command.cmd}\`), so completion, hover, and diagnostics are limited. ` +
+      "Install Aura, or set \"aura.compilerPath\" to the full path of the aura executable, then run \"Aura: Restart Language Server\"."
+  );
 });
 
 connection.onInitialize((params) => {
@@ -72,6 +99,16 @@ connection.onInitialize((params) => {
       ...editorCapabilities
     }
   };
+});
+
+connection.onInitialized(() => {
+  const configuredPath = process.env.AURA_LSP_AURA_PATH;
+  if (configuredPath && !fs.existsSync(expandHome(configuredPath))) {
+    showNoticeOnce(
+      "configured-path",
+      `Aura: the configured compiler path \`${configuredPath}\` does not exist; looking for \`aura\` on PATH instead.`
+    );
+  }
 });
 
 registerEditorHandlers(connection, documents, editorRequestWithCompiler);
@@ -400,3 +437,4 @@ function symbolKind(kind) {
       return SymbolKind.Variable;
   }
 }
+
