@@ -93,7 +93,7 @@ impl Lowerer<'_> {
                     _ => self.completed_operand_type(left, params),
                 }
             }
-            Rvalue::Call { callee, args } => self.completed_call_type(callee, args, params),
+            Rvalue::Call { callee, args, .. } => self.completed_call_type(callee, args, params),
             Rvalue::VariantPayload {
                 scrutinee,
                 variant_name,

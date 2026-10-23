@@ -603,6 +603,7 @@ def main() -> int32:
                                 op, receiver: None, ..
                             },
                         args,
+                        ..
                     },
                 ..
             } if op.name() == "sys::monotonic_time_ms" => Some(args),
@@ -729,6 +730,7 @@ fn public_serialized_mir_api_runs_safe_payloads_and_rejects_forged_ffi() {
                             return_type: Type::named("int32"),
                         }),
                         args: Vec::new(),
+                        type_args: Default::default(),
                     },
                 }],
                 terminator: Terminator::Return(Operand::Place("process_id".to_string())),

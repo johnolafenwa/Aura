@@ -51,7 +51,11 @@ fn expect(pairs: &[(&str, OperandRole)]) -> Vec<(String, OperandRole)> {
 }
 
 fn call(callee: CallTarget, args: Vec<MirArg>) -> Instruction {
-    assign(Rvalue::Call { callee, args })
+    assign(Rvalue::Call {
+        callee,
+        args,
+        type_args: Default::default(),
+    })
 }
 
 #[test]
@@ -322,24 +326,25 @@ fn calls_consume_arguments_except_extern_and_runtime_borrows() {
         )),
         expect(&[("items", Borrow), ("a", Consume)])
     );
-    // Named arguments bind by name, whatever their order.
+    // MIR binds a resolved op's arguments in parameter order, so each takes
+    // the role of the parameter at its position. One past the last borrows.
     assert_eq!(
         roles(&runtime(
             RuntimeOp::Dict(DictOp::SetIndex),
             Some("d"),
             vec![
-                arg(Some("line"), "line"),
-                arg(Some("value"), "v"),
-                arg(Some("key"), "k"),
-                arg(Some("column"), "column"),
-                arg(Some("missing"), "m"),
+                arg(None, "k"),
+                arg(None, "v"),
+                arg(None, "line"),
+                arg(None, "column"),
+                arg(None, "m"),
             ]
         )),
         expect(&[
             ("d", Borrow),
-            ("line", Borrow),
-            ("v", Consume),
             ("k", Consume),
+            ("v", Consume),
+            ("line", Borrow),
             ("column", Borrow),
             ("m", Borrow)
         ])
@@ -875,6 +880,7 @@ def main():
                         Rvalue::Call {
                             callee: CallTarget::Name(name),
                             args,
+                            ..
                         },
                     ..
                 } if name == callee => args.first().map(|arg| &arg.value),

@@ -32,6 +32,48 @@ use crate::native_runtime::HOST_BUILTIN_SYMBOLS;
 use crate::runtime_abi::RuntimeFn;
 use crate::sema::{lookup_type, optional_type, poll_type, text_convenience_result_type, Type};
 
+/// A default argument value that has no constant operand spelling. MIR
+/// writes it as `Operand::Default` in the slot of the optional parameter a
+/// runtime op call leaves out (see `RuntimeOp::default_arg`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum ArgDefault {
+    /// The helper applies the parameter's default itself, such as no
+    /// deadline for an omitted `timeout`. A backend passes a zero word.
+    Omitted,
+    /// An `int64` constant.
+    Int64(i64),
+    /// An `int32` constant.
+    Int32(i32),
+    /// An empty `dict[str, str]`.
+    EmptyStrDict,
+    /// `process.null()`.
+    StdioNull,
+    /// `process.inherit()`.
+    StdioInherit,
+    /// `process.RestartPolicy.OnFailure`.
+    RestartOnFailure,
+    /// A `Duration` of this many milliseconds.
+    Milliseconds(i64),
+}
+
+impl ArgDefault {
+    /// The value's type. An omitted value has none.
+    pub fn ty(self) -> Option<Type> {
+        let named = |name: &str| Type::Named(name.to_string(), Vec::new());
+        Some(match self {
+            ArgDefault::Omitted => return None,
+            ArgDefault::Int64(_) => named("int64"),
+            ArgDefault::Int32(_) => named("int32"),
+            ArgDefault::EmptyStrDict => {
+                Type::Named("dict".to_string(), vec![named("str"), named("str")])
+            }
+            ArgDefault::StdioNull | ArgDefault::StdioInherit => named("process.Stdio"),
+            ArgDefault::RestartOnFailure => named("process.RestartPolicy"),
+            ArgDefault::Milliseconds(_) => named("Duration"),
+        })
+    }
+}
+
 /// One resolved built-in operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum RuntimeOp {
@@ -2645,6 +2687,29 @@ impl RuntimeOp {
                     })
                     .collect()
             }
+        }
+    }
+
+    /// The argument a call that leaves out the optional parameter `name`
+    /// passes. A value with a constant spelling is that constant. Any other
+    /// is an `Operand::Default` that names it.
+    pub fn default_arg(self, name: &str) -> crate::mir::Operand {
+        use crate::mir::Operand;
+        let named = |default| Operand::Default(default);
+        match (self, name) {
+            (RuntimeOp::Resource(ResourceOp::ProcessSupervisorStart), _) => match name {
+                "cwd" => Operand::Unit,
+                "env" => named(ArgDefault::EmptyStrDict),
+                "stdin" => named(ArgDefault::StdioNull),
+                "stdout" | "stderr" => named(ArgDefault::StdioInherit),
+                "restart" => named(ArgDefault::RestartOnFailure),
+                "backoff" => named(ArgDefault::Milliseconds(100)),
+                "max_restarts" => named(ArgDefault::Int32(-1)),
+                "group" => Operand::Bool(true),
+                _ => named(ArgDefault::Omitted),
+            },
+            (RuntimeOp::List(ListOp::Pop), "index") => named(ArgDefault::Int64(-1)),
+            _ => named(ArgDefault::Omitted),
         }
     }
 

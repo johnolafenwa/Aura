@@ -1060,6 +1060,11 @@ pub enum Rvalue {
     Call {
         callee: CallTarget,
         args: Vec<MirArg>,
+        /// The type each type parameter of a generic callee stands for at
+        /// this call, by name (see `mir::type_args`). Empty for any other
+        /// call.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        type_args: BTreeMap<String, Type>,
     },
     VecLiteral {
         elements: Vec<Operand>,
@@ -1304,13 +1309,19 @@ pub struct AssertionCapture {
 pub enum Operand {
     Place(String),
     MovePlace(String),
-    Function { name: String, signature: Box<Type> },
+    Function {
+        name: String,
+        signature: Box<Type>,
+    },
     Int(u128),
     Duration(i128),
     Float(f64),
     Bool(bool),
     String(String),
     Unit,
+    /// The default of the optional parameter a runtime op call leaves out,
+    /// in that parameter's slot. Only a `Runtime` call argument may be one.
+    Default(crate::runtime_ops::ArgDefault),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2928,6 +2939,7 @@ impl<'a> MirLoanValidationContext<'a> {
             Operand::Unit => Ok(Some(Type::Unit)),
             Operand::Function { signature, .. } => Ok(Some((**signature).clone())),
             Operand::Int(_) => Ok(None),
+            Operand::Default(default) => Ok(default.ty()),
         }
     }
 
@@ -4441,7 +4453,7 @@ fn rebase_callable_rvalue(
             ),
             _ => Vec::new(),
         },
-        Rvalue::Call { callee, args } if callee.member_parts().is_some() => {
+        Rvalue::Call { callee, args, .. } if callee.member_parts().is_some() => {
             let MemberCallParts { object, field, .. } = callee
                 .member_parts()
                 .expect("the guard matched member parts");
@@ -4458,7 +4470,7 @@ fn rebase_callable_rvalue(
             }
             call_result_callable_identities(function, callee, args, target, context, state)
         }
-        Rvalue::Call { callee, args } => {
+        Rvalue::Call { callee, args, .. } => {
             call_result_callable_identities(function, callee, args, target, context, state)
         }
         Rvalue::StartTask {
@@ -4845,7 +4857,7 @@ fn function_body_moves_root(function: &MirFunction, root: &str) -> bool {
             Rvalue::Binary { left, right, .. } => {
                 operand_moves(left, root) || operand_moves(right, root)
             }
-            Rvalue::Call { callee, args } => {
+            Rvalue::Call { callee, args, .. } => {
                 let callee_moves = match callee {
                     CallTarget::Value(operand) => operand_moves(operand, root),
                     CallTarget::Member { object, .. } | CallTarget::TraitMember { object, .. } => {
@@ -5518,7 +5530,7 @@ fn container_mutation_callables(
     value: &Rvalue,
     state: &ValidatedLoanState,
 ) -> std::result::Result<Option<ContainerMutation>, String> {
-    let Rvalue::Call { callee, args } = value else {
+    let Rvalue::Call { callee, args, .. } = value else {
         return Ok(None);
     };
     let Some(MemberCallParts { object, field, .. }) = callee.member_parts() else {
@@ -6673,12 +6685,14 @@ fn named_call(value: &Rvalue) -> Option<(&str, &[MirArg])> {
         Rvalue::Call {
             callee: CallTarget::Name(name),
             args,
+            ..
         } => Some((name, args)),
         Rvalue::Call {
             callee: CallTarget::Runtime {
                 op, receiver: None, ..
             },
             args,
+            ..
         } => Some((op.name(), args)),
         _ => None,
     }
@@ -7409,7 +7423,7 @@ fn validate_loan_rvalue(
             validate_task_boundary_contract(function, task_function, context, state)
         }
         Rvalue::Binary { left, right, .. } => operands(&[left.clone(), right.clone()]),
-        Rvalue::Call { callee, args } => {
+        Rvalue::Call { callee, args, .. } => {
             match callee {
                 CallTarget::Name(_)
                 | CallTarget::Extern(_)
@@ -9053,7 +9067,7 @@ fn validate_loan_instruction(
             if !matches!(value, Rvalue::UnionTagTest { .. }) {
                 state.tag_tests.remove(target);
             }
-            if let Rvalue::Call { callee, args } = value {
+            if let Rvalue::Call { callee, args, .. } = value {
                 let mut pending = context.pending_call(function, callee, args)?;
                 if pending.returned_view.is_none() {
                     pending.returned_view =
@@ -10066,7 +10080,7 @@ fn rvalue_place_mentions<'a>(value: &'a Rvalue, mentions: &mut Vec<&'a str>) {
             }
             arg_place_mentions(args, mentions);
         }
-        Rvalue::Call { callee, args } => {
+        Rvalue::Call { callee, args, .. } => {
             match callee {
                 CallTarget::Value(operand) => operand_place_mention(operand, mentions),
                 CallTarget::Member {
@@ -10133,6 +10147,7 @@ pub fn lower(program: &Program) -> MirModule {
     let mut module = lower_implicit(program);
     checks::resolve_checks(&mut module);
     ownership::insert_ownership(&mut module);
+    type_args::record_call_type_args(&mut module);
     module
 }
 
@@ -10693,6 +10708,7 @@ fn push_display_wrappers(program: &Program, functions: &mut Vec<MirFunction>) {
                             receiver_place: Some("value".to_string()),
                         },
                         args: Vec::new(),
+                        type_args: Default::default(),
                     },
                 }],
                 terminator: Terminator::Return(Operand::MovePlace("%t0".to_string())),
@@ -11077,6 +11093,7 @@ fn lower_function_or_initializer(
             value: Rvalue::Call {
                 callee: CallTarget::Name(name.to_string()),
                 args,
+                type_args: Default::default(),
             },
         });
         lowerer.terminate(Terminator::Return(Operand::Place(result)));
@@ -13573,6 +13590,7 @@ impl<'a> Lowerer<'a> {
                         value: right_value.clone(),
                         writeback_place: None,
                     }],
+                    type_args: Default::default(),
                 },
             });
         } else {
@@ -13833,6 +13851,7 @@ impl<'a> Lowerer<'a> {
                                 writeback_place: None,
                             },
                         ],
+                        type_args: Default::default(),
                     },
                 });
                 let indexed_value_type = self.local_types[&current].clone();
@@ -13882,6 +13901,7 @@ impl<'a> Lowerer<'a> {
                             writeback_place: None,
                         },
                     ],
+                    type_args: Default::default(),
                 },
             });
             return;
@@ -16417,6 +16437,7 @@ impl<'a> Lowerer<'a> {
                     receiver_place: receiver_place.clone(),
                 },
                 args: Vec::new(),
+                type_args: Default::default(),
             },
         });
         let length_matches = self.new_typed_temp(Type::named("bool"));
@@ -16512,6 +16533,7 @@ impl<'a> Lowerer<'a> {
                                 receiver_place: receiver_place.clone(),
                             },
                             args,
+                            type_args: Default::default(),
                         },
                     });
                     (slice, list_ty.clone())
@@ -16550,6 +16572,7 @@ impl<'a> Lowerer<'a> {
                                 receiver_place: receiver_place.clone(),
                             },
                             args,
+                            type_args: Default::default(),
                         },
                     });
                     (value, element_ty.clone())
@@ -17188,6 +17211,7 @@ impl<'a> Lowerer<'a> {
                         value: Operand::Place(selector),
                         writeback_place: None,
                     }],
+                    type_args: Default::default(),
                 },
             });
             let present_block = if position + 1 == sources.len() {
@@ -17437,6 +17461,7 @@ impl<'a> Lowerer<'a> {
                             receiver_place,
                         },
                         args,
+                        type_args: Default::default(),
                     },
                 });
                 self.terminate(Terminator::Match {
@@ -17504,6 +17529,7 @@ impl<'a> Lowerer<'a> {
                                 receiver_place: Some(place.clone()),
                             },
                             args: Vec::new(),
+                            type_args: Default::default(),
                         },
                     });
                 }
@@ -17537,6 +17563,7 @@ impl<'a> Lowerer<'a> {
                                     receiver_place,
                                 },
                                 args: Vec::new(),
+                                type_args: Default::default(),
                             },
                         });
                         Some(length)
@@ -17604,6 +17631,7 @@ impl<'a> Lowerer<'a> {
                                 receiver_place,
                             },
                             args,
+                            type_args: Default::default(),
                         },
                     });
                     // The advance follows the read, so the fact above covers
@@ -17652,6 +17680,7 @@ impl<'a> Lowerer<'a> {
                                 value: Operand::Place(index.clone()),
                                 writeback_place: None,
                             }],
+                            type_args: Default::default(),
                         },
                     });
                     self.terminate(Terminator::Match {
@@ -17755,6 +17784,7 @@ impl<'a> Lowerer<'a> {
                             value: Operand::Place(index.clone()),
                             writeback_place: None,
                         }],
+                        type_args: Default::default(),
                     },
                 });
                 self.terminate(Terminator::Match {
@@ -18248,6 +18278,7 @@ impl<'a> Lowerer<'a> {
                             value,
                             writeback_place: None,
                         }],
+                        type_args: Default::default(),
                     },
                 });
             }
@@ -18293,6 +18324,7 @@ impl<'a> Lowerer<'a> {
                                 writeback_place: None,
                             },
                         ],
+                        type_args: Default::default(),
                     },
                 });
             }
@@ -18851,6 +18883,7 @@ impl<'a> Lowerer<'a> {
                                 receiver_place,
                             },
                             args: Vec::new(),
+                            type_args: Default::default(),
                         },
                     });
                     return Operand::Place(temp);
@@ -18938,6 +18971,7 @@ impl<'a> Lowerer<'a> {
                                 receiver_place,
                             },
                             args,
+                            type_args: Default::default(),
                         },
                     });
                     return Operand::Place(temp);
@@ -19140,6 +19174,7 @@ impl<'a> Lowerer<'a> {
                                 writeback_place: None,
                             },
                         ],
+                        type_args: Default::default(),
                     },
                 });
                 Operand::Place(temp)
@@ -19462,6 +19497,7 @@ impl<'a> Lowerer<'a> {
                         writeback_place: None,
                     },
                 ],
+                type_args: Default::default(),
             },
         });
 
@@ -19490,6 +19526,7 @@ impl<'a> Lowerer<'a> {
             value: Rvalue::Call {
                 callee: CallTarget::Name("control::__retry_cancel_if_requested".to_string()),
                 args: Vec::new(),
+                type_args: Default::default(),
             },
         });
         self.emit(Instruction::Assign {
@@ -19497,6 +19534,7 @@ impl<'a> Lowerer<'a> {
             value: Rvalue::Call {
                 callee: CallTarget::Value(worker),
                 args: Vec::new(),
+                type_args: Default::default(),
             },
         });
         let cancellation_checked = self.new_typed_temp(Type::Unit);
@@ -19505,6 +19543,7 @@ impl<'a> Lowerer<'a> {
             value: Rvalue::Call {
                 callee: CallTarget::Name("control::__retry_cancel_if_requested".to_string()),
                 args: Vec::new(),
+                type_args: Default::default(),
             },
         });
         self.terminate(Terminator::Match {
@@ -19586,6 +19625,7 @@ impl<'a> Lowerer<'a> {
                     value: Operand::Place(backoff.clone()),
                     writeback_place: None,
                 }],
+                type_args: Default::default(),
             },
         });
         self.terminate(Terminator::Goto(self.label(delay_ready)));
@@ -19619,6 +19659,7 @@ impl<'a> Lowerer<'a> {
                     value: Operand::Place(backoff),
                     writeback_place: None,
                 }],
+                type_args: Default::default(),
             },
         });
         self.terminate(Terminator::Goto(self.label(advance)));
@@ -19711,6 +19752,7 @@ impl<'a> Lowerer<'a> {
                     value: Operand::Place(element),
                     writeback_place: None,
                 }],
+                type_args: Default::default(),
             },
         });
         self.emit_vec_push(
@@ -19806,6 +19848,7 @@ impl<'a> Lowerer<'a> {
                     value: Operand::Place(element.clone()),
                     writeback_place: None,
                 }],
+                type_args: Default::default(),
             },
         });
         if filter {
@@ -19861,6 +19904,7 @@ impl<'a> Lowerer<'a> {
                     receiver_place: None,
                 },
                 args: Vec::new(),
+                type_args: Default::default(),
             },
         });
         let outer_index = self.new_typed_temp(Type::named("int64"));
@@ -20030,6 +20074,7 @@ impl<'a> Lowerer<'a> {
                     value: Operand::Place(index.to_string()),
                     writeback_place: None,
                 }],
+                type_args: Default::default(),
             },
         });
     }
@@ -20067,6 +20112,7 @@ impl<'a> Lowerer<'a> {
                         writeback_place: None,
                     },
                 ],
+                type_args: Default::default(),
             },
         });
         target
@@ -20094,6 +20140,7 @@ impl<'a> Lowerer<'a> {
                     value: Operand::Place(right.to_string()),
                     writeback_place: None,
                 }],
+                type_args: Default::default(),
             }
         };
         self.emit(Instruction::Assign {
@@ -20118,6 +20165,7 @@ impl<'a> Lowerer<'a> {
                     value,
                     writeback_place: None,
                 }],
+                type_args: Default::default(),
             },
         });
     }
@@ -20144,6 +20192,7 @@ impl<'a> Lowerer<'a> {
                         writeback_place: None,
                     },
                 ],
+                type_args: Default::default(),
             },
         });
     }
@@ -20219,6 +20268,7 @@ impl<'a> Lowerer<'a> {
                     value,
                     writeback_place: None,
                 }],
+                type_args: Default::default(),
             },
         });
         if !negated {
@@ -20586,6 +20636,7 @@ impl<'a> Lowerer<'a> {
                         writeback_place: None,
                     },
                 ],
+                type_args: Default::default(),
             },
         });
         Operand::Place(temp)
@@ -22086,6 +22137,7 @@ impl<'a> Lowerer<'a> {
                     value: Rvalue::Call {
                         callee: CallTarget::Value(function),
                         args,
+                        type_args: Default::default(),
                     },
                 });
                 return Operand::Place(temp);
@@ -22119,6 +22171,7 @@ impl<'a> Lowerer<'a> {
                                 receiver_place,
                             },
                             args: Vec::new(),
+                            type_args: Default::default(),
                         },
                     });
                 } else {
@@ -22147,6 +22200,7 @@ impl<'a> Lowerer<'a> {
                                 &class.decl.name,
                             )),
                             args: lowered_args,
+                            type_args: Default::default(),
                         },
                     });
                     return Operand::Place(temp);
@@ -22267,6 +22321,7 @@ impl<'a> Lowerer<'a> {
                     value: Rvalue::Call {
                         callee: CallTarget::Name("Queue".to_string()),
                         args: lowered_args,
+                        type_args: Default::default(),
                     },
                 });
             }
@@ -22277,6 +22332,7 @@ impl<'a> Lowerer<'a> {
                     value: Rvalue::Call {
                         callee: CallTarget::Name("TaskGroup".to_string()),
                         args: lowered_args,
+                        type_args: Default::default(),
                     },
                 });
             }
@@ -22466,6 +22522,7 @@ impl<'a> Lowerer<'a> {
                                             )
                                         })
                                         .collect(),
+                                    type_args: Default::default(),
                                 },
                             });
                             return Operand::Place(temp);
@@ -22489,6 +22546,7 @@ impl<'a> Lowerer<'a> {
                                 value,
                                 writeback_place: None,
                             }],
+                            type_args: Default::default(),
                         },
                     });
                     return Operand::Place(temp);
@@ -22516,6 +22574,7 @@ impl<'a> Lowerer<'a> {
                                             module_path, item_name, field
                                         )),
                                         args: lowered_args,
+                                        type_args: Default::default(),
                                     },
                                 });
                                 return Operand::Place(temp);
@@ -22554,6 +22613,7 @@ impl<'a> Lowerer<'a> {
                                 value: Rvalue::Call {
                                     callee: CallTarget::Extern(Self::extern_call_target(&function)),
                                     args: lowered_args,
+                                    type_args: Default::default(),
                                 },
                             });
                             return Operand::Place(temp);
@@ -22576,6 +22636,7 @@ impl<'a> Lowerer<'a> {
                                         field,
                                     )),
                                     args: lowered_args,
+                                    type_args: Default::default(),
                                 },
                             });
                             return Operand::Place(temp);
@@ -22638,6 +22699,7 @@ impl<'a> Lowerer<'a> {
                                 value: Rvalue::Call {
                                     callee: CallTarget::Name(callee_name),
                                     args: lowered_args,
+                                    type_args: Default::default(),
                                 },
                             });
                             return Operand::Place(temp);
@@ -22887,6 +22949,7 @@ impl<'a> Lowerer<'a> {
                                         field,
                                     )),
                                     args: lowered_args,
+                                    type_args: Default::default(),
                                 },
                             });
                             return Operand::Place(temp);
@@ -22921,6 +22984,7 @@ impl<'a> Lowerer<'a> {
                             value: Rvalue::Call {
                                 callee: CallTarget::Name(function_name),
                                 args: lowered_args,
+                                type_args: Default::default(),
                             },
                         });
                         return Operand::Place(temp);
@@ -23016,6 +23080,7 @@ impl<'a> Lowerer<'a> {
                             },
                         },
                         args: lowered_args,
+                        type_args: Default::default(),
                     },
                 });
             }
@@ -23033,6 +23098,7 @@ impl<'a> Lowerer<'a> {
                     value: Rvalue::Call {
                         callee: CallTarget::Name(name.clone()),
                         args: lowered_args,
+                        type_args: Default::default(),
                     },
                 });
             }
@@ -23070,6 +23136,7 @@ impl<'a> Lowerer<'a> {
                     value: Rvalue::Call {
                         callee: CallTarget::Name(name.clone()),
                         args: lowered_args,
+                        type_args: Default::default(),
                     },
                 });
             }
@@ -23120,6 +23187,7 @@ impl<'a> Lowerer<'a> {
                     value: Rvalue::Call {
                         callee: CallTarget::Name(name.clone()),
                         args: lowered_args,
+                        type_args: Default::default(),
                     },
                 });
             }
@@ -23138,6 +23206,7 @@ impl<'a> Lowerer<'a> {
                         value: Rvalue::Call {
                             callee: CallTarget::Extern(Self::extern_call_target(&function)),
                             args: lowered_args,
+                            type_args: Default::default(),
                         },
                     });
                     return Operand::Place(temp);
@@ -23200,6 +23269,7 @@ impl<'a> Lowerer<'a> {
                     value: Rvalue::Call {
                         callee: CallTarget::Name(callee_name),
                         args: lowered_args,
+                        type_args: Default::default(),
                     },
                 });
             }
@@ -23211,6 +23281,7 @@ impl<'a> Lowerer<'a> {
                     value: Rvalue::Call {
                         callee: CallTarget::Name(fallback),
                         args: lowered_args,
+                        type_args: Default::default(),
                     },
                 });
             }
@@ -23662,6 +23733,7 @@ impl<'a> Lowerer<'a> {
                     crate::sema::INITIALIZER_NAME,
                 )),
                 args: lowered_args,
+                type_args: Default::default(),
             },
         });
     }
@@ -23785,6 +23857,7 @@ impl<'a> Lowerer<'a> {
                     value: Rvalue::Call {
                         callee: CallTarget::Name(helper),
                         args: Vec::new(),
+                        type_args: Default::default(),
                     },
                 });
                 if passing == Some(ReceiverKind::Borrow) {
@@ -26085,7 +26158,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn rvalue_writes_place(&self, value: &Rvalue, place: &str) -> bool {
-        let Rvalue::Call { callee, args } = value else {
+        let Rvalue::Call { callee, args, .. } = value else {
             return false;
         };
         let receiver_writes_place = match callee {
@@ -26178,6 +26251,7 @@ impl<'a> Lowerer<'a> {
             Operand::Bool(_) => Some(Type::named("bool")),
             Operand::String(_) => Some(Type::named("str")),
             Operand::Unit => Some(Type::Unit),
+            Operand::Default(default) => default.ty(),
         }
     }
 
@@ -26726,6 +26800,9 @@ mod lending;
 #[path = "mir_checks.rs"]
 pub(crate) mod checks;
 
+#[path = "mir_type_args.rs"]
+pub(crate) mod type_args;
+
 pub(crate) use ownership_check::validate_ownership;
 
 /// Why a module failed the checks every execution boundary runs.
@@ -26746,17 +26823,21 @@ pub(crate) fn validate_at_boundary(
         validate_loan_flow(module).map_err(BoundaryError::LoanFlow)?;
         checks::resolve_checks(module);
         ownership::insert_ownership(module);
+        type_args::record_call_type_args(module);
     }
     validate_loan_flow(module).map_err(BoundaryError::LoanFlow)?;
     validate_ownership(module).map_err(BoundaryError::Ownership)?;
-    checks::validate_checks(module).map_err(BoundaryError::Checks)
+    checks::validate_checks(module).map_err(BoundaryError::Checks)?;
+    type_args::validate_call_type_args(module).map_err(BoundaryError::LoanFlow)
 }
 
 /// The checks the interpreter runs. It decides ownership itself, so an
 /// implicit module skips the pass and the checker. An explicit module must
 /// still state its ownership and its checks correctly. The interpreter
 /// checks every access itself, so an implicit module skips the checks
-/// validator and `aura run` starts no slower.
+/// validator and `aura run` starts no slower. An explicit module must also
+/// name each generic call's type arguments correctly, though the interpreter
+/// reads values and ignores them.
 pub(crate) fn validate_for_interpreter(
     module: &MirModule,
 ) -> std::result::Result<(), BoundaryError> {
@@ -26765,10 +26846,13 @@ pub(crate) fn validate_for_interpreter(
     if module.ownership.is_implicit() {
         return Ok(());
     }
-    checks::validate_checks(module).map_err(BoundaryError::Checks)
+    checks::validate_checks(module).map_err(BoundaryError::Checks)?;
+    type_args::validate_call_type_args(module).map_err(BoundaryError::LoanFlow)
 }
 
-pub(crate) use runtime_ops::{is_builtin_wrapper, resolve_runtime_ops, specialized_member_op};
+pub(crate) use runtime_ops::{
+    bind_runtime_op_args, is_builtin_wrapper, resolve_runtime_ops, specialized_member_op,
+};
 
 #[cfg(test)]
 #[path = "mir_tests.rs"]

@@ -423,6 +423,7 @@ fn the_validator_refuses_unchecked_forms_off_their_shape() {
                             ..
                         },
                     args,
+                    ..
                 },
             ..
         } = instruction

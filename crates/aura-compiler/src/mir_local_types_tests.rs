@@ -162,6 +162,7 @@ fn completed_rvalue_types_follow_each_rvalue_kind() {
     let call = |callee: CallTarget| Rvalue::Call {
         callee,
         args: Vec::new(),
+        type_args: Default::default(),
     };
     let member = |object: &str, field: &str| {
         call(CallTarget::Member {

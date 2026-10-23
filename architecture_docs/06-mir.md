@@ -371,7 +371,7 @@ always moves.
 | Borrow | `Binary`, `Unary`, and `Cast` operands; `Member`, `TupleElement`, and `VariantPayload` objects; f-string parts; `Eval`, `Branch`, `Match`, and `ForRange` operands; the function a `Value` call calls; extern call arguments; task inputs; assertion operands |
 
 A runtime operation names the role of each argument in
-`RuntimeOp::arg_ownership`. An `own` parameter consumes, and so do the key
+`RuntimeOp::arg_ownership`, by its position. An `own` parameter consumes, and so do the key
 and value an index write stores and the values a span restore puts back.
 Every other argument borrows. `RuntimeOp::receiver_ownership` borrows the
 receiver of every operation that has one.
@@ -493,6 +493,75 @@ the interpreter's. It refuses a trap the table does not give, except `None`
 on an advance a fact covers. It refuses an unchecked read or loan that no
 fact covers. The interpreter reads an unchecked read as a checked one and
 checks each fact.
+
+## Calls in MIR
+
+MIR states how each call passes its arguments, so a backend does not bind
+them again.
+
+### Runtime Op Arguments
+
+A `Runtime` call carries one positional argument for each parameter of its
+op, in parameter order. `resolve_runtime_ops` binds a call's named
+arguments when it resolves the op, as the checker binds them. An optional
+parameter the call leaves out gets the op's default, from
+`RuntimeOp::default_arg`:
+
+- a default with a constant spelling is that constant, such as `None` for
+  `cwd` and `true` for `group` in `process.Supervisor.start`;
+- any other default is an `Operand::Default` that names it, such as
+  `Default(StdioNull)` for `stdin` or `Default(Milliseconds(100))` for
+  `backoff`;
+- `Default(Omitted)` stands for a default the runtime helper applies
+  itself, such as no deadline for an omitted `timeout`. A backend passes a
+  zero word for it.
+
+```text
+%t4 = Runtime Resource(ProcessSupervisorStart) supervisor(name, command, (),
+    Default(EmptyStrDict), Default(StdioNull), Default(StdioInherit),
+    Default(StdioInherit), Default(RestartOnFailure), Default(Milliseconds(100)),
+    Default(Int32(-1)), true)
+```
+
+`range` with one argument binds it to `stop`, and `select` takes its
+sources as they are. The shared validator refuses a `Runtime` call whose
+arguments are not in this form: a missing or extra argument, a named one,
+or a default that is not its parameter's. It refuses `Operand::Default` in
+any other call. The interpreter reads the bound form. It leaves out each
+`Default(Omitted)` argument and applies its own default.
+
+### Generic Call Type Arguments
+
+A generic function that no pass specializes has one body, and each
+parameter that names a type parameter passes in that parameter's boxed
+layout. A `Name` call to such a function records the type each type
+parameter stands for at the call in `Rvalue::Call::type_args`, by name.
+The native emitter loads each argument as its parameter type with those
+types substituted, then boxes it.
+
+`mir::type_args::record_call_type_args` fills them after the ownership
+pass: in `lower`, and at the native boundary for an implicit module. It
+matches the callee's return type against the call's destination first,
+then each parameter type against its argument's type. The first type a
+parameter meets is its argument, and a parameter nothing fixes stands for
+itself. `lower_implicit` skips the pass, and the interpreter ignores type
+arguments.
+
+`validate_call_type_args` runs at the native boundary, and in the
+interpreter for a module with explicit ownership. It refuses a call whose
+type arguments do not name exactly its callee's type parameters, and type
+arguments on any other call.
+
+### Number Methods With an Array Argument
+
+A call such as `factor.mul(values)`, where `factor` is a number and
+`values` is an `Array`, is the built-in `Array` operator unless the
+program implements that method on the number's type.
+`resolve_runtime_ops` rewrites the built-in form to `Rvalue::Binary` with
+trap `Runtime`, the same form as `factor * values`. It does this for
+`add`, `sub`, `mul`, and `div` on `int32`, `int64`, `uint64`, `float32`,
+and `float64`. A program's own method stays a `Member` call, so both
+backends run it.
 
 ## Why both backends benefit from MIR
 

@@ -45,6 +45,16 @@ in this file.
   `None`, and its element loan as `checked: false`. Native code makes the
   checks MIR names, and refuses MIR with a wrong trap or an unchecked read
   that no `IndexInRange` covers. Emitted code is unchanged.
+- `aura mir` shows each built-in call's arguments in parameter order,
+  without names. An optional argument the call leaves out shows as its
+  default: a constant such as `None`, or a `Default` operand such as
+  `Default(StdioNull)` for `process.Supervisor.start`'s `stdin`. Both
+  backends refuse a built-in call whose arguments are missing, extra,
+  named, or a default that is not their parameter's.
+- `aura mir` shows the type arguments of each call to a generic function
+  as `type_args`. Native code refuses a call whose type arguments do not
+  name its callee's type parameters, and so does the interpreter for MIR
+  with explicit ownership. Emitted code is unchanged.
 - Debug builds of the direct runtime stop a task that releases a value it
   does not own.
 - `AURA_RUNTIME_STATS=1` also reports `retains`, `releases`, and `clones`:
@@ -68,6 +78,11 @@ in this file.
 - Building the same program twice produces the same native object. Native
   code used to release a function's values at return, and declare some
   callees, in hash map order, which changed from one build to the next.
+- A method a program implements on a number for an `Array` argument, such
+  as `factor.mul(values)` from `impl Scale[Array[float64], Array[float64]]
+  for float64`, runs the program's method in native code. Native code used
+  to run the built-in `Array` product instead, so the two backends printed
+  different results.
 - A program can call its own function named `list`, `dict`, `set`, or
   `Queue`. Lowering used to give such a call no result type, so both
   backends rejected the program.

@@ -231,7 +231,7 @@ enum Covered {
 fn element_read(instruction: &Instruction) -> Option<(&str, &str)> {
     let Instruction::Assign {
         target,
-        value: Rvalue::Call { callee, args },
+        value: Rvalue::Call { callee, args, .. },
     } = instruction
     else {
         return None;

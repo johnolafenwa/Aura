@@ -14,12 +14,11 @@ use super::{
     direct_field_type, direct_type, direct_type_to_type, emit_host_object,
     emit_host_object_with_metadata, ensure_direct_type, enum_variant_payload_types_for_target,
     infer_operand_type, is_numeric_type_name, main_signature, mangle_default_binder_symbol,
-    mangle_symbol, mangle_thunk_symbol, native_codegen_flags, ordered_named_args,
-    ordered_optional_named_args, release_direct_call_results, release_direct_values,
-    render_direct_type, runtime_type_is_wildcard, signature_for, thunk_signature,
-    thunk_string_constant, unbox_thunk_value, validate_function, validate_operand, validate_rvalue,
-    validate_tuple_projection_operand, validate_tuple_take_place, DirectType, DirectViewPlace,
-    NativeCodegen, PlainClassField, PlainClassType, ScalarKind,
+    mangle_symbol, mangle_thunk_symbol, native_codegen_flags, release_direct_call_results,
+    release_direct_values, render_direct_type, runtime_type_is_wildcard, signature_for,
+    thunk_signature, thunk_string_constant, unbox_thunk_value, validate_function, validate_operand,
+    validate_rvalue, validate_tuple_projection_operand, validate_tuple_take_place, DirectType,
+    DirectViewPlace, NativeCodegen, PlainClassField, PlainClassType, ScalarKind,
 };
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::Span;
@@ -259,6 +258,7 @@ fn adr0038_direct_view_and_closure_metadata_helpers_preserve_dataflow_invariants
     let called = Rvalue::Call {
         callee: CallTarget::Value(Operand::Place("worker.callable".to_string())),
         args: Vec::new(),
+        type_args: Default::default(),
     };
     assert_eq!(
         direct_closure_metadata_uses(&called).collect::<Vec<_>>(),
@@ -682,96 +682,6 @@ def main():
         error.contains("mutable closure capture `values` has no source place"),
         "unexpected mutable-capture diagnostic: {error}"
     );
-}
-
-#[test]
-fn direct_runtime_type_substitutions_respect_callable_structure_and_capabilities() {
-    use super::collect_direct_runtime_type_substitutions;
-    use crate::ast::ReceiverKind;
-    use crate::sema::{ClosureCallKind, ClosureCapture, ClosureCaptureMode, FunctionParamContract};
-
-    let param = |name: &str, ty: Type, passing| FunctionParamContract {
-        keyword_only: false,
-        name: name.to_string(),
-        ty,
-        passing,
-        has_default: false,
-    };
-    let pattern = Type::Closure {
-        params: Box::new(vec![param(
-            "value",
-            Type::TypeParam("T".to_string()),
-            ReceiverKind::Value,
-        )]),
-        return_type: Box::new(Type::Tuple(vec![
-            Type::TypeParam("T".to_string()),
-            Type::TypeParam("U".to_string()),
-        ])),
-        captures: Box::new(vec![ClosureCapture {
-            name: "state".to_string(),
-            ty: Type::TypeParam("U".to_string()),
-            mode: ClosureCaptureMode::MutableView,
-            span: Span::new(1, 1),
-            mutated: false,
-        }]),
-        call_kind: ClosureCallKind::MutableRepeatable,
-    };
-    let actual = Type::Closure {
-        params: Box::new(vec![param(
-            "value",
-            Type::named("int64"),
-            ReceiverKind::Value,
-        )]),
-        return_type: Box::new(Type::Tuple(vec![Type::named("int64"), Type::named("str")])),
-        captures: Box::new(vec![ClosureCapture {
-            name: "state".to_string(),
-            ty: Type::named("str"),
-            mode: ClosureCaptureMode::MutableView,
-            span: Span::new(1, 1),
-            mutated: false,
-        }]),
-        call_kind: ClosureCallKind::MutableRepeatable,
-    };
-    let mut substitutions = HashMap::new();
-    collect_direct_runtime_type_substitutions(&pattern, &actual, &mut substitutions);
-    assert_eq!(substitutions.get("T"), Some(&Type::named("int64")));
-    assert_eq!(substitutions.get("U"), Some(&Type::named("str")));
-
-    let function_pattern = Type::Function {
-        params: vec![param(
-            "value",
-            Type::TypeParam("V".to_string()),
-            ReceiverKind::Borrow,
-        )],
-        return_type: Box::new(Type::TypeParam("R".to_string())),
-    };
-    let wrong_capability = Type::Function {
-        params: vec![param("value", Type::named("bool"), ReceiverKind::BorrowMut)],
-        return_type: Box::new(Type::named("int32")),
-    };
-    collect_direct_runtime_type_substitutions(
-        &function_pattern,
-        &wrong_capability,
-        &mut substitutions,
-    );
-    assert!(!substitutions.contains_key("V"));
-    assert!(!substitutions.contains_key("R"));
-
-    for (pattern, actual) in [
-        (
-            Type::Named("list".to_string(), vec![Type::TypeParam("N".to_string())]),
-            Type::named("str"),
-        ),
-        (
-            Type::Tuple(vec![Type::TypeParam("Q".to_string())]),
-            Type::Tuple(Vec::new()),
-        ),
-        (function_pattern, Type::Unit),
-    ] {
-        collect_direct_runtime_type_substitutions(&pattern, &actual, &mut substitutions);
-    }
-    assert!(!substitutions.contains_key("N"));
-    assert!(!substitutions.contains_key("Q"));
 }
 
 #[test]
@@ -1705,6 +1615,7 @@ fn direct_select_packages_variadic_sources_into_the_owned_tuple_abi() {
                 value: Operand::Duration(0),
                 writeback_place: None,
             }],
+            type_args: Default::default(),
         },
         Type::Named("SelectOutcome".to_string(), vec![Type::Unit, Type::Unit]),
     );
@@ -2127,7 +2038,7 @@ def main() -> int32:
                     callee: CallTarget::Runtime {
                         op, receiver: None, ..
                     },
-                    args,
+                    args, ..
                 },
                 ..
             } if op.name() == "wait_all"
@@ -3147,6 +3058,7 @@ fn direct_ffi_codegen_embeds_call_metadata_and_uses_only_the_runtime_adapter() {
             return_type: Type::named("int32"),
         }),
         args: Vec::new(),
+        type_args: Default::default(),
     };
     let module = module_with_main_call_result_type(call, Type::named("int32"));
     let object = emit_host_object(&module).expect("direct getpid FFI should emit");
@@ -3249,6 +3161,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                                     writeback_place: Some("bytes".to_string()),
                                 },
                             ],
+                            type_args: Default::default(),
                         },
                     },
                     Instruction::Assign {
@@ -3269,6 +3182,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                                 value: Operand::Int(1),
                                 writeback_place: None,
                             }],
+                            type_args: Default::default(),
                         },
                     },
                     Instruction::Assign {
@@ -3289,6 +3203,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                                 value: Operand::MovePlace("handle".to_string()),
                                 writeback_place: None,
                             }],
+                            type_args: Default::default(),
                         },
                     },
                     Instruction::Assign {
@@ -3309,6 +3224,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                                 value: Operand::Int(7),
                                 writeback_place: None,
                             }],
+                            type_args: Default::default(),
                         },
                     },
                 ],
@@ -3339,6 +3255,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
                 return_type: Type::named("int32"),
             }),
             args: Vec::new(),
+            type_args: Default::default(),
         },
         Type::named("int32"),
     );
@@ -3358,6 +3275,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
                 return_type: Type::named("int32"),
             }),
             args: Vec::new(),
+            type_args: Default::default(),
         },
         Type::named("int32"),
     );
@@ -3383,6 +3301,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
                 value: Operand::Int(1),
                 writeback_place: Some("value".to_string()),
             }],
+            type_args: Default::default(),
         },
         Type::named("int32"),
     );
@@ -3444,6 +3363,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
                                 value: Operand::MovePlace("bytes".to_string()),
                                 writeback_place: None,
                             }],
+                            type_args: Default::default(),
                         },
                     },
                 ],
@@ -3624,6 +3544,7 @@ fn module_with_main_member_call_result_type(
                                 receiver_place: Some(object_name.to_string()),
                             },
                             args,
+                            type_args: Default::default(),
                         },
                     },
                 ],
@@ -3969,6 +3890,7 @@ fn direct_backend_scalar_bool_range_and_coercion_paths_compile() {
                                     writeback_place: None,
                                 },
                             ],
+                            type_args: Default::default(),
                         },
                     },
                     Instruction::Assign {
@@ -4152,11 +4074,13 @@ fn direct_backend_runtime_member_matrix_covers_remaining_string_collection_and_r
     let channel_value = Rvalue::Call {
         callee: CallTarget::Name("Queue".to_string()),
         args: Vec::new(),
+        type_args: Default::default(),
     };
     let task_group_ty = Type::named("TaskGroup");
     let task_group_value = Rvalue::Call {
         callee: CallTarget::Name("TaskGroup".to_string()),
         args: Vec::new(),
+        type_args: Default::default(),
     };
     let cases = vec![
         (
@@ -6054,6 +5978,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
     let channel_value = Rvalue::Call {
         callee: CallTarget::Name("Queue".to_string()),
         args: Vec::new(),
+        type_args: Default::default(),
     };
     let task_ty = Type::Named("Task".to_string(), vec![Type::named("int32")]);
     let task_value = Rvalue::Use(Operand::String("opaque-task".to_string()));
@@ -6061,6 +5986,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
     let task_group_value = Rvalue::Call {
         callee: CallTarget::Name("TaskGroup".to_string()),
         args: Vec::new(),
+        type_args: Default::default(),
     };
     let arg = |value| MirArg {
         name: None,
@@ -7012,6 +6938,7 @@ fn direct_backend_rejects_a_wait_result_of_unknown_payload_type() {
                                 value: Operand::Place("tasks".to_string()),
                                 writeback_place: None,
                             }],
+                            type_args: Default::default(),
                         },
                     },
                 ],
@@ -7636,6 +7563,7 @@ def main() -> int32:
                     Rvalue::Call {
                         callee: CallTarget::Value(Operand::Place(place)),
                         args,
+                        ..
                     },
                 ..
             } if place == "worker" => Some(args),
@@ -7808,6 +7736,7 @@ fn native_codegen_function_value_signature_errors_are_precise() {
                                         "worker_value".to_string(),
                                     )),
                                     args,
+                                    type_args: Default::default(),
                                 },
                             },
                         ],
@@ -7938,6 +7867,7 @@ def main() -> int32:
                     Rvalue::Call {
                         callee: CallTarget::Value(_),
                         args,
+                        ..
                     },
                 ..
             } => Some(args),
@@ -8087,6 +8017,7 @@ def main() -> int32:
             module_with_main_call(Rvalue::Call {
                 callee: CallTarget::Name("print".to_string()),
                 args: vec![],
+                type_args: Default::default(),
             }),
             "`Print.Value` in `main`: expected `print()` to receive `value`",
         ),
@@ -8106,6 +8037,7 @@ def main() -> int32:
                         writeback_place: None,
                     },
                 ],
+                type_args: Default::default(),
             }),
             "expected `Queue()` to take at most 1 argument(s), found 2",
         ),
@@ -8118,6 +8050,7 @@ def main() -> int32:
                     value: Operand::Int(1),
                     writeback_place: None,
                 }],
+                type_args: Default::default(),
             }),
             "`Queue()` has no parameter `size`",
         ),
@@ -8130,6 +8063,7 @@ def main() -> int32:
                     value: Operand::Int(1),
                     writeback_place: None,
                 }],
+                type_args: Default::default(),
             }),
             "expected `TaskGroup()` to take no arguments",
         ),
@@ -8142,6 +8076,7 @@ def main() -> int32:
                     value: Operand::Int(1),
                     writeback_place: None,
                 }],
+                type_args: Default::default(),
             }),
             "expected `cancelled()` to take no arguments",
         ),
@@ -8150,6 +8085,7 @@ def main() -> int32:
             module_with_main_call(Rvalue::Call {
                 callee: CallTarget::Name("sleep".to_string()),
                 args: vec![],
+                type_args: Default::default(),
             }),
             "expected `sleep()` to receive `duration`",
         ),
@@ -8169,6 +8105,7 @@ def main() -> int32:
                         writeback_place: None,
                     },
                 ],
+                type_args: Default::default(),
             }),
             "`wait_any()` receives `tasks` twice",
         ),
@@ -8193,6 +8130,7 @@ def main() -> int32:
                         writeback_place: None,
                     },
                 ],
+                type_args: Default::default(),
             }),
             "`wait_all()` receives `timeout` twice",
         ),
@@ -8205,6 +8143,7 @@ def main() -> int32:
                     value: Operand::Unit,
                     writeback_place: None,
                 }],
+                type_args: Default::default(),
             }),
             "`wait_any()` has no parameter `jobs`",
         ),
@@ -8213,6 +8152,7 @@ def main() -> int32:
             module_with_main_call(Rvalue::Call {
                 callee: CallTarget::Name("abs".to_string()),
                 args: vec![],
+                type_args: Default::default(),
             }),
             "expected `abs()` to receive `value`",
         ),
@@ -8221,6 +8161,7 @@ def main() -> int32:
             module_with_main_call(Rvalue::Call {
                 callee: CallTarget::Name("parse_int32".to_string()),
                 args: vec![],
+                type_args: Default::default(),
             }),
             "expected `parse_int32()` to receive `text`",
         ),
@@ -8233,6 +8174,7 @@ def main() -> int32:
                     value: Operand::Int(1),
                     writeback_place: None,
                 }],
+                type_args: Default::default(),
             }),
             "expected `min()` to receive `right`",
         ),
@@ -8241,6 +8183,7 @@ def main() -> int32:
             module_with_main_call(Rvalue::Call {
                 callee: CallTarget::Name("sqrt".to_string()),
                 args: vec![],
+                type_args: Default::default(),
             }),
             "expected `sqrt()` to receive `value`",
         ),
@@ -8249,6 +8192,7 @@ def main() -> int32:
             module_with_main_call(Rvalue::Call {
                 callee: CallTarget::Name("round".to_string()),
                 args: vec![],
+                type_args: Default::default(),
             }),
             "expected `round()` to receive `value`",
         ),
@@ -8261,6 +8205,7 @@ def main() -> int32:
                     value: Operand::Int(1),
                     writeback_place: None,
                 }],
+                type_args: Default::default(),
             }),
             "expected `divmod()` to receive `right`",
         ),
@@ -8273,6 +8218,7 @@ def main() -> int32:
                     value: Operand::Int(1),
                     writeback_place: None,
                 }],
+                type_args: Default::default(),
             }),
             "expected `list()` to take no arguments",
         ),
@@ -8297,6 +8243,7 @@ def main() -> int32:
                         writeback_place: None,
                     },
                 ],
+                type_args: Default::default(),
             }),
             "expected `range()` to take at most 2 argument(s)",
         ),
@@ -8326,6 +8273,7 @@ def main() -> int32:
                         writeback_place: None,
                     },
                 ],
+                type_args: Default::default(),
             }),
             "expected `range()` to take at most 2 argument(s)",
         ),
@@ -8345,6 +8293,7 @@ def main() -> int32:
                         writeback_place: None,
                     },
                 ],
+                type_args: Default::default(),
             }),
             "`range()` has no parameter `middle`",
         ),
@@ -8357,6 +8306,7 @@ def main() -> int32:
                     value: Operand::Int(1),
                     writeback_place: None,
                 }],
+                type_args: Default::default(),
             }),
             "expected `range()` to receive `stop`",
         ),
@@ -8378,6 +8328,7 @@ def main() -> int32:
                 Rvalue::Call {
                     callee: CallTarget::Name("dict".to_string()),
                     args: Vec::new(),
+                    type_args: Default::default(),
                 },
                 Type::Named(
                     "dict".to_string(),
@@ -8415,6 +8366,7 @@ def main() -> int32:
                         value: Operand::Unit,
                         writeback_place: None,
                     }],
+                    type_args: Default::default(),
                 },
                 Type::Named("WaitAll".to_string(), vec![Type::named("int64")]),
             ),
@@ -8436,6 +8388,7 @@ def main() -> int32:
                             writeback_place: None,
                         },
                     ],
+                    type_args: Default::default(),
                 },
                 Type::Named("WaitAny".to_string(), vec![Type::named("int64")]),
             ),
@@ -8763,6 +8716,7 @@ def main() -> int32:
                 value: Rvalue::Call {
                     callee: CallTarget::Name("TaskGroup".to_string()),
                     args: vec![],
+                    type_args: Default::default(),
                 },
             },
             Instruction::Assign {
@@ -9494,6 +9448,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
     let channel_object = || Rvalue::Call {
         callee: CallTarget::Name("Queue".to_string()),
         args: vec![],
+        type_args: Default::default(),
     };
 
     let error_cases = [
@@ -11681,75 +11636,6 @@ fn native_codegen_helper_utilities_cover_signatures_wildcards_and_metadata() {
 }
 
 #[test]
-fn native_codegen_orders_named_builtin_args_and_reports_binding_errors() {
-    let arg = |name: Option<&str>, value: u128| MirArg {
-        name: name.map(str::to_string),
-        value: Operand::Int(value),
-        writeback_place: None,
-    };
-    let int_arg = |argument: &MirArg| match &argument.value {
-        Operand::Int(value) => *value,
-        other => panic!("expected int argument, found {other:?}"),
-    };
-
-    let mixed_args = vec![arg(Some("timeout"), 30), arg(None, 7)];
-    let ordered = ordered_named_args(&["value", "timeout"], &mixed_args)
-        .expect("named and positional arguments should bind by expected parameter order");
-    assert_eq!(int_arg(ordered[0]), 7);
-    assert_eq!(int_arg(ordered[1]), 30);
-
-    let positional_after_named = vec![arg(Some("value"), 7), arg(None, 30)];
-    let ordered = ordered_named_args(&["value", "timeout"], &positional_after_named)
-        .expect("positional arguments should skip slots filled by named arguments");
-    assert_eq!(int_arg(ordered[0]), 7);
-    assert_eq!(int_arg(ordered[1]), 30);
-
-    assert!(ordered_named_args(&["value"], &[arg(Some("missing"), 1)])
-        .expect_err("unknown names should fail")
-        .contains("does not recognize builtin argument `missing`"));
-    assert!(
-        ordered_named_args(&["value"], &[arg(Some("value"), 1), arg(Some("value"), 2)])
-            .expect_err("duplicate names should fail")
-            .contains("duplicate builtin argument `value`")
-    );
-    assert!(
-        ordered_named_args(&["value"], &[arg(None, 1), arg(None, 2)])
-            .expect_err("extra positional arguments should fail")
-            .contains("too many builtin arguments")
-    );
-    assert!(ordered_named_args(&["value", "timeout"], &[arg(None, 1)])
-        .expect_err("missing required arguments should fail")
-        .contains("missing a builtin argument"));
-
-    let optional = ordered_optional_named_args(&["default", "timeout"], &mixed_args)
-        .expect("optional named arguments should preserve empty slots");
-    assert_eq!(int_arg(optional[0].expect("default should bind")), 7);
-    assert_eq!(int_arg(optional[1].expect("timeout should bind")), 30);
-
-    let optional_after_named = vec![arg(Some("default"), 7), arg(None, 30)];
-    let optional = ordered_optional_named_args(&["default", "timeout"], &optional_after_named)
-        .expect("optional positional arguments should skip named slots");
-    assert_eq!(int_arg(optional[0].expect("default should bind")), 7);
-    assert_eq!(int_arg(optional[1].expect("timeout should bind")), 30);
-    assert!(
-        ordered_optional_named_args(&["timeout"], &[arg(Some("missing"), 1)])
-            .expect_err("unknown optional names should fail")
-            .contains("does not recognize builtin argument `missing`")
-    );
-    assert!(ordered_optional_named_args(
-        &["timeout"],
-        &[arg(Some("timeout"), 1), arg(Some("timeout"), 2)]
-    )
-    .expect_err("duplicate optional names should fail")
-    .contains("duplicate builtin argument `timeout`"));
-    assert!(
-        ordered_optional_named_args(&["timeout"], &[arg(None, 1), arg(None, 2)])
-            .expect_err("extra optional positional arguments should fail")
-            .contains("too many builtin arguments")
-    );
-}
-
-#[test]
 fn native_codegen_direct_types_keep_recursive_and_generic_classes_opaque() {
     let classes = HashMap::from([
         (
@@ -12864,6 +12750,7 @@ fn direct_union_receiver_switch_refuses_a_member_without_the_method() {
                     receiver_place: Some(union_local.clone()),
                 },
                 args: Vec::new(),
+                type_args: Default::default(),
             },
         },
     );
@@ -13842,7 +13729,7 @@ fn define_main_with_forged_print(
         .flat_map(|block| &mut block.instructions)
         .find_map(|instruction| match instruction {
             Instruction::Assign {
-                value: Rvalue::Call { callee, args },
+                value: Rvalue::Call { callee, args, .. },
                 ..
             } if matches!(
                 callee,
@@ -13951,6 +13838,7 @@ def main():
                         Rvalue::Call {
                             callee: CallTarget::Runtime { op, .. },
                             args,
+                            ..
                         },
                     ..
                 } if *op == target => Some(args),
@@ -14055,7 +13943,7 @@ fn an_unresolved_internal_slice_needs_all_six_arguments() {
         .flat_map(|block| block.instructions.iter_mut())
         .find_map(|instruction| match instruction {
             Instruction::Assign {
-                value: Rvalue::Call { callee, args },
+                value: Rvalue::Call { callee, args, .. },
                 ..
             } if matches!(
                 callee,

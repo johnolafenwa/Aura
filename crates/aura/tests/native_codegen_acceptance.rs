@@ -58,6 +58,7 @@ fn public_object_codegen_reads_host_and_wait_result_types_from_mir() {
                         value: Rvalue::Call {
                             callee: CallTarget::Name("sys::args".to_string()),
                             args: Vec::new(),
+                            type_args: Default::default(),
                         },
                     },
                     Instruction::Assign {
@@ -69,6 +70,7 @@ fn public_object_codegen_reads_host_and_wait_result_types_from_mir() {
                                 value: Operand::Place("tasks".to_string()),
                                 writeback_place: None,
                             }],
+                            type_args: Default::default(),
                         },
                     },
                 ],

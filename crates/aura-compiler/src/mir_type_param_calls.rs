@@ -144,6 +144,7 @@ impl Lowerer<'_> {
             value: Rvalue::Call {
                 callee: CallTarget::Name(placeholder(&self.type_param_call_id(expr.span))),
                 args: lowered_args,
+                type_args: Default::default(),
             },
         });
         Some(Operand::Place(temp))

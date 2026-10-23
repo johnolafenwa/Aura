@@ -27,7 +27,8 @@ use crate::mir::{
 };
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_ops::{
-    builtin_function_for_name, builtin_member_for_receiver, FunctionOp, RuntimeOp, StrOp,
+    builtin_function_for_name, builtin_member_for_receiver, ArgDefault, FunctionOp, RuntimeOp,
+    StrOp,
 };
 use crate::runtime_value::{
     append_string_checked, cast_numeric_value, catch_lightweight_task_failure,
@@ -64,9 +65,9 @@ use crate::runtime_value::{
     EnumVariantValue, FfiHandleValue, FileValue, FloatPowerWidth, FunctionValue, HttpExchangeValue,
     HttpListenerValue, HttpResponseValue, InstanceValue, IntegerArithmeticMode, MapValue,
     ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
-    ProcessRestartPolicy, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
-    RecvValueResult, RngValue, RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetElements,
-    SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
+    ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue,
+    RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetElements, SetValue,
+    TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
     TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue,
     UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
     NANOS_PER_MILLISECOND, NANOS_PER_MINUTE, NANOS_PER_SECOND,
@@ -153,6 +154,26 @@ pub(crate) fn run_entry_with_stdout_sink_and_program_args_trusted(
     // calls. Resolve them as the native emitter does, so both boundaries
     // validate and run the same form.
     crate::mir::resolve_runtime_ops(&mut module);
+    run_resolved_entry(module, entry, stdout_sink, program_args)
+}
+
+/// Runs a module `lower_implicit` just made. Lowering already resolved its
+/// runtime ops and bound their arguments, so this skips doing it again.
+pub(crate) fn run_lowered_entry(
+    module: &MirModule,
+    entry: Option<&str>,
+    stdout_sink: Option<StdoutSink>,
+    program_args: Vec<String>,
+) -> Result<RunOutput> {
+    run_resolved_entry(module.clone(), entry, stdout_sink, program_args)
+}
+
+fn run_resolved_entry(
+    module: MirModule,
+    entry: Option<&str>,
+    stdout_sink: Option<StdoutSink>,
+    program_args: Vec<String>,
+) -> Result<RunOutput> {
     crate::mir::validate_for_interpreter(&module).map_err(|error| match error {
         crate::mir::BoundaryError::LoanFlow(error) => {
             Diagnostic::coded("AU4001", format!("invalid MIR loan flow: {error}"))
@@ -387,7 +408,7 @@ fn rvalue_materializes_process_run(value: &Rvalue) -> bool {
         Rvalue::Binary { left, right, .. } => {
             operand_is_process_run_function(left) || operand_is_process_run_function(right)
         }
-        Rvalue::Call { callee, args } => {
+        Rvalue::Call { callee, args, .. } => {
             let callee_materializes = match callee {
                 CallTarget::Name(_) | CallTarget::Extern(_) => false,
                 CallTarget::Value(value) => operand_is_process_run_function(value),
@@ -2058,6 +2079,7 @@ fn borrow_mir_operand<'a>(operand: &'a Operand, env: &'a Env) -> Result<MirBorro
             MirBorrowedOperand::Immediate(Value::String(value.clone()))
         }
         Operand::Unit => MirBorrowedOperand::Immediate(Value::Unit),
+        Operand::Default(default) => MirBorrowedOperand::Immediate(arg_default_value(*default)?),
     })
 }
 
@@ -2129,7 +2151,52 @@ fn take_mir_operand(operand: &Operand, env: &mut Env) -> Result<Value> {
         Operand::Bool(value) => Ok(Value::Bool(*value)),
         Operand::String(value) => Ok(Value::String(value.clone())),
         Operand::Unit => Ok(Value::Unit),
+        Operand::Default(default) => arg_default_value(*default),
     }
+}
+
+/// The arguments of a resolved op's call, which MIR binds in parameter
+/// order, named after their parameters, without the omitted ones. The
+/// built-in evaluators then apply their own defaults for those.
+fn name_bound_args(op: RuntimeOp, args: &[MirArg]) -> Vec<MirArg> {
+    op.params()
+        .iter()
+        .zip(args)
+        .filter(|(_, argument)| argument.value != Operand::Default(ArgDefault::Omitted))
+        .map(|(param, argument)| MirArg {
+            name: Some(param.name.to_string()),
+            ..argument.clone()
+        })
+        .collect()
+}
+
+/// The value a default argument stands for. An omitted one has none: the
+/// runtime op call leaves it out before it binds its arguments.
+fn arg_default_value(default: ArgDefault) -> Result<Value> {
+    Ok(match default {
+        ArgDefault::Omitted => {
+            return Err(Diagnostic::new(
+                "an omitted MIR argument has no value outside a runtime operation call",
+            ))
+        }
+        ArgDefault::Int64(value) => Value::Int(IntegerValue::from_i64(value)),
+        ArgDefault::Int32(value) => Value::Int(IntegerValue::from_i32(value)),
+        ArgDefault::EmptyStrDict => Value::Map(MapValue {
+            key_type: Type::named("str"),
+            value_type: Type::named("str"),
+            entries: DictEntries::new(),
+        }),
+        ArgDefault::StdioNull => process_stdio_null(),
+        ArgDefault::StdioInherit => process_stdio_inherit(),
+        ArgDefault::RestartOnFailure => Value::EnumVariant(EnumVariantValue {
+            enum_name: "process.RestartPolicy".to_string(),
+            variant_name: "OnFailure".to_string(),
+            payloads: Vec::new(),
+        }),
+        ArgDefault::Milliseconds(milliseconds) => {
+            Value::Duration(i128::from(milliseconds) * crate::runtime_value::NANOS_PER_MILLISECOND)
+        }
+    })
 }
 
 fn bind_mir_arg_refs<'a>(expected_names: &[&str], args: &'a [MirArg]) -> Result<Vec<&'a MirArg>> {
@@ -3244,6 +3311,7 @@ impl MirRuntime {
             Operand::Bool(_) => Some(Type::named("bool")),
             Operand::String(_) => Some(Type::named("str")),
             Operand::Unit => Some(Type::Unit),
+            Operand::Default(default) => default.ty(),
         }
     }
 
@@ -4550,7 +4618,7 @@ impl MirRuntime {
                     Some(*span),
                 )?))
             }
-            Rvalue::Call { callee, args } => Ok(RvalueOutcome::Value(
+            Rvalue::Call { callee, args, .. } => Ok(RvalueOutcome::Value(
                 self.evaluate_call_for_target(callee, args, env, expected_type)?,
             )),
             Rvalue::VecLiteral {
@@ -5399,6 +5467,16 @@ impl MirRuntime {
                 receiver,
                 receiver_place,
             } => {
+                let named_args;
+                let args = if args
+                    .iter()
+                    .any(|argument| argument.value == Operand::Default(ArgDefault::Omitted))
+                {
+                    named_args = name_bound_args(*op, args);
+                    &named_args[..]
+                } else {
+                    args
+                };
                 // A named op runs the built-in its name calls.
                 let Some(object) = receiver else {
                     if op.has_receiver() {
@@ -8933,7 +9011,9 @@ impl MirRuntime {
     ) -> Result<Value> {
         match field {
             "start" => {
-                let mut bound = bind_optional_builtin_args(
+                // MIR binds every `start` parameter, filling each omitted one
+                // with its default.
+                let mut bound = bind_builtin_args(
                     &[
                         "name",
                         "command",
@@ -8948,69 +9028,24 @@ impl MirRuntime {
                         "group",
                     ],
                     evaluate_named_args(args, env)?,
-                )?;
-                let name = expect_owned_string_value(
-                    bound[0]
-                        .take()
-                        .ok_or_else(|| {
-                            Diagnostic::new("missing MIR argument `name` for `start(...)`")
-                        })?
-                        .value,
-                    "start(...)",
-                )?;
-                let command = expect_owned_command_vec(
-                    bound[1]
-                        .take()
-                        .ok_or_else(|| {
-                            Diagnostic::new("missing MIR argument `command` for `start(...)`")
-                        })?
-                        .value,
-                    "start(...)",
-                )?;
-                let cwd = bound[2]
-                    .take()
-                    .map(|argument| {
-                        expect_owned_optional_string_value(argument.value, "start(...)")
-                    })
-                    .transpose()?
-                    .flatten();
-                let env = match bound[3].take() {
-                    Some(argument) => expect_owned_headers_map(argument.value, "start(...)")?,
-                    None => Vec::new(),
+                )?
+                .into_iter()
+                .map(|argument| argument.value);
+                let mut next = || bound.next().expect("`start` binds eleven parameters");
+                let name = expect_owned_string_value(next(), "start(...)")?;
+                let command = expect_owned_command_vec(next(), "start(...)")?;
+                let cwd = expect_owned_optional_string_value(next(), "start(...)")?;
+                let env = expect_owned_headers_map(next(), "start(...)")?;
+                let stdin = decode_process_stdio(&next(), "start(...)")?;
+                let stdout = decode_process_stdio(&next(), "start(...)")?;
+                let stderr = decode_process_stdio(&next(), "start(...)")?;
+                let restart = decode_process_restart_policy(&next(), "start(...)")?;
+                let backoff = match expect_duration_value(&next(), "start(...)") {
+                    Ok(backoff) => backoff,
+                    Err(error) => return Ok(result_err(error)),
                 };
-                let stdin = match bound[4].take() {
-                    Some(argument) => decode_process_stdio(&argument.value, "start(...)")?,
-                    None => crate::runtime_value::ProcessStdioConfig::Null,
-                };
-                let stdout = match bound[5].take() {
-                    Some(argument) => decode_process_stdio(&argument.value, "start(...)")?,
-                    None => crate::runtime_value::ProcessStdioConfig::Inherit,
-                };
-                let stderr = match bound[6].take() {
-                    Some(argument) => decode_process_stdio(&argument.value, "start(...)")?,
-                    None => crate::runtime_value::ProcessStdioConfig::Inherit,
-                };
-                let restart = match bound[7].take() {
-                    Some(argument) => decode_process_restart_policy(&argument.value, "start(...)")?,
-                    None => ProcessRestartPolicy::OnFailure,
-                };
-                let backoff = match bound[8].take() {
-                    Some(argument) => match expect_duration_value(&argument.value, "start(...)") {
-                        Ok(backoff) => backoff,
-                        Err(error) => return Ok(result_err(error)),
-                    },
-                    None => StdDuration::from_millis(100),
-                };
-                let max_restarts = match bound[9].take() {
-                    Some(argument) => {
-                        expect_supervisor_max_restarts(&argument.value, "start(...)")?
-                    }
-                    None => None,
-                };
-                let group = match bound[10].take() {
-                    Some(argument) => expect_bool_value(&argument.value, "start(...)")?,
-                    None => true,
-                };
+                let max_restarts = expect_supervisor_max_restarts(&next(), "start(...)")?;
+                let group = expect_bool_value(&next(), "start(...)")?;
                 match supervisor.start(
                     name,
                     command,
@@ -9941,6 +9976,7 @@ impl MirRuntime {
             Operand::Bool(value) => Ok(Value::Bool(*value)),
             Operand::String(value) => Ok(Value::String(value.clone())),
             Operand::Unit => Ok(Value::Unit),
+            Operand::Default(default) => arg_default_value(*default),
         }
     }
 
@@ -10639,6 +10675,7 @@ fn evaluate_named_args(args: &[MirArg], env: &mut Env) -> Result<Vec<EvaluatedMi
                 Operand::Bool(_) => Some(Type::named("bool")),
                 Operand::String(_) => Some(Type::named("str")),
                 Operand::Unit => Some(Type::Unit),
+                Operand::Default(default) => default.ty(),
             };
             let value = match &arg.value {
                 Operand::Place(place) => env.read_place(place)?,
@@ -10650,6 +10687,7 @@ fn evaluate_named_args(args: &[MirArg], env: &mut Env) -> Result<Vec<EvaluatedMi
                 Operand::Bool(value) => Value::Bool(*value),
                 Operand::String(value) => Value::String(value.clone()),
                 Operand::Unit => Value::Unit,
+                Operand::Default(default) => arg_default_value(*default)?,
             };
             Ok(EvaluatedMirArg {
                 name: arg.name.clone(),
@@ -10980,38 +11018,6 @@ fn bind_builtin_args(
                 .ok_or_else(|| Diagnostic::new("missing MIR argument"))
         })
         .collect()
-}
-
-fn bind_optional_builtin_args(
-    expected_names: &[&str],
-    args: Vec<EvaluatedMirArg>,
-) -> Result<Vec<Option<EvaluatedMirArg>>> {
-    let mut values = vec![None; expected_names.len()];
-    let mut next_positional = 0;
-
-    for argument in args {
-        if let Some(name) = argument.name.as_deref() {
-            let Some(index) = expected_names
-                .iter()
-                .position(|candidate| *candidate == name)
-            else {
-                return Err(Diagnostic::new(format!("unknown MIR argument `{}`", name)));
-            };
-            values[index] = Some(argument);
-            continue;
-        }
-
-        while next_positional < values.len() && values[next_positional].is_some() {
-            next_positional += 1;
-        }
-        if next_positional >= values.len() {
-            return Err(Diagnostic::new("too many MIR arguments"));
-        }
-        values[next_positional] = Some(argument);
-        next_positional += 1;
-    }
-
-    Ok(values)
 }
 
 fn expect_string_value(value: &Value, label: &str) -> Result<String> {

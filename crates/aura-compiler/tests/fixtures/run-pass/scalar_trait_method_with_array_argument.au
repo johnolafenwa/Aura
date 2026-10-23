@@ -1,0 +1,12 @@
+trait Scale[Rhs, Out]:
+    def mul(self, rhs: Rhs) -> Out
+
+impl Scale[Array[float64], Array[float64]] for float64:
+    def mul(self, rhs: Array[float64]) -> Array[float64]:
+        return rhs.clone()
+
+def main() -> None:
+    values = Array[float64].from_list([1.0, 2.0], [2])
+    factor = 2.0
+    print(factor.mul(values).sum())
+    print((factor * values).sum())

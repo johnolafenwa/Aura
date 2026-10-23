@@ -146,6 +146,7 @@ impl Lowerer<'_> {
                     receiver_place: Some(base.to_string()),
                 },
                 args: args.into_iter().map(arg).collect(),
+                type_args: Default::default(),
             },
         });
         target
