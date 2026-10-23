@@ -30,6 +30,7 @@ const {
   runCommand,
   SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION,
   setCompilerSchemaMismatchHandler,
+  setCompilerUnavailableHandler,
   setSourceOverlayProvider,
   setWorkspaceRoots,
   uriToPath
@@ -6839,6 +6840,13 @@ test("compiler discovery searches PATH, then the usual install directories", () 
     fs.writeFileSync(path.join(onPath, binaryName()), "");
     assert.equal(findOnPath(binaryName(), ["", path.join(root, "missing"), onPath].join(path.delimiter)), path.join(onPath, binaryName()));
     assert.equal(findOnPath(binaryName(), path.join(root, "missing")), null);
+    const savedPath = process.env.PATH;
+    delete process.env.PATH;
+    try {
+      assert.equal(findOnPath(binaryName()), null);
+    } finally {
+      process.env.PATH = savedPath;
+    }
     // A directory named like the compiler is not the compiler.
     fs.mkdirSync(path.join(root, "dir", binaryName()), { recursive: true });
     assert.equal(findOnPath(binaryName(), path.join(root, "dir")), null);
@@ -6870,4 +6878,40 @@ test("a compiler that cannot be started is reported as unavailable", async () =>
   assert.equal(notices.length, 1);
   assert.equal(notices[0].error.code, "ENOENT");
   assert.match(notices[0].command.cmd, /aura-missing-compiler-binary/);
+});
+
+test("without aura on PATH the server uses an installed compiler or reports it missing", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "aura-installed-"));
+  const saved = {
+    HOME: process.env.HOME,
+    PATH: process.env.PATH,
+    workspace: process.env.AURA_LSP_USE_WORKSPACE_COMPILER
+  };
+  const notices = [];
+  try {
+    process.env.HOME = root;
+    process.env.PATH = path.join(root, "empty");
+    delete process.env.AURA_LSP_USE_WORKSPACE_COMPILER;
+    setWorkspaceRoots([root]);
+
+    setCompilerUnavailableHandler("not a function");
+    assert.equal(await analyzeWithCompiler("untitled:missing", "def main():\n    pass\n"), null);
+    setCompilerUnavailableHandler((details) => notices.push(details));
+    disposeCompilerService();
+    assert.equal(await analyzeWithCompiler("untitled:missing", "def main():\n    pass\n"), null);
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0].command.cmd, "aura");
+
+    const installed = path.join(root, ".local", "bin", binaryName());
+    fs.mkdirSync(path.dirname(installed), { recursive: true });
+    fs.writeFileSync(installed, "");
+    assert.deepEqual(resolveCompilerCommand(), { cmd: installed, args: [], cwd: root });
+  } finally {
+    setCompilerUnavailableHandler(null);
+    disposeCompilerService();
+    process.env.HOME = saved.HOME;
+    process.env.PATH = saved.PATH;
+    process.env.AURA_LSP_USE_WORKSPACE_COMPILER = saved.workspace;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

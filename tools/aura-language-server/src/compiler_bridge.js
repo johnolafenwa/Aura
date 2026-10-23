@@ -173,10 +173,9 @@ class CompilerService {
     this.child.stderr.on("data", (chunk) => {
       this.stderrBuffer = (this.stderrBuffer + chunk).slice(-65_536);
     });
+    // An `error` event means the process could not be started or signalled.
     this.child.on("error", (error) => {
-      if (error.code === "ENOENT" || error.code === "EACCES") {
-        onUnavailable({ command, error });
-      }
+      onUnavailable({ command, error });
       this.fail(error);
     });
     this.child.on("close", (code) => {
