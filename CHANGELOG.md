@@ -32,6 +32,12 @@ in this file.
   already accepted this form; the docs said an empty set needed
   `set[T]()`.
 
+### Added
+
+- An `aura` built with the `llvm` cargo feature can generate native code
+  with LLVM 22 when `AURA_NATIVE_CODEGEN=llvm` is set. Cranelift stays the
+  default, and the native run cache keeps the two apart.
+
 ### Changed
 
 - The VS Code extension adds **Aura: Run File**, **Build File**, **Test

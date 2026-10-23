@@ -50,6 +50,7 @@ pub use mir_runtime::{
     run_serialized_mir, run_with_stdout_sink as run_mir_with_stdout_sink,
     run_with_stdout_sink_and_program_args as run_mir_with_stdout_sink_and_program_args, StdoutSink,
 };
+pub use native_backend::{selected_code_generator, CodeGenerator};
 pub use native_codegen::{
     emit_host_object as emit_host_native_object,
     emit_host_object_with_metadata as emit_host_native_object_with_metadata,

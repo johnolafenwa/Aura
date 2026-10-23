@@ -186,13 +186,51 @@ follow an instruction in the current block, and rewriting an earlier call
 as another call, a copy, or nothing.
 
 [`native_backend_cranelift.rs`](../crates/aura-compiler/src/native_backend_cranelift.rs)
-is the only implementation. Each handle is the index of the Cranelift
+is the default implementation. Each handle is the index of the Cranelift
 entity it names, so the emitter builds the same instructions in the same
 order as it did through Cranelift directly, and objects stay byte for
 byte the same. The Cranelift flags, the host ISA, per-function sections,
-and the implicit return area for many return values stay inside it. An
-LLVM implementation of the same traits is step 9b of
-[Batch 7](22-batch-7-design-checkpoint.md).
+and the implicit return area for many return values stay inside it.
+
+## The LLVM code generator
+
+An `aura` built with the `llvm` cargo feature also has
+[`native_backend_llvm.rs`](../crates/aura-compiler/src/native_backend_llvm.rs),
+which generates code with LLVM 22 through inkwell. Setting
+`AURA_NATIVE_CODEGEN=llvm` selects it. Unset, empty, or `cranelift` keeps
+Cranelift, and any other value is an error, as is `llvm` in an `aura`
+built without the feature. The native run cache keys on the selected code
+generator, so one never reuses a program the other built.
+
+The LLVM implementation records each body in a small instruction list of
+its own while the emitter builds it, so the peepholes inspect and rewrite
+the instructions they built, as they do on Cranelift. `use_var` answers
+from the variable's last definition in the current block, or in a chain
+of sealed blocks with one predecessor each, as Cranelift's SSA builder
+does, so the peepholes see the same constants. `finish` then lowers the
+whole object to LLVM IR in one context:
+
+- Blocks become basic blocks and block parameters become phis. An entry
+  block holds an alloca for each variable and stack slot, and `mem2reg`
+  and SROA promote the variables.
+- Values stay 64-bit integers, as on Cranelift. A load or store turns its
+  address into a pointer, and `func_addr`, `symbol_value`, and
+  `stack_addr` turn pointers back into integers.
+- An Aura-convention function with many results returns one struct, which
+  LLVM passes back through memory when it does not fit the return
+  registers. Direct and indirect calls share that type. The C convention
+  uses the C ABI.
+- A trap calls `llvm.trap`. Divisions trap on a zero divisor and on the
+  quotient that overflows, as Cranelift's do, where LLVM would leave them
+  undefined.
+- Every function has an asynchronous unwind table, since a task failure
+  unwinds through generated frames to the runtime's task boundary.
+- The target machine uses the host triple, the generic CPU, and PIC, and
+  the module runs `default<O1>`. Step 9c tunes the pipeline and sections.
+
+[`scripts/install-llvm.sh`](../scripts/install-llvm.sh) installs the
+static LLVM libraries the feature links. See
+[CONTRIBUTING](../CONTRIBUTING.md).
 
 ## Validation before emission
 
@@ -257,6 +295,7 @@ not a second language-level cleanup mechanism.
 - [`native_codegen.rs`](../crates/aura-compiler/src/native_codegen.rs)
 - [`native_backend.rs`](../crates/aura-compiler/src/native_backend.rs)
 - [`native_backend_cranelift.rs`](../crates/aura-compiler/src/native_backend_cranelift.rs)
+- [`native_backend_llvm.rs`](../crates/aura-compiler/src/native_backend_llvm.rs)
 - [`native_runtime.rs`](../crates/aura-runtime/src/native_runtime.rs)
 - [`native_codegen_tests.rs`](../crates/aura-compiler/src/native_codegen_tests.rs)
 - [`native_runtime_tests.rs`](../crates/aura-runtime/src/native_runtime_tests.rs)
