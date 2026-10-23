@@ -7,29 +7,63 @@ const { computeAuraNewlineIndent } = require("./indentation");
 
 let client;
 
-async function activate(context) {
+// `aura.compilerPath` reaches the server as `AURA_LSP_AURA_PATH`, which wins
+// over `aura` on PATH.
+function serverEnvironment(configuredPath) {
+  const env = { ...process.env };
+  if (configuredPath) {
+    env.AURA_LSP_AURA_PATH = configuredPath;
+  }
+  return env;
+}
+
+function createClient(context) {
   const serverModule = context.asAbsolutePath(path.join("dist", "server.js"));
+  const configuredPath = vscode.workspace.getConfiguration("aura").get("compilerPath", "").trim();
+  const env = serverEnvironment(configuredPath);
   const serverOptions = {
-    run: { module: serverModule, transport: TransportKind.ipc },
+    run: { module: serverModule, transport: TransportKind.ipc, options: { env } },
     debug: {
       module: serverModule,
       transport: TransportKind.ipc,
-      options: { execArgv: ["--nolazy", "--inspect=6010"] }
+      options: { env, execArgv: ["--nolazy", "--inspect=6010"] }
     }
   };
 
   const clientOptions = {
-    documentSelector: [{ language: "aura", scheme: "file" }],
+    documentSelector: [
+      { language: "aura", scheme: "file" },
+      { language: "aura", scheme: "untitled" }
+    ],
     synchronize: {
       fileEvents: vscode.workspace.createFileSystemWatcher("**/*.au")
     }
   };
 
-  client = new LanguageClient(
-    "auraLanguageServer",
-    "Aura Language Server",
-    serverOptions,
-    clientOptions
+  return new LanguageClient("auraLanguageServer", "Aura Language Server", serverOptions, clientOptions);
+}
+
+async function restartClient(context) {
+  if (client) {
+    const previous = client;
+    client = null;
+    await previous.stop().catch(() => {});
+  }
+  client = createClient(context);
+  await client.start();
+}
+
+async function activate(context) {
+  client = createClient(context);
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("aura.restartLanguageServer", () => restartClient(context)),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("aura.compilerPath")) {
+        void restartClient(context);
+      }
+    }),
+    { dispose: () => client && client.stop() }
   );
 
   context.subscriptions.push(
@@ -100,7 +134,6 @@ async function activate(context) {
   );
 
   await client.start();
-  context.subscriptions.push(client);
 }
 
 function getIndentUnit(editor) {
@@ -121,5 +154,6 @@ async function deactivate() {
 
 module.exports = {
   activate,
-  deactivate
+  deactivate,
+  serverEnvironment
 };

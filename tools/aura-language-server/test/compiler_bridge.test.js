@@ -22,6 +22,9 @@ const {
   compilerSymbolsToLsp,
   findOccurrence,
   disposeCompilerService,
+  expandHome,
+  findOnPath,
+  installedCompiler,
   openDocumentOverlays,
   resolveCompilerCommand,
   runCommand,
@@ -6826,4 +6829,45 @@ test("compiler bridge maps imported definition columns with the imported file te
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
+});
+
+test("compiler discovery searches PATH, then the usual install directories", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "aura-discovery-"));
+  try {
+    const onPath = path.join(root, "bin");
+    fs.mkdirSync(onPath);
+    fs.writeFileSync(path.join(onPath, binaryName()), "");
+    assert.equal(findOnPath(binaryName(), ["", path.join(root, "missing"), onPath].join(path.delimiter)), path.join(onPath, binaryName()));
+    assert.equal(findOnPath(binaryName(), path.join(root, "missing")), null);
+    // A directory named like the compiler is not the compiler.
+    fs.mkdirSync(path.join(root, "dir", binaryName()), { recursive: true });
+    assert.equal(findOnPath(binaryName(), path.join(root, "dir")), null);
+
+    const home = path.join(root, "home");
+    assert.equal(installedCompiler(home, "linux") === path.join(home, ".local", "bin", "aura"), false);
+    fs.mkdirSync(path.join(home, ".cargo", "bin"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".cargo", "bin", "aura"), "");
+    assert.equal(installedCompiler(home, "linux"), path.join(home, ".cargo", "bin", "aura"));
+    fs.mkdirSync(path.join(home, ".local", "bin"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".local", "bin", "aura"), "");
+    assert.equal(installedCompiler(home, "linux"), path.join(home, ".local", "bin", "aura"));
+
+    assert.equal(expandHome("~"), os.homedir());
+    assert.equal(expandHome("~/.local/bin/aura"), path.join(os.homedir(), ".local", "bin", "aura"));
+    assert.equal(expandHome("/opt/aura"), "/opt/aura");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a compiler that cannot be started is reported as unavailable", async () => {
+  const notices = [];
+  const service = new CompilerService(
+    { cmd: path.join(os.tmpdir(), "aura-missing-compiler-binary"), args: [], cwd: undefined },
+    { onUnavailable: (details) => notices.push(details) }
+  );
+  await assert.rejects(service.request("analyze", { path: "x.au", source: "" }));
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].error.code, "ENOENT");
+  assert.match(notices[0].command.cmd, /aura-missing-compiler-binary/);
 });
