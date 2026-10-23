@@ -108,7 +108,7 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
         verify_header = workflow.split("jobs:\n  verify:\n", 1)[1].split(
             "\n    steps:\n", 1
         )[0]
-        self.assertIn("\n    timeout-minutes: 180\n", verify_header)
+        self.assertIn("\n    timeout-minutes: 210\n", verify_header)
 
     def test_ci_checkout_includes_head_parent_for_commit_hygiene(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
@@ -126,6 +126,31 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
             "          tool: ripgrep@14.1.1\n",
             workflow,
         )
+
+    def test_ci_installs_pinned_llvm_and_runs_the_llvm_gates(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn(
+            "      - name: Install LLVM\n"
+            "        run: bash scripts/install-llvm.sh\n",
+            workflow,
+        )
+        self.assertIn("path: ~/.cache/aura/llvm/22.1.2", workflow)
+        installer = (REPO_ROOT / "scripts" / "install-llvm.sh").read_text(
+            encoding="utf-8"
+        )
+        pins = re.findall(r"^    sha256=([0-9a-f]{64})$", installer, re.MULTILINE)
+        self.assertEqual(len(pins), 2, "Linux and macOS archives are pinned")
+        self.assertLess(
+            installer.index('if [ "$actual" != "$sha256" ]'),
+            installer.index("tar -xJf"),
+            "the checksum is checked before anything is extracted",
+        )
+        scripts = json.loads((REPO_ROOT / "package.json").read_text(encoding="utf-8"))[
+            "scripts"
+        ]
+        for gate in ("test:llvm", "test:backend-parity:llvm", "check:clippy:llvm"):
+            self.assertIn(f"npm run {gate} ", scripts["ci"] + " ")
+        self.assertIn("AURA_NATIVE_CODEGEN=llvm", scripts["test:backend-parity:llvm"])
 
     def test_linux_coverage_tests_export_process_ffi_symbols(self) -> None:
         self.assertTrue(AURA_COMPILER_BUILD.is_file())

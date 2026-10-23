@@ -4,16 +4,75 @@
 //! only: `ModuleBackend` declares and defines functions and data and writes
 //! the object, and `FunctionBackend` builds one function's body. Handles are
 //! plain indices that each code generator maps to its own entities, so the
-//! emitter names no code generator types. Cranelift is the one
-//! implementation today.
+//! emitter names no code generator types. Cranelift is the default
+//! implementation, and an `aura` built with the `llvm` feature also has an
+//! LLVM one, which `AURA_NATIVE_CODEGEN=llvm` selects.
+
+use std::ffi::OsStr;
 
 #[path = "native_backend_cranelift.rs"]
 mod cranelift;
+#[cfg(feature = "llvm")]
+#[path = "native_backend_llvm.rs"]
+mod llvm;
+
+/// The environment variable that selects the code generator.
+pub(crate) const NATIVE_CODEGEN_ENV: &str = "AURA_NATIVE_CODEGEN";
+
+/// A code generator the native emitter can write objects with.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CodeGenerator {
+    Cranelift,
+    #[cfg(feature = "llvm")]
+    Llvm,
+}
+
+impl CodeGenerator {
+    /// The name `AURA_NATIVE_CODEGEN` selects it by, which the native cache
+    /// key also carries.
+    pub fn name(self) -> &'static str {
+        match self {
+            CodeGenerator::Cranelift => "cranelift",
+            #[cfg(feature = "llvm")]
+            CodeGenerator::Llvm => "llvm",
+        }
+    }
+}
+
+/// The code generator `AURA_NATIVE_CODEGEN` selects. Unset, empty, or
+/// `cranelift` selects Cranelift.
+pub fn selected_code_generator() -> Result<CodeGenerator, String> {
+    code_generator_for(std::env::var_os(NATIVE_CODEGEN_ENV).as_deref())
+}
+
+/// The code generator one `AURA_NATIVE_CODEGEN` setting selects.
+fn code_generator_for(setting: Option<&OsStr>) -> Result<CodeGenerator, String> {
+    let setting = setting.unwrap_or_default();
+    if setting.is_empty() || setting == "cranelift" {
+        return Ok(CodeGenerator::Cranelift);
+    }
+    if setting == "llvm" {
+        #[cfg(feature = "llvm")]
+        return Ok(CodeGenerator::Llvm);
+        #[cfg(not(feature = "llvm"))]
+        return Err(format!(
+            "{NATIVE_CODEGEN_ENV}=llvm needs LLVM, but this aura was built without the `llvm` feature"
+        ));
+    }
+    Err(format!(
+        "{NATIVE_CODEGEN_ENV} must be `cranelift` or `llvm`, not `{}`",
+        setting.to_string_lossy()
+    ))
+}
 
 /// The module backend for the host, which the emitter writes one object
 /// through.
 pub(crate) fn host_module_backend() -> Result<Box<dyn ModuleBackend>, String> {
-    Ok(Box::new(cranelift::CraneliftModule::for_host()?))
+    match selected_code_generator()? {
+        CodeGenerator::Cranelift => Ok(Box::new(cranelift::CraneliftModule::for_host()?)),
+        #[cfg(feature = "llvm")]
+        CodeGenerator::Llvm => Ok(Box::new(llvm::LlvmModule::for_host()?)),
+    }
 }
 
 /// An SSA value.
@@ -362,3 +421,7 @@ pub(crate) trait FunctionBackend {
     fn fcvt_from_uint(&mut self, ty: ScalarType, value: Val) -> Val;
     fn fcvt_from_sint(&mut self, ty: ScalarType, value: Val) -> Val;
 }
+
+#[cfg(test)]
+#[path = "native_backend_tests.rs"]
+mod tests;

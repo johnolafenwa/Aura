@@ -4990,6 +4990,74 @@ fn native_keep_symbols_skips_strip_and_separates_cached_programs() {
 }
 
 #[cfg(unix)]
+#[test]
+fn native_run_cache_keys_on_the_code_generator() {
+    let fixture = NativeCacheFixture::new("aura-codegen-cache");
+    let entries = || {
+        fs::read_dir(fixture.cache.path().join("programs"))
+            .unwrap()
+            .count()
+    };
+    let run = |setting: &str| {
+        let mut command = fixture.command();
+        command.env("AURA_NATIVE_CODEGEN", setting);
+        command_output_with_timeout(
+            command,
+            std::time::Duration::from_secs(60),
+            "code generator native cache",
+        )
+    };
+
+    // Cranelift is the default, so naming it reuses the default's entry.
+    let cranelift = run("cranelift");
+    assert!(
+        cranelift.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cranelift.stderr)
+    );
+    assert_eq!(
+        entries(),
+        1,
+        "naming the default code generator keeps its key"
+    );
+
+    let llvm = run("llvm");
+    if cfg!(feature = "llvm") {
+        assert!(
+            llvm.status.success(),
+            "{}",
+            String::from_utf8_lossy(&llvm.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&llvm.stdout), "cached\n");
+        assert_eq!(
+            entries(),
+            2,
+            "an LLVM run must build its own program, not reuse the Cranelift one"
+        );
+    } else {
+        assert!(
+            !llvm.status.success(),
+            "an aura without LLVM must refuse an LLVM run, not reuse the Cranelift program"
+        );
+        assert!(
+            String::from_utf8_lossy(&llvm.stderr).contains("built without the `llvm` feature"),
+            "{}",
+            String::from_utf8_lossy(&llvm.stderr)
+        );
+        assert_eq!(entries(), 1);
+    }
+
+    let unknown = run("gcc");
+    assert!(!unknown.status.success());
+    assert!(
+        String::from_utf8_lossy(&unknown.stderr)
+            .contains("AURA_NATIVE_CODEGEN must be `cranelift` or `llvm`, not `gcc`"),
+        "{}",
+        String::from_utf8_lossy(&unknown.stderr)
+    );
+}
+
+#[cfg(unix)]
 fn replace_file_with_fifo(path: &std::path::Path) {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;

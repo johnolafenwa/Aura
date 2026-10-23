@@ -2982,9 +2982,9 @@ fn write_private_cache_file(path: &Path, contents: &[u8]) -> io::Result<()> {
 /// Content-addressed identity of a native build.
 ///
 /// Every input that can change the emitted binary contributes: the cache
-/// format, this compiler's version, the host target, the backend, the runtime
-/// archive's identity, its ordered native link arguments, and the complete
-/// lowered program. Lowering already
+/// format, this compiler's version, the host target, the backend and its code
+/// generator, the runtime archive's identity, its ordered native link
+/// arguments, and the complete lowered program. Lowering already
 /// incorporates the entry source and every resolved dependency source, so
 /// hashing the module covers the whole dependency set without walking it
 /// again. Returning `None` disables caching rather than risking a key that
@@ -3012,6 +3012,13 @@ fn native_cache_key_for_semantic_schema(
     let runtime = native_runtime_identity_material(runtime_identity)?;
     let semantic_schema = semantic_schema_version.to_le_bytes();
     let keep_symbols = [u8::from(native_keep_symbols())];
+    // A setting that selects no code generator gets a key of its own, so the
+    // build reports the setting instead of reusing another generator's
+    // program. Its build fails, so nothing is ever stored under that key.
+    let code_generator = match aura_compiler::selected_code_generator() {
+        Ok(code_generator) => code_generator.name(),
+        Err(_) => "unavailable",
+    };
     let mut material = Vec::with_capacity(lowered.len() + 256);
     for part in [
         NATIVE_CACHE_FORMAT.as_bytes(),
@@ -3020,6 +3027,7 @@ fn native_cache_key_for_semantic_schema(
         std::env::consts::ARCH.as_bytes(),
         std::env::consts::OS.as_bytes(),
         b"direct",
+        code_generator.as_bytes(),
         keep_symbols.as_slice(),
         runtime.as_slice(),
     ] {
