@@ -62,13 +62,15 @@ scripts/install-llvm.sh
 export LLVM_SYS_221_PREFIX="$HOME/.cache/aura/llvm/22.1.2"
 ```
 
-The script downloads the official LLVM 22.1.2 release archive for Linux
-x86-64 or macOS arm64, checks its SHA-256, and keeps only `llvm-config`,
-the headers, and the static libraries, about 360 MB. `llvm-config` also
-names a few system libraries:
+On Linux x86-64, the script downloads the official LLVM 22.1.2 release
+archive, checks its SHA-256, and keeps only `llvm-config`, the headers,
+and the static libraries, about 360 MB. `llvm-config` also names
+`libzstd` and `libxml2`, so on Ubuntu install `libzstd-dev` and
+`libxml2-dev`.
 
-- On Ubuntu, install `libzstd-dev` and `libxml2-dev`.
-- On macOS, install Homebrew's `zstd`.
+On macOS arm64, the script installs Homebrew's `llvm@22` and prints its
+prefix to use instead. The official macOS archive's static libraries hold
+LLVM bitcode, which Apple's linker cannot read.
 
 Then build or test with the feature, for example
 `cargo build -p aura --features llvm`, and run a program with

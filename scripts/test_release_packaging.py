@@ -139,7 +139,8 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
             encoding="utf-8"
         )
         pins = re.findall(r"^    sha256=([0-9a-f]{64})$", installer, re.MULTILINE)
-        self.assertEqual(len(pins), 2, "Linux and macOS archives are pinned")
+        self.assertEqual(len(pins), 1, "the Linux archive is pinned")
+        self.assertIn("brew install llvm@22", installer)
         self.assertLess(
             installer.index('if [ "$actual" != "$sha256" ]'),
             installer.index("tar -xJf"),

@@ -84,12 +84,8 @@ jobs:
         # The Linux llvm-config names a static libzstd and libxml2.
         run: sudo apt-get update && sudo apt-get install -y libzstd-dev libxml2-dev
 
-      - name: Install LLVM's system libraries
-        if: runner.os == 'macOS'
-        # The macOS llvm-config names Homebrew's static libzstd.
-        run: brew list zstd >/dev/null 2>&1 || brew install zstd
-
       - name: Cache LLVM
+        if: runner.os == 'Linux'
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cache/aura/llvm/22.1.2

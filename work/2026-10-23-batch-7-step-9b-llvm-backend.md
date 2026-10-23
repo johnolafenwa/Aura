@@ -68,13 +68,18 @@ installs LLVM and runs the matrix on both code generators.
 
 ### Building and CI
 
-- `scripts/install-llvm.sh` downloads the official LLVM 22.1.2 archive
-  for Linux x86-64 or macOS arm64, checks its SHA-256 before extracting,
-  and keeps `llvm-config`, the headers, and the static libLLVM and
-  libPolly archives, about 360 MB.
-- Both verify jobs install `llvm-config`'s system libraries (Ubuntu's
-  `libzstd-dev` and `libxml2-dev`, Homebrew's `zstd`), cache the prefix
-  keyed on the version and the script, and run the script.
+- On Linux x86-64, `scripts/install-llvm.sh` downloads the official LLVM
+  22.1.2 archive, checks its SHA-256 before extracting, and keeps
+  `llvm-config`, the headers, and the static libLLVM and libPolly
+  archives, about 360 MB.
+- On macOS arm64, the script installs Homebrew's `llvm@22`. The first CI
+  run showed that the official macOS archive's static libraries hold LLVM
+  bitcode: Apple's linker, with its LLVM 17 libLTO, could not read them.
+  Homebrew's bottle holds machine code. Its LLVM is a later 22.1 release,
+  which `llvm22-1` accepts.
+- The Ubuntu job installs `libzstd-dev` and `libxml2-dev`, which
+  `llvm-config` names, caches the prefix keyed on the version and the
+  script, and runs the script. The macOS job runs the script.
 - `npm run ci` adds `test:llvm` (the compiler library tests with the
   feature), `test:backend-parity:llvm` (the parity matrix with
   `AURA_NATIVE_CODEGEN=llvm`), and `check:clippy:llvm`.

@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
 # Installs the static LLVM libraries that the `llvm` cargo feature links.
 #
-# Downloads the official LLVM release archive for this host, checks its
-# SHA-256 before extracting anything, and keeps only what llvm-sys needs:
+# On Linux, downloads the official LLVM release archive, checks its SHA-256
+# before extracting anything, and keeps only what llvm-sys needs:
 # llvm-config, the LLVM and LLVM-C headers, and the static libLLVM and
 # libPolly archives.
 #
+# On macOS, installs Homebrew's llvm@22 instead. The official macOS
+# archive's static libraries hold LLVM bitcode, which Apple's linker cannot
+# read, and Homebrew's bottle holds machine code. Homebrew checks the
+# bottle's checksum itself.
+#
 # Usage: scripts/install-llvm.sh [prefix]
 #
-# The default prefix is ~/.cache/aura/llvm/<version>. The script prints the
+# The default Linux prefix is ~/.cache/aura/llvm/<version>, and the prefix
+# argument applies to Linux only. The script prints the
 # LLVM_SYS_221_PREFIX setting to build with, and appends it to $GITHUB_ENV
 # under GitHub Actions. It does nothing when the prefix already holds this
 # version.
@@ -22,8 +28,19 @@ case "$(uname -s)-$(uname -m)" in
     sha256=ff32497b6801267ee427bc69cdaeecfb2d19578af8c2a942e864c45215f9a2ac
     ;;
   Darwin-arm64)
-    archive="LLVM-${version}-macOS-ARM64.tar.xz"
-    sha256=7b290ec4529c309b6b952d64a3513595c816dff1c217d54466a586d6e35dcec9
+    brew list llvm@22 >/dev/null 2>&1 || brew install llvm@22
+    prefix=$(brew --prefix llvm@22)
+    installed=$("$prefix/bin/llvm-config" --version)
+    if [ "${installed%%.*}" != "${version%%.*}" ]; then
+      echo "install-llvm.sh: Homebrew's llvm@22 is LLVM ${installed}" >&2
+      exit 1
+    fi
+    echo "Using Homebrew's LLVM ${installed} in ${prefix}"
+    echo "export LLVM_SYS_221_PREFIX=${prefix}"
+    if [ -n "${GITHUB_ENV:-}" ]; then
+      echo "LLVM_SYS_221_PREFIX=${prefix}" >> "$GITHUB_ENV"
+    fi
+    exit 0
     ;;
   *)
     echo "install-llvm.sh: LLVM ${version} has no release archive for $(uname -s) $(uname -m)" >&2
