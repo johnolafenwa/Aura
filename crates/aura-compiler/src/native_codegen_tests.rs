@@ -2080,6 +2080,54 @@ def main() -> int32:
 }
 
 #[test]
+fn generated_functions_push_frames_inline_and_keep_the_runtime_paths() {
+    let source = "def leaf(n: int32) -> int32:\n    return n + 1\n\ndef main() -> int32:\n    return leaf(1)\n";
+    let mir = lower_source_to_mir(source).expect("source should lower");
+    let object = emit_host_object_with_metadata(&mir, "/workspace/main.au", source).expect("emit");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "aura_direct_frame_stack",
+        "aura_direct_enter_frame",
+        "aura_direct_exit_call",
+        "aura_direct_check_frame_stack_layout",
+        "aura_direct_validate_frame_descriptors",
+    ] {
+        assert!(
+            referenced.iter().any(|name| name.ends_with(symbol)),
+            "generated code must reference `{symbol}`: {referenced:?}"
+        );
+    }
+}
+
+#[test]
+fn the_frame_descriptor_table_reports_backend_errors() {
+    use super::declare_frame_descriptor_table;
+    use crate::native_backend::{host_module_backend, Linkage};
+
+    let mut taken = host_module_backend().expect("host module");
+    taken
+        .declare_function(
+            "aura_frame_descriptors",
+            Linkage::Local,
+            &Signature::new(CallConv::C),
+        )
+        .expect("declare the clashing function");
+    let error = declare_frame_descriptor_table(taken.as_mut(), &[]).expect_err("name clash");
+    assert!(
+        error.starts_with("failed to declare the frame descriptor table: "),
+        "{error}"
+    );
+
+    let mut twice = host_module_backend().expect("host module");
+    declare_frame_descriptor_table(twice.as_mut(), &[]).expect("first table");
+    let error = declare_frame_descriptor_table(twice.as_mut(), &[]).expect_err("second table");
+    assert!(
+        error.starts_with("failed to define the frame descriptor table: "),
+        "{error}"
+    );
+}
+
+#[test]
 fn native_codegen_forwards_exact_call_and_task_frame_metadata_to_runtime_abis() {
     let source = r#"
 def child() -> int32:

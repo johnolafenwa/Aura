@@ -92,6 +92,47 @@ parent-spawn records needed to reconstruct ancestry. A trap captures both
 lists before generated cleanup or forced stack reset, using the same
 compiler-owned diagnostic types and ordering as the MIR runtime.
 
+### Frame Records
+
+Every generated Aura function records its call in its task's frame stack,
+and generated code does the common push and pop itself. A trap reads the
+same records as the runtime paths write, so traces, task ancestry, and the
+depth limit of 256 calls stay exact.
+
+- **The stack.** Each task's runtime state owns one `DirectFrameStack` at a
+  fixed heap address. An entry is the address of the function's static
+  `DirectFrameDescriptor`, or a boxed frame record with the low bit set.
+  The first 64 entries live inside the stack. A deeper call moves them to
+  a heap block that doubles and is kept.
+- **The header.** Generated code reads `len`, `limit`, `floor`, `flags`,
+  and `entries` at the offsets of `DirectFrameStackLayout`. The program
+  checks the layout's fingerprint at startup, as it does the list layout.
+- **Push.** A function's entry calls `aura_direct_frame_stack`. It stores
+  its descriptor at `entries[len]` and adds one to `len` when
+  `len < limit` and `flags == 0`. Otherwise it calls
+  `aura_direct_enter_frame`, which grows the stack, raises the depth trap,
+  or takes the pending mutable sinks.
+- **Pop.** A return subtracts one from `len` when `len > floor` and
+  `flags == 0`. Otherwise it calls `aura_direct_exit_call`, which hands a
+  returned view to the caller and frees a boxed record.
+- **Limit and floor.** `limit` is the smaller of the capacity and
+  `floor + 256`. Cleanup that runs during a trap sets `floor` to `len`, so
+  its calls count their own depth and never pop the trapped calls.
+- **Flags.** The runtime sets a flag while a call hands mutable sinks to
+  its callee, while any call holds a returned-view record, and while the
+  stack holds a boxed record. Each push and pop then takes the runtime
+  path.
+- **Validation.** The main wrapper passes every descriptor to
+  `aura_direct_validate_frame_descriptors` before the first call, so an
+  inline push stores only descriptors whose text is valid UTF-8.
+
+The accessor keeps the current task's stack in a scheduler slot, which
+every task switch clears. A task's stack keeps its address while the task
+lives, so every call from one task returns the same address. LLVM sees the
+accessor as `memory(none)` and merges a function's calls into one, even
+across a yield. Cranelift calls it at each push and pop. The runtime paths
+are cold blocks on both code generators.
+
 ## `OpaqueValue` and refcounting
 
 `native_runtime.rs` defines:
@@ -185,6 +226,11 @@ of a value, the constant an `iconst` defines, whether only allowed calls
 follow an instruction in the current block, and rewriting an earlier call
 as another call, a copy, or nothing.
 
+Two methods are hints that change no result. `mark_task_invariant` says a
+runtime import returns the same value on every call from one task and
+touches no memory its callers see. `set_cold_block` says a block rarely
+runs. The frame record paths use both.
+
 [`native_backend_cranelift.rs`](../crates/aura-compiler/src/native_backend_cranelift.rs)
 is the default implementation. Each handle is the index of the Cranelift
 entity it names, so the emitter builds the same instructions in the same
@@ -225,6 +271,9 @@ whole object to LLVM IR in one context:
   undefined.
 - Every function has an asynchronous unwind table, since a task failure
   unwinds through generated frames to the runtime's task boundary.
+- A task-invariant import gets `memory(none)`, `nounwind`, and
+  `willreturn`. A branch to a cold block gets `branch_weights` of 1 to
+  2000. Cranelift moves cold blocks to the end of the function.
 - The target machine uses the host triple, the generic CPU, and PIC, and
   the module runs `default<O3>`.
 - On ELF every defined function gets its own `.text.<symbol>` section after

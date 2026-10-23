@@ -129,6 +129,12 @@ in this file.
   A first build of hello world into an empty cache on Linux drops from
   about 0.75 s to 0.45 s. The new cache format rebuilds programs cached
   by earlier versions once.
+- Native code records each Aura call in its task's frame stack itself. It
+  calls the runtime only to grow the stack, to raise the depth limit, or
+  while mutable sinks or returned views are pending. `fib(30)` runs in 115
+  million instructions instead of 484 million with LLVM, and in 211 million
+  instead of 523 million with Cranelift. Traces, task ancestry, and the
+  limit of 256 nested calls are unchanged.
 
 ### Fixed
 

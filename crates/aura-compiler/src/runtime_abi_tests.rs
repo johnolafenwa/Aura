@@ -261,3 +261,24 @@ fn private_receiver(op: crate::runtime_ops::RuntimeOp) -> &'static str {
         _ => "list",
     }
 }
+
+#[test]
+fn only_the_frame_stack_accessor_is_task_invariant() {
+    let invariant = RuntimeFn::ALL
+        .iter()
+        .filter(|function| function.is_task_invariant())
+        .collect::<Vec<_>>();
+    assert_eq!(invariant, [&RuntimeFn::FrameStack]);
+    assert_eq!(RuntimeFn::FrameStack.params(), &[] as &[AbiType]);
+    assert_eq!(RuntimeFn::FrameStack.result(), Some(AbiType::I64));
+}
+
+#[test]
+fn the_frame_stack_layout_comes_from_the_runtime() {
+    let layout = frame_stack_layout();
+    assert_eq!(
+        layout,
+        aura_runtime::native_runtime::direct_frame_stack_layout()
+    );
+    assert_eq!(FRAME_STACK_ENTRY_BYTES, 8);
+}

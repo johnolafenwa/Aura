@@ -505,3 +505,123 @@ fn mach_o_objects_are_split_by_symbol() {
         assert_eq!(first, second, "{triple}");
     }
 }
+
+/// The module's LLVM IR after the object's pass pipeline.
+fn optimized_ir(module: &LlvmModule) -> String {
+    let machine = host_target_machine().expect("the host target machine should exist");
+    let context = Context::create();
+    let lowered = module
+        .lower(&context, &machine)
+        .expect("the module should lower and verify");
+    lowered
+        .run_passes(
+            super::PASS_PIPELINE,
+            &machine,
+            inkwell::passes::PassBuilderOptions::create(),
+        )
+        .expect("the passes should run");
+    lowered.print_to_string().to_string()
+}
+
+#[test]
+fn task_invariant_imports_let_llvm_merge_their_calls() {
+    let mut module = module();
+    let getter = signature(CallConv::C, &[], &[types::I64]);
+    let effect = signature(CallConv::C, &[types::I64], &[]);
+    let stack = module
+        .declare_function("aura_direct_frame_stack", Linkage::Import, &getter)
+        .expect("the import should declare");
+    module.mark_task_invariant(stack);
+    let opaque = module
+        .declare_function("opaque_effect", Linkage::Import, &effect)
+        .expect("the import should declare");
+    let sig = signature(CallConv::C, &[], &[types::I64]);
+    define(
+        &mut module,
+        "twice",
+        Linkage::Export,
+        &sig,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.switch_to_block(entry);
+            let stack = builder.import_function(stack);
+            let opaque = builder.import_function(opaque);
+            let first = builder.call(stack, &[]).results[0];
+            builder.call(opaque, &[first]);
+            let second = builder.call(stack, &[]).results[0];
+            let sum = builder.iadd(first, second);
+            builder.return_(&[sum]);
+        },
+    );
+
+    let ir = ir(&module);
+    assert!(
+        ir.contains("declare i64 @aura_direct_frame_stack() #"),
+        "{ir}"
+    );
+    assert!(
+        ir.contains("memory(none)") && ir.contains("nounwind") && ir.contains("willreturn"),
+        "{ir}"
+    );
+    let optimized = optimized_ir(&module);
+    assert_eq!(
+        optimized
+            .matches("call i64 @aura_direct_frame_stack()")
+            .count(),
+        1,
+        "a call between them does not keep both: {optimized}"
+    );
+}
+
+#[test]
+fn branches_to_cold_blocks_carry_branch_weights() {
+    let mut module = module();
+    let effect = signature(CallConv::C, &[], &[]);
+    let slow = module
+        .declare_function("slow_path", Linkage::Import, &effect)
+        .expect("the import should declare");
+    let sig = signature(CallConv::C, &[types::I64], &[]);
+    for (name, cold_first) in [
+        ("cold_then", true),
+        ("cold_else", false),
+        ("neither", false),
+    ] {
+        define(&mut module, name, Linkage::Export, &sig, move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            let flag = builder.block_params(entry)[0];
+            let cold = builder.create_block();
+            let hot = builder.create_block();
+            let done = builder.create_block();
+            if name != "neither" {
+                builder.set_cold_block(cold);
+            }
+            if cold_first {
+                builder.brif(flag, cold, &[], hot, &[]);
+            } else {
+                builder.brif(flag, hot, &[], cold, &[]);
+            }
+            builder.switch_to_block(cold);
+            let slow = builder.import_function(slow);
+            builder.call(slow, &[]);
+            builder.jump(done, &[]);
+            builder.switch_to_block(hot);
+            builder.jump(done, &[]);
+            builder.switch_to_block(done);
+            builder.seal_all_blocks();
+            builder.return_(&[]);
+        });
+    }
+
+    let ir = ir(&module);
+    assert!(
+        ir.contains(r#"!{!"branch_weights", i32 1, i32 2000}"#),
+        "{ir}"
+    );
+    assert!(
+        ir.contains(r#"!{!"branch_weights", i32 2000, i32 1}"#),
+        "{ir}"
+    );
+    assert_eq!(ir.matches("!prof").count(), 2, "{ir}");
+}

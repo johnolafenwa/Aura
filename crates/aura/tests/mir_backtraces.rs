@@ -384,3 +384,87 @@ fn structured_frames_keep_imported_function_paths_on_both_backends() {
     );
     let _ = fs::remove_dir_all(root);
 }
+
+/// Tasks that yield at every level of a recursion interleave their calls on
+/// each worker, so a trap in one task must still list only its own frames.
+/// The large stacks let a debug build of the MIR interpreter recurse this
+/// deep.
+const TASK_SWITCH_TRAP: &str = "def left(label: str, depth: int64, target: int64) -> int64:\n    yield_now()\n    if depth == target:\n        return land(label, depth)\n    return right(label, depth + 1, target)\n\ndef right(label: str, depth: int64, target: int64) -> int64:\n    yield_now()\n    if depth == target:\n        return land(label, depth)\n    return left(label, depth + 1, target)\n\ndef land(label: str, depth: int64) -> int64:\n    if label == \"boom\":\n        values: list[int64] = [1, 2]\n        return values[depth]\n    return depth\n\ndef quiet(target: int64) -> int64:\n    return left(\"quiet\", 1, target)\n\ndef boom() -> int64:\n    return left(\"boom\", 1, 9)\n\ndef main() -> int32:\n    with TaskGroup() as group:\n        for index in range(20):\n            group.start_soon_with_stack(8388608, quiet, 10 + index)\n        group.start_soon_with_stack(8388608, boom)\n    return 0\n";
+
+#[test]
+fn traces_stay_exact_when_tasks_switch_in_the_middle_of_recursion() {
+    let path = write_source("task-switch-trace", TASK_SWITCH_TRAP);
+    let mut expected_calls = vec![serde_json::json!({
+        "function": "land",
+        "span": point_span(&path, 13, 1),
+    })];
+    for depth in (1..=9).rev() {
+        let (function, line) = if depth % 2 == 1 {
+            ("left", 1)
+        } else {
+            ("right", 7)
+        };
+        expected_calls.push(serde_json::json!({
+            "function": function,
+            "span": point_span(&path, line, 1),
+        }));
+    }
+    expected_calls.push(serde_json::json!({"function": "boom", "span": point_span(&path, 22, 1)}));
+    let expected_ancestry = serde_json::json!([{
+        "task_function": "boom",
+        "task_entry_span": point_span(&path, 22, 1),
+        "parent_function": "main",
+        "spawn_span": point_span(&path, 29, 15),
+    }]);
+    for backend in ["mir", "direct"] {
+        // Repeat, since the interleaving differs from run to run.
+        for _ in 0..3 {
+            let report = run_json_path(&path, backend);
+            let diagnostic = &report["diagnostics"][0];
+            assert_eq!(diagnostic["code"], "AU4003", "{backend}: {diagnostic}");
+            assert_eq!(
+                diagnostic["call_frames"],
+                serde_json::Value::Array(expected_calls.clone()),
+                "{backend} must list exactly the trapping task's calls"
+            );
+            assert_eq!(diagnostic["task_ancestry"], expected_ancestry, "{backend}");
+        }
+    }
+    let _ = fs::remove_file(&path);
+}
+
+/// The MIR interpreter runs out of task stack before this depth, with
+/// `AU4005`, so only the direct backend reaches the depth limit here.
+#[test]
+fn the_direct_depth_limit_counts_each_task_alone_while_tasks_switch() {
+    let source = "def left(depth: int64, target: int64) -> int64:\n    yield_now()\n    if depth == target:\n        return depth\n    return right(depth + 1, target)\n\ndef right(depth: int64, target: int64) -> int64:\n    yield_now()\n    if depth == target:\n        return depth\n    return left(depth + 1, target)\n\ndef dive(depth: int64) -> int64:\n    yield_now()\n    return dive(depth + 1)\n\ndef main() -> int32:\n    with TaskGroup() as group:\n        for index in range(40):\n            group.start_soon(left, 1, 100 + index)\n        group.start_soon(dive, 1)\n    return 0\n";
+    let path = write_source("task-switch-depth", source);
+    let report = run_json_path(&path, "direct");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "AU4001", "{diagnostic}");
+    assert_eq!(
+        diagnostic["message"],
+        "maximum call depth of 256 exceeded while calling `dive`"
+    );
+    let frames = diagnostic["call_frames"]
+        .as_array()
+        .expect("call frames should be an array");
+    assert_eq!(frames.len(), 256, "{diagnostic}");
+    for frame in frames {
+        assert_eq!(
+            frame,
+            &serde_json::json!({"function": "dive", "span": point_span(&path, 13, 1)}),
+            "the other tasks' calls must not count toward this task's depth"
+        );
+    }
+    assert_eq!(
+        diagnostic["task_ancestry"],
+        serde_json::json!([{
+            "task_function": "dive",
+            "task_entry_span": point_span(&path, 13, 1),
+            "parent_function": "main",
+            "spawn_span": point_span(&path, 21, 15),
+        }])
+    );
+    let _ = fs::remove_file(&path);
+}

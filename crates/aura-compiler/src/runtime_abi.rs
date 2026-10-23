@@ -48,7 +48,10 @@ macro_rules! runtime_functions {
 runtime_functions! {
     RuntimeInit => ("aura_direct_runtime_init", [I64, I64, I64, I64], None),
     CheckListLayout => ("aura_direct_check_list_layout", [I64], None),
+    CheckFrameStackLayout => ("aura_direct_check_frame_stack_layout", [I64], None),
+    ValidateFrameDescriptors => ("aura_direct_validate_frame_descriptors", [I64, I64], None),
     RunRoot => ("aura_direct_run_root", [I64], Some(I32)),
+    FrameStack => ("aura_direct_frame_stack", [], Some(I64)),
     EnterCall => ("aura_direct_enter_frame", [I64], None),
     ExitCall => ("aura_direct_exit_call", [], None),
     SetReturnedViewProjection => ("aura_direct_set_returned_view_projection", [I64, I64], None),
@@ -433,6 +436,26 @@ runtime_functions! {
     SleepValueVoid => ("aura_direct_sleep_value_void", [I64], None),
     StartTaskCall => ("aura_direct_start_task_function_with_frames", [I64, I64, I64, I64, I64, I64, I64, I64, I64, I64, I64, I64, I64, I64], Some(I64)),
 }
+
+impl RuntimeFn {
+    /// Whether every call from one task returns the same value without
+    /// touching memory the caller sees, so a code generator may merge the
+    /// calls. The frame stack keeps one address for a task's lifetime.
+    pub(crate) fn is_task_invariant(self) -> bool {
+        matches!(self, RuntimeFn::FrameStack)
+    }
+}
+
+/// Where generated code finds the fields of a task's frame stack and a
+/// frame descriptor's validation word. The runtime owns the layout, and
+/// each executable checks the fingerprint at startup.
+pub(crate) fn frame_stack_layout() -> aura_runtime::native_runtime::DirectFrameStackLayout {
+    aura_runtime::native_runtime::direct_frame_stack_layout()
+}
+
+/// The bytes of one frame stack entry.
+pub(crate) const FRAME_STACK_ENTRY_BYTES: i64 =
+    aura_runtime::native_runtime::DirectFrameStackLayout::ENTRY_BYTES;
 
 /// One value per runtime helper, such as an emitter's declaration handle.
 pub(crate) struct RuntimeTable<T>(Vec<T>);

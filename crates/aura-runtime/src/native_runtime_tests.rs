@@ -13834,6 +13834,13 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                     super::direct_list_layout().fingerprint().wrapping_add(1),
                 );
             }
+            "frame-stack-layout-mismatch" => {
+                super::aura_direct_check_frame_stack_layout(
+                    super::direct_frame_stack_layout()
+                        .fingerprint()
+                        .wrapping_add(1),
+                );
+            }
             "vec-element-read-oob" => {
                 let text = b"a";
                 super::aura_direct_compare_str_literal_at(
@@ -14855,6 +14862,10 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         (
             "list-layout-mismatch",
+            "this executable was built for a different Aura runtime",
+        ),
+        (
+            "frame-stack-layout-mismatch",
             "this executable was built for a different Aura runtime",
         ),
         (
@@ -16326,6 +16337,195 @@ fn native_runtime_direct_call_depth_is_isolated_across_suspended_tasks() {
     );
 }
 
+/// Pushes `descriptor` the way generated code does, through the runtime
+/// when the fast rule declines.
+unsafe fn generated_enter(
+    stack: *mut super::DirectFrameStack,
+    descriptor: *const super::DirectFrameDescriptor,
+) {
+    unsafe {
+        if !super::DirectFrameStack::generated_push(stack, descriptor) {
+            super::aura_direct_enter_frame(descriptor);
+        }
+    }
+}
+
+/// Pops a call the way generated code does.
+unsafe fn generated_exit(stack: *mut super::DirectFrameStack) {
+    unsafe {
+        if !super::DirectFrameStack::generated_pop(stack) {
+            super::aura_direct_exit_call();
+        }
+    }
+}
+
+#[test]
+fn native_runtime_frame_stacks_stay_exact_across_task_switches() {
+    const TASK_COUNT: usize = 200;
+
+    let result = run_lightweight_root_task(|| {
+        let mut tasks = Vec::with_capacity(TASK_COUNT);
+        for index in 0..TASK_COUNT {
+            // Depths up to 100 cross the inline entries into a heap block.
+            let depth = 1 + (index * 7) % 100;
+            let descriptors = (0..depth)
+                .map(|level| {
+                    let name: &'static str =
+                        Box::leak(format!("task{index}_level{level}").into_boxed_str());
+                    leaked_frame_descriptor(
+                        level as i64 + 1,
+                        index as i64 + 1,
+                        b"/workspace/stress.au",
+                        name.as_bytes(),
+                    ) as usize
+                })
+                .collect::<Vec<_>>();
+            // The main wrapper validates every descriptor before any call.
+            unsafe {
+                super::aura_direct_validate_frame_descriptors(
+                    descriptors.as_ptr().cast(),
+                    descriptors.len() as i64,
+                );
+            }
+            tasks.push(spawn_lightweight_task(move || {
+                super::with_direct_task_runtime_scope(|| {
+                    Ok(super::with_task_runtime_error_capture(|| {
+                        // Generated code reads the address once per function
+                        // and keeps it across every yield.
+                        let stack = super::aura_direct_frame_stack();
+                        for (level, descriptor) in descriptors.iter().enumerate() {
+                            unsafe { generated_enter(stack, *descriptor as *const _) };
+                            super::aura_direct_yield_now();
+                            assert_eq!(
+                                super::aura_direct_frame_stack(),
+                                stack,
+                                "a task keeps one frame stack across yields"
+                            );
+                            let frames = super::direct_runtime_call_frames();
+                            assert_eq!(frames.len(), level + 1);
+                            for (offset, frame) in frames.iter().enumerate() {
+                                let expected = level - offset;
+                                assert_eq!(
+                                    frame.function,
+                                    format!("task{index}_level{expected}"),
+                                    "a trace taken mid-yield lists only this task's calls"
+                                );
+                                assert_eq!(
+                                    frame.span,
+                                    runtime_source_span(
+                                        "/workspace/stress.au",
+                                        expected + 1,
+                                        index + 1
+                                    )
+                                );
+                            }
+                        }
+                        for remaining in (0..descriptors.len()).rev() {
+                            unsafe { generated_exit(stack) };
+                            super::aura_direct_yield_now();
+                            assert_eq!(super::direct_runtime_call_frames().len(), remaining);
+                        }
+                        Value::Unit
+                    }))
+                })
+            })?);
+        }
+        for (index, task) in tasks.iter().enumerate() {
+            match task
+                .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(30)), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?
+            {
+                TaskWaitStatus::Ready(Ok(Value::Unit)) => {}
+                other => {
+                    return Err(Diagnostic::new(format!(
+                        "frame stack task {index} did not finish cleanly: {other:?}"
+                    )))
+                }
+            }
+        }
+        Ok(Value::Unit)
+    });
+
+    assert_eq!(
+        result.expect("tasks that switch mid-recursion should keep exact frames"),
+        Value::Unit
+    );
+}
+
+#[test]
+fn native_runtime_frame_stack_accessor_follows_the_task_state() {
+    super::with_direct_task_runtime_scope(|| {
+        let outer = super::aura_direct_frame_stack();
+        assert_eq!(super::aura_direct_frame_stack(), outer);
+        super::with_direct_task_runtime_scope(|| {
+            assert_ne!(
+                super::aura_direct_frame_stack(),
+                outer,
+                "a replaced state brings its own stack"
+            );
+            Ok::<_, Diagnostic>(Value::Unit)
+        })
+        .expect("inner scope should complete");
+        assert_eq!(super::aura_direct_frame_stack(), outer);
+        Ok::<_, Diagnostic>(Value::Unit)
+    })
+    .expect("outer scope should complete");
+}
+
+#[test]
+fn native_runtime_sinks_and_returned_views_send_frame_pushes_to_the_runtime() {
+    let caller = leaked_frame_descriptor(1, 1, b"/workspace/main.au", b"caller") as usize;
+    let callee = leaked_frame_descriptor(5, 1, b"/workspace/main.au", b"callee") as usize;
+    super::with_direct_task_runtime_scope(|| {
+        let stack = super::aura_direct_frame_stack();
+        unsafe {
+            super::aura_direct_enter_frame(caller as *const _);
+            super::aura_direct_enter_frame(callee as *const _);
+        }
+        let projection = b"items";
+        super::aura_direct_set_returned_view_projection(projection.as_ptr(), projection.len());
+        assert!(
+            !unsafe { super::DirectFrameStack::generated_pop(stack) },
+            "a call with a returned view leaves through the runtime"
+        );
+        unsafe { super::aura_direct_exit_call() };
+        assert!(
+            !unsafe { super::DirectFrameStack::generated_pop(stack) },
+            "the caller holds the handed-over view until it takes it"
+        );
+        let selected =
+            super::aura_direct_take_returned_view_projection(projection.as_ptr(), projection.len());
+        assert_eq!(selected, 0);
+        unsafe { super::aura_direct_exit_call() };
+        assert!(super::direct_runtime_call_frames().is_empty());
+        assert!(unsafe { super::DirectFrameStack::generated_push(stack, caller as *const _) });
+        assert!(unsafe { super::DirectFrameStack::generated_pop(stack) });
+
+        // A sink handoff waits for the next call, which the runtime enters.
+        let sinks = [7_i64];
+        super::aura_direct_set_next_mutable_sinks(sinks.as_ptr(), 1);
+        assert!(!unsafe { super::DirectFrameStack::generated_push(stack, callee as *const _) });
+        unsafe { super::aura_direct_enter_frame(callee as *const _) };
+        assert_eq!(super::aura_direct_current_mutable_sink(0), 7);
+        assert!(
+            !unsafe { super::DirectFrameStack::generated_pop(stack) },
+            "a call holding sinks leaves through the runtime"
+        );
+        unsafe { super::aura_direct_exit_call() };
+        assert!(unsafe { super::DirectFrameStack::generated_push(stack, callee as *const _) });
+        assert!(unsafe { super::DirectFrameStack::generated_pop(stack) });
+
+        // An empty handoff still reaches the runtime, which clears it.
+        super::aura_direct_set_next_mutable_sinks(std::ptr::null(), 0);
+        unsafe { generated_enter(stack, callee as *const _) };
+        unsafe { generated_exit(stack) };
+        assert!(unsafe { super::DirectFrameStack::generated_push(stack, callee as *const _) });
+        assert!(unsafe { super::DirectFrameStack::generated_pop(stack) });
+        Ok::<_, Diagnostic>(Value::Unit)
+    })
+    .expect("returned-view probe should complete");
+}
+
 fn runtime_source_span(path: &str, line: usize, column: usize) -> RuntimeSourceSpan {
     RuntimeSourceSpan {
         path: Some(path.to_string()),
@@ -16436,9 +16636,9 @@ fn native_runtime_common_frame_storage_stays_inline_until_a_trap_materializes_it
         }
 
         super::with_direct_task_runtime_state(|state| {
-            assert_eq!(state.call_frames.len(), 1);
+            assert_eq!(state.frames().len(), 1);
             assert!(
-                !state.call_frames.has_heap_spill(),
+                !state.frames().is_spilled(),
                 "the common depth-one call chain must remain inline"
             );
             assert_eq!(state.task_ancestry.len(), 1);
@@ -16702,6 +16902,46 @@ fn native_runtime_frame_descriptor_validates_once_and_materializes_its_frame() {
         Ok::<_, Diagnostic>(Value::Unit)
     })
     .expect("descriptor frame probe should complete");
+}
+
+#[test]
+fn native_runtime_validates_every_frame_descriptor_at_startup() {
+    let good = [
+        leaked_frame_descriptor(1, 1, b"/workspace/main.au", b"main"),
+        leaked_frame_descriptor(2, 1, b"", b"helper"),
+    ];
+    unsafe { super::aura_direct_validate_frame_descriptors(good.as_ptr(), good.len() as i64) };
+    assert!(good
+        .iter()
+        .all(|descriptor| unsafe { &**descriptor }.is_validated()));
+    // An empty table validates nothing and reads nothing.
+    unsafe { super::aura_direct_validate_frame_descriptors(std::ptr::null(), 0) };
+
+    for case in ["invalid-text", "null-entry", "null-table"] {
+        let diagnostic = run_lightweight_root_task(move || {
+            super::with_direct_task_runtime_scope(|| {
+                Ok(super::with_task_runtime_error_capture(|| {
+                    let invalid = leaked_frame_descriptor(3, 1, b"/workspace/main.au", &[0xff]);
+                    let table = match case {
+                        "invalid-text" => vec![invalid],
+                        _ => vec![std::ptr::null()],
+                    };
+                    let table_ptr = if case == "null-table" {
+                        std::ptr::null()
+                    } else {
+                        table.as_ptr()
+                    };
+                    unsafe { super::aura_direct_validate_frame_descriptors(table_ptr, 1) };
+                    Value::Unit
+                }))
+            })
+        })
+        .expect_err("an invalid descriptor table should stop the program");
+        assert_eq!(
+            diagnostic.message, "aura direct runtime received invalid UTF-8 bytes",
+            "{case}"
+        );
+    }
 }
 
 #[test]
@@ -22235,7 +22475,7 @@ fn direct_array_kernels_match_frozen_pre_vectorization_bits() {
 #[test]
 fn direct_frame_metadata_materializes_call_frames_and_task_ancestry() {
     use super::{
-        reset_direct_runtime_frame_materialization_count, DirectCallFrameStorage, DirectFrameText,
+        reset_direct_runtime_frame_materialization_count, DirectFrameStack, DirectFrameText,
         DirectRuntimeCallFrame, DirectRuntimeSourceSpan, DirectRuntimeTaskFrame,
         DirectTaskAncestry, PreparedDirectTaskRuntimeState,
         DIRECT_RUNTIME_FRAME_MATERIALIZATION_COUNT,
@@ -22256,42 +22496,30 @@ fn direct_frame_metadata_materializes_call_frames_and_task_ancestry() {
     assert_eq!(materialized.end, Span::new(3, 8));
 
     reset_direct_runtime_frame_materialization_count();
-    let mut storage = DirectCallFrameStorage::default();
-    assert!(storage.pop().is_none());
+    let stack = DirectFrameStack::allocate();
+    // SAFETY: the test owns the stack until it frees it below.
+    let storage = unsafe { &mut *stack.as_ptr() };
+    assert!(!storage.pop_call());
     assert!(storage.materialize_innermost_first().is_empty());
     for index in 0..3 {
-        storage.push(DirectRuntimeCallFrame {
+        storage.push_owned(Box::new(DirectRuntimeCallFrame {
             function: DirectFrameText::shared(format!("frame{index}")),
             span: DirectRuntimeSourceSpan::point(None, Span::new(index + 1, 1)),
-        });
+        }));
     }
     assert_eq!(storage.len(), 3);
-    assert!(storage.has_heap_spill());
     let innermost_first = storage.materialize_innermost_first();
     assert_eq!(innermost_first[0].function, "frame2");
     assert_eq!(innermost_first[2].span.start, Span::new(1, 1));
-    assert_eq!(
-        storage
-            .pop()
-            .map(|frame| frame.materialize().function)
-            .as_deref(),
-        Some("frame2")
-    );
-    assert_eq!(
-        storage
-            .pop()
-            .map(|frame| frame.materialize().function)
-            .as_deref(),
-        Some("frame1")
-    );
+    assert!(storage.pop_call());
+    assert_eq!(storage.materialize_innermost_first()[0].function, "frame1");
+    assert!(storage.pop_call());
     assert_eq!(storage.len(), 1);
-    assert!(
-        storage.has_heap_spill(),
-        "a spilled stack keeps its allocation so call depth changes do not reallocate"
-    );
     assert_eq!(storage.materialize_innermost_first().len(), 1);
-    assert!(storage.pop().is_some());
-    assert!(storage.pop().is_none());
+    assert!(storage.pop_call());
+    assert!(!storage.pop_call());
+    // SAFETY: nothing uses the stack after this.
+    unsafe { DirectFrameStack::free(stack) };
     assert!(DIRECT_RUNTIME_FRAME_MATERIALIZATION_COUNT.with(|count| count.get()) >= 4);
 
     let frames = (0..2)
@@ -25425,6 +25653,7 @@ fn list_view_reads_scalar_elements_in_place() {
         DirectListAccess::None as u32
     );
     super::aura_direct_check_list_layout(layout.fingerprint());
+    super::aura_direct_check_frame_stack_layout(super::direct_frame_stack_layout().fingerprint());
     for value in [integers, wide, floats, flags] {
         unsafe { release_value(value) };
     }
