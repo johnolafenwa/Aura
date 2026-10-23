@@ -76,6 +76,10 @@ in this file.
   generic receiver, such as `item.total()` for `T: Totals`, as its declared
   type instead of a boxed value. Arithmetic and printing on it no longer go
   through the runtime's boxed helpers. `Queue.get_or` results do the same.
+- `aura build` reuses the runtime archive's recorded digest while the
+  archive file is unchanged, instead of hashing all 62 MB of it on every
+  build. A repeat build of hello world on Linux drops from 0.66 s to
+  0.35 s. The first build after the runtime changes still hashes it once.
 
 ### Fixed
 
