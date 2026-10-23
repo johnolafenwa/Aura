@@ -394,6 +394,10 @@ function compilerDiagnosticsToLsp(analysis, documentUri) {
     if (diagnostic.code) {
       result.code = diagnostic.code;
     }
+    if (diagnostic.code === "AU5001") {
+      // DiagnosticTag.Unnecessary: editors fade an unused binding.
+      result.tags = [1];
+    }
     if (documentUri && diagnostic.secondary_spans?.length) {
       result.relatedInformation = diagnostic.secondary_spans.map((secondary) => ({
         location: {

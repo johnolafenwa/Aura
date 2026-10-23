@@ -9,6 +9,9 @@ in this file.
 
 ### Changed
 
+- Editor analysis warns `AU5001` about a local that nothing reads. VS Code
+  fades it. A name that starts with `_` and a `with` binding are exempt.
+  `aura check` does not report it.
 - `aura mir` prints built-in calls on files, sockets, processes,
   `random.Rng`, numbers, `Duration`, `str`, queues, tasks, lists, dicts,
   sets, and arrays, the private reads, writes, slices, and span operations
@@ -79,6 +82,17 @@ in this file.
 
 ### Fixed
 
+- Editor analysis survives a statement that fails to check or parse. It
+  takes that statement out, checks the rest of the file again, and reports
+  each independent error, so hover, go-to-definition, references, rename,
+  and the outline keep working. It used to stop at the first error and drop
+  every symbol occurrence in the file, and a syntax error emptied the
+  outline. A header missing its colon, as in `if ready`, is read as if the
+  colon were there.
+- Completion works with errors elsewhere in the file, after `import ` and
+  `from ` with builtin modules and sibling `.au` files, after `case Color.`
+  with the enum's variants, and for a member name typed without the `.`
+  trigger, as in `s.up` or `Array[int32].from_`.
 - A direct runtime helper that takes a boxed value, such as `append`,
   copies the value when another reference still holds the box. It used to
   empty the box under the other reference.

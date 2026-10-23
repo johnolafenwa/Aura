@@ -194,9 +194,24 @@ pub fn complete_path_source(
     character: usize,
     trigger_character: Option<char>,
 ) -> Result<Vec<AnalysisCompletion>> {
-    complete_with_checker(source, line, character, trigger_character, |candidate| {
-        crate::check_path_with_source_without_lockfile(path, candidate)
-    })
+    let analyzed = crate::absolutize(path);
+    let is_local = |error: &Diagnostic| {
+        error
+            .render_path
+            .as_deref()
+            .is_none_or(|rendered| crate::absolutize(Path::new(rendered)) == analyzed)
+    };
+    if let Some(completions) = import_completions(Some(path), source, line, character) {
+        return Ok(completions);
+    }
+    complete_with_checker(
+        source,
+        line,
+        character,
+        trigger_character,
+        is_local,
+        |candidate| crate::check_path_with_source_without_lockfile(path, candidate),
+    )
 }
 
 pub fn analyze_program(source: &str, program: &Program) -> AnalysisOutput {
@@ -210,11 +225,15 @@ pub fn complete_source(
     character: usize,
     trigger_character: Option<char>,
 ) -> Result<Vec<AnalysisCompletion>> {
+    if let Some(completions) = import_completions(None, source, line, character) {
+        return Ok(completions);
+    }
     complete_with_checker(
         source,
         line,
         character,
         trigger_character,
+        |error: &Diagnostic| error.render_path.is_none(),
         crate::check_source,
     )
 }
@@ -273,45 +292,135 @@ where
                         dependencies: Vec::new(),
                     }
                 }
-                Ok(program) => AnalysisBuilder::new(source, &program, symbols).build(),
+                Ok(program) => {
+                    let mut output = AnalysisBuilder::new(source, &program, symbols).build();
+                    output
+                        .diagnostics
+                        .extend(unused_binding_warnings(source, &output.occurrences));
+                    output
+                }
             }
         }
     }
 }
 
-fn complete_with_checker<F>(
+/// `AU5001` warnings for locals that nothing reads. They are computed only
+/// for a program that checks, since a replaced statement hides its uses. A
+/// name that starts with `_` is unused on purpose, and a `with` binding holds
+/// its resource open.
+fn unused_binding_warnings(
+    source: &str,
+    occurrences: &[AnalysisOccurrence],
+) -> Vec<AnalysisDiagnostic> {
+    let same_place = |occurrence: &AnalysisOccurrence, range: &AnalysisRange| {
+        occurrence.line == range.line
+            && occurrence.start_character == range.start_character
+            && occurrence.end_character == range.end_character
+    };
+    let lines = source.lines().collect::<Vec<_>>();
+    let mut warnings = Vec::new();
+    let mut reported = BTreeSet::new();
+    for occurrence in occurrences {
+        let Some(definition) = &occurrence.definition else {
+            continue;
+        };
+        let local = occurrence.hover.starts_with("```aura\nbinding ")
+            || occurrence.hover.starts_with("```aura\nlocal ");
+        if !local
+            || !same_place(occurrence, definition)
+            || !reported.insert((
+                definition.file_path.clone(),
+                definition.line,
+                definition.start_character,
+            ))
+        {
+            continue;
+        }
+        let name = lines
+            .get(occurrence.line)
+            .and_then(|text| text.get(occurrence.start_character..occurrence.end_character))
+            .unwrap_or("");
+        // A `with` binding keeps its resource open for the block even unread.
+        let with_binding = lines
+            .get(occurrence.line)
+            .is_some_and(|text| text.trim_start().starts_with("with "));
+        if name.is_empty() || name.starts_with('_') || with_binding {
+            continue;
+        }
+        let used = occurrences.iter().any(|other| {
+            other.definition.as_ref() == Some(definition) && !same_place(other, definition)
+        });
+        if !used {
+            warnings.push(AnalysisDiagnostic {
+                code: "AU5001".to_string(),
+                line: occurrence.line,
+                start_character: occurrence.start_character,
+                end_character: occurrence.end_character,
+                message: format!("local `{name}` is never read"),
+                severity: 2,
+                secondary_spans: Vec::new(),
+                notes: Vec::new(),
+                help: vec![format!(
+                    "remove it, or rename it to `_{name}` if it is unused on purpose"
+                )],
+                edits: Vec::new(),
+                call_frames: Vec::new(),
+                task_ancestry: Vec::new(),
+            });
+        }
+    }
+    warnings
+}
+
+fn complete_with_checker<L, F>(
     source: &str,
     line: usize,
     character: usize,
     trigger_character: Option<char>,
+    is_local: L,
     mut check_program: F,
 ) -> Result<Vec<AnalysisCompletion>>
 where
+    L: Fn(&Diagnostic) -> bool,
     F: FnMut(&str) -> Result<Program>,
 {
+    // `s.up` or `Array[int32].from_` asked for without the `.` trigger, such
+    // as by Ctrl+Space or after a deletion, still completes members.
+    let (trigger_character, character) = match trigger_character {
+        None => match member_dot_before(source.lines().nth(line).unwrap_or(""), character) {
+            Some(dot) => (Some('.'), dot + 1),
+            None => (None, character),
+        },
+        trigger => (trigger, character),
+    };
     let capture_opener = lambda_capture_opener_before_position(source, line, character);
     let program = match check_program(source) {
         Ok(program) => program,
-        Err(error) if trigger_character == Some('.') => {
-            recover_checked_program_after_position(source, line, character, &mut check_program)
-                .ok_or(error)?
+        Err(error) => {
+            let recovered = if trigger_character == Some('.') {
+                recover_checked_program_after_position(source, line, character, &mut check_program)
+            } else if let Some(opener) = capture_opener {
+                let recovered = replace_lambda_capture_statement_with_recovery_stmt(source, opener);
+                recover_checked_program_after_member_errors(&recovered, &mut check_program)
+            } else if !cursor_statement_is_block_header(source, line) {
+                // A name still being typed (`li` on its way to `limits`, or
+                // an empty f-string `{}`) leaves the program unchecked.
+                // Replace the statement under the cursor so the surrounding
+                // scope still checks.
+                let recovered = replace_dangling_member_stmt_with_recovery_stmt(source, line);
+                recover_checked_program_after_member_errors(&recovered, &mut check_program)
+            } else {
+                None
+            };
+            // Errors elsewhere in the file are replaced one statement at a
+            // time, as analysis does. A broken declaration header keeps its
+            // error.
+            match recovered {
+                Some(program) => program,
+                None => recover_around_cursor(source, line, &is_local, &mut check_program)
+                    .ok_or(error)?,
+            }
         }
-        Err(error) if capture_opener.is_some() => {
-            let opener = capture_opener.expect("guarded lambda capture opener remains available");
-            let recovered = replace_lambda_capture_statement_with_recovery_stmt(source, opener);
-            recover_checked_program_after_member_errors(&recovered, &mut check_program)
-                .ok_or(error)?
-        }
-        // A name still being typed (`li` on its way to `limits`, or an empty
-        // f-string `{}`) leaves the program unchecked. Replace the statement
-        // under the cursor so the surrounding scope still checks; a broken
-        // declaration or block header keeps its error.
-        Err(error) if !cursor_statement_is_block_header(source, line) => {
-            let recovered = replace_dangling_member_stmt_with_recovery_stmt(source, line);
-            recover_checked_program_after_member_errors(&recovered, &mut check_program)
-                .ok_or(error)?
-        }
-        Err(error) => return Err(error),
     };
     let builder = AnalysisBuilder::new(source, &program, Vec::new());
     builder.complete(line, character, trigger_character)
@@ -8534,6 +8643,158 @@ fn replace_statement_with_recovery_stmt(
         *line_text = replacement;
     }
     lines.join("\n")
+}
+
+/// Takes the statement under the cursor out of the program, then replaces
+/// each other failing statement until the program checks. A `case X.` header
+/// still being written becomes `case _:`, or goes away with its `match`.
+fn recover_around_cursor<L, F>(
+    source: &str,
+    line: usize,
+    is_local: &L,
+    check_program: &mut F,
+) -> Option<Program>
+where
+    L: Fn(&Diagnostic) -> bool,
+    F: FnMut(&str) -> Result<Program>,
+{
+    let mut candidates = Vec::new();
+    let lines = source.lines().collect::<Vec<_>>();
+    let text = lines.get(line).copied().unwrap_or("");
+    let indent = text.len() - text.trim_start().len();
+    if text.trim_start().starts_with("case ") {
+        let mut edited = lines
+            .iter()
+            .map(|text| text.to_string())
+            .collect::<Vec<_>>();
+        edited[line] = format!("{}case _:", &text[..indent]);
+        candidates.push(edited.join("\n"));
+        edited[line].clear();
+        candidates.push(edited.join("\n"));
+        // The only arm of its `match`: drop the whole statement.
+        if let Some(header) = (0..line).rev().find(|candidate| {
+            let other = lines[*candidate];
+            other.len() - other.trim_start().len() < indent && !other.trim().is_empty()
+        }) {
+            let header_indent = lines[header].len() - lines[header].trim_start().len();
+            edited[header] = format!("{}pass", &lines[header][..header_indent]);
+            for (index, other) in lines.iter().enumerate().skip(header + 1) {
+                let other_indent = other.len() - other.trim_start().len();
+                if index > line && !other.trim().is_empty() && other_indent <= header_indent {
+                    break;
+                }
+                edited[index].clear();
+            }
+            candidates.push(edited.join("\n"));
+        }
+    } else if !cursor_statement_is_block_header(source, line) {
+        candidates.push(replace_statement_with_recovery_stmt(source, line, false));
+        candidates.push(replace_dangling_member_stmt_with_recovery_stmt(
+            source, line,
+        ));
+    }
+    for candidate in candidates {
+        let result = match parser::parse(&candidate) {
+            Ok(_) => check_program(&candidate),
+            Err(error) => Err(error),
+        };
+        match result {
+            Ok(program) => return Some(program),
+            Err(error) => {
+                if let Some((program, _)) =
+                    recover_program_for_analysis(&candidate, &error, is_local, check_program)
+                {
+                    return Some(program);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The byte index of the `.` that begins the member name being typed at
+/// `character`, as in `text.up` or `Array[int32].from_`. Dots inside strings
+/// and comments, and the dot of a float literal such as `1.5`, do not count.
+fn member_dot_before(line_text: &str, character: usize) -> Option<usize> {
+    let prefix = line_text.get(..character)?;
+    let name_start = prefix.trim_end_matches(is_identifier_continue).len();
+    let dot = name_start.checked_sub(1)?;
+    if prefix.as_bytes()[dot] != b'.' || !line_ends_with_dangling_member_dot(&prefix[..=dot]) {
+        return None;
+    }
+    let before = &prefix[..dot];
+    let receiver_word = &before[before.trim_end_matches(is_identifier_continue).len()..];
+    let receiver_ends =
+        before.ends_with(|ch: char| is_identifier_continue(ch) || ")]".contains(ch));
+    if !receiver_ends
+        || (!receiver_word.is_empty() && receiver_word.chars().all(|ch| ch.is_ascii_digit()))
+    {
+        return None;
+    }
+    Some(dot)
+}
+
+/// Module names after `import ` or `from `: the builtin modules, and the `.au`
+/// files and folders beside the file being edited.
+fn import_completions(
+    path: Option<&Path>,
+    source: &str,
+    line: usize,
+    character: usize,
+) -> Option<Vec<AnalysisCompletion>> {
+    let prefix = source.lines().nth(line)?.get(..character)?.trim_start();
+    let typed = prefix
+        .strip_prefix("import ")
+        .or_else(|| prefix.strip_prefix("from "))?
+        .trim_start();
+    if !typed
+        .chars()
+        .all(|ch| is_identifier_continue(ch) || ch == '.')
+    {
+        return None;
+    }
+    let parents = typed
+        .rsplit_once('.')
+        .map(|(parents, _)| parents.split('.').collect::<Vec<_>>())
+        .unwrap_or_default();
+    let mut names = BTreeMap::new();
+    if parents.is_empty() {
+        for name in crate::builtin_modules::builtin_module_registry().into_keys() {
+            names.insert(name, "builtin module".to_string());
+        }
+    }
+    if let Some(directory) = path.and_then(Path::parent) {
+        let directory = parents
+            .iter()
+            .fold(directory.to_path_buf(), |path, part| path.join(part));
+        for entry in std::fs::read_dir(directory).into_iter().flatten().flatten() {
+            let entry_path = entry.path();
+            let Some(stem) = entry_path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            let is_module = entry_path
+                .extension()
+                .is_some_and(|extension| extension == "au");
+            let is_package = entry_path.is_dir() && !stem.starts_with('.');
+            let current = path.and_then(|path| path.file_stem()) == Some(stem.as_ref());
+            if (is_module || is_package) && !current && stem.chars().all(is_identifier_continue) {
+                names
+                    .entry(stem.to_string())
+                    .or_insert_with(|| if is_module { "module" } else { "package" }.to_string());
+            }
+        }
+    }
+    Some(
+        names
+            .into_iter()
+            .map(|(name, detail)| AnalysisCompletion {
+                name,
+                kind: "module".to_string(),
+                detail,
+                documentation: None,
+            })
+            .collect(),
+    )
 }
 
 /// Replaces each failing statement of this file with a recovery statement

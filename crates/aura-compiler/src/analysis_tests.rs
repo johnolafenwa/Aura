@@ -8,13 +8,15 @@ use super::{
     find_receiver_start, first_dangling_member_line, format_class_hover, format_enum_hover_named,
     format_function_detail, format_function_hover, format_method_hover, format_value_hover,
     format_variant_hover, infer_builtin_variant_call, lambda_capture_opener_before_position,
-    lower_type_ref, placeholder_stmt_for_return_type, range_from_span, range_from_span_with_path,
-    recover_checked_program_after_member_errors, recover_checked_program_after_member_errors_with,
+    lower_type_ref, member_dot_before, placeholder_stmt_for_return_type, range_from_span,
+    range_from_span_with_path, recover_checked_program_after_member_errors,
+    recover_checked_program_after_member_errors_with,
     recover_checked_program_after_parse_error_with, recover_checked_program_after_position,
-    render_view_source, replace_dangling_member_stmt_with_recovery_stmt,
+    recover_program_for_analysis, render_view_source,
+    replace_dangling_member_stmt_with_recovery_stmt,
     replace_lambda_capture_statement_with_recovery_stmt, sanitize_member_completion_source,
-    stmt_end_line, stmt_start_line, symbols_from_module, view_source_root, AnalysisBuilder,
-    TypeExt,
+    statement_binding_name, stmt_end_line, stmt_start_line, symbols_from_module, view_source_root,
+    AnalysisBuilder, TypeExt,
 };
 use crate::ast::{
     Argument, AssignStmt, AssignTarget, BinaryOp, ClassDecl, Expr, ExprKind, FunctionDecl, Item,
@@ -798,7 +800,14 @@ def main():
     print(rows)
 "#;
     let output = analyze_source(source);
-    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    assert!(
+        output
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity != 1),
+        "{:?}",
+        output.diagnostics
+    );
     for expected_hover in [
         "binding zeros: Array[int32]",
         "binding full: Array[int32]",
@@ -1574,7 +1583,10 @@ fn conditional_expression_analysis_uses_the_contextual_arm_type() {
 "#;
     let analysis = analyze_source(source);
     assert!(
-        analysis.diagnostics.is_empty(),
+        analysis
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity != 1),
         "{:?}",
         analysis.diagnostics
     );
@@ -2008,7 +2020,10 @@ def main() -> int32:
 "#,
     );
     assert!(
-        analysis.diagnostics.is_empty(),
+        analysis
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity != 1),
         "{:?}",
         analysis.diagnostics
     );
@@ -2127,7 +2142,10 @@ def main():
 "#,
     );
     assert!(
-        analysis.diagnostics.is_empty(),
+        analysis
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity != 1),
         "{:?}",
         analysis.diagnostics
     );
@@ -2715,7 +2733,10 @@ fn comprehension_analysis_infers_every_builtin_iterable_target_and_result_shape(
 
     let analysis = analyze_source(source);
     assert!(
-        analysis.diagnostics.is_empty(),
+        analysis
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity != 1),
         "{:?}",
         analysis.diagnostics
     );
@@ -5737,7 +5758,10 @@ fn analysis_exposes_structural_tuple_equality_without_consuming_operands() {
 
     let analysis = analyze_source(&source);
     assert!(
-        analysis.diagnostics.is_empty(),
+        analysis
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity != 1),
         "{:?}",
         analysis.diagnostics
     );
@@ -8674,7 +8698,10 @@ fn lambda_analysis_preserves_parameter_modes_and_vec_map_result_types() {
 
     let analysis = analyze_source(&source);
     assert!(
-        analysis.diagnostics.is_empty(),
+        analysis
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity != 1),
         "valid contextual lambda modes should analyze cleanly: {:?}",
         analysis.diagnostics
     );
@@ -10249,7 +10276,10 @@ fn analysis_records_rest_sequence_and_class_pattern_bindings() {
     let analysis = analyze_source(&source);
 
     assert!(
-        analysis.diagnostics.is_empty(),
+        analysis
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity != 1),
         "{:?}",
         analysis.diagnostics
     );
@@ -10661,7 +10691,10 @@ fn declaration_symbols_and_definitions_select_the_declared_name() {
     );
     let analysis = analyze_source(source);
     assert!(
-        analysis.diagnostics.is_empty(),
+        analysis
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity != 1),
         "{:?}",
         analysis.diagnostics
     );
@@ -10960,4 +10993,228 @@ fn completion_offers_keyword_arguments_the_call_has_not_bound() {
     // not a call.
     assert!(names_at(6, "denominator=").is_empty());
     assert!(names_at(7, "} is_divisible(").is_empty());
+}
+
+#[test]
+fn analysis_keeps_occurrences_and_reports_each_error_when_statements_fail() {
+    let source = [
+        "def add(a: int32, b: int32) -> int32:",
+        "    return a + b",
+        "",
+        "def main() -> int32:",
+        "    total = add(1, 2)",
+        "    bad: int32 = \"oops\"",
+        "    print(total)",
+        "    missing = unknown_call()",
+        "    print(missing)",
+        "    worse: str = 1",
+        "    return 0",
+        "",
+    ]
+    .join("\n");
+    let analysis = analyze_source(&source);
+    let errors = analysis
+        .diagnostics
+        .iter()
+        .map(|diagnostic| (diagnostic.line, diagnostic.code.as_str()))
+        .collect::<Vec<_>>();
+    // `print(missing)` only fails because its binding was replaced, so it is
+    // not reported.
+    assert_eq!(errors, vec![(5, "AU2002"), (7, "AU2999"), (9, "AU2002")]);
+    let total_use = analysis
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 6 && occurrence.start_character == 10)
+        .expect("hover survives the errors around it");
+    assert!(total_use.hover.contains("total"));
+    assert_eq!(
+        total_use.definition.as_ref().map(|range| range.line),
+        Some(4)
+    );
+    assert!(analysis.symbols.iter().any(|symbol| symbol.name == "add"));
+}
+
+#[test]
+fn analysis_keeps_the_outline_through_a_syntax_error() {
+    let source = "def main() -> int32:\n    x = 1\n    y = x +\n    return 0\n\ndef helper() -> int32:\n    return 1\n";
+    let analysis = analyze_source(source);
+    assert_eq!(analysis.diagnostics.len(), 1);
+    assert_eq!(analysis.diagnostics[0].line, 2);
+    let names = analysis
+        .symbols
+        .iter()
+        .map(|symbol| symbol.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, vec!["main", "helper"]);
+
+    let missing_colon =
+        "def main() -> int32:\n    x = 1\n    if x > 0\n        print(x)\n    return 0\n";
+    let analysis = analyze_source(missing_colon);
+    assert_eq!(analysis.diagnostics.len(), 1);
+    assert!(analysis
+        .occurrences
+        .iter()
+        .any(|occurrence| occurrence.line == 3 && occurrence.hover.contains("x")));
+}
+
+#[test]
+fn analysis_gives_up_on_broken_headers_and_foreign_errors() {
+    let broken_header = "def main(:\n    return 0\n";
+    let analysis = analyze_source(broken_header);
+    assert_eq!(analysis.diagnostics.len(), 1);
+    assert!(analysis.occurrences.is_empty());
+
+    let mut checks = 0;
+    let foreign = Diagnostic::at(Span::new(2, 5), "boom").with_render_context("other.au", "");
+    let recovered = recover_program_for_analysis(
+        "def main():\n    pass\n",
+        &foreign,
+        &|error: &Diagnostic| error.render_path.is_none(),
+        &mut |_: &str| {
+            checks += 1;
+            crate::check_source("def main():\n    pass\n")
+        },
+    );
+    assert!(recovered.is_none());
+    assert_eq!(checks, 0);
+}
+
+#[test]
+fn analysis_warns_about_locals_nothing_reads() {
+    let source = [
+        "def main() -> int32:",
+        "    used = 1",
+        "    unused = 2",
+        "    _ignored = 3",
+        "    for item in range(2):",
+        "        print(used)",
+        "    return 0",
+        "",
+    ]
+    .join("\n");
+    let warnings = analyze_source(&source)
+        .diagnostics
+        .into_iter()
+        .filter(|diagnostic| diagnostic.code == "AU5001")
+        .map(|diagnostic| (diagnostic.line, diagnostic.severity, diagnostic.message))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        warnings,
+        vec![
+            (2, 2, "local `unused` is never read".to_string()),
+            (4, 2, "local `item` is never read".to_string()),
+        ]
+    );
+    assert!(statement_binding_name("    for item in values:").is_some());
+    assert_eq!(
+        statement_binding_name("    mut count: int32 = 0"),
+        Some("count")
+    );
+    assert_eq!(statement_binding_name("    total == 3"), None);
+    assert_eq!(statement_binding_name("    print(x)"), None);
+}
+
+#[test]
+fn member_completion_works_without_the_dot_trigger() {
+    let names_at = |source: &str, line: usize, needle: &str, trigger: Option<char>| {
+        let text = source.lines().nth(line).unwrap();
+        let character = text.find(needle).unwrap() + needle.len();
+        complete_source(source, line, character, trigger)
+            .unwrap_or_else(|error| panic!("completion in `{text}` failed: {error:?}"))
+            .into_iter()
+            .map(|completion| completion.name)
+            .collect::<BTreeSet<_>>()
+    };
+    let text = "def main() -> int32:\n    s = \"a\"\n    print(s.up)\n    return 0\n";
+    let names = names_at(text, 2, "s.up", None);
+    assert!(
+        names.contains("to_upper") && !names.contains("class"),
+        "{names:?}"
+    );
+
+    let array = "def main() -> int32:\n    arr = Array[int32].from_\n    return 0\n";
+    assert!(names_at(array, 1, ".from_", None).contains("from_list"));
+
+    // Dots in strings and float literals are not member access.
+    let string = "def main() -> int32:\n    print(\"x.up\")\n    return 0\n";
+    assert!(names_at(string, 1, "x.up", None).contains("class"));
+    let float = "def main() -> int32:\n    x = 1.5\n    return x\n";
+    assert!(names_at(float, 1, "1.5", None).contains("class"));
+    assert_eq!(member_dot_before("    x = .5", 10), None);
+    assert_eq!(member_dot_before("    x", 99), None);
+}
+
+#[test]
+fn case_member_completion_lists_enum_variants() {
+    let names_at = |source: &str, line: usize| {
+        let character = source.lines().nth(line).unwrap().len();
+        complete_source(source, line, character, Some('.'))
+            .unwrap_or_else(|error| panic!("completion failed: {error:?}"))
+            .into_iter()
+            .map(|completion| completion.name)
+            .collect::<Vec<_>>()
+    };
+    let only_arm = "enum Color:\n    Red\n    Blue\n\ndef f(c: Color) -> int32:\n    match c:\n        case Color.\n    return 0\n";
+    assert_eq!(names_at(only_arm, 6), vec!["Blue", "Red"]);
+    let second_arm = "enum Color:\n    Red\n    Blue\n\ndef f(c: Color) -> int32:\n    match c:\n        case Color.Red:\n            return 1\n        case Color.\n    return 0\n";
+    assert_eq!(names_at(second_arm, 8), vec!["Blue", "Red"]);
+    let with_body = "enum Color:\n    Red\n    Blue\n\ndef f(c: Color) -> int32:\n    match c:\n        case Color.\n            return 1\n    return 0\n";
+    assert_eq!(names_at(with_body, 6), vec!["Blue", "Red"]);
+}
+
+#[test]
+fn completion_survives_errors_elsewhere_in_the_file() {
+    let source = [
+        "def main() -> int32:",
+        "    broken: int32 = \"text\"",
+        "    values = [1, 2]",
+        "    also_broken: str = 3",
+        "    print(val)",
+        "    return 0",
+        "",
+    ]
+    .join("\n");
+    let names = complete_source(&source, 4, 13, None)
+        .expect("errors on other lines must not hide the scope")
+        .into_iter()
+        .map(|completion| completion.name)
+        .collect::<BTreeSet<_>>();
+    assert!(names.contains("values"), "{names:?}");
+}
+
+#[test]
+fn import_completion_lists_builtin_and_sibling_modules() {
+    let temp = std::env::temp_dir().join(format!("aura-import-completion-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp);
+    std::fs::create_dir_all(temp.join("helpers")).unwrap();
+    std::fs::write(temp.join("helpers").join("math_utils.au"), "").unwrap();
+    std::fs::write(temp.join("shapes.au"), "").unwrap();
+    std::fs::write(temp.join("notes.txt"), "").unwrap();
+    let main = temp.join("main.au");
+    std::fs::write(&main, "").unwrap();
+    let names = |source: &str| {
+        let line = source.lines().next().unwrap();
+        complete_path_source(&main, source, 0, line.len(), None)
+            .unwrap()
+            .into_iter()
+            .map(|completion| (completion.name, completion.detail))
+            .collect::<BTreeMap<_, _>>()
+    };
+    let top = names("import ");
+    assert_eq!(top.get("math").map(String::as_str), Some("builtin module"));
+    assert_eq!(top.get("shapes").map(String::as_str), Some("module"));
+    assert_eq!(top.get("helpers").map(String::as_str), Some("package"));
+    assert!(!top.contains_key("main") && !top.contains_key("notes"));
+    let nested = names("from helpers.ma");
+    assert_eq!(nested.keys().collect::<Vec<_>>(), vec!["math_utils"]);
+    assert!(complete_source("import math", 0, 11, None)
+        .unwrap()
+        .iter()
+        .any(|completion| completion.name == "json"));
+    // Past the module path, `import` completion stops.
+    assert!(complete_source("from math import ", 0, 17, None)
+        .unwrap()
+        .iter()
+        .all(|completion| completion.kind != "module" || completion.name != "json"));
+    let _ = std::fs::remove_dir_all(&temp);
 }
