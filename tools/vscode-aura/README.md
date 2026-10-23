@@ -25,6 +25,12 @@ files. It provides:
 - workspace symbol search and go-to-implementation for traits and types
 - recovery while you edit incomplete functions, member access, comprehensions,
   slices, and numeric arrays
+- **Aura: Run File**, **Build File**, **Test File**, and **Run Workspace
+  Tests** commands, a Run button in the editor title, and a **▶ Run** lens
+  above `def main`. They run `aura` in an integrated terminal named Aura.
+
+Aura native builds do not carry debug information yet, so the extension has
+no debugger.
 
 ## Install
 

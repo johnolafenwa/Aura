@@ -15,7 +15,7 @@ An identifier starts with an ASCII letter or `_`. The rest may be ASCII letters,
 
 `copy`, `self`, `None`, and `_` are contextual identifiers. Their special meaning depends on where they appear in the grammar.
 
-User items cannot redefine builtin type names or builtin top-level function names. `Self` is reserved in trait and implementation type contexts. It cannot be declared as a type parameter.
+User items cannot redefine builtin type names or builtin top-level function names. A local binding can still use a builtin function name. Inside its scope, calling that name calls the local value. `Self` is reserved in trait and implementation type contexts. It cannot be declared as a type parameter.
 
 ## Module Scope
 

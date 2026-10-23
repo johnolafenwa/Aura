@@ -292,6 +292,25 @@ fn native_runtime_archive() -> PathBuf {
         .join("libaura_runtime.a")
 }
 
+/// Copies the workspace runtime archive into an installed layout. Cargo
+/// refreshes an uplifted archive by removing it and then linking the new
+/// one, so a sibling test's build can leave it missing for a moment.
+fn copy_native_runtime_archive(destination: &std::path::Path) -> std::io::Result<u64> {
+    let source = native_runtime_archive();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        match fs::copy(&source, destination) {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            result => return result,
+        }
+    }
+}
+
 struct TempDir {
     path: PathBuf,
 }
@@ -4855,11 +4874,8 @@ impl NativeCacheFixture {
         fs::create_dir_all(&runtime_dir).expect("installed runtime directory should be creatable");
         let installed_aura = bin_dir.join("aura");
         fs::copy(aura_bin(), &installed_aura).expect("aura executable should be installable");
-        fs::copy(
-            native_runtime_archive(),
-            runtime_dir.join("libaura_runtime.a"),
-        )
-        .expect("native runtime archive should be installable");
+        copy_native_runtime_archive(&runtime_dir.join("libaura_runtime.a"))
+            .expect("native runtime archive should be installable");
         let runtime_memo = fs::read_to_string(cache.path().join("runtime-identity"))
             .expect("cold run should record native link arguments");
         let native_link_args = runtime_memo
@@ -4987,6 +5003,74 @@ fn native_keep_symbols_skips_strip_and_separates_cached_programs() {
             "keep={keep} strip invocations"
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn native_run_cache_keys_on_the_code_generator() {
+    let fixture = NativeCacheFixture::new("aura-codegen-cache");
+    let entries = || {
+        fs::read_dir(fixture.cache.path().join("programs"))
+            .unwrap()
+            .count()
+    };
+    let run = |setting: &str| {
+        let mut command = fixture.command();
+        command.env("AURA_NATIVE_CODEGEN", setting);
+        command_output_with_timeout(
+            command,
+            std::time::Duration::from_secs(60),
+            "code generator native cache",
+        )
+    };
+
+    // Cranelift is the default, so naming it reuses the default's entry.
+    let cranelift = run("cranelift");
+    assert!(
+        cranelift.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cranelift.stderr)
+    );
+    assert_eq!(
+        entries(),
+        1,
+        "naming the default code generator keeps its key"
+    );
+
+    let llvm = run("llvm");
+    if cfg!(feature = "llvm") {
+        assert!(
+            llvm.status.success(),
+            "{}",
+            String::from_utf8_lossy(&llvm.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&llvm.stdout), "cached\n");
+        assert_eq!(
+            entries(),
+            2,
+            "an LLVM run must build its own program, not reuse the Cranelift one"
+        );
+    } else {
+        assert!(
+            !llvm.status.success(),
+            "an aura without LLVM must refuse an LLVM run, not reuse the Cranelift program"
+        );
+        assert!(
+            String::from_utf8_lossy(&llvm.stderr).contains("built without the `llvm` feature"),
+            "{}",
+            String::from_utf8_lossy(&llvm.stderr)
+        );
+        assert_eq!(entries(), 1);
+    }
+
+    let unknown = run("gcc");
+    assert!(!unknown.status.success());
+    assert!(
+        String::from_utf8_lossy(&unknown.stderr)
+            .contains("AURA_NATIVE_CODEGEN must be `cranelift` or `llvm`, not `gcc`"),
+        "{}",
+        String::from_utf8_lossy(&unknown.stderr)
+    );
 }
 
 #[cfg(unix)]
@@ -6248,11 +6332,8 @@ fn installed_direct_run_keeps_native_cache_optional_for_build_locking() {
     fs::create_dir_all(&runtime_dir).expect("installed runtime directory should be creatable");
     let installed_aura = bin_dir.join("aura");
     fs::copy(aura_bin(), &installed_aura).expect("aura executable should be installable");
-    fs::copy(
-        native_runtime_archive(),
-        runtime_dir.join("libaura_runtime.a"),
-    )
-    .expect("native runtime archive should be installable");
+    copy_native_runtime_archive(&runtime_dir.join("libaura_runtime.a"))
+        .expect("native runtime archive should be installable");
     let runtime_memo = fs::read_to_string(bootstrap_cache.path().join("runtime-identity"))
         .expect("bootstrap should record native link arguments");
     let native_link_args = runtime_memo
@@ -6314,8 +6395,7 @@ fn native_build_reuses_the_runtime_identity_memo_while_the_archive_stamp_holds()
     let installed_aura = bin_dir.join("aura");
     fs::copy(aura_bin(), &installed_aura).expect("aura executable should be installable");
     let archive = runtime_dir.join("libaura_runtime.a");
-    fs::copy(native_runtime_archive(), &archive)
-        .expect("native runtime archive should be installable");
+    copy_native_runtime_archive(&archive).expect("native runtime archive should be installable");
     let bootstrap_memo = fs::read_to_string(bootstrap_cache.path().join("runtime-identity"))
         .expect("bootstrap should record native link arguments");
     let native_link_args = bootstrap_memo

@@ -5280,6 +5280,16 @@ impl<'a> AnalysisBuilder<'a> {
                     return self.infer_alias_call_type(alias, None, callee.span, args, scope);
                 }
                 match BuiltinFunction::from_name(name)? {
+                    builtin @ (BuiltinFunction::Min
+                    | BuiltinFunction::Max
+                    | BuiltinFunction::Sum)
+                        if builtin.is_collection_reduction(args.len()) =>
+                    {
+                        args.first()
+                            .and_then(|arg| self.infer_expr_type(&arg.value, scope))
+                            .and_then(|ty| reduction_element_type(&ty))
+                    }
+                    BuiltinFunction::Any | BuiltinFunction::All => Some(Type::named("bool")),
                     BuiltinFunction::Abs | BuiltinFunction::Min | BuiltinFunction::Max => args
                         .first()
                         .and_then(|arg| self.infer_expr_type(&arg.value, scope)),
@@ -8048,6 +8058,19 @@ fn builtin_specialized_associated_function_completions(
         .collect()
 }
 
+/// The element type `sum`, `min`, and `max` return for a collection.
+fn reduction_element_type(ty: &Type) -> Option<Type> {
+    match ty {
+        Type::Named(name, args) if name == "Range" && args.is_empty() => Some(Type::named("int64")),
+        Type::Named(name, args)
+            if matches!(name.as_str(), "list" | "set" | "Array" | "Span") && args.len() == 1 =>
+        {
+            Some(args[0].clone())
+        }
+        _ => None,
+    }
+}
+
 fn builtin_function_return_type(name: &str) -> Option<Type> {
     match BuiltinFunction::from_name(name)? {
         BuiltinFunction::Print => Some(Type::Unit),
@@ -8060,6 +8083,8 @@ fn builtin_function_return_type(name: &str) -> Option<Type> {
         BuiltinFunction::WaitAll => None,
         BuiltinFunction::Len => Some(Type::named("int64")),
         BuiltinFunction::Str => Some(Type::named("str")),
+        BuiltinFunction::Sum => None,
+        BuiltinFunction::Any | BuiltinFunction::All => Some(Type::named("bool")),
         BuiltinFunction::Abs => None,
         BuiltinFunction::Min => None,
         BuiltinFunction::Max => None,
