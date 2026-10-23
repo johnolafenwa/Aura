@@ -91,7 +91,8 @@ async function activateWithEditor(editor, settings = {}) {
         executed.push(args);
       }
     },
-    window: { activeTextEditor: editor },
+    window: { activeTextEditor: editor, onDidCloseTerminal: () => ({ dispose() {} }) },
+    languages: { registerCodeLensProvider: () => ({ dispose() {} }) },
     workspace: {
       createFileSystemWatcher: () => ({ dispose() {} }),
       getConfiguration: () => ({

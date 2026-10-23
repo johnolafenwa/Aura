@@ -2,6 +2,13 @@
 
 Last updated: 2026-10-23
 
+## Editor experience pass (in progress)
+
+- Target: fix every gap John listed for the VS Code extension and language
+  server on 2026-10-23. Details are in `2026-10-23-editor-experience.md`.
+- In review: PRs #119, #121, #123, #124, and the Run commands PR.
+- Remaining: a debugger, which needs DWARF from the LLVM backend.
+
 ## Batch 7 step 8: semantics in MIR (in progress)
 
 - Target: move the direct emitter's semantic decisions into MIR before the
