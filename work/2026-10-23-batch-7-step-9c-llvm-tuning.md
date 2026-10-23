@@ -35,6 +35,9 @@ numbers to start from. The raw reports are in
   named `.text.<symbol>`. `--gc-sections` can then drop functions nothing
   calls, as it does with Cranelift's `per_function_section`. Placing the
   sections after the passes also covers any function the passes create.
+- The code calls `LLVMSetSection` directly. inkwell's `set_section`
+  prefixes a comma on a macOS host, for Mach-O's `segment,section` form,
+  so the ELF test failed there with `,.text.first`.
 - Cranelift names every one of its sections `.text.subsection`. LLVM uses
   the symbol, as rustc does. The linker treats both the same.
 - On Mach-O, Cranelift puts every function in one `__text` section and

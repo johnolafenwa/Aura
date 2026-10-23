@@ -29,8 +29,8 @@ use inkwell::targets::{
 };
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, IntType};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue, IntValue,
-    PhiValue, PointerValue,
+    AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
+    IntValue, PhiValue, PointerValue,
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 
@@ -280,10 +280,20 @@ fn place_functions_in_own_sections(module: &Module<'_>, triple: &TargetTriple) {
     while let Some(current) = function {
         if current.count_basic_blocks() > 0 {
             let section = format!(".text.{}", current.get_name().to_string_lossy());
-            current.as_global_value().set_section(Some(&section));
+            set_section(current, &section);
         }
         function = current.get_next_function();
     }
+}
+
+/// Names `function`'s section exactly. inkwell's `set_section` prefixes a
+/// comma on a macOS host, for Mach-O's `segment,section` form, which turns
+/// an ELF name into `,.text.<symbol>` when a macOS host writes ELF.
+fn set_section(function: FunctionValue<'_>, section: &str) {
+    let name = std::ffi::CString::new(section).expect("symbol names hold no NUL byte");
+    // SAFETY: `function` is a live value of a module this thread owns, and
+    // LLVM copies the name before the call returns.
+    unsafe { inkwell::llvm_sys::core::LLVMSetSection(function.as_value_ref(), name.as_ptr()) }
 }
 
 /// The LLVM triple of the host. On macOS it names the deployment target
