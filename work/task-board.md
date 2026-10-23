@@ -86,17 +86,21 @@ Last updated: 2026-10-23
   holds, instead of hashing 62 MB every build. Repeat builds of hello
   world drop from 0.66 s to 0.35 s on Linux. Details are in
   `2026-10-23-faster-builds-runtime-digest.md`.
+- Done: faster cold builds. The native cache hashes the runtime archive
+  with BLAKE3 instead of SHA-256, 16 ms instead of 340 ms here, so a
+  first build of hello world into an empty cache drops from about 0.75 s
+  to 0.45 s. Details are in `2026-10-23-faster-cold-builds-blake3.md`.
 - Done: 9a, merged as PR #120. The emitter reaches Cranelift only
   through `ModuleBackend` and `FunctionBackend`, with Cranelift as the
   only implementation. Objects are byte-identical.
   Details are in `2026-10-23-batch-7-step-9a-backend-interface.md`.
-- In progress: 9b, the LLVM code generator. An `aura` built with the
-  `llvm` feature implements both traits with LLVM 22 through inkwell, and
+- Done: 9b, the LLVM code generator, merged as PR #126. An `aura`
+  built with the `llvm` feature implements both traits with LLVM 22 through inkwell, and
   `AURA_NATIVE_CODEGEN=llvm` selects it. The whole parity matrix passes on
   LLVM, and CI installs LLVM 22.1.2 and runs it. Details are in
   `2026-10-23-batch-7-step-9b-llvm-backend.md`.
-- In progress: 9c, LLVM tuned and measured. LLVM runs `default<O3>`, puts
-  each function in its own ELF section, and passes the size gates and the
+- Done: 9c, LLVM tuned and measured, merged as PR #127. LLVM runs
+  `default<O3>`, puts each function in its own ELF section, and passes the size gates and the
   repeat-build test. It runs the six phase targets in 0.4% to 42% fewer
   instructions than Cranelift. Details are in
   `2026-10-23-batch-7-step-9c-llvm-tuning.md`.

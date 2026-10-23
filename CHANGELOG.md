@@ -118,6 +118,11 @@ in this file.
   archive file is unchanged, instead of hashing all 62 MB of it on every
   build. A repeat build of hello world on Linux drops from 0.66 s to
   0.35 s. The first build after the runtime changes still hashes it once.
+- The native cache identifies the runtime archive by its BLAKE3 digest
+  instead of SHA-256, which hashes it in about 16 ms instead of 340 ms.
+  A first build of hello world into an empty cache on Linux drops from
+  about 0.75 s to 0.45 s. The new cache format rebuilds programs cached
+  by earlier versions once.
 
 ### Fixed
 

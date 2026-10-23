@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 aura-compiler = { path = "../aura-compiler" }
+blake3 = "1.8"
 libc = "0.2"
 serde_json = "1"
 

@@ -2991,7 +2991,7 @@ fn write_private_cache_file(path: &Path, contents: &[u8]) -> io::Result<()> {
 /// omits an input.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct NativeRuntimeIdentity {
-    archive_sha256: String,
+    archive_digest: String,
     native_link_args: Vec<String>,
 }
 
@@ -3039,13 +3039,13 @@ fn native_cache_key_for_semantic_schema(
 }
 
 fn native_runtime_identity_material(identity: &NativeRuntimeIdentity) -> Option<Vec<u8>> {
-    serde_json::to_vec(&(identity.archive_sha256.as_str(), &identity.native_link_args)).ok()
+    serde_json::to_vec(&(identity.archive_digest.as_str(), &identity.native_link_args)).ok()
 }
 
 // The compiler-owned semantic schema version is an additional, independent
 // key component, so checked-source changes do not require a cache-container
 // format change.
-const NATIVE_CACHE_FORMAT: &str = "aura-native-cache-v8";
+const NATIVE_CACHE_FORMAT: &str = "aura-native-cache-v9";
 
 /// The exact runtime inputs that a warm native-cache lookup may reuse.
 ///
@@ -3105,11 +3105,18 @@ fn native_runtime_identity_for_cache() -> Option<NativeRuntimeIdentity> {
     let native_link_args = installed_link_args?;
     let contents = fs::read(&path).ok()?;
     let identity = NativeRuntimeIdentity {
-        archive_sha256: aura_compiler::sha256_hex(&contents),
+        archive_digest: runtime_archive_digest(&contents),
         native_link_args,
     };
     write_runtime_identity_memo(&memo, &stamp, &identity);
     Some(identity)
+}
+
+/// The content digest of a runtime archive, which the native cache keys on.
+/// BLAKE3 hashes the 62 MB archive about 20 times faster than SHA-256, so
+/// a build that must hash it stays fast.
+fn runtime_archive_digest(bytes: &[u8]) -> String {
+    blake3::hash(bytes).to_hex().to_string()
 }
 
 const RUNTIME_IDENTITY_MEMO: &str = "runtime-identity";
@@ -3161,7 +3168,7 @@ fn read_runtime_identity_memo_by_content(
         .and_then(|metadata| runtime_archive_memo_stamp(archive, &metadata))?;
     if before != stamp
         || after != stamp
-        || aura_compiler::sha256_hex(&contents) != identity.archive_sha256
+        || runtime_archive_digest(&contents) != identity.archive_digest
     {
         return None;
     }
@@ -3174,15 +3181,15 @@ fn parse_runtime_identity_memo(memo: &Path) -> Option<(String, NativeRuntimeIden
     let recorded = std::str::from_utf8(&recorded).ok()?;
     let mut lines = recorded.lines();
     let recorded_stamp = lines.next()?;
-    let archive_sha256 = lines.next()?;
+    let archive_digest = lines.next()?;
     let native_link_args = lines.next()?;
-    if !is_sha256_hex(archive_sha256) || lines.next().is_some() {
+    if !is_sha256_hex(archive_digest) || lines.next().is_some() {
         return None;
     }
     Some((
         recorded_stamp.to_string(),
         NativeRuntimeIdentity {
-            archive_sha256: archive_sha256.to_string(),
+            archive_digest: archive_digest.to_string(),
             native_link_args: serde_json::from_str(native_link_args).ok()?,
         },
     ))
@@ -3254,7 +3261,7 @@ fn establish_native_runtime_identity_memo() -> std::result::Result<NativeRuntime
         ));
     }
     let identity = NativeRuntimeIdentity {
-        archive_sha256: aura_compiler::sha256_hex(&contents),
+        archive_digest: runtime_archive_digest(&contents),
         native_link_args: native_runtime.native_link_args,
     };
     write_runtime_identity_memos(&after, &identity);
@@ -3279,7 +3286,7 @@ fn write_runtime_identity_memo(memo: &Path, stamp: &str, identity: &NativeRuntim
     };
     if write_private_cache_file(
         &staged,
-        format!("{stamp}\n{}\n{native_link_args}\n", identity.archive_sha256).as_bytes(),
+        format!("{stamp}\n{}\n{native_link_args}\n", identity.archive_digest).as_bytes(),
     )
     .is_err()
     {
@@ -4119,10 +4126,10 @@ fn build_direct_native_binary_with_identity(
     // lookup trusts it, so only a missing or stale memo rehashes the archive.
     let memo_digest = stable_archive_stamp.as_deref().and_then(|stamp| {
         let memo = authoritative_runtime_identity_memo()?;
-        read_runtime_identity_memo(&memo, stamp).map(|identity| identity.archive_sha256)
+        read_runtime_identity_memo(&memo, stamp).map(|identity| identity.archive_digest)
     });
     let runtime_identity = NativeRuntimeIdentity {
-        archive_sha256: memo_digest.unwrap_or_else(|| aura_compiler::sha256_hex(&staticlib_bytes)),
+        archive_digest: memo_digest.unwrap_or_else(|| runtime_archive_digest(&staticlib_bytes)),
         native_link_args: native_runtime.native_link_args.clone(),
     };
     fs::write(&temp_staticlib, &staticlib_bytes).map_err(|error| {
@@ -4769,15 +4776,16 @@ mod tests {
     };
     use super::{
         cleanup_stale_native_cache_artifacts_at, cleanup_stale_verified_native_directories,
-        configure_native_runtime_cargo, create_private_cache_directory_all, lsp_response_for_line,
-        native_cache_key, native_cache_key_for_semantic_schema, native_execution_failure,
-        native_launch_error_invalidates_cache, native_runtime_identity_material,
-        parse_native_static_libs, parse_run_backend, parse_static_library_artifact_path,
-        query_native_runtime_link_args, remove_native_cache_entry_if_unchanged,
+        configure_native_runtime_cargo, create_private_cache_directory_all, is_sha256_hex,
+        lsp_response_for_line, native_cache_key, native_cache_key_for_semantic_schema,
+        native_execution_failure, native_launch_error_invalidates_cache,
+        native_runtime_identity_material, parse_native_static_libs, parse_run_backend,
+        parse_static_library_artifact_path, query_native_runtime_link_args,
+        remove_native_cache_entry_if_unchanged,
         resolve_installed_runtime_artifacts_from_executable, resolve_static_library_path,
-        runtime_archive_memo_stamp, select_run_outcome, verified_native_execution_failure,
-        NativeExecutionError, NativeRunOutcome, NativeRuntimeIdentity, RunBackend,
-        VerifiedNativeLaunchError, NATIVE_CACHE_ENTRY_ID,
+        runtime_archive_digest, runtime_archive_memo_stamp, select_run_outcome,
+        verified_native_execution_failure, NativeExecutionError, NativeRunOutcome,
+        NativeRuntimeIdentity, RunBackend, VerifiedNativeLaunchError, NATIVE_CACHE_ENTRY_ID,
     };
 
     fn unique_temp_dir(name: &str) -> PathBuf {
@@ -4865,6 +4873,17 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn runtime_archive_digest_is_blake3() {
+        // Changing the digest changes every native cache key, which needs a
+        // new `NATIVE_CACHE_FORMAT`.
+        assert_eq!(
+            runtime_archive_digest(b"abc"),
+            "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85"
+        );
+        assert!(is_sha256_hex(&runtime_archive_digest(b"")));
+    }
+
     #[cfg(unix)]
     #[test]
     fn runtime_archive_memo_stamp_detects_same_size_same_mtime_replacement() {
@@ -4940,7 +4959,7 @@ mod tests {
     #[test]
     fn native_runtime_identity_preserves_archive_and_ordered_link_inputs() {
         let identity = |hash: &str, args: &[&str]| NativeRuntimeIdentity {
-            archive_sha256: hash.repeat(64),
+            archive_digest: hash.repeat(64),
             native_link_args: args.iter().map(|arg| (*arg).to_string()).collect(),
         };
         let base = native_runtime_identity_material(&identity("a", &["-lone", "-ltwo"]))
@@ -4966,7 +4985,7 @@ mod tests {
         let mir = aura_compiler::lower_source_to_mir("def main() -> int32:\n    return 0\n")
             .expect("cache-key fixture should lower");
         let runtime_identity = NativeRuntimeIdentity {
-            archive_sha256: "a".repeat(64),
+            archive_digest: "a".repeat(64),
             native_link_args: vec!["-laura_runtime".to_string()],
         };
 

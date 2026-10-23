@@ -15263,11 +15263,11 @@ fn aura_test_registration_timeout_retains_stdout_in_the_single_json_document() {
 fn native_cache_format_carries_the_runtime_archive_epoch() {
     let main = include_str!("../src/main.rs");
     assert!(
-        main.contains(r#"const NATIVE_CACHE_FORMAT: &str = "aura-native-cache-v8";"#),
+        main.contains(r#"const NATIVE_CACHE_FORMAT: &str = "aura-native-cache-v9";"#),
         "native cache format must invalidate artifacts linked against the compiler archive"
     );
     assert!(
-        !main.contains("aura-native-cache-v7"),
+        !main.contains("aura-native-cache-v8"),
         "the prior cache format must not linger in key material"
     );
 }
