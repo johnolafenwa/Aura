@@ -1160,3 +1160,77 @@ test(
     assert.deepEqual(await published, []);
   }
 );
+
+test("bundled language server serves highlights, tokens, hints, fixes, and workspace symbols", async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "aura-editor-features-"));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  fs.writeFileSync(
+    path.join(workspace, "shapes.au"),
+    "trait Shape:\n    def area(self) -> int64\n\nclass Square:\n    side: int64\n\nimpl Shape for Square:\n    def area(self) -> int64:\n        return self.side\n"
+  );
+  const client = await startWorkspaceServer(t, [workspace]);
+
+  const source = [
+    "def main() -> int32:",
+    "    total = 1",
+    "    unused = 2",
+    "    print(total)",
+    "    return 0",
+    ""
+  ].join("\n");
+  const uri = pathToFileURL(path.join(workspace, "main.au")).toString();
+  client.notify("textDocument/didOpen", {
+    textDocument: { uri, languageId: "aura", version: 1, text: source }
+  });
+  const diagnostics = await publishedDiagnostics(client, uri, (items) => items.length > 0);
+  const unused = diagnostics.find((diagnostic) => diagnostic.code === "AU5001");
+  assert.ok(unused, `expected an unused-local warning: ${JSON.stringify(diagnostics)}`);
+  assert.equal(unused.severity, 2);
+
+  const highlights = await client.request("textDocument/documentHighlight", {
+    textDocument: { uri },
+    position: { line: 3, character: 11 }
+  });
+  assert.deepEqual(
+    highlights.result.map((highlight) => [highlight.range.start.line, highlight.kind]),
+    [
+      [1, 3],
+      [3, 2]
+    ]
+  );
+
+  const tokens = await client.request("textDocument/semanticTokens/full", { textDocument: { uri } });
+  assert.ok(tokens.result.data.length >= 15, JSON.stringify(tokens.result));
+
+  const hints = await client.request("textDocument/inlayHint", {
+    textDocument: { uri },
+    range: { start: { line: 0, character: 0 }, end: { line: 5, character: 0 } }
+  });
+  assert.deepEqual(
+    hints.result.map((hint) => [hint.position.line, hint.label]),
+    [
+      [1, ": int64"],
+      [2, ": int64"]
+    ]
+  );
+
+  const actions = await client.request("textDocument/codeAction", {
+    textDocument: { uri },
+    range: unused.range,
+    context: { diagnostics: [unused] }
+  });
+  assert.equal(actions.result[0].edit.changes[uri][0].newText, "_");
+
+  const symbols = await client.request("workspace/symbol", { query: "Squ" });
+  assert.ok(symbols.result.some((symbol) => symbol.name === "Square"));
+
+  const shapes = pathToFileURL(path.join(workspace, "shapes.au")).toString();
+  client.notify("textDocument/didOpen", {
+    textDocument: { uri: shapes, languageId: "aura", version: 1, text: fs.readFileSync(path.join(workspace, "shapes.au"), "utf8") }
+  });
+  const impls = await client.request("textDocument/implementation", {
+    textDocument: { uri: shapes },
+    position: { line: 0, character: 7 }
+  });
+  assert.deepEqual(impls.result.map((location) => location.range.start.line), [6]);
+});

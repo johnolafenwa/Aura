@@ -17,8 +17,12 @@ files. It provides:
 - snippets for functions, classes, matching, concurrency, lambdas, and the
   foreign function interface (FFI)
 - compiler-backed diagnostics, completions, hover, signature help,
-  go-to-definition, and document symbols, with docstrings in hover,
-  completions, and signature help
+  go-to-definition, references, rename, and document symbols, with
+  docstrings in hover, completions, and signature help
+- semantic highlighting, inferred-type inlay hints for unannotated locals,
+  highlighting of the other uses of the name under the cursor, and quick
+  fixes for compiler suggestions and unused locals
+- workspace symbol search and go-to-implementation for traits and types
 - recovery while you edit incomplete functions, member access, comprehensions,
   slices, and numeric arrays
 - **Aura: Run File**, **Build File**, **Test File**, and **Run Workspace
