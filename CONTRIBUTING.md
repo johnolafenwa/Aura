@@ -38,7 +38,7 @@ Run these from the repository root.
 | `npm run check:format` | Verifies Rust formatting. |
 | `npm run check:clippy` | Runs the Rust lint gate with warnings treated as errors. |
 | `npm run check:clippy:llvm` | Runs the same lint gate on `aura-compiler` and `aura` with the `llvm` feature. |
-| `npm run test:llvm` | Runs the compiler library tests with the `llvm` feature. |
+| `npm run test:llvm` | Runs the compiler library tests with the `llvm` feature, then the repeat-build test with `AURA_NATIVE_CODEGEN=llvm`. |
 | `npm run test:backend-parity:llvm` | Runs the backend-parity gate with `AURA_NATIVE_CODEGEN=llvm`, so every fixture's native program comes from LLVM. |
 | `npm run check:audit` | Runs the npm and RustSec vulnerability gates. |
 | `npm run check:hygiene` | Rejects whitespace errors, tracked generated executables, editor metadata, and scratch evaluation corpora. |

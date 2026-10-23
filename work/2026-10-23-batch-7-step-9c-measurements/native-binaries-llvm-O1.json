@@ -1,0 +1,50 @@
+{
+  "platform": "linux-x86_64",
+  "subjects": {
+    "hello_world": {
+      "bytes": 977632,
+      "components": [
+        "ring",
+        "rustls",
+        "tungstenite"
+      ]
+    },
+    "reference_agent": {
+      "bytes": 1815424,
+      "components": [
+        "ring",
+        "rustls",
+        "serde_json",
+        "tungstenite"
+      ]
+    },
+    "json": {
+      "bytes": 1459728,
+      "components": [
+        "ring",
+        "rustls",
+        "serde_json",
+        "tungstenite"
+      ]
+    },
+    "tls": {
+      "bytes": 3245928,
+      "components": [
+        "ring",
+        "rustls",
+        "tungstenite"
+      ]
+    },
+    "websocket": {
+      "bytes": 3588336,
+      "components": [
+        "http",
+        "httparse",
+        "ring",
+        "rustls",
+        "tungstenite",
+        "url"
+      ]
+    }
+  }
+}

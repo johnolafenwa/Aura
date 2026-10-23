@@ -3,7 +3,7 @@
 //! A function body is recorded as the emitter builds it, in a small
 //! instruction list of this file's own, so the emitter's inspections and
 //! rewrites see the same instructions they built. `finish` then lowers the
-//! whole object to LLVM IR in one context, runs a short pass pipeline, and
+//! whole object to LLVM IR in one context, runs LLVM's `O3` pipeline, and
 //! writes the object.
 //!
 //! Lowering keeps values as 64-bit integers like the Cranelift emitter:
@@ -29,8 +29,8 @@ use inkwell::targets::{
 };
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, IntType};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue, IntValue,
-    PhiValue, PointerValue,
+    AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
+    IntValue, PhiValue, PointerValue,
 };
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 
@@ -40,8 +40,10 @@ use super::{
     ModuleBackend, ScalarType, SigRef, Signature, Slot, TrapCode, Val, Var,
 };
 
-/// The pass pipeline every object runs. Step 9c tunes it.
-const PASS_PIPELINE: &str = "default<O1>";
+/// The pass pipeline every object runs. Step 9c measured `O1`, `O2`, and
+/// `O3`: `O3` alone sped up a benchmark, by unswitching a list loop on its
+/// layout check, and it costs under 1% more compile work than `O2`.
+const PASS_PIPELINE: &str = "default<O3>";
 
 /// The LLVM `uwtable` kind for asynchronous unwind tables. Task failures
 /// unwind through generated frames, so every function needs one.
@@ -244,18 +246,54 @@ impl ModuleBackend for LlvmModule {
     }
 
     fn finish(self: Box<Self>) -> Result<Vec<u8>, String> {
-        let machine = host_target_machine()?;
+        self.object_for(&host_target_machine()?)
+    }
+}
+
+impl LlvmModule {
+    /// The object for `machine`: lowered, optimized, and written.
+    fn object_for(&self, machine: &TargetMachine) -> Result<Vec<u8>, String> {
         let context = Context::create();
-        let module = self.lower(&context, &machine)?;
-        if let Err(error) = module.run_passes(PASS_PIPELINE, &machine, PassBuilderOptions::create())
+        let module = self.lower(&context, machine)?;
+        if let Err(error) = module.run_passes(PASS_PIPELINE, machine, PassBuilderOptions::create())
         {
             return Err(format!("LLVM failed to optimize the module: {error}"));
         }
+        place_functions_in_own_sections(&module, &machine.get_triple());
         match machine.write_to_memory_buffer(&module, FileType::Object) {
             Ok(buffer) => Ok(buffer.as_slice().to_vec()),
             Err(error) => Err(format!("LLVM failed to write the object: {error}")),
         }
     }
+}
+
+/// Gives every defined function its own ELF section, as Cranelift's
+/// `per_function_section` does, so `--gc-sections` drops the ones nothing
+/// calls. It runs after the passes, so it also covers any function they
+/// create. Mach-O needs nothing: LLVM marks its objects
+/// `MH_SUBSECTIONS_VIA_SYMBOLS`, and `-dead_strip` works per symbol.
+fn place_functions_in_own_sections(module: &Module<'_>, triple: &TargetTriple) {
+    if triple.as_str().to_string_lossy().contains("apple") {
+        return;
+    }
+    let mut function = module.get_first_function();
+    while let Some(current) = function {
+        if current.count_basic_blocks() > 0 {
+            let section = format!(".text.{}", current.get_name().to_string_lossy());
+            set_section(current, &section);
+        }
+        function = current.get_next_function();
+    }
+}
+
+/// Names `function`'s section exactly. inkwell's `set_section` prefixes a
+/// comma on a macOS host, for Mach-O's `segment,section` form, which turns
+/// an ELF name into `,.text.<symbol>` when a macOS host writes ELF.
+fn set_section(function: FunctionValue<'_>, section: &str) {
+    let name = std::ffi::CString::new(section).expect("symbol names hold no NUL byte");
+    // SAFETY: `function` is a live value of a module this thread owns, and
+    // LLVM copies the name before the call returns.
+    unsafe { inkwell::llvm_sys::core::LLVMSetSection(function.as_value_ref(), name.as_ptr()) }
 }
 
 /// The LLVM triple of the host. On macOS it names the deployment target
@@ -276,13 +314,17 @@ fn host_target_machine() -> Result<TargetMachine, String> {
         .get_or_init(|| Target::initialize_native(&InitializationConfig::default()))
         .clone()
         .map_err(|error| format!("failed to initialize the LLVM host target: {error}"))?;
-    let triple = host_triple();
-    let target = Target::from_triple(&triple)
+    target_machine(&host_triple())
+}
+
+/// A machine for `triple`, whose target must already be initialized.
+fn target_machine(triple: &TargetTriple) -> Result<TargetMachine, String> {
+    let target = Target::from_triple(triple)
         .map_err(|error| format!("LLVM has no target for {triple}: {error}"))?;
     // A generic CPU keeps objects the same on every host of one target.
     target
         .create_target_machine(
-            &triple,
+            triple,
             "generic",
             "",
             OptimizationLevel::Default,

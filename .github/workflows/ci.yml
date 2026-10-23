@@ -117,8 +117,30 @@ jobs:
         with:
           toolchain: 1.95.0
 
+      - name: Install LLVM's system libraries
+        if: runner.os == 'Linux'
+        # The Linux llvm-config names a static libzstd and libxml2.
+        run: sudo apt-get update && sudo apt-get install -y libzstd-dev libxml2-dev
+
+      - name: Cache LLVM
+        if: runner.os == 'Linux'
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/aura/llvm/22.1.2
+          key: llvm-22.1.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-llvm.sh') }}
+
+      - name: Install LLVM
+        run: bash scripts/install-llvm.sh
+
+      # One compiler checks both code generators. The `llvm` feature does
+      # not change what Cranelift emits or the runtime programs link.
       - name: Build release compiler and runtime
-        run: cargo build --release --locked -p aura -p aura-runtime
+        run: cargo build --release --locked -p aura -p aura-runtime --features aura/llvm
 
       - name: Check native executable contents and sizes
         run: python3 scripts/check-native-binaries.py
+
+      - name: Check native executable contents and sizes on LLVM
+        run: python3 scripts/check-native-binaries.py
+        env:
+          AURA_NATIVE_CODEGEN: llvm

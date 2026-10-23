@@ -95,6 +95,11 @@ Last updated: 2026-10-23
   `AURA_NATIVE_CODEGEN=llvm` selects it. The whole parity matrix passes on
   LLVM, and CI installs LLVM 22.1.2 and runs it. Details are in
   `2026-10-23-batch-7-step-9b-llvm-backend.md`.
+- In progress: 9c, LLVM tuned and measured. LLVM runs `default<O3>`, puts
+  each function in its own ELF section, and passes the size gates and the
+  repeat-build test. It runs the six phase targets in 0.4% to 42% fewer
+  instructions than Cranelift. Details are in
+  `2026-10-23-batch-7-step-9c-llvm-tuning.md`.
 
 ## Aura 0.6.0 preview release (complete)
 
