@@ -97,6 +97,13 @@ in this file.
 - A program can call its own function named `list`, `dict`, `set`, or
   `Queue`. Lowering used to give such a call no result type, so both
   backends rejected the program.
+- Completion offers the locals in scope while a name is still being typed,
+  including inside f-string braces such as `f"Limit: {li}"` or an empty
+  `{}`. The compiler used to reject the unfinished name, so the editor fell
+  back to keywords and top-level names only.
+- The VS Code extension treats the inside of f-string braces as code, so
+  suggestions appear there as you type. VS Code used to treat it as string
+  text, where it turns suggestions off.
 
 ## VS Code extension 0.6.0 — 2026-10-21
 

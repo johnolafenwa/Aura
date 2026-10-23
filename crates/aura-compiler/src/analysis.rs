@@ -268,6 +268,15 @@ where
             recover_checked_program_after_member_errors(&recovered, &mut check_program)
                 .ok_or(error)?
         }
+        // A name still being typed (`li` on its way to `limits`, or an empty
+        // f-string `{}`) leaves the program unchecked. Replace the statement
+        // under the cursor so the surrounding scope still checks; a broken
+        // declaration or block header keeps its error.
+        Err(error) if !cursor_statement_is_block_header(source, line) => {
+            let recovered = replace_dangling_member_stmt_with_recovery_stmt(source, line);
+            recover_checked_program_after_member_errors(&recovered, &mut check_program)
+                .ok_or(error)?
+        }
         Err(error) => return Err(error),
     };
     let builder = AnalysisBuilder::new(source, &program, Vec::new());
@@ -8475,6 +8484,40 @@ fn replace_dangling_member_stmt_with_recovery_stmt(source: &str, line: usize) ->
         *line_text = replacement;
     }
     lines.join("\n")
+}
+
+fn cursor_statement_is_block_header(source: &str, line: usize) -> bool {
+    let start_line = unmatched_delimiter_statement_start_line(source, line).unwrap_or(line);
+    let Some(text) = source.lines().nth(start_line) else {
+        return false;
+    };
+    let text = text.trim_start();
+    if text.starts_with('@') {
+        return true;
+    }
+    let first_word = text
+        .split(|ch: char| !is_identifier_continue(ch))
+        .next()
+        .unwrap_or("");
+    matches!(
+        first_word,
+        "def"
+            | "class"
+            | "enum"
+            | "trait"
+            | "impl"
+            | "extern"
+            | "public"
+            | "copy"
+            | "if"
+            | "elif"
+            | "else"
+            | "while"
+            | "for"
+            | "match"
+            | "case"
+            | "with"
+    )
 }
 
 fn unmatched_delimiter_statement_start_line(source: &str, through_line: usize) -> Option<usize> {
