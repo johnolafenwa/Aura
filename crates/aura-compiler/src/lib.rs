@@ -14,6 +14,7 @@ pub mod limits;
 pub mod mir;
 mod mir_copies;
 pub mod mir_runtime;
+mod native_backend;
 mod native_codegen;
 mod runtime_abi;
 pub mod runtime_ops;

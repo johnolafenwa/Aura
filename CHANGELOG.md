@@ -34,6 +34,10 @@ in this file.
 
 ### Changed
 
+- The VS Code extension adds **Aura: Run File**, **Build File**, **Test
+  File**, and **Run Workspace Tests**, a Run button in the editor title, and
+  a **▶ Run** lens above `def main`. Each saves the file and runs `aura` in
+  an integrated terminal.
 - `aura mir` prints built-in calls on files, sockets, processes,
   `random.Rng`, numbers, `Duration`, `str`, queues, tasks, lists, dicts,
   sets, and arrays, the private reads, writes, slices, and span operations

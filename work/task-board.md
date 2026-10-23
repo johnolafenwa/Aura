@@ -9,6 +9,13 @@ Last updated: 2026-10-23
   now shadows a builtin function name. Details are in
   `2026-10-23-collection-reduction-builtins.md`.
 
+## Editor experience pass (in progress)
+
+- Target: fix every gap John listed for the VS Code extension and language
+  server on 2026-10-23. Details are in `2026-10-23-editor-experience.md`.
+- In review: PRs #119, #121, #123, #124, and the Run commands PR.
+- Remaining: a debugger, which needs DWARF from the LLVM backend.
+
 ## Batch 7 step 8: semantics in MIR (in progress)
 
 - Target: move the direct emitter's semantic decisions into MIR before the
@@ -79,6 +86,10 @@ Last updated: 2026-10-23
   holds, instead of hashing 62 MB every build. Repeat builds of hello
   world drop from 0.66 s to 0.35 s on Linux. Details are in
   `2026-10-23-faster-builds-runtime-digest.md`.
+- In progress: 9a, one code generator interface. The emitter reaches
+  Cranelift only through `ModuleBackend` and `FunctionBackend`, with
+  Cranelift as the only implementation. Objects are byte-identical.
+  Details are in `2026-10-23-batch-7-step-9a-backend-interface.md`.
 
 ## Aura 0.6.0 preview release (complete)
 

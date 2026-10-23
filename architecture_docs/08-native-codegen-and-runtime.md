@@ -156,10 +156,43 @@ Aura uses Cranelift to:
 
 Aura still does the language-specific work itself:
 
-- mapping MIR semantics onto Cranelift operations
+- mapping MIR semantics onto code generator operations
 - deciding when to box or flatten
 - selecting runtime helpers
 - validating that the MIR shape is supported by the direct backend
+
+## The code generator interface
+
+The emitter reaches Cranelift only through
+[`native_backend.rs`](../crates/aura-compiler/src/native_backend.rs). It
+defines two traits:
+
+- `ModuleBackend` declares functions and data, defines them, and writes the
+  object file. A function definition takes a closure that builds the body.
+- `FunctionBackend` builds one body: blocks with parameters, variables,
+  stack slots, and one method per instruction kind the emitter uses, such
+  as `iconst`, `call`, `brif`, `load`, and `fcmp`. A call returns its
+  results directly.
+
+Values, blocks, variables, stack slots, instructions, and declared
+functions and data are `u32` handles, and scalar types, condition codes,
+memory flags, trap codes, linkage, and signatures are the module's own
+types. A signature names one of two calling conventions: Aura's private
+one, which may return many values, or the C ABI that the runtime calls.
+
+A few methods serve the emitter's retain and release peepholes: the type
+of a value, the constant an `iconst` defines, whether only allowed calls
+follow an instruction in the current block, and rewriting an earlier call
+as another call, a copy, or nothing.
+
+[`native_backend_cranelift.rs`](../crates/aura-compiler/src/native_backend_cranelift.rs)
+is the only implementation. Each handle is the index of the Cranelift
+entity it names, so the emitter builds the same instructions in the same
+order as it did through Cranelift directly, and objects stay byte for
+byte the same. The Cranelift flags, the host ISA, per-function sections,
+and the implicit return area for many return values stay inside it. An
+LLVM implementation of the same traits is step 9b of
+[Batch 7](22-batch-7-design-checkpoint.md).
 
 ## Validation before emission
 
@@ -222,6 +255,8 @@ not a second language-level cleanup mechanism.
 ## Files to study
 
 - [`native_codegen.rs`](../crates/aura-compiler/src/native_codegen.rs)
+- [`native_backend.rs`](../crates/aura-compiler/src/native_backend.rs)
+- [`native_backend_cranelift.rs`](../crates/aura-compiler/src/native_backend_cranelift.rs)
 - [`native_runtime.rs`](../crates/aura-runtime/src/native_runtime.rs)
 - [`native_codegen_tests.rs`](../crates/aura-compiler/src/native_codegen_tests.rs)
 - [`native_runtime_tests.rs`](../crates/aura-runtime/src/native_runtime_tests.rs)
