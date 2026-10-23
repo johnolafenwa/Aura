@@ -424,6 +424,167 @@ into MIR, where the interpreter and every native backend read it.
 The Cranelift emitter follows each sub-step until step 11 removes it, so the
 parity matrix keeps comparing native code with the interpreter.
 
+### Step 8 Results
+
+Step 8g measured `ff35ee70`, the end of 8f, against `840f91ee`, the
+`v0.6.0-preview` release that starts phase 2. Both ran on one shared
+four-core Linux x86-64 container. Its Xeon CPU has no SHA extensions. Step 1
+ran on a different host, so its build times do not compare with these. Raw
+reports and scripts are in `work/2026-10-22-batch-7-step-8g-measurements/`.
+
+#### Emitter Size
+
+The emitter is `native_codegen.rs` with `native_codegen_callables.rs` and
+`native_codegen_reachability.rs`, without tests. The MIR column counts the
+`mir*.rs` files, the interpreter among them, with `runtime_ops.rs`,
+`runtime_abi.rs`, and `union_layout.rs`.
+
+| Commit | `native_codegen.rs` | Emitter | MIR and shared tables |
+| --- | ---: | ---: | ---: |
+| `840f91ee`, start of phase 2 | 22,934 | 24,480 | 40,345 |
+| `4c6f1238`, start of 8c | 20,201 | 21,761 | 40,811 |
+| `ff35ee70`, end of 8f | 14,942 | 16,524 | 49,082 |
+
+Step 8 took 7,956 lines, 32%, out of the emitter and added 8,737 lines to
+MIR and the shared tables.
+
+#### What The Emitter Still Does
+
+Each function or block of `native_codegen.rs` at `ff35ee70` is assigned to
+the group it mostly serves. The callables file is layout and the
+reachability file is translation.
+
+| Group | Lines | Share | What it holds |
+| --- | ---: | ---: | --- |
+| Translation of MIR | 6,659 | 40% | setup, blocks, terminators, rvalues, arithmetic with the traps MIR names, runtime ops to helpers, prints, tasks, cleanup registration |
+| Value layout, boxing, and ABI | 8,253 | 50% | scalar words, inline unions and callables, boxing and type tags, inline list and `Array` reads, loans as places, mutable sinks, thunks, FFI, frame descriptors, retains by layout |
+| Semantic decisions | 1,612 | 10% | the items below |
+
+The semantic decisions, with their lines in `native_codegen.rs`:
+
+| Item | Lines | Where | Recommendation |
+| --- | ---: | --- | --- |
+| Method calls resolved by name. The emitter finds class methods, picks trait impls by specificity, dispatches a union receiver per member, and runs a candidate chain on an erased receiver. It also clones a union by the name `clone` and finds the `From` impl for `?` | 850 | 1980-2008, 6812-6854, 7111-7171, 9238-9392, 10134-10210, 10829-10865, 12097-12419, 12752-12956 | Move before step 9, about 550 MIR lines |
+| Generic call type arguments, unified from parameter and argument types | 166 | 6139-6165, 14687-14825 | Move before step 9, about 80 MIR lines |
+| Cleanup exit method named as a string, and `TaskGroup` closed inline | 147 | 1655-1700, 10741-10813, 13248-13275 | Move before step 9, about 60 MIR lines |
+| Named arguments of runtime ops bound by name again | 144 | 577-721, 6216-6227 | Move before step 9, about 60 MIR lines |
+| Argument defaults of `process` calls and `Supervisor.start` | 71 | 11168-11238 | Move before step 9, about 90 MIR lines |
+| A scalar `add`, `sub`, `mul`, or `div` with an `Array` right operand picks `ArrayBinary` by member name | 48 | 7063-7110 | Move before step 9, about 40 MIR lines |
+| Borrowed-element `len`, `get`, and comparison read a lent list element in place | 186 | 4869-4934, 6904-7023 | Fold into step 9. It picks a faster helper with the same result |
+
+Step 8g checked the other known items and found them to be translation or
+layout:
+
+| Item | Group | Recommendation |
+| --- | --- | --- |
+| A cast picks its conversion helper from the source and target types, and the helper reports a value that does not fit | Translation, 4674-4793 | Fold into step 9. Give `Cast` a trap only if step 10 inlines conversions |
+| An `int32` range check on every result and every store, because `int32` lives in a 64-bit word | Layout, 5181-5238 and 8671-8712 | Leave for LLVM. An `i32` layout gets the check from the trap MIR names |
+| `no_call_since` drops a repeated type tag on one box | Layout, 8617-8641 | Leave for LLVM |
+| The `transfer_*` helpers retain boxed Copy values and the emitter's own temporaries, which MIR does not track | Layout, 2660-3102 | Leave for LLVM, which needs the same ledger for its temporaries |
+| `container_mutation_callables` matches mutating members by name | MIR validator, `mir.rs` 5517 | Key it on the op with the method work. It also matches a user method of the same name. Step 9 does not read it |
+
+#### Compile Time
+
+`aura build`, cold, medians of 11 alternating runs in seconds. The middle
+column is everything between the front end and the link.
+
+| Program | Build | `aura check` | Lowering, MIR, hash, and emit | Link |
+| --- | ---: | ---: | ---: | ---: |
+| Hello world | 0.742 to 0.721 | 0.006 to 0.006 | 0.424 to 0.423 | 0.282 to 0.275 |
+| Reference agent | 1.055 to 1.014 | 0.066 to 0.070 | 0.672 to 0.647 | 0.294 to 0.297 |
+| `unix_tls_roundtrip` | 0.878 to 0.818 | 0.011 to 0.012 | 0.525 to 0.475 | 0.344 to 0.335 |
+
+Callgrind splits the work of the `aura build` process, in millions of
+instructions, base to head:
+
+| Phase | Hello world | Reference agent | `unix_tls_roundtrip` |
+| --- | ---: | ---: | ---: |
+| SHA-256 of the 62 MB runtime archive | 3,341 to 3,344 | 3,341 to 3,344 | 3,341 to 3,344 |
+| Front end | 6.6 to 6.6 | 252.5 to 252.5 | 33.7 to 33.7 |
+| Lowering | 8.0 to 7.1 | 346.3 to 348.7 | 26.5 to 26.1 |
+| `resolve_checks` | none to 0.4 | none to 2.4 | none to 0.8 |
+| Ownership pass, with lending | none to 17.4 | none to 81.6 | none to 24.1 |
+| Unreachable-function pruning | 114.2 to 2.0 | 202.7 to 42.9 | 123.2 to 12.4 |
+| Boundary validators | 0.1 to 0.4 | 135.2 to 130.9 | 19.0 to 18.6 |
+| Emission, Cranelift included | 5.2 to 5.6 | 970.7 to 797.1 | 374.1 to 169.3 |
+| Compiler work without the hash | 135.8 to 41.1 | 1,923.1 to 1,672.6 | 579.5 to 287.8 |
+
+- **Step 8 made builds no slower.** The passes it added cost 18 to 84
+  million instructions, about 5% of the compiler's work on the reference
+  agent. Faster pruning and less emitted code more than pay for them.
+- **The ownership pass is the top new cost.** Allocation takes about 37%
+  of its instructions on the reference agent. Recursive type walks with no
+  memo, `lending::may_reach_instance` first, rebuild substituted types for
+  every call. The pass also runs before pruning. Hello world owns 111
+  functions and emits one, and the reference agent owns 228 and emits 106.
+- **The archive hash dominates the build.** `aura build` hashes the whole
+  runtime archive for the native cache identity. On this host that is 98%
+  of a hello world build process and two thirds of a reference agent's,
+  about 0.35 s. Hello world builds in 0.72 s here, over the phase 2 target
+  of 0.6 s, before LLVM adds anything. Step 8 did not change it.
+
+#### Runtime
+
+Medians of 31 alternating runs in milliseconds. `fib(30)` and 10,000 tasks
+time GO to DONE. The rest time the whole process.
+
+| Program | `840f91ee` | `ff35ee70` | Rust | Aura / Rust, before and after | Phase 2 target |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `fib(30)` | 40.14 | 39.09 | 4.13 | 9.7x, 9.5x | 3x |
+| 10,000 tasks | 744.1 | 742.7 | 7.89 | 94.3x, 94.1x | tracked |
+| `int_list_sum` | 10.17 | 10.88 | 3.73 | 2.7x, 2.9x | 2x |
+| `string_list_scan` | 16.12 | 16.76 | 3.65 | 4.4x, 4.6x | 4x |
+| `dict_build_get` | 116.67 | 116.72 | 23.73 | 4.9x, 4.9x | 4x |
+| `set_insert_contains` | 21.20 | 21.52 | 5.97 | 3.6x, 3.6x | 3x |
+| `record_field_reads` | 106.74 | 104.59 | 9.31 | 11.5x, 11.2x | 4x |
+
+Runtime did not change. Callgrind counts the same work in both builds:
+`int_list_sum` runs 73.21 and 73.12 million instructions, `string_list_scan`
+150.97 and 150.89 million, and `record_field_reads` 692.55 and 693.17
+million. So the 7% wall-clock gap on `int_list_sum` is code layout, as 8e
+found for `record_field_reads`. Binary sizes match, except
+`record_field_reads`, which is 4 KiB smaller. TCP fan-out has no Rust
+binary on this host and was not run. This host's ratios run higher than
+the step 7 Linux ones, for both commits.
+
+#### What Step 9 Inherits
+
+- MIR with a type for every local, a resolved op for every built-in call,
+  explicit `Retain`, `Release`, `Lend`, and `EndLend`, a named trap on
+  every numeric operation, and unchecked reads where a fact proves them.
+- One runtime ABI table for the 386 helpers.
+- About 8,250 lines of layout to rebuild in LLVM terms, and 6,650 lines
+  of translation to rewrite against inkwell.
+- The 1,612 lines of semantic decisions above, unless they move first.
+- The two checks the plan already names: inkwell's LLVM 22 support, and
+  the size libLLVM adds to `aura`.
+
+#### Recommendation
+
+Add one sub-step, 8h, before step 9. It moves every semantic item above
+except borrowed-element fusion, in two PRs:
+
+1. **Bound runtime op arguments.** Lowering binds named arguments to op
+   parameters and fills the `process` and `Supervisor.start` defaults. A
+   resolved op covers scalar-left `Array` arithmetic. Each generic call
+   records its type arguments. `container_mutation_callables` keys on
+   ops. About 300 MIR lines, and the emitter loses about 400.
+2. **Resolved method calls.** A member call names the function it calls.
+   A union or erased receiver carries its candidates in specificity order.
+   `?` names its `From` function, and each cleanup action names its
+   callee. About 550 MIR lines, and the emitter loses about 650.
+
+These decisions choose which user code or which default runs. The emitter
+re-derives them from names with sema's helpers, and the interpreter does
+too. A second emitter would make a fourth copy of each, about 1,400 lines
+of inkwell code that the parity matrix would have to keep in line. The
+passes so far cost about 5% of compiler work, so the move is cheap at
+build time. After 8h, start step 9.
+
+Two build-time fixes help the phase 2 target and do not block step 9:
+memoize the ownership pass's type walks and run it after pruning, and
+stop hashing the full runtime archive on every `aura build`.
+
 ## Owner Questions
 
 Each names the recommended default first.
