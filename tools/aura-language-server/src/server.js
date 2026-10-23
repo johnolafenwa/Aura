@@ -38,6 +38,18 @@ const { createDocumentStateCache } = require("./document_state");
 const { canonicalFileUri, uriToPath } = require("./uri");
 
 const { registerEditorHandlers, editorCapabilities } = require("./editor_handlers");
+const {
+  SEMANTIC_TOKEN_MODIFIERS,
+  SEMANTIC_TOKEN_TYPES,
+  codeActions,
+  documentHighlights,
+  implementations,
+  inlayHints,
+  semanticTokens,
+  wordAt,
+  workspaceSources,
+  workspaceSymbols
+} = require("./editor_features");
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
@@ -54,8 +66,11 @@ setCompilerSchemaMismatchHandler(() => {
   documentStateCache.invalidateAll();
 });
 
+let workspaceRoots = [];
+
 connection.onInitialize((params) => {
-  setWorkspaceRoots(extractWorkspaceRoots(params));
+  workspaceRoots = extractWorkspaceRoots(params);
+  setWorkspaceRoots(workspaceRoots);
   return {
     serverInfo: {
       name: "aura-language-server",
@@ -67,6 +82,15 @@ connection.onInitialize((params) => {
         triggerCharacters: ["."]
       },
       documentSymbolProvider: true,
+      documentHighlightProvider: true,
+      semanticTokensProvider: {
+        legend: { tokenTypes: SEMANTIC_TOKEN_TYPES, tokenModifiers: SEMANTIC_TOKEN_MODIFIERS },
+        full: true
+      },
+      inlayHintProvider: true,
+      codeActionProvider: { codeActionKinds: ["quickfix"] },
+      workspaceSymbolProvider: true,
+      implementationProvider: true,
       hoverProvider: true,
       definitionProvider: true,
       ...editorCapabilities
@@ -106,6 +130,65 @@ connection.onCompletion(async (params, cancellationToken) => {
     kind: completionKind(item.kind),
     detail: item.detail || ""
   }));
+});
+
+async function analysisFor(uri) {
+  const document = documents.get(uri);
+  if (!document) {
+    return null;
+  }
+  const state = await getDocumentState(document);
+  return { document, analysis: state.compilerAnalysis };
+}
+
+function openSources() {
+  return documents.all().map((document) => ({ uri: document.uri, text: document.getText() }));
+}
+
+connection.onDocumentHighlight(async (params) => {
+  const found = await analysisFor(params.textDocument.uri);
+  return found && found.analysis
+    ? documentHighlights(
+        found.analysis,
+        found.document.getText(),
+        params.position.line,
+        params.position.character
+      )
+    : [];
+});
+
+connection.languages.semanticTokens.on(async (params) => {
+  const found = await analysisFor(params.textDocument.uri);
+  return found && found.analysis
+    ? semanticTokens(found.analysis, found.document.getText())
+    : { data: [] };
+});
+
+connection.languages.inlayHint.on(async (params) => {
+  const found = await analysisFor(params.textDocument.uri);
+  return found && found.analysis
+    ? inlayHints(found.analysis, found.document.getText(), params.range)
+    : [];
+});
+
+connection.onCodeAction((params) => {
+  const document = documents.get(params.textDocument.uri);
+  return document
+    ? codeActions(params.textDocument.uri, document.getText(), params.context.diagnostics)
+    : [];
+});
+
+connection.onWorkspaceSymbol((params) =>
+  workspaceSymbols(params.query, workspaceSources(workspaceRoots, openSources()))
+);
+
+connection.onImplementation((params) => {
+  const document = documents.get(params.textDocument.uri);
+  if (!document) {
+    return [];
+  }
+  const name = wordAt(document.getText(), params.position.line, params.position.character);
+  return implementations(name, workspaceSources(workspaceRoots, openSources()));
 });
 
 connection.onDocumentSymbol(async (params) => {

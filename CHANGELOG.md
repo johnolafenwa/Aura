@@ -9,6 +9,12 @@ in this file.
 
 ### Changed
 
+- The language server offers semantic highlighting, inlay hints with the
+  inferred type of each unannotated local and loop variable, highlighting of
+  the other uses of the name under the cursor, quick fixes that apply
+  compiler-suggested edits or prefix an unused local with `_`, workspace
+  symbol search, and go-to-implementation from a trait or type to its
+  `impl` blocks.
 - Editor analysis warns `AU5001` about a local that nothing reads. VS Code
   fades it. A name that starts with `_` and a `with` binding are exempt.
   `aura check` does not report it.
