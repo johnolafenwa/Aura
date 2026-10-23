@@ -80,8 +80,52 @@
         "command": "aura.restartLanguageServer",
         "title": "Restart Language Server",
         "category": "Aura"
+      },
+      {
+        "command": "aura.runFile",
+        "title": "Run File",
+        "category": "Aura",
+        "icon": "$(play)"
+      },
+      {
+        "command": "aura.buildFile",
+        "title": "Build File",
+        "category": "Aura"
+      },
+      {
+        "command": "aura.testFile",
+        "title": "Test File",
+        "category": "Aura"
+      },
+      {
+        "command": "aura.runTests",
+        "title": "Run Workspace Tests",
+        "category": "Aura"
       }
     ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "aura.runFile",
+          "when": "editorLangId == aura",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "aura.runFile",
+          "when": "editorLangId == aura"
+        },
+        {
+          "command": "aura.buildFile",
+          "when": "editorLangId == aura"
+        },
+        {
+          "command": "aura.testFile",
+          "when": "editorLangId == aura"
+        }
+      ]
+    },
     "configuration": {
       "title": "Aura",
       "properties": {
