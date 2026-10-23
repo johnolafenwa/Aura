@@ -14,13 +14,13 @@ use cranelift_module::{default_libcall_names, DataDescription, DataId, FuncId, L
 use cranelift_object::{ObjectBuilder, ObjectModule};
 
 use crate::ast::{BinaryOp, ReceiverKind, UnaryOp};
-use crate::call::BuiltinMember;
 use crate::diag::Span;
 use crate::ffi::FfiType;
 use crate::mir::{
-    ArithmeticTrap, BasicBlock, CallTarget, CleanupAction, Instruction, MirArg, MirClass, MirEnum,
-    MirExternCall, MirFormatPart, MirFunction, MirMapEntry, MirMethod, MirModule, MirReceiverKind,
-    MirTraitImpl, Operand, Rvalue, Terminator, NATIVE_LOOP_SAFEPOINT_INTERVAL,
+    ArithmeticTrap, BasicBlock, CallTarget, CleanupAction, CleanupCallee, Instruction,
+    MethodCandidate, MethodDispatch, MirArg, MirClass, MirEnum, MirExternCall, MirFormatPart,
+    MirFunction, MirMapEntry, MirModule, MirReceiverKind, Operand, Rvalue, Terminator,
+    NATIVE_LOOP_SAFEPOINT_INTERVAL,
 };
 use crate::native_runtime::{
     encode_direct_ffi_call_spec, DirectFfiCallSpec, DirectFfiParam, DirectFfiType,
@@ -28,7 +28,7 @@ use crate::native_runtime::{
 use crate::runtime_abi::{AbiType, RuntimeFn, RuntimeTable};
 use crate::runtime_ops::{
     first_type_arg, ArgDefault, ArrayOp, DictOp, FunctionOp, HostBuiltin, ListOp, PrintKind,
-    ResourceOp, RuntimeOp, RuntimeTarget, ScalarElement, ScalarOp, SetOp, SpanOp, StrOp, ValueOp,
+    RuntimeOp, RuntimeTarget, ScalarElement, ScalarOp, SetOp, SpanOp, StrOp, ValueOp,
 };
 use crate::sema::optional_type;
 use crate::sema::{substitute_type, FunctionParamContract, Type};
@@ -547,7 +547,8 @@ struct NativeCodegen<'a> {
     classes: HashMap<String, MirClass>,
     enums: HashMap<String, MirEnum>,
     union_layouts: HashMap<String, crate::union_layout::MirUnionLayout>,
-    trait_impls: Vec<MirTraitImpl>,
+    /// How each method function takes its receiver, by function name.
+    method_receivers: HashMap<String, Option<MirReceiverKind>>,
     function_return_types: HashMap<String, DirectType>,
     function_param_types: HashMap<String, Vec<DirectType>>,
     function_writeback_types: HashMap<String, Vec<DirectType>>,
@@ -651,7 +652,18 @@ impl<'a> NativeCodegen<'a> {
         for class in &module.classes {
             classes.insert(class.name.clone(), class.clone());
         }
-        let trait_impls = module.trait_impls.clone();
+        let method_receivers = module
+            .classes
+            .iter()
+            .flat_map(|class| &class.methods)
+            .chain(
+                module
+                    .trait_impls
+                    .iter()
+                    .flat_map(|trait_impl| &trait_impl.methods),
+            )
+            .map(|method| (method.function_name.clone(), method.receiver))
+            .collect();
 
         let flags = native_codegen_flags()?;
         let isa_builder =
@@ -800,7 +812,7 @@ impl<'a> NativeCodegen<'a> {
                     )
                 })
                 .collect(),
-            trait_impls,
+            method_receivers,
             function_return_types,
             function_param_types,
             function_writeback_types,
@@ -982,18 +994,27 @@ impl<'a> NativeCodegen<'a> {
 
         let mut cleanup_places = Vec::<String>::new();
         let mut cleanup_actions = HashMap::<String, CleanupAction>::new();
+        let mut cleanup_callees = HashMap::<String, CleanupCallee>::new();
         for block in &function.blocks {
             if !reachable_blocks.contains(&block.label) {
                 continue;
             }
             for instruction in &block.instructions {
-                let Instruction::PushCleanup { place, action } = instruction else {
+                let Instruction::PushCleanup {
+                    place,
+                    action,
+                    callee,
+                } = instruction
+                else {
                     continue;
                 };
                 if !cleanup_places.contains(place) {
                     cleanup_places.push(place.clone());
                 }
                 cleanup_actions.insert(place.clone(), action.clone());
+                if let Some(callee) = callee {
+                    cleanup_callees.insert(place.clone(), callee.clone());
+                }
             }
         }
         let mut cleanup_active_vars = HashMap::new();
@@ -1177,7 +1198,7 @@ impl<'a> NativeCodegen<'a> {
             classes: self.classes.clone(),
             enums: self.enums.clone(),
             union_layouts: self.union_layouts.clone(),
-            trait_impls: self.trait_impls.clone(),
+            method_receivers: &self.method_receivers,
             return_type: function.return_type.clone(),
             layout_scratch: LayoutScratch::default(),
             tracked_roots: explicit_locals.tracked,
@@ -1206,6 +1227,7 @@ impl<'a> NativeCodegen<'a> {
             call_conv: self.call_conv,
             cleanup_places,
             cleanup_actions,
+            cleanup_callees,
             cleanup_active_vars,
             cleanup_registration_vars,
             safepoint_fuel,
@@ -1550,7 +1572,11 @@ impl<'a> NativeCodegen<'a> {
         let place_ty = cleanup_place_type(function, &self.classes, place)?;
 
         let action = cleanup_action_for_place(function, place);
-        let exit_method = cleanup_exit_method(action.as_ref());
+        // The class method the cleanup calls, if it calls one.
+        let exit_function = match cleanup_callee_for_place(function, place) {
+            Some(CleanupCallee::Method { function }) => Some(function),
+            _ => None,
+        };
 
         let mut ctx = self.object.make_context();
         ctx.func.signature = thunk_signature(self.call_conv);
@@ -1569,21 +1595,10 @@ impl<'a> NativeCodegen<'a> {
             DirectType::Callable(_) => {}
             DirectType::Union(_) => {}
             DirectType::PlainClass(class_ty) => {
-                let close_method = self
-                    .classes
-                    .get(&class_ty.class_name)
-                    .and_then(|class| {
-                        class
-                            .methods
-                            .iter()
-                            .find(|method| method.name == exit_method)
-                    })
-                    .cloned();
-                if let Some(method) = close_method {
-                    let target_id = *self.functions.get(&method.function_name).ok_or({
+                if let Some(exit_function) = &exit_function {
+                    let target_id = *self.functions.get(exit_function).ok_or({
                         format!(
-                            "direct backend could not find cleanup close method `{}`",
-                            method.function_name
+                            "direct backend could not find cleanup close method `{exit_function}`"
                         )
                     })?;
                     let target_ref = self.object.declare_func_in_func(target_id, builder.func);
@@ -1595,7 +1610,7 @@ impl<'a> NativeCodegen<'a> {
                         &mut builder,
                         action.as_ref(),
                         &class_ty.class_name,
-                        &method.function_name,
+                        exit_function,
                         &results,
                     )?;
                 }
@@ -1609,24 +1624,10 @@ impl<'a> NativeCodegen<'a> {
                 builder.ins().return_(&[unit]);
             }
             DirectType::Opaque(ty) => {
-                let close_method = match ty {
-                    Type::Named(class_name, _) => self
-                        .classes
-                        .get(class_name)
-                        .and_then(|class| {
-                            class
-                                .methods
-                                .iter()
-                                .find(|method| method.name == exit_method)
-                        })
-                        .cloned(),
-                    _ => None,
-                };
-                if let Some(method) = close_method {
-                    let target_id = *self.functions.get(&method.function_name).ok_or({
+                if let Some(exit_function) = &exit_function {
+                    let target_id = *self.functions.get(exit_function).ok_or({
                         format!(
-                            "direct backend could not find cleanup close method `{}`",
-                            method.function_name
+                            "direct backend could not find cleanup close method `{exit_function}`"
                         )
                     })?;
                     let target_ref = self.object.declare_func_in_func(target_id, builder.func);
@@ -1646,7 +1647,7 @@ impl<'a> NativeCodegen<'a> {
                         &mut builder,
                         action.as_ref(),
                         &class_name,
-                        &method.function_name,
+                        exit_function,
                         &results,
                     )?;
                     let zero = builder.ins().iconst(types::I64, 0);
@@ -1869,34 +1870,39 @@ enum RuntimeOpArg {
     Word(Value),
 }
 
-/// What a member call on a receiver runs: a member named in MIR, or a
-/// runtime operation lowering resolved.
+/// What a member call on a receiver runs: a member and the dispatch MIR
+/// resolved for it, or a runtime operation lowering resolved.
 #[derive(Clone, Copy)]
 enum MemberCallee<'a> {
-    Field(&'a str),
+    Method {
+        field: &'a str,
+        dispatch: &'a MethodDispatch,
+    },
     Runtime(RuntimeOp),
 }
 
-impl<'a> MemberCallee<'a> {
-    /// The source member name.
-    fn field(self) -> &'a str {
+impl MemberCallee<'_> {
+    /// The runtime op the call makes, if it makes one.
+    fn op(self) -> Option<RuntimeOp> {
         match self {
-            MemberCallee::Field(field) => field,
-            MemberCallee::Runtime(op) => op.name(),
+            MemberCallee::Runtime(op) => Some(op),
+            MemberCallee::Method {
+                dispatch: MethodDispatch::Runtime(op),
+                ..
+            } => Some(*op),
+            MemberCallee::Method { .. } => None,
         }
     }
+}
 
-    /// The runtime op the call makes on a receiver of type `receiver`: a
-    /// resolved op, or the op a member call resolves to, specialized as
-    /// lowering specializes it.
-    fn op(self, receiver: &Type, args: &[MirArg]) -> Option<RuntimeOp> {
-        let field = match self {
-            MemberCallee::Runtime(op) => return Some(op),
-            MemberCallee::Field(field) => field,
-        };
-        let op = RuntimeOp::resolve_member(receiver, field, |_| false)?;
-        Some(crate::mir::specialized_member_op(op, receiver, args))
-    }
+/// The dispatch MIR names for a member call `.field`.
+fn required_dispatch<'a>(
+    dispatch: &'a Option<MethodDispatch>,
+    field: &str,
+) -> std::result::Result<&'a MethodDispatch, String> {
+    dispatch
+        .as_ref()
+        .ok_or_else(|| format!("direct backend received member call `.{field}` without a dispatch"))
 }
 
 /// How the emitter passes one argument of a named function op.
@@ -2403,7 +2409,7 @@ struct FunctionCompiler<'a> {
     classes: HashMap<String, MirClass>,
     enums: HashMap<String, MirEnum>,
     union_layouts: HashMap<String, crate::union_layout::MirUnionLayout>,
-    trait_impls: Vec<MirTraitImpl>,
+    method_receivers: &'a HashMap<String, Option<MirReceiverKind>>,
     return_type: Type,
     layout_scratch: LayoutScratch,
     /// The roots whose values the MIR retains and releases. Any other root
@@ -2467,6 +2473,8 @@ struct FunctionCompiler<'a> {
     cleanup_places: Vec<String>,
     /// The typed exit action each cleanup place registers.
     cleanup_actions: HashMap<String, CleanupAction>,
+    /// What each cleanup place's action runs, as MIR names it.
+    cleanup_callees: HashMap<String, CleanupCallee>,
     cleanup_active_vars: HashMap<String, Variable>,
     cleanup_registration_vars: HashMap<String, Variable>,
     safepoint_fuel: Option<Variable>,
@@ -3692,10 +3700,17 @@ impl<'a> FunctionCompiler<'a> {
                 if let Rvalue::Try {
                     value: try_value,
                     releases_on_error,
+                    from,
                 } = value
                 {
                     let target_ty = self.type_of_place(target)?;
-                    self.compile_try_assign(target, target_ty, try_value, releases_on_error)?;
+                    self.compile_try_assign(
+                        target,
+                        target_ty,
+                        try_value,
+                        releases_on_error,
+                        from.as_deref(),
+                    )?;
                 } else {
                     let target_ty = self.type_of_place(target)?;
                     let compiled = self.compile_rvalue_for_target(value, &target_ty)?;
@@ -5503,9 +5518,13 @@ impl<'a> FunctionCompiler<'a> {
                 object,
                 field,
                 receiver_place,
+                dispatch,
             } => self.compile_member_call(
                 object,
-                MemberCallee::Field(field),
+                MemberCallee::Method {
+                    field,
+                    dispatch: required_dispatch(dispatch, field)?,
+                },
                 receiver_place.as_deref(),
                 args,
             ),
@@ -5524,16 +5543,15 @@ impl<'a> FunctionCompiler<'a> {
             } => self.compile_named_runtime_op(*op, args, target),
             CallTarget::TraitMember {
                 object,
-                trait_name,
                 field,
                 receiver_place,
-            } => self.compile_trait_member_call(
-                object,
-                trait_name,
-                field,
-                receiver_place.as_deref(),
-                args,
-            ),
+                dispatch,
+                ..
+            } => {
+                let dispatch = required_dispatch(dispatch, field)?;
+                let object = self.load_operand(object)?;
+                self.compile_dispatch(object, field, dispatch, receiver_place.as_deref(), args)
+            }
         }
     }
 
@@ -6669,49 +6687,6 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn compile_trait_member_call(
-        &mut self,
-        object: &Operand,
-        trait_name: &str,
-        field: &str,
-        receiver_place: Option<&str>,
-        args: &[MirArg],
-    ) -> std::result::Result<ValueRef, String> {
-        let object = self.load_operand(object)?;
-        if let DirectType::Union(union) = &object.ty {
-            let union = union.clone();
-            return self.compile_union_member_call(
-                &union,
-                &object.values,
-                field,
-                receiver_place,
-                args,
-                Some(trait_name),
-            );
-        }
-        let receiver_ty = direct_type_to_type(&object.ty);
-        if let Type::Named(receiver_name, _) = &receiver_ty {
-            self.compile_class_member_call(
-                receiver_name,
-                Some(receiver_ty.clone()),
-                object,
-                field,
-                receiver_place,
-                args,
-                Some(trait_name),
-            )
-        } else {
-            self.compile_opaque_member_call(
-                &receiver_ty,
-                object,
-                field,
-                receiver_place,
-                args,
-                Some(trait_name),
-            )
-        }
-    }
-
     fn compile_member_call(
         &mut self,
         object: &Operand,
@@ -6723,7 +6698,7 @@ impl<'a> FunctionCompiler<'a> {
             return Ok(result);
         }
         let object = match (object, callee) {
-            (Operand::Place(place), MemberCallee::Field(_))
+            (Operand::Place(place), MemberCallee::Method { .. })
                 if self.moves_lent_temp(place, receiver_place) =>
             {
                 self.take_place(place)?
@@ -6750,8 +6725,8 @@ impl<'a> FunctionCompiler<'a> {
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
         match callee {
-            MemberCallee::Field(field) => {
-                self.compile_member_call_on_receiver(object, field, receiver_place, args)
+            MemberCallee::Method { field, dispatch } => {
+                self.compile_dispatch(object, field, dispatch, receiver_place, args)
             }
             MemberCallee::Runtime(op) => self.compile_runtime_op(op, object, receiver_place, args),
         }
@@ -6813,7 +6788,7 @@ impl<'a> FunctionCompiler<'a> {
         let Some(selection) = self.borrowed_list_element(object) else {
             return Ok(None);
         };
-        let op = callee.op(&selection.element_type, args);
+        let op = callee.op();
         let key = match (op, args) {
             (Some(RuntimeOp::Dict(DictOp::Get | DictOp::GetStr)), [key]) => Some(key),
             (
@@ -6827,12 +6802,11 @@ impl<'a> FunctionCompiler<'a> {
             ) => None,
             _ => return Ok(None),
         };
-        if self
-            .find_trait_method(&selection.element_type, callee.field())
-            .is_some()
-            || args
-                .iter()
-                .any(|argument| argument.name.is_some() || argument.writeback_place.is_some())
+        // MIR resolved the call to the built-in op, so a trait method of
+        // the same name on the element's type does not run.
+        if args
+            .iter()
+            .any(|argument| argument.name.is_some() || argument.writeback_place.is_some())
         {
             return Ok(None);
         }
@@ -6920,69 +6894,66 @@ impl<'a> FunctionCompiler<'a> {
         self.coerce_value(taken, &ty)
     }
 
-    fn compile_member_call_on_receiver(
+    /// Runs the dispatch MIR resolved for `.field` on a loaded receiver.
+    fn compile_dispatch(
         &mut self,
         object: ValueRef,
         field: &str,
+        dispatch: &MethodDispatch,
         receiver_place: Option<&str>,
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
-        match object.ty.clone() {
-            DirectType::Callable(_) => Err(format!(
-                "direct backend cannot call `.{field}` on a callable value"
-            )),
-            DirectType::Union(union) => self.compile_union_member_call(
-                &union,
-                &object.values,
-                field,
-                receiver_place,
-                args,
-                None,
-            ),
-            DirectType::PlainClass(class_ty) => self.compile_class_member_call(
-                class_ty.class_name.as_str(),
-                Some(Type::named(&class_ty.class_name)),
-                object,
-                field,
-                receiver_place,
-                args,
-                None,
-            ),
-            DirectType::Opaque(ty) => {
-                if let Type::Named(_name, _type_args) = &ty {
-                    return self.compile_opaque_member_call(
-                        &ty,
-                        object,
-                        field,
-                        receiver_place,
-                        args,
-                        None,
-                    );
-                }
-                self.compile_opaque_member_call(&ty, object, field, receiver_place, args, None)
+        match dispatch {
+            MethodDispatch::Static { function } => {
+                self.compile_method_call(function, object, receiver_place, args)
             }
-            DirectType::Scalar(_) => {
-                let receiver_ty = direct_type_to_type(&object.ty);
-                if let Some(op) = RuntimeOp::resolve_member(&receiver_ty, field, |_| false) {
-                    let args = bind_member_call_args(op, args)?;
-                    return self.compile_runtime_op(op, object, receiver_place, &args);
+            MethodDispatch::Runtime(op) => {
+                let args = bind_member_call_args(*op, args)?;
+                self.compile_runtime_op(*op, object, receiver_place, &args)
+            }
+            MethodDispatch::Nothing => {
+                let _ = self.ensure_opaque(object)?;
+                Ok(unit_value(&mut self.builder))
+            }
+            MethodDispatch::Union(arms) => {
+                let DirectType::Union(union) = object.ty.clone() else {
+                    return Err(format!(
+                        "direct backend received a union dispatch of `.{field}` on `{}`",
+                        render_direct_type(&object.ty)
+                    ));
+                };
+                self.compile_union_member_call(
+                    &union,
+                    &object.values,
+                    field,
+                    arms,
+                    receiver_place,
+                    args,
+                )
+            }
+            MethodDispatch::UnionClone => {
+                let DirectType::Union(union) = object.ty.clone() else {
+                    return Err(format!(
+                        "direct backend received a union clone on `{}`",
+                        render_direct_type(&object.ty)
+                    ));
+                };
+                if !args.is_empty() {
+                    return Err("`clone` does not take arguments".to_string());
                 }
-                if self.find_trait_method(&receiver_ty, field).is_some() {
-                    return self.compile_class_member_call(
-                        &receiver_ty.to_string(),
-                        Some(receiver_ty),
+                self.compile_union_clone(&union, &object.values)
+            }
+            MethodDispatch::Candidates { candidates, erased } => {
+                if *erased {
+                    self.compile_borrowed_receiver_dispatch(
                         object,
-                        field,
                         receiver_place,
                         args,
-                        None,
-                    );
+                        candidates,
+                    )
+                } else {
+                    self.compile_candidate_dispatch(object, receiver_place, args, candidates)
                 }
-                Err(format!(
-                    "direct backend does not support member call `.{}` on `{}`",
-                    field,
-                    render_direct_type(&object.ty)
-                ))
             }
         }
     }
@@ -9053,80 +9024,68 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    /// The direct result type of `.field` on an inline union receiver,
-    /// taken from the first member that declares it.
-    fn union_member_call_result_type(
-        &self,
+    /// A union clones as its active member (ADR-0052 A6): inline members
+    /// copy their words, a runtime-object member's handle is cloned by the
+    /// runtime, and the copy owns its handle.
+    fn compile_union_clone(
+        &mut self,
         union: &DirectUnionType,
-        field: &str,
-        trait_name: Option<&str>,
-    ) -> Option<DirectType> {
-        union.members.iter().find_map(|member| {
-            let class_name = match &member.ty {
-                DirectType::PlainClass(class_ty) => class_ty.class_name.clone(),
-                DirectType::Opaque(Type::Named(name, args)) if args.is_empty() => name.clone(),
-                _ => return None,
-            };
-            let method = match trait_name {
-                Some(trait_name) => self
-                    .find_trait_method_for_trait(&Type::named(&class_name), trait_name, field)
-                    .cloned(),
-                None => find_method(self.classes.get(&class_name), field)
-                    .or_else(|| find_concrete_impl_method(&self.trait_impls, &class_name, field))
-                    .cloned(),
-            }?;
-            self.function_return_types
-                .get(&method.function_name)
-                .cloned()
-        })
+        words: &[Value],
+    ) -> std::result::Result<ValueRef, String> {
+        let result_ty = DirectType::Union(union.clone());
+        let cloned =
+            self.switch_on_union_tag(union, words, &result_ty, |codegen, index, member| {
+                let member = if matches!(member.ty, DirectType::Opaque(_)) {
+                    let inst = codegen
+                        .builder
+                        .ins()
+                        .call(codegen.runtime[RuntimeFn::CloneValue], &[member.values[0]]);
+                    ValueRef {
+                        values: codegen.builder.inst_results(inst).to_vec(),
+                        ty: member.ty.clone(),
+                    }
+                } else {
+                    member
+                };
+                let member_words = codegen.union_words_from_member(union, index, member)?;
+                Ok(ValueRef {
+                    values: member_words,
+                    ty: result_ty.clone(),
+                })
+            })?;
+        self.mark_temporary_union_owned(&cloned);
+        Ok(cloned)
     }
 
-    /// A method on an inline union receiver dispatches on the tag; every
-    /// member resolves the method through one trait, so the arms share the
-    /// result type. A `mut self` arm writes its receiver back through the
-    /// member's payload projection.
+    /// A method on an inline union receiver dispatches on the tag, and each
+    /// member runs its arm of the dispatch. The arms share the result type
+    /// of the first method one of them calls. A `mut self` arm writes its
+    /// receiver back through the member's payload projection.
     fn compile_union_member_call(
         &mut self,
         union: &DirectUnionType,
         words: &[Value],
         field: &str,
+        arms: &[MethodDispatch],
         receiver_place: Option<&str>,
         args: &[MirArg],
-        trait_name: Option<&str>,
     ) -> std::result::Result<ValueRef, String> {
-        if field == "clone" && trait_name.is_none() {
-            // A union clones as its active member (ADR-0052 A6): inline
-            // members copy their words, a runtime-object member's handle is
-            // cloned by the runtime, and the copy owns its handle.
-            if !args.is_empty() {
-                return Err("`clone` does not take arguments".to_string());
-            }
-            let result_ty = DirectType::Union(union.clone());
-            let cloned =
-                self.switch_on_union_tag(union, words, &result_ty, |codegen, index, member| {
-                    let member = if matches!(member.ty, DirectType::Opaque(_)) {
-                        let inst = codegen
-                            .builder
-                            .ins()
-                            .call(codegen.runtime[RuntimeFn::CloneValue], &[member.values[0]]);
-                        ValueRef {
-                            values: codegen.builder.inst_results(inst).to_vec(),
-                            ty: member.ty.clone(),
-                        }
-                    } else {
-                        member
-                    };
-                    let member_words = codegen.union_words_from_member(union, index, member)?;
-                    Ok(ValueRef {
-                        values: member_words,
-                        ty: result_ty.clone(),
-                    })
-                })?;
-            self.mark_temporary_union_owned(&cloned);
-            return Ok(cloned);
+        if arms.len() != union.members.len() {
+            return Err(format!(
+                "direct backend received {} dispatch arms for the {} members of `{}`",
+                arms.len(),
+                union.members.len(),
+                union.union_type
+            ));
         }
-        let result_ty = self
-            .union_member_call_result_type(union, field, trait_name)
+        let result_ty = arms
+            .iter()
+            .find_map(|arm| match arm {
+                MethodDispatch::Static { function } => {
+                    self.function_return_types.get(function).cloned()
+                }
+                _ => None,
+            })
             .ok_or_else(|| {
                 format!(
                     "direct backend does not know the result of `.{field}` on `{}`",
@@ -9147,7 +9106,6 @@ impl<'a> FunctionCompiler<'a> {
         let receiver_place = receiver_place.map(str::to_string);
         let args = args.to_vec();
         let field = field.to_string();
-        let trait_name = trait_name.map(str::to_string);
         let result =
             self.switch_on_union_tag(union, &words, &result_ty, |codegen, index, member| {
                 if owned {
@@ -9159,52 +9117,12 @@ impl<'a> FunctionCompiler<'a> {
                         crate::mir::UNION_PAYLOAD_PROJECTION_PREFIX
                     )
                 });
-                codegen.compile_member_call_on_value(
-                    member,
-                    &field,
-                    projected.as_deref(),
-                    &args,
-                    trait_name.as_deref(),
-                )
+                codegen.compile_dispatch(member, &field, &arms[index], projected.as_deref(), &args)
             })?;
         if matches!(result.ty, DirectType::Opaque(_)) {
             self.mark_temporary_opaque_owned(&result);
         }
         Ok(result)
-    }
-
-    /// A member call whose receiver is an already loaded value.
-    fn compile_member_call_on_value(
-        &mut self,
-        object: ValueRef,
-        field: &str,
-        receiver_place: Option<&str>,
-        args: &[MirArg],
-        trait_name: Option<&str>,
-    ) -> std::result::Result<ValueRef, String> {
-        match object.ty.clone() {
-            DirectType::PlainClass(class_ty) => self.compile_class_member_call(
-                class_ty.class_name.as_str(),
-                Some(Type::named(&class_ty.class_name)),
-                object,
-                field,
-                receiver_place,
-                args,
-                trait_name,
-            ),
-            DirectType::Opaque(ty) => self.compile_opaque_member_call(
-                &ty,
-                object,
-                field,
-                receiver_place,
-                args,
-                trait_name,
-            ),
-            other => Err(format!(
-                "direct backend cannot call `.{field}` on `{}`",
-                render_direct_type(&other)
-            )),
-        }
     }
 
     /// The tag word and payload words of `member` injected as member
@@ -9863,6 +9781,7 @@ impl<'a> FunctionCompiler<'a> {
         target_ty: DirectType,
         try_value: &Operand,
         releases_on_error: &[String],
+        from: Option<&str>,
     ) -> std::result::Result<(), String> {
         let loaded = self.load_operand(try_value)?;
         let (source_error_ty, target_error_ty) = match (&loaded.ty, &self.return_type) {
@@ -9934,8 +9853,12 @@ impl<'a> FunctionCompiler<'a> {
                 self.clear_temporary_opaque_owned(&value);
                 self.release_opaque_handle(value.values[0]);
             }
-            let converted =
-                self.convert_try_error_via_from(payload, &source_error_ty, &target_error_ty)?;
+            let from = from.ok_or_else(|| {
+                format!(
+                    "direct backend `try` names no `From[{source_error_ty}] for {target_error_ty}` conversion"
+                )
+            })?;
+            let converted = self.convert_try_error_via_from(payload, from, &source_error_ty)?;
             self.compile_enum_variant_from_values(
                 "Result",
                 "Err",
@@ -9951,55 +9874,14 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
+    /// Converts a `try` error payload with the `From` method MIR names.
     fn convert_try_error_via_from(
         &mut self,
         payload: ValueRef,
+        function_name: &str,
         source_ty: &Type,
-        target_ty: &Type,
     ) -> std::result::Result<ValueRef, String> {
-        let method = self
-            .trait_impls
-            .iter()
-            .filter(|trait_impl| {
-                trait_impl.trait_name == "From" && trait_impl.trait_args.len() == 1
-            })
-            .filter_map(|trait_impl| {
-                let mut type_params = BTreeSet::new();
-                collect_type_params_from_type(&trait_impl.for_type, &mut type_params);
-                for trait_arg in &trait_impl.trait_args {
-                    collect_type_params_from_type(trait_arg, &mut type_params);
-                }
-                let mut substitutions = HashMap::new();
-                if !crate::sema::type_pattern_matches(
-                    &trait_impl.for_type,
-                    target_ty,
-                    &type_params,
-                    &mut substitutions,
-                ) || crate::sema::substitute_type(&trait_impl.trait_args[0], &substitutions)
-                    != *source_ty
-                {
-                    return None;
-                }
-                let method = trait_impl
-                    .methods
-                    .iter()
-                    .find(|method| method.name == "from")?;
-                Some((
-                    crate::sema::trait_impl_specificity_parts(
-                        &trait_impl.for_type,
-                        &trait_impl.trait_args,
-                    ),
-                    method.clone(),
-                ))
-            })
-            .max_by_key(|(specificity, _)| *specificity)
-            .map(|(_, method)| method);
-        let Some(method) = method else {
-            return Err(format!(
-                "direct backend could not find `From[{source_ty}] for {target_ty}` required by `try`"
-            ));
-        };
-        let function_name = method.function_name;
+        let function_name = function_name.to_string();
         let expected = self
             .function_param_types
             .get(&function_name)
@@ -10572,61 +10454,64 @@ impl<'a> FunctionCompiler<'a> {
                 })
             );
         let receiver_ty = self.type_of_place(place)?;
-        let exit_method = cleanup_exit_method(self.cleanup_actions.get(place));
-        match &receiver_ty {
-            DirectType::PlainClass(class_ty) => {
-                let has_exit = self
-                    .classes
-                    .get(&class_ty.class_name)
-                    .and_then(|class| {
-                        class
-                            .methods
-                            .iter()
-                            .find(|method| method.name == exit_method)
-                    })
-                    .is_some();
-                if has_exit {
-                    let operand = Operand::Place(place.to_string());
-                    let result = self.compile_member_call(
-                        &operand,
-                        MemberCallee::Field(exit_method),
-                        Some(place),
-                        &[],
-                    )?;
-                    if record_exit_failure {
-                        let class_name = class_ty.class_name.clone();
-                        self.record_manager_exit_failure_value(&class_name, result)?;
-                    }
+        let callee =
+            self.cleanup_callees.get(place).cloned().ok_or_else(|| {
+                format!("direct backend received cleanup `{place}` without a callee")
+            })?;
+        let operand = Operand::Place(place.to_string());
+        match (&receiver_ty, &callee) {
+            (DirectType::PlainClass(class_ty), CleanupCallee::Method { function }) => {
+                let dispatch = MethodDispatch::Static {
+                    function: function.clone(),
+                };
+                let result = self.compile_member_call(
+                    &operand,
+                    MemberCallee::Method {
+                        field: function,
+                        dispatch: &dispatch,
+                    },
+                    Some(place),
+                    &[],
+                )?;
+                if record_exit_failure {
+                    let class_name = class_ty.class_name.clone();
+                    self.record_manager_exit_failure_value(&class_name, result)?;
                 }
             }
-            DirectType::Opaque(ty) => {
-                let operand = Operand::Place(place.to_string());
+            (DirectType::Opaque(ty), _) => {
                 let loaded = self.load_operand(&operand)?;
-                if matches!(ty, Type::Named(name, _) if name == "TaskGroup") {
-                    let loaded = self.ensure_opaque(loaded)?;
-                    let cancel_before = self
-                        .builder
-                        .ins()
-                        .iconst(types::I64, if cancel_before_cleanup { 1 } else { 0 });
-                    let result = self.builder.ins().call(
-                        self.runtime[RuntimeFn::TaskGroupClose],
-                        &[loaded.values[0], cancel_before],
-                    );
-                    self.release_opaque_handle(self.builder.inst_results(result)[0]);
-                    return Ok(());
-                }
-                if let Ok(result) =
-                    self.compile_opaque_member_call(ty, loaded, exit_method, Some(place), &[], None)
-                {
-                    if record_exit_failure {
-                        if let Type::Named(class_name, _) = ty {
-                            self.record_manager_exit_failure_value(class_name, result)?;
+                match &callee {
+                    CleanupCallee::Method { function } => {
+                        let result =
+                            self.compile_method_call(function, loaded, Some(place), &[])?;
+                        if record_exit_failure {
+                            if let Type::Named(class_name, _) = ty {
+                                self.record_manager_exit_failure_value(class_name, result)?;
+                            }
                         }
                     }
-                    return Ok(());
+                    CleanupCallee::Runtime(op) => {
+                        let args = bind_member_call_args(*op, &[])?;
+                        self.compile_runtime_op(*op, loaded, Some(place), &args)?;
+                    }
+                    CleanupCallee::CloseTaskGroup => {
+                        let loaded = self.ensure_opaque(loaded)?;
+                        let cancel_before = self
+                            .builder
+                            .ins()
+                            .iconst(types::I64, if cancel_before_cleanup { 1 } else { 0 });
+                        let result = self.builder.ins().call(
+                            self.runtime[RuntimeFn::TaskGroupClose],
+                            &[loaded.values[0], cancel_before],
+                        );
+                        self.release_opaque_handle(self.builder.inst_results(result)[0]);
+                    }
+                    CleanupCallee::Nothing => {
+                        let _ = self.ensure_opaque(loaded)?;
+                    }
                 }
             }
-            DirectType::Scalar(_) | DirectType::Union(_) | DirectType::Callable(_) => {}
+            _ => {}
         }
         Ok(())
     }
@@ -10645,50 +10530,21 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn compile_class_member_call(
+    /// Calls the method `function` MIR resolved for a member call, with
+    /// the receiver first. A `mut self` receiver writes back to its place.
+    fn compile_method_call(
         &mut self,
-        class_name: &str,
-        receiver_type_hint: Option<Type>,
+        function: &str,
         object: ValueRef,
-        field: &str,
         receiver_place: Option<&str>,
         args: &[MirArg],
-        trait_name: Option<&str>,
     ) -> std::result::Result<ValueRef, String> {
-        let mut method = trait_name.and_then(|trait_name| {
-            receiver_type_hint
-                .as_ref()
-                .and_then(|ty| self.find_trait_method_for_trait(ty, trait_name, field))
-                .or_else(|| {
-                    self.find_trait_method_for_trait(&Type::named(class_name), trait_name, field)
-                })
-                .cloned()
-        });
-        if trait_name.is_none() {
-            method = find_method(self.classes.get(class_name), field).cloned();
-            if method.is_none() {
-                method = receiver_type_hint
-                    .as_ref()
-                    .and_then(|ty| self.find_trait_method(ty, field).cloned());
-            }
-            if method.is_none() {
-                method = self
-                    .find_trait_method(&Type::named(class_name), field)
-                    .cloned();
-            }
-        }
-        let Some(method) = method else {
+        let method_function_name = function.to_string();
+        let mutable_receiver =
+            self.method_receivers.get(function) == Some(&Some(MirReceiverKind::BorrowMut));
+        if mutable_receiver && receiver_place.is_none() {
             return Err(format!(
-                "direct backend does not know method `{}.{}`",
-                class_name, field
-            ));
-        };
-        let method_function_name = method.function_name.clone();
-        if method.receiver == Some(MirReceiverKind::BorrowMut) && receiver_place.is_none() {
-            return Err(format!(
-                "direct backend does not yet support temporary mutable receiver method `{}.{}`",
-                class_name, field
+                "direct backend does not yet support temporary mutable receiver method `{function}`"
             ));
         }
         let func_ref = *self.function_refs.get(&method_function_name).ok_or({
@@ -10709,11 +10565,10 @@ impl<'a> FunctionCompiler<'a> {
         let receiver = self.coerce_value(object.clone(), &receiver_expected)?;
         let transferred = self.transfer_values(&receiver);
         lowered_args.extend(transferred);
-        if method.receiver == Some(MirReceiverKind::BorrowMut) {
+        if mutable_receiver {
             let Some(place) = receiver_place else {
                 return Err(format!(
-                    "direct backend does not yet support temporary mutable receiver method `{}.{}`",
-                    class_name, field
+                    "direct backend does not yet support temporary mutable receiver method `{function}`"
                 ));
             };
             writeback_places.push(place.to_string());
@@ -11888,133 +11743,23 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn compile_opaque_member_call(
+    /// Tests the receiver's runtime type against each candidate in turn and
+    /// runs the first match's method. Every branch joins on one result.
+    fn compile_candidate_dispatch(
         &mut self,
-        object_ty: &Type,
         object: ValueRef,
-        field: &str,
         receiver_place: Option<&str>,
         args: &[MirArg],
-        trait_name: Option<&str>,
+        candidates: &[MethodCandidate],
     ) -> std::result::Result<ValueRef, String> {
-        if let Type::Named(name, _) = object_ty {
-            let has_declared_class_method = find_method(self.classes.get(name), field).is_some();
-            let has_noncolliding_trait_method = BuiltinMember::resolve(name, field).is_none()
-                && self.find_trait_method(object_ty, field).is_some();
-            if has_declared_class_method || has_noncolliding_trait_method {
-                return self.compile_class_member_call(
-                    name,
-                    Some(object_ty.clone()),
-                    object,
-                    field,
-                    receiver_place,
-                    args,
-                    None,
-                );
-            }
-        }
-        if let Some(op) = RuntimeOp::resolve_member(object_ty, field, |_| false) {
-            let op = crate::mir::specialized_member_op(op, object_ty, args);
-            let args = bind_member_call_args(op, args)?;
-            return self.compile_runtime_op(op, object, receiver_place, &args);
-        }
-        if let Type::Named(name, class_args) = object_ty {
-            if matches!(name.as_str(), "str" | "Array" | "list" | "dict" | "set") {
-                return Err(format!(
-                    "direct backend does not know runtime member `{name}.{field}`"
-                ));
-            }
-            // These handles own no host resource, so leaving their scope
-            // closes nothing.
-            if field == "close"
-                && matches!(
-                    name.as_str(),
-                    "net.HttpExchange" | "net.HttpResponse" | "net.WebSocketListener"
-                )
-            {
-                let _ = self.ensure_opaque(object)?;
-                return Ok(unit_value(&mut self.builder));
-            }
-            if ResourceOp::ALL
-                .iter()
-                .any(|op| op.receiver_type_name() == name)
-            {
-                return Err(format!(
-                    "direct backend does not know runtime member `{name}.{field}`"
-                ));
-            }
-            if self.classes.contains_key(name)
-                || (BuiltinMember::resolve(name, field).is_none()
-                    && self.find_trait_method(object_ty, field).is_some())
-            {
-                if let Ok(result) = self.compile_class_member_call(
-                    name,
-                    Some(object_ty.clone()),
-                    object.clone(),
-                    field,
-                    receiver_place,
-                    args,
-                    None,
-                ) {
-                    return Ok(result);
-                }
-            }
-            if matches!(name.as_str(), "Queue" | "Task" | "TaskGroup") {
-                return Err(format!(
-                    "direct backend does not know runtime member `{name}.{field}`"
-                ));
-            }
-            let _ = class_args;
-        }
-
-        let candidates = self.dynamic_method_candidates(field, trait_name);
-        if candidates.is_empty() {
-            return Err(format!(
-                "direct backend does not know dynamic method `.{}` on `{}`",
-                field, object_ty
-            ));
-        }
-        // An erased receiver (a generic body's `T`) may hold a union whose
-        // active member carries the method (ADR-0052 A8). The interpreter
-        // inspects the runtime value; the direct backend branches on it.
-        if matches!(object_ty, Type::TypeParam(_)) {
-            return self.compile_borrowed_receiver_dispatch(
-                object,
-                field,
-                receiver_place,
-                args,
-                trait_name,
-                &candidates,
-            );
-        }
-        if candidates.len() == 1 {
-            let Type::Named(candidate_name, _) = &candidates[0].0 else {
-                return Err(format!(
-                    "direct backend does not know how to call dynamic method `.{}` for `{}`",
-                    field, candidates[0].0
-                ));
-            };
-            return self.compile_class_member_call(
-                candidate_name,
-                Some(candidates[0].0.clone()),
-                object,
-                field,
-                receiver_place,
-                args,
-                trait_name,
-            );
-        }
-
-        let result_ty = self.dynamic_result_type(&candidates)?;
+        let result_ty = self.dynamic_result_type(candidates)?;
         let join_block = self.builder.create_block();
         let result_vars = self.declare_temporary_result_storage(&result_ty)?;
         self.emit_candidate_chain(
             object,
             receiver_place,
-            &candidates,
-            field,
+            candidates,
             args,
-            trait_name,
             &result_ty,
             &result_vars,
             join_block,
@@ -12033,14 +11778,17 @@ impl<'a> FunctionCompiler<'a> {
     /// unknown when the candidates disagree.
     fn dynamic_result_type(
         &self,
-        candidates: &[(Type, MirMethod)],
+        candidates: &[MethodCandidate],
     ) -> std::result::Result<DirectType, String> {
+        let [first, ..] = candidates else {
+            return Err("direct backend received a dispatch without candidates".to_string());
+        };
         let result_types = candidates
             .iter()
-            .map(|(_, method)| self.call_result_type(&method.function_name))
+            .map(|candidate| self.call_result_type(&candidate.function))
             .collect::<std::result::Result<Vec<_>, _>>()?;
         if result_types.windows(2).all(|window| window[0] == window[1]) {
-            self.call_result_type(&candidates[0].1.function_name)
+            self.call_result_type(&first.function)
         } else {
             Ok(DirectType::Opaque(Type::named("Unknown")))
         }
@@ -12053,11 +11801,9 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_borrowed_receiver_dispatch(
         &mut self,
         object: ValueRef,
-        field: &str,
         receiver_place: Option<&str>,
         args: &[MirArg],
-        trait_name: Option<&str>,
-        candidates: &[(Type, MirMethod)],
+        candidates: &[MethodCandidate],
     ) -> std::result::Result<ValueRef, String> {
         let raw = self.ensure_opaque(object)?;
         let result_ty = self.dynamic_result_type(candidates)?;
@@ -12078,9 +11824,16 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(union_block);
         self.builder.seal_block(union_block);
         self.layout_scratch = caller_owned.clone();
+        let receiver_kind = |candidate: &MethodCandidate| {
+            self.method_receivers
+                .get(&candidate.function)
+                .copied()
+                .flatten()
+        };
         let mutates_receiver = candidates
             .iter()
-            .any(|(_, method)| method.receiver == Some(MirReceiverKind::BorrowMut));
+            .any(|candidate| receiver_kind(candidate) == Some(MirReceiverKind::BorrowMut));
+        let consumes = receiver_kind(&candidates[0]) == Some(MirReceiverKind::Value);
         if mutates_receiver {
             // No static write-back path exists for the payload of a union
             // behind an erased place; refuse at run time rather than mutate
@@ -12094,7 +11847,6 @@ impl<'a> FunctionCompiler<'a> {
             );
             self.builder.ins().trap(TrapCode::unwrap_user(1));
         } else {
-            let consumes = candidates[0].1.receiver == Some(MirReceiverKind::Value);
             let consume_flag = self.builder.ins().iconst(types::I64, i64::from(consumes));
             let inst = self.builder.ins().call(
                 self.runtime[RuntimeFn::UnionActivePayload],
@@ -12114,9 +11866,7 @@ impl<'a> FunctionCompiler<'a> {
                 payload,
                 union_receiver_place.as_deref(),
                 candidates,
-                field,
                 args,
-                trait_name,
                 &result_ty,
                 &result_vars,
                 join_block,
@@ -12130,9 +11880,7 @@ impl<'a> FunctionCompiler<'a> {
             raw,
             receiver_place,
             candidates,
-            field,
             args,
-            trait_name,
             &result_ty,
             &result_vars,
             join_block,
@@ -12152,10 +11900,8 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         object: ValueRef,
         receiver_place: Option<&str>,
-        candidates: &[(Type, MirMethod)],
-        field: &str,
+        candidates: &[MethodCandidate],
         args: &[MirArg],
-        trait_name: Option<&str>,
         result_ty: &DirectType,
         result_vars: &[Variable],
         join_block: cranelift_codegen::ir::Block,
@@ -12167,17 +11913,9 @@ impl<'a> FunctionCompiler<'a> {
         // next candidate. Keep the compile-time ledger path-local so a later
         // candidate still emits the release owed by its runtime path.
         let caller_owned = self.layout_scratch.clone();
-        for (candidate_ty, _method) in candidates.iter() {
-            // Every implementation target is a named type; anything else is
-            // forged metadata, refused before a block is left unterminated.
-            let Type::Named(candidate_name, _) = candidate_ty else {
-                return Err(format!(
-                    "direct backend does not know how to call dynamic method `.{}` for `{}`",
-                    field, candidate_ty
-                ));
-            };
+        for candidate in candidates {
             self.layout_scratch = caller_owned.clone();
-            let matched = self.value_matches_runtime_type(object.values[0], candidate_ty)?;
+            let matched = self.value_matches_runtime_type(object.values[0], &candidate.ty)?;
             let then_block = self.builder.create_block();
             let else_block = self.builder.create_block();
             self.builder
@@ -12185,14 +11923,11 @@ impl<'a> FunctionCompiler<'a> {
                 .brif(matched, then_block, &[], else_block, &[]);
             self.builder.switch_to_block(then_block);
             self.layout_scratch = caller_owned.clone();
-            let call_result = self.compile_class_member_call(
-                candidate_name,
-                Some(candidate_ty.clone()),
+            let call_result = self.compile_method_call(
+                &candidate.function,
                 object.clone(),
-                field,
                 receiver_place,
                 args,
-                trait_name,
             )?;
             let coerced_result = self.coerce_value(call_result, result_ty)?;
             self.store_result_vars(result_vars, &coerced_result)?;
@@ -12544,108 +12279,6 @@ impl<'a> FunctionCompiler<'a> {
         )
     }
 
-    fn dynamic_method_candidates(
-        &self,
-        field: &str,
-        trait_name: Option<&str>,
-    ) -> Vec<(Type, MirMethod)> {
-        let mut candidates = Vec::new();
-        if trait_name.is_none() {
-            for class in self.classes.values() {
-                if let Some(method) = class.methods.iter().find(|method| method.name == field) {
-                    candidates.push((usize::MAX, Type::named(&class.name), method.clone()));
-                }
-            }
-        }
-        for trait_impl in &self.trait_impls {
-            if trait_name.is_some_and(|name| trait_impl.trait_name != name) {
-                continue;
-            }
-            if let Some(method) = trait_impl
-                .methods
-                .iter()
-                .find(|method| method.name == field)
-            {
-                candidates.push((
-                    crate::sema::trait_impl_specificity_parts(
-                        &trait_impl.for_type,
-                        &trait_impl.trait_args,
-                    ),
-                    trait_impl.for_type.clone(),
-                    method.clone(),
-                ));
-            }
-        }
-        candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
-        candidates
-            .into_iter()
-            .map(|(_, ty, method)| (ty, method))
-            .collect()
-    }
-
-    fn find_trait_method(&self, ty: &Type, field: &str) -> Option<&MirMethod> {
-        self.find_trait_method_with_identity(ty, None, field)
-    }
-
-    fn find_trait_method_for_trait(
-        &self,
-        ty: &Type,
-        trait_name: &str,
-        field: &str,
-    ) -> Option<&MirMethod> {
-        self.find_trait_method_with_identity(ty, Some(trait_name), field)
-    }
-
-    fn find_trait_method_with_identity(
-        &self,
-        ty: &Type,
-        trait_name: Option<&str>,
-        field: &str,
-    ) -> Option<&MirMethod> {
-        let mut best = None;
-        let mut best_specificity = 0usize;
-        let mut ambiguous = false;
-        for trait_impl in &self.trait_impls {
-            if trait_name.is_some_and(|name| trait_impl.trait_name != name) {
-                continue;
-            }
-            let mut type_params = BTreeSet::new();
-            collect_type_params_from_type(&trait_impl.for_type, &mut type_params);
-            let mut substitutions = HashMap::new();
-            if !crate::sema::type_pattern_matches(
-                &trait_impl.for_type,
-                ty,
-                &type_params,
-                &mut substitutions,
-            ) {
-                continue;
-            }
-            let Some(method) = trait_impl
-                .methods
-                .iter()
-                .find(|method| method.name == field)
-            else {
-                continue;
-            };
-            let specificity = crate::sema::trait_impl_specificity_parts(
-                &trait_impl.for_type,
-                &trait_impl.trait_args,
-            );
-            if best.is_none() || specificity > best_specificity {
-                best = Some(method);
-                best_specificity = specificity;
-                ambiguous = false;
-            } else if specificity == best_specificity {
-                ambiguous = true;
-            }
-        }
-        if ambiguous {
-            None
-        } else {
-            best
-        }
-    }
-
     fn declare_temporary_result_storage(
         &mut self,
         ty: &DirectType,
@@ -12711,21 +12344,6 @@ fn unit_value(builder: &mut FunctionBuilder<'_>) -> ValueRef {
     }
 }
 
-/// The trait-impl method a concrete class provides for `field`; the checker
-/// has already rejected an ambiguous name, so the first impl is the one.
-fn find_concrete_impl_method<'a>(
-    trait_impls: &'a [MirTraitImpl],
-    class_name: &str,
-    field: &str,
-) -> Option<&'a MirMethod> {
-    trait_impls
-        .iter()
-        .filter(|trait_impl| {
-            matches!(&trait_impl.for_type, Type::Named(name, args) if name == class_name && args.is_empty())
-        })
-        .find_map(|trait_impl| trait_impl.methods.iter().find(|method| method.name == field))
-}
-
 /// The addresses of the consuming `Place` operands among `roles`.
 fn consuming_operands(
     roles: Vec<(&Operand, crate::mir::ownership::OperandRole)>,
@@ -12738,15 +12356,6 @@ fn consuming_operands(
         })
         .map(|(operand, _)| operand as *const Operand)
         .collect()
-}
-
-fn find_method<'a>(class: Option<&'a MirClass>, field: &str) -> Option<&'a MirMethod> {
-    let class = class?;
-    class
-        .methods
-        .iter()
-        .find(|&method| method.name == field)
-        .map(|v| v as _)
 }
 
 fn declare_runtime_helper(
@@ -13038,15 +12647,6 @@ fn declare_root_variables(
     variable_types.insert(name, ty);
 }
 
-/// The method a cleanup action calls on a class place: `__exit__` for a
-/// manager, `close` for a resource.
-fn cleanup_exit_method(action: Option<&CleanupAction>) -> &'static str {
-    match action {
-        Some(CleanupAction::ManagerExit { .. }) => "__exit__",
-        _ => "close",
-    }
-}
-
 /// The action registered for `place` in `function`. Every push of one place
 /// in a function carries the same action, because lowering derives it from
 /// the place's type.
@@ -13059,7 +12659,26 @@ fn cleanup_action_for_place(function: &MirFunction, place: &str) -> Option<Clean
                 Instruction::PushCleanup {
                     place: pushed,
                     action,
+                    ..
                 } if pushed == place => Some(action.clone()),
+                _ => None,
+            })
+    })
+}
+
+/// The callee MIR names for the cleanup of `place` in `function`. Every
+/// push of one place carries the same callee.
+fn cleanup_callee_for_place(function: &MirFunction, place: &str) -> Option<CleanupCallee> {
+    function.blocks.iter().find_map(|block| {
+        block
+            .instructions
+            .iter()
+            .find_map(|instruction| match instruction {
+                Instruction::PushCleanup {
+                    place: pushed,
+                    callee,
+                    ..
+                } if pushed == place => callee.clone(),
                 _ => None,
             })
     })
@@ -13629,7 +13248,7 @@ fn direct_type_inner(
                 let resolved = union
                     .keys
                     .get(index)
-                    .and_then(|key| canonical_named_type_from_key(key))
+                    .and_then(|key| crate::mir::methods::canonical_named_type_from_key(key))
                     .filter(|candidate| {
                         matches!(candidate, Type::Named(name, _) if classes.contains_key(name))
                     })
@@ -13709,23 +13328,6 @@ fn direct_type_inner(
             Some(DirectType::Opaque(Type::Named(name.clone(), args.clone())))
         }
     }
-}
-
-/// The module-qualified nominal type a canonical key names, for a key of a
-/// non-generic named type; every other key shape resolves through the
-/// member's own spelling.
-fn canonical_named_type_from_key(key: &str) -> Option<Type> {
-    let encoded = key.strip_prefix("aura-type-key-v1:")?;
-    let parsed: serde_json::Value = serde_json::from_str(encoded).ok()?;
-    let parts = parsed.as_array()?;
-    if parts.len() != 3 || parts[0].as_str()? != "named" {
-        return None;
-    }
-    let name = parts[1].as_str()?;
-    if !parts[2].as_array()?.is_empty() {
-        return None;
-    }
-    Some(Type::named(name))
 }
 
 fn collect_type_params_from_type(ty: &Type, collected: &mut BTreeSet<String>) {

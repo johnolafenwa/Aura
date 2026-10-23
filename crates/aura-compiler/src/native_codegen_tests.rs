@@ -3542,6 +3542,7 @@ fn module_with_main_member_call_result_type(
                                 object: Operand::Place(object_name.to_string()),
                                 field: field.to_string(),
                                 receiver_place: Some(object_name.to_string()),
+                                dispatch: None,
                             },
                             args,
                             type_args: Default::default(),
@@ -4747,7 +4748,7 @@ fn direct_backend_resource_member_argument_errors_cover_network_and_process_path
             named("fs.File"),
             "unknown",
             Vec::new(),
-            "does not know runtime member `fs.File.unknown`",
+            "runtime has no member `fs.File.unknown`",
         ),
         (
             named("process.Child"),
@@ -4789,7 +4790,7 @@ fn direct_backend_resource_member_argument_errors_cover_network_and_process_path
             named("process.Child"),
             "unknown",
             Vec::new(),
-            "does not know runtime member `process.Child.unknown`",
+            "runtime has no member `process.Child.unknown`",
         ),
         (
             named("process.Pipe"),
@@ -4831,7 +4832,7 @@ fn direct_backend_resource_member_argument_errors_cover_network_and_process_path
             named("process.Pipe"),
             "unknown",
             Vec::new(),
-            "does not know runtime member `process.Pipe.unknown`",
+            "runtime has no member `process.Pipe.unknown`",
         ),
         (
             named("process.Completed"),
@@ -4879,7 +4880,7 @@ fn direct_backend_resource_member_argument_errors_cover_network_and_process_path
             named("process.Completed"),
             "unknown",
             Vec::new(),
-            "does not know runtime member `process.Completed.unknown`",
+            "runtime has no member `process.Completed.unknown`",
         ),
         (
             named("process.Supervisor"),
@@ -4915,7 +4916,7 @@ fn direct_backend_resource_member_argument_errors_cover_network_and_process_path
             named("process.Supervisor"),
             "unknown",
             Vec::new(),
-            "does not know runtime member `process.Supervisor.unknown`",
+            "runtime has no member `process.Supervisor.unknown`",
         ),
         (
             named("net.TcpListener"),
@@ -4933,7 +4934,7 @@ fn direct_backend_resource_member_argument_errors_cover_network_and_process_path
             named("net.TcpListener"),
             "unknown",
             Vec::new(),
-            "does not know runtime member `net.TcpListener.unknown`",
+            "runtime has no member `net.TcpListener.unknown`",
         ),
         (
             named("net.TcpStream"),
@@ -5005,7 +5006,7 @@ fn direct_backend_resource_member_argument_errors_cover_network_and_process_path
             named("net.TcpStream"),
             "unknown",
             Vec::new(),
-            "does not know runtime member `net.TcpStream.unknown`",
+            "runtime has no member `net.TcpStream.unknown`",
         ),
         (
             named("net.UdpSocket"),
@@ -5053,37 +5054,37 @@ fn direct_backend_resource_member_argument_errors_cover_network_and_process_path
             named("net.UdpSocket"),
             "unknown",
             Vec::new(),
-            "does not know runtime member `net.UdpSocket.unknown`",
+            "runtime has no member `net.UdpSocket.unknown`",
         ),
         (
             named("net.UdpDatagram"),
             "unknown",
             Vec::new(),
-            "does not know runtime member `net.UdpDatagram.unknown`",
+            "runtime has no member `net.UdpDatagram.unknown`",
         ),
         (
             named("net.HttpListener"),
             "unknown",
             Vec::new(),
-            "does not know runtime member `net.HttpListener.unknown`",
+            "runtime has no member `net.HttpListener.unknown`",
         ),
         (
             named("net.HttpExchange"),
             "unknown",
             Vec::new(),
-            "does not know runtime member `net.HttpExchange.unknown`",
+            "runtime has no member `net.HttpExchange.unknown`",
         ),
         (
             named("net.HttpResponse"),
             "unknown",
             Vec::new(),
-            "does not know runtime member `net.HttpResponse.unknown`",
+            "runtime has no member `net.HttpResponse.unknown`",
         ),
         (
             named("net.WebSocketListener"),
             "unknown",
             Vec::new(),
-            "does not know runtime member `net.WebSocketListener.unknown`",
+            "runtime has no member `net.WebSocketListener.unknown`",
         ),
         (
             named("net.WebSocket"),
@@ -5101,13 +5102,13 @@ fn direct_backend_resource_member_argument_errors_cover_network_and_process_path
             named("net.WebSocket"),
             "unknown",
             Vec::new(),
-            "does not know runtime member `net.WebSocket.unknown`",
+            "runtime has no member `net.WebSocket.unknown`",
         ),
         (
             named("net.UnixListener"),
             "unknown",
             Vec::new(),
-            "does not know runtime member `net.UnixListener.unknown`",
+            "runtime has no member `net.UnixListener.unknown`",
         ),
         (
             named("net.UnixStream"),
@@ -5125,13 +5126,13 @@ fn direct_backend_resource_member_argument_errors_cover_network_and_process_path
             named("net.UnixStream"),
             "unknown",
             Vec::new(),
-            "does not know runtime member `net.UnixStream.unknown`",
+            "runtime has no member `net.UnixStream.unknown`",
         ),
         (
             named("net.TlsListener"),
             "unknown",
             Vec::new(),
-            "does not know runtime member `net.TlsListener.unknown`",
+            "runtime has no member `net.TlsListener.unknown`",
         ),
         (
             named("net.TlsStream"),
@@ -5149,7 +5150,7 @@ fn direct_backend_resource_member_argument_errors_cover_network_and_process_path
             named("net.TlsStream"),
             "unknown",
             Vec::new(),
-            "does not know runtime member `net.TlsStream.unknown`",
+            "runtime has no member `net.TlsStream.unknown`",
         ),
     ];
 
@@ -5195,7 +5196,7 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
             "to_string",
             vec![arg(None, Operand::Int(1))],
             // The checker gives `to_string()` only to numbers and `bool`.
-            "does not know runtime member `str.to_string`",
+            "runtime has no member `str.to_string`",
         ),
         (
             Type::named("str"),
@@ -5231,7 +5232,7 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
             Type::named("str"),
             "add",
             Vec::new(),
-            "does not know runtime member `str.add`",
+            "runtime has no member `str.add`",
         ),
         (
             Type::named("str"),
@@ -5267,7 +5268,7 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
             Type::named("str"),
             "unknown",
             Vec::new(),
-            "does not know runtime member `str.unknown`",
+            "runtime has no member `str.unknown`",
         ),
         (
             vec_int(),
@@ -5369,7 +5370,7 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
             vec_int(),
             "unknown",
             Vec::new(),
-            "does not know runtime member `list.unknown`",
+            "runtime has no member `list.unknown`",
         ),
         (
             map_string_int(),
@@ -5453,7 +5454,7 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
             map_string_int(),
             "unknown",
             Vec::new(),
-            "does not know runtime member `dict.unknown`",
+            "runtime has no member `dict.unknown`",
         ),
         (
             set_string(),
@@ -5495,7 +5496,7 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
             set_string(),
             "unknown",
             Vec::new(),
-            "does not know runtime member `set.unknown`",
+            "runtime has no member `set.unknown`",
         ),
         (
             queue_int(),
@@ -5519,7 +5520,7 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
             queue_int(),
             "unknown",
             Vec::new(),
-            "does not know runtime member `Queue.unknown`",
+            "runtime has no member `Queue.unknown`",
         ),
         (
             Type::named("TaskGroup"),
@@ -5531,13 +5532,13 @@ fn direct_backend_collection_member_argument_errors_cover_core_runtime_paths() {
             Type::named("TaskGroup"),
             "close",
             vec![arg(None, Operand::Int(1))],
-            "does not know runtime member `TaskGroup.close`",
+            "runtime has no member `TaskGroup.close`",
         ),
         (
             task_int(),
             "unknown",
             Vec::new(),
-            "does not know runtime member `Task.unknown`",
+            "runtime has no member `Task.unknown`",
         ),
     ];
 
@@ -6061,7 +6062,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 vec![arg(Operand::Int(1))],
             ),
             // The checker gives `to_string()` only to numbers and `bool`.
-            "does not know runtime member `str.to_string`",
+            "runtime has no member `str.to_string`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6083,7 +6084,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "add",
                 Vec::new(),
             ),
-            "does not know runtime member `str.add`",
+            "runtime has no member `str.add`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6127,7 +6128,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "unknown",
                 Vec::new(),
             ),
-            "does not know runtime member `str.unknown`",
+            "runtime has no member `str.unknown`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6282,7 +6283,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "unknown",
                 Vec::new(),
             ),
-            "does not know runtime member `list.unknown`",
+            "runtime has no member `list.unknown`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6419,7 +6420,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "unknown",
                 Vec::new(),
             ),
-            "does not know runtime member `dict.unknown`",
+            "runtime has no member `dict.unknown`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6485,7 +6486,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "unknown",
                 Vec::new(),
             ),
-            "does not know runtime member `set.unknown`",
+            "runtime has no member `set.unknown`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6674,7 +6675,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "unknown",
                 Vec::new(),
             ),
-            "does not know runtime member `Queue.unknown`",
+            "runtime has no member `Queue.unknown`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6748,7 +6749,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "unknown",
                 Vec::new(),
             ),
-            "does not know runtime member `Task.unknown`",
+            "runtime has no member `Task.unknown`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6778,7 +6779,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                     writeback_place: None,
                 }],
             ),
-            "does not know runtime member `TaskGroup.close`",
+            "runtime has no member `TaskGroup.close`",
         ),
         (
             module_with_main_member_call_result_type(
@@ -6789,7 +6790,7 @@ fn direct_backend_runtime_member_arity_errors_cover_string_collection_and_runtim
                 "unknown",
                 Vec::new(),
             ),
-            "does not know runtime member `TaskGroup.unknown`",
+            "runtime has no member `TaskGroup.unknown`",
         ),
     ];
 
@@ -9646,7 +9647,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
                 "missing",
                 vec![],
             ),
-            "does not know runtime member `str.missing`",
+            "runtime has no member `str.missing`",
         ),
         (
             "unknown scalar member",
@@ -9657,7 +9658,7 @@ fn direct_backend_member_call_error_surface_reports_expected_diagnostics() {
                 "missing",
                 vec![],
             ),
-            "does not support member call `.missing` on `int32`",
+            "`int32` has no method `missing`",
         ),
         (
             "string replace missing arg",
@@ -10201,6 +10202,7 @@ fn native_codegen_rejects_try_between_non_result_types() {
                         value: Rvalue::Try {
                             value: Operand::Place("source".to_string()),
                             releases_on_error: Vec::new(),
+                            from: None,
                         },
                     },
                 ],
@@ -10215,7 +10217,10 @@ fn native_codegen_rejects_try_between_non_result_types() {
 
     let error = emit_host_object(&invalid_module)
         .expect_err("direct backend try should require Result operands and returns");
-    assert!(error.contains("requires Result types"));
+    assert!(
+        error.contains("`try` needs a `Result` operand and a `Result` return"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -11848,6 +11853,7 @@ fn direct_codegen_ignores_dead_cleanup_and_terminator_metadata_but_checks_cfg_st
                 instructions: vec![Instruction::PushCleanup {
                     place: "missing".to_string(),
                     action: crate::mir::CleanupAction::ResourceClose,
+                    callee: None,
                 }],
                 terminator: Terminator::Unreachable,
             },
@@ -11918,7 +11924,7 @@ fn native_codegen_constructor_initializes_runtime_function_surface() {
     assert_eq!(codegen.program_path, "/tmp/direct_constructor.au");
     assert!(codegen.program_source.contains("return 0"));
     assert!(codegen.classes.is_empty());
-    assert!(codegen.trait_impls.is_empty());
+    assert!(codegen.method_receivers.is_empty());
     assert!(codegen.string_data.is_empty());
     assert!(codegen.functions.contains_key("main"));
     assert!(codegen.function_return_types.contains_key("main"));
@@ -11982,6 +11988,20 @@ fn native_codegen_replace_nested_field_rejects_empty_paths_without_panicking() {
     assert!(error.contains("empty field path"));
 }
 
+/// `function` with each cleanup calling the class method `exit`.
+fn with_cleanup_method(mut function: MirFunction, exit: &str) -> MirFunction {
+    for block in &mut function.blocks {
+        for instruction in &mut block.instructions {
+            if let Instruction::PushCleanup { callee, .. } = instruction {
+                *callee = Some(crate::mir::CleanupCallee::Method {
+                    function: exit.to_string(),
+                });
+            }
+        }
+    }
+    function
+}
+
 fn cleanup_test_function(local_name: &str, ty: Type, place: &str) -> MirFunction {
     MirFunction {
         name: "main".to_string(),
@@ -12001,6 +12021,7 @@ fn cleanup_test_function(local_name: &str, ty: Type, place: &str) -> MirFunction
             instructions: vec![Instruction::PushCleanup {
                 place: place.to_string(),
                 action: crate::mir::CleanupAction::ResourceClose,
+                callee: None,
             }],
             terminator: Terminator::Return(Operand::Int(0)),
         }],
@@ -12097,6 +12118,7 @@ fn dead_assignments_do_not_poison_reachable_cleanup_type_inference() {
                     Instruction::PushCleanup {
                         place: "resource".to_string(),
                         action: crate::mir::CleanupAction::ResourceClose,
+                        callee: None,
                     },
                 ],
                 terminator: Terminator::AssertFail {
@@ -12210,8 +12232,10 @@ fn native_codegen_cleanup_thunks_cover_scalar_plain_opaque_and_metadata_errors()
 
 #[test]
 fn native_codegen_cleanup_thunks_cover_class_close_success_and_missing_targets() {
-    let plain_close_function =
-        cleanup_test_function("resource", Type::named("Resource"), "resource");
+    let plain_close_function = with_cleanup_method(
+        cleanup_test_function("resource", Type::named("Resource"), "resource"),
+        "Resource.close",
+    );
     let resource_close = close_function("Resource");
     let plain_close_module = crate::mir::MirModule {
         unions: Vec::new(),
@@ -12251,7 +12275,10 @@ fn native_codegen_cleanup_thunks_cover_class_close_success_and_missing_targets()
         .expect_err("missing plain-class close targets should be reported");
     assert!(missing_target_error.contains("could not find cleanup close method `Resource.close`"));
 
-    let opaque_close_function = cleanup_test_function("managed", Type::named("Managed"), "managed");
+    let opaque_close_function = with_cleanup_method(
+        cleanup_test_function("managed", Type::named("Managed"), "managed"),
+        "Managed.close",
+    );
     let managed_close = close_function("Managed");
     let opaque_close_module = crate::mir::MirModule {
         unions: Vec::new(),
@@ -12685,7 +12712,7 @@ fn direct_runtime_member_calls_report_unknown_members_and_to_float_arity() {
     let unknown_member_error = emit_host_object(&unknown_member)
         .expect_err("an unknown runtime member cannot be compiled");
     assert!(
-        unknown_member_error.contains("does not know runtime member `str.bogus`"),
+        unknown_member_error.contains("runtime has no member `str.bogus`"),
         "{unknown_member_error}"
     );
 
@@ -12748,20 +12775,20 @@ fn direct_union_receiver_switch_refuses_a_member_without_the_method() {
                     object: Operand::Place(union_local.clone()),
                     field: "greet".to_string(),
                     receiver_place: Some(union_local.clone()),
+                    dispatch: None,
                 },
                 args: Vec::new(),
                 type_args: Default::default(),
             },
         },
     );
-    let main = main.clone();
-    let mut codegen = NativeCodegen::new(&module, "/tmp/union_receiver_switch.au", source)
-        .expect("codegen should initialize");
-    let error = codegen
-        .define_function(&main)
-        .expect_err("the `None` member has no `greet`");
+    let error = crate::mir::methods::validate_methods(
+        &module,
+        crate::mir::methods::MethodsConsumer::Native,
+    )
+    .expect_err("the `None` member has no `greet`");
     assert!(
-        error.contains("direct backend cannot call `.greet` on `None`"),
+        error.contains("`.greet` in `main` resolves to no method: member `None` has no method"),
         "{error}"
     );
 }
@@ -13867,34 +13894,34 @@ def main():
 }
 
 #[test]
-fn member_callee_op_resolves_an_unresolved_member_as_lowering_does() {
+fn member_callee_op_is_the_op_mir_names() {
     use super::MemberCallee;
-    use crate::runtime_ops::{DictOp, ListOp, RuntimeOp, SetOp};
+    use crate::mir::MethodDispatch;
+    use crate::runtime_ops::{DictOp, RuntimeOp, SetOp};
 
-    let list = Type::Named("list".to_string(), vec![Type::named("str")]);
-    let dict = Type::Named(
-        "dict".to_string(),
-        vec![Type::named("str"), Type::named("int64")],
+    let get = RuntimeOp::Dict(DictOp::GetStr);
+    let dispatch = MethodDispatch::Runtime(get);
+    assert_eq!(
+        MemberCallee::Method {
+            field: "get",
+            dispatch: &dispatch,
+        }
+        .op(),
+        Some(get)
     );
-    let key = MirArg {
-        name: None,
-        value: Operand::String("a".to_string()),
-        writeback_place: None,
+    let method = MethodDispatch::Static {
+        function: "Box.get".to_string(),
     };
-    assert!(matches!(
-        MemberCallee::Field("__take_index_option").op(&list, &[]),
-        Some(RuntimeOp::List(ListOp::TakeIndexOption))
-    ));
-    assert!(matches!(
-        MemberCallee::Field("get").op(&dict, std::slice::from_ref(&key)),
-        Some(RuntimeOp::Dict(DictOp::GetStr))
-    ));
-    assert!(MemberCallee::Field("sort").op(&list, &[]).is_none());
+    assert_eq!(
+        MemberCallee::Method {
+            field: "get",
+            dispatch: &method,
+        }
+        .op(),
+        None
+    );
     let take = RuntimeOp::Set(SetOp::TakeIndexOption);
-    assert!(matches!(
-        MemberCallee::Runtime(take).op(&list, &[]),
-        Some(RuntimeOp::Set(SetOp::TakeIndexOption))
-    ));
+    assert_eq!(MemberCallee::Runtime(take).op(), Some(take));
 }
 
 #[test]
@@ -13965,6 +13992,7 @@ fn an_unresolved_internal_slice_needs_all_six_arguments() {
         object: receiver.expect("a slice has a receiver"),
         field: "__slice".to_string(),
         receiver_place: None,
+        dispatch: None,
     };
     call.1.truncate(2);
     let error = super::validate_module(&module).expect_err("a short internal slice must fail");
@@ -14049,5 +14077,88 @@ def main():
             .any(|name| name.ends_with("aura_direct_fail_integer_overflow")
                 || name.ends_with("aura_direct_fail_division_by_zero")),
         "no trap is named, referenced: {referenced:?}"
+    );
+}
+
+#[test]
+fn direct_member_calls_compile_the_dispatch_mir_names() {
+    use crate::mir::MethodDispatch;
+
+    let module = lower_source_to_mir(
+        r#"
+trait Speak:
+    def speak(self) -> int64
+
+class Dog:
+    age: int64
+
+impl Speak for Dog:
+    def speak(self) -> int64:
+        return self.age
+
+class Cat:
+    lives: int64
+
+impl Speak for Cat:
+    def speak(self) -> int64:
+        return self.lives
+
+def show[T: Speak](pet: T) -> int64:
+    return pet.speak()
+
+def main() -> int32:
+    print(show(Dog(age=3)) + show(Cat(lives=9)))
+    return 0
+"#,
+    )
+    .expect("trait dispatch should lower");
+    let with_dispatch = |edit: &dyn Fn(&mut Option<MethodDispatch>)| {
+        let mut module = module.clone();
+        for instruction in module
+            .functions
+            .iter_mut()
+            .filter(|function| function.name == "show")
+            .flat_map(|function| &mut function.blocks)
+            .flat_map(|block| &mut block.instructions)
+        {
+            if let Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee:
+                            CallTarget::Member { dispatch, .. }
+                            | CallTarget::TraitMember { dispatch, .. },
+                        ..
+                    },
+                ..
+            } = instruction
+            {
+                edit(dispatch);
+            }
+        }
+        let show = module
+            .functions
+            .iter()
+            .find(|function| function.name == "show")
+            .cloned()
+            .expect("show should lower");
+        let mut codegen = NativeCodegen::new(&module, "/tmp/direct_dispatch.au", "")
+            .expect("direct codegen should initialize");
+        codegen.define_function(&show)
+    };
+
+    // A receiver whose type is known runs a runtime type test per
+    // candidate, without the erased union path.
+    with_dispatch(&|dispatch| {
+        if let Some(MethodDispatch::Candidates { erased, .. }) = dispatch {
+            *erased = false;
+        }
+    })
+    .expect("a candidate chain on a known receiver should compile");
+
+    let missing = with_dispatch(&|dispatch| *dispatch = None)
+        .expect_err("the emitter needs the dispatch MIR names");
+    assert!(
+        missing.contains("direct backend received member call `.speak` without a dispatch"),
+        "{missing}"
     );
 }

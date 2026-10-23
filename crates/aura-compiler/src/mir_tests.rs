@@ -694,6 +694,7 @@ def main():
                     object: Operand::Place("holder".to_string()),
                     field: "borrow".to_string(),
                     receiver_place: None,
+                    dispatch: None,
                 },
                 args: Vec::new(),
                 type_args: Default::default(),
@@ -1327,6 +1328,7 @@ def main():
         object,
         field,
         receiver_place,
+        dispatch: None,
     };
     assert_public_boundaries_reject(&erased_identity, "requires an authoritative trait identity");
 
@@ -5607,6 +5609,7 @@ def main():
                                 trait_name,
                                 field,
                                 receiver_place,
+                                ..
                             },
                         ..
                     },
@@ -9834,6 +9837,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
                 object: Operand::Place("items".to_string()),
                 field: "append".to_string(),
                 receiver_place: Some("items".to_string()),
+                dispatch: None,
             },
             args: Vec::new(),
             type_args: Default::default()
@@ -14950,6 +14954,7 @@ fn step8d_hand_built_str_queue_and_task_members_run_like_resolved_ones() {
                         object: object.clone(),
                         field: op.name().to_string(),
                         receiver_place: receiver_place.clone(),
+                        dispatch: None,
                     };
                 }
             }
@@ -15156,6 +15161,7 @@ fn step8d_hand_built_collection_members_run_like_resolved_ones() {
                         object: object.clone(),
                         field: op.name().to_string(),
                         receiver_place: receiver_place.clone(),
+                        dispatch: None,
                     };
                 }
             }

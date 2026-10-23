@@ -3927,7 +3927,7 @@ impl MirRuntime {
                 }
                 Ok(None)
             }
-            Instruction::PushCleanup { place, action } => {
+            Instruction::PushCleanup { place, action, .. } => {
                 cleanup_stack.push((place.clone(), action.clone()));
                 Ok(None)
             }
@@ -5535,6 +5535,7 @@ impl MirRuntime {
                 object,
                 field,
                 receiver_place,
+                ..
             }
             | CallTarget::TraitMember {
                 object,

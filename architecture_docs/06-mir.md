@@ -496,8 +496,8 @@ checks each fact.
 
 ## Calls in MIR
 
-MIR states how each call passes its arguments, so a backend does not bind
-them again.
+MIR states how each call passes its arguments and what each member call
+runs, so a backend does not bind arguments or look methods up again.
 
 ### Runtime Op Arguments
 
@@ -562,6 +562,75 @@ trap `Runtime`, the same form as `factor * values`. It does this for
 `add`, `sub`, `mul`, and `div` on `int32`, `int64`, `uint64`, `float32`,
 and `float64`. A program's own method stays a `Member` call, so both
 backends run it.
+
+### Member Calls
+
+A `Member` or `TraitMember` call names what it runs in `dispatch`, a
+`MethodDispatch`, so a backend does not look methods up by name:
+
+- `Static { function }` calls one function with the receiver first. A
+  class's own method wins, then the most specific trait method for the
+  receiver's type. A `TraitMember` call looks only at its trait.
+- `Runtime(op)` is a runtime op on one member of a union receiver. Any
+  other call that resolves to an op is already a `Runtime` call.
+- `Nothing` runs nothing: `close` on `net.HttpExchange`,
+  `net.HttpResponse`, or `net.WebSocketListener`, which own no host
+  resource.
+- `Union(arms)` switches on a union receiver's tag. It holds one arm for
+  each member, in the union's member order, and each arm is one of the
+  forms above.
+- `UnionClone` is `clone` on a union. It copies the active member.
+- `Candidates { candidates, erased }` lists the types that declare the
+  method, most specific first: the classes by name, then the trait impls
+  by specificity. Each candidate names the function it calls. The
+  receiver's runtime type picks the first candidate it matches, and a
+  value that matches none traps. `erased` marks a receiver whose type is a
+  type parameter: a union value there is matched by its active member. A
+  call on a type that only one type declares is `Static`.
+
+`aura mir` shows the dispatch of `pet.speak()` on a `Dog | Cat`
+receiver. The union keeps its members in canonical order, so `Cat` comes
+first:
+
+```text
+callee: TraitMember {
+    object: Place("pet"),
+    trait_name: "Speak",
+    field: "speak",
+    receiver_place: Some("pet"),
+    dispatch: Some(Union([
+        Static { function: "Speak for Cat.speak" },
+        Static { function: "Speak for Dog.speak" },
+    ])),
+},
+```
+
+`Rvalue::Try` names the `from` method of the most specific `From` impl
+when the operand's error type differs from the function's. A
+`PushCleanup` names its `CleanupCallee`:
+
+- `Method { function }`: the class's `close`, or `__exit__` for a manager;
+- `Runtime(op)`: the `close` op of a built-in resource, such as
+  `fs.File`;
+- `CloseTaskGroup`: a `TaskGroup` waits for its tasks;
+- `Nothing`: a handle that owns no host resource.
+
+`mir::methods::resolve_methods` fills all three after the ownership pass:
+in `lower`, and at the native boundary for an implicit module. It reads
+the receiver's MIR type. `lower_implicit` skips the pass, and the
+interpreter dispatches on the runtime value instead.
+
+`validate_methods` resolves each call in a reachable block again. It
+refuses a call, a `try`, or a cleanup that names a callee its types do not
+resolve to. The native boundary also refuses one that names none. The
+interpreter checks a module with explicit ownership, and it accepts an
+unnamed call that resolves to nothing, such as a method no type of the
+program declares in a generic builtin body.
+
+The loan validator tracks the callables a built-in container holds. It
+reads a mutation, such as `append` or `clear`, only from a `Runtime` call.
+A program's own method of the same name is a `Member` call, and it leaves
+the identities of its receiver's fields alone.
 
 ## Why both backends benefit from MIR
 
