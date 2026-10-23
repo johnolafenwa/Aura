@@ -40,6 +40,9 @@ in this file.
 
 ### Changed
 
+- Editor analysis warns `AU5001` about a local that nothing reads. VS Code
+  fades it. A name that starts with `_` and a `with` binding are exempt.
+  `aura check` does not report it.
 - The VS Code extension adds **Aura: Run File**, **Build File**, **Test
   File**, and **Run Workspace Tests**, a Run button in the editor title, and
   a **▶ Run** lens above `def main`. Each saves the file and runs `aura` in
@@ -118,6 +121,17 @@ in this file.
 
 ### Fixed
 
+- Editor analysis survives a statement that fails to check or parse. It
+  takes that statement out, checks the rest of the file again, and reports
+  each independent error, so hover, go-to-definition, references, rename,
+  and the outline keep working. It used to stop at the first error and drop
+  every symbol occurrence in the file, and a syntax error emptied the
+  outline. A header missing its colon, as in `if ready`, is read as if the
+  colon were there.
+- Completion works with errors elsewhere in the file, after `import ` and
+  `from ` with builtin modules and sibling `.au` files, after `case Color.`
+  with the enum's variants, and for a member name typed without the `.`
+  trigger, as in `s.up` or `Array[int32].from_`.
 - A local binding shadows a builtin function name. Calling a local function
   value named `min` or `sum` now calls that value instead of the builtin.
 - The VS Code extension finds `aura` in `~/.local/bin`, `~/.cargo/bin`,

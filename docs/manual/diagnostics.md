@@ -32,6 +32,7 @@ the phase that owns the failure.
 | `AU20xx` | names and types |
 | `AU30xx` | ownership, loans, and transfer |
 | `AU40xx` | runtime-checked traps |
+| `AU50xx` | editor warnings |
 
 The registry is append-only:
 
@@ -470,6 +471,18 @@ It never returns or clones the stored value. The same defense applies when
 malformed backend state reaches `select`. An already-claimed or duplicated
 non-repeatable Task traps with `AU4001` before any result is delivered.
 
+### Editor Warnings
+
+Editor warnings come from editor analysis only. `aura check`, `aura run`, and
+`aura build` do not report them, and they never reject a program.
+
+| Code | Meaning | Common causes | How to fix |
+| --- | --- | --- | --- |
+| `AU5001` | unused local binding | A local or loop variable that nothing reads. | Remove it, or start its name with `_` if it is unused on purpose. |
+
+`AU5001` is reported only when the file checks. A `with` binding is exempt,
+since it holds its resource open for the block.
+
 ## Diagnostic Structure
 
 Every diagnostic contains all of these fields:
@@ -616,6 +629,12 @@ The JavaScript language-server bridge maps each part to the LSP:
 - secondary spans to `relatedInformation`
 - the code to `Diagnostic.code`
 - the remaining metadata to `Diagnostic.data`
+
+When a statement fails to check, analysis replaces that statement and checks
+the rest of the file again. Hover, definitions, references, and the outline
+keep working everywhere else, and each independent error gets its own
+diagnostic. An error that only follows from a replaced statement, such as a
+use of the binding that statement introduced, is not reported.
 
 The language server has no semantic-diagnostic implementation of its own. If
 the compiler service is unavailable, lexical recovery may keep basic editor

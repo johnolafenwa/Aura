@@ -159,16 +159,26 @@ struct ResolvedMember {
 }
 
 pub fn analyze_source(source: &str) -> AnalysisOutput {
-    analyze_with_checker(source, crate::check_source)
+    analyze_with_checker(
+        source,
+        |error| error.render_path.is_none(),
+        crate::check_source,
+    )
 }
 
 pub fn analyze_path_source(path: &Path, source: &str) -> AnalysisOutput {
+    let analyzed = crate::absolutize(path);
+    let is_local = |error: &Diagnostic| {
+        error
+            .render_path
+            .as_deref()
+            .is_none_or(|rendered| crate::absolutize(Path::new(rendered)) == analyzed)
+    };
     let (mut output, reads) = crate::with_source_reads(|| {
-        analyze_with_checker(source, |candidate| {
+        analyze_with_checker(source, is_local, |candidate| {
             crate::check_path_with_source_without_lockfile(path, candidate)
         })
     });
-    let analyzed = crate::absolutize(path);
     output.dependencies = reads
         .into_iter()
         .filter(|read| *read != analyzed)
@@ -184,9 +194,24 @@ pub fn complete_path_source(
     character: usize,
     trigger_character: Option<char>,
 ) -> Result<Vec<AnalysisCompletion>> {
-    complete_with_checker(source, line, character, trigger_character, |candidate| {
-        crate::check_path_with_source_without_lockfile(path, candidate)
-    })
+    let analyzed = crate::absolutize(path);
+    let is_local = |error: &Diagnostic| {
+        error
+            .render_path
+            .as_deref()
+            .is_none_or(|rendered| crate::absolutize(Path::new(rendered)) == analyzed)
+    };
+    if let Some(completions) = import_completions(Some(path), source, line, character) {
+        return Ok(completions);
+    }
+    complete_with_checker(
+        source,
+        line,
+        character,
+        trigger_character,
+        is_local,
+        |candidate| crate::check_path_with_source_without_lockfile(path, candidate),
+    )
 }
 
 pub fn analyze_program(source: &str, program: &Program) -> AnalysisOutput {
@@ -200,17 +225,22 @@ pub fn complete_source(
     character: usize,
     trigger_character: Option<char>,
 ) -> Result<Vec<AnalysisCompletion>> {
+    if let Some(completions) = import_completions(None, source, line, character) {
+        return Ok(completions);
+    }
     complete_with_checker(
         source,
         line,
         character,
         trigger_character,
+        |error: &Diagnostic| error.render_path.is_none(),
         crate::check_source,
     )
 }
 
-fn analyze_with_checker<F>(source: &str, mut check_program: F) -> AnalysisOutput
+fn analyze_with_checker<L, F>(source: &str, is_local: L, mut check_program: F) -> AnalysisOutput
 where
+    L: Fn(&Diagnostic) -> bool,
     F: FnMut(&str) -> Result<Program>,
 {
     match parser::parse(source) {
@@ -220,6 +250,15 @@ where
             {
                 let mut output = analyze_program(source, &program);
                 output.diagnostics.insert(0, analysis_diagnostic(&error));
+                output
+            } else if let Some((program, later)) =
+                recover_program_for_analysis(source, &error, &is_local, &mut check_program)
+            {
+                let mut output = analyze_program(source, &program);
+                output.diagnostics = std::iter::once(&error)
+                    .chain(&later)
+                    .map(analysis_diagnostic)
+                    .collect();
                 output
             } else {
                 AnalysisOutput {
@@ -233,51 +272,155 @@ where
         Ok(module) => {
             let symbols = symbols_from_module(&module, source);
             match check_program(source) {
-                Err(error) => AnalysisOutput {
-                    diagnostics: vec![analysis_diagnostic(&error)],
-                    symbols,
-                    occurrences: Vec::new(),
-                    dependencies: Vec::new(),
-                },
-                Ok(program) => AnalysisBuilder::new(source, &program, symbols).build(),
+                Err(error) => {
+                    // Keep hover, definitions, and references alive in the
+                    // rest of the file while one statement is wrong.
+                    if let Some((program, later)) =
+                        recover_program_for_analysis(source, &error, &is_local, &mut check_program)
+                    {
+                        let mut output = AnalysisBuilder::new(source, &program, symbols).build();
+                        output.diagnostics = std::iter::once(&error)
+                            .chain(&later)
+                            .map(analysis_diagnostic)
+                            .collect();
+                        return output;
+                    }
+                    AnalysisOutput {
+                        diagnostics: vec![analysis_diagnostic(&error)],
+                        symbols,
+                        occurrences: Vec::new(),
+                        dependencies: Vec::new(),
+                    }
+                }
+                Ok(program) => {
+                    let mut output = AnalysisBuilder::new(source, &program, symbols).build();
+                    output
+                        .diagnostics
+                        .extend(unused_binding_warnings(source, &output.occurrences));
+                    output
+                }
             }
         }
     }
 }
 
-fn complete_with_checker<F>(
+/// `AU5001` warnings for locals that nothing reads. They are computed only
+/// for a program that checks, since a replaced statement hides its uses. A
+/// name that starts with `_` is unused on purpose, and a `with` binding holds
+/// its resource open.
+fn unused_binding_warnings(
+    source: &str,
+    occurrences: &[AnalysisOccurrence],
+) -> Vec<AnalysisDiagnostic> {
+    let same_place = |occurrence: &AnalysisOccurrence, range: &AnalysisRange| {
+        occurrence.line == range.line
+            && occurrence.start_character == range.start_character
+            && occurrence.end_character == range.end_character
+    };
+    let lines = source.lines().collect::<Vec<_>>();
+    let mut warnings = Vec::new();
+    let mut reported = BTreeSet::new();
+    for occurrence in occurrences {
+        let Some(definition) = &occurrence.definition else {
+            continue;
+        };
+        let local = occurrence.hover.starts_with("```aura\nbinding ")
+            || occurrence.hover.starts_with("```aura\nlocal ");
+        if !local
+            || !same_place(occurrence, definition)
+            || !reported.insert((
+                definition.file_path.clone(),
+                definition.line,
+                definition.start_character,
+            ))
+        {
+            continue;
+        }
+        let name = lines
+            .get(occurrence.line)
+            .and_then(|text| text.get(occurrence.start_character..occurrence.end_character))
+            .unwrap_or("");
+        // A `with` binding keeps its resource open for the block even unread.
+        let with_binding = lines
+            .get(occurrence.line)
+            .is_some_and(|text| text.trim_start().starts_with("with "));
+        if name.is_empty() || name.starts_with('_') || with_binding {
+            continue;
+        }
+        let used = occurrences.iter().any(|other| {
+            other.definition.as_ref() == Some(definition) && !same_place(other, definition)
+        });
+        if !used {
+            warnings.push(AnalysisDiagnostic {
+                code: "AU5001".to_string(),
+                line: occurrence.line,
+                start_character: occurrence.start_character,
+                end_character: occurrence.end_character,
+                message: format!("local `{name}` is never read"),
+                severity: 2,
+                secondary_spans: Vec::new(),
+                notes: Vec::new(),
+                help: vec![format!(
+                    "remove it, or rename it to `_{name}` if it is unused on purpose"
+                )],
+                edits: Vec::new(),
+                call_frames: Vec::new(),
+                task_ancestry: Vec::new(),
+            });
+        }
+    }
+    warnings
+}
+
+fn complete_with_checker<L, F>(
     source: &str,
     line: usize,
     character: usize,
     trigger_character: Option<char>,
+    is_local: L,
     mut check_program: F,
 ) -> Result<Vec<AnalysisCompletion>>
 where
+    L: Fn(&Diagnostic) -> bool,
     F: FnMut(&str) -> Result<Program>,
 {
+    // `s.up` or `Array[int32].from_` asked for without the `.` trigger, such
+    // as by Ctrl+Space or after a deletion, still completes members.
+    let (trigger_character, character) = match trigger_character {
+        None => match member_dot_before(source.lines().nth(line).unwrap_or(""), character) {
+            Some(dot) => (Some('.'), dot + 1),
+            None => (None, character),
+        },
+        trigger => (trigger, character),
+    };
     let capture_opener = lambda_capture_opener_before_position(source, line, character);
     let program = match check_program(source) {
         Ok(program) => program,
-        Err(error) if trigger_character == Some('.') => {
-            recover_checked_program_after_position(source, line, character, &mut check_program)
-                .ok_or(error)?
+        Err(error) => {
+            let recovered = if trigger_character == Some('.') {
+                recover_checked_program_after_position(source, line, character, &mut check_program)
+            } else if let Some(opener) = capture_opener {
+                let recovered = replace_lambda_capture_statement_with_recovery_stmt(source, opener);
+                recover_checked_program_after_member_errors(&recovered, &mut check_program)
+            } else if !cursor_statement_is_block_header(source, line) {
+                // A name still being typed (`li` on its way to `limits`, or
+                // an empty f-string `{}`) leaves the program unchecked.
+                // Replace the statement under the cursor so the surrounding
+                // scope still checks.
+                let recovered = replace_dangling_member_stmt_with_recovery_stmt(source, line);
+                recover_checked_program_after_member_errors(&recovered, &mut check_program)
+            } else {
+                None
+            };
+            // Errors elsewhere in the file are replaced one statement at a
+            // time, as analysis does. A broken declaration header keeps its
+            // error.
+            match recovered {
+                Some(program) => program,
+                None => recover_around_cursor(source, line, &is_local, &mut check_program)
+                    .ok_or(error)?,
+            }
         }
-        Err(error) if capture_opener.is_some() => {
-            let opener = capture_opener.expect("guarded lambda capture opener remains available");
-            let recovered = replace_lambda_capture_statement_with_recovery_stmt(source, opener);
-            recover_checked_program_after_member_errors(&recovered, &mut check_program)
-                .ok_or(error)?
-        }
-        // A name still being typed (`li` on its way to `limits`, or an empty
-        // f-string `{}`) leaves the program unchecked. Replace the statement
-        // under the cursor so the surrounding scope still checks; a broken
-        // declaration or block header keeps its error.
-        Err(error) if !cursor_statement_is_block_header(source, line) => {
-            let recovered = replace_dangling_member_stmt_with_recovery_stmt(source, line);
-            recover_checked_program_after_member_errors(&recovered, &mut check_program)
-                .ok_or(error)?
-        }
-        Err(error) => return Err(error),
     };
     let builder = AnalysisBuilder::new(source, &program, Vec::new());
     builder.complete(line, character, trigger_character)
@@ -8488,6 +8631,17 @@ fn sanitize_member_completion_source(source: &str, line: usize, character: usize
 }
 
 fn replace_dangling_member_stmt_with_recovery_stmt(source: &str, line: usize) -> String {
+    replace_statement_with_recovery_stmt(source, line, true)
+}
+
+/// Replaces the statement ending on `line` with `pass`, or with a `return` of
+/// a placeholder value when `return_placeholder` asks for one and the
+/// enclosing function returns a value.
+fn replace_statement_with_recovery_stmt(
+    source: &str,
+    line: usize,
+    return_placeholder: bool,
+) -> String {
     let mut lines = source.lines().map(str::to_string).collect::<Vec<_>>();
     let start_line = unmatched_delimiter_statement_start_line(source, line).unwrap_or(line);
     let Some(line_text) = lines.get(start_line) else {
@@ -8497,7 +8651,9 @@ fn replace_dangling_member_stmt_with_recovery_stmt(source: &str, line: usize) ->
         .chars()
         .take_while(|ch| ch.is_whitespace())
         .collect::<String>();
-    let replacement = enclosing_function_return_placeholder(source, start_line)
+    let replacement = return_placeholder
+        .then(|| enclosing_function_return_placeholder(source, start_line))
+        .flatten()
         .map(|value| format!("{}{}", indent, value))
         .unwrap_or_else(|| format!("{}pass", indent));
     if start_line == line {
@@ -8512,6 +8668,267 @@ fn replace_dangling_member_stmt_with_recovery_stmt(source: &str, line: usize) ->
         *line_text = replacement;
     }
     lines.join("\n")
+}
+
+/// Takes the statement under the cursor out of the program, then replaces
+/// each other failing statement until the program checks. A `case X.` header
+/// still being written becomes `case _:`, or goes away with its `match`.
+fn recover_around_cursor<L, F>(
+    source: &str,
+    line: usize,
+    is_local: &L,
+    check_program: &mut F,
+) -> Option<Program>
+where
+    L: Fn(&Diagnostic) -> bool,
+    F: FnMut(&str) -> Result<Program>,
+{
+    let mut candidates = Vec::new();
+    let lines = source.lines().collect::<Vec<_>>();
+    let text = lines.get(line).copied().unwrap_or("");
+    let indent = text.len() - text.trim_start().len();
+    if text.trim_start().starts_with("case ") {
+        let mut edited = lines
+            .iter()
+            .map(|text| text.to_string())
+            .collect::<Vec<_>>();
+        edited[line] = format!("{}case _:", &text[..indent]);
+        candidates.push(edited.join("\n"));
+        edited[line].clear();
+        candidates.push(edited.join("\n"));
+        // The only arm of its `match`: drop the whole statement.
+        if let Some(header) = (0..line).rev().find(|candidate| {
+            let other = lines[*candidate];
+            other.len() - other.trim_start().len() < indent && !other.trim().is_empty()
+        }) {
+            let header_indent = lines[header].len() - lines[header].trim_start().len();
+            edited[header] = format!("{}pass", &lines[header][..header_indent]);
+            for (index, other) in lines.iter().enumerate().skip(header + 1) {
+                let other_indent = other.len() - other.trim_start().len();
+                if index > line && !other.trim().is_empty() && other_indent <= header_indent {
+                    break;
+                }
+                edited[index].clear();
+            }
+            candidates.push(edited.join("\n"));
+        }
+    } else if !cursor_statement_is_block_header(source, line) {
+        candidates.push(replace_statement_with_recovery_stmt(source, line, false));
+        candidates.push(replace_dangling_member_stmt_with_recovery_stmt(
+            source, line,
+        ));
+    }
+    for candidate in candidates {
+        let result = match parser::parse(&candidate) {
+            Ok(_) => check_program(&candidate),
+            Err(error) => Err(error),
+        };
+        match result {
+            Ok(program) => return Some(program),
+            Err(error) => {
+                if let Some((program, _)) =
+                    recover_program_for_analysis(&candidate, &error, is_local, check_program)
+                {
+                    return Some(program);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The byte index of the `.` that begins the member name being typed at
+/// `character`, as in `text.up` or `Array[int32].from_`. Dots inside strings
+/// and comments, and the dot of a float literal such as `1.5`, do not count.
+fn member_dot_before(line_text: &str, character: usize) -> Option<usize> {
+    let prefix = line_text.get(..character)?;
+    let name_start = prefix.trim_end_matches(is_identifier_continue).len();
+    let dot = name_start.checked_sub(1)?;
+    if prefix.as_bytes()[dot] != b'.' || !line_ends_with_dangling_member_dot(&prefix[..=dot]) {
+        return None;
+    }
+    let before = &prefix[..dot];
+    let receiver_word = &before[before.trim_end_matches(is_identifier_continue).len()..];
+    let receiver_ends =
+        before.ends_with(|ch: char| is_identifier_continue(ch) || ")]".contains(ch));
+    if !receiver_ends
+        || (!receiver_word.is_empty() && receiver_word.chars().all(|ch| ch.is_ascii_digit()))
+    {
+        return None;
+    }
+    Some(dot)
+}
+
+/// Module names after `import ` or `from `: the builtin modules, and the `.au`
+/// files and folders beside the file being edited.
+fn import_completions(
+    path: Option<&Path>,
+    source: &str,
+    line: usize,
+    character: usize,
+) -> Option<Vec<AnalysisCompletion>> {
+    let prefix = source.lines().nth(line)?.get(..character)?.trim_start();
+    let typed = prefix
+        .strip_prefix("import ")
+        .or_else(|| prefix.strip_prefix("from "))?
+        .trim_start();
+    if !typed
+        .chars()
+        .all(|ch| is_identifier_continue(ch) || ch == '.')
+    {
+        return None;
+    }
+    let parents = typed
+        .rsplit_once('.')
+        .map(|(parents, _)| parents.split('.').collect::<Vec<_>>())
+        .unwrap_or_default();
+    let mut names = BTreeMap::new();
+    if parents.is_empty() {
+        for name in crate::builtin_modules::builtin_module_registry().into_keys() {
+            names.insert(name, "builtin module".to_string());
+        }
+    }
+    if let Some(directory) = path.and_then(Path::parent) {
+        let directory = parents
+            .iter()
+            .fold(directory.to_path_buf(), |path, part| path.join(part));
+        for entry in std::fs::read_dir(directory).into_iter().flatten().flatten() {
+            let entry_path = entry.path();
+            let Some(stem) = entry_path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            let is_module = entry_path
+                .extension()
+                .is_some_and(|extension| extension == "au");
+            let is_package = entry_path.is_dir() && !stem.starts_with('.');
+            let current = path.and_then(|path| path.file_stem()) == Some(stem.as_ref());
+            if (is_module || is_package) && !current && stem.chars().all(is_identifier_continue) {
+                names
+                    .entry(stem.to_string())
+                    .or_insert_with(|| if is_module { "module" } else { "package" }.to_string());
+            }
+        }
+    }
+    Some(
+        names
+            .into_iter()
+            .map(|(name, detail)| AnalysisCompletion {
+                name,
+                kind: "module".to_string(),
+                detail,
+                documentation: None,
+            })
+            .collect(),
+    )
+}
+
+/// Replaces each failing statement of this file with a recovery statement
+/// until the program checks, so analysis covers everything else. Returns the
+/// errors found after `first`, leaving out the ones that name, or sit on a
+/// line that uses, a binding a replaced statement used to introduce.
+fn recover_program_for_analysis<L, F>(
+    source: &str,
+    first: &Diagnostic,
+    is_local: &L,
+    check_program: &mut F,
+) -> Option<(Program, Vec<Diagnostic>)>
+where
+    L: Fn(&Diagnostic) -> bool,
+    F: FnMut(&str) -> Result<Program>,
+{
+    let mut error = first.clone();
+    let mut candidate = source.to_string();
+    let mut later = Vec::new();
+    let mut lost_bindings = BTreeSet::new();
+    let check = |candidate: &str, check_program: &mut F| match parser::parse(candidate) {
+        Ok(_) => check_program(candidate),
+        Err(error) => Err(error),
+    };
+    for _ in 0..32 {
+        if !is_local(&error) {
+            return None;
+        }
+        let line = error.span?.line.checked_sub(1)?;
+        let mut result = None;
+        if cursor_statement_is_block_header(&candidate, line) {
+            // `if ready` missing its colon is the one header fixed in place.
+            if !error.message.starts_with("expected Colon") {
+                return None;
+            }
+            let mut lines = candidate.lines().map(str::to_string).collect::<Vec<_>>();
+            let text = lines.get_mut(line)?;
+            if text.trim_end().ends_with(':') {
+                return None;
+            }
+            text.truncate(text.trim_end().len());
+            text.push(':');
+            candidate = lines.join("\n");
+        } else {
+            let start = unmatched_delimiter_statement_start_line(&candidate, line).unwrap_or(line);
+            for text in source.lines().take(line + 1).skip(start) {
+                if let Some(name) = statement_binding_name(text) {
+                    lost_bindings.insert(name.to_string());
+                }
+            }
+            // `pass` keeps the statements after this one reachable, so their
+            // errors still show; a function left without a return needs one.
+            let passed = replace_statement_with_recovery_stmt(&candidate, line, false);
+            if passed == candidate {
+                return None;
+            }
+            let passed_result = check(&passed, check_program);
+            let header_error = passed_result.as_ref().err().is_some_and(|next| {
+                next.span.is_some_and(|span| {
+                    cursor_statement_is_block_header(&passed, span.line.saturating_sub(1))
+                })
+            });
+            if header_error {
+                candidate = replace_statement_with_recovery_stmt(&candidate, line, true);
+            } else {
+                candidate = passed;
+                result = Some(passed_result);
+            }
+        }
+        match result.unwrap_or_else(|| check(&candidate, check_program)) {
+            Ok(program) => return Some((program, later)),
+            Err(next_error) => {
+                let error_line = next_error
+                    .span
+                    .and_then(|span| source.lines().nth(span.line.saturating_sub(1)))
+                    .unwrap_or("");
+                let cascade = lost_bindings.iter().any(|name| {
+                    next_error.message.contains(&format!("`{name}`"))
+                        || find_identifier_in_line(error_line, name).is_some()
+                });
+                if !cascade {
+                    later.push(next_error.clone());
+                }
+                error = next_error;
+            }
+        }
+    }
+    None
+}
+
+/// The name a simple `name = ...`, `mut name: T = ...`, or `for name in ...`
+/// statement binds.
+fn statement_binding_name(text: &str) -> Option<&str> {
+    let text = text.trim_start();
+    let text = text
+        .strip_prefix("for ")
+        .or_else(|| text.strip_prefix("mut "))
+        .unwrap_or(text)
+        .trim_start();
+    let end = text
+        .find(|ch: char| !is_identifier_continue(ch))
+        .unwrap_or(text.len());
+    let (name, rest) = text.split_at(end);
+    let rest = rest.trim_start();
+    let binds = rest.starts_with(':')
+        || rest.starts_with(" in")
+        || rest.starts_with("in ")
+        || (rest.starts_with('=') && !rest.starts_with("=="));
+    (!name.is_empty() && binds).then_some(name)
 }
 
 fn cursor_statement_is_block_header(source: &str, line: usize) -> bool {

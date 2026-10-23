@@ -327,6 +327,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         band: "runtime",
         title: "collection value not found",
     },
+    DiagnosticCodeInfo {
+        code: "AU5001",
+        band: "lint",
+        title: "unused local binding",
+    },
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

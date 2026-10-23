@@ -1443,7 +1443,7 @@ test("compiler bridge exposes guarded TaskGroup stack override completion and ho
     const analysis = await analyzeWithCompiler(mainUri, source);
 
     assert.ok(analysis);
-    assert.deepEqual(analysis.diagnostics, []);
+    assert.deepEqual(analysis.diagnostics.filter((diagnostic) => diagnostic.severity === 1), []);
     for (const [line, name, signature] of [
       [6, "start_with_stack", "start_with_stack(bytes: int64, function, own ...) -> Task[T]"],
       [
@@ -1660,7 +1660,7 @@ test("compiler bridge preserves enumerate and zip loop operands", async () => {
     const analysis = await analyzeWithCompiler(mainUri, source);
 
     assert.ok(analysis);
-    assert.deepEqual(analysis.diagnostics, []);
+    assert.deepEqual(analysis.diagnostics.filter((diagnostic) => diagnostic.severity === 1), []);
     const hosts = analysis.occurrences.find(
       (candidate) => candidate.line === 1 && candidate.start_character === 33
     );
@@ -2920,7 +2920,7 @@ test("compiler bridge exposes the complete Duration surface and operator precede
     const analysis = await analyzeWithCompiler(mainUri, source);
 
     assert.ok(analysis);
-    assert.deepEqual(analysis.diagnostics, []);
+    assert.deepEqual(analysis.diagnostics.filter((diagnostic) => diagnostic.severity === 1), []);
     for (const signature of [
       "type Duration",
       "ms(value: int64) -> Duration",
@@ -6275,7 +6275,7 @@ test("compiler bridge exposes the global numeric Array surface and result types"
     const mainUri = `file://${path.join(tempRoot, "main.au")}`;
     const analysis = await analyzeWithCompiler(mainUri, source);
     assert.ok(analysis);
-    assert.deepEqual(analysis.diagnostics, []);
+    assert.deepEqual(analysis.diagnostics.filter((diagnostic) => diagnostic.severity === 1), []);
 
     for (const expected of [
       "binding left: Array[int32]",
@@ -6837,6 +6837,24 @@ test("compiler bridge maps imported definition columns with the imported file te
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
+});
+
+test("unused-binding warnings are faded as unnecessary", () => {
+  const [warning] = compilerDiagnosticsToLsp({
+    diagnostics: [
+      {
+        code: "AU5001",
+        severity: 2,
+        line: 1,
+        start_character: 4,
+        end_character: 10,
+        message: "local `unused` is never read",
+        secondary_spans: []
+      }
+    ]
+  });
+  assert.equal(warning.severity, 2);
+  assert.deepEqual(warning.tags, [1]);
 });
 
 test("compiler discovery searches PATH, then the usual install directories", () => {

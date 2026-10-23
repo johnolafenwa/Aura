@@ -191,7 +191,7 @@ fn diagnostic_code_registry_is_unique_banded_and_append_only_shaped() {
         assert!(entry.code[2..].chars().all(|ch| ch.is_ascii_digit()));
         assert!(matches!(
             entry.band,
-            "lexical" | "parse" | "names/types" | "ownership" | "runtime"
+            "lexical" | "parse" | "names/types" | "ownership" | "runtime" | "lint"
         ));
         assert!(!entry.title.is_empty());
     }
