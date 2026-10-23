@@ -8538,8 +8538,8 @@ fn replace_statement_with_recovery_stmt(
 
 /// Replaces each failing statement of this file with a recovery statement
 /// until the program checks, so analysis covers everything else. Returns the
-/// errors found after `first`, leaving out the ones that name a binding a
-/// replaced statement used to introduce.
+/// errors found after `first`, leaving out the ones that name, or sit on a
+/// line that uses, a binding a replaced statement used to introduce.
 fn recover_program_for_analysis<L, F>(
     source: &str,
     first: &Diagnostic,
@@ -8606,9 +8606,14 @@ where
         match result.unwrap_or_else(|| check(&candidate, check_program)) {
             Ok(program) => return Some((program, later)),
             Err(next_error) => {
-                let cascade = lost_bindings
-                    .iter()
-                    .any(|name| next_error.message.contains(&format!("`{name}`")));
+                let error_line = next_error
+                    .span
+                    .and_then(|span| source.lines().nth(span.line.saturating_sub(1)))
+                    .unwrap_or("");
+                let cascade = lost_bindings.iter().any(|name| {
+                    next_error.message.contains(&format!("`{name}`"))
+                        || find_identifier_in_line(error_line, name).is_some()
+                });
                 if !cascade {
                     later.push(next_error.clone());
                 }
