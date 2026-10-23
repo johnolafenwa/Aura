@@ -55,6 +55,13 @@ in this file.
   as `type_args`. Native code refuses a call whose type arguments do not
   name its callee's type parameters, and so does the interpreter for MIR
   with explicit ownership. Emitted code is unchanged.
+- `aura mir` shows what each member call runs as `dispatch`: the method's
+  function, one arm for each member of a union receiver, or the candidate
+  types a generic receiver picks from at run time. A `try` names the
+  `From` method that converts its error as `from`, and each `with` cleanup
+  names its `close`, `__exit__`, or runtime close as `callee`. Native code
+  refuses MIR that names another callee or none, and so does the
+  interpreter for MIR with explicit ownership. Emitted code is unchanged.
 - Debug builds of the direct runtime stop a task that releases a value it
   does not own.
 - `AURA_RUNTIME_STATS=1` also reports `retains`, `releases`, and `clones`:
@@ -83,6 +90,10 @@ in this file.
   for float64`, runs the program's method in native code. Native code used
   to run the built-in `Array` product instead, so the two backends printed
   different results.
+- A class can declare a method named like a container operation, such as
+  `append`, `clear`, `insert`, `pop`, or `sort`, next to a field that
+  holds a function. Both backends used to reject a call of the field after
+  a call of the method, with `no authoritative callable contract`.
 - A program can call its own function named `list`, `dict`, `set`, or
   `Queue`. Lowering used to give such a call no result type, so both
   backends rejected the program.

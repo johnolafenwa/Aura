@@ -879,6 +879,10 @@ pub enum Instruction {
         place: String,
         #[serde(default)]
         action: CleanupAction,
+        /// What the action runs (see `mir::methods`). Only an explicit
+        /// module names it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        callee: Option<CleanupCallee>,
     },
     /// Removes the top exit action. With `run` it also performs the action;
     /// without it, lowering performs the exit explicitly right after the pop
@@ -904,6 +908,21 @@ pub enum CleanupAction {
     ResourceClose,
     /// `__exit__(mut self)` on a manager place.
     ManagerExit { exit_result: ManagerExitResult },
+}
+
+/// What a cleanup action runs, resolved from its place's type.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CleanupCallee {
+    /// The place's class method, `close` or `__exit__`, with the place as
+    /// its `mut self` receiver.
+    Method { function: String },
+    /// The built-in resource's `close` op.
+    Runtime(RuntimeOp),
+    /// A `TaskGroup` waits for its tasks. It cancels them first when the
+    /// pop asks for that, or when a task failed or the frame is cancelled.
+    CloseTaskGroup,
+    /// The handle owns no host resource, so leaving the scope runs nothing.
+    Nothing,
 }
 
 /// The declared result shape of a manager's `__exit__`.
@@ -1039,6 +1058,11 @@ pub enum Rvalue {
         /// in name order. Only an explicit module names any.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         releases_on_error: Vec<String>,
+        /// The `from` method of the `From` impl that converts the error when
+        /// the operand's error type is not the function's (see
+        /// `mir::methods`). Only an explicit module names it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<String>,
     },
     StartTask {
         returns_handle: bool,
@@ -1147,6 +1171,11 @@ pub enum CallTarget {
         object: Operand,
         field: String,
         receiver_place: Option<String>,
+        /// What the call runs (see `mir::methods`). Lowering for the
+        /// interpreter leaves it out, and the interpreter reads the runtime
+        /// value instead. An explicit module names it on every member call.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dispatch: Option<MethodDispatch>,
     },
     /// A member call selected through one specific generic trait bound.
     ///
@@ -1157,6 +1186,9 @@ pub enum CallTarget {
         trait_name: String,
         field: String,
         receiver_place: Option<String>,
+        /// What the call runs, as on `Member`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dispatch: Option<MethodDispatch>,
     },
     /// A built-in operation resolved from a member call on a receiver of
     /// concrete built-in type (see `crate::runtime_ops`). `receiver` is the
@@ -1167,6 +1199,43 @@ pub enum CallTarget {
         receiver: Option<Operand>,
         receiver_place: Option<String>,
     },
+}
+
+/// What a member call runs, resolved from the receiver's type (see
+/// `mir::methods`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MethodDispatch {
+    /// The call runs this function, with the receiver first: a class
+    /// method or the method of a trait impl.
+    Static { function: String },
+    /// The call is this runtime op on the receiver. A member of a union
+    /// receiver can resolve to one. Any other member call that resolves to
+    /// an op is a `CallTarget::Runtime` call.
+    Runtime(RuntimeOp),
+    /// The call does nothing: `close` on a handle that owns no host
+    /// resource.
+    Nothing,
+    /// The receiver is a union. The call switches on its tag and runs one
+    /// arm for each member, in the union's member order.
+    Union(Vec<MethodDispatch>),
+    /// `clone` on a union copies its active member.
+    UnionClone,
+    /// The receiver's runtime type picks the method. The first candidate
+    /// whose type the value has runs, and a value that matches none traps.
+    /// With `erased`, the receiver's type is a type parameter, and a union
+    /// value is matched by its active member.
+    Candidates {
+        candidates: Vec<MethodCandidate>,
+        erased: bool,
+    },
+}
+
+/// One runtime type a `MethodDispatch::Candidates` call tests, and the
+/// function it runs for a value of that type.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MethodCandidate {
+    pub ty: Type,
+    pub function: String,
 }
 
 /// The receiver, member name, and writeback place of a member call.
@@ -1189,6 +1258,7 @@ impl CallTarget {
                 object,
                 field,
                 receiver_place,
+                ..
             } => Some(MemberCallParts {
                 object,
                 field,
@@ -1200,6 +1270,7 @@ impl CallTarget {
                 trait_name,
                 field,
                 receiver_place,
+                ..
             } => Some(MemberCallParts {
                 object,
                 field,
@@ -3612,6 +3683,7 @@ impl<'a> MirLoanValidationContext<'a> {
                 trait_name,
                 field,
                 receiver_place,
+                ..
             } => {
                 let object_origin = match object {
                     Operand::Place(place) => Some(place.as_str()),
@@ -5520,8 +5592,8 @@ struct ContainerMutation {
     replacements: Vec<(String, ValidatedCallable)>,
 }
 
-/// Computes how a mutating container member call changes the receiver's
-/// element identities. Exact element keys collapse into one merged wildcard
+/// Computes how a mutating container op changes the receiver's element
+/// identities. The op's member name says what it does. Exact element keys collapse into one merged wildcard
 /// identity per descendant suffix, because insertion, removal, and reordering
 /// move elements between indexes at runtime. An operand without authoritative
 /// identity clears the receiver's identities so later reads fall back to the
@@ -5530,12 +5602,23 @@ fn container_mutation_callables(
     value: &Rvalue,
     state: &ValidatedLoanState,
 ) -> std::result::Result<Option<ContainerMutation>, String> {
-    let Rvalue::Call { callee, args, .. } = value else {
+    // Only a built-in container's op mutates its elements. A program's
+    // method of the same name, such as a class's `clear`, is a `Member`
+    // call and keeps the identities of the receiver's fields.
+    let Rvalue::Call {
+        callee:
+            CallTarget::Runtime {
+                op,
+                receiver: Some(object),
+                ..
+            },
+        args,
+        ..
+    } = value
+    else {
         return Ok(None);
     };
-    let Some(MemberCallParts { object, field, .. }) = callee.member_parts() else {
-        return Ok(None);
-    };
+    let field = op.name();
     let (Operand::Place(receiver) | Operand::MovePlace(receiver)) = object else {
         return Ok(None);
     };
@@ -9082,7 +9165,7 @@ fn validate_loan_instruction(
                 validate_loan_operand(function, &Operand::Place(place.clone()), context, state)?;
             }
         }
-        Instruction::PushCleanup { place, action } => {
+        Instruction::PushCleanup { place, action, .. } => {
             if place_has_borrowed_value_origin(place, state) {
                 return Err(format!(
                     "invalid MIR cleanup `{place}` in `{}` cannot close a borrowed value",
@@ -9186,7 +9269,7 @@ fn validate_manager_exit_actions(
     };
     for block in &function.blocks {
         for (index, instruction) in block.instructions.iter().enumerate() {
-            let Instruction::PushCleanup { place, action } = instruction else {
+            let Instruction::PushCleanup { place, action, .. } = instruction else {
                 continue;
             };
             let exit_method =
@@ -10045,6 +10128,7 @@ fn rvalue_place_mentions<'a>(value: &'a Rvalue, mentions: &mut Vec<&'a str>) {
         Rvalue::Try {
             value,
             releases_on_error,
+            ..
         } => {
             operand_place_mention(value, mentions);
             mentions.extend(releases_on_error.iter().map(String::as_str));
@@ -10148,6 +10232,7 @@ pub fn lower(program: &Program) -> MirModule {
     checks::resolve_checks(&mut module);
     ownership::insert_ownership(&mut module);
     type_args::record_call_type_args(&mut module);
+    methods::resolve_methods(&mut module);
     module
 }
 
@@ -10706,6 +10791,7 @@ fn push_display_wrappers(program: &Program, functions: &mut Vec<MirFunction>) {
                             object: Operand::Place("value".to_string()),
                             field: crate::sema::DISPLAY_METHOD.to_string(),
                             receiver_place: Some("value".to_string()),
+                            dispatch: None,
                         },
                         args: Vec::new(),
                         type_args: Default::default(),
@@ -13584,6 +13670,7 @@ impl<'a> Lowerer<'a> {
                         trait_name,
                         field,
                         receiver_place: None,
+                        dispatch: None,
                     },
                     args: vec![MirArg {
                         name: None,
@@ -13833,6 +13920,7 @@ impl<'a> Lowerer<'a> {
                             object: lowered_object.clone(),
                             field: index_field,
                             receiver_place: receiver_place.clone(),
+                            dispatch: None,
                         },
                         args: vec![
                             MirArg {
@@ -13878,6 +13966,7 @@ impl<'a> Lowerer<'a> {
                         object: lowered_object,
                         field: set_index_field,
                         receiver_place,
+                        dispatch: None,
                     },
                     args: vec![
                         MirArg {
@@ -16435,6 +16524,7 @@ impl<'a> Lowerer<'a> {
                     object: scrutinee.clone(),
                     field: "len".to_string(),
                     receiver_place: receiver_place.clone(),
+                    dispatch: None,
                 },
                 args: Vec::new(),
                 type_args: Default::default(),
@@ -16531,6 +16621,7 @@ impl<'a> Lowerer<'a> {
                                 object: scrutinee.clone(),
                                 field: INTERNAL_SLICE_FIELD.to_string(),
                                 receiver_place: receiver_place.clone(),
+                                dispatch: None,
                             },
                             args,
                             type_args: Default::default(),
@@ -16570,6 +16661,7 @@ impl<'a> Lowerer<'a> {
                                 object: scrutinee.clone(),
                                 field: INTERNAL_VEC_INDEX_FIELD.to_string(),
                                 receiver_place: receiver_place.clone(),
+                                dispatch: None,
                             },
                             args,
                             type_args: Default::default(),
@@ -17205,6 +17297,7 @@ impl<'a> Lowerer<'a> {
                         object: object.clone(),
                         field: INTERNAL_VEC_INDEX_OPTION_FIELD.to_string(),
                         receiver_place: receiver_place.clone(),
+                        dispatch: None,
                     },
                     args: vec![MirArg {
                         name: None,
@@ -17459,6 +17552,7 @@ impl<'a> Lowerer<'a> {
                             object: iterable.clone(),
                             field,
                             receiver_place,
+                            dispatch: None,
                         },
                         args,
                         type_args: Default::default(),
@@ -17527,6 +17621,7 @@ impl<'a> Lowerer<'a> {
                                 object: Operand::Place(place.clone()),
                                 field: "reverse".to_string(),
                                 receiver_place: Some(place.clone()),
+                                dispatch: None,
                             },
                             args: Vec::new(),
                             type_args: Default::default(),
@@ -17561,6 +17656,7 @@ impl<'a> Lowerer<'a> {
                                     object: iterable.clone(),
                                     field: "len".to_string(),
                                     receiver_place,
+                                    dispatch: None,
                                 },
                                 args: Vec::new(),
                                 type_args: Default::default(),
@@ -17629,6 +17725,7 @@ impl<'a> Lowerer<'a> {
                                 object: iterable.clone(),
                                 field: INTERNAL_VEC_INDEX_FIELD.to_string(),
                                 receiver_place,
+                                dispatch: None,
                             },
                             args,
                             type_args: Default::default(),
@@ -17674,6 +17771,7 @@ impl<'a> Lowerer<'a> {
                                 object: iteration_object,
                                 field: iteration_field,
                                 receiver_place: iteration_receiver_place,
+                                dispatch: None,
                             },
                             args: vec![MirArg {
                                 name: None,
@@ -17778,6 +17876,7 @@ impl<'a> Lowerer<'a> {
                             object: iteration_object,
                             field: iteration_field,
                             receiver_place: iteration_receiver_place,
+                            dispatch: None,
                         },
                         args: vec![MirArg {
                             name: None,
@@ -18272,6 +18371,7 @@ impl<'a> Lowerer<'a> {
                             object: Operand::Place(result_place.to_string()),
                             field: "add".to_string(),
                             receiver_place: Some(result_place.to_string()),
+                            dispatch: None,
                         },
                         args: vec![MirArg {
                             name: None,
@@ -18301,6 +18401,7 @@ impl<'a> Lowerer<'a> {
                             object: Operand::Place(result_place.to_string()),
                             field: INTERNAL_MAP_SET_INDEX_FIELD.to_string(),
                             receiver_place: Some(result_place.to_string()),
+                            dispatch: None,
                         },
                         args: vec![
                             MirArg {
@@ -18881,6 +18982,7 @@ impl<'a> Lowerer<'a> {
                                 trait_name,
                                 field,
                                 receiver_place,
+                                dispatch: None,
                             },
                             args: Vec::new(),
                             type_args: Default::default(),
@@ -18929,6 +19031,7 @@ impl<'a> Lowerer<'a> {
                     value: Rvalue::Try {
                         value,
                         releases_on_error: Vec::new(),
+                        from: None,
                     },
                 });
                 Operand::Place(temp)
@@ -18969,6 +19072,7 @@ impl<'a> Lowerer<'a> {
                                 trait_name,
                                 field,
                                 receiver_place,
+                                dispatch: None,
                             },
                             args,
                             type_args: Default::default(),
@@ -19156,6 +19260,7 @@ impl<'a> Lowerer<'a> {
                             object: lowered_object,
                             field,
                             receiver_place,
+                            dispatch: None,
                         },
                         args: vec![
                             MirArg {
@@ -19902,6 +20007,7 @@ impl<'a> Lowerer<'a> {
                     object: ordering_source.clone(),
                     field: "len".to_string(),
                     receiver_place: None,
+                    dispatch: None,
                 },
                 args: Vec::new(),
                 type_args: Default::default(),
@@ -20068,6 +20174,7 @@ impl<'a> Lowerer<'a> {
                     object: source,
                     field: INTERNAL_VEC_INDEX_OPTION_FIELD.to_string(),
                     receiver_place: None,
+                    dispatch: None,
                 },
                 args: vec![MirArg {
                     name: None,
@@ -20094,6 +20201,7 @@ impl<'a> Lowerer<'a> {
                     object: source,
                     field: INTERNAL_VEC_INDEX_FIELD.to_string(),
                     receiver_place: None,
+                    dispatch: None,
                 },
                 args: vec![
                     MirArg {
@@ -20134,6 +20242,7 @@ impl<'a> Lowerer<'a> {
                     object: Operand::Place(left.to_string()),
                     field: "lt".to_string(),
                     receiver_place: None,
+                    dispatch: None,
                 },
                 args: vec![MirArg {
                     name: None,
@@ -20159,6 +20268,7 @@ impl<'a> Lowerer<'a> {
                     object: vector,
                     field: "append".to_string(),
                     receiver_place: Some(vector_place.to_string()),
+                    dispatch: None,
                 },
                 args: vec![MirArg {
                     name: None,
@@ -20179,6 +20289,7 @@ impl<'a> Lowerer<'a> {
                     object: vector,
                     field: "swap".to_string(),
                     receiver_place: Some(vector_place.to_string()),
+                    dispatch: None,
                 },
                 args: vec![
                     MirArg {
@@ -20262,6 +20373,7 @@ impl<'a> Lowerer<'a> {
                     object: container,
                     field: member.to_string(),
                     receiver_place,
+                    dispatch: None,
                 },
                 args: vec![MirArg {
                     name: None,
@@ -20603,6 +20715,7 @@ impl<'a> Lowerer<'a> {
                     object: lowered_object,
                     field: INTERNAL_SLICE_FIELD.to_string(),
                     receiver_place,
+                    dispatch: None,
                 },
                 args: vec![
                     MirArg {
@@ -22169,6 +22282,7 @@ impl<'a> Lowerer<'a> {
                                 object,
                                 field: "len".to_string(),
                                 receiver_place,
+                                dispatch: None,
                             },
                             args: Vec::new(),
                             type_args: Default::default(),
@@ -23072,11 +23186,13 @@ impl<'a> Lowerer<'a> {
                                 trait_name,
                                 field: field.clone(),
                                 receiver_place,
+                                dispatch: None,
                             },
                             None => CallTarget::Member {
                                 object: lowered_object,
                                 field: field.clone(),
                                 receiver_place,
+                                dispatch: None,
                             },
                         },
                         args: lowered_args,
@@ -26166,6 +26282,7 @@ impl<'a> Lowerer<'a> {
                 object,
                 field,
                 receiver_place: Some(receiver_place),
+                ..
             } => {
                 place_paths_overlap(receiver_place, place)
                     && self.member_call_mutates_receiver(object, None, field)
@@ -26175,6 +26292,7 @@ impl<'a> Lowerer<'a> {
                 trait_name,
                 field,
                 receiver_place: Some(receiver_place),
+                ..
             } => {
                 place_paths_overlap(receiver_place, place)
                     && self.member_call_mutates_receiver(object, Some(trait_name), field)
@@ -26458,6 +26576,7 @@ impl<'a> Lowerer<'a> {
         self.emit(Instruction::PushCleanup {
             place: place.clone(),
             action,
+            callee: None,
         });
         self.with_stack.push(place.clone());
         let mut body_endings = ending_loans
@@ -26803,6 +26922,9 @@ pub(crate) mod checks;
 #[path = "mir_type_args.rs"]
 pub(crate) mod type_args;
 
+#[path = "mir_methods.rs"]
+pub(crate) mod methods;
+
 pub(crate) use ownership_check::validate_ownership;
 
 /// Why a module failed the checks every execution boundary runs.
@@ -26824,11 +26946,14 @@ pub(crate) fn validate_at_boundary(
         checks::resolve_checks(module);
         ownership::insert_ownership(module);
         type_args::record_call_type_args(module);
+        methods::resolve_methods(module);
     }
     validate_loan_flow(module).map_err(BoundaryError::LoanFlow)?;
     validate_ownership(module).map_err(BoundaryError::Ownership)?;
     checks::validate_checks(module).map_err(BoundaryError::Checks)?;
-    type_args::validate_call_type_args(module).map_err(BoundaryError::LoanFlow)
+    type_args::validate_call_type_args(module).map_err(BoundaryError::LoanFlow)?;
+    methods::validate_methods(module, methods::MethodsConsumer::Native)
+        .map_err(BoundaryError::LoanFlow)
 }
 
 /// The checks the interpreter runs. It decides ownership itself, so an
@@ -26847,7 +26972,9 @@ pub(crate) fn validate_for_interpreter(
         return Ok(());
     }
     checks::validate_checks(module).map_err(BoundaryError::Checks)?;
-    type_args::validate_call_type_args(module).map_err(BoundaryError::LoanFlow)
+    type_args::validate_call_type_args(module).map_err(BoundaryError::LoanFlow)?;
+    methods::validate_methods(module, methods::MethodsConsumer::Interpreter)
+        .map_err(BoundaryError::LoanFlow)
 }
 
 pub(crate) use runtime_ops::{

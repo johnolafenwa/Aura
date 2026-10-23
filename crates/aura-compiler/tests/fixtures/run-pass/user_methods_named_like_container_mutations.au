@@ -1,0 +1,22 @@
+type Unary = def(int64) -> int64
+
+def double(value: int64) -> int64:
+    return value * 2
+
+class Pipeline:
+    step: Unary
+    count: int64
+
+    def append(mut self, amount: int64):
+        self.count = self.count + amount
+
+    def clear(mut self):
+        self.count = 0
+
+def main():
+    mut pipeline = Pipeline(step=Unary(double), count=3)
+    pipeline.append(2)
+    print(pipeline.step(pipeline.count))
+    pipeline.clear()
+    print(pipeline.step(4))
+    print(pipeline.count)

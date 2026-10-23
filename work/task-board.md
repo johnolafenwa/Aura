@@ -54,13 +54,18 @@ Last updated: 2026-10-23
   dominates `aura build` on this host. The checkpoint's Step 8 Results
   section has the numbers. Details are in
   `2026-10-22-batch-7-step-8g-measure.md`.
-- In progress: 8h, recommended by 8g, in two PRs. PR 1 binds each runtime
-  op call's arguments in MIR, in parameter order with every default
-  filled in, and records each generic call's type arguments. It also
-  resolves a number method with an `Array` argument in MIR. Objects are
-  byte-identical, and the emitter shrinks from 14,942 to 14,600 lines.
-  Details are in `2026-10-23-batch-7-step-8h1-arguments.md`. PR 2 moves
-  method resolution and cleanup callees. Then step 9.
+- Done: 8h part 1. It binds each runtime op call's arguments in MIR, in
+  parameter order with every default filled in, and records each generic
+  call's type arguments. It also resolves a number method with an `Array`
+  argument in MIR. Objects are byte-identical, and the emitter shrinks
+  from 14,942 to 14,600 lines. Details are in
+  `2026-10-23-batch-7-step-8h1-arguments.md`.
+- In review: 8h part 2. Each member call names its `MethodDispatch`, each
+  `try` its `From` method, and each `with` cleanup its callee. The
+  validator keys container mutations on runtime ops, which fixes a class
+  method named like one. Objects are byte-identical, and the emitter
+  shrinks from 14,600 to 14,202 lines. Details are in
+  `2026-10-23-batch-7-step-8h2-methods-and-cleanups.md`. Next: step 9.
 
 ## Aura 0.6.0 preview release (complete)
 

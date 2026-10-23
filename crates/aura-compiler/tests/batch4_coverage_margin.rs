@@ -372,7 +372,7 @@ fn forged_class_receiver_constants_are_rejected_by_both_backends() {
     let native = emit_host_native_object(&mir).expect_err("native emission must reject it too");
     assert_eq!(
         native,
-        "direct backend does not support member call `.bump` on `int64`"
+        "invalid MIR member call `.bump` in `main` resolves to no method: `int64` has no method `bump`"
     );
 }
 

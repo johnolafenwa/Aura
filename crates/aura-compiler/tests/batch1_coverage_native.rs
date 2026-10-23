@@ -672,16 +672,16 @@ fn native_backend_dispatches_union_receivers_across_trait_candidates() {
         .as_array_mut()
         .unwrap()
         .push(duplicate);
-    assert_native_rejects(encoded, "does not know method");
+    assert_native_rejects(encoded, "resolves to no method");
 
     let mut encoded = encode(GENERIC_TRAIT);
     trait_member_call_mut(function_mut(&mut encoded, "show"))["callee"]["TraitMember"]["field"] =
         json!("vanish");
-    assert_native_rejects(encoded, "does not know dynamic method `.vanish`");
+    assert_native_rejects(encoded, "no type declares `.vanish` for `T`");
 
     let mut encoded = encode(GENERIC_TRAIT);
     encoded["trait_impls"][0]["for_type"] = json!({ "Tuple": [{ "Named": ["int64", []] }] });
-    assert_native_rejects(encoded, "does not know how to call dynamic method `.speak`");
+    assert_native_rejects(encoded, "candidate `(int64,)` is not a named type");
 }
 
 // ---------------------------------------------------------------------------
@@ -810,12 +810,15 @@ fn native_backend_rejects_try_conversions_without_from_implementations() {
     encoded["trait_impls"] = json!([]);
     assert_native_rejects(
         encoded,
-        "could not find `From[ReadError] for AppError` required by `try`",
+        "no `From[ReadError] for AppError` converts the error",
     );
 
     let mut encoded = encode(TRY_FROM);
     encoded["trait_impls"][0]["methods"][0]["function_name"] = json!("From.vanished");
-    assert_native_rejects(encoded, "does not know From function `From.vanished`");
+    assert_native_rejects(
+        encoded,
+        "names a `From` conversion its error types do not resolve to",
+    );
 }
 
 const UNION_MATCH: &str = "def describe(value: int64 | None) -> int64:\n    match value:\n        case int64 as number:\n            return number\n        case None:\n            return 0\ndef main():\n    print(describe(3))\n    print(describe(None))\n";

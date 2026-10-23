@@ -144,6 +144,7 @@ impl Lowerer<'_> {
                     object: Operand::Place(base.to_string()),
                     field: field.to_string(),
                     receiver_place: Some(base.to_string()),
+                    dispatch: None,
                 },
                 args: args.into_iter().map(arg).collect(),
                 type_args: Default::default(),

@@ -118,6 +118,7 @@ fn a_target_takes_what_it_is_given() {
         roles(&assign(Rvalue::Try {
             value: place("r"),
             releases_on_error: Vec::new(),
+            from: None,
         })),
         expect(&[("r", Consume)])
     );
@@ -290,6 +291,7 @@ fn calls_consume_arguments_except_extern_and_runtime_borrows() {
                 object: place("o"),
                 field: "m".to_string(),
                 receiver_place: Some("o".to_string()),
+                dispatch: None,
             },
             vec![arg(None, "a")]
         )),
@@ -955,6 +957,7 @@ def main():
                         Rvalue::Try {
                             value,
                             releases_on_error,
+                            ..
                         },
                     ..
                 } => Some((value, releases_on_error)),
@@ -1055,6 +1058,7 @@ fn a_call_on_a_boxed_generic_receiver_borrows_it() {
                 object: place(object),
                 field: "map".to_string(),
                 receiver_place: Some(object.to_string()),
+                dispatch: None,
             },
             vec![arg(None, "value")],
         )
