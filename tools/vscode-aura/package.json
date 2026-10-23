@@ -78,6 +78,24 @@
         }
       }
     ],
+    "commands": [
+      {
+        "command": "aura.restartLanguageServer",
+        "title": "Restart Language Server",
+        "category": "Aura"
+      }
+    ],
+    "configuration": {
+      "title": "Aura",
+      "properties": {
+        "aura.compilerPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Full path to the `aura` executable the language server runs. Leave empty to use `aura` on `PATH`, then `~/.local/bin`, `~/.cargo/bin`, `/opt/homebrew/bin`, and `/usr/local/bin`."
+        }
+      }
+    },
     "snippets": [
       {
         "language": "aura",

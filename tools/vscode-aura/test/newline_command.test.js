@@ -73,9 +73,11 @@ function createFakeEditor(lines, cursors) {
   return editor;
 }
 
-async function activateWithEditor(editor) {
+async function activateWithEditor(editor, settings = {}) {
   const commands = new Map();
   const executed = [];
+  const clients = [];
+  const configurationListeners = [];
   const fakeVscode = {
     Position,
     Selection,
@@ -90,11 +92,28 @@ async function activateWithEditor(editor) {
       }
     },
     window: { activeTextEditor: editor },
-    workspace: { createFileSystemWatcher: () => ({ dispose() {} }) }
+    workspace: {
+      createFileSystemWatcher: () => ({ dispose() {} }),
+      getConfiguration: () => ({
+        get: (key, fallback) => (key in settings ? settings[key] : fallback)
+      }),
+      onDidChangeConfiguration(listener) {
+        configurationListeners.push(listener);
+        return { dispose() {} };
+      }
+    }
   };
   class FakeLanguageClient {
-    async start() {}
-    async stop() {}
+    constructor(id, name, serverOptions, clientOptions) {
+      Object.assign(this, { serverOptions, clientOptions, started: false, stopped: false });
+      clients.push(this);
+    }
+    async start() {
+      this.started = true;
+    }
+    async stop() {
+      this.stopped = true;
+    }
     dispose() {}
   }
   const originalLoad = Module._load;
@@ -118,7 +137,7 @@ async function activateWithEditor(editor) {
     subscriptions: [],
     asAbsolutePath: (relative) => path.join(__dirname, "..", relative)
   });
-  return { type: commands.get("type"), executed };
+  return { type: commands.get("type"), commands, executed, clients, configurationListeners };
 }
 
 function cursorPositions(editor) {
@@ -179,4 +198,31 @@ test("Enter with two cursors on one line splits the line at both cursors", async
     [1, 0],
     [2, 0]
   ]);
+});
+
+test("aura.compilerPath reaches the server and a change restarts it", async () => {
+  const settings = { compilerPath: "~/.local/bin/aura" };
+  const { commands, clients, configurationListeners } = await activateWithEditor(
+    createFakeEditor(["x"], [[0, 1]]),
+    settings
+  );
+  assert.equal(clients.length, 1);
+  assert.equal(clients[0].serverOptions.run.options.env.AURA_LSP_AURA_PATH, "~/.local/bin/aura");
+  assert.deepEqual(
+    clients[0].clientOptions.documentSelector.map((selector) => selector.scheme),
+    ["file", "untitled"]
+  );
+
+  settings.compilerPath = "/opt/aura/bin/aura";
+  configurationListeners[0]({ affectsConfiguration: (section) => section === "aura.compilerPath" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(clients.length, 2);
+  assert.equal(clients[0].stopped, true);
+  assert.equal(clients[1].started, true);
+  assert.equal(clients[1].serverOptions.run.options.env.AURA_LSP_AURA_PATH, "/opt/aura/bin/aura");
+
+  configurationListeners[0]({ affectsConfiguration: () => false });
+  await commands.get("aura.restartLanguageServer")();
+  assert.equal(clients.length, 3);
+  assert.equal(clients[1].stopped, true);
 });
