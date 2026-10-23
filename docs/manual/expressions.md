@@ -849,10 +849,12 @@ needs an expected type:
 ```aura
 values: list[int32] = []
 counts: dict[str, int32] = {}
-seen = set[int32]()
+seen: set[int32] = {}
 ```
 
-`{}` is a dictionary literal. An empty set uses `set[T]()`.
+`{}` is an empty set when the expected type is `set[T]`, and an empty
+dictionary otherwise. `list[T]()`, `dict[K, V]()`, and `set[T]()` build the
+same empty collections without an expected type.
 
 Collection literals may span physical lines while their `[` or `{` is open.
 They accept one trailing comma before the closing delimiter.

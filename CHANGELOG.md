@@ -7,6 +7,13 @@ in this file.
 
 ## Unreleased
 
+### Documentation
+
+- The manual and tutorials now show that `{}` is an empty set when the
+  expected type is `set[T]`, as in `seen: set[int32] = {}`. The checker
+  already accepted this form; the docs said an empty set needed
+  `set[T]()`.
+
 ### Changed
 
 - `aura mir` prints built-in calls on files, sockets, processes,

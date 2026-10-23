@@ -4169,12 +4169,15 @@ empty: dict[str, int32] = {}
 other = dict[str, int32]()
 ```
 
-A set literal uses braces when the context expects a `set[T]`. `{}` is a
-dictionary literal, so an empty set needs its typed constructor.
+A set literal uses braces when the context expects a `set[T]`. Without that
+context `{}` is a dictionary literal, so an empty set takes its type from an
+annotation, a parameter, a field, or a return type, or from the typed
+constructor.
 
 ```aura
 seen: set[int32] = {1, 2, 3}
-empty = set[int32]()
+empty: set[int32] = {}
+other = set[int32]()
 ```
 
 Every literal is homogeneous in each type position. The checker rejects mixed
@@ -9803,10 +9806,12 @@ needs an expected type:
 ```aura
 values: list[int32] = []
 counts: dict[str, int32] = {}
-seen = set[int32]()
+seen: set[int32] = {}
 ```
 
-`{}` is a dictionary literal. An empty set uses `set[T]()`.
+`{}` is an empty set when the expected type is `set[T]`, and an empty
+dictionary otherwise. `list[T]()`, `dict[K, V]()`, and `set[T]()` build the
+same empty collections without an expected type.
 
 Collection literals may span physical lines while their `[` or `{` is open.
 They accept one trailing comma before the closing delimiter.
@@ -13261,8 +13266,8 @@ expressions require parentheses. An unparenthesized comma is accepted only in
 an unpack target. `()` is rejected.
 
 A nonempty brace literal is a dictionary when its first element is followed by
-`:`, and a set otherwise. `{}` is an empty dictionary. An empty set uses the
-typed `set[T]()` constructor.
+`:`, and a set otherwise. `{}` is an empty set when the expected type is
+`set[T]`, and an empty dictionary otherwise.
 
 ### Comprehensions
 
@@ -17995,6 +18000,11 @@ host allocator. On both backends, the runtime counts every union payload box,
 closure environment, opaque runtime box, and callable overflow allocation. A
 process run with `AURA_RUNTIME_STATS=1` prints the totals on standard error
 when its program ends.
+
+The same line reports how often the direct backend retains, releases, and
+copies a boxed value, as `retains`, `releases`, and `clones`. The direct
+runtime counts these only when the report is requested. The interpreter
+reports zero for them.
 
 `benchmarks/representation` holds the programs.
 `scripts/bench-representation.py` records the counters, the direct binary's
@@ -30073,7 +30083,8 @@ Empty collections need a type:
   `values: list[int32] = []`. You can also write `list[int32]()`.
 - An empty dictionary literal needs an expected `dict[K, V]` type, such as
   `counts: dict[str, int32] = {}`. You can also write `dict[K, V]()`.
-- An empty set uses a typed constructor, such as `set[int32]()`.
+- An empty set literal is `{}` with an expected `set[T]` type, such as
+  `seen: set[int32] = {}`. You can also write `set[int32]()`.
 
 ### Operators
 
