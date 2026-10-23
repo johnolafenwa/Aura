@@ -3,9 +3,9 @@ use super::{
     base_type_name, block_contains_line, builtin_enum_hover, builtin_enum_variant_completions,
     builtin_function_hover, builtin_function_return_type, builtin_member_completions,
     callable_contains_line, complete_path_source, complete_source,
-    enclosing_function_return_placeholder, expression_end_line, extract_receiver_before_dot,
-    extract_receiver_ending_before, find_identifier_in_line, find_receiver_start,
-    first_dangling_member_line, format_class_hover, format_enum_hover_named,
+    cursor_statement_is_block_header, enclosing_function_return_placeholder, expression_end_line,
+    extract_receiver_before_dot, extract_receiver_ending_before, find_identifier_in_line,
+    find_receiver_start, first_dangling_member_line, format_class_hover, format_enum_hover_named,
     format_function_detail, format_function_hover, format_method_hover, format_value_hover,
     format_variant_hover, infer_builtin_variant_call, lambda_capture_opener_before_position,
     lower_type_ref, placeholder_stmt_for_return_type, range_from_span, range_from_span_with_path,
@@ -10864,4 +10864,100 @@ fn decorated_functions_hover_with_their_decorators_and_hide_generated_names() {
             .all(|label| !label.starts_with("__aura_")),
         "{completions:?}"
     );
+}
+
+#[test]
+fn completion_offers_locals_while_a_name_is_still_being_typed() {
+    let prefix = [
+        "def main() -> int32:",
+        "    limits = 10",
+        "    enabled = true",
+        "    name = \"John\"",
+    ]
+    .join("\n");
+    let cases = [
+        ("    print(f\"Limit: {li}\")", "{li"),
+        ("    print(f\"Limit: {}\")", "{"),
+        ("    print(f\"Limit: {li\")", "{li"),
+        ("    print(f\"Limit: {limits}, name: {na}\")", "{na"),
+        ("    print(li)", "(li"),
+        ("    total = li", "= li"),
+    ];
+    for (line_text, before_cursor) in cases {
+        let source = format!("{prefix}\n{line_text}\n    later = 1\n    return 0\n");
+        let character = line_text.find(before_cursor).unwrap() + before_cursor.len();
+        let names = complete_source(&source, 4, character, None)
+            .unwrap_or_else(|error| panic!("completion in `{line_text}` failed: {error:?}"))
+            .into_iter()
+            .map(|completion| completion.name)
+            .collect::<BTreeSet<_>>();
+        for local in ["limits", "enabled", "name"] {
+            assert!(
+                names.contains(local),
+                "`{line_text}` should offer {local}: {names:?}"
+            );
+        }
+        assert!(
+            !names.contains("later"),
+            "`{line_text}` must not offer later locals"
+        );
+    }
+}
+
+#[test]
+fn half_typed_name_recovery_leaves_block_headers_alone() {
+    assert!(cursor_statement_is_block_header("def main(\n", 0));
+    assert!(cursor_statement_is_block_header("@decorator\n", 0));
+    assert!(cursor_statement_is_block_header(
+        "def main():\n    if (ready and\n        li\n",
+        2
+    ));
+    assert!(!cursor_statement_is_block_header(
+        "def main():\n    print(li)\n",
+        1
+    ));
+    assert!(!cursor_statement_is_block_header("def main():\n", 3));
+}
+
+#[test]
+fn completion_offers_keyword_arguments_the_call_has_not_bound() {
+    let source = [
+        "def is_divisible(numerator: int32, denominator: int32 = 2) -> bool:",
+        "    return (numerator % denominator) == 0",
+        "",
+        "def main() -> int32:",
+        "    print(is_divisible(4, de))",
+        "    print(is_divisible())",
+        "    print(is_divisible(4, denominator=3))",
+        "    print(f\"{is_divisible(4)} is_divisible(\")",
+        "    return 0",
+        "",
+    ]
+    .join("\n");
+    let names_at = |line: usize, needle: &str| {
+        let text = source.lines().nth(line).unwrap();
+        let character = text.find(needle).unwrap() + needle.len();
+        complete_source(&source, line, character, None)
+            .unwrap_or_else(|error| panic!("completion in `{text}` failed: {error:?}"))
+            .into_iter()
+            .filter(|completion| completion.kind == "parameter")
+            .map(|completion| (completion.name, completion.detail))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        names_at(4, "4, de"),
+        vec![("denominator=".to_string(), "int32".to_string())]
+    );
+    assert_eq!(
+        names_at(5, "is_divisible("),
+        vec![
+            ("numerator=".to_string(), "int32".to_string()),
+            ("denominator=".to_string(), "int32".to_string())
+        ]
+    );
+    // A value after `=` is not a parameter name, and text inside a string is
+    // not a call.
+    assert!(names_at(6, "denominator=").is_empty());
+    assert!(names_at(7, "} is_divisible(").is_empty());
 }

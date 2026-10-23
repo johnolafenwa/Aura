@@ -316,6 +316,9 @@ function completionKind(kind) {
       return CompletionItemKind.Constant;
     case "keyword":
       return CompletionItemKind.Keyword;
+    case "variable":
+    case "parameter":
+      return CompletionItemKind.Variable;
     default:
       return CompletionItemKind.Text;
   }

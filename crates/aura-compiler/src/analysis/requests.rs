@@ -545,27 +545,10 @@ fn callee_path(expr: &Expr) -> Option<String> {
     }
 }
 
-pub fn signature_help_path_source(
-    path: &Path,
-    source: &str,
-    line: usize,
-    character: usize,
-) -> Option<AnalysisSignatureHelp> {
-    let character = byte_character(source, line, character)?;
-    let line_start = source
-        .split_inclusive('\n')
-        .take(line)
-        .map(str::len)
-        .sum::<usize>();
-    let line_text = source.lines().nth(line)?;
-    if character > line_text.len() {
-        return None;
-    }
-    let cursor = line_start.checked_add(character)?;
-    let (open, ordinal, argument_start) = active_call(source, cursor)?;
+// Try expression suffixes at lexical boundaries, longest first. Parsing
+// accepts qualified members, bound methods, specialization and call results.
+fn callee_before_open(source: &str, open: usize) -> Option<Expr> {
     let prefix = &source[..open];
-    // Try expression suffixes at lexical boundaries, longest first. Parsing
-    // accepts qualified members, bound methods, specialization and call results.
     let statement_start = prefix.rfind('\n').map_or(0, |offset| offset + 1);
     let mut candidates = vec![statement_start];
     for (offset, ch) in prefix[statement_start..].char_indices() {
@@ -573,33 +556,30 @@ pub fn signature_help_path_source(
             candidates.push(statement_start + offset + ch.len_utf8());
         }
     }
-    let callee = candidates
+    candidates
         .into_iter()
-        .find_map(|start| parser::parse_expression(prefix[start..].trim()).ok())?;
-    let mut checker =
-        |candidate: &str| crate::check_path_with_source_without_lockfile(path, candidate);
-    let program = checker(source).ok().or_else(|| {
-        recover_checked_program_after_position(source, line, character, &mut checker)
-    })?;
-    let builder = AnalysisBuilder::new(source, &program, Vec::new());
-    let scope = builder.scope_for_position(line, character);
-    let ty = call_site_contract(&builder, &callee, &scope)?;
-    let (params, result) = match &ty {
+        .find_map(|start| parser::parse_expression(prefix[start..].trim()).ok())
+}
+
+fn contract_params(ty: &Type) -> Option<(&[FunctionParamContract], &Type)> {
+    match ty {
         Type::Function {
             params,
             return_type,
-        } => (params.as_slice(), return_type.as_ref()),
+        } => Some((params.as_slice(), return_type.as_ref())),
         Type::Closure {
             params,
             return_type,
             ..
-        } => (params.as_slice(), return_type.as_ref()),
-        Type::Callable(callable) => (callable.params.as_slice(), &callable.return_type),
-        _ => return None,
-    };
-    let previous = source[open + 1..argument_start]
-        .trim_end()
-        .trim_end_matches(',');
+        } => Some((params.as_slice(), return_type.as_ref())),
+        Type::Callable(callable) => Some((callable.params.as_slice(), &callable.return_type)),
+        _ => None,
+    }
+}
+
+/// The parameters the finished arguments before the cursor already bind.
+fn used_parameter_slots(previous: &str, params: &[FunctionParamContract]) -> BTreeSet<usize> {
+    let previous = previous.trim_end().trim_end_matches(',');
     let mut used = BTreeSet::new();
     if let Ok(Expr {
         kind: ExprKind::Call { args, .. },
@@ -620,6 +600,96 @@ pub fn signature_help_path_source(
             }
         }
     }
+    used
+}
+
+/// `name=` completions for the parameters of the call the cursor's argument
+/// belongs to that earlier arguments have not bound yet. `character` is a
+/// UTF-8 byte column.
+pub(super) fn keyword_argument_completions(
+    builder: &AnalysisBuilder<'_>,
+    source: &str,
+    line: usize,
+    character: usize,
+    scope: &BTreeMap<String, BindingInfo>,
+) -> Vec<AnalysisCompletion> {
+    keyword_argument_completions_inner(builder, source, line, character, scope).unwrap_or_default()
+}
+
+fn keyword_argument_completions_inner(
+    builder: &AnalysisBuilder<'_>,
+    source: &str,
+    line: usize,
+    character: usize,
+    scope: &BTreeMap<String, BindingInfo>,
+) -> Option<Vec<AnalysisCompletion>> {
+    let line_start = source
+        .split_inclusive('\n')
+        .take(line)
+        .map(str::len)
+        .sum::<usize>();
+    let line_text = source.lines().nth(line)?;
+    if character > line_text.len() || !line_text.is_char_boundary(character) {
+        return None;
+    }
+    let cursor = line_start + character;
+    let (open, _, argument_start) = active_call(source, cursor)?;
+    // Only a bare name being typed can become `name=`.
+    if !source[argument_start..cursor]
+        .trim_start()
+        .chars()
+        .all(is_identifier_continue)
+    {
+        return None;
+    }
+    let callee = callee_before_open(source, open)?;
+    let ty = call_site_contract(builder, &callee, scope)?;
+    let (params, _) = contract_params(&ty)?;
+    let used = used_parameter_slots(&source[open + 1..argument_start], params);
+    Some(
+        params
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !used.contains(index))
+            .map(|(_, param)| AnalysisCompletion {
+                name: format!("{}=", param.name),
+                kind: "parameter".to_string(),
+                detail: param.ty.to_string(),
+                documentation: None,
+            })
+            .collect(),
+    )
+}
+
+pub fn signature_help_path_source(
+    path: &Path,
+    source: &str,
+    line: usize,
+    character: usize,
+) -> Option<AnalysisSignatureHelp> {
+    let character = byte_character(source, line, character)?;
+    let line_start = source
+        .split_inclusive('\n')
+        .take(line)
+        .map(str::len)
+        .sum::<usize>();
+    let line_text = source.lines().nth(line)?;
+    if character > line_text.len() {
+        return None;
+    }
+    let cursor = line_start.checked_add(character)?;
+    let (open, ordinal, argument_start) = active_call(source, cursor)?;
+    let callee = callee_before_open(source, open)?;
+    let mut checker =
+        |candidate: &str| crate::check_path_with_source_without_lockfile(path, candidate);
+    let program = checker(source).ok().or_else(|| {
+        recover_checked_program_after_position(source, line, character, &mut checker)
+    })?;
+    let builder = AnalysisBuilder::new(source, &program, Vec::new());
+    let scope = builder.scope_for_position(line, character);
+    let ty = call_site_contract(&builder, &callee, &scope)?;
+    let (params, result) = contract_params(&ty)?;
+    let used = used_parameter_slots(&source[open + 1..argument_start], params);
     let next = (0..params.len())
         .find(|index| !used.contains(index))
         .unwrap_or(ordinal);
