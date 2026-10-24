@@ -682,6 +682,24 @@ Callgrind instructions, in millions:
   `record_field_reads` drops 2.4 times, past the 2x gate.
 - Error messages are unchanged.
 
+Step 10c gives a `list[str]` a view of where its elements lie, so a loop
+compares an element with a literal in generated code. Literal text that
+is all ASCII skips UTF-8 validation. The method and tables are in
+[the 10c note](../work/2026-10-24-batch-7-step-10c-strings.md).
+Callgrind instructions, in millions:
+
+| Program | Cranelift before | Cranelift after | LLVM before | LLVM after | LLVM / Rust |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `fib(30)` | 210.6 | 210.6 | 115.0 | 115.0 | 2.9x |
+| `int_list_sum` | 73.1 | 73.1 | 42.2 | 42.2 | 3.2x |
+| `string_list_scan` | 142.9 | 57.8 | 128.7 | 32.7 | 2.5x |
+| `dict_build_get` | 425.0 | 403.3 | 397.8 | 376.1 | 2.1x |
+| `set_insert_contains` | 140.5 | 140.5 | 135.1 | 135.1 | 4.3x |
+| `record_field_reads` | 252.2 | 245.6 | 233.3 | 226.7 | 6.3x |
+
+- `string_list_scan` is at 2.5 times Rust on LLVM, inside the 4x gate.
+- UTF-8 and Unicode behavior is unchanged.
+
 ## Owner Questions
 
 Each names the recommended default first.

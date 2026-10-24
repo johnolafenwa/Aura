@@ -922,10 +922,32 @@ impl PartialEq for EnumVariantValue {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct VecValue {
     pub element_type: Type,
     pub elements: ListElements,
+    /// Where a `list[str]`'s elements lie, which the native runtime builds
+    /// for generated code. It is not part of the value.
+    pub str_view: crate::list_elements::StrViewCache,
+}
+
+impl VecValue {
+    pub fn new(element_type: Type, elements: ListElements) -> Self {
+        Self {
+            element_type,
+            elements,
+            str_view: Default::default(),
+        }
+    }
+}
+
+impl fmt::Debug for VecValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VecValue")
+            .field("element_type", &self.element_type)
+            .field("elements", &self.elements)
+            .finish()
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1157,6 +1179,7 @@ impl ArrayValue {
         let vector = VecValue {
             element_type: element_type.clone(),
             elements: elements.into(),
+            str_view: Default::default(),
         };
         let dtype = ArrayDType::from_type(element_type).ok_or_else(|| {
             Diagnostic::coded(
@@ -1247,6 +1270,7 @@ impl ArrayValue {
         Ok(Value::Vec(VecValue {
             element_type: Type::named("int64"),
             elements: elements.into(),
+            str_view: Default::default(),
         }))
     }
 
@@ -2288,6 +2312,7 @@ pub fn slice_vec_owned(
     Ok(VecValue {
         element_type: vector.element_type.clone(),
         elements: elements.into(),
+        str_view: Default::default(),
     })
 }
 
@@ -2404,6 +2429,7 @@ pub fn span_extract(vector: &mut VecValue, start: i128, len: i128) -> Result<Vec
     Ok(VecValue {
         element_type: vector.element_type.clone(),
         elements: vector.elements.take_range(start, start + len),
+        str_view: Default::default(),
     })
 }
 
@@ -2779,6 +2805,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                         Some(Value::Vec(VecValue {
                             element_type: vector.element_type.clone(),
                             elements: elements.into(),
+                            str_view: Default::default(),
                         }))
                     } else {
                         state.push_frame(CloneFrame::Vec {
@@ -2928,6 +2955,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                         state.completed = Some(Value::Vec(VecValue {
                             element_type: vector.element_type.clone(),
                             elements: elements.into(),
+                            str_view: Default::default(),
                         }));
                     }
                 }
@@ -7478,6 +7506,7 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
                             vec![Value::Vec(VecValue {
                                 element_type: vector.element_type.clone(),
                                 elements: elements.into(),
+                                str_view: Default::default(),
                             })],
                         ))
                     } else {
@@ -7545,6 +7574,7 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
                             vec![Value::Vec(VecValue {
                                 element_type: vector.element_type.clone(),
                                 elements: elements.into(),
+                                str_view: Default::default(),
                             })],
                         ));
                     }
@@ -15390,6 +15420,7 @@ pub fn runtime_bytes_from_host(bytes: &[u8]) -> Result<Value> {
     Ok(Value::Vec(VecValue {
         element_type: Type::Named(bytes_runtime_owned_string("uint8")?, Vec::new()),
         elements: elements.into(),
+        str_view: Default::default(),
     }))
 }
 
@@ -16055,6 +16086,7 @@ pub fn json_value_to_runtime(value: JsonValue) -> Result<Value> {
                             json_runtime_single_payload(Value::Vec(VecValue {
                                 element_type: json_runtime_type("json.Value")?,
                                 elements: elements.into(),
+                                str_view: Default::default(),
                             }))?,
                         )?);
                     }
@@ -16815,6 +16847,7 @@ pub fn wait_all_ready(values: Vec<Value>) -> Value {
         payloads: vec![Value::Vec(VecValue {
             element_type: Type::named("Unknown"),
             elements: values.into(),
+            str_view: Default::default(),
         })],
     })
 }

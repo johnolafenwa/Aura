@@ -717,6 +717,7 @@ fn dense_arrays_copy_vec_inputs_normalize_coordinates_and_slice_the_first_axis()
         elements: (0..6)
             .map(|value| Value::Int(IntegerValue::from_i32(value)))
             .collect(),
+        str_view: Default::default(),
     };
     let array = ArrayValue::from_vec(&source, Some(&[2, 3]))
         .expect("typed Vec input should copy into dense storage");
@@ -870,6 +871,7 @@ fn dense_arrays_all_dtypes_construct_clone_mutate_fill_and_slice_exactly() {
                 .into_iter()
                 .map(|value| Value::Int(IntegerValue::from_i64(value)))
                 .collect(),
+            str_view: Default::default(),
         },
         None,
     )
@@ -904,6 +906,7 @@ fn dense_arrays_all_dtypes_construct_clone_mutate_fill_and_slice_exactly() {
         &VecValue {
             element_type: Type::named("float32"),
             elements: [1.25, -2.5, 4.0].into_iter().map(Value::Float).collect(),
+            str_view: Default::default(),
         },
         Some(&[3]),
     )
@@ -933,6 +936,7 @@ fn dense_arrays_all_dtypes_construct_clone_mutate_fill_and_slice_exactly() {
         &VecValue {
             element_type: Type::named("float64"),
             elements: [1.5, 2.5, 3.5].into_iter().map(Value::Float).collect(),
+            str_view: Default::default(),
         },
         Some(&[3]),
     )
@@ -1003,6 +1007,7 @@ fn array_from_vec_validates_shape_and_count_before_allocation_or_conversion() {
     let malformed_source = VecValue {
         element_type: Type::named("int32"),
         elements: vec![Value::Int(IntegerValue::from_i64(7))].into(),
+        str_view: Default::default(),
     };
 
     let rank_error = super::with_array_allocation_budget(0, || {
@@ -1046,6 +1051,7 @@ fn array_construction_rejects_unsupported_types_and_inexact_scalar_metadata() {
     let unsupported = VecValue {
         element_type: Type::named("str"),
         elements: vec![Value::String("one".to_string())].into(),
+        str_view: Default::default(),
     };
     let from_vec_error = ArrayValue::from_vec(&unsupported, None)
         .expect_err("Array.from_list must reject non-numeric element types");
@@ -1153,6 +1159,7 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
         Value::Vec(VecValue {
             element_type: array_type.clone(),
             elements: vec![source_array(&[4, 9]), source_array(&[1, 7])].into(),
+            str_view: Default::default(),
         }),
         Value::Tuple(TupleValue {
             element_types: vec![Type::named("str"), array_type.clone(), Type::named("int32")],
@@ -1249,6 +1256,7 @@ fn array_containing_language_copies_preserve_empty_containers() {
         Value::Vec(VecValue {
             element_type: array_type.clone(),
             elements: Vec::new().into(),
+            str_view: Default::default(),
         }),
         Value::Tuple(TupleValue {
             element_types: Vec::new(),
@@ -1322,6 +1330,7 @@ fn array_containing_language_copy_reports_outer_shape_and_storage_allocation_fai
             .unwrap(),
         )]
         .into(),
+        str_view: Default::default(),
     });
 
     let expected_failures = [
@@ -1406,6 +1415,7 @@ fn adr0038_partial_capture_copies_release_every_projected_value_after_failure() 
                         .into(),
                     })]
                     .into(),
+                    str_view: Default::default(),
                 }),
                 Value::Map(MapValue {
                     key_type: Type::named("str"),
@@ -2408,6 +2418,7 @@ fn owned_slice_helpers_normalize_once_reject_without_clamping_and_copy_values() 
             .into_iter()
             .map(|value| Value::String(value.to_string()))
             .collect(),
+        str_view: Default::default(),
     };
 
     let middle = slice_vec_owned(&vector, Some(-3), Some(-1))
@@ -2792,6 +2803,7 @@ fn function_values_remain_observable_inside_structural_runtime_aggregates() {
                 }))
             })
             .collect(),
+        str_view: Default::default(),
     });
 
     assert_eq!(
@@ -2935,6 +2947,7 @@ fn adr0038_closure_environment_mutable_capture_helpers_cover_success_and_errors(
                 value: Value::Vec(VecValue {
                     element_type: Type::named("int64"),
                     elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
+                    str_view: Default::default(),
                 }),
                 source_place: Some("items".to_string()),
                 mutable: true,
@@ -2963,6 +2976,7 @@ fn adr0038_closure_environment_mutable_capture_helpers_cover_success_and_errors(
             Value::Vec(VecValue {
                 element_type: Type::named("int64"),
                 elements: vec![Value::Int(IntegerValue::from_signed(2))].into(),
+                str_view: Default::default(),
             }),
         )
         .expect("mutable captures accept writeback");
@@ -2973,6 +2987,7 @@ fn adr0038_closure_environment_mutable_capture_helpers_cover_success_and_errors(
         Value::Vec(VecValue {
             element_type: Type::named("int64"),
             elements: vec![Value::Int(IntegerValue::from_signed(2))].into(),
+            str_view: Default::default(),
         })
     );
 
@@ -3213,6 +3228,7 @@ fn runtime_bytes(bytes: &[u8]) -> Value {
                 )
             })
             .collect(),
+        str_view: Default::default(),
     })
 }
 
@@ -3273,14 +3289,17 @@ fn bytes_runtime_conversion_rejects_malformed_vec_uint8_values() {
     let wrong_type = Value::Vec(VecValue {
         element_type: Type::named("int32"),
         elements: Vec::new().into(),
+        str_view: Default::default(),
     });
     let wrong_metadata = Value::Vec(VecValue {
         element_type: Type::named("uint8"),
         elements: vec![Value::Int(IntegerValue::from_literal(1))].into(),
+        str_view: Default::default(),
     });
     let wrong_element = Value::Vec(VecValue {
         element_type: Type::named("uint8"),
         elements: vec![Value::Bool(true)].into(),
+        str_view: Default::default(),
     });
 
     let error = super::host_bytes_from_runtime(&not_a_vector, "bytes::hex_encode")
@@ -5912,6 +5931,7 @@ fn async_and_process_result_helpers_render_expected_variants() {
         vec![Value::Vec(VecValue {
             element_type: Type::named("Unknown"),
             elements: all_ready.into(),
+            str_view: Default::default(),
         })],
     );
     assert_variant(
@@ -6228,6 +6248,7 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
         Value::Vec(VecValue {
             element_type: Type::named("int32"),
             elements: vec![].into(),
+            str_view: Default::default(),
         }),
         "list",
     );
@@ -7217,6 +7238,7 @@ fn dynamic_json_runtime_conversion_rejects_noncanonical_payload_metadata() {
                 Value::Vec(VecValue {
                     element_type: Type::named("str"),
                     elements: Vec::new().into(),
+                    str_view: Default::default(),
                 }),
             ),
             "exactly `list[json.Value]`",
@@ -7312,6 +7334,7 @@ fn dynamic_json_accessors_reject_noncanonical_payload_metadata() {
                 Value::Vec(VecValue {
                     element_type: Type::named("str"),
                     elements: Vec::new().into(),
+                    str_view: Default::default(),
                 }),
             ),
         ),
@@ -7618,6 +7641,7 @@ fn dynamic_json_runtime_conversion_rejects_depth_before_building_an_unbounded_cl
             payloads: vec![Value::Vec(VecValue {
                 element_type: Type::named("json.Value"),
                 elements: vec![value].into(),
+                str_view: Default::default(),
             })],
         });
     }
@@ -7639,6 +7663,7 @@ fn dynamic_json_runtime_conversion_fits_a_forced_512_kib_task_stack_at_the_depth
                 payloads: vec![Value::Vec(VecValue {
                     element_type: Type::named("json.Value"),
                     elements: vec![value].into(),
+                    str_view: Default::default(),
                 })],
             });
         }
@@ -11194,6 +11219,7 @@ fn value_equality_and_render_cover_collection_shapes() {
             Value::Int(IntegerValue::from_signed(2)),
         ]
         .into(),
+        str_view: Default::default(),
     });
     assert_eq!(vec_value.render(), "[1, 2]");
 
@@ -11354,6 +11380,7 @@ fn nested_queue_producer_registration_walks_tuples_collections_instances_and_var
         Value::Vec(VecValue {
             element_type: Type::named("Queue"),
             elements: vec![Value::Channel(queue_in_vec.clone())].into(),
+            str_view: Default::default(),
         }),
         Value::Set(SetValue {
             element_type: Type::named("Queue"),
@@ -18059,6 +18086,7 @@ fn malformed_json_runtime_trees_fall_back_to_structural_clones() {
             vec![Value::Vec(VecValue {
                 element_type: Type::named("json.Value"),
                 elements: elements.into(),
+                str_view: Default::default(),
             })],
         )
     };
@@ -18536,6 +18564,7 @@ fn array_free_dicts_and_sets_clone_by_sharing() {
             vec![Type::named("str"), Type::named("json.Value")],
         ),
         elements: vec![map.clone()].into(),
+        str_view: Default::default(),
     });
     let copy = super::try_clone_array_containing_value(&documents).expect("clone");
     let (Value::Vec(original), Value::Vec(shared)) = (&documents, &copy) else {
@@ -18545,6 +18574,7 @@ fn array_free_dicts_and_sets_clone_by_sharing() {
     let unknown_list = Value::Vec(VecValue {
         element_type: Type::named("Unknown"),
         elements: vec![documents.clone()].into(),
+        str_view: Default::default(),
     });
     let copy = super::try_clone_array_containing_value(&unknown_list).expect("clone");
     let (Value::Vec(original), Value::Vec(walked)) = (&unknown_list, &copy) else {
@@ -18751,6 +18781,7 @@ fn array_aware_copy_keeps_enum_variants_with_leaf_and_nested_payloads() {
             Value::Vec(VecValue {
                 element_type: Type::named("int64"),
                 elements: vec![Value::Int(crate::integer::IntegerValue::from_i64(1))].into(),
+                str_view: Default::default(),
             }),
         ],
     });

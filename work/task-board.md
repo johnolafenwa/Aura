@@ -121,6 +121,11 @@ Last updated: 2026-10-23
   With LLVM, `dict_build_get` runs at 2.2 times Rust and
   `record_field_reads` drops from 571 to 233 million instructions.
   Details are in `2026-10-24-batch-7-step-10d-lookups-and-variants.md`.
+- In progress: 10c, strings. A `list[str]` records where its elements
+  lie once enough reads miss, and a loop compares an element with a
+  literal in generated code. With LLVM, `string_list_scan` runs in 33
+  million instructions instead of 129 million, 2.5 times Rust. Details
+  are in `2026-10-24-batch-7-step-10c-strings.md`.
 
 ## Aura 0.6.0 preview release (complete)
 

@@ -14430,3 +14430,29 @@ fn direct_lookup_slots_reject_every_other_use() {
     })
     .is_empty());
 }
+
+#[test]
+fn str_literal_equality_reads_the_str_view_in_place() {
+    let equality = r#"
+def main():
+    names = ["user-1", "user-7"]
+    mut hits = 0
+    for name in names:
+        if name == "user-7":
+            hits += 1
+        if "" != name:
+            hits += 1
+    print(hits)
+"#;
+    let mir = lower_source_to_mir(equality).expect("the equality loop should lower");
+    let object = emit_host_object(&mir).expect("the equality loop should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    // The bytes are compared in generated code once the lengths match, and
+    // a list without a `str` view still takes the runtime compare.
+    for required in [
+        "aura_direct_bytes_equal",
+        "aura_direct_compare_str_literal_at",
+    ] {
+        assert!(referenced.contains(required), "{required}: {referenced:?}");
+    }
+}

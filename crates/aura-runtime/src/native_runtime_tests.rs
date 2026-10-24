@@ -651,6 +651,7 @@ fn integer_vector(kind: IntegerKind, values: &[i64]) -> *mut OpaqueValue {
                 )
             })
             .collect(),
+        str_view: Default::default(),
     }))
 }
 
@@ -695,6 +696,7 @@ fn direct_array_abi_uses_typed_storage_kernels_and_callback_thunks() {
                 Value::Int(IntegerValue::from_i64(2)),
             ]
             .into(),
+            str_view: Default::default(),
         })
     );
 
@@ -841,6 +843,7 @@ fn direct_array_abi_accepts_positive_literal_representations_at_signed_boundarie
     let shape = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("int64"),
         elements: vec![tagged_literal(2, IntegerKind::Int64)].into(),
+        str_view: Default::default(),
     }));
     let values = integer_vector(IntegerKind::Int32, &[7, 11]);
     let array = super::aura_direct_array_from_vec(0, values, shape, 17, 19);
@@ -855,6 +858,7 @@ fn direct_array_abi_accepts_positive_literal_representations_at_signed_boundarie
     let vector_coordinate = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("int64"),
         elements: vec![tagged_literal(0, IntegerKind::Int64)].into(),
+        str_view: Default::default(),
     }));
     let vector_result = super::aura_direct_array_index(array, vector_coordinate, 31, 37);
     assert_eq!(
@@ -921,6 +925,7 @@ fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
     let malformed_shape = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("int64"),
         elements: vec![Value::String("one".to_string())].into(),
+        str_view: Default::default(),
     }));
     let malformed_shape_address = malformed_shape as usize;
     let diagnostic = capture_diagnostic(move || {
@@ -937,6 +942,7 @@ fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
     let wrong_kind_shape = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("int64"),
         elements: vec![Value::Int(IntegerValue::from_i32(1))].into(),
+        str_view: Default::default(),
     }));
     let wrong_kind_shape_address = wrong_kind_shape as usize;
     let diagnostic = capture_diagnostic(move || {
@@ -1125,6 +1131,7 @@ fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
     let malformed_coordinates = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("int64"),
         elements: vec![Value::String("zero".to_string())].into(),
+        str_view: Default::default(),
     }));
     let malformed_coordinates_address = malformed_coordinates as usize;
     let array_address = array as usize;
@@ -1146,6 +1153,7 @@ fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
     let wrong_kind_coordinates = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("int64"),
         elements: vec![Value::Int(IntegerValue::from_i32(0))].into(),
+        str_view: Default::default(),
     }));
     let wrong_kind_coordinates_address = wrong_kind_coordinates as usize;
     let array_address = array as usize;
@@ -1478,6 +1486,7 @@ fn direct_nested_array_collection_reads_and_clones_use_fallible_copy() {
     let vector = boxed_value(Value::Vec(VecValue {
         element_type: Type::Named("Array".to_string(), vec![Type::named("int32")]),
         elements: vec![array_value(7)].into(),
+        str_view: Default::default(),
     }));
     let vector_address = vector as usize;
     let diagnostic = allocation_diagnostic(move || {
@@ -2380,6 +2389,7 @@ fn direct_ffi_mutable_bytes_write_back_before_return_validation_failure() {
                 Value::Int(IntegerValue::from_typed_unsigned(0, IntegerKind::Uint8).unwrap()),
             ]
             .into(),
+            str_view: Default::default(),
         })
     );
     unsafe { release_value(bytes) };
@@ -3677,6 +3687,7 @@ fn direct_bytes_adapter_propagates_materialization_allocation_failure_as_au4005(
                 .expect("the test byte fits uint8"),
         )]
         .into(),
+        str_view: Default::default(),
     }));
     let source_elements = unsafe {
         super::with_value(source, |value| match value {
@@ -3723,6 +3734,7 @@ fn direct_bytes_host_ffi_dispatches_without_consuming_borrowed_input() {
                 )
             })
             .collect(),
+        str_view: Default::default(),
     }));
     let source_elements = unsafe {
         super::with_value(source, |value| match value {
@@ -3874,6 +3886,7 @@ fn direct_byte_list(bytes: &[u8]) -> *mut OpaqueValue {
                 )
             })
             .collect(),
+        str_view: Default::default(),
     }))
 }
 
@@ -5067,6 +5080,7 @@ fn native_runtime_timeout_and_option_decoders_cover_error_edges() {
             &Value::Vec(VecValue {
                 element_type: aura_core::types::Type::named("Unknown"),
                 elements: vec![Value::String("echo".to_string())].into(),
+                str_view: Default::default(),
             }),
             "command",
         ),
@@ -5077,6 +5091,7 @@ fn native_runtime_timeout_and_option_decoders_cover_error_edges() {
             &Value::Vec(VecValue {
                 element_type: aura_core::types::Type::named("int32"),
                 elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
+                str_view: Default::default(),
             }),
             "command",
         );
@@ -5475,6 +5490,7 @@ fn direct_runtime_type_tags_are_interned_and_retagging_is_idempotent() {
     let vector = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("Unknown"),
         elements: Vec::new().into(),
+        str_view: Default::default(),
     }));
     super::aura_direct_tag_value_type(vector, b"list[int64]".as_ptr(), 11);
     super::aura_direct_tag_value_type(vector, b"list[int64]".as_ptr(), 11);
@@ -5584,6 +5600,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
                 IntegerValue::from_typed_signed(9, IntegerKind::Int64).expect("9 fits int64"),
             )]
             .into(),
+            str_view: Default::default(),
         })],
     }));
     super::aura_direct_tag_value_type(
@@ -5655,6 +5672,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     let vector = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("Unknown"),
         elements: Vec::new().into(),
+        str_view: Default::default(),
     }));
     super::aura_direct_tag_value_type(vector, b"list[int32]".as_ptr(), "list[int32]".len());
     assert_eq!(super::aura_direct_value_has_runtime_type(vector), 1);
@@ -6435,6 +6453,7 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
                 Value::Int(IntegerValue::from_literal(66)),
             ]
             .into(),
+            str_view: Default::default(),
         }))
     }));
     assert_eq!(
@@ -6446,6 +6465,7 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
         Ok(Value::Vec(VecValue {
             element_type: aura_core::types::Type::named("uint8"),
             elements: vec![Value::Int(IntegerValue::from_signed(300))].into(),
+            str_view: Default::default(),
         }))
     }));
     let message = capture_runtime_error_message(|| {
@@ -6457,6 +6477,7 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
         Ok(Value::Vec(VecValue {
             element_type: aura_core::types::Type::named("uint8"),
             elements: vec![Value::String("bad".to_string())].into(),
+            str_view: Default::default(),
         }))
     }));
     let message = capture_runtime_error_message(|| {
@@ -6468,6 +6489,7 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
         Ok(Value::Vec(VecValue {
             element_type: aura_core::types::Type::named("str"),
             elements: vec![Value::String("bad".to_string())].into(),
+            str_view: Default::default(),
         }))
     }));
     let message = capture_runtime_error_message(|| {
@@ -6491,6 +6513,7 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
             Ok(Value::Vec(VecValue {
                 element_type: aura_core::types::Type::named("uint8"),
                 elements: Vec::new().into(),
+                str_view: Default::default(),
             }))
         }));
         capture_runtime_error_message(|| {
@@ -10883,6 +10906,7 @@ fn direct_enum_owned_payload_buffer_moves_string_vec_and_map_allocations() {
             Value::Vec(VecValue {
                 element_type: Type::named("json.Value"),
                 elements: elements.into(),
+                str_view: Default::default(),
             }),
             Allocation::Vec(elements_ptr),
         ),
@@ -11560,6 +11584,7 @@ fn direct_task_producer_discovery_and_abandoned_args_do_not_clone_values() {
         payloads: vec![Value::Vec(VecValue {
             element_type: Type::named("Queue"),
             elements: vec![Value::Channel(queue)].into(),
+            str_view: Default::default(),
         })],
     }));
     let clone_count = super::direct_value_clone_count();
@@ -11671,6 +11696,7 @@ fn direct_json_rejects_inexact_int_array_object_and_indent_metadata() {
         payloads: vec![Value::Vec(VecValue {
             element_type: Type::named("Unknown"),
             elements: vec![].into(),
+            str_view: Default::default(),
         })],
     }));
     assert!(malformed_json_call("json::into_array", vec![array])
@@ -12358,6 +12384,7 @@ fn native_runtime_private_value_decoders_cover_success_paths() {
                     Value::Int(IntegerValue::from_signed(66)),
                 ]
                 .into(),
+                str_view: Default::default(),
             }),
             "bytes",
         ),
@@ -12454,6 +12481,7 @@ fn native_runtime_private_value_decoders_cover_success_paths() {
                     Value::String("ok".to_string()),
                 ]
                 .into(),
+                str_view: Default::default(),
             }),
             "command",
         ),
@@ -12489,6 +12517,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                     &Value::Vec(VecValue {
                         element_type: aura_core::types::Type::named("uint8"),
                         elements: vec![Value::Int(IntegerValue::from_signed(300))].into(),
+                        str_view: Default::default(),
                     }),
                     "bytes",
                 );
@@ -12548,6 +12577,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                     &Value::Vec(VecValue {
                         element_type: aura_core::types::Type::named("str"),
                         elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
+                        str_view: Default::default(),
                     }),
                     "command",
                 );
@@ -15080,6 +15110,7 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
         value_type_name(Value::Vec(VecValue {
             element_type: aura_core::types::Type::named("int32"),
             elements: Vec::new().into(),
+            str_view: Default::default(),
         })),
         "list"
     );
@@ -15157,6 +15188,7 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
         inferred_collection_type(&Value::Vec(VecValue {
             element_type: aura_core::types::Type::named("int32"),
             elements: Vec::new().into(),
+            str_view: Default::default(),
         })),
         aura_core::types::Type::Named(
             "list".to_string(),
@@ -15289,10 +15321,12 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
             Value::Vec(VecValue {
                 element_type: aura_core::types::Type::named("int32"),
                 elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
+                str_view: Default::default(),
             }),
             Value::Vec(VecValue {
                 element_type: aura_core::types::Type::named("int32"),
                 elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
+                str_view: Default::default(),
             }),
             BinaryOp::Eq,
         )
@@ -24667,6 +24701,7 @@ fn direct_element_path_take_and_probe_lend_entries_without_cloning() {
                 .iter()
                 .map(|item| Value::Int(IntegerValue::from_i64(*item)))
                 .collect(),
+            str_view: Default::default(),
         })
     }
     let table = boxed_value(Value::Map(MapValue {
@@ -24791,6 +24826,7 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
     let users = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("Profile"),
         elements: vec![profile("ada", 1), profile("linus", 2)].into(),
+        str_view: Default::default(),
     })) as usize;
 
     // The whole element, then a projected field through a negative position.
@@ -24869,6 +24905,7 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
             ],
         })]
         .into(),
+        str_view: Default::default(),
     })) as usize;
     assert_eq!(element_path_load(pairs, "[i].1", &[0]).render(), "one");
     element_path_store(pairs, "[i].0", &[0], Value::Int(IntegerValue::from_i64(41)));
@@ -24890,6 +24927,7 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
     let numbers = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("int64"),
         elements: vec![Value::Int(IntegerValue::from_i64(3))].into(),
+        str_view: Default::default(),
     })) as usize;
     assert!(element_load_trap(numbers, "[i].visits", vec![0])
         .message
@@ -24912,6 +24950,7 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
                     Value::Int(IntegerValue::from_i64(6)),
                 ]
                 .into(),
+                str_view: Default::default(),
             }),
         )]
         .into(),
@@ -24986,6 +25025,7 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
             payloads: vec![Value::Int(IntegerValue::from_i64(5))],
         })]
         .into(),
+        str_view: Default::default(),
     })) as usize;
     let circle = "[i].__variant_payload_Circle_0";
     assert_eq!(element_path_load(shapes, circle, &[0]).render(), "5");
@@ -25013,6 +25053,7 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
             payload: Value::Int(IntegerValue::from_i64(7)),
         }))]
         .into(),
+        str_view: Default::default(),
     })) as usize;
     assert_eq!(
         element_path_load(unions, "[i].__union_payload_0", &[0]).render(),
@@ -25106,10 +25147,12 @@ fn adr0061_direct_element_paths_keep_collection_field_and_tuple_storage() {
                     Value::Vec(VecValue {
                         element_type: Type::named("int64"),
                         elements: vec![Value::Int(IntegerValue::from_i64(5))].into(),
+                        str_view: Default::default(),
                     }),
                     Value::Vec(VecValue {
                         element_type: Type::named("int64"),
                         elements: vec![Value::Int(IntegerValue::from_i64(7))].into(),
+                        str_view: Default::default(),
                     }),
                 ],
             }),
@@ -26522,4 +26565,224 @@ fn direct_fused_format_start_matches_begin_and_push() {
         super::aura_direct_format_begin_i64([0xff_u8].as_ptr(), 1, 3, 0);
     });
     assert_eq!(message, "aura direct runtime received invalid UTF-8 bytes");
+}
+
+/// Compares element `index` of `list` with `literal` through the runtime,
+/// as generated code does when the list view misses.
+fn compare_element_with_literal(list: *mut OpaqueValue, index: i64, op: i64, literal: &str) -> i64 {
+    super::aura_direct_compare_str_literal_at(
+        op,
+        list,
+        index,
+        literal.as_ptr(),
+        literal.len(),
+        0,
+        0,
+        0,
+    )
+}
+
+/// The `str` view entries of `list`, read the way generated code reads
+/// them.
+fn str_view_texts(list: *mut OpaqueValue) -> Vec<String> {
+    let layout = super::direct_list_layout();
+    let base = list as *const u8;
+    unsafe {
+        let entries = *(base.add(layout.elements_offset as usize) as *const usize);
+        let len = *(base.add(layout.len_offset as usize) as *const usize);
+        (0..len)
+            .map(|index| {
+                let entry =
+                    (entries + index * super::DIRECT_STR_VIEW_ENTRY_BYTES as usize) as *const u8;
+                let ptr = *(entry.add(super::DIRECT_STR_VIEW_PTR_OFFSET as usize) as *const usize)
+                    as *const u8;
+                let len = *(entry.add(super::DIRECT_STR_VIEW_LEN_OFFSET as usize) as *const usize);
+                String::from_utf8(std::slice::from_raw_parts(ptr, len).to_vec()).unwrap()
+            })
+            .collect()
+    }
+}
+
+#[test]
+fn str_lists_switch_to_the_str_view_after_enough_misses() {
+    use super::DirectListAccess;
+    let names: Vec<String> = (0..16).map(|index| format!("user-{index}")).collect();
+    let list = super::aura_direct_vec_empty();
+    for name in &names {
+        super::aura_direct_vec_push_in_place(list, string_value(name));
+    }
+    assert_eq!(list_view_access(list), DirectListAccess::Values as u32);
+    // One miss in eight elements builds the view.
+    assert_eq!(compare_element_with_literal(list, 7, 5, "user-7"), 1);
+    assert_eq!(list_view_access(list), DirectListAccess::Values as u32);
+    assert_eq!(compare_element_with_literal(list, 3, 6, "user-7"), 1);
+    assert_eq!(list_view_access(list), DirectListAccess::Str as u32);
+    assert_eq!(str_view_texts(list), names);
+    assert_eq!(super::aura_direct_vec_len(list), 16);
+
+    // A write switches the view back until enough reads miss again.
+    super::aura_direct_vec_push_in_place(list, string_value("ünïcode"));
+    assert_eq!(list_view_access(list), DirectListAccess::Values as u32);
+    for index in 0..3 {
+        compare_element_with_literal(list, index, 5, "x");
+    }
+    assert_eq!(list_view_access(list), DirectListAccess::Str as u32);
+    assert_eq!(
+        str_view_texts(list).last().map(String::as_str),
+        Some("ünïcode")
+    );
+    assert_eq!(compare_element_with_literal(list, -1, 5, "ünïcode"), 1);
+    unsafe { release_value(list) };
+
+    // A list that holds anything but `str` keeps the plain view.
+    let mixed = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_in_place(mixed, string_value("a"));
+    super::aura_direct_vec_push_in_place(mixed, int_value(1));
+    for _ in 0..4 {
+        assert_eq!(compare_element_with_literal(mixed, 0, 5, "a"), 1);
+    }
+    assert_eq!(list_view_access(mixed), DirectListAccess::Values as u32);
+    unsafe { release_value(mixed) };
+
+    // A shared list is never read in place.
+    let shared = string_vec(&["a", "b"]);
+    unsafe { super::share_direct_value(shared) };
+    for _ in 0..4 {
+        assert_eq!(compare_element_with_literal(shared, 1, 5, "b"), 1);
+    }
+    assert_eq!(list_view_access(shared), DirectListAccess::None as u32);
+    unsafe { release_value(shared) };
+
+    // An empty list builds an empty view on its first miss.
+    let empty = super::aura_direct_vec_empty();
+    unsafe { &*empty }.note_str_view_miss();
+    assert_eq!(list_view_access(empty), DirectListAccess::Str as u32);
+    assert_eq!(super::aura_direct_vec_len(empty), 0);
+    unsafe { release_value(empty) };
+}
+
+#[test]
+fn str_view_misses_keep_the_runtime_diagnostics() {
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            let list = string_vec(&["a"]);
+            compare_element_with_literal(list, 4, 5, "a");
+        }),
+        capture_direct_boundary_error_message(|| {
+            let list = string_vec(&["a"]);
+            super::aura_direct_vec_check_index(list, 4, 0, 0);
+        })
+    );
+}
+
+#[test]
+fn bytes_equal_compares_exactly_len_bytes() {
+    assert_eq!(
+        super::aura_direct_bytes_equal(b"user-7".as_ptr(), b"user-7".as_ptr(), 6),
+        1
+    );
+    assert_eq!(
+        super::aura_direct_bytes_equal(b"user-7".as_ptr(), b"user-8".as_ptr(), 6),
+        0
+    );
+    assert_eq!(
+        super::aura_direct_bytes_equal(b"user-7".as_ptr(), b"user-8".as_ptr(), 5),
+        1
+    );
+    assert_eq!(
+        super::aura_direct_bytes_equal(b"".as_ptr(), b"x".as_ptr(), 0),
+        1
+    );
+}
+
+#[test]
+fn element_comparisons_with_a_str_operand_match_the_value_comparison() {
+    let list = super::aura_direct_vec_empty();
+    for value in [string_value("beta"), string_value("é"), int_value(3)] {
+        super::aura_direct_vec_push_in_place(list, value);
+    }
+    for other in ["alpha", "beta", "gamma", "é", ""] {
+        let boxed = string_value(other);
+        for index in 0..2 {
+            for op in 5..=10 {
+                for element_on_left in [0, 1] {
+                    let expected = unsafe {
+                        super::with_vec_element(list, index, 0, 0, |element| {
+                            super::with_value(boxed, |other| {
+                                let compared = if element_on_left != 0 {
+                                    super::compare_value_refs(
+                                        element,
+                                        other,
+                                        super::direct_comparison_op(op),
+                                    )
+                                } else {
+                                    super::compare_value_refs(
+                                        other,
+                                        element,
+                                        super::direct_comparison_op(op),
+                                    )
+                                };
+                                i64::from(matches!(compared, Ok(Value::Bool(true))))
+                            })
+                        })
+                    };
+                    assert_eq!(
+                        super::aura_direct_compare_values_at(
+                            op,
+                            list,
+                            index,
+                            boxed,
+                            element_on_left,
+                            0,
+                            0
+                        ),
+                        expected,
+                        "element {index} op {op} against {other:?}"
+                    );
+                }
+            }
+        }
+        // A non-`str` element compares with a `str` as it did before.
+        assert_eq!(
+            super::aura_direct_compare_values_at(5, list, 2, boxed, 1, 0, 0),
+            0
+        );
+        assert_eq!(
+            capture_direct_boundary_error_message(|| {
+                let list = super::aura_direct_vec_empty();
+                super::aura_direct_vec_push_in_place(list, int_value(3));
+                super::aura_direct_compare_values_at(7, list, 0, string_value("a"), 1, 0, 0);
+            }),
+            // The generic comparison reports the same mismatch.
+            super::compare_value_refs(
+                &Value::Int(IntegerValue::from_i32(3)),
+                &Value::String("a".to_string()),
+                aura_core::ops::BinaryOp::Less,
+            )
+            .expect_err("an integer and a `str` do not order")
+            .message
+        );
+        unsafe { release_value(boxed) };
+    }
+    unsafe { release_value(list) };
+}
+
+#[test]
+fn literal_text_decodes_non_ascii_and_rejects_invalid_bytes() {
+    let builder = super::aura_direct_format_begin("é ".as_ptr(), "é ".len());
+    super::aura_direct_format_push_str(builder, "ü".as_ptr(), "ü".len());
+    match unsafe { take_value(builder) } {
+        Value::String(text) => assert_eq!(text, "é ü"),
+        other => panic!("expected a string, found {other:?}"),
+    }
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_format_push_str(
+                super::aura_direct_format_begin(b"a".as_ptr(), 1),
+                [0xc3_u8].as_ptr(),
+                1,
+            );
+        }),
+        "aura direct runtime received invalid UTF-8 bytes"
+    );
 }

@@ -153,6 +153,13 @@ in this file.
   its text in one buffer. With LLVM, `dict_build_get` runs in 398
   million instructions instead of 765 million, and `record_field_reads`
   in 233 million instead of 571 million. Error messages are unchanged.
+- A `for` loop over a `list[str]` compares each element with a `str`
+  literal in generated code once the runtime has recorded where the
+  elements lie. It compares the lengths first and the bytes only when they
+  match. With LLVM, `string_list_scan` runs in 33 million instructions
+  instead of 129 million. Literal text that is all ASCII is no longer
+  validated as UTF-8 on every use, and an element compared with a `str`
+  value skips the general comparison.
 
 ### Fixed
 

@@ -70,6 +70,7 @@ fn string_list(parts: impl IntoIterator<Item = String>) -> Value {
     Value::Vec(VecValue {
         element_type: str_type(),
         elements: parts.into_iter().map(Value::String).collect(),
+        str_view: Default::default(),
     })
 }
 

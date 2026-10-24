@@ -208,6 +208,33 @@ and tag.
   `aura_direct_format_begin_i64`. It writes the leading literal and the
   digits into one buffer sized for the later parts.
 
+### The `str` View
+
+A `list[str]` can expose where its elements lie, so a loop compares them
+with a literal without a runtime call.
+
+- **Entries.** `DirectListAccess::Str` is a list form whose view points at
+  one `DirectStrViewEntry` per element: the address and length of its
+  UTF-8 bytes. The list's `VecValue` owns the entries in its
+  `StrViewCache`, so the box keeps its size, and a copy of the list starts
+  without them. `DirectListLayout`'s fingerprint covers the code and the
+  entry layout.
+- **Building.** A confined list's view starts as `Values`. Each
+  `aura_direct_compare_str_literal_at` call counts a miss. Once the misses
+  since the last build reach an eighth of the length, the runtime records
+  every element and switches the view to `Str`. A list that holds any
+  other value keeps `Values`. Each build is paid for by the misses before
+  it, so a list that changes between reads costs a constant factor more
+  at most.
+- **Writes.** Every write refreshes the view to `Values`, as it does for
+  the other forms, so a stale entry is never read. A shared value's view
+  stays `None`.
+- **Generated code.** `==` and `!=` between a lent `str` element and a
+  literal check the code, the index, and the length inline. When the
+  lengths match, `aura_direct_bytes_equal` compares the bytes. Any other
+  case calls `aura_direct_compare_str_literal_at`, which reports the same
+  diagnostics as before.
+
 ## A tiny direct-backend design example
 
 This miniature example does not use Cranelift, but it shows the same architectural split: simple values are direct, complex values are boxed.

@@ -205,6 +205,7 @@ pub fn host_sys_args(args: Vec<Value>, program_args: Option<&[String]>) -> Resul
             .into_iter()
             .map(Value::String)
             .collect(),
+        str_view: Default::default(),
     }))
 }
 
