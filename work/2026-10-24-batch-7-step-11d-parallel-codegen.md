@@ -151,8 +151,11 @@ stays inside the 10% size gate.
   generated 40-function program splits into disjoint objects with one
   `main`, the same on a repeated build.
 - `reference_tool_runner_package_has_pinned_output_on_both_backends` now
-  builds the reference agent twice and checks the two executables are
-  identical.
+  builds the reference agent twice and, on Linux, checks the two
+  executables are identical. On macOS, ld64 folds each object's temporary
+  path into the executable's UUID and names the output file in its ad hoc
+  signature, so the bytes differ there by design. The backend tests check
+  the units' objects on every host.
 
 ## Verification
 
