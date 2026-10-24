@@ -14502,6 +14502,140 @@ def main():
 }
 
 #[test]
+fn lookups_only_read_lend_their_found_value() {
+    let source = r#"
+import json
+
+def main():
+    mut docs: list[dict[str, json.Value]] = []
+    mut doc: dict[str, json.Value] = {}
+    doc["age"] = json.Value.Int(41)
+    docs.append(doc)
+    mut flags: dict[int64, json.Value] = {}
+    flags[1] = json.Value.Bool(true)
+    mut total = 0
+    for item in docs:
+        match item.get("age"):
+            case Lookup.Found(value):
+                match value:
+                    case json.Value.Int(age):
+                        if age > 40:
+                            total += age
+                    case _:
+                        pass
+            case Lookup.Missing:
+                pass
+    match flags.get(1):
+        case Lookup.Found(flag):
+            match flag:
+                case json.Value.Bool(set):
+                    if set:
+                        total += 1
+                case _:
+                    pass
+        case Lookup.Missing:
+            pass
+    print(total + docs.len() + flags.len())
+"#;
+    let mir = lower_source_to_mir(source).expect("the lookups should lower");
+    let object = emit_host_object(&mir).expect("the lookups should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    // A found value that is only tested and read is lent, never copied.
+    // Both dicts outlive it: one the MIR releases right after the lookup,
+    // as after its last use, is copied from.
+    for required in [
+        "aura_direct_vec_element_map_get_str_lent",
+        "aura_direct_map_get_int64_lent",
+        "aura_direct_lent_variant_matches",
+        "aura_direct_lent_variant_payload_int64",
+        "aura_direct_lent_variant_payload_bool",
+    ] {
+        assert!(referenced.contains(required), "{required}: {referenced:?}");
+    }
+    for copied in [
+        "aura_direct_vec_element_map_get_str_payload",
+        "aura_direct_map_get_int64_payload",
+    ] {
+        assert!(!referenced.contains(copied), "{copied}: {referenced:?}");
+    }
+}
+
+#[test]
+fn lookups_copy_their_found_value_when_the_dict_can_change() {
+    // Each program changes, hands on, or keeps the found value, so the
+    // lookup copies it.
+    let cases = [
+        r#"
+import json
+
+def main():
+    mut scores: dict[str, json.Value] = {}
+    scores["a"] = json.Value.Int(1)
+    match scores.get("a"):
+        case Lookup.Found(value):
+            scores["a"] = json.Value.Int(2)
+            match value:
+                case json.Value.Int(n):
+                    print(n)
+                case _:
+                    pass
+        case Lookup.Missing:
+            pass
+    print(scores.len())
+"#,
+        r#"
+import json
+
+def kind(value: json.Value) -> str:
+    match value:
+        case json.Value.Int(_):
+            return "int"
+        case _:
+            return "other"
+
+def main():
+    mut scores: dict[str, json.Value] = {}
+    scores["a"] = json.Value.Int(1)
+    match scores.get("a"):
+        case Lookup.Found(value):
+            print(kind(value))
+        case Lookup.Missing:
+            pass
+    print(scores.len())
+"#,
+        r#"
+import json
+
+def main():
+    mut scores: dict[str, json.Value] = {}
+    scores["a"] = json.Value.Int(1)
+    mut kept: list[json.Value] = []
+    match own scores.get("a"):
+        case Lookup.Found(value):
+            kept.append(value)
+        case Lookup.Missing:
+            pass
+    print(kept.len())
+"#,
+    ];
+    for source in cases {
+        let mir = lower_source_to_mir(source).expect("the lookup should lower");
+        let object = emit_host_object(&mir).expect("the lookup should compile directly");
+        let referenced = exact_referenced_symbols(&object);
+        // An owned match takes the whole lookup, so it copies too.
+        assert!(
+            referenced.contains("aura_direct_map_get_str_payload")
+                || referenced.contains("aura_direct_map_get_str"),
+            "{source}: {referenced:?}"
+        );
+        assert!(
+            !referenced.contains("aura_direct_map_get_str_lent"),
+            "{source}: {referenced:?}"
+        );
+    }
+}
+
+#[test]
 fn scalar_appends_keep_the_runtime_push_for_a_full_list() {
     let source = r#"
 def main():

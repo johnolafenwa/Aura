@@ -1234,7 +1234,28 @@ impl<'a> NativeCodegen<'a> {
                     Some(DirectType::Opaque(Type::Named(lookup, _))) if lookup == "Lookup"
                 )
             })
-            .collect();
+            .collect::<HashSet<_>>();
+        let lent_places = lookups::lent_lookup_places(
+            function,
+            &lookup_slots,
+            // The MIR retains and releases every place that holds the value,
+            // so each of its references is counted where the MIR says.
+            |place| {
+                explicit_locals.tracked.contains(place)
+                    && matches!(variable_types.get(place), Some(DirectType::Opaque(_)))
+            },
+            |place| {
+                matches!(
+                    variable_types.get(place),
+                    Some(DirectType::Scalar(
+                        ScalarKind::Int32
+                            | ScalarKind::Int64
+                            | ScalarKind::Uint64
+                            | ScalarKind::Bool
+                    ))
+                )
+            },
+        );
         let mut compiler = FunctionCompiler {
             builder,
             blocks,
@@ -1261,6 +1282,8 @@ impl<'a> NativeCodegen<'a> {
             loan_locals: explicit_locals.loans,
             closed_matches: explicit_locals.closed_matches,
             lookup_slots,
+            lent_places,
+            lend_lookup: false,
             lookup_payload: None,
             emptied_store_root: None,
             lent_temps: HashMap::new(),
@@ -2436,6 +2459,13 @@ struct FunctionCompiler<'a> {
     /// The `Lookup` temporaries kept as the found value's box or null. See
     /// `lookups::lookup_payload_slots`.
     lookup_slots: HashSet<String>,
+    /// The lookup slots whose found value is lent, and the locals that hold
+    /// that value. See `lookups::lent_lookup_places`. Each holds null, a
+    /// box, or a value's address with its low bit set, so a retain or a
+    /// release masks the address out.
+    lent_places: HashSet<String>,
+    /// Set while a `get` for a lent slot compiles.
+    lend_lookup: bool,
     /// Set while a `get` for one of `lookup_slots` compiles: `Some(false)`
     /// asks for the payload form, and the helper that emits it sets
     /// `Some(true)`.
@@ -2894,9 +2924,78 @@ impl<'a> FunctionCompiler<'a> {
                 self.release_union_words(&union, &words);
             }
             DirectType::Callable(_) => self.release_callable_words(&words),
+            _ if self.lent_places.contains(name) => {
+                let owned = self.owned_lent_word(words[0]);
+                self.release_opaque_handle(owned);
+            }
             _ => self.release_opaque_handle(words[0]),
         }
         Ok(())
+    }
+
+    /// The box a lent lookup result owns: the word itself, or null for a
+    /// value's address, which has its low bit set.
+    fn owned_lent_word(&mut self, word: Val) -> Val {
+        let bit = self.builder.band_imm(word, 1);
+        let lent = self.builder.icmp_imm(IntCC::NotEqual, bit, 0);
+        let null = self.builder.iconst(types::I64, 0);
+        self.builder.select(lent, null, word)
+    }
+
+    /// A new reference to a lent lookup result. Only a box counts it.
+    fn retain_lent_word(&mut self, word: Val) {
+        let owned = self.owned_lent_word(word);
+        self.builder
+            .call(self.runtime[RuntimeFn::RetainValue], &[owned]);
+    }
+
+    /// Stores a lent lookup result in root `name` as it is.
+    fn store_lent_word(&mut self, name: &str, word: Val) -> std::result::Result<(), String> {
+        if self.emptied_store_root.as_deref() == Some(name) {
+            self.emptied_store_root = None;
+        } else {
+            self.release_root_words(name)?;
+        }
+        let vars = self.local_vars(name)?;
+        self.builder.def_var(vars[0], word);
+        Ok(())
+    }
+
+    /// Assigns the found value of a lent lookup, or a copy of one, to
+    /// another of the places that hold it. The words move as they are,
+    /// with the reference `Retain` counts or the payload read adds.
+    fn compile_lent_assign(
+        &mut self,
+        target: &str,
+        value: &Rvalue,
+    ) -> std::result::Result<(), String> {
+        let (source, payload, moved) = match value {
+            Rvalue::VariantPayload {
+                scrutinee: Operand::Place(source),
+                ..
+            } => (source, true, false),
+            Rvalue::VariantPayload {
+                scrutinee: Operand::MovePlace(source),
+                ..
+            } => (source, true, true),
+            Rvalue::Use(Operand::Place(source)) => (source, false, false),
+            Rvalue::Use(Operand::MovePlace(source)) => (source, false, true),
+            other => {
+                return Err(format!(
+                    "direct backend cannot lend `{target}` from `{other:?}`"
+                ))
+            }
+        };
+        let word = self.load_place(source)?.values[0];
+        if moved {
+            let vars = self.local_vars(source)?;
+            let null = self.builder.iconst(types::I64, 0);
+            self.builder.def_var(vars[0], null);
+        } else if payload {
+            // The payload is a new reference to the slot's value.
+            self.retain_lent_word(word);
+        }
+        self.store_lent_word(target, word)
     }
 
     /// Lowers MIR `Release`: drops the root's value by its layout and
@@ -3140,6 +3239,11 @@ impl<'a> FunctionCompiler<'a> {
             "layout temporaries outlived the instruction before {instruction:?}"
         );
         if let Instruction::Retain { place } = instruction {
+            if self.lent_places.contains(place.as_str()) {
+                let word = self.load_place(place)?.values[0];
+                self.retain_lent_word(word);
+                return Ok(());
+            }
             return self.retain_place(place);
         }
         let erased = crate::mir::ownership::borrowed_receiver(instruction, |place| {
@@ -3688,6 +3792,10 @@ impl<'a> FunctionCompiler<'a> {
                         releases_on_error,
                         from.as_deref(),
                     )?;
+                } else if self.lent_places.contains(target.as_str())
+                    && !self.lookup_slots.contains(target.as_str())
+                {
+                    self.compile_lent_assign(target, value)?;
                 } else if self.lookup_slots.contains(target.as_str()) {
                     self.compile_lookup_slot_assign(target, value)?;
                 } else if let Some(scalar) = self.compile_scalar_variant_payload(target, value)? {
@@ -3791,6 +3899,10 @@ impl<'a> FunctionCompiler<'a> {
                     scrutinee,
                     Operand::Place(place) if self.lookup_slots.contains(place.as_str())
                 );
+                let lent = matches!(
+                    scrutinee,
+                    Operand::Place(place) if self.lent_places.contains(place.as_str())
+                );
                 let scrutinee = self.load_operand(scrutinee)?;
                 let DirectType::Opaque(scrutinee_ty) = &scrutinee.ty else {
                     return Err(
@@ -3821,7 +3933,13 @@ impl<'a> FunctionCompiler<'a> {
                         let cc = if found { IntCC::NotEqual } else { IntCC::Equal };
                         self.builder.icmp_imm(cc, scrutinee.values[0], 0)
                     } else {
-                        self.variant_matches_value(
+                        let test = if lent {
+                            RuntimeFn::LentVariantMatches
+                        } else {
+                            RuntimeFn::VariantMatches
+                        };
+                        self.variant_matches_with(
+                            test,
                             scrutinee.values[0],
                             arm.enum_name.as_deref().unwrap_or(scrutinee_enum_name),
                             arm.variant_name.as_deref().unwrap_or_default(),
@@ -6766,6 +6884,8 @@ impl<'a> FunctionCompiler<'a> {
                 let function = self.lookup_function(
                     self.runtime[RuntimeFn::VecElementMapGetStr],
                     RuntimeFn::VecElementMapGetStrPayload,
+                    RuntimeFn::VecElementMapGetStrLent,
+                    true,
                 );
                 self.builder
                     .call(function, &[list, index, key_ptr, key_len, line, column])
@@ -6777,6 +6897,8 @@ impl<'a> FunctionCompiler<'a> {
                 let function = self.lookup_function(
                     self.runtime[RuntimeFn::VecElementMapGet],
                     RuntimeFn::VecElementMapGetPayload,
+                    RuntimeFn::VecElementMapGetLent,
+                    true,
                 );
                 self.builder
                     .call(function, &[list, index, key.values[0], line, column])
@@ -8315,13 +8437,18 @@ impl<'a> FunctionCompiler<'a> {
     /// Whether `inst` is in the current block and no call that could change
     /// a box follows it there. A retain or a release changes only the count
     /// of the value it names, and a tag of `raw` is never followed by a
-    /// release of `raw` that frees it.
+    /// release of `raw` that frees it. A call that only boxes a new value
+    /// from its words reaches no other box.
     fn no_call_since(&self, inst: Inst) -> bool {
         self.builder.only_calls_since(
             inst,
             &[
                 self.runtime[RuntimeFn::RetainValue],
                 self.runtime[RuntimeFn::ReleaseValue],
+                self.runtime[RuntimeFn::FormatBegin],
+                self.runtime[RuntimeFn::StringLiteral],
+                self.runtime[RuntimeFn::BoxI64],
+                self.runtime[RuntimeFn::BoxBool],
             ],
         )
     }
@@ -9710,11 +9837,21 @@ impl<'a> FunctionCompiler<'a> {
             return Ok(None);
         }
         let target_ty = self.type_of_place(target)?;
-        let function = match target_ty {
-            DirectType::Scalar(ScalarKind::Int32) => RuntimeFn::VariantPayloadI64,
-            DirectType::Scalar(ScalarKind::Int64) => RuntimeFn::VariantPayloadInt64,
-            DirectType::Scalar(ScalarKind::Uint64) => RuntimeFn::VariantPayloadU64,
-            DirectType::Scalar(ScalarKind::Bool) => RuntimeFn::VariantPayloadBool,
+        let lent = self.lent_places.contains(place.as_str());
+        let function = match (&target_ty, lent) {
+            (DirectType::Scalar(ScalarKind::Int32), false) => RuntimeFn::VariantPayloadI64,
+            (DirectType::Scalar(ScalarKind::Int64), false) => RuntimeFn::VariantPayloadInt64,
+            (DirectType::Scalar(ScalarKind::Uint64), false) => RuntimeFn::VariantPayloadU64,
+            (DirectType::Scalar(ScalarKind::Bool), false) => RuntimeFn::VariantPayloadBool,
+            (DirectType::Scalar(ScalarKind::Int32), true) => RuntimeFn::LentVariantPayloadI64,
+            (DirectType::Scalar(ScalarKind::Int64), true) => RuntimeFn::LentVariantPayloadInt64,
+            (DirectType::Scalar(ScalarKind::Uint64), true) => RuntimeFn::LentVariantPayloadU64,
+            (DirectType::Scalar(ScalarKind::Bool), true) => RuntimeFn::LentVariantPayloadBool,
+            (_, true) => {
+                return Err(format!(
+                    "direct backend cannot read a lent payload into `{target}`"
+                ))
+            }
             _ => return Ok(None),
         };
         let scrutinee = self.load_operand(scrutinee)?;
@@ -9732,11 +9869,23 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     /// `payload` in place of `lookup` while a lookup slot asks for the
-    /// payload form, which this records. Otherwise `lookup`.
-    fn lookup_function(&mut self, lookup: FuncRef, payload: RuntimeFn) -> FuncRef {
+    /// payload form, which this records. Otherwise `lookup`. A slot whose
+    /// found value is lent takes `lent` instead when the collection handle
+    /// is the one its place holds, not a copy this instruction frees.
+    fn lookup_function(
+        &mut self,
+        lookup: FuncRef,
+        payload: RuntimeFn,
+        lent: RuntimeFn,
+        in_place: bool,
+    ) -> FuncRef {
         if self.lookup_payload == Some(false) {
             self.lookup_payload = Some(true);
-            self.runtime[payload]
+            if self.lend_lookup && in_place {
+                self.runtime[lent]
+            } else {
+                self.runtime[payload]
+            }
         } else {
             lookup
         }
@@ -9751,7 +9900,9 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<(), String> {
         let target_ty = self.type_of_place(target)?;
         self.lookup_payload = Some(false);
+        self.lend_lookup = self.lent_places.contains(target);
         let compiled = self.compile_rvalue_for_target(value, &target_ty);
+        self.lend_lookup = false;
         let payload_form = self.lookup_payload.take() == Some(true);
         let compiled = self.ensure_opaque(compiled?)?;
         let payload = if payload_form {
@@ -9805,10 +9956,21 @@ impl<'a> FunctionCompiler<'a> {
         enum_name: &str,
         variant_name: &str,
     ) -> std::result::Result<Val, String> {
+        self.variant_matches_with(RuntimeFn::VariantMatches, value, enum_name, variant_name)
+    }
+
+    /// A variant test by `test`, which reads a box or a lent value.
+    fn variant_matches_with(
+        &mut self,
+        test: RuntimeFn,
+        value: Val,
+        enum_name: &str,
+        variant_name: &str,
+    ) -> std::result::Result<Val, String> {
         let (enum_ptr, enum_len) = self.string_constant(enum_name.as_bytes())?;
         let (variant_ptr, variant_len) = self.string_constant(variant_name.as_bytes())?;
         let inst = self.builder.call(
-            self.runtime[RuntimeFn::VariantMatches],
+            self.runtime[test],
             &[value, enum_ptr, enum_len, variant_ptr, variant_len],
         );
         Ok(inst.results[0])
@@ -11351,6 +11513,9 @@ impl<'a> FunctionCompiler<'a> {
         let call = runtime_op.runtime_call();
         let function = self.runtime[call.function];
         let dict_ty = direct_type_to_type(&object.ty);
+        // A lookup lends from the map only through the handle its place
+        // holds, never a copy this instruction frees.
+        let in_place = !self.temporary_owns_opaque(&object);
         let object = self.ensure_opaque(object)?;
         let map = object.values[0];
         let (key_ty, value_ty) = match &dict_ty {
@@ -11386,7 +11551,12 @@ impl<'a> FunctionCompiler<'a> {
                         ty: DirectType::Scalar(ScalarKind::Bool),
                     });
                 }
-                let function = self.lookup_function(function, RuntimeFn::MapGetInt64Payload);
+                let function = self.lookup_function(
+                    function,
+                    RuntimeFn::MapGetInt64Payload,
+                    RuntimeFn::MapGetInt64Lent,
+                    in_place,
+                );
                 let results = self.runtime_call_results(function, &[map, key.values[0]]);
                 Ok(self.owned_opaque_result(results, optional_type(value_ty)))
             }
@@ -11409,14 +11579,24 @@ impl<'a> FunctionCompiler<'a> {
                     ));
                 };
                 let (key_ptr, key_len) = self.string_constant(text.as_bytes())?;
-                let function = self.lookup_function(function, RuntimeFn::MapGetStrPayload);
+                let function = self.lookup_function(
+                    function,
+                    RuntimeFn::MapGetStrPayload,
+                    RuntimeFn::MapGetStrLent,
+                    in_place,
+                );
                 let results = self.runtime_call_results(function, &[map, key_ptr, key_len]);
                 Ok(self.owned_opaque_result(results, optional_type(value_ty)))
             }
             DictOp::Get | DictOp::Remove => {
                 let key = self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
                 let function = if op == DictOp::Get {
-                    self.lookup_function(function, RuntimeFn::MapGetPayload)
+                    self.lookup_function(
+                        function,
+                        RuntimeFn::MapGetPayload,
+                        RuntimeFn::MapGetLent,
+                        in_place,
+                    )
                 } else {
                     function
                 };

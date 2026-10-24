@@ -203,7 +203,31 @@ fn key_is_str(mut key: &Value, text: &str) -> bool {
     while let Value::Union(union) = key {
         key = &union.payload;
     }
-    matches!(key, Value::String(key) if key == text)
+    matches!(key, Value::String(key) if short_bytes_eq(key.as_bytes(), text.as_bytes()))
+}
+
+/// `a == b`, comparing up to sixteen bytes in two overlapping words
+/// instead of calling `memcmp`. Keys, enum names, and variant names are
+/// mostly short.
+pub(crate) fn short_bytes_eq(a: &[u8], b: &[u8]) -> bool {
+    fn word<const N: usize>(bytes: &[u8], at: usize) -> [u8; N] {
+        bytes[at..at + N].try_into().expect("in range")
+    }
+    let len = a.len();
+    if len != b.len() {
+        return false;
+    }
+    match len {
+        0 => true,
+        1..=3 => a[0] == b[0] && a[len / 2] == b[len / 2] && a[len - 1] == b[len - 1],
+        4..=7 => {
+            word::<4>(a, 0) == word::<4>(b, 0) && word::<4>(a, len - 4) == word::<4>(b, len - 4)
+        }
+        8..=16 => {
+            word::<8>(a, 0) == word::<8>(b, 0) && word::<8>(a, len - 8) == word::<8>(b, len - 8)
+        }
+        _ => a == b,
+    }
 }
 
 /// Hashes an `int`, `float`, or `bool` value and returns true, or returns

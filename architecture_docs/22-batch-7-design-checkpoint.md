@@ -738,6 +738,24 @@ Callgrind instructions, in millions:
 - `int_list_sum` is at 1.2 times Rust on LLVM, inside the 2x gate.
 - The check for appended elements costs the other programs 0.2% to 0.6%.
 
+Step 10g lends a found value in place when the lookup's result is only
+matched or read before the dict can change. The method and tables are in
+[the 10g note](../work/2026-10-24-batch-7-step-10g-lent-lookups.md).
+Callgrind instructions, in millions:
+
+| Program | Cranelift before | Cranelift after | LLVM before | LLVM after | LLVM / Rust |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `fib(30)` | 210.6 | 210.6 | 115.0 | 115.0 | 2.9x |
+| `int_list_sum` | 47.2 | 47.2 | 16.0 | 16.0 | 1.2x |
+| `string_list_scan` | 58.0 | 58.0 | 32.9 | 32.9 | 2.5x |
+| `dict_build_get` | 377.1 | 371.7 | 349.9 | 344.8 | 1.9x |
+| `set_insert_contains` | 65.0 | 64.9 | 59.6 | 59.6 | 1.9x |
+| `record_field_reads` | 246.0 | 147.0 | 227.1 | 135.1 | 3.8x |
+
+- `record_field_reads` is at 3.75 times Rust on LLVM, inside the 4x gate.
+  All six programs now meet their phase 2 targets.
+- No other program grows by more than 0.03%.
+
 ## Owner Questions
 
 Each names the recommended default first.

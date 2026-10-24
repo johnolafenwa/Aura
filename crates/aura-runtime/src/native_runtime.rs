@@ -28,6 +28,7 @@ use std::sync::MutexGuard;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration as StdDuration, Instant};
 
+use crate::collection_index::short_bytes_eq;
 use crate::diag::{Diagnostic, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span};
 use crate::ffi::{FfiError, FfiSignature, FfiType, FfiValue, OpaqueHandle};
 use crate::integer::{
@@ -43,7 +44,7 @@ use crate::runtime_value::{
     current_lightweight_task_id, current_task_native_slot, decode_process_restart_policy,
     decode_process_stdio, divmod_numeric_values, embedded_nominal_runtime_type_name,
     fail_current_lightweight_task, float_floor_divmod, float_power, format_runtime_value_with,
-    host_builtins, io_error, io_read_line, json_array_metadata_is_exact,
+    host_builtins, io_error, io_read_line, is_clone_leaf, json_array_metadata_is_exact,
     json_dump_error_to_diagnostic, json_int_metadata_is_exact, json_object_metadata_is_exact,
     json_parse_owned_to_runtime, lookup_found, lookup_missing, nominal_runtime_base_name,
     optional_absent, optional_bytes_value, optional_present, optional_str_value, optional_value,
@@ -3306,9 +3307,11 @@ const LITERAL_NAME_LOOKUP_SLOTS: usize = 64;
 type LiteralNameSlot = Option<(usize, usize, RuntimeName)>;
 
 thread_local! {
-    /// Per-thread direct-mapped names keyed by the literal's address and
-    /// length. A hit still compares the bytes, so a reused buffer cannot
-    /// return a stale name.
+    /// Per-thread names keyed by the literal's address and length. Each
+    /// literal may sit in its own slot or the slot beside it, so two
+    /// literals that hash alike do not evict each other on every call. A
+    /// hit still compares the bytes, so a reused buffer cannot return a
+    /// stale name.
     static LITERAL_NAME_LOOKUP: RefCell<[LiteralNameSlot; LITERAL_NAME_LOOKUP_SLOTS]> =
         const { RefCell::new([const { None }; LITERAL_NAME_LOOKUP_SLOTS]) };
 }
@@ -3320,14 +3323,20 @@ fn literal_runtime_name(ptr: *const u8, len: usize) -> RuntimeName {
     let bytes = unsafe { slice::from_raw_parts(ptr, len) };
     let address = ptr as usize;
     let slot = ((address >> 3) ^ (address >> 11) ^ len) % LITERAL_NAME_LOOKUP_SLOTS;
+    let slots = [slot, slot ^ 1];
     let cached = LITERAL_NAME_LOOKUP
-        .try_with(|lookup| match &lookup.borrow()[slot] {
-            Some((cached_address, cached_len, name))
-                if *cached_address == address && *cached_len == len && name.as_bytes() == bytes =>
-            {
-                Some(name.clone())
-            }
-            _ => None,
+        .try_with(|lookup| {
+            let lookup = lookup.borrow();
+            slots.iter().find_map(|&index| match &lookup[index] {
+                Some((cached_address, cached_len, name))
+                    if *cached_address == address
+                        && *cached_len == len
+                        && name.as_bytes() == bytes =>
+                {
+                    Some(name.clone())
+                }
+                _ => None,
+            })
         })
         .ok()
         .flatten();
@@ -3336,7 +3345,12 @@ fn literal_runtime_name(ptr: *const u8, len: usize) -> RuntimeName {
     }
     let name = RuntimeName::from(utf8_text(bytes));
     let _ = LITERAL_NAME_LOOKUP.try_with(|lookup| {
-        lookup.borrow_mut()[slot] = Some((address, len, name.clone()));
+        let mut lookup = lookup.borrow_mut();
+        let index = slots
+            .into_iter()
+            .find(|&index| lookup[index].is_none())
+            .unwrap_or(slot);
+        lookup[index] = Some((address, len, name.clone()));
     });
     name
 }
@@ -8243,6 +8257,201 @@ fn boxed_map_payload(found: Option<&Value>) -> *mut OpaqueValue {
     map_lookup_copy(found).map_or(std::ptr::null_mut(), boxed_value)
 }
 
+/// The low bit of a lent lookup result. A `Value` is aligned to at least
+/// eight bytes, so a value's address never has it set.
+const LENT_VALUE_BIT: usize = 1;
+
+/// A lookup result for generated code that only reads it while nothing
+/// can change the collection: the found value's address with
+/// [`LENT_VALUE_BIT`] set, or what [`boxed_map_payload`] returns. Only a
+/// value in a collection confined to this thread is lent, and only one
+/// whose copy cannot fail, so a lent read reports what a copy would.
+fn lent_map_payload(found: Option<&Value>, confined: bool) -> *mut OpaqueValue {
+    match found {
+        Some(value) if confined && copies_infallibly(value) => {
+            (std::ptr::from_ref(value) as usize | LENT_VALUE_BIT) as *mut OpaqueValue
+        }
+        found => boxed_map_payload(found),
+    }
+}
+
+/// Whether `try_clone_array_containing_value` copies `value` without a
+/// chance of failure: a scalar or text, or an enum variant that carries
+/// only those.
+fn copies_infallibly(value: &Value) -> bool {
+    match value {
+        Value::EnumVariant(variant) => variant.payloads.iter().all(is_clone_leaf),
+        leaf => is_clone_leaf(leaf),
+    }
+}
+
+/// Reads the value of a box that a lookup may lend from, with whether the
+/// box is confined to this thread. A `list` reader takes in appended
+/// elements first, as [`with_value`] does.
+unsafe fn with_lendable_value<T>(
+    ptr: *mut OpaqueValue,
+    list: bool,
+    read: impl FnOnce(&Value, bool) -> T,
+) -> T {
+    let value = match unsafe { ptr.as_ref() } {
+        Some(value) => value,
+        None => runtime_error("direct runtime received a null opaque value pointer"),
+    };
+    let access = if list {
+        value.access(false)
+    } else {
+        value.access_unlisted(false)
+    };
+    let confined = matches!(access, DirectValueAccess::Confined);
+    // SAFETY: as in `with_value`.
+    read(unsafe { &*value.value.get() }, confined)
+}
+
+/// Looks a key up in the `dict` that `map` holds, lending the result.
+fn lent_map_lookup(
+    map: *mut OpaqueValue,
+    find: impl FnOnce(&MapValue) -> Option<&Value>,
+) -> *mut OpaqueValue {
+    unsafe {
+        with_lendable_value(map, false, |value, confined| match value {
+            Value::Map(map) => lent_map_payload(find(map), confined),
+            other => runtime_error(format!(
+                "expected `dict`, found `{}`",
+                value_type_name(other)
+            )),
+        })
+    }
+}
+
+/// Looks a key up in the `dict` at `index` of `list`, lending the result.
+/// It reports a bad index or element as `with_vec_element` does.
+fn lent_vec_element_map_lookup(
+    list: *mut OpaqueValue,
+    index: i64,
+    line: i64,
+    column: i64,
+    find: impl FnOnce(&MapValue) -> Option<&Value>,
+) -> *mut OpaqueValue {
+    unsafe {
+        with_lendable_value(list, true, |value, confined| {
+            let Value::Vec(vector) = value else {
+                runtime_error(format!(
+                    "expected `list`, found `{}`",
+                    value_type_name(value)
+                ))
+            };
+            let len = vector.elements.len();
+            let Some(position) = normalize_vec_index(index, len).filter(|position| *position < len)
+            else {
+                direct_vec_index_error(index, len, line, column)
+            };
+            let ListElements::Values(values) = &vector.elements else {
+                // A list of unboxed scalars holds no `dict`.
+                let element = vector.elements.at(position);
+                runtime_error(format!(
+                    "expected `dict`, found `{}`",
+                    value_type_name(&*element)
+                ))
+            };
+            match &values[position] {
+                Value::Map(map) => lent_map_payload(find(map), confined),
+                other => runtime_error(format!(
+                    "expected `dict`, found `{}`",
+                    value_type_name(other)
+                )),
+            }
+        })
+    }
+}
+
+/// `aura_direct_map_get_payload`, lending the found value where it can.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_get_lent(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        lent_map_lookup(map, |map| {
+            unsafe { with_value(key, |key| map.entries.value_of(key).map(std::ptr::from_ref)) }
+                .map(|found| unsafe { &*found })
+        })
+    })
+}
+
+/// `aura_direct_map_get_str_payload`, lending the found value where it can.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_get_str_lent(
+    map: *mut OpaqueValue,
+    key_ptr: *const u8,
+    key_len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let key = literal_str(key_ptr, key_len);
+        lent_map_lookup(map, |map| map.entries.value_of_str(key))
+    })
+}
+
+/// `aura_direct_map_get_int64_payload`, lending the found value where it
+/// can.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_get_int64_lent(
+    map: *mut OpaqueValue,
+    key: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| lent_map_lookup(map, |map| map.entries.value_of_i64(key)))
+}
+
+/// `aura_direct_vec_element_map_get_payload`, lending the found value
+/// where it can.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_element_map_get_lent(
+    list: *mut OpaqueValue,
+    index: i64,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        lent_vec_element_map_lookup(list, index, line, column, |map| {
+            unsafe { with_value(key, |key| map.entries.value_of(key).map(std::ptr::from_ref)) }
+                .map(|found| unsafe { &*found })
+        })
+    })
+}
+
+/// `aura_direct_vec_element_map_get_str_payload`, lending the found value
+/// where it can.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_element_map_get_str_lent(
+    list: *mut OpaqueValue,
+    index: i64,
+    key_ptr: *const u8,
+    key_len: usize,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let key = literal_str(key_ptr, key_len);
+        lent_vec_element_map_lookup(list, index, line, column, |map| {
+            map.entries.value_of_str(key)
+        })
+    })
+}
+
+/// Reads a lookup result that may be lent: the value at its address, or
+/// the value its box holds.
+unsafe fn with_lent_value<T>(handle: *mut OpaqueValue, read: impl FnOnce(&Value) -> T) -> T {
+    let word = handle as usize;
+    if word & LENT_VALUE_BIT != 0 {
+        // SAFETY: a lent result is the address of a value in a confined
+        // collection, and generated code reads it only while nothing can
+        // change that collection.
+        read(unsafe { &*((word & !LENT_VALUE_BIT) as *const Value) })
+    } else {
+        unsafe { with_unlisted_value(handle, read) }
+    }
+}
+
 /// The key of a `dict[str, V]` lookup, a literal in the program image.
 /// `aura_direct_map_get` with a `str` literal key, which is never boxed.
 #[cfg_attr(not(coverage), no_mangle)]
@@ -8531,6 +8740,8 @@ pub extern "C-unwind" fn aura_direct_map_index(
     })
 }
 
+/// `map[key] = value`. It returns null, which releases as nothing: the
+/// statement has no value, and a boxed unit would cost an allocation.
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_map_set_index_in_place(
     map: *mut OpaqueValue,
@@ -8545,7 +8756,7 @@ pub extern "C-unwind" fn aura_direct_map_set_index_in_place(
         with_map_mut(map, |map| {
             map.entries.insert(key, value);
         });
-        boxed_value(Value::Unit)
+        std::ptr::null_mut()
     })
 }
 
@@ -10376,11 +10587,29 @@ pub extern "C-unwind" fn aura_direct_tuple_take_element(
 fn nominal_base_name_is(name: &str, expected: &[u8]) -> bool {
     let separator = DIRECT_RUNTIME_TYPE_SEPARATOR as u8;
     let name = name.as_bytes();
-    name.starts_with(expected)
+    name.get(..expected.len())
+        .is_some_and(|prefix| short_bytes_eq(prefix, expected))
         && name
             .get(expected.len())
             .is_none_or(|&next| next == separator)
-        && !expected.contains(&separator)
+        && !contains_separator(expected)
+}
+
+/// Whether `bytes` holds the runtime type separator, eight bytes at a time.
+/// Every variant test asks this of a short enum name.
+fn contains_separator(bytes: &[u8]) -> bool {
+    const _: () = assert!(DIRECT_RUNTIME_TYPE_SEPARATOR as u32 == 0);
+    const ONES: u64 = u64::from_ne_bytes([0x01; 8]);
+    const HIGHS: u64 = u64::from_ne_bytes([0x80; 8]);
+    let mut words = bytes.chunks_exact(8);
+    for word in &mut words {
+        let word = u64::from_ne_bytes(word.try_into().expect("eight bytes"));
+        // Nonzero exactly when some byte of `word` is zero.
+        if word.wrapping_sub(ONES) & !word & HIGHS != 0 {
+            return true;
+        }
+    }
+    words.remainder().contains(&0)
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -10397,15 +10626,42 @@ pub extern "C-unwind" fn aura_direct_variant_matches(
         let expected_enum = unsafe { slice::from_raw_parts(enum_ptr, enum_len) };
         let expected_variant = unsafe { slice::from_raw_parts(variant_ptr, variant_len) };
         unsafe {
-            with_unlisted_value(value, |value| match value {
-                Value::EnumVariant(variant) => i64::from(
-                    variant.variant_name.as_bytes() == expected_variant
-                        && nominal_base_name_is(&variant.enum_name, expected_enum),
-                ),
-                _ => 0,
+            with_unlisted_value(value, |value| {
+                variant_is(value, expected_enum, expected_variant)
             })
         }
     })
+}
+
+/// `aura_direct_variant_matches` for a lookup result that may be lent.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_lent_variant_matches(
+    value: *mut OpaqueValue,
+    enum_ptr: *const u8,
+    enum_len: usize,
+    variant_ptr: *const u8,
+    variant_len: usize,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let expected_enum = unsafe { slice::from_raw_parts(enum_ptr, enum_len) };
+        let expected_variant = unsafe { slice::from_raw_parts(variant_ptr, variant_len) };
+        unsafe {
+            with_lent_value(value, |value| {
+                variant_is(value, expected_enum, expected_variant)
+            })
+        }
+    })
+}
+
+/// Whether `value` is the named variant, as `1` or `0`.
+fn variant_is(value: &Value, expected_enum: &[u8], expected_variant: &[u8]) -> i64 {
+    match value {
+        Value::EnumVariant(variant) => i64::from(
+            short_bytes_eq(variant.variant_name.as_bytes(), expected_variant)
+                && nominal_base_name_is(&variant.enum_name, expected_enum),
+        ),
+        _ => 0,
+    }
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -10423,12 +10679,12 @@ fn direct_variant_payload_clone(value: &Value, index: i64) -> *mut OpaqueValue {
 }
 
 macro_rules! direct_variant_payload_scalar {
-    ($($(#[$doc:meta])* $name:ident => $unbox:ident -> $result:ty),+ $(,)?) => {$(
+    ($($(#[$doc:meta])* $name:ident => $reader:ident, $unbox:ident -> $result:ty),+ $(,)?) => {$(
         $(#[$doc])*
         #[cfg_attr(not(coverage), no_mangle)]
         pub extern "C-unwind" fn $name(value: *mut OpaqueValue, index: i64) -> $result {
             task_runtime_boundary(|| unsafe {
-                with_unlisted_value(value, |value| $unbox(direct_variant_payload_ref(value, index)))
+                $reader(value, |value| $unbox(direct_variant_payload_ref(value, index)))
             })
         }
     )+};
@@ -10437,13 +10693,25 @@ macro_rules! direct_variant_payload_scalar {
 direct_variant_payload_scalar! {
     /// `aura_direct_variant_payload` then `aura_direct_unbox_i64`, without
     /// a copy or a box.
-    aura_direct_variant_payload_i64 => unbox_i64_of -> i64,
+    aura_direct_variant_payload_i64 => with_unlisted_value, unbox_i64_of -> i64,
     /// `aura_direct_variant_payload` then `aura_direct_unbox_int64`.
-    aura_direct_variant_payload_int64 => unbox_int64_of -> i64,
+    aura_direct_variant_payload_int64 => with_unlisted_value, unbox_int64_of -> i64,
     /// `aura_direct_variant_payload` then `aura_direct_unbox_u64`.
-    aura_direct_variant_payload_u64 => unbox_u64_of -> u64,
+    aura_direct_variant_payload_u64 => with_unlisted_value, unbox_u64_of -> u64,
     /// `aura_direct_variant_payload` then `aura_direct_unbox_bool`.
-    aura_direct_variant_payload_bool => unbox_bool_of -> i64,
+    aura_direct_variant_payload_bool => with_unlisted_value, unbox_bool_of -> i64,
+    /// `aura_direct_variant_payload_i64` for a lookup result that may be
+    /// lent.
+    aura_direct_lent_variant_payload_i64 => with_lent_value, unbox_i64_of -> i64,
+    /// `aura_direct_variant_payload_int64` for a lookup result that may be
+    /// lent.
+    aura_direct_lent_variant_payload_int64 => with_lent_value, unbox_int64_of -> i64,
+    /// `aura_direct_variant_payload_u64` for a lookup result that may be
+    /// lent.
+    aura_direct_lent_variant_payload_u64 => with_lent_value, unbox_u64_of -> u64,
+    /// `aura_direct_variant_payload_bool` for a lookup result that may be
+    /// lent.
+    aura_direct_lent_variant_payload_bool => with_lent_value, unbox_bool_of -> i64,
 }
 
 fn direct_variant_payload_ref(value: &Value, index: i64) -> &Value {
@@ -10858,13 +11126,18 @@ pub extern "C-unwind" fn aura_direct_callable_env_free(env: *mut i64) {
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
+#[allow(clippy::slow_vector_initialization)]
 pub extern "C-unwind" fn aura_direct_arg_buffer_new(count: i64) -> *mut i64 {
     task_runtime_boundary(|| {
         let count = match usize::try_from(count) {
             Ok(count) => count,
             Err(_) => runtime_error("invalid arg buffer size"),
         };
-        let mut values = vec![0i64; count].into_boxed_slice();
+        // Zeroed by hand: `vec![0; count]` asks the allocator for zeroed
+        // memory, which costs more than writing a few words.
+        let mut values = Vec::with_capacity(count);
+        values.resize(count, 0i64);
+        let mut values = values.into_boxed_slice();
         let ptr = values.as_mut_ptr();
         Box::leak(values);
         ptr

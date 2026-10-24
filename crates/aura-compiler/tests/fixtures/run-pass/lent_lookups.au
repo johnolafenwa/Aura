@@ -1,0 +1,128 @@
+import json
+
+def kind(value: json.Value) -> str:
+    match value:
+        case json.Value.Int(_):
+            return "int"
+        case json.Value.Bool(_):
+            return "bool"
+        case json.Value.Array(_):
+            return "array"
+        case json.Value.Object(_):
+            return "object"
+        case _:
+            return "other"
+
+def main():
+    mut docs: list[dict[str, json.Value]] = []
+    mut i = 0
+    while i < 6:
+        mut doc: dict[str, json.Value] = {}
+        doc["age"] = json.Value.Int(30 + i * 5)
+        doc["active"] = json.Value.Bool(i % 2 == 0)
+        if i % 3 != 0:
+            doc["tags"] = json.Value.Array([json.Value.Int(i)])
+        docs.append(doc)
+        i += 1
+
+    # Found values that are only matched and read borrow the stored value.
+    mut older = 0
+    mut active = 0
+    mut missing = 0
+    for doc in docs:
+        match doc.get("age"):
+            case Lookup.Found(value):
+                match value:
+                    case json.Value.Int(age):
+                        if age >= 40:
+                            older += 1
+                    case _:
+                        pass
+            case Lookup.Missing:
+                missing += 1
+        match doc.get("active"):
+            case Lookup.Found(flag):
+                match flag:
+                    case json.Value.Bool(set):
+                        if set:
+                            active += 1
+                    case _:
+                        pass
+            case Lookup.Missing:
+                missing += 1
+        match doc.get("name"):
+            case Lookup.Found(_):
+                print("unexpected name")
+            case Lookup.Missing:
+                missing += 1
+    print(older)
+    print(active)
+    print(missing)
+
+    # A value that owns a list is copied, and reads the same.
+    mut tagged = 0
+    for doc in docs:
+        match doc.get("tags"):
+            case Lookup.Found(tags):
+                match tags:
+                    case json.Value.Array(items):
+                        tagged += items.len()
+                    case _:
+                        pass
+            case Lookup.Missing:
+                pass
+    print(tagged)
+
+    # Integer keys lend as well.
+    mut flags: dict[int64, json.Value] = {}
+    flags[1] = json.Value.Bool(true)
+    flags[2] = json.Value.Int(9)
+    mut seen = 0
+    mut key = 0
+    while key < 4:
+        match flags.get(key):
+            case Lookup.Found(entry):
+                match entry:
+                    case json.Value.Bool(on):
+                        if on:
+                            seen += 100
+                    case json.Value.Int(n):
+                        seen += n
+                    case _:
+                        pass
+            case Lookup.Missing:
+                seen += 1
+        key += 1
+    print(seen)
+
+    # A dict changed while the found value is in use keeps its old copy.
+    mut scores: dict[str, json.Value] = {}
+    scores["a"] = json.Value.Int(1)
+    match scores.get("a"):
+        case Lookup.Found(value):
+            scores["a"] = json.Value.Int(2)
+            match value:
+                case json.Value.Int(n):
+                    print(n)
+                case _:
+                    pass
+        case Lookup.Missing:
+            pass
+    match scores.get("a"):
+        case Lookup.Found(value):
+            match value:
+                case json.Value.Int(n):
+                    print(n)
+                case _:
+                    pass
+        case Lookup.Missing:
+            pass
+
+    # A found value handed to a function is copied.
+    match scores.get("a"):
+        case Lookup.Found(value):
+            print(kind(value))
+        case Lookup.Missing:
+            pass
+    print(scores.len())
+    print(docs.len() + flags.len())
