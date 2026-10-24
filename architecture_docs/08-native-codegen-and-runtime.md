@@ -9,7 +9,7 @@ Code generation is the stage that turns an intermediate representation into mach
 In Aura, the direct backend:
 
 - takes `MirModule`
-- uses Cranelift to emit native code into an object file
+- uses LLVM 22 to emit native code into an object file
 - links that object file against Aura's direct runtime
 
 The code generator lives in [`native_codegen.rs`](../crates/aura-compiler/src/native_codegen.rs). The runtime ABI it targets lives in [`native_runtime.rs`](../crates/aura-runtime/src/native_runtime.rs).
@@ -28,7 +28,7 @@ flowchart LR
     A["MirModule"] --> B["validate_module"]
     B --> C["classify DirectType"]
     C --> D["declare runtime imports"]
-    D --> E["compile each MirFunction with Cranelift"]
+    D --> E["compile each MirFunction with LLVM"]
     E --> F["emit host object bytes"]
     F --> G["link with native_runtime static library"]
 ```
@@ -130,8 +130,7 @@ The accessor keeps the current task's stack in a scheduler slot, which
 every task switch clears. A task's stack keeps its address while the task
 lives, so every call from one task returns the same address. LLVM sees the
 accessor as `memory(none)` and merges a function's calls into one, even
-across a yield. Cranelift calls it at each push and pop. The runtime paths
-are cold blocks on both code generators.
+across a yield. The runtime paths are cold blocks.
 
 ## `OpaqueValue` and refcounting
 
@@ -317,7 +316,7 @@ instead of copying it into a new box.
 
 ## A tiny direct-backend design example
 
-This miniature example does not use Cranelift, but it shows the same architectural split: simple values are direct, complex values are boxed.
+This miniature example does not use LLVM, but it shows the same architectural split: simple values are direct, complex values are boxed.
 
 ```rust
 #[derive(Debug, Clone)]
@@ -354,14 +353,15 @@ Aura's real backend is more advanced, but the design lesson is the same:
 - emit fast paths for simple cases
 - call runtime helpers for rich behavior
 
-## Cranelift's role
+## LLVM's role
 
-Aura uses Cranelift to:
+Aura uses LLVM to:
 
 - create function signatures
 - build IR blocks and instructions
-- manage variables and values
-- emit object code for the host ISA
+- promote variables to SSA values
+- optimize each object with `default<O3>`
+- emit object code for the host target
 
 Aura still does the language-specific work itself:
 
@@ -372,7 +372,7 @@ Aura still does the language-specific work itself:
 
 ## The code generator interface
 
-The emitter reaches Cranelift only through
+The emitter reaches LLVM only through
 [`native_backend.rs`](../crates/aura-compiler/src/native_backend.rs). It
 defines two traits:
 
@@ -399,59 +399,47 @@ runtime import returns the same value on every call from one task and
 touches no memory its callers see. `set_cold_block` says a block rarely
 runs. The frame record paths use both.
 
-[`native_backend_cranelift.rs`](../crates/aura-compiler/src/native_backend_cranelift.rs)
-is the default implementation. Each handle is the index of the Cranelift
-entity it names, so the emitter builds the same instructions in the same
-order as it did through Cranelift directly, and objects stay byte for
-byte the same. The Cranelift flags, the host ISA, per-function sections,
-and the implicit return area for many return values stay inside it.
-
 ## The LLVM code generator
 
-An `aura` built with the `llvm` cargo feature also has
-[`native_backend_llvm.rs`](../crates/aura-compiler/src/native_backend_llvm.rs),
-which generates code with LLVM 22 through inkwell. Setting
-`AURA_NATIVE_CODEGEN=llvm` selects it. Unset, empty, or `cranelift` keeps
-Cranelift, and any other value is an error, as is `llvm` in an `aura`
-built without the feature. The native run cache keys on the selected code
-generator, so one never reuses a program the other built.
-
-The LLVM implementation records each body in a small instruction list of
-its own while the emitter builds it, so the peepholes inspect and rewrite
-the instructions they built, as they do on Cranelift. `use_var` answers
-from the variable's last definition in the current block, or in a chain
-of sealed blocks with one predecessor each, as Cranelift's SSA builder
-does, so the peepholes see the same constants. `finish` then lowers the
-whole object to LLVM IR in one context:
+[`native_backend_llvm.rs`](../crates/aura-compiler/src/native_backend_llvm.rs)
+implements both traits with LLVM 22 through inkwell. It is the only
+implementation. It records each body in a small instruction list of its
+own while the emitter builds it, so the peepholes inspect and rewrite the
+instructions they built. `use_var` answers from the variable's last
+definition in the current block, or in a chain of sealed blocks with one
+predecessor each, as an SSA builder does, so the peepholes see the same
+constants. `finish` then lowers the whole object to LLVM IR in one context:
 
 - Blocks become basic blocks and block parameters become phis. An entry
   block holds an alloca for each variable and stack slot, and `mem2reg`
   and SROA promote the variables.
-- Values stay 64-bit integers, as on Cranelift. A load or store turns its
-  address into a pointer, and `func_addr`, `symbol_value`, and
-  `stack_addr` turn pointers back into integers.
+- Values are 64-bit integers. A load or store turns its address into a
+  pointer, and `func_addr`, `symbol_value`, and `stack_addr` turn pointers
+  back into integers.
 - An Aura-convention function with many results returns one struct, which
   LLVM passes back through memory when it does not fit the return
   registers. Direct and indirect calls share that type. The C convention
   uses the C ABI.
 - A trap calls `llvm.trap`. Divisions trap on a zero divisor and on the
-  quotient that overflows, as Cranelift's do, where LLVM would leave them
-  undefined.
+  quotient that overflows, where LLVM would leave them undefined.
 - Every function has an asynchronous unwind table, since a task failure
   unwinds through generated frames to the runtime's task boundary.
 - A task-invariant import gets `memory(none)`, `nounwind`, and
   `willreturn`. A branch to a cold block gets `branch_weights` of 1 to
-  2000. Cranelift moves cold blocks to the end of the function.
+  2000.
 - The target machine uses the host triple, the generic CPU, and PIC, and
   the module runs `default<O3>`.
 - On ELF every defined function gets its own `.text.<symbol>` section after
-  the passes run, so `--gc-sections` drops the ones nothing calls, as with
-  Cranelift's per-function sections. LLVM marks Mach-O objects
-  `MH_SUBSECTIONS_VIA_SYMBOLS`, as Cranelift does, so `-dead_strip` works
+  the passes run, so `--gc-sections` drops the ones nothing calls. LLVM
+  marks Mach-O objects `MH_SUBSECTIONS_VIA_SYMBOLS`, so `-dead_strip` works
   per symbol there.
 
+Tests that pin which functions the emitter defines and which helpers it
+calls build their object with `without_optimization`, which skips the
+passes on one thread. The parity matrix runs the optimized objects.
+
 [`scripts/install-llvm.sh`](../scripts/install-llvm.sh) installs the
-static LLVM libraries the feature links. See
+static LLVM libraries `aura-compiler` links. See
 [CONTRIBUTING](../CONTRIBUTING.md).
 
 ## Validation before emission
@@ -487,7 +475,7 @@ diagnostic.
 
 ## Generated task exit and scheduler teardown
 
-Generated direct tasks suspend below Cranelift frames. Rust unwinding cannot
+Generated direct tasks suspend below generated native frames. Rust unwinding cannot
 safely cross those frames on every supported platform, so the scheduler never
 pretends that a forced reset is an ordinary unwind.
 
@@ -517,7 +505,6 @@ not a second language-level cleanup mechanism.
 - [`native_codegen.rs`](../crates/aura-compiler/src/native_codegen.rs)
 - [`native_codegen_lookups.rs`](../crates/aura-compiler/src/native_codegen_lookups.rs)
 - [`native_backend.rs`](../crates/aura-compiler/src/native_backend.rs)
-- [`native_backend_cranelift.rs`](../crates/aura-compiler/src/native_backend_cranelift.rs)
 - [`native_backend_llvm.rs`](../crates/aura-compiler/src/native_backend_llvm.rs)
 - [`native_runtime.rs`](../crates/aura-runtime/src/native_runtime.rs)
 - [`native_codegen_tests.rs`](../crates/aura-compiler/src/native_codegen_tests.rs)

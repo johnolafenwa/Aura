@@ -138,7 +138,7 @@ jobs:
         env:
           AURA_BUILD_COMMIT: ${{ needs.release_identity.outputs.implementation_commit }}
           AURA_BUILD_CHANNEL: preview
-        run: cargo build -p aura --release --locked --features llvm
+        run: cargo build -p aura --release --locked
 
       - name: Check the libraries the CLI loads
         run: python3 scripts/check-aura-libraries.py target/release/aura

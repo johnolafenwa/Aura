@@ -30,7 +30,7 @@ This glossary gives short, concrete definitions for the terms used throughout th
 - Lowering
   Translating a higher-level representation into a lower-level one. Aura lowers `Program` into MIR, and MIR into native code for `build`.
 - Direct backend
-  Aura's native code generation path in `native_codegen.rs`. It compiles MIR to machine code using Cranelift and relies on `native_runtime.rs`.
+  Aura's native code generation path in `native_codegen.rs`. It compiles MIR to machine code using LLVM 22 and relies on `native_runtime.rs`.
 - MIR runtime
   The execution engine in `mir_runtime.rs` that interprets MIR directly.
 

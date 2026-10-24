@@ -756,6 +756,36 @@ Callgrind instructions, in millions:
   All six programs now meet their phase 2 targets.
 - No other program grows by more than 0.03%.
 
+### Step 11 Results
+
+Step 11 removed Cranelift. LLVM 22 through inkwell is the only native
+code generator, and the parity matrix compares it with the MIR
+interpreter. The method and tables are in
+[the step 11 note](../work/2026-10-24-batch-7-step-11-remove-cranelift.md).
+
+`scripts/bench-compile-time.py` measured both code generators before the
+removal, twice each, alternating. Medians of ten cold builds, in seconds:
+
+| Program | Cranelift | LLVM | Phase 2 target |
+| --- | ---: | ---: | ---: |
+| Hello world | 0.457 | 0.453 | 0.6 |
+| Reference agent | 0.792 | 1.893 | 1.5 |
+| `unix_tls_roundtrip` | 0.509 | 1.004 | |
+
+- **The reference agent misses its build target on LLVM**, at 1.89 s
+  against 1.5 s. 9c measured 1.27 s. Step 10's inline fast paths made the
+  IR larger.
+- LLVM's `default<O3>` passes take 0.61 to 0.70 s of that build, and
+  instruction selection and object writing 0.51 to 0.58 s, on one thread.
+  `default<O1>` passes take 0.37 to 0.44 s, so a lighter pipeline alone
+  does not reach the target. Code generation on several threads, as
+  rustc does with codegen units, is the larger lever. The owner decides
+  which step takes it.
+- Hello world meets its target.
+- `aura` links LLVM statically. It is 66.3 MB stripped on Linux, against
+  17.8 MB with Cranelift alone. Every native binaries subject passes the
+  size gate, and the gate checks that no user program links LLVM.
+
 ## Owner Questions
 
 Each names the recommended default first.

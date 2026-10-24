@@ -1,6 +1,6 @@
-use cranelift_object::object::{Object, ObjectSection, ObjectSymbol};
 use inkwell::context::Context;
 use inkwell::targets::{InitializationConfig, Target, TargetTriple};
+use object::{Object, ObjectSection, ObjectSymbol};
 
 use super::{host_target_machine, target_machine, LlvmModule};
 use crate::native_backend::{
@@ -222,7 +222,7 @@ fn rewrites_turn_calls_into_other_calls_copies_and_nothing() {
 }
 
 #[test]
-fn use_var_follows_sealed_single_predecessors_like_cranelift() {
+fn use_var_follows_sealed_single_predecessors() {
     let mut module = module();
     let sig = signature(CallConv::C, &[types::I64], &[types::I64]);
     define(&mut module, "vars", Linkage::Export, &sig, |builder| {
@@ -358,7 +358,7 @@ fn data_holds_bytes_and_the_addresses_written_into_it() {
 }
 
 #[test]
-fn declarations_merge_like_cranelift_and_definitions_happen_once() {
+fn declarations_merge_and_definitions_happen_once() {
     let mut module = module();
     let sig = signature(CallConv::C, &[], &[]);
     let imported = module
@@ -419,8 +419,7 @@ fn finished_objects_carry_symbols_and_unwind_tables() {
         builder.return_(&[doubled]);
     });
     let bytes = Box::new(module).finish().expect("the object should write");
-    let object =
-        cranelift_object::object::File::parse(bytes.as_slice()).expect("the object should parse");
+    let object = object::File::parse(bytes.as_slice()).expect("the object should parse");
     assert!(object
         .symbols()
         .any(|symbol| symbol.name().is_ok_and(|name| name.ends_with("exported"))));
@@ -464,8 +463,7 @@ fn elf_objects_put_every_function_in_its_own_section() {
     let module = two_function_module();
     for triple in ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"] {
         let bytes = object_for_triple(&module, triple);
-        let object = cranelift_object::object::File::parse(bytes.as_slice())
-            .expect("the object should parse");
+        let object = object::File::parse(bytes.as_slice()).expect("the object should parse");
         let mut sections = Vec::new();
         for name in ["first", "second"] {
             let symbol = object
@@ -488,18 +486,17 @@ fn elf_objects_put_every_function_in_its_own_section() {
 
 #[test]
 fn mach_o_objects_are_split_by_symbol() {
-    use cranelift_object::object::FileFlags;
+    use object::FileFlags;
     const MH_SUBSECTIONS_VIA_SYMBOLS: u32 = 0x2000;
     let module = two_function_module();
     for triple in ["arm64-apple-macosx11.0.0", "x86_64-apple-macosx10.12.0"] {
         let bytes = object_for_triple(&module, triple);
-        let object = cranelift_object::object::File::parse(bytes.as_slice())
-            .expect("the object should parse");
+        let object = object::File::parse(bytes.as_slice()).expect("the object should parse");
         let FileFlags::MachO { flags } = object.flags() else {
             panic!("{triple} should write Mach-O");
         };
         assert_ne!(flags & MH_SUBSECTIONS_VIA_SYMBOLS, 0, "{triple}");
-        // Like Cranelift's Mach-O, both functions share one text section.
+        // Both functions share one text section, split by symbol.
         let first = object.symbol_by_name("_first").unwrap().section_index();
         let second = object.symbol_by_name("_second").unwrap().section_index();
         assert_eq!(first, second, "{triple}");

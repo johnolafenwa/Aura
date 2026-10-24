@@ -38,8 +38,10 @@ manifests, or packaged-archive smoke tests.
 | Tool | Pinned version |
 | --- | --- |
 | Rust | 1.95.0 |
+| LLVM | 22.1.2 on Linux, Homebrew `llvm@22` on macOS |
 | Cargo LLVM coverage | 0.8.4 |
 | Node.js | 22.14.0 |
 | npm | 11.4.2 |
 
-`rust-toolchain.toml` and `package.json` hold the pins.
+`rust-toolchain.toml` and `package.json` hold the pins, and
+`scripts/install-llvm.sh` holds the LLVM one.

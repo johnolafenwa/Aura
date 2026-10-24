@@ -8,28 +8,21 @@ rust-version.workspace = true
 [dependencies]
 aura-core = { path = "../aura-core" }
 aura-runtime = { path = "../aura-runtime" }
-cranelift-codegen = "0.118"
-cranelift-frontend = "0.118"
-cranelift-module = "0.118"
-cranelift-native = "0.118"
-cranelift-object = "0.118"
-inkwell = { version = "0.11.0", default-features = false, features = ["llvm22-1", "target-x86", "target-aarch64"], optional = true }
+# The native code generator. It links static LLVM 22 libraries; see
+# CONTRIBUTING.md.
+inkwell = { version = "0.11.0", default-features = false, features = ["llvm22-1", "target-x86", "target-aarch64"] }
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision", "unbounded_depth"] }
 sha2 = "0.10"
 toml = "0.8"
 
-[features]
-# The LLVM code generator, which `AURA_NATIVE_CODEGEN=llvm` selects. It needs
-# static LLVM 22 libraries; see CONTRIBUTING.md.
-llvm = ["dep:inkwell"]
-
 [dev-dependencies]
 aura-core = { path = "../aura-core", features = ["test-support"] }
 aura-runtime = { path = "../aura-runtime", features = ["test-support"] }
 corosensei = "0.3.3"
 getrandom = "0.2"
+object = { version = "0.36", default-features = false, features = ["read_core", "elf", "macho", "std"] }
 rcgen = "0.13"
 
 [[bench]]

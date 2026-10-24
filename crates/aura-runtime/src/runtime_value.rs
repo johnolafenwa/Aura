@@ -6617,7 +6617,7 @@ impl LightweightTaskScheduler {
                         )))
                     });
                 if let Some(cleanup) = record.forced_exit_cleanup.take() {
-                    // Direct-backend tasks suspend below generated Cranelift frames. Those
+                    // Direct-backend tasks suspend below generated native frames. Those
                     // frames cannot be crossed by corosensei's forced Rust unwind on all
                     // supported platforms, so their owned state is deliberately externalized
                     // into this scheduler callback before the stack is reset.

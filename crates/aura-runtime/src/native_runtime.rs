@@ -16297,7 +16297,7 @@ unsafe fn start_direct_task_call(call: DirectTaskCall) -> *mut OpaqueValue {
             _ => runtime_error("invalid task-start stack-presence flag"),
         };
         // A direct task can be abandoned while suspended inside generated
-        // Cranelift frames. Keep its raw argument allocation outside the
+        // frames. Keep its raw argument allocation outside the
         // coroutine stack so the scheduler can reclaim it without unwinding
         // through those frames.
         // The spawned task and its forced-exit cleanup now own the external

@@ -5539,8 +5539,8 @@ page-rounded and guard-protected. The MIR and direct entry thread reserves
 suspended, it disarms their waits, publishes cancellation to their handles and
 observers, and reclaims scheduler-owned and direct-runtime host state. This
 abandonment path does not run arbitrary Aura cleanup thunks. Direct generated
-stacks may be reset, because they cannot safely be unwound through Cranelift
-frames.
+stacks may be reset, because they cannot safely be unwound through
+generated native frames.
 
 **Detached tasks.** Detached lightweight tasks are unavailable.
 
@@ -6371,7 +6371,7 @@ The foreign function interface (FFI) is at version 0.
 - MIR and native direct-backend traps carry the same typed Aura call frames and task ancestry. Call frames are innermost first, and task ancestry is youngest first. Every frame keeps its own defining or spawning source path.
 - Human diagnostics synthesize the compact call-chain, task-entry, and task-ancestry note lines.
 - Structured schema-version-1 diagnostics expose `call_frames` and `task_ancestry` arrays instead. They do not duplicate the generated frame prose in `notes`.
-- Aura does not expose host Rust/Cranelift backtraces, debugger stack reflection, exception catching, or a standalone-binary JSON switch.
+- Aura does not expose host Rust or LLVM backtraces, debugger stack reflection, exception catching, or a standalone-binary JSON switch.
 
 ### Scheduling
 
@@ -6570,6 +6570,7 @@ the phase that owns the failure.
 | `AU20xx` | names and types |
 | `AU30xx` | ownership, loans, and transfer |
 | `AU40xx` | runtime-checked traps |
+| `AU50xx` | editor warnings |
 
 The registry is append-only:
 
@@ -7008,6 +7009,18 @@ It never returns or clones the stored value. The same defense applies when
 malformed backend state reaches `select`. An already-claimed or duplicated
 non-repeatable Task traps with `AU4001` before any result is delivered.
 
+### Editor Warnings
+
+Editor warnings come from editor analysis only. `aura check`, `aura run`, and
+`aura build` do not report them, and they never reject a program.
+
+| Code | Meaning | Common causes | How to fix |
+| --- | --- | --- | --- |
+| `AU5001` | unused local binding | A local or loop variable that nothing reads. | Remove it, or start its name with `_` if it is unused on purpose. |
+
+`AU5001` is reported only when the file checks. A `with` binding is exempt,
+since it holds its resource open for the block.
+
 ## Diagnostic Structure
 
 Every diagnostic contains all of these fields:
@@ -7154,6 +7167,12 @@ The JavaScript language-server bridge maps each part to the LSP:
 - secondary spans to `relatedInformation`
 - the code to `Diagnostic.code`
 - the remaining metadata to `Diagnostic.data`
+
+When a statement fails to check, analysis replaces that statement and checks
+the rest of the file again. Hover, definitions, references, and the outline
+keep working everywhere else, and each independent error gets its own
+diagnostic. An error that only follows from a replaced statement, such as a
+use of the binding that statement introduced, is not reported.
 
 The language server has no semantic-diagnostic implementation of its own. If
 the compiler service is unavailable, lexical recovery may keep basic editor
@@ -7307,8 +7326,8 @@ every trap. MIR is Aura's mid-level intermediate representation.
   entry, its parent function, and the exact source location that started each
   task. They are ordered youngest first.
 
-These are Aura frames, not host Rust, Cranelift, scheduler, or service-worker
-frames.
+These are Aura frames, not host Rust, generated-code, scheduler, or
+service-worker frames.
 
 Frame records are captured once, when the primary trap is established, before
 cleanup or task-state reset. Propagation through callers, Task results, task
@@ -8793,7 +8812,7 @@ Closing a resource explicitly before scope exit is permitted only where the reso
 
 These rules apply when Aura control flow or a maintained runtime failure exits the task through the language cleanup machinery. Internal scheduler abandonment is different. It is a last-resort containment path, used when the whole scheduler stops while a child is still suspended, such as after root completion or a fatal reactor failure.
 
-Scheduler abandonment marks the remaining task cancelled and releases scheduler-owned and direct-runtime host state. It does not invoke arbitrary Aura cleanup thunks, so no `__exit__` or `close` runs. A direct generated stack may be reset on this path, because it cannot be safely Rust-unwound across Cranelift frames. Use structured `TaskGroup` scopes. Do not depend on scheduler abandonment as a cleanup mechanism.
+Scheduler abandonment marks the remaining task cancelled and releases scheduler-owned and direct-runtime host state. It does not invoke arbitrary Aura cleanup thunks, so no `__exit__` or `close` runs. A direct generated stack may be reset on this path, because it cannot be safely Rust-unwound across generated native frames. Use structured `TaskGroup` scopes. Do not depend on scheduler abandonment as a cleanup mechanism.
 
 ## Tasks And Scheduler
 
@@ -22936,8 +22955,8 @@ Use the guide for the system where the `aura` command will run:
 
 ## Build From Source
 
-To build Aura itself, you need the pinned Rust toolchain and a host C
-compiler.
+To build Aura itself, you need the pinned Rust toolchain, a host C
+compiler, and the static libraries of LLVM 22.
 
 - **Rust**: install it through [rustup](https://rustup.rs).
   `rust-toolchain.toml` selects Rust 1.95.0.
@@ -22945,6 +22964,11 @@ compiler.
   them with `xcode-select --install`. On Linux and on Ubuntu under WSL 2,
   `build-essential` supplies the supported host toolchain. Native Windows
   source builds are outside the distribution matrix.
+- **LLVM 22**: `aura` generates native code with LLVM and links it
+  statically. `scripts/install-llvm.sh` installs it and prints the
+  `LLVM_SYS_221_PREFIX` setting to export before you build. On Linux it
+  downloads the official LLVM 22.1.2 archive and needs `libzstd-dev` and
+  `libxml2-dev`. On macOS it installs Homebrew's `llvm@22`.
 
 ## Build The Compiler
 
@@ -22953,8 +22977,12 @@ Clone the repository and build a release binary:
 ```bash
 git clone https://github.com/johnolafenwa/Aura.git
 cd Aura
+scripts/install-llvm.sh
+export LLVM_SYS_221_PREFIX="$HOME/.cache/aura/llvm/22.1.2"
 cargo build --release -p aura
 ```
+
+On macOS, export the settings the script prints instead.
 
 The release build is at `./target/release/aura`. In a source checkout,
 `aura build` can use the sibling runtime that Cargo built. A distributed

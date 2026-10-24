@@ -3,7 +3,7 @@
 
 use std::process::Command;
 
-const FORBIDDEN: &[&str] = &["aura-compiler", "cranelift"];
+const FORBIDDEN: &[&str] = &["aura-compiler", "inkwell", "llvm-sys"];
 
 #[test]
 fn runtime_normal_dependencies_exclude_compiler_crates() {

@@ -234,7 +234,7 @@ If the scheduler itself is torn down, it disarms registered waits, drains
 prepared starts, and retires every remaining task as cancelled so handles and
 waiters are notified. MIR and other pure-Rust task closures are force-unwound,
 which drops their Rust-owned captures. A started direct-native task cannot
-safely unwind through generated Cranelift frames; its stack is reset and its
+safely unwind through generated native frames; its stack is reset and its
 scheduler-owned host/runtime state is released instead. An unstarted direct
 task drops its entry closure and external state once. The scheduler invokes
 forced cleanup and Rust destructors with the task context installed, so any

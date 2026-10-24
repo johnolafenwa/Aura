@@ -1,4 +1,4 @@
-//! Whole-program direct-backend (Cranelift) execution for the Batch 1
+//! Whole-program direct-backend execution for the Batch 1
 //! coverage programs: each source is run on the MIR interpreter and built and
 //! executed through `aura build --backend direct`, and both must agree.
 

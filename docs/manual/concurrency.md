@@ -750,8 +750,8 @@ page-rounded and guard-protected. The MIR and direct entry thread reserves
 suspended, it disarms their waits, publishes cancellation to their handles and
 observers, and reclaims scheduler-owned and direct-runtime host state. This
 abandonment path does not run arbitrary Aura cleanup thunks. Direct generated
-stacks may be reset, because they cannot safely be unwound through Cranelift
-frames.
+stacks may be reset, because they cannot safely be unwound through
+generated native frames.
 
 **Detached tasks.** Detached lightweight tasks are unavailable.
 

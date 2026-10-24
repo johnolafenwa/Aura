@@ -7,11 +7,16 @@ chapter is the full command reference.
 
 ## Build The Binary
 
-From the repository root:
+`aura` links LLVM 22's static libraries. From the repository root, install
+them once, export the settings the script prints, and build:
 
 ```bash
+scripts/install-llvm.sh
+export LLVM_SYS_221_PREFIX="$HOME/.cache/aura/llvm/22.1.2"
 cargo build -p aura --release
 ```
+
+The prefix shown is the Linux default. CONTRIBUTING.md has the details.
 
 That produces the standalone binary at:
 

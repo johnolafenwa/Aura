@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use cranelift_object::object::{Object, ObjectSection, ObjectSymbol, RelocationTarget};
+use object::{Object, ObjectSection, ObjectSymbol, RelocationTarget};
 
 use super::{
     box_thunk_value, cleanup_place_type, collect_type_params_from_type, direct_ffi_type_for_source,
@@ -1244,10 +1244,10 @@ fn emit_unoptimized_object(module: &crate::mir::MirModule) -> std::result::Resul
 /// is the symbol defined at that place in the section. A 32-bit PC-relative
 /// field counts from its own end, 4 bytes past the place it patches.
 fn relocation_symbol_name(
-    object: &cranelift_object::object::File<'_>,
-    relocation: &cranelift_object::object::Relocation,
+    object: &object::File<'_>,
+    relocation: &object::Relocation,
 ) -> Option<String> {
-    use cranelift_object::object::{RelocationKind, SymbolKind};
+    use object::{RelocationKind, SymbolKind};
 
     let RelocationTarget::Symbol(index) = relocation.target() else {
         return None;
@@ -1282,8 +1282,8 @@ fn relocation_symbol_name(
 }
 
 fn object_referenced_symbols(bytes: &[u8]) -> BTreeSet<String> {
-    let object = cranelift_object::object::File::parse(bytes)
-        .expect("direct backend output should be a readable host object");
+    let object =
+        object::File::parse(bytes).expect("direct backend output should be a readable host object");
     object
         .sections()
         .flat_map(|section| section.relocations())
@@ -1292,8 +1292,8 @@ fn object_referenced_symbols(bytes: &[u8]) -> BTreeSet<String> {
 }
 
 fn object_function_referenced_symbols(bytes: &[u8], function: &str) -> BTreeSet<String> {
-    let object = cranelift_object::object::File::parse(bytes)
-        .expect("direct backend output should be a readable host object");
+    let object =
+        object::File::parse(bytes).expect("direct backend output should be a readable host object");
     let symbol = object
         .symbols()
         .find(|symbol| {
@@ -1329,8 +1329,8 @@ fn object_function_referenced_symbols(bytes: &[u8], function: &str) -> BTreeSet<
 }
 
 fn object_referenced_symbol_occurrences(bytes: &[u8], needle: &str) -> usize {
-    let object = cranelift_object::object::File::parse(bytes)
-        .expect("direct backend output should be a readable host object");
+    let object =
+        object::File::parse(bytes).expect("direct backend output should be a readable host object");
     object
         .sections()
         .flat_map(|section| section.relocations())
@@ -1539,7 +1539,7 @@ def main():
         "dynamic tuple specialization must consult runtime type matching: {referenced:?}"
     );
 
-    let object = cranelift_object::object::File::parse(bytes.as_slice())
+    let object = object::File::parse(bytes.as_slice())
         .expect("direct tuple-dispatch output should be a readable host object");
     let data_occurrences = |needle: &[u8]| {
         object
@@ -2281,7 +2281,7 @@ def main() -> int32:
         );
     }
 
-    let parsed = cranelift_object::object::File::parse(object.as_slice())
+    let parsed = object::File::parse(object.as_slice())
         .expect("frame-aware output should be a readable host object");
     let data_contains = |needle: &[u8]| {
         parsed.sections().any(|section| {
@@ -9234,7 +9234,7 @@ def main() -> int32:
         "str.to_bytes must call its own host builtin entry: {referenced:?}"
     );
 
-    let object = cranelift_object::object::File::parse(bytes.as_slice())
+    let object = object::File::parse(bytes.as_slice())
         .expect("str.to_bytes direct output should be a readable host object");
     assert!(
         !object
@@ -13527,8 +13527,8 @@ def main() -> int32:
 }
 
 fn object_defined_aura_functions(bytes: &[u8]) -> BTreeSet<String> {
-    let object = cranelift_object::object::File::parse(bytes)
-        .expect("direct backend output should be a readable host object");
+    let object =
+        object::File::parse(bytes).expect("direct backend output should be a readable host object");
     object
         .symbols()
         .filter(|symbol| symbol.section_index().is_some())

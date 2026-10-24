@@ -6,7 +6,7 @@
 //! whole object to LLVM IR in one context, runs LLVM's `O3` pipeline, and
 //! writes the object.
 //!
-//! Lowering keeps values as 64-bit integers like the Cranelift emitter:
+//! Lowering keeps every value a 64-bit integer, as the emitter does:
 //! loads and stores turn the address into a pointer, and addresses turn
 //! back into integers. Blocks become basic blocks, block parameters become
 //! phis, and variables and stack slots become allocas in an entry block
@@ -117,8 +117,7 @@ impl LlvmModule {
     }
 }
 
-/// The more visible of two linkages, as Cranelift merges a repeated
-/// declaration.
+/// The more visible of two linkages, which a repeated declaration keeps.
 fn merge_linkage(previous: Linkage, declared: Linkage) -> Linkage {
     fn rank(linkage: Linkage) -> u8 {
         match linkage {
@@ -235,8 +234,8 @@ impl ModuleBackend for LlvmModule {
             module: self,
             ir: FunctionIr::new(signature.clone()),
         };
-        // The body's own error comes first, as in Cranelift, which checks
-        // the definition only once the body is built.
+        // The body's own error comes first. The definition is checked only
+        // once the body is built.
         if let Err(error) = body(&mut builder) {
             return Err(DefineError::Body(error));
         }
@@ -289,9 +288,8 @@ impl LlvmModule {
     }
 }
 
-/// Gives every defined function its own ELF section, as Cranelift's
-/// `per_function_section` does, so `--gc-sections` drops the ones nothing
-/// calls. It runs after the passes, so it also covers any function they
+/// Gives every defined function its own ELF section, so `--gc-sections`
+/// drops the ones nothing calls. It runs after the passes, so it also covers any function they
 /// create. Mach-O needs nothing: LLVM marks its objects
 /// `MH_SUBSECTIONS_VIA_SYMBOLS`, and `-dead_strip` works per symbol.
 fn place_functions_in_own_sections(module: &Module<'_>, triple: &TargetTriple) {
@@ -578,7 +576,7 @@ impl FunctionIr {
     }
 
     /// Follows sealed blocks with one predecessor back to the variable's
-    /// last definition, the way Cranelift's SSA builder answers `use_var`.
+    /// last definition, as an SSA builder answers `use_var`.
     fn var_source(&self, var: Var) -> VarSource {
         let Some(mut block) = self.current else {
             return VarSource::Memory;
@@ -1167,7 +1165,7 @@ fn float_predicate(cond: FloatCC) -> FloatPredicate {
 }
 
 /// The alignment an access may assume: natural when it is trusted,
-/// otherwise none, as Cranelift loads and stores may be unaligned.
+/// otherwise none, since the emitter's other accesses may be unaligned.
 fn access_alignment(ty: ScalarType, flags: MemFlags) -> u32 {
     if !flags.trusted {
         return 1;
@@ -1404,7 +1402,7 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
         }
         // Variables and stack slots live in the entry block, so mem2reg can
         // promote the variables. A variable read before any write reads
-        // zero, as in Cranelift.
+        // zero.
         self.builder.position_at_end(entry);
         for (var, ty) in &self.ir.vars {
             let llvm_ty = basic_type(context, *ty);
@@ -1563,7 +1561,7 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
         Ok(())
     }
 
-    /// Traps when `condition` holds, the way a Cranelift division traps.
+    /// Traps when `condition` holds, as a checked division does.
     fn trap_if(&mut self, condition: IntValue<'ctx>) -> Result<(), String> {
         let trap = self.trap_block()?;
         let resume = self.context.append_basic_block(self.function, "");
@@ -2042,8 +2040,7 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
             BinaryOp::Bor => self.builder.build_or(left, right, ""),
             BinaryOp::Bxor => self.builder.build_xor(left, right, ""),
             BinaryOp::Udiv | BinaryOp::Urem => {
-                // Division by zero traps, as it does in Cranelift; LLVM leaves
-                // it undefined.
+                // Division by zero traps. LLVM leaves it undefined.
                 let zero = built(self.builder.build_int_compare(
                     IntPredicate::EQ,
                     right,
@@ -2058,8 +2055,8 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                 }
             }
             BinaryOp::Sdiv => {
-                // Cranelift traps on a zero divisor and on the one quotient
-                // that overflows.
+                // A zero divisor traps, and so does the one quotient that
+                // overflows.
                 let zero = built(self.builder.build_int_compare(
                     IntPredicate::EQ,
                     right,
@@ -2084,9 +2081,8 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                 self.builder.build_int_signed_div(left, right, "")
             }
             BinaryOp::Srem => {
-                // Cranelift traps on a zero divisor, and `x srem -1` is zero.
-                // LLVM leaves both undefined, so -1 becomes 1, which gives the
-                // same zero.
+                // A zero divisor traps, and `x srem -1` is zero. LLVM leaves
+                // both undefined, so -1 becomes 1, which gives the same zero.
                 let zero = built(self.builder.build_int_compare(
                     IntPredicate::EQ,
                     right,

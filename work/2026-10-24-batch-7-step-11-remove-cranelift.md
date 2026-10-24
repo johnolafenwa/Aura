@@ -138,3 +138,79 @@ ten pooled samples, in seconds:
   a whole. The native binaries job checks the first on the next pull
   request. Whether Homebrew still bottles `llvm@22` for Intel macOS is
   unknown until the Release workflow runs on `macos-15-intel`.
+
+## Part 11c: Cranelift Removed
+
+### Design
+
+- `native_backend_cranelift.rs` and the five Cranelift crates are gone,
+  with 20 more crates only they used. inkwell is a plain dependency of
+  `aura-compiler`, and the `llvm` cargo feature is gone from both crates.
+  The tests read objects with the `object` crate, a dev-dependency now.
+- `CodeGenerator`, `selected_code_generator`, and `AURA_NATIVE_CODEGEN`
+  are gone. `host_module_backend` builds the LLVM module. A set
+  `AURA_NATIVE_CODEGEN` is ignored, so an old shell setting cannot break a
+  build.
+- The native cache format is `aura-native-cache-v10`. The key names
+  `llvm` as a constant instead of the selected code generator, so programs
+  that Cranelift built under v9 never reach an LLVM `aura`.
+- The size gate's `cranelift` component is now `llvm`, matching `llvm::`,
+  `inkwell::`, and `LLVM`, and every subject must lack it. So the gate
+  checks that user programs never link LLVM. `aura-runtime`'s dependency
+  test forbids `inkwell` and `llvm-sys`.
+- CI drops `test:llvm`, `test:backend-parity:llvm`, and
+  `check:clippy:llvm`. `test:rust` and `test:backend-parity` run on LLVM,
+  and the repeat-build test runs inside `test:rust`. The native binaries
+  job builds once and runs the gate once.
+- `docs.yml` builds `aura` for the doc examples, and `safety.yml` builds
+  `aura-compiler` in the fuzz, ASan, and stress and benchmark jobs. Each
+  now installs LLVM, with the CI cache. The ThreadSanitizer job tests
+  `aura-runtime` alone and needs none.
+- `fuzz/Cargo.lock` was already stale before this step, and `cargo fuzz`
+  refreshes it. It is left as it was.
+- Docs: CONTRIBUTING, SUPPORTED_PLATFORMS, the CLI README, the
+  install page, architecture docs 00, 07, 08, and the README, and the
+  manual pages that named Cranelift frames.
+
+### Tests Retired
+
+| Test | Reason |
+| --- | --- |
+| `direct_backend_enables_stack_returns_for_flattened_mutable_writeback` | It checked Cranelift's flags. Cranelift is gone |
+| `unset_empty_and_cranelift_settings_select_cranelift` | The switch is gone |
+| `other_settings_name_both_code_generators` | The switch is gone |
+| `llvm_setting_needs_the_llvm_feature` | The feature is gone |
+| `llvm_setting_selects_llvm` | The switch is gone |
+| `native_run_cache_keys_on_the_code_generator` | Replaced by `native_run_ignores_the_retired_code_generator_setting`, which runs `cranelift`, `llvm`, `gcc`, and an empty setting and expects each to reuse the one cached program. It does not depend on the ambient environment |
+| `test_ci_installs_pinned_llvm_and_runs_the_llvm_gates` | Replaced by a test that every workflow building the compiler installs pinned LLVM |
+| `test_native_binary_gate_checks_both_code_generators` | Replaced by a test that no gate builds a second code generator |
+
+Two LLVM backend tests lost `like_cranelift` from their names.
+
+### Verification
+
+- `cargo fmt --check`, `npm run check:clippy`, and
+  `scripts/check-hygiene.sh` pass.
+- The whole workspace passes, except
+  `package_io_helpers_cover_local_error_paths`, which fails only because
+  the container runs as root. The CLI test binary passes 404 tests.
+- `npm run test:backend-parity` compares LLVM with the MIR interpreter
+  and passes in 1047 s.
+- The size gate passes on the LLVM-only `aura`. Hello world is 982,472
+  bytes, the reference agent 1,894,808, the JSON subject 1,477,432, the
+  TLS subject 3,299,176, and the WebSocket subject 3,608,584. No subject
+  links LLVM.
+- `scripts/check-aura-libraries.py` passes on the LLVM-only `aura` on
+  Linux.
+- The Python gates pass, and `check_doc_examples` checks 812 examples.
+- Coverage meets its floors, with `native_backend_llvm.rs` in the report
+  and the Cranelift file gone: lines 96.51% (floor 96.46), functions
+  97.37% (floor 97.33), and regions 95.44% (floor 95.23). The run used
+  `--no-fail-fast`, so the root-only failure did not stop it.
+  `native_backend_llvm.rs` alone covers 92.06% of its lines.
+- The LLVM-only `aura` release binary is 66.33 MB stripped, against
+  68.69 MB with both code generators and 17.8 MB for Cranelift alone
+  at 9b.
+- Not run here: `npm run docs:build`, since this worktree has no
+  VitePress install. The regenerated `llms-full.txt` comes from
+  `npm run docs:llms`, and `npm run docs:llms:check` passes.

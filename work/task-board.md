@@ -18,6 +18,12 @@ Last updated: 2026-10-24
   runners, Intel Macs included. A new check fails a release `aura` that
   loads a library users may lack, such as Homebrew's zstd. The macOS
   steps are unverified until CI and the Release workflow run them.
+- Done: 11c. Cranelift, its five crates, the `llvm` feature, and
+  `AURA_NATIVE_CODEGEN` are gone. The parity matrix compares LLVM with the
+  MIR interpreter, the native cache format is v10, and the size gate
+  checks that no user program links LLVM. `aura` is 66.3 MB on Linux.
+- Remaining: John's decision on the reference agent's build time, and a
+  first Release workflow run to confirm the macOS archives.
 
 ## Collection reduction builtins (complete)
 

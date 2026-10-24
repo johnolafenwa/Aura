@@ -11,9 +11,5 @@ blake3 = "1.8"
 libc = "0.2"
 serde_json = "1"
 
-[features]
-# Builds the LLVM code generator into `aura`; see aura-compiler.
-llvm = ["aura-compiler/llvm"]
-
 [dev-dependencies]
 rcgen = "0.13"

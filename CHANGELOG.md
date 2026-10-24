@@ -32,17 +32,21 @@ in this file.
   already accepted this form; the docs said an empty set needed
   `set[T]()`.
 
-### Added
-
-- Release archives build `aura` with the LLVM code generator, on Linux
-  x86-64, macOS x86-64, and macOS arm64. Cranelift stays the default. The
-  Linux `aura` loads `libstdc++.so.6`, `libz.so.1`, and `libzstd.so.1`
-  besides glibc.
-- An `aura` built with the `llvm` cargo feature can generate native code
-  with LLVM 22 when `AURA_NATIVE_CODEGEN=llvm` is set. Cranelift stays the
-  default, and the native run cache keeps the two apart.
-
 ### Changed
+
+- `aura build` and `aura run --backend direct` generate native code with
+  LLVM 22 instead of Cranelift. Cranelift is removed. `aura` links LLVM
+  statically, so the release `aura` is about 66 MB. The Linux `aura`
+  loads `libstdc++.so.6`, `libz.so.1`, and `libzstd.so.1` besides glibc.
+  On macOS it loads only system libraries.
+- A cold build of a larger program takes longer: the reference agent
+  builds in 1.89 s instead of 0.79 s on the Linux x86-64 measurement
+  host. Hello world builds in about 0.45 s on both.
+- The native cache format is `aura-native-cache-v10`, so programs cached
+  by earlier versions rebuild once.
+- Building `aura` from source needs LLVM 22's static libraries.
+  `scripts/install-llvm.sh` installs them. `AURA_NATIVE_CODEGEN`, which
+  chose a code generator in source builds, is ignored.
 
 - The language server offers semantic highlighting, inlay hints with the
   inferred type of each unannotated local and loop variable, highlighting of

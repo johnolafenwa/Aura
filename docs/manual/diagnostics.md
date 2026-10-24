@@ -788,8 +788,8 @@ every trap. MIR is Aura's mid-level intermediate representation.
   entry, its parent function, and the exact source location that started each
   task. They are ordered youngest first.
 
-These are Aura frames, not host Rust, Cranelift, scheduler, or service-worker
-frames.
+These are Aura frames, not host Rust, generated-code, scheduler, or
+service-worker frames.
 
 Frame records are captured once, when the primary trap is established, before
 cleanup or task-state reset. Propagation through callers, Task results, task

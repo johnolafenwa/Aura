@@ -139,7 +139,7 @@ The foreign function interface (FFI) is at version 0.
 - MIR and native direct-backend traps carry the same typed Aura call frames and task ancestry. Call frames are innermost first, and task ancestry is youngest first. Every frame keeps its own defining or spawning source path.
 - Human diagnostics synthesize the compact call-chain, task-entry, and task-ancestry note lines.
 - Structured schema-version-1 diagnostics expose `call_frames` and `task_ancestry` arrays instead. They do not duplicate the generated frame prose in `notes`.
-- Aura does not expose host Rust/Cranelift backtraces, debugger stack reflection, exception catching, or a standalone-binary JSON switch.
+- Aura does not expose host Rust or LLVM backtraces, debugger stack reflection, exception catching, or a standalone-binary JSON switch.
 
 ### Scheduling
 

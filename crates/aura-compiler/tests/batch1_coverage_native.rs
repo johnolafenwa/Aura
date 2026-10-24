@@ -1,4 +1,4 @@
-//! Direct-backend (Cranelift) coverage: codegen paths reached through
+//! Direct-backend coverage: codegen paths reached through
 //! `emit_host_native_object`, and the backend's defensive rejections of
 //! forged MIR that the shared validator does not refuse. Mutations the
 //! shared validator does refuse are asserted on both public boundaries so
