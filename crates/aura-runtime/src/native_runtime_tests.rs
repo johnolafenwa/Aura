@@ -9223,13 +9223,14 @@ fn direct_runtime_map_and_set_helpers_cover_collection_surface() {
         )),
         2
     );
-    expect_unit(super::aura_direct_map_set_index_in_place(
+    assert!(super::aura_direct_map_set_index_in_place(
         map,
         string_value("status"),
         int_value(7),
         1,
         1,
-    ));
+    )
+    .is_null());
     expect_unit(super::aura_direct_map_extend_in_place(map, {
         let other = super::aura_direct_map_empty();
         expect_lookup_missing(super::aura_direct_map_set_in_place(
@@ -20214,13 +20215,10 @@ fn native_runtime_collection_helpers_cover_remaining_success_paths() {
         expect_int(super::aura_direct_map_index(map, string_value("b"), 0, 0)),
         2
     );
-    expect_unit(super::aura_direct_map_set_index_in_place(
-        map,
-        string_value("b"),
-        int_value(7),
-        0,
-        0,
-    ));
+    assert!(
+        super::aura_direct_map_set_index_in_place(map, string_value("b"), int_value(7), 0, 0,)
+            .is_null()
+    );
     assert_eq!(
         expect_lookup_found_int(super::aura_direct_map_remove_in_place(
             map,
@@ -26019,6 +26017,262 @@ fn list_ints(list: *mut OpaqueValue) -> Vec<i64> {
     }
 }
 
+fn json_value(variant: &str, payloads: Vec<Value>) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: "json.Value".into(),
+        variant_name: variant.into(),
+        payloads,
+    })
+}
+
+/// A map of `str` keys to `json.Value`s and other values, as a lookup
+/// that lends sees it.
+fn lending_map() -> *mut OpaqueValue {
+    let map = super::aura_direct_map_empty();
+    let entries = [
+        (
+            "age",
+            json_value("Int", vec![Value::Int(IntegerValue::from_i64(41))]),
+        ),
+        ("ok", json_value("Bool", vec![Value::Bool(true)])),
+        ("name", Value::String("Ada".to_string())),
+        (
+            "tags",
+            json_value(
+                "Array",
+                vec![Value::Vec(VecValue::new(
+                    Type::named("str"),
+                    Vec::new().into(),
+                ))],
+            ),
+        ),
+    ];
+    for (key, value) in entries {
+        assert!(super::aura_direct_map_set_index_in_place(
+            map,
+            string_value(key),
+            boxed_value(value),
+            0,
+            0,
+        )
+        .is_null());
+    }
+    map
+}
+
+#[test]
+fn lookups_lend_values_whose_copy_cannot_fail() {
+    let map = lending_map();
+    let lend = |key: &str| super::aura_direct_map_get_str_lent(map, key.as_ptr(), key.len());
+    let int64 = |handle| super::aura_direct_lent_variant_payload_int64(handle, 0);
+    let is = |handle, variant: &str| {
+        super::aura_direct_lent_variant_matches(
+            handle,
+            b"json.Value".as_ptr(),
+            "json.Value".len(),
+            variant.as_ptr(),
+            variant.len(),
+        )
+    };
+
+    // A scalar variant is lent in place: its address with the low bit set.
+    let age = lend("age");
+    assert_eq!(age as usize & 1, 1);
+    assert_eq!(is(age, "Int"), 1);
+    assert_eq!(is(age, "Bool"), 0);
+    assert_eq!(int64(age), 41);
+    let ok = lend("ok");
+    assert_eq!(ok as usize & 1, 1);
+    assert_eq!(super::aura_direct_lent_variant_payload_bool(ok, 0), 1);
+    assert_eq!(lend("name") as usize & 1, 1);
+    assert!(lend("missing").is_null());
+    // A lent value is the stored one, so lending copies nothing.
+    let before = super::direct_value_clone_count();
+    assert_eq!(int64(lend("age")), 41);
+    assert_eq!(super::direct_value_clone_count(), before);
+
+    // A variant that carries a collection is copied into a box.
+    let tags = lend("tags");
+    assert_eq!(tags as usize & 1, 0);
+    assert_eq!(is(tags, "Array"), 1);
+    unsafe { release_value(tags) };
+
+    // The other probes lend the same values.
+    let boxed_key = string_value("age");
+    let by_value = super::aura_direct_map_get_lent(map, boxed_key);
+    assert_eq!(by_value, age);
+    unsafe { release_value(boxed_key) };
+    let list = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_in_place(list, map);
+    let element =
+        super::aura_direct_vec_element_map_get_str_lent(list, 0, b"age".as_ptr(), 3, 0, 0);
+    assert_eq!(element as usize & 1, 1);
+    assert_eq!(int64(element), 41);
+    let element_key = string_value("ok");
+    let element = super::aura_direct_vec_element_map_get_lent(list, -1, element_key, 0, 0);
+    assert_eq!(super::aura_direct_lent_variant_payload_bool(element, 0), 1);
+    unsafe { release_value(element_key) };
+    unsafe { release_value(list) };
+}
+
+#[test]
+fn lent_lookups_raise_the_errors_of_the_copying_lookups() {
+    let not_a_list = super::aura_direct_box_i64(5) as usize;
+    let dicts = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_in_place(dicts, lending_map());
+    let ints = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_in_place(ints, super::aura_direct_box_i64(1));
+    let (dicts, ints) = (dicts as usize, ints as usize);
+    let message = |list: usize, index: i64, lent: bool, boxed_key: bool| {
+        capture_direct_boundary_error_message(move || {
+            let list = list as *mut _;
+            let found = match (lent, boxed_key) {
+                (true, false) => super::aura_direct_vec_element_map_get_str_lent(
+                    list,
+                    index,
+                    b"age".as_ptr(),
+                    3,
+                    4,
+                    7,
+                ),
+                (false, false) => super::aura_direct_vec_element_map_get_str_payload(
+                    list,
+                    index,
+                    b"age".as_ptr(),
+                    3,
+                    4,
+                    7,
+                ),
+                (true, true) => super::aura_direct_vec_element_map_get_lent(
+                    list,
+                    index,
+                    string_value("age"),
+                    4,
+                    7,
+                ),
+                (false, true) => super::aura_direct_vec_element_map_get_payload(
+                    list,
+                    index,
+                    string_value("age"),
+                    4,
+                    7,
+                ),
+            };
+            assert!(found.is_null(), "the lookup should fail");
+        })
+    };
+    for (list, index, expected) in [
+        (not_a_list, 0, "expected `list`"),
+        (dicts, 3, "index"),
+        (ints, 0, "expected `dict`"),
+    ] {
+        for boxed_key in [false, true] {
+            let lent = message(list, index, true, boxed_key);
+            assert!(lent.contains(expected), "{lent}");
+            assert_eq!(lent, message(list, index, false, boxed_key));
+        }
+    }
+}
+
+#[test]
+fn lookups_copy_from_a_map_another_thread_may_reach() {
+    let map = lending_map();
+    let ints = super::aura_direct_map_empty();
+    assert!(super::aura_direct_map_set_index_in_place(
+        ints,
+        super::aura_direct_box_i64(7),
+        boxed_value(json_value(
+            "Int",
+            vec![Value::Int(IntegerValue::from_i64(-3))]
+        )),
+        0,
+        0,
+    )
+    .is_null());
+    unsafe {
+        super::share_direct_value(map);
+        super::share_direct_value(ints);
+    }
+    let age = super::aura_direct_map_get_str_lent(map, b"age".as_ptr(), 3);
+    assert!(!age.is_null());
+    assert_eq!(age as usize & 1, 0, "a shared map lends nothing");
+    assert_eq!(super::aura_direct_lent_variant_payload_int64(age, 0), 41);
+    unsafe { release_value(age) };
+    let seven = super::aura_direct_map_get_int64_lent(ints, 7);
+    assert_eq!(seven as usize & 1, 0);
+    assert_eq!(super::aura_direct_lent_variant_payload_i64(seven, 0), -3);
+    unsafe { release_value(seven) };
+    assert!(super::aura_direct_map_get_int64_lent(ints, 8).is_null());
+    unsafe {
+        release_value(map);
+        release_value(ints);
+    }
+}
+
+#[test]
+fn variant_tests_compare_short_names_by_words() {
+    for (len, variant) in [
+        (1, "A"),
+        (3, "Int"),
+        (6, "String"),
+        (9, "ValueNine"),
+        (17, "AVeryLongVariant1"),
+    ] {
+        assert_eq!(variant.len(), len);
+        let value = boxed_value(Value::EnumVariant(EnumVariantValue {
+            enum_name: "json.Value".into(),
+            variant_name: variant.into(),
+            payloads: Vec::new(),
+        }));
+        let matches = |enum_name: &str, name: &str| {
+            super::aura_direct_variant_matches(
+                value,
+                enum_name.as_ptr(),
+                enum_name.len(),
+                name.as_ptr(),
+                name.len(),
+            )
+        };
+        assert_eq!(matches("json.Value", variant), 1, "{variant}");
+        assert_eq!(matches("json", variant), 0, "a prefix of the enum name");
+        assert_eq!(matches("json.Values", variant), 0);
+        // Each byte position counts.
+        for at in 0..len {
+            let mut changed = variant.as_bytes().to_vec();
+            changed[at] ^= 0x20;
+            let changed = String::from_utf8(changed).expect("ASCII");
+            assert_eq!(matches("json.Value", &changed), 0, "{changed}");
+        }
+        unsafe { release_value(value) };
+    }
+    // A tagged enum name carries a descriptor after the separator. Only its
+    // base names the enum.
+    let tagged = boxed_value(Value::EnumVariant(EnumVariantValue {
+        enum_name: "json.Value\0descriptor-of-sixteen".into(),
+        variant_name: "Int".into(),
+        payloads: Vec::new(),
+    }));
+    for (enum_name, expected) in [
+        ("json.Value", 1),
+        ("json.Value\0descriptor-of-sixteen", 0),
+        ("json.Value\0", 0),
+        ("json", 0),
+    ] {
+        assert_eq!(
+            super::aura_direct_variant_matches(
+                tagged,
+                enum_name.as_ptr(),
+                enum_name.len(),
+                b"Int".as_ptr(),
+                3,
+            ),
+            expected,
+            "{enum_name:?}"
+        );
+    }
+    unsafe { release_value(tagged) };
+}
+
 #[test]
 fn appends_in_place_join_the_list_at_the_next_access() {
     use super::DirectListAccess;
@@ -26677,6 +26931,36 @@ fn direct_enum_variants_share_the_names_of_their_literals() {
     buffer.copy_from_slice(b"Omega");
     let omega = super::literal_runtime_name(buffer.as_ptr(), buffer.len());
     assert_eq!((alpha.as_str(), omega.as_str()), ("Alpha", "Omega"));
+
+    // Two literals that hash to one slot keep their names side by side. A
+    // new thread starts with an empty table.
+    std::thread::spawn(|| {
+        let text = [b'n'; 4096];
+        let len = 4;
+        let slot_of = |offset: usize| {
+            let address = text.as_ptr() as usize + offset;
+            ((address >> 3) ^ (address >> 11) ^ len) % super::LITERAL_NAME_LOOKUP_SLOTS
+        };
+        let other = (8..text.len() - len)
+            .step_by(8)
+            .find(|&offset| slot_of(offset) == slot_of(0))
+            .expect("two offsets should share a slot");
+        let name_at = |offset: usize| super::literal_runtime_name(text[offset..].as_ptr(), len);
+        let first = name_at(0);
+        let second = name_at(other);
+        for _ in 0..2 {
+            assert!(std::ptr::eq(
+                first.as_str().as_ptr(),
+                name_at(0).as_str().as_ptr()
+            ));
+            assert!(std::ptr::eq(
+                second.as_str().as_ptr(),
+                name_at(other).as_str().as_ptr()
+            ));
+        }
+    })
+    .join()
+    .expect("the name thread should finish");
 
     let message = capture_direct_boundary_error_message(|| {
         super::aura_direct_enum_variant(

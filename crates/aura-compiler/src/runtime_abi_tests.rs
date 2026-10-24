@@ -181,7 +181,8 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
     // has an op. The shared collection operation pops and removes, an
     // element path checks its index, and a lent element's `len` and `get`
     // are read in place. A `get` whose `Lookup` is kept as its found value
-    // calls the `_payload` form of the op's helper.
+    // calls the `_payload` form of the op's helper, and one whose found
+    // value is only read calls the `_lent` form.
     let uncovered = RuntimeFn::ALL
         .iter()
         .copied()
@@ -212,9 +213,14 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::VecElementMapGetPayload,
             RuntimeFn::VecElementMapGetStr,
             RuntimeFn::VecElementMapGetStrPayload,
+            RuntimeFn::VecElementMapGetLent,
+            RuntimeFn::VecElementMapGetStrLent,
             RuntimeFn::MapGetPayload,
             RuntimeFn::MapGetStrPayload,
             RuntimeFn::MapGetInt64Payload,
+            RuntimeFn::MapGetLent,
+            RuntimeFn::MapGetStrLent,
+            RuntimeFn::MapGetInt64Lent,
             RuntimeFn::SetRemoveInPlace,
         ]
     );

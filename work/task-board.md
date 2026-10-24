@@ -136,6 +136,11 @@ Last updated: 2026-10-23
   With LLVM, `int_list_sum` runs in 16 million instructions instead of 42
   million, 1.2 times Rust. Details are in
   `2026-10-24-batch-7-step-10f-list-push.md`.
+- In progress: 10g, lent lookups. A lookup whose found value is only
+  matched or read borrows the stored value instead of copying it. With
+  LLVM, `record_field_reads` runs in 135 million instructions instead of
+  227 million, 3.8 times Rust. Details are in
+  `2026-10-24-batch-7-step-10g-lent-lookups.md`.
 
 ## Aura 0.6.0 preview release (complete)
 

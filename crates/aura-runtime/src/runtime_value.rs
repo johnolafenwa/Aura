@@ -2590,7 +2590,7 @@ fn shared_collection_clone(value: &Value) -> Option<Value> {
     shareable.then(|| value.clone())
 }
 
-fn is_clone_leaf(value: &Value) -> bool {
+pub(crate) fn is_clone_leaf(value: &Value) -> bool {
     matches!(
         value,
         Value::Int(_)

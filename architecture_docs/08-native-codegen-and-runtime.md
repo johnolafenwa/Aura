@@ -289,6 +289,32 @@ call.
   variant, or a scalar take `access_unlisted`, which skips the check. A
   list handed to one of them only reaches its type error.
 
+### Lent Lookups
+
+A lookup slot whose found value is only read borrows the stored value
+instead of copying it into a new box.
+
+- **The proof.** `lent_lookup_places` in `native_codegen_lookups.rs`
+  takes a lookup slot that is assigned once and read from a local
+  collection. It follows the found value into each local it is copied
+  into. Each of them must be assigned once and only retained, released,
+  matched, or unpacked into an `int32`, `int64`, `uint64`, or `bool`
+  local. While any of them is live, the function may run only those
+  steps, scalar arithmetic, and plain branches. A call, a write, or a
+  release of the collection fails the proof, and the slot keeps the copy.
+- **The word.** A lent slot holds null for `Lookup.Missing`, an owned box
+  as before, or the stored value's address with the low bit set. The
+  `_lent` forms of the `get` helpers fill it. They lend only from a
+  confined collection, and only a value whose copy cannot fail: a leaf,
+  or an enum variant whose payloads are all leaves. Any other value comes
+  back as an owned copy, so every error stays word for word the same.
+- **Reading it.** `aura_direct_lent_variant_matches` and the
+  `aura_direct_lent_variant_payload_*` readers take either form.
+  Generated retain and release skip a word with the low bit set.
+- **Why not `Lend`.** MIR's `Lend` and `EndLend` move a place into a
+  temporary for one call. A lookup result is a fresh value whose uses
+  cross blocks, so the check sits beside the lookup slots instead.
+
 ## A tiny direct-backend design example
 
 This miniature example does not use Cranelift, but it shows the same architectural split: simple values are direct, complex values are boxed.

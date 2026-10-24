@@ -172,6 +172,13 @@ in this file.
   the element in generated code while the list has room, and calls the
   runtime only to grow it. With LLVM, `int_list_sum` runs in 16 million
   instructions instead of 42 million, 1.2 times Rust.
+- A `dict` lookup whose found value is only matched or read into a
+  scalar borrows the stored value instead of copying it. The runtime
+  also tests short variant names a word at a time, keeps each literal
+  name it decoded even when two literals hash alike, and `map[key] =
+  value` no longer boxes a unit result. With LLVM, `record_field_reads`
+  runs in 135 million instructions instead of 227 million, 3.8 times
+  Rust.
 
 ### Fixed
 
