@@ -9443,7 +9443,7 @@ fn native_runtime_task_result_handoff_clones_copy_values_and_moves_noncopy_value
 
             super::with_direct_task_runtime_state(|state| {
                 assert!(
-                    state.owned_value_refs.is_empty(),
+                    state.owned_values().is_empty(),
                     "task-result handoff must balance every opaque wrapper reference"
                 );
             });
@@ -17406,7 +17406,7 @@ fn native_runtime_closure_task_handoff_transfers_capture_ownership_to_child() {
             }
             super::with_direct_task_runtime_state(|state| {
                 assert!(
-                    state.owned_value_refs.is_empty(),
+                    state.owned_values().is_empty(),
                     "a completed closure task must leave no capture in the parent ownership ledger"
                 );
             });
@@ -17569,7 +17569,7 @@ fn native_runtime_closure_task_handoff_preserves_repeatable_and_one_shot_semanti
             }
             super::with_direct_task_runtime_state(|state| {
                 assert!(
-                    state.owned_value_refs.is_empty(),
+                    state.owned_values().is_empty(),
                     "closure task transfer and retry rejection must balance all owned handles"
                 );
             });
@@ -17684,7 +17684,7 @@ fn native_runtime_closure_task_rejects_negative_public_arity_then_allows_valid_r
             }
             super::with_direct_task_runtime_state(|state| {
                 assert!(
-                    state.owned_value_refs.is_empty(),
+                    state.owned_values().is_empty(),
                     "rejected and successful closure task starts must balance ownership"
                 );
             });
@@ -18191,7 +18191,7 @@ fn native_runtime_closure_calls_preserve_results_writebacks_and_call_kind() {
             }
             super::with_direct_task_runtime_state(|state| {
                 assert!(
-                    state.owned_value_refs.is_empty(),
+                    state.owned_values().is_empty(),
                     "successful and rejected closure calls must balance every opaque handle"
                 );
             });
@@ -18316,7 +18316,7 @@ fn native_runtime_closure_call_moves_owned_args_and_copies_only_mutable_writebac
             }
             super::with_direct_task_runtime_state(|state| {
                 assert!(
-                    state.owned_value_refs.is_empty(),
+                    state.owned_values().is_empty(),
                     "mixed closure argument movement must balance captures, inputs, and writebacks"
                 );
             });
@@ -18363,7 +18363,7 @@ fn native_runtime_closure_construction_handles_zero_captures_and_reports_invalid
 
             super::with_direct_task_runtime_state(|state| {
                 assert!(
-                    state.owned_value_refs.is_empty(),
+                    state.owned_values().is_empty(),
                     "invalid closure construction must consume or release every transferred value"
                 );
             });
@@ -18494,7 +18494,7 @@ fn native_runtime_selected_default_callbacks_bind_functions_and_closures() {
                 release_value(ordinary);
             }
             super::with_direct_task_runtime_state(|state| {
-                assert!(state.owned_value_refs.is_empty());
+                assert!(state.owned_values().is_empty());
             });
             Ok(Value::Unit)
         })
@@ -18658,7 +18658,7 @@ fn native_runtime_trapping_closure_call_releases_combined_buffer_without_mut_wri
             );
             super::with_direct_task_runtime_state(|state| {
                 assert!(
-                    state.owned_value_refs.is_empty(),
+                    state.owned_values().is_empty(),
                     "closure capture and public-argument handles must leave no owned-ledger entries"
                 );
             });
@@ -18706,7 +18706,7 @@ fn native_runtime_uncalled_closure_releases_owned_capture_environment() {
             }
             super::with_direct_task_runtime_state(|state| {
                 assert!(
-                    state.owned_value_refs.is_empty(),
+                    state.owned_values().is_empty(),
                     "dropping an uncalled closure must release its environment and opaque handle"
                 );
             });
@@ -19405,6 +19405,173 @@ fn native_runtime_direct_cancellation_releases_frame_owned_argument_references()
     }
 }
 
+/// The type name every box a ledger test task makes carries. Each live box
+/// holds one reference to it, so its count shows whether any box leaked.
+static LEDGER_TEST_TYPE: std::sync::Mutex<Option<Arc<str>>> = std::sync::Mutex::new(None);
+
+fn ledger_test_type() -> Arc<str> {
+    LEDGER_TEST_TYPE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get_or_insert_with(|| Arc::from("LedgerTestValue"))
+        .clone()
+}
+
+/// Makes boxes the way a task body does, and keeps references to them in
+/// every form the ledger records: linked once and several times, counted
+/// in place, and shared.
+fn hold_values_in_every_ledger_form() {
+    let name = ledger_test_type();
+    let held = (0..6)
+        .map(|_| super::boxed_value_with_type(Value::Unit, Some(name.clone())))
+        .collect::<Vec<_>>();
+    unsafe {
+        super::aura_direct_retain_value(held[0]);
+        super::aura_direct_retain_value(held[0]);
+    }
+    let stack = super::aura_direct_frame_stack();
+    assert!(unsafe { super::owned_values::generated_retain(stack, held[1]) });
+    unsafe {
+        super::share_direct_value(held[2]);
+        super::aura_direct_retain_value(held[2]);
+    }
+    // One box is released before the task stops, so only the rest remain.
+    unsafe { super::aura_direct_release_value(held[5]) };
+    super::with_direct_task_runtime_state(|state| {
+        assert_eq!(state.owned_values().entries().len(), 5);
+    });
+}
+
+unsafe extern "C-unwind" fn direct_task_traps_while_holding_values(
+    _args: *const i64,
+    _arg_count: usize,
+) -> *mut OpaqueValue {
+    hold_values_in_every_ledger_form();
+    super::aura_direct_fail_division_by_zero(0, 0)
+}
+
+unsafe extern "C-unwind" fn direct_task_is_cancelled_while_holding_values(
+    _args: *const i64,
+    _arg_count: usize,
+) -> *mut OpaqueValue {
+    hold_values_in_every_ledger_form();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while super::aura_direct_cancelled() == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the root task must cancel this task's group"
+        );
+        super::aura_direct_yield_now();
+    }
+    super::task_runtime_boundary(|| std::panic::panic_any(TaskCancelledSignal));
+    unreachable!("the cancellation boundary must exit the current lightweight task")
+}
+
+#[test]
+fn native_runtime_frees_every_value_a_failed_or_cancelled_task_held() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
+    let name = ledger_test_type();
+    let baseline = Arc::strong_count(&name);
+    for (cancel, thunk) in [
+        (
+            false,
+            direct_task_traps_while_holding_values
+                as unsafe extern "C-unwind" fn(*const i64, usize) -> *mut OpaqueValue,
+        ),
+        (true, direct_task_is_cancelled_while_holding_values),
+    ] {
+        let result = run_lightweight_root_task(move || {
+            super::with_direct_task_runtime_scope(|| {
+                let args = super::aura_direct_arg_buffer_new(0);
+                let group = super::aura_direct_task_group_new();
+                let task = unsafe {
+                    super::aura_direct_start_task_call(
+                        thunk as *const () as usize as i64,
+                        args,
+                        0,
+                        1,
+                        group,
+                        1,
+                        0,
+                        0,
+                    )
+                };
+                if cancel {
+                    let cancelled = super::aura_direct_task_group_cancel(group);
+                    unsafe { release_value(cancelled) };
+                }
+                let joined = super::aura_direct_task_join(task);
+                match unsafe { take_value(joined) } {
+                    Value::EnumVariant(variant) if variant.enum_name == "TaskResult" => {
+                        let expected = if cancel { "Cancelled" } else { "Error" };
+                        assert_eq!(variant.variant_name, expected);
+                    }
+                    other => panic!("expected a TaskResult, found {other:?}"),
+                }
+                unsafe {
+                    release_value(joined);
+                    release_value(task);
+                    release_value(group);
+                }
+                Ok(Value::Unit)
+            })
+        });
+        assert_eq!(result.expect("root task should complete"), Value::Unit);
+        assert_eq!(
+            Arc::strong_count(&name),
+            baseline,
+            "the task's ledger must free every box it held when it {}",
+            if cancel { "was cancelled" } else { "failed" }
+        );
+    }
+}
+
+#[test]
+fn native_runtime_releases_a_tasks_last_linked_reference_without_a_lookup() {
+    // The ledger tests share the type name whose count they check.
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
+    let name = ledger_test_type();
+    let baseline = Arc::strong_count(&name);
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            let boxed = || super::boxed_value_with_type(Value::Unit, Some(ledger_test_type()));
+            let header = |value: *mut OpaqueValue| unsafe { &*value };
+            let entries =
+                || super::with_direct_task_runtime_state(|state| state.owned_values().entries());
+
+            // The ledger held the only reference, so the value is freed.
+            unsafe { super::aura_direct_release_last_owned_value(boxed()) };
+            assert!(entries().is_empty());
+
+            // A reference outside the ledger keeps the value, which leaves
+            // the list.
+            let kept = boxed();
+            unsafe { super::retain_untracked_value(kept) };
+            unsafe { super::aura_direct_release_last_owned_value(kept) };
+            assert_eq!(header(kept).ref_count.load(Ordering::Relaxed), 1);
+            assert!(header(kept).owner.get().is_null());
+            assert!(entries().is_empty());
+
+            // A value the ledger owns more than once, or a shared one, takes
+            // the whole release.
+            let many = boxed();
+            unsafe { super::aura_direct_retain_value(many) };
+            unsafe { super::aura_direct_release_last_owned_value(many) };
+            assert_eq!(entries(), [(many as usize, 1)]);
+            unsafe { super::aura_direct_release_last_owned_value(many) };
+            let shared = boxed();
+            unsafe { super::share_direct_value(shared) };
+            unsafe { super::aura_direct_release_last_owned_value(shared) };
+            assert!(entries().is_empty());
+
+            unsafe { super::release_untracked_value(kept) };
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+    assert_eq!(Arc::strong_count(&name), baseline, "every box is freed");
+}
+
 #[test]
 fn native_runtime_direct_owned_ledger_balances_normal_and_buffer_transfers() {
     let external = string_value("external owner");
@@ -19421,7 +19588,7 @@ fn native_runtime_direct_owned_ledger_balances_normal_and_buffer_transfers() {
             }
             super::with_direct_task_runtime_state(|state| {
                 assert!(
-                    state.owned_value_refs.is_empty(),
+                    state.owned_values().is_empty(),
                     "the raw buffer reference must not be mistaken for a task-frame owner"
                 );
             });
@@ -19445,7 +19612,7 @@ fn native_runtime_direct_owned_ledger_balances_normal_and_buffer_transfers() {
             super::aura_direct_arg_buffer_store_owned(owned_buffer, 0, transferred as i64);
             super::with_direct_task_runtime_state(|state| {
                 assert!(
-                    state.owned_value_refs.is_empty(),
+                    state.owned_values().is_empty(),
                     "an owned buffer transfer must detach its frame-ledger entry"
                 );
             });
@@ -19462,7 +19629,7 @@ fn native_runtime_direct_owned_ledger_balances_normal_and_buffer_transfers() {
             }
             super::with_direct_task_runtime_state(|state| {
                 assert!(
-                    state.owned_value_refs.is_empty(),
+                    state.owned_values().is_empty(),
                     "normal retain/release pairs must leave the task ledger empty"
                 );
             });
@@ -19687,7 +19854,7 @@ fn native_runtime_owned_arg_buffer_replacement_releases_previous_value_and_valid
             }
             super::with_direct_task_runtime_state(|state| {
                 assert!(
-                    state.owned_value_refs.is_empty(),
+                    state.owned_values().is_empty(),
                     "owned replacement and clearing must leave no stale ledger references"
                 );
             });
@@ -25678,9 +25845,10 @@ fn shared_lists_are_never_read_in_place() {
 #[test]
 fn opaque_values_keep_their_box_size() {
     // Every boxed value pays for these bytes. The list view fits in the
-    // space a confined value does not need for a lock.
+    // space a confined value does not need for a lock. The ledger's owner,
+    // count, and links take the last 32.
     #[cfg(target_pointer_width = "64")]
-    assert_eq!(std::mem::size_of::<OpaqueValue>(), 160);
+    assert_eq!(std::mem::size_of::<OpaqueValue>(), 192);
 }
 
 #[test]

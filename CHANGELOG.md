@@ -135,6 +135,14 @@ in this file.
   million instructions instead of 484 million with LLVM, and in 211 million
   instead of 523 million with Cranelift. Traces, task ancestry, and the
   limit of 256 nested calls are unchanged.
+- Native code retains and releases a value in place when the value is
+  confined to its thread and the running task owns it. Each task keeps the
+  values it owns in a list linked through their headers instead of a hash
+  map, so a task that fails or is cancelled still frees every value it
+  held. A freed value box goes to a small per-thread cache that the next
+  box reuses. With LLVM, `dict_build_get` runs in 765 million instructions
+  instead of 935 million, and `record_field_reads` in 571 million instead
+  of 690 million.
 
 ### Fixed
 

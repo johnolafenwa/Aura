@@ -639,6 +639,29 @@ Callgrind instructions for one whole run, in millions:
   later parts of step 10 target their runtime calls.
 - Traces, task ancestry, and the depth limit of 256 calls are unchanged.
 
+Step 10b replaces each task's map of owned values with a list linked
+through the value headers, and retains and releases values in place. A
+per-thread cache reuses freed value boxes. The method and tables are in
+[the 10b note](../work/2026-10-23-batch-7-step-10b-ownership-ledger.md).
+Callgrind instructions, in millions:
+
+| Program | Cranelift before | Cranelift after | LLVM before | LLVM after | LLVM / Rust |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `fib(30)` | 210.6 | 210.6 | 115.0 | 115.0 | 2.9x |
+| `int_list_sum` | 73.1 | 73.1 | 42.2 | 42.2 | 3.2x |
+| `string_list_scan` | 150.9 | 145.1 | 137.5 | 130.9 | 10.0x |
+| `dict_build_get` | 940.4 | 785.9 | 935.3 | 764.8 | 4.3x |
+| `set_insert_contains` | 148.9 | 141.9 | 144.6 | 136.5 | 4.3x |
+| `record_field_reads` | 693.2 | 588.3 | 690.5 | 570.6 | 15.8x |
+
+- `dict_build_get` drops 18% and `record_field_reads` 17% on LLVM. The
+  plan asked for 25%. The ledger and its lookups cost about 15% of each
+  run before 10b, so removing them all could not reach 25%. The box cache
+  adds most of the rest.
+- What remains is mostly allocation, cloning, hashing, and type tags,
+  which 10d and 10e target.
+- A task that fails or is cancelled still frees every value it held.
+
 ## Owner Questions
 
 Each names the recommended default first.

@@ -18,7 +18,7 @@ use crate::native_runtime::{
     encode_direct_ffi_call_spec, DirectFfiCallSpec, DirectFfiParam, DirectFfiType,
 };
 use crate::runtime_abi::{
-    frame_stack_layout, AbiType, RuntimeFn, RuntimeTable, FRAME_STACK_ENTRY_BYTES,
+    frame_stack_layout, ownership_layout, AbiType, RuntimeFn, RuntimeTable, FRAME_STACK_ENTRY_BYTES,
 };
 use crate::runtime_ops::{
     first_type_arg, ArgDefault, ArrayOp, DictOp, FunctionOp, HostBuiltin, ListOp, PrintKind,
@@ -528,6 +528,20 @@ struct NativeCodegen<'a> {
     string_data: HashMap<Vec<u8>, DataHandle>,
     /// Every function's frame descriptor, which the main wrapper validates.
     frame_descriptors: Vec<DataHandle>,
+    /// The module's own retain and release, which `runtime` names in place
+    /// of the runtime's.
+    ownership: OwnershipFastPaths,
+}
+
+/// The retain and release every generated call goes through. Each does the
+/// common case in place and calls the runtime's export for the rest.
+#[derive(Clone, Copy)]
+struct OwnershipFastPaths {
+    retain: FuncHandle,
+    release: FuncHandle,
+    runtime_retain: FuncHandle,
+    runtime_release: FuncHandle,
+    release_last: FuncHandle,
 }
 
 macro_rules! try_or_string_error {
@@ -640,8 +654,9 @@ impl<'a> NativeCodegen<'a> {
 
         let mut object = crate::native_backend::host_module_backend()?;
 
-        let runtime =
+        let mut runtime =
             RuntimeTable::try_build(|function| declare_runtime_helper(&mut *object, function))?;
+        let ownership = declare_ownership_fast_paths(&mut *object, &mut runtime)?;
 
         let mut functions = HashMap::new();
         let mut function_thunks = HashMap::new();
@@ -779,6 +794,7 @@ impl<'a> NativeCodegen<'a> {
             runtime,
             string_data: HashMap::new(),
             frame_descriptors: Vec::new(),
+            ownership,
         })
     }
 
@@ -805,11 +821,36 @@ impl<'a> NativeCodegen<'a> {
         {
             self.define_cleanup_thunks(function)?;
         }
+        self.define_ownership_fast_paths()?;
         self.define_main_wrapper()?;
         match self.take_module_backend()?.finish() {
             Ok(bytes) => Ok(bytes),
             Err(error) => Err(format!("failed to emit direct backend object: {}", error)),
         }
+    }
+
+    /// Defines the module's retain and release.
+    fn define_ownership_fast_paths(&mut self) -> std::result::Result<(), String> {
+        let paths = self.ownership;
+        let frame_stack = self.runtime[RuntimeFn::FrameStack];
+        self.define_body(
+            paths.retain,
+            &ownership_fast_path_signature(true),
+            "the retain fast path",
+            |_, builder| {
+                emit_retain_fast_path(builder, frame_stack, paths.runtime_retain);
+                Ok(())
+            },
+        )?;
+        self.define_body(
+            paths.release,
+            &ownership_fast_path_signature(false),
+            "the release fast path",
+            |_, builder| {
+                emit_release_fast_path(builder, frame_stack, paths);
+                Ok(())
+            },
+        )
     }
 
     /// The module backend, out of `self`.
@@ -1718,6 +1759,11 @@ impl<'a> NativeCodegen<'a> {
             builder.import_function(self.runtime[RuntimeFn::CheckFrameStackLayout]);
         let fingerprint = builder.iconst(types::I64, frame_stack_layout().fingerprint());
         builder.call(check_frame_stack_layout, &[fingerprint]);
+        // Retains and releases update reference counts at fixed offsets.
+        let check_ownership_layout =
+            builder.import_function(self.runtime[RuntimeFn::CheckOwnershipLayout]);
+        let fingerprint = builder.iconst(types::I64, ownership_layout().fingerprint());
+        builder.call(check_ownership_layout, &[fingerprint]);
         // Validating every descriptor now lets each function push its own
         // without checking it.
         let descriptors =
@@ -12003,6 +12049,185 @@ fn emit_frame_push(
     builder.seal_block(done);
     builder.switch_to_block(done);
     done
+}
+
+fn ownership_fast_path_signature(returns_value: bool) -> Signature {
+    let mut signature = Signature::new(CallConv::C);
+    signature.params.push(types::I64);
+    if returns_value {
+        signature.returns.push(types::I64);
+    }
+    signature
+}
+
+/// Declares the module's retain and release, and makes `runtime` name them
+/// instead of the runtime's exports, which they call for the cold cases.
+/// LLVM inlines both into every caller.
+fn declare_ownership_fast_paths(
+    module: &mut dyn ModuleBackend,
+    runtime: &mut RuntimeTable<FuncHandle>,
+) -> std::result::Result<OwnershipFastPaths, String> {
+    let retain = try_or_string_error!(
+        module.declare_function(
+            "aura_owned_retain",
+            Linkage::Local,
+            &ownership_fast_path_signature(true),
+        ),
+        "failed to declare the retain fast path: {}"
+    );
+    let release = try_or_string_error!(
+        module.declare_function(
+            "aura_owned_release",
+            Linkage::Local,
+            &ownership_fast_path_signature(false),
+        ),
+        "failed to declare the release fast path: {}"
+    );
+    module.mark_inline(retain);
+    module.mark_inline(release);
+    Ok(OwnershipFastPaths {
+        retain,
+        release,
+        runtime_retain: runtime.replace(RuntimeFn::RetainValue, retain),
+        runtime_release: runtime.replace(RuntimeFn::ReleaseValue, release),
+        release_last: runtime[RuntimeFn::ReleaseLastOwnedValue],
+    })
+}
+
+/// What both fast paths share: the value, the cold block that calls the
+/// runtime, and the block that returns.
+struct OwnershipBlocks {
+    value: Val,
+    slow: Blk,
+    done: Blk,
+}
+
+/// Emits the checks both fast paths make before they touch the counts: the
+/// value is not null, is confined to this thread, and is linked into the
+/// ledger of the running task. Leaves the builder in the block that may
+/// touch the counts.
+fn emit_ownership_checks(
+    builder: &mut dyn FunctionBackend,
+    frame_stack: FuncHandle,
+) -> OwnershipBlocks {
+    let layout = ownership_layout();
+    let trusted = MemFlags::trusted();
+    let entry = builder.create_block();
+    builder.append_block_params_for_function_params(entry);
+    builder.switch_to_block(entry);
+    builder.seal_block(entry);
+    let value = builder.block_params(entry)[0];
+    let check = builder.create_block();
+    let linked = builder.create_block();
+    let counts = builder.create_block();
+    let slow = builder.create_block();
+    let done = builder.create_block();
+    builder.set_cold_block(slow);
+    let null = builder.icmp_imm(IntCC::Equal, value, 0);
+    builder.brif(null, done, &[], check, &[]);
+    builder.seal_block(check);
+
+    // Another thread may write the header of a shared value, so the owner
+    // is read only once the lock word shows the value is confined.
+    builder.switch_to_block(check);
+    let stack_ref = builder.import_function(frame_stack);
+    let stack = builder.call(stack_ref, &[]).results[0];
+    let lock = builder.load(types::I64, trusted, value, layout.shared_lock_offset);
+    let shared = builder.icmp_imm(IntCC::NotEqual, lock, 0);
+    builder.brif(shared, slow, &[], linked, &[]);
+    builder.seal_block(linked);
+
+    builder.switch_to_block(linked);
+    let owner = builder.load(types::I64, trusted, value, layout.owner_offset);
+    let elsewhere = builder.icmp(IntCC::NotEqual, owner, stack);
+    builder.brif(elsewhere, slow, &[], counts, &[]);
+    builder.seal_block(counts);
+    builder.switch_to_block(counts);
+    OwnershipBlocks { value, slow, done }
+}
+
+/// Retains a value: adds one to its reference count and to its ledger's,
+/// unless the value is shared, belongs to another task's ledger, or its
+/// count is full. Then `aura_direct_retain_value` does it.
+fn emit_retain_fast_path(
+    builder: &mut dyn FunctionBackend,
+    frame_stack: FuncHandle,
+    runtime_retain: FuncHandle,
+) {
+    let layout = ownership_layout();
+    let trusted = MemFlags::trusted();
+    let blocks = emit_ownership_checks(builder, frame_stack);
+    let ref_count = builder.load(types::I32, trusted, blocks.value, layout.ref_count_offset);
+    let full = builder.icmp_imm(IntCC::Equal, ref_count, -1);
+    let fast = builder.create_block();
+    builder.brif(full, blocks.slow, &[], fast, &[]);
+    builder.seal_block(fast);
+    builder.seal_block(blocks.slow);
+
+    builder.switch_to_block(fast);
+    let retained = builder.iadd_imm(ref_count, 1);
+    builder.store(trusted, retained, blocks.value, layout.ref_count_offset);
+    let owned = builder.load(types::I64, trusted, blocks.value, layout.owned_offset);
+    let owned = builder.iadd_imm(owned, 1);
+    builder.store(trusted, owned, blocks.value, layout.owned_offset);
+    builder.jump(blocks.done, &[]);
+
+    builder.switch_to_block(blocks.slow);
+    let slow_ref = builder.import_function(runtime_retain);
+    builder.call(slow_ref, &[blocks.value]);
+    builder.jump(blocks.done, &[]);
+
+    builder.seal_block(blocks.done);
+    builder.switch_to_block(blocks.done);
+    builder.return_(&[blocks.value]);
+}
+
+/// Releases a value: subtracts one from its reference count and from its
+/// ledger's, while both stay above zero. When the running task's ledger
+/// holds the last reference it links, `aura_direct_release_last_owned_value`
+/// unlinks the value and frees it at zero without a lookup. A shared value,
+/// or one another task's ledger links, goes to `aura_direct_release_value`.
+fn emit_release_fast_path(
+    builder: &mut dyn FunctionBackend,
+    frame_stack: FuncHandle,
+    paths: OwnershipFastPaths,
+) {
+    let layout = ownership_layout();
+    let trusted = MemFlags::trusted();
+    let blocks = emit_ownership_checks(builder, frame_stack);
+    let owned = builder.load(types::I64, trusted, blocks.value, layout.owned_offset);
+    let ref_count = builder.load(types::I32, trusted, blocks.value, layout.ref_count_offset);
+    let last_owned = builder.icmp_imm(IntCC::UnsignedLessThanOrEqual, owned, 1);
+    let last_reference = builder.icmp_imm(IntCC::UnsignedLessThanOrEqual, ref_count, 1);
+    let last = builder.bor(last_owned, last_reference);
+    let fast = builder.create_block();
+    // Most releases drop the last reference, so this call is not cold.
+    let last_block = builder.create_block();
+    builder.brif(last, last_block, &[], fast, &[]);
+    builder.seal_block(fast);
+    builder.seal_block(last_block);
+    builder.seal_block(blocks.slow);
+
+    builder.switch_to_block(fast);
+    let released = builder.iadd_imm(ref_count, -1);
+    builder.store(trusted, released, blocks.value, layout.ref_count_offset);
+    let owned = builder.iadd_imm(owned, -1);
+    builder.store(trusted, owned, blocks.value, layout.owned_offset);
+    builder.jump(blocks.done, &[]);
+
+    builder.switch_to_block(last_block);
+    let last_ref = builder.import_function(paths.release_last);
+    builder.call(last_ref, &[blocks.value]);
+    builder.jump(blocks.done, &[]);
+
+    builder.switch_to_block(blocks.slow);
+    let slow_ref = builder.import_function(paths.runtime_release);
+    builder.call(slow_ref, &[blocks.value]);
+    builder.jump(blocks.done, &[]);
+
+    builder.seal_block(blocks.done);
+    builder.switch_to_block(blocks.done);
+    builder.return_(&[]);
 }
 
 /// Pops the innermost call's frame record: count one entry fewer, unless
