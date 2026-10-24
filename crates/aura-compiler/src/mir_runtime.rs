@@ -4631,6 +4631,7 @@ impl MirRuntime {
                     .map(|operand| self.evaluate_owned_operand(operand, env))
                     .collect::<Result<Vec<_>>>()?
                     .into(),
+                str_view: Default::default(),
             }))),
             Rvalue::TupleLiteral {
                 elements,
@@ -4946,6 +4947,7 @@ impl MirRuntime {
             return Ok(Value::Vec(VecValue {
                 element_type: Type::named("Unknown"),
                 elements: Vec::new().into(),
+                str_view: Default::default(),
             }));
         }
 
@@ -5095,6 +5097,7 @@ impl MirRuntime {
                     Ok(Value::Vec(VecValue {
                         element_type: args[0].clone(),
                         elements: elements.into(),
+                        str_view: Default::default(),
                     }))
                 }
                 ("dict", Some(Type::Named(_, args))) if args.len() == 2 => {
@@ -7386,6 +7389,7 @@ impl MirRuntime {
                 Ok(Value::Vec(VecValue {
                     element_type: map.key_type.clone(),
                     elements: elements.into(),
+                    str_view: Default::default(),
                 }))
             }
             "values" => {
@@ -7400,6 +7404,7 @@ impl MirRuntime {
                 Ok(Value::Vec(VecValue {
                     element_type: map.value_type.clone(),
                     elements: elements.into(),
+                    str_view: Default::default(),
                 }))
             }
             "items" => {
@@ -7420,6 +7425,7 @@ impl MirRuntime {
                 Ok(Value::Vec(VecValue {
                     element_type: Type::Tuple(vec![map.key_type.clone(), map.value_type.clone()]),
                     elements: elements.into(),
+                    str_view: Default::default(),
                 }))
             }
             "clear" => {
@@ -7549,6 +7555,7 @@ impl MirRuntime {
                         .split(&separator)
                         .map(|part| Value::String(part.to_string()))
                         .collect(),
+                    str_view: Default::default(),
                 }))
             }
             "replace" => {
@@ -8352,6 +8359,7 @@ impl MirRuntime {
                     Ok(names) => Ok(result_ok(Value::Vec(VecValue {
                         element_type: Type::named("str"),
                         elements: names.into_iter().map(Value::String).collect(),
+                        str_view: Default::default(),
                     }))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
@@ -10487,6 +10495,7 @@ fn bytes_runtime_value(bytes: &[u8]) -> Value {
                 )
             })
             .collect(),
+        str_view: Default::default(),
     })
 }
 
@@ -11401,6 +11410,7 @@ fn bytes_vec_value(bytes: Vec<u8>) -> Value {
                 )
             })
             .collect(),
+        str_view: Default::default(),
     })
 }
 

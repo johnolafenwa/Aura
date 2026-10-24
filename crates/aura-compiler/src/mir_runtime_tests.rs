@@ -187,6 +187,7 @@ fn adr0061_element_place_walkers_report_missing_slots_without_changing_values() 
         Value::Vec(VecValue {
             element_type: Type::named("int64"),
             elements: vec![Value::Int(IntegerValue::from_i64(3))].into(),
+            str_view: Default::default(),
         }),
     );
     env.define_typed(
@@ -2576,6 +2577,7 @@ fn mir_nested_array_clone_allocation_failure_is_au4005_and_preserves_source() {
                 .unwrap(),
             )]
             .into(),
+            str_view: Default::default(),
         }),
     );
     let source_storage = match env.place_borrow("nested").unwrap() {
@@ -3499,6 +3501,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
             Value::Vec(VecValue {
                 element_type: Type::named("uint8"),
                 elements: vec![Value::Bool(true)].into(),
+                str_view: Default::default(),
             }),
         ),
     ];
@@ -3518,6 +3521,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
         Value::Vec(VecValue {
             element_type: Type::named("int32"),
             elements: vec![Value::Int(IntegerValue::from_i32(1))].into(),
+            str_view: Default::default(),
         }),
     );
     assert_eq!(unsupported.code, "AU4005");
@@ -3978,6 +3982,7 @@ fn mir_length_vec_len_borrows_receiver_without_snapshot_clone() {
                 Value::String("second-vector-payload".repeat(64)),
             ]
             .into(),
+            str_view: Default::default(),
         }),
         "len",
         2,
@@ -4083,6 +4088,7 @@ def measure(values: list[str]) -> int64:
                 Value::String("second-free-len-payload".repeat(64)),
             ]
             .into(),
+            str_view: Default::default(),
         }),
     );
 
@@ -4593,6 +4599,7 @@ fn mir_json_into_accessors_move_payload_allocations_and_consume_places() {
             vec![Value::Vec(VecValue {
                 element_type: Type::named("json.Value"),
                 elements: values.into(),
+                str_view: Default::default(),
             })],
         ),
     );
@@ -4674,6 +4681,7 @@ fn mir_json_variant_construction_moves_owned_payload_allocations() {
             Value::Vec(VecValue {
                 element_type: Type::named("json.Value"),
                 elements: values.into(),
+                str_view: Default::default(),
             }),
         ),
         (
@@ -5286,6 +5294,7 @@ fn mir_json_adapters_reject_inexact_runtime_metadata() {
             Value::Vec(VecValue {
                 element_type: Type::named("str"),
                 elements: Vec::new().into(),
+                str_view: Default::default(),
             }),
         ),
         (
@@ -5759,6 +5768,7 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
             } else {
                 Vec::new().into()
             },
+            str_view: Default::default(),
         };
         env.define_typed("vector", vector_type.clone(), Value::Vec(vector.clone()));
         env.define_typed("payload", string_type.clone(), Value::String(payload));
@@ -5796,6 +5806,7 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
     let vector = VecValue {
         element_type: string_type.clone(),
         elements: Vec::new().into(),
+        str_view: Default::default(),
     };
     env.define_typed("vector", vector_type.clone(), Value::Vec(vector.clone()));
     env.define_typed(
@@ -5804,6 +5815,7 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
         Value::Vec(VecValue {
             element_type: string_type.clone(),
             elements: vec![Value::String(extended)].into(),
+            str_view: Default::default(),
         }),
     );
     runtime
@@ -5953,6 +5965,7 @@ fn mir_owned_process_and_http_decoders_transfer_string_allocations() {
         Value::Vec(VecValue {
             element_type: Type::named("str"),
             elements: command.into(),
+            str_view: Default::default(),
         }),
         "start(command=...)",
     )
@@ -6004,6 +6017,7 @@ fn mir_owned_process_and_http_decoders_transfer_string_allocations() {
                     ),
                 ]
                 .into(),
+                str_view: Default::default(),
             }),
             "respond_bytes(bytes=...)",
         )
@@ -6032,6 +6046,7 @@ fn mir_owned_runtime_decoders_reject_malformed_values_without_partial_conversion
     let non_signed_byte = Value::Vec(VecValue {
         element_type: Type::named("uint8"),
         elements: vec![uint128_max()].into(),
+        str_view: Default::default(),
     });
     assert!(super::expect_owned_bytes_value(non_signed_byte, "payload")
         .expect_err("byte conversion must reject integers outside the signed runtime view")
@@ -6040,6 +6055,7 @@ fn mir_owned_runtime_decoders_reject_malformed_values_without_partial_conversion
     let oversized_byte = Value::Vec(VecValue {
         element_type: Type::named("uint8"),
         elements: vec![Value::Int(IntegerValue::from_signed(256))].into(),
+        str_view: Default::default(),
     });
     assert!(super::expect_owned_bytes_value(oversized_byte, "payload")
         .expect_err("byte conversion must reject values above uint8::MAX")
@@ -6202,6 +6218,7 @@ fn mir_owned_vec_and_set_iteration_take_elements_from_the_private_source() {
         Value::Vec(VecValue {
             element_type: Type::named("str"),
             elements: vec![Value::String(vector_text)].into(),
+            str_view: Default::default(),
         }),
     );
     let value = runtime
@@ -6350,6 +6367,7 @@ fn string_vec_value(items: &[&str]) -> Value {
             .iter()
             .map(|item| Value::String((*item).to_string()))
             .collect(),
+        str_view: Default::default(),
     })
 }
 
@@ -6619,6 +6637,7 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
         &Value::Vec(VecValue {
             element_type: Type::named("int32"),
             elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
+            str_view: Default::default(),
         }),
         "command",
     )
@@ -6631,6 +6650,7 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
             &Value::Vec(VecValue {
                 element_type: Type::named("str"),
                 elements: vec![Value::String("echo".to_string())].into(),
+                str_view: Default::default(),
             }),
             "command",
         )
@@ -6641,6 +6661,7 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
         &Value::Vec(VecValue {
             element_type: Type::named("str"),
             elements: vec![Value::Bool(true)].into(),
+            str_view: Default::default(),
         }),
         "command",
     )
@@ -6658,6 +6679,7 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
                     Value::Int(IntegerValue::from_signed(66)),
                 ]
                 .into(),
+                str_view: Default::default(),
             }),
             "payload",
         )
@@ -6673,6 +6695,7 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
         &Value::Vec(VecValue {
             element_type: Type::named("uint8"),
             elements: vec![Value::Int(IntegerValue::from_signed(300))].into(),
+            str_view: Default::default(),
         }),
         "payload",
     )
@@ -6908,6 +6931,7 @@ fn mir_runtime_process_capture_helpers_cover_success_and_malformed_results() {
                 Value::Int(IntegerValue::from_literal(66)),
             ]
             .into(),
+            str_view: Default::default(),
         }))
     }));
     assert_eq!(
@@ -6921,6 +6945,7 @@ fn mir_runtime_process_capture_helpers_cover_success_and_malformed_results() {
         Ok(Value::Vec(VecValue {
             element_type: Type::named("uint8"),
             elements: vec![Value::Int(IntegerValue::from_signed(300))].into(),
+            str_view: Default::default(),
         }))
     }));
     let error = runtime
@@ -6934,6 +6959,7 @@ fn mir_runtime_process_capture_helpers_cover_success_and_malformed_results() {
         Ok(Value::Vec(VecValue {
             element_type: Type::named("uint8"),
             elements: vec![Value::String("bad".to_string())].into(),
+            str_view: Default::default(),
         }))
     }));
     let error = runtime
@@ -6947,6 +6973,7 @@ fn mir_runtime_process_capture_helpers_cover_success_and_malformed_results() {
         Ok(Value::Vec(VecValue {
             element_type: Type::named("str"),
             elements: vec![Value::String("bad".to_string())].into(),
+            str_view: Default::default(),
         }))
     }));
     let error = runtime
@@ -6983,6 +7010,7 @@ fn mir_runtime_process_capture_helpers_cover_success_and_malformed_results() {
         Ok(Value::Vec(VecValue {
             element_type: Type::named("uint8"),
             elements: Vec::new().into(),
+            str_view: Default::default(),
         }))
     }));
     group.cancel();
@@ -12168,6 +12196,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
                 Value::Int(IntegerValue::from_signed(2)),
             ]
             .into(),
+            str_view: Default::default(),
         }),
     );
     env.define_typed(
@@ -12684,6 +12713,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
         Value::Vec(crate::runtime_value::VecValue {
             element_type: Type::named("int32"),
             elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
+            str_view: Default::default(),
         }),
     );
     env.define_typed(
@@ -13643,6 +13673,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
         MirRuntime::infer_value_type(&Value::Vec(crate::runtime_value::VecValue {
             element_type: Type::named("int32"),
             elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
+            str_view: Default::default(),
         })),
         Some(Type::Named("list".to_string(), vec![Type::named("int32")]))
     );
@@ -13827,6 +13858,7 @@ fn mir_owned_slice_runtime_uses_scalar_bounds_and_preserves_au4003_spans() {
             .into_iter()
             .map(|value| Value::String(value.to_string()))
             .collect(),
+        str_view: Default::default(),
     };
     let source_elements = vector.elements.as_ptr();
     env.define_typed(
@@ -13944,6 +13976,7 @@ fn mir_owned_slice_runtime_uses_scalar_bounds_and_preserves_au4003_spans() {
                     Value::Int(IntegerValue::from_signed(3)),
                 ]
                 .into(),
+                str_view: Default::default(),
             },
             "__slice",
             None,
@@ -14102,6 +14135,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
                 Value::Int(IntegerValue::from_signed(2)),
             ]
             .into(),
+            str_view: Default::default(),
         }),
     );
     env.define_typed(
@@ -14110,6 +14144,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         Value::Vec(crate::runtime_value::VecValue {
             element_type: Type::named("int32"),
             elements: vec![Value::Int(IntegerValue::from_signed(3))].into(),
+            str_view: Default::default(),
         }),
     );
     env.define_typed(
@@ -14122,6 +14157,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
                 Value::String("two".to_string()),
             ]
             .into(),
+            str_view: Default::default(),
         }),
     );
     env.define_typed(
@@ -15399,6 +15435,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         Value::Vec(crate::runtime_value::VecValue {
             element_type: Type::named("int32"),
             elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
+            str_view: Default::default(),
         }),
     );
 
@@ -15564,6 +15601,7 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
                 .into_iter()
                 .map(|value| Value::Int(IntegerValue::from_signed(value)))
                 .collect(),
+            str_view: Default::default(),
         }),
     );
     for magnitude in 1..=5 {
@@ -15770,6 +15808,7 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
         Value::Vec(crate::runtime_value::VecValue {
             element_type: Type::named("int32"),
             elements: Vec::new().into(),
+            str_view: Default::default(),
         }),
     );
     let empty_insert = runtime
@@ -15834,6 +15873,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
             crate::runtime_value::VecValue {
                 element_type: Type::named("int32"),
                 elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
+                str_view: Default::default(),
             },
             "clear",
             None,
@@ -15891,6 +15931,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
                 crate::runtime_value::VecValue {
                     element_type: Type::named("int32"),
                     elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
+                    str_view: Default::default(),
                 },
                 field,
                 None,
@@ -15910,6 +15951,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
             crate::runtime_value::VecValue {
                 element_type: Type::named("int32"),
                 elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
+                str_view: Default::default(),
             },
             "__index",
             Some("missing"),
@@ -15929,6 +15971,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
             crate::runtime_value::VecValue {
                 element_type: Type::named("int32"),
                 elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
+                str_view: Default::default(),
             },
             "__set_index",
             Some("missing"),
@@ -17366,6 +17409,7 @@ fn mir_runtime_wait_helpers_cover_task_lists_ready_error_timeout_and_cancel_path
     let task_list = Value::Vec(VecValue {
         element_type: Type::Named("Task".to_string(), vec![Type::named("bool")]),
         elements: vec![Value::Task(ready_task.clone())].into(),
+        str_view: Default::default(),
     });
     assert_eq!(
         runtime
@@ -17381,6 +17425,7 @@ fn mir_runtime_wait_helpers_cover_task_lists_ready_error_timeout_and_cancel_path
     let non_task_list = Value::Vec(VecValue {
         element_type: Type::named("int32"),
         elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
+        str_view: Default::default(),
     });
     let non_task = runtime
         .expect_task_list(&non_task_list, "wait_any(...)")
@@ -20641,6 +20686,7 @@ def main():
         Value::Vec(VecValue {
             element_type: Type::named("int64"),
             elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
+            str_view: Default::default(),
         }),
     );
     let shuffle_place = runtime
@@ -20661,6 +20707,7 @@ def main():
         &Value::Vec(VecValue {
             element_type: Type::named("int64"),
             elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
+            str_view: Default::default(),
         })
     );
 
@@ -21113,6 +21160,7 @@ fn owned_collection_methods_require_their_source_places() {
     let vector = || VecValue {
         element_type: Type::named("int64"),
         elements: vec![Value::Int(IntegerValue::from_i64(1))].into(),
+        str_view: Default::default(),
     };
     let map = || MapValue {
         key_type: Type::named("str"),
@@ -21406,6 +21454,7 @@ fn owned_argument_decoders_accept_unknown_byte_lists_and_option_strings() {
     let unknown_bytes = Value::Vec(VecValue {
         element_type: Type::named("Unknown"),
         elements: vec![Value::Int(IntegerValue::from_literal(7))].into(),
+        str_view: Default::default(),
     });
     assert_eq!(
         super::expect_owned_bytes_value(unknown_bytes, "demo")
@@ -21424,6 +21473,7 @@ fn owned_argument_decoders_accept_unknown_byte_lists_and_option_strings() {
     let oversized = Value::Vec(VecValue {
         element_type: Type::named("Unknown"),
         elements: vec![Value::Int(IntegerValue::from_literal(u128::MAX))].into(),
+        str_view: Default::default(),
     });
     assert_eq!(
         super::expect_bytes_value(&oversized, "demo")
@@ -22616,6 +22666,7 @@ fn process_child_and_supervisor_methods_cover_optional_waits_and_missing_argumen
         Value::Vec(VecValue {
             element_type: Type::named("str"),
             elements: vec![Value::String("true".to_string())].into(),
+            str_view: Default::default(),
         }),
     );
     let supervisor = ProcessSupervisorValue::new();
@@ -22862,6 +22913,7 @@ fn member_calls_fall_through_length_and_byte_helpers_for_other_receivers() {
             elements: (1..=4)
                 .map(|value| Value::Int(IntegerValue::from_i64(value)))
                 .collect(),
+            str_view: Default::default(),
         }),
     );
     for field in ["len", "to_bytes"] {
@@ -22971,6 +23023,7 @@ fn index_in_range_facts_are_checked_by_the_interpreter() {
                 Value::Int(IntegerValue::from_i64(4)),
             ]
             .into(),
+            str_view: Default::default(),
         }),
     );
     env.define_typed("flag", Type::named("bool"), Value::Bool(true));

@@ -1,0 +1,31 @@
+def count(names: list[str], wanted: str) -> int64:
+    mut hits = 0
+    for name in names:
+        if name == "user-7":
+            hits += 1
+        if name != "":
+            hits += 10
+        if name == "ünï":
+            hits += 100
+        if name == wanted:
+            hits += 1000
+    return hits
+
+
+def main():
+    mut names: list[str] = []
+    mut i = 0
+    while i < 40:
+        names.append(f"user-{i % 10}")
+        i += 1
+    names.append("")
+    names.append("ünï")
+    mut round = 0
+    mut total = 0
+    while round < 5:
+        total += count(names, "user-3")
+        names.append("user-7")
+        round += 1
+    print(total)
+    print(count([], "x"))
+    print(count(["user-70", "user-", "ünïcode"], "user-"))

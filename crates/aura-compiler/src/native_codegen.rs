@@ -4761,19 +4761,37 @@ impl<'a> FunctionCompiler<'a> {
                 let (list, index) = self.load_borrowed_list_element(&selection)?;
                 let (literal_ptr, literal_len) = self.string_constant(literal.as_bytes())?;
                 let literal_on_left = self.builder.iconst(types::I64, 1 - element_on_left);
-                self.builder.call(
-                    self.runtime[RuntimeFn::CompareStrLiteralAt],
-                    &[
-                        opcode,
+                let slow_args = [
+                    opcode,
+                    list,
+                    index,
+                    literal_ptr,
+                    literal_len,
+                    literal_on_left,
+                    line,
+                    column,
+                ];
+                if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+                    && selection.element_type == Type::named("str")
+                {
+                    let equal = self.emit_str_view_equality(
                         list,
                         index,
-                        literal_ptr,
-                        literal_len,
-                        literal_on_left,
-                        line,
-                        column,
-                    ],
-                )
+                        (literal_ptr, literal.len()),
+                        &slow_args,
+                    );
+                    let result = if op == BinaryOp::Eq {
+                        equal
+                    } else {
+                        self.builder.bxor_imm(equal, 1)
+                    };
+                    return Ok(Some(ValueRef {
+                        values: vec![result],
+                        ty: DirectType::Scalar(ScalarKind::Bool),
+                    }));
+                }
+                self.builder
+                    .call(self.runtime[RuntimeFn::CompareStrLiteralAt], &slow_args)
             }
             other => {
                 let other = self.load_operand(other)?;
@@ -8396,6 +8414,84 @@ impl<'a> FunctionCompiler<'a> {
         let inst = self.builder.call(self.runtime[RuntimeFn::VecLen], &[list]);
         let len = inst.results[0];
         self.builder.jump(join_block, &[len]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        self.builder.block_params(join_block)[0]
+    }
+
+    /// Whether element `index` of a `list[str]` equals a literal, as 1 or 0.
+    /// A list whose view is `DirectListAccess::Str` is read in place: the
+    /// lengths are compared first, and the bytes only when they match. Any
+    /// other list, or an index out of range, takes
+    /// `aura_direct_compare_str_literal_at` with `slow_args`, which asks
+    /// for `==` and reports the same diagnostics as before.
+    fn emit_str_view_equality(
+        &mut self,
+        list: Val,
+        index: Val,
+        (literal_ptr, literal_len): (Val, usize),
+        slow_args: &[Val; 8],
+    ) -> Val {
+        use aura_runtime::native_runtime::{
+            DirectListAccess, DIRECT_STR_VIEW_ENTRY_BYTES, DIRECT_STR_VIEW_LEN_OFFSET,
+            DIRECT_STR_VIEW_PTR_OFFSET,
+        };
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let slow_block = self.builder.create_block();
+        let fast_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        self.emit_list_access_check(list, DirectListAccess::Str, &layout, slow_block, fast_block);
+
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let flags = MemFlags::trusted();
+        let entries = self
+            .builder
+            .load(types::I64, flags, list, layout.elements_offset);
+        let position = self.emit_list_view_bounds_check(list, index, &layout, slow_block);
+        let offset = self
+            .builder
+            .imul_imm(position, i64::from(DIRECT_STR_VIEW_ENTRY_BYTES));
+        let entry = self.builder.iadd(entries, offset);
+        let len = self
+            .builder
+            .load(types::I64, flags, entry, DIRECT_STR_VIEW_LEN_OFFSET);
+        let same_len = self.builder.icmp_imm(IntCC::Equal, len, literal_len as i64);
+        if literal_len == 0 {
+            let empty = self.builder.uextend(types::I64, same_len);
+            self.builder.jump(join_block, &[empty]);
+        } else {
+            let bytes_block = self.builder.create_block();
+            let zero = self.builder.iconst(types::I64, 0);
+            self.builder
+                .brif(same_len, bytes_block, &[], join_block, &[zero]);
+            self.builder.switch_to_block(bytes_block);
+            self.builder.seal_block(bytes_block);
+            let bytes = self
+                .builder
+                .load(types::I64, flags, entry, DIRECT_STR_VIEW_PTR_OFFSET);
+            let literal_len = self.builder.iconst(types::I64, literal_len as i64);
+            let inst = self.builder.call(
+                self.runtime[RuntimeFn::BytesEqual],
+                &[bytes, literal_ptr, literal_len],
+            );
+            let equal = inst.results[0];
+            self.builder.jump(join_block, &[equal]);
+        }
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let mut args = *slow_args;
+        args[0] = self
+            .builder
+            .iconst(types::I64, Self::binary_opcode(BinaryOp::Eq));
+        let inst = self
+            .builder
+            .call(self.runtime[RuntimeFn::CompareStrLiteralAt], &args);
+        let equal = inst.results[0];
+        self.builder.jump(join_block, &[equal]);
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);

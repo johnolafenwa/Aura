@@ -165,6 +165,7 @@ runtime_functions! {
     VecIndexScalar => ("aura_direct_vec_index_scalar", [I64, I64, I64], Some(I64)),
     VecCheckIndex => ("aura_direct_vec_check_index", [I64, I64, I64, I64], None),
     CompareStrLiteralAt => ("aura_direct_compare_str_literal_at", [I64, I64, I64, I64, I64, I64, I64, I64], Some(I64)),
+    BytesEqual => ("aura_direct_bytes_equal", [I64, I64, I64], Some(I64)),
     CompareValuesAt => ("aura_direct_compare_values_at", [I64, I64, I64, I64, I64, I64, I64], Some(I64)),
     VecElementLen => ("aura_direct_vec_element_len", [I64, I64, I64, I64], Some(I64)),
     VecElementMapGet => ("aura_direct_vec_element_map_get", [I64, I64, I64, I64, I64], Some(I64)),

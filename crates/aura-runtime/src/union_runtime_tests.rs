@@ -296,6 +296,7 @@ fn runtime_member_type_identifies_every_backend_independent_payload_kind() {
         runtime_member_type(&Value::Vec(VecValue {
             element_type: Type::named("str"),
             elements: Vec::new().into(),
+            str_view: Default::default(),
         })),
         Some(Type::Named("list".to_string(), vec![Type::named("str")]))
     );

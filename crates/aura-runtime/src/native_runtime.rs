@@ -1426,6 +1426,53 @@ impl OpaqueValue {
         self.list_access.store(access as u32, Ordering::Relaxed);
     }
 
+    /// Counts one element read of a confined `list[str]` that missed the
+    /// list view. Once the misses since the last build reach an eighth of
+    /// the length, it records where every element lies and switches the
+    /// view to [`DirectListAccess::Str`], so later reads stay in generated
+    /// code. A write switches the view back to
+    /// [`DirectListAccess::Values`]. Each build costs one pass over the
+    /// list, which the misses before it pay for, so a list that changes
+    /// between reads costs at most a constant factor more.
+    fn note_str_view_miss(&self) {
+        if self.list_access.load(Ordering::Relaxed) != DirectListAccess::Values as u32 {
+            return;
+        }
+        let _access = self.access(false);
+        if self.shared_lock().is_some() {
+            return;
+        }
+        // SAFETY: the access holds.
+        let Value::Vec(vector) = (unsafe { &*self.value.get() }) else {
+            return;
+        };
+        let ListElements::Values(values) = &vector.elements else {
+            return;
+        };
+        // SAFETY: the value is confined to this thread, and nothing else
+        // holds its view.
+        let view = unsafe { vector.str_view.get_or_create() };
+        view.misses += 1;
+        if view.misses.saturating_mul(STR_VIEW_MISSES_PER_ELEMENT) < values.len() {
+            return;
+        }
+        view.misses = 0;
+        view.entries.clear();
+        for element in values.iter() {
+            let Value::String(text) = element else {
+                view.entries.clear();
+                return;
+            };
+            view.entries.push(DirectStrViewEntry {
+                ptr: text.as_ptr() as usize,
+                len: text.len(),
+            });
+        }
+        self.list_elements.set(view.entries.as_ptr() as usize);
+        self.list_access
+            .store(DirectListAccess::Str as u32, Ordering::Relaxed);
+    }
+
     /// The lock of a shared value, or `None` while it is confined.
     fn shared_lock(&self) -> Option<&RwLock<()>> {
         // SAFETY: a non-null pointer is the box `share_direct_value` leaked,
@@ -2468,21 +2515,38 @@ pub enum DirectListAccess {
     Float64 = 3,
     /// A list of `bool` elements, 1 byte each.
     Bool = 4,
+    /// A list of `Value`s that are all `str`. The view's elements are
+    /// [`DirectStrViewEntry`] records, one per element.
+    Str = 5,
     /// A rank-1 `Array[int32]`.
-    ArrayInt32 = 5,
+    ArrayInt32 = 6,
     /// A rank-1 `Array[int64]`.
-    ArrayInt64 = 6,
+    ArrayInt64 = 7,
     /// A rank-1 `Array[float32]`.
-    ArrayFloat32 = 7,
+    ArrayFloat32 = 8,
     /// A rank-1 `Array[float64]`.
-    ArrayFloat64 = 8,
+    ArrayFloat64 = 9,
 }
 
 impl DirectListAccess {
     /// The codes of the list forms, which all keep their length in the
     /// view. They are consecutive from [`DirectListAccess::Values`].
-    pub const LIST_FORMS: u32 = 4;
+    pub const LIST_FORMS: u32 = 5;
 }
+
+/// Where one element of a [`DirectListAccess::Str`] view keeps its UTF-8
+/// bytes.
+pub use crate::list_elements::StrViewEntry as DirectStrViewEntry;
+
+/// The size of a [`DirectStrViewEntry`], and the offsets of its fields,
+/// which generated code reads.
+pub const DIRECT_STR_VIEW_ENTRY_BYTES: i32 = std::mem::size_of::<DirectStrViewEntry>() as i32;
+pub const DIRECT_STR_VIEW_PTR_OFFSET: i32 = std::mem::offset_of!(DirectStrViewEntry, ptr) as i32;
+pub const DIRECT_STR_VIEW_LEN_OFFSET: i32 = std::mem::offset_of!(DirectStrViewEntry, len) as i32;
+
+/// A `list[str]` builds its `str` view once its misses times this reach
+/// its length.
+const STR_VIEW_MISSES_PER_ELEMENT: usize = 8;
 
 /// Where generated code finds the list view in a boxed value. The offsets
 /// hold for one build of the runtime, so the compiler records
@@ -2511,6 +2575,10 @@ impl DirectListLayout {
             DirectListAccess::Float64 as i64,
             DirectListAccess::Bool as i64,
             DirectListAccess::ArrayFloat64 as i64,
+            DirectListAccess::Str as i64,
+            i64::from(DIRECT_STR_VIEW_ENTRY_BYTES),
+            i64::from(DIRECT_STR_VIEW_PTR_OFFSET),
+            i64::from(DIRECT_STR_VIEW_LEN_OFFSET),
             // The element layouts: 8-byte `int64` and `float64`, 1-byte
             // `bool`.
             0x0801,
@@ -3192,21 +3260,32 @@ fn literal_runtime_name(ptr: *const u8, len: usize) -> RuntimeName {
     if let Some(name) = cached {
         return name;
     }
-    let name = RuntimeName::from(
-        str::from_utf8(bytes)
-            .unwrap_or_else(|_| runtime_error("aura direct runtime received invalid UTF-8 bytes")),
-    );
+    let name = RuntimeName::from(utf8_text(bytes));
     let _ = LITERAL_NAME_LOOKUP.try_with(|lookup| {
         lookup.borrow_mut()[slot] = Some((address, len, name.clone()));
     });
     name
 }
 
-fn decode_bytes(ptr: *const u8, len: usize) -> String {
-    let bytes = unsafe { slice::from_raw_parts(ptr, len) };
+/// The text of the UTF-8 bytes at `ptr`, which generated code passes for a
+/// literal. Literals are mostly ASCII, which needs no decoding, so only
+/// other bytes go through the full UTF-8 check.
+fn literal_str<'a>(ptr: *const u8, len: usize) -> &'a str {
+    utf8_text(unsafe { slice::from_raw_parts(ptr, len) })
+}
+
+/// `bytes` as text, or the runtime error for bytes that are not UTF-8.
+fn utf8_text(bytes: &[u8]) -> &str {
+    if bytes.is_ascii() {
+        // SAFETY: ASCII is UTF-8.
+        return unsafe { str::from_utf8_unchecked(bytes) };
+    }
     str::from_utf8(bytes)
         .unwrap_or_else(|_| runtime_error("aura direct runtime received invalid UTF-8 bytes"))
-        .to_string()
+}
+
+fn decode_bytes(ptr: *const u8, len: usize) -> String {
+    literal_str(ptr, len).to_string()
 }
 
 fn direct_ffi_type_code(ffi_type: FfiType) -> u8 {
@@ -3443,6 +3522,7 @@ fn bytes_vec_value(bytes: Vec<u8>) -> Value {
                 )
             })
             .collect(),
+        str_view: Default::default(),
     })
 }
 
@@ -5783,10 +5863,7 @@ pub extern "C-unwind" fn aura_direct_format_push_str(
     len: usize,
 ) {
     task_runtime_boundary(|| {
-        let bytes = unsafe { slice::from_raw_parts(ptr, len) };
-        let text = str::from_utf8(bytes)
-            .unwrap_or_else(|_| runtime_error("aura direct runtime received invalid UTF-8 bytes"));
-        push_format_text(builder, text);
+        push_format_text(builder, literal_str(ptr, len));
     })
 }
 
@@ -5837,16 +5914,18 @@ pub extern "C-unwind" fn aura_direct_format_begin_i64(
     reserve: usize,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let bytes = unsafe { slice::from_raw_parts(ptr, len) };
-        let leading = str::from_utf8(bytes)
-            .unwrap_or_else(|_| runtime_error("aura direct runtime received invalid UTF-8 bytes"));
+        let leading = literal_str(ptr, len);
         let mut output = String::with_capacity(
             len.saturating_add(I64_DECIMAL_BYTES)
                 .saturating_add(reserve.min(FORMAT_RESERVE_LIMIT)),
         );
         output.push_str(leading);
         let mut digits = [0_u8; I64_DECIMAL_BYTES];
-        if let Err(error) = append_string_checked(&mut output, i64_decimal(value, &mut digits)) {
+        let digits = i64_decimal(value, &mut digits);
+        if output.len() + digits.len() <= crate::runtime_value::MAX_STRING_BYTES {
+            // The buffer already has room for the digits.
+            output.push_str(digits);
+        } else if let Err(error) = append_string_checked(&mut output, digits) {
             runtime_diagnostic_error(error);
         }
         boxed_value(Value::String(output))
@@ -6072,6 +6151,7 @@ pub extern "C-unwind" fn aura_direct_string_split(
                     .split(&separator)
                     .map(|part| Value::String(part.to_string()))
                     .collect(),
+                str_view: Default::default(),
             })),
             other => runtime_error(format!(
                 "expected `str`, found `{}`",
@@ -6684,6 +6764,7 @@ pub extern "C-unwind" fn aura_direct_vec_empty() -> *mut OpaqueValue {
         boxed_value(Value::Vec(VecValue {
             element_type: Type::named("Unknown"),
             elements: Vec::new().into(),
+            str_view: Default::default(),
         }))
     })
 }
@@ -7330,8 +7411,30 @@ pub extern "C-unwind" fn aura_direct_compare_str_literal_at(
         let compared = with_vec_element(list, index, line, column, |value| {
             compare_with_str_literal(op, value, literal_ptr, literal_len, literal_on_left)
         });
+        // SAFETY: `with_vec_element` checked the handle.
+        unsafe { &*list }.note_str_view_miss();
         direct_comparison_flag(compared, line, column)
     })
+}
+
+/// 1 when the `len` bytes at `left` and `right` are equal, and 0 when they
+/// differ. Generated code calls it once two `str` lengths match. It cannot
+/// fail, so it skips the runtime boundary.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_bytes_equal(
+    left: *const u8,
+    right: *const u8,
+    len: usize,
+) -> i64 {
+    // SAFETY: generated code passes a view entry and a literal of `len`
+    // bytes each.
+    let (left, right) = unsafe {
+        (
+            slice::from_raw_parts(left, len),
+            slice::from_raw_parts(right, len),
+        )
+    };
+    i64::from(left == right)
 }
 
 /// `aura_direct_compare_values` with one operand read in place from element
@@ -7349,12 +7452,18 @@ pub extern "C-unwind" fn aura_direct_compare_values_at(
     task_runtime_boundary(|| {
         let op = direct_comparison_op(op);
         let compared = with_vec_element(list, index, line, column, |element| unsafe {
-            with_value(other, |other| {
-                if element_on_left != 0 {
-                    compare_value_refs(element, other, op)
-                } else {
-                    compare_value_refs(other, element, op)
-                }
+            with_value(other, |other| match other {
+                // A `str` operand compares as bytes, as a literal does.
+                Value::String(text) => compare_with_str_literal(
+                    op,
+                    element,
+                    text.as_ptr(),
+                    text.len(),
+                    1 - element_on_left,
+                )
+                .map(Value::Bool),
+                other if element_on_left != 0 => compare_value_refs(element, other, op),
+                other => compare_value_refs(other, element, op),
             })
         });
         direct_comparison_bit(compared, line, column)
@@ -8061,12 +8170,6 @@ fn boxed_map_payload(found: Option<&Value>) -> *mut OpaqueValue {
 }
 
 /// The key of a `dict[str, V]` lookup, a literal in the program image.
-fn literal_str<'a>(ptr: *const u8, len: usize) -> &'a str {
-    let bytes = unsafe { slice::from_raw_parts(ptr, len) };
-    str::from_utf8(bytes)
-        .unwrap_or_else(|_| runtime_error("aura direct runtime received invalid UTF-8 bytes"))
-}
-
 /// `aura_direct_map_get` with a `str` literal key, which is never boxed.
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_map_get_str(
@@ -8242,6 +8345,7 @@ pub extern "C-unwind" fn aura_direct_map_keys(map: *mut OpaqueValue) -> *mut Opa
         boxed_value(Value::Vec(VecValue {
             element_type: key_type,
             elements: elements.into(),
+            str_view: Default::default(),
         }))
     })
 }
@@ -8261,6 +8365,7 @@ pub extern "C-unwind" fn aura_direct_map_values(map: *mut OpaqueValue) -> *mut O
         boxed_value(Value::Vec(VecValue {
             element_type: value_type,
             elements: elements.into(),
+            str_view: Default::default(),
         }))
     })
 }
@@ -8287,6 +8392,7 @@ pub extern "C-unwind" fn aura_direct_map_items(map: *mut OpaqueValue) -> *mut Op
         boxed_value(Value::Vec(VecValue {
             element_type,
             elements: elements.into(),
+            str_view: Default::default(),
         }))
     })
 }
@@ -12569,6 +12675,7 @@ pub extern "C-unwind" fn aura_direct_fs_read_dir(path: *mut OpaqueValue) -> *mut
             Ok(names) => boxed_value(result_ok(Value::Vec(VecValue {
                 element_type: Type::named("str"),
                 elements: names.into_iter().map(Value::String).collect(),
+                str_view: Default::default(),
             }))),
             Err(error) => boxed_value(result_err(io_error(error))),
         },

@@ -678,3 +678,71 @@ impl IntoIterator for ListElements {
 #[cfg(test)]
 #[path = "list_elements_tests.rs"]
 mod tests;
+
+/// Where one element of a `list[str]` keeps its UTF-8 bytes, as generated
+/// code reads it from the list's `str` view.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct StrViewEntry {
+    /// The address of the first byte.
+    pub ptr: usize,
+    /// The length in bytes.
+    pub len: usize,
+}
+
+/// A list's `str` view: one entry per element, and the element reads that
+/// missed it since it was last built.
+#[derive(Debug, Default)]
+pub struct StrView {
+    pub entries: Vec<StrViewEntry>,
+    pub misses: usize,
+}
+
+/// The `str` view a list keeps once the native runtime builds it. It
+/// describes the list's current elements only while the box's list view
+/// says so, and a copy of the list starts without one.
+#[derive(Default)]
+pub struct StrViewCache(std::sync::atomic::AtomicPtr<StrView>);
+
+impl StrViewCache {
+    /// The view, made empty on first use.
+    ///
+    /// # Safety
+    ///
+    /// Only the thread the list's box is confined to may call it, and no
+    /// other reference to the view may be alive.
+    #[allow(clippy::mut_from_ref)]
+    pub unsafe fn get_or_create(&self) -> &mut StrView {
+        use std::sync::atomic::Ordering;
+        let mut view = self.0.load(Ordering::Relaxed);
+        if view.is_null() {
+            view = Box::into_raw(Box::default());
+            self.0.store(view, Ordering::Relaxed);
+        }
+        // SAFETY: the box is this cache's, and the caller holds the only
+        // reference.
+        unsafe { &mut *view }
+    }
+}
+
+impl Clone for StrViewCache {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl Drop for StrViewCache {
+    fn drop(&mut self) {
+        let view = *self.0.get_mut();
+        if !view.is_null() {
+            // SAFETY: `get_or_create` leaked this box for the cache.
+            drop(unsafe { Box::from_raw(view) });
+        }
+    }
+}
+
+impl fmt::Debug for StrViewCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("StrViewCache")
+    }
+}
