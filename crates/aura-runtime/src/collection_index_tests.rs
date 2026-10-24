@@ -1,5 +1,5 @@
 use super::*;
-use crate::integer::{IntegerKind, IntegerValue};
+use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::runtime_value::{InstanceValue, TupleValue, UnionValue};
 use aura_core::types::Type;
 use std::collections::BTreeMap;
@@ -175,6 +175,121 @@ fn set_insert_contains_and_remove() {
     assert_eq!(elements.pop(), Some(int(147)));
     assert!(!elements.contains_key(&int(147)));
     assert!(elements.contains_key(&int(9)));
+}
+
+/// Integers of every width, each equal to `value`, in both representations
+/// where the value allows.
+fn integers_equal_to(value: i128) -> Vec<Value> {
+    let mut integers = Vec::new();
+    for kind in [
+        IntegerKind::Int8,
+        IntegerKind::Int16,
+        IntegerKind::Int32,
+        IntegerKind::Int64,
+        IntegerKind::Int128,
+        IntegerKind::Uint8,
+        IntegerKind::Uint16,
+        IntegerKind::Uint32,
+        IntegerKind::Uint64,
+        IntegerKind::Uint128,
+    ] {
+        let typed = if value < 0 {
+            IntegerValue::from_typed_signed(value, kind)
+        } else if kind.is_signed() {
+            IntegerValue::from_typed_signed(value, kind)
+        } else {
+            IntegerValue::from_typed_unsigned(value as u128, kind)
+        };
+        if let Some(typed) = typed {
+            integers.push(Value::Int(typed));
+        }
+    }
+    integers.push(Value::Int(IntegerValue::from_representation(
+        IntegerRepresentation::Signed(value),
+    )));
+    if value >= 0 {
+        integers.push(Value::Int(IntegerValue::from_representation(
+            IntegerRepresentation::Unsigned(value as u128),
+        )));
+    }
+    integers
+}
+
+#[test]
+fn equal_integers_of_every_width_hash_the_same() {
+    let wide = i128::from(i64::MAX) + 1;
+    for value in [
+        0,
+        1,
+        -1,
+        7,
+        255,
+        -128,
+        i128::from(i64::MIN),
+        i128::from(i64::MAX),
+        wide,
+        -wide - 1,
+        i128::MAX,
+    ] {
+        let integers = integers_equal_to(value);
+        assert!(integers.len() >= 2, "{value} has several widths");
+        let hash = hash_value(&integers[0]);
+        for integer in &integers {
+            assert_eq!(*integer, integers[0], "{value} compares equal");
+            assert_eq!(hash_value(integer), hash, "{value} as {integer:?}");
+        }
+        if let Ok(narrow) = i64::try_from(value) {
+            assert_eq!(hash_i64(narrow), hash, "{value} hashes as an i64");
+        }
+    }
+    let top = Value::Int(IntegerValue::from_literal(u128::MAX));
+    assert_eq!(hash_value(&top), hash_value(&top.clone()));
+    assert_ne!(hash_value(&int(1)), hash_value(&Value::Bool(true)));
+}
+
+#[test]
+fn int64_probes_agree_with_value_probes_across_widths() {
+    for count in [3_i64, 40] {
+        let mut elements = SetElements::new();
+        for index in 0..count {
+            let value = i128::from(index * 7 - 70);
+            let widths = integers_equal_to(value);
+            elements.insert(widths[index as usize % widths.len()].clone());
+        }
+        elements.insert(text("7"));
+        let mut entries = DictEntries::new();
+        for (position, element) in elements.iter().enumerate() {
+            entries.insert(element.clone(), int(position as i64));
+        }
+        for probe in [
+            i64::MIN,
+            -70,
+            -7,
+            -1,
+            0,
+            7,
+            8,
+            7 * 39 - 70,
+            7 * 40 - 70,
+            i64::MAX,
+        ] {
+            assert_eq!(elements.position_i64(probe), elements.position(&int(probe)));
+            assert_eq!(entries.position_i64(probe), entries.position(&int(probe)));
+            for width in integers_equal_to(i128::from(probe)) {
+                assert_eq!(elements.position(&width), elements.position(&int(probe)));
+            }
+        }
+        let mut copy = elements.clone();
+        assert!(!copy.insert_i64(-70));
+        assert!(!copy.insert_i64(7 * (count - 1) - 70));
+        assert!(copy.insert_i64(1));
+        assert!(!copy.insert(int(1)));
+        assert!(!copy.insert(integers_equal_to(1)[0].clone()));
+        assert_eq!(copy.len(), elements.len() + 1);
+        assert_eq!(copy.last(), Some(&int(1)));
+        assert_eq!(copy.position_i64(1), Some(elements.len()));
+        assert_eq!(elements.position_i64(1), None);
+    }
 }
 
 #[test]

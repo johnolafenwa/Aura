@@ -9291,6 +9291,88 @@ fn direct_set_contains_int64_agrees_with_boxed_membership() {
     }
 }
 
+#[test]
+fn direct_set_insert_int64_agrees_with_boxed_insertion() {
+    // Twenty elements pass the scan threshold, so both paths hash.
+    for count in [3_i64, 20] {
+        let unboxed = super::aura_direct_set_empty();
+        let boxed = super::aura_direct_set_empty();
+        let elements = (0..count).map(|element| element * 7);
+        for element in elements.chain([0, 7 * (count - 1), -5, -5, i64::MIN, i64::MAX]) {
+            assert_eq!(
+                super::aura_direct_set_insert_int64_in_place(unboxed, element),
+                super::aura_direct_set_insert_in_place(boxed, super::aura_direct_box_i64(element)),
+                "element {element} in a set of {count}"
+            );
+        }
+        let Value::Set(set) = (unsafe { value_ref(unboxed) }) else {
+            panic!("expected a set");
+        };
+        assert_eq!(set.element_type, Type::named("int64"));
+        let Value::Set(boxed_set) = (unsafe { value_ref(boxed) }) else {
+            panic!("expected a set");
+        };
+        assert_eq!(set.elements.as_slice(), boxed_set.elements.as_slice());
+        for probe in [-35, 0, 7, 8, 7 * (count - 1)] {
+            assert_eq!(
+                super::aura_direct_set_contains_int64(unboxed, probe),
+                super::aura_direct_set_contains_int64(boxed, probe),
+            );
+        }
+        unsafe { release_value(unboxed) };
+        unsafe { release_value(boxed) };
+    }
+}
+
+#[test]
+fn direct_map_int64_probes_agree_with_boxed_lookups() {
+    // Twenty keys pass the scan threshold, so both paths hash. The keys are
+    // `int32` values, which equal `int64` probes of the same value.
+    for count in [3_i64, 20] {
+        let map = super::aura_direct_map_empty();
+        for key in 0..count {
+            expect_lookup_missing(super::aura_direct_map_set_in_place(
+                map,
+                super::aura_direct_box_i32(key * 7 - 21),
+                int_value(key),
+            ));
+        }
+        for probe in [
+            i64::MIN,
+            -21,
+            -7,
+            0,
+            6,
+            7,
+            7 * (count - 1) - 21,
+            7 * count,
+            i64::MAX,
+        ] {
+            let boxed = int_value(probe);
+            assert_eq!(
+                super::aura_direct_map_contains_int64(map, probe),
+                super::aura_direct_map_contains_key(map, boxed),
+                "probe {probe} in a map of {count}"
+            );
+            let expected = unsafe { value_ref(super::aura_direct_map_get(map, boxed)) };
+            let found = unsafe { value_ref(super::aura_direct_map_get_int64(map, probe)) };
+            assert_eq!(found, expected);
+            let payload = super::aura_direct_map_get_int64_payload(map, probe);
+            let boxed_payload = super::aura_direct_map_get_payload(map, boxed);
+            assert_eq!(payload.is_null(), boxed_payload.is_null());
+            if !payload.is_null() {
+                assert_eq!(unsafe { value_ref(payload) }, unsafe {
+                    value_ref(boxed_payload)
+                });
+                unsafe { release_value(payload) };
+                unsafe { release_value(boxed_payload) };
+            }
+            unsafe { release_value(boxed) };
+        }
+        unsafe { release_value(map) };
+    }
+}
+
 unsafe extern "C-unwind" fn test_native_thunk(args: *const i64, len: usize) -> *mut OpaqueValue {
     let args = std::slice::from_raw_parts(args, len);
     let total = args

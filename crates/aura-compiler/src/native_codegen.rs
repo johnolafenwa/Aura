@@ -6721,7 +6721,9 @@ impl<'a> FunctionCompiler<'a> {
         };
         let op = callee.op();
         let key = match (op, args) {
-            (Some(RuntimeOp::Dict(DictOp::Get | DictOp::GetStr)), [key]) => Some(key),
+            (Some(RuntimeOp::Dict(DictOp::Get | DictOp::GetStr | DictOp::GetInt64)), [key]) => {
+                Some(key)
+            }
             (
                 Some(
                     RuntimeOp::Str(StrOp::Len)
@@ -11308,6 +11310,20 @@ impl<'a> FunctionCompiler<'a> {
                 values: self.runtime_call_results(function, &[map]),
                 ty: DirectType::Scalar(ScalarKind::Int64),
             }),
+            DictOp::ContainsKeyInt64 | DictOp::GetInt64 => {
+                // An `int64` key is searched for without a box.
+                let loaded = self.load_operand_for_target(&args[0].value, &key_direct_ty)?;
+                let key = self.coerce_value(loaded, &key_direct_ty)?;
+                if op == DictOp::ContainsKeyInt64 {
+                    return Ok(ValueRef {
+                        values: self.runtime_call_results(function, &[map, key.values[0]]),
+                        ty: DirectType::Scalar(ScalarKind::Bool),
+                    });
+                }
+                let function = self.lookup_function(function, RuntimeFn::MapGetInt64Payload);
+                let results = self.runtime_call_results(function, &[map, key.values[0]]);
+                Ok(self.owned_opaque_result(results, optional_type(value_ty)))
+            }
             DictOp::IsEmpty | DictOp::ContainsKey => {
                 let mut words = vec![map];
                 if let Some(key) = args.first() {
@@ -11445,6 +11461,14 @@ impl<'a> FunctionCompiler<'a> {
                     self.load_operand_as_opaque_direct(&args[0].value, &element_direct_ty)?;
                 let value = self.transfer_owned_opaque_value(&value);
                 self.builder.call(function, &[set, value]);
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut *self.builder))
+            }
+            // An `int64` element is added without a box.
+            SetOp::AddInt64 => {
+                let loaded = self.load_operand_for_target(&args[0].value, &element_direct_ty)?;
+                let value = self.coerce_value(loaded, &element_direct_ty)?;
+                self.builder.call(function, &[set, value.values[0]]);
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }

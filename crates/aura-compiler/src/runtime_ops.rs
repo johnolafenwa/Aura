@@ -1231,16 +1231,20 @@ impl ListOp {
 /// that `in` and literal construction lower to, and the private element
 /// read and write. `GetStr` is the specialization lowering picks for a
 /// `get` with a literal `str` key, which the runtime looks up without a
-/// box.
+/// box. `GetInt64` and `ContainsKeyInt64` are the specializations for a
+/// dict with `int64` keys, which the runtime searches without boxing the
+/// key.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum DictOp {
     Len,
     IsEmpty,
     Get,
     GetStr,
+    GetInt64,
     Set,
     Remove,
     ContainsKey,
+    ContainsKeyInt64,
     Keys,
     Values,
     Items,
@@ -1260,9 +1264,11 @@ impl DictOp {
         DictOp::IsEmpty,
         DictOp::Get,
         DictOp::GetStr,
+        DictOp::GetInt64,
         DictOp::Set,
         DictOp::Remove,
         DictOp::ContainsKey,
+        DictOp::ContainsKeyInt64,
         DictOp::Keys,
         DictOp::Values,
         DictOp::Items,
@@ -1278,10 +1284,10 @@ impl DictOp {
         Some(match self {
             DictOp::Len => M::MapLen,
             DictOp::IsEmpty => M::MapIsEmpty,
-            DictOp::Get | DictOp::GetStr => M::MapGet,
+            DictOp::Get | DictOp::GetStr | DictOp::GetInt64 => M::MapGet,
             DictOp::Set => M::MapSet,
             DictOp::Remove => M::MapRemove,
-            DictOp::ContainsKey => M::MapContainsKey,
+            DictOp::ContainsKey | DictOp::ContainsKeyInt64 => M::MapContainsKey,
             DictOp::Keys => M::MapKeys,
             DictOp::Values => M::MapValues,
             DictOp::Items => M::MapItems,
@@ -1316,7 +1322,7 @@ impl DictOp {
     /// is named `contains`.
     const fn private_name(self) -> Option<&'static str> {
         Some(match self {
-            DictOp::ContainsKey => "contains_key",
+            DictOp::ContainsKey | DictOp::ContainsKeyInt64 => "contains_key",
             DictOp::Index => INDEX_MEMBER,
             DictOp::SetIndex => SET_INDEX_MEMBER,
             _ => return None,
@@ -1341,7 +1347,8 @@ impl DictOp {
 
     const fn unspecialized(self) -> Self {
         match self {
-            DictOp::GetStr => DictOp::Get,
+            DictOp::GetStr | DictOp::GetInt64 => DictOp::Get,
+            DictOp::ContainsKeyInt64 => DictOp::ContainsKey,
             other => other,
         }
     }
@@ -1354,9 +1361,11 @@ impl DictOp {
             DictOp::IsEmpty => helper(RuntimeFn::MapIsEmpty),
             DictOp::Get => helper(RuntimeFn::MapGet),
             DictOp::GetStr => helper_with(RuntimeFn::MapGetStr, &[], 1),
+            DictOp::GetInt64 => helper(RuntimeFn::MapGetInt64),
             DictOp::Set => helper(RuntimeFn::MapSetInPlace),
             DictOp::Remove => helper(RuntimeFn::MapRemoveInPlace),
             DictOp::ContainsKey => helper(RuntimeFn::MapContainsKey),
+            DictOp::ContainsKeyInt64 => helper(RuntimeFn::MapContainsInt64),
             DictOp::Keys => helper(RuntimeFn::MapKeys),
             DictOp::Values => helper(RuntimeFn::MapValues),
             DictOp::Items => helper(RuntimeFn::MapItems),
@@ -1381,8 +1390,10 @@ impl DictOp {
         let list = |element: Type| Type::Named("list".to_string(), vec![element]);
         Some(match self {
             DictOp::Len => Type::named("int64"),
-            DictOp::IsEmpty | DictOp::ContainsKey => Type::named("bool"),
-            DictOp::Get | DictOp::GetStr | DictOp::Set | DictOp::Remove => lookup_type(value()),
+            DictOp::IsEmpty | DictOp::ContainsKey | DictOp::ContainsKeyInt64 => Type::named("bool"),
+            DictOp::Get | DictOp::GetStr | DictOp::GetInt64 | DictOp::Set | DictOp::Remove => {
+                lookup_type(value())
+            }
             DictOp::Keys => list(key()),
             DictOp::Values => list(value()),
             DictOp::Items => list(Type::Tuple(vec![key(), value()])),
@@ -1393,9 +1404,9 @@ impl DictOp {
 }
 
 /// A method of `set[T]`, including the private `contains` that `in` lowers
-/// to and the private iteration reads. `ContainsInt64` is the
-/// specialization lowering picks for a set of `int64`, which the runtime
-/// searches without boxing the needle.
+/// to and the private iteration reads. `ContainsInt64` and `AddInt64` are
+/// the specializations lowering picks for a set of `int64`, which the
+/// runtime searches and fills without boxing the element.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum SetOp {
     Len,
@@ -1403,6 +1414,7 @@ pub enum SetOp {
     Contains,
     ContainsInt64,
     Add,
+    AddInt64,
     Remove,
     Discard,
     Clear,
@@ -1420,6 +1432,7 @@ impl SetOp {
         SetOp::Contains,
         SetOp::ContainsInt64,
         SetOp::Add,
+        SetOp::AddInt64,
         SetOp::Remove,
         SetOp::Discard,
         SetOp::Clear,
@@ -1434,7 +1447,7 @@ impl SetOp {
             SetOp::Len => M::SetLen,
             SetOp::IsEmpty => M::SetIsEmpty,
             SetOp::Contains | SetOp::ContainsInt64 => M::SetContains,
-            SetOp::Add => M::SetInsert,
+            SetOp::Add | SetOp::AddInt64 => M::SetInsert,
             SetOp::Remove => M::SetRemove,
             SetOp::Discard => M::SetDiscard,
             SetOp::Clear => M::SetClear,
@@ -1484,6 +1497,7 @@ impl SetOp {
     const fn unspecialized(self) -> Self {
         match self {
             SetOp::ContainsInt64 => SetOp::Contains,
+            SetOp::AddInt64 => SetOp::Add,
             other => other,
         }
     }
@@ -1495,6 +1509,7 @@ impl SetOp {
             SetOp::Contains => helper(RuntimeFn::SetContains),
             SetOp::ContainsInt64 => helper(RuntimeFn::SetContainsInt64),
             SetOp::Add => helper(RuntimeFn::SetInsertInPlace),
+            SetOp::AddInt64 => helper(RuntimeFn::SetInsertInt64InPlace),
             SetOp::Remove => helper_with(
                 RuntimeFn::CollectionOperation,
                 COLLECTION_SET_REMOVE_WORDS,
@@ -1524,9 +1539,12 @@ impl SetOp {
         match self {
             SetOp::Len => Type::named("int64"),
             SetOp::IsEmpty | SetOp::Contains | SetOp::ContainsInt64 => Type::named("bool"),
-            SetOp::Add | SetOp::Remove | SetOp::Discard | SetOp::Clear | SetOp::Reserve => {
-                Type::Unit
-            }
+            SetOp::Add
+            | SetOp::AddInt64
+            | SetOp::Remove
+            | SetOp::Discard
+            | SetOp::Clear
+            | SetOp::Reserve => Type::Unit,
             SetOp::IndexOption | SetOp::TakeIndexOption => {
                 lookup_type(element.unwrap_or_else(|| Type::named("Unknown")))
             }

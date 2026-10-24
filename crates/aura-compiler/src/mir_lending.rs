@@ -365,7 +365,9 @@ impl Planner<'_, '_> {
                 && matches!(
                     op,
                     RuntimeOp::List(ListOp::Len)
-                        | RuntimeOp::Dict(DictOp::Len | DictOp::Get | DictOp::GetStr)
+                        | RuntimeOp::Dict(
+                            DictOp::Len | DictOp::Get | DictOp::GetStr | DictOp::GetInt64
+                        )
                         | RuntimeOp::Set(SetOp::Len)
                 )
             {

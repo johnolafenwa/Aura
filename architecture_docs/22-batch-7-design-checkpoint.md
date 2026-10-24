@@ -700,6 +700,26 @@ Callgrind instructions, in millions:
 - `string_list_scan` is at 2.5 times Rust on LLVM, inside the 4x gate.
 - UTF-8 and Unicode behavior is unchanged.
 
+Step 10e hashes a scalar or `str` key with one write to the keyed SipHash
+hasher, and an insert hashes its key once. `add` and `in` on a
+`set[int64]`, and `get` and `in` on a dict with `int64` keys, pass the
+key without a box. The method and tables are in
+[the 10e note](../work/2026-10-24-batch-7-step-10e-scalar-keys.md).
+Callgrind instructions, in millions:
+
+| Program | Cranelift before | Cranelift after | LLVM before | LLVM after | LLVM / Rust |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `fib(30)` | 210.6 | 210.6 | 115.0 | 115.0 | 2.9x |
+| `int_list_sum` | 73.1 | 73.1 | 42.2 | 42.2 | 3.2x |
+| `string_list_scan` | 57.8 | 57.8 | 32.7 | 32.7 | 2.5x |
+| `dict_build_get` | 403.3 | 376.4 | 376.1 | 349.1 | 2.0x |
+| `set_insert_contains` | 140.5 | 64.8 | 135.1 | 59.4 | 1.9x |
+| `record_field_reads` | 245.6 | 245.2 | 226.7 | 226.3 | 6.3x |
+
+- `set_insert_contains` is at 1.9 times Rust on LLVM, inside the 3x gate.
+- Equal integers of different widths still hash alike, and iteration
+  order is unchanged.
+
 ## Owner Questions
 
 Each names the recommended default first.

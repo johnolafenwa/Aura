@@ -235,6 +235,29 @@ with a literal without a runtime call.
   case calls `aura_direct_compare_str_literal_at`, which reports the same
   diagnostics as before.
 
+### Scalar Keys
+
+`dict` and `set` keep their keyed SipHash hasher, with keys chosen once
+per process. A scalar or `str` key reaches it with one write.
+
+- **Integers.** An integer key writes its value as one `i64` when it fits,
+  and as its 128 bits otherwise. The word depends on the value alone, so
+  an `int32` and an `int64` that compare equal hash alike.
+- **Other keys.** A `float` writes its bits, with `-0.0` as `0.0`. A
+  `bool` writes one byte, and a `str` writes its bytes. Tuples, instances,
+  and every other key take the structural walk, as before.
+- **Inserts.** A probe returns the hash it computed, so an insert that
+  misses reuses it for the index instead of hashing the key again.
+- **Unboxed keys.** `add` and `in` on a `set[int64]` call
+  `aura_direct_set_insert_int64_in_place` and
+  `aura_direct_set_contains_int64`. `get` and `in` on a dict with `int64`
+  keys call `aura_direct_map_get_int64`, or its payload form, and
+  `aura_direct_map_contains_int64`. Each passes the key as a word, and the
+  runtime compares it with stored keys of any integer width without
+  building a value.
+- **Order.** Entries stay in insertion order, so the hash never changes
+  what a program prints.
+
 ## A tiny direct-backend design example
 
 This miniature example does not use Cranelift, but it shows the same architectural split: simple values are direct, complex values are boxed.
