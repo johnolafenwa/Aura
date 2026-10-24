@@ -68,9 +68,17 @@ and the static libraries, about 360 MB. `llvm-config` also names
 `libzstd` and `libxml2`, so on Ubuntu install `libzstd-dev` and
 `libxml2-dev`.
 
-On macOS arm64, the script installs Homebrew's `llvm@22` and prints its
-prefix to use instead. The official macOS archive's static libraries hold
-LLVM bitcode, which Apple's linker cannot read.
+On macOS, arm64 or x86-64, the script installs Homebrew's `llvm@22` and
+prints its prefix to use instead. The official macOS archive's static
+libraries hold LLVM bitcode, which Apple's linker cannot read. The script
+stops when Homebrew has no `llvm@22` bottle for the Mac, since building
+LLVM from source takes hours. It also prints an
+`LLVM_SYS_SYSTEM_LIBRARY_DIRS` setting that makes the build link
+Homebrew's static `libzstd.a`, so `aura` loads no Homebrew library.
+
+`scripts/check-aura-libraries.py target/release/aura` lists the libraries
+an `aura` loads, and fails on one outside the system set. The release
+workflow and the native binaries CI job run it.
 
 Then build or test with the feature, for example
 `cargo build -p aura --features llvm`, and run a program with

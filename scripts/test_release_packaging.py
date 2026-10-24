@@ -175,6 +175,36 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
             job,
         )
 
+    def test_release_cli_links_llvm_and_checks_the_libraries_it_loads(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        job = workflow[workflow.index("  cli:\n"):workflow.index("  tools:\n")]
+        for runner in ("os: ubuntu-24.04", "os: macos-15-intel", "os: macos-15"):
+            self.assertIn(runner, job)
+        self.assertIn("        run: bash scripts/install-llvm.sh\n", job)
+        self.assertNotIn("actions/cache", job, "a release links no cached LLVM")
+        self.assertLess(
+            job.index("run: bash scripts/install-llvm.sh"),
+            job.index("run: cargo build -p aura --release --locked"),
+        )
+        self.assertLess(
+            job.index("run: python3 scripts/check-aura-libraries.py target/release/aura"),
+            job.index("run: scripts/package-cli.sh"),
+            "the libraries are checked before the archive is packaged",
+        )
+        ci = CI_WORKFLOW.read_text(encoding="utf-8")
+        native = ci[ci.index("  native-binaries:\n"):]
+        self.assertIn("run: python3 scripts/check-aura-libraries.py target/release/aura\n", native)
+
+    def test_macos_llvm_install_links_static_zstd_and_needs_a_bottle(self) -> None:
+        installer = (REPO_ROOT / "scripts" / "install-llvm.sh").read_text(encoding="utf-8")
+        self.assertIn("  Darwin-arm64 | Darwin-x86_64)\n", installer)
+        darwin = installer[installer.index("  Darwin-arm64 | Darwin-x86_64)"):]
+        self.assertLess(darwin.index("check_bottle"), darwin.index("brew install llvm@22"))
+        self.assertIn('ln -sf "$zstd_static" "$static_dir/libzstd.a"', darwin)
+        self.assertIn(
+            'echo "LLVM_SYS_SYSTEM_LIBRARY_DIRS=${static_dir}" >> "$GITHUB_ENV"', darwin
+        )
+
     def test_linux_coverage_tests_export_process_ffi_symbols(self) -> None:
         self.assertTrue(AURA_COMPILER_BUILD.is_file())
         build_script = AURA_COMPILER_BUILD.read_text(encoding="utf-8")

@@ -34,6 +34,10 @@ in this file.
 
 ### Added
 
+- Release archives build `aura` with the LLVM code generator, on Linux
+  x86-64, macOS x86-64, and macOS arm64. Cranelift stays the default. The
+  Linux `aura` loads `libstdc++.so.6`, `libz.so.1`, and `libzstd.so.1`
+  besides glibc.
 - An `aura` built with the `llvm` cargo feature can generate native code
   with LLVM 22 when `AURA_NATIVE_CODEGEN=llvm` is set. Cranelift stays the
   default, and the native run cache keeps the two apart.

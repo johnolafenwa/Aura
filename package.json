@@ -51,7 +51,7 @@
     "postinstall": "npm run build:extension",
     "test:bench-direct-integer-loops": "python3 -m unittest scripts/test_bench_direct_integer_loops.py",
     "test:bench-binary-size": "python3 -m unittest scripts/test_bench_binary_size.py",
-    "test:native-binaries": "python3 -m unittest scripts/test_check_native_binaries.py",
+    "test:native-binaries": "python3 -m unittest scripts/test_check_native_binaries.py scripts/test_check_aura_libraries.py",
     "check:native-binaries": "python3 scripts/check-native-binaries.py",
     "test:bench-representation": "python3 -m unittest scripts/test_bench_representation.py",
     "test:rust-baselines": "python3 -m unittest scripts/test_rust_baselines.py && python3 scripts/rust_baselines.py",

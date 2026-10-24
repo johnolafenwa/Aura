@@ -14,6 +14,10 @@ Last updated: 2026-10-24
 - Done: 11a. The emitter tests that pin what the emitter defines and
   calls read the object before LLVM optimizes it, so they hold on both
   code generators.
+- Done: 11b. Release archives build `aura` with LLVM on all three
+  runners, Intel Macs included. A new check fails a release `aura` that
+  loads a library users may lack, such as Homebrew's zstd. The macOS
+  steps are unverified until CI and the Release workflow run them.
 
 ## Collection reduction builtins (complete)
 

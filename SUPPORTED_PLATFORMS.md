@@ -9,6 +9,12 @@ Aura 0.6 is a technical preview. It supports these hosts:
 | macOS 15 | Apple silicon | Yes | Yes | Yes, with Xcode command-line tools |
 | Windows 11 with WSL 2 and Ubuntu 24.04 | x86-64 | Inherits Linux behavior. No dedicated WSL runner | Use the Linux archive inside WSL | Yes, with `build-essential` inside WSL |
 
+## Libraries `aura` Loads
+
+The `aura` compiler links LLVM statically. On Linux it also loads
+`libstdc++.so.6`, `libz.so.1`, and `libzstd.so.1`, which every supported
+glibc distribution installs. On macOS it loads only system libraries.
+
 ## Windows
 
 Aura does not publish a native Windows executable. On Windows, run the Linux

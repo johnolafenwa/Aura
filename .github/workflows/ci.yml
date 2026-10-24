@@ -137,6 +137,9 @@ jobs:
       - name: Build release compiler and runtime
         run: cargo build --release --locked -p aura -p aura-runtime --features aura/llvm
 
+      - name: Check the libraries the compiler loads
+        run: python3 scripts/check-aura-libraries.py target/release/aura
+
       - name: Check native executable contents and sizes
         run: python3 scripts/check-native-binaries.py
 

@@ -95,3 +95,46 @@ ten pooled samples, in seconds:
   and `scripts/check-hygiene.sh` pass.
 - 11a changes no code outside tests. The switch compiles only in test
   builds, and a release build runs the passes as before.
+
+## Part 11b: LLVM In Every Release Build
+
+### Design
+
+- The Release workflow's `cli` job installs LLVM on all three runners and
+  builds `aura` with the `llvm` feature. `ubuntu-24.04` uses the pinned
+  Linux archive, and `macos-15` and `macos-15-intel` use Homebrew's
+  `llvm@22`, each for its own architecture. The release restores no
+  cache. Cranelift stays the default until 11c.
+- `install-llvm.sh` handles `Darwin-x86_64` as it handles `Darwin-arm64`.
+  Before `brew install`, it reads `brew info --json=v2` and stops when no
+  bottle fits this Mac, since building LLVM from source takes hours. An
+  older macOS bottle counts, as Homebrew uses one.
+- A static LLVM still names system libraries. On Linux the LLVM `aura`
+  loads `libstdc++.so.6`, `libz.so.1`, and `libzstd.so.1` besides glibc
+  and `libgcc_s`. `--as-needed` drops `libxml2`, which `llvm-config` also
+  names. On macOS, Homebrew's LLVM names Homebrew's zstd, a dylib under
+  the Homebrew prefix, which a Mac without Homebrew lacks. The smoke test
+  would not notice, since it runs on the build machine.
+  - `install-llvm.sh` links Homebrew's `libzstd.a` into a directory of its
+    own and exports it as `LLVM_SYS_SYSTEM_LIBRARY_DIRS`. llvm-sys passes
+    those directories to the linker before Homebrew's `lib`, and Apple's
+    linker takes the first directory that has the library, so `aura`
+    links zstd statically.
+  - `scripts/check-aura-libraries.py` reads `readelf -d` or `otool -L`
+    and fails on a library outside the system set. The Release workflow
+    runs it before packaging, and the native binaries CI job runs it on
+    every pull request, on Linux and macOS arm64.
+- SUPPORTED_PLATFORMS lists the libraries the Linux `aura` loads.
+
+### Verification
+
+- The six new library-check tests and the 35 release packaging tests
+  pass. Two packaging tests are new: one pins the Release steps and their
+  order, and one pins the macOS bottle check and the static zstd.
+- On Linux, the check passes on the release `aura` built at bb29b251
+  with LLVM.
+- Not verified here, since the container has no macOS: the static zstd
+  route, the bottle check on a real Homebrew, and the Release workflow as
+  a whole. The native binaries job checks the first on the next pull
+  request. Whether Homebrew still bottles `llvm@22` for Intel macOS is
+  unknown until the Release workflow runs on `macos-15-intel`.
