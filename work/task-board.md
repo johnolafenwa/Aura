@@ -10,7 +10,7 @@ Last updated: 2026-10-24
   `2026-10-24-batch-7-step-11-remove-cranelift.md`.
 - Measured first: a cold reference agent build takes 1.89 s on LLVM and
   0.79 s on Cranelift, over the 1.5 s phase 2 target. Hello world meets
-  its 0.6 s target on both. John decides how to close the gap.
+  its 0.6 s target on both. 11d closes the gap.
 - Done: 11a. The emitter tests that pin what the emitter defines and
   calls read the object before LLVM optimizes it, so they hold on both
   code generators.
@@ -22,8 +22,12 @@ Last updated: 2026-10-24
   `AURA_NATIVE_CODEGEN` are gone. The parity matrix compares LLVM with the
   MIR interpreter, the native cache format is v10, and the size gate
   checks that no user program links LLVM. `aura` is 66.3 MB on Linux.
-- Remaining: John's decision on the reference agent's build time, and a
-  first Release workflow run to confirm the macOS archives.
+- Done: 11d. Large programs split into codegen units that LLVM
+  optimizes and writes on parallel threads. A cold reference agent build
+  takes 0.96 s, inside the 1.5 s target. Small programs stay one unit and
+  build byte-identical executables. Details are in
+  `2026-10-24-batch-7-step-11d-parallel-codegen.md`.
+- Remaining: a first Release workflow run to confirm the macOS archives.
 
 ## Collection reduction builtins (complete)
 

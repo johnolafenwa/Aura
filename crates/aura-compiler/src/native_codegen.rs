@@ -45,6 +45,24 @@ pub fn emit_host_object_with_metadata(
     program_path: &str,
     program_source: &str,
 ) -> std::result::Result<Vec<u8>, String> {
+    let module = validated_for_emission(module)?;
+    NativeCodegen::with_validated_loans(&module, program_path, program_source)?.emit()
+}
+
+/// The program's objects. A large program splits into several objects,
+/// which LLVM writes on parallel threads; a small one is the one object
+/// [`emit_host_object_with_metadata`] writes.
+pub fn emit_host_objects_with_metadata(
+    module: &MirModule,
+    program_path: &str,
+    program_source: &str,
+) -> std::result::Result<Vec<Vec<u8>>, String> {
+    let module = validated_for_emission(module)?;
+    NativeCodegen::with_validated_loans(&module, program_path, program_source)?.emit_units()
+}
+
+/// `module` pruned, resolved, and validated, as the emitter takes it.
+fn validated_for_emission(module: &MirModule) -> std::result::Result<MirModule, String> {
     let mut module = reachability::prune_unreachable_functions(module);
     // Hand-built or older MIR may still spell resolved operations as member
     // calls; the pass is idempotent on lowered MIR.
@@ -57,8 +75,7 @@ pub fn emit_host_object_with_metadata(
         | crate::mir::BoundaryError::Ownership(error)
         | crate::mir::BoundaryError::Checks(error) => error,
     })?;
-    let context = NativeCodegen::with_validated_loans(&module, program_path, program_source)?;
-    context.emit()
+    Ok(module)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -802,7 +819,24 @@ impl<'a> NativeCodegen<'a> {
         })
     }
 
+    /// The program as one object.
     fn emit(mut self) -> std::result::Result<Vec<u8>, String> {
+        self.define_program()?;
+        self.take_module_backend()?
+            .finish()
+            .map_err(|error| format!("failed to emit direct backend object: {}", error))
+    }
+
+    /// The program as the objects of its codegen units.
+    fn emit_units(mut self) -> std::result::Result<Vec<Vec<u8>>, String> {
+        self.define_program()?;
+        self.take_module_backend()?
+            .finish_units()
+            .map_err(|error| format!("failed to emit direct backend object: {}", error))
+    }
+
+    /// Defines every function and data object of the program.
+    fn define_program(&mut self) -> std::result::Result<(), String> {
         for function in self
             .module
             .functions
@@ -826,11 +860,7 @@ impl<'a> NativeCodegen<'a> {
             self.define_cleanup_thunks(function)?;
         }
         self.define_ownership_fast_paths()?;
-        self.define_main_wrapper()?;
-        match self.take_module_backend()?.finish() {
-            Ok(bytes) => Ok(bytes),
-            Err(error) => Err(format!("failed to emit direct backend object: {}", error)),
-        }
+        self.define_main_wrapper()
     }
 
     /// Defines the module's retain and release.

@@ -7,7 +7,7 @@ use std::process::{self, Command};
 use aura_compiler::format::{format_source, FormatError};
 use aura_compiler::{
     analyze_path_source, check_path, check_path_with_source, complete_path_source,
-    emit_host_native_object_with_metadata, lower_path_to_checked_mir, lower_path_to_mir,
+    emit_host_native_objects_with_metadata, lower_path_to_checked_mir, lower_path_to_mir,
     lower_path_with_source_to_mir, parse_source,
     run_checked_mir_entry_with_stdout_sink_and_program_args,
     run_path_with_source_and_stdout_sink_and_program_args,
@@ -4086,16 +4086,26 @@ fn build_direct_native_binary_with_identity(
     }
 
     let native_runtime = ensure_native_runtime_artifacts()?;
-    let object_bytes = emit_host_native_object_with_metadata(mir, path, source)?;
-    let temp_object = temporary_direct_object_path(output_path);
+    let objects = emit_host_native_objects_with_metadata(mir, path, source)?;
+    let temp_objects = (0..objects.len())
+        .map(|unit| temporary_direct_object_path(output_path, unit))
+        .collect::<Vec<_>>();
+    let remove_temp_objects = || {
+        for temp_object in &temp_objects {
+            let _ = fs::remove_file(temp_object);
+        }
+    };
+    for (temp_object, object_bytes) in temp_objects.iter().zip(objects) {
+        if let Err(error) = fs::write(temp_object, object_bytes) {
+            remove_temp_objects();
+            return Err(format!(
+                "failed to write direct backend object `{}`: {}",
+                temp_object.display(),
+                error
+            ));
+        }
+    }
     let temp_staticlib = temporary_direct_staticlib_path(output_path);
-    fs::write(&temp_object, object_bytes).map_err(|error| {
-        format!(
-            "failed to write direct backend object `{}`: {}",
-            temp_object.display(),
-            error
-        )
-    })?;
     let archive_stamp_before = fs::metadata(&native_runtime.staticlib)
         .ok()
         .and_then(|metadata| runtime_archive_memo_stamp(&native_runtime.staticlib, &metadata));
@@ -4149,7 +4159,7 @@ fn build_direct_native_binary_with_identity(
     let cc = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
     let mut command = Command::new(cc);
     command
-        .arg(&temp_object)
+        .args(&temp_objects)
         .arg(&temp_staticlib)
         .arg("-o")
         .arg(output_path);
@@ -4162,7 +4172,7 @@ fn build_direct_native_binary_with_identity(
         .output()
         .map_err(|error| format!("failed to run native linker for direct backend: {}", error));
 
-    let _ = fs::remove_file(&temp_object);
+    remove_temp_objects();
     let _ = fs::remove_file(&temp_staticlib);
 
     let output = result?;
@@ -4211,16 +4221,17 @@ fn user_binary_link_args(os: &str) -> &'static [&'static str] {
     }
 }
 
-fn temporary_direct_object_path(output_path: &Path) -> PathBuf {
+fn temporary_direct_object_path(output_path: &Path, unit: usize) -> PathBuf {
     let file_name = output_path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("aura-output");
     let unique = format!(
-        "aura-direct-object-{}-{}-{}.o",
+        "aura-direct-object-{}-{}-{}-{}.o",
         file_name,
         std::process::id(),
-        system_time_nanos()
+        system_time_nanos(),
+        unit
     );
     std::env::temp_dir().join(unique)
 }

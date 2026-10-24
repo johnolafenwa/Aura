@@ -39,9 +39,13 @@ in this file.
   statically, so the release `aura` is about 66 MB. The Linux `aura`
   loads `libstdc++.so.6`, `libz.so.1`, and `libzstd.so.1` besides glibc.
   On macOS it loads only system libraries.
-- A cold build of a larger program takes longer: the reference agent
-  builds in 1.89 s instead of 0.79 s on the Linux x86-64 measurement
-  host. Hello world builds in about 0.45 s on both.
+- A cold build of a larger program takes longer than with Cranelift: the
+  reference agent builds in 0.96 s instead of 0.79 s on the Linux x86-64
+  measurement host. Hello world builds in about 0.4 s on both.
+- `aura build` splits a large program into codegen units and has LLVM
+  optimize and write them on parallel threads. That halves the reference
+  agent's cold build, from 1.91 s to 0.96 s. Small programs stay one unit
+  and build exactly as before. The executable is the same on every build.
 - The native cache format is `aura-native-cache-v10`, so programs cached
   by earlier versions rebuild once.
 - Building `aura` from source needs LLVM 22's static libraries.

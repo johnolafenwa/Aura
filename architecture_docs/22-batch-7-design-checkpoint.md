@@ -786,6 +786,32 @@ removal, twice each, alternating. Medians of ten cold builds, in seconds:
   17.8 MB with Cranelift alone. Every native binaries subject passes the
   size gate, and the gate checks that no user program links LLVM.
 
+### Step 11d Results
+
+Step 11d writes large programs as several codegen units, which threads
+optimize and write in parallel. The method and tables are in
+[the step 11d note](../work/2026-10-24-batch-7-step-11d-parallel-codegen.md).
+
+`scripts/bench-compile-time.py` measured the release `aura` before and
+after on the four-core Linux x86-64 container. Medians of ten cold builds,
+in seconds:
+
+| Program | Before | After | Phase 2 target |
+| --- | ---: | ---: | ---: |
+| Hello world | 0.410 | 0.404 | 0.6 |
+| Reference agent | 1.908 | 0.960 | 1.5 |
+| `unix_tls_roundtrip` | 1.069 | 0.927 | |
+
+- **The reference agent meets its build target**, at 0.96 s against
+  1.5 s. It splits into 8 units.
+- Hello world and the six phase 2 benchmark programs stay one unit, and
+  their executables are byte-identical to the ones before. Their
+  instruction counts do not change.
+- `unix_tls_roundtrip` splits into 3 units, but one function holds two
+  thirds of its weight, so it gains less.
+- The reference agent's executable grows by 18,040 bytes, or 1.0%, and
+  the TLS subject's by 6,496 bytes, inside the size gate.
+
 ## Owner Questions
 
 Each names the recommended default first.

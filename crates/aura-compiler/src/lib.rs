@@ -53,6 +53,7 @@ pub use mir_runtime::{
 pub use native_codegen::{
     emit_host_object as emit_host_native_object,
     emit_host_object_with_metadata as emit_host_native_object_with_metadata,
+    emit_host_objects_with_metadata as emit_host_native_objects_with_metadata,
 };
 pub use runtime_value::{RunOutput, Value};
 

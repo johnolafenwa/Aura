@@ -9,8 +9,8 @@ Code generation is the stage that turns an intermediate representation into mach
 In Aura, the direct backend:
 
 - takes `MirModule`
-- uses LLVM 22 to emit native code into an object file
-- links that object file against Aura's direct runtime
+- uses LLVM 22 to emit native code into object files, one per codegen unit
+- links those object files against Aura's direct runtime
 
 The code generator lives in [`native_codegen.rs`](../crates/aura-compiler/src/native_codegen.rs). The runtime ABI it targets lives in [`native_runtime.rs`](../crates/aura-runtime/src/native_runtime.rs).
 
@@ -378,6 +378,8 @@ defines two traits:
 
 - `ModuleBackend` declares functions and data, defines them, and writes the
   object file. A function definition takes a closure that builds the body.
+  `finish` writes one object. `finish_units` may write several, one per
+  codegen unit, and `aura build` links them all.
 - `FunctionBackend` builds one body: blocks with parameters, variables,
   stack slots, and one method per instruction kind the emitter uses, such
   as `iconst`, `call`, `brif`, `load`, and `fcmp`. A call returns its
@@ -437,6 +439,43 @@ constants. `finish` then lowers the whole object to LLVM IR in one context:
 Tests that pin which functions the emitter defines and which helpers it
 calls build their object with `without_optimization`, which skips the
 passes on one thread. The parity matrix runs the optimized objects.
+
+### Codegen units
+
+`aura build` calls `finish_units`, which splits a large object into
+codegen units, as rustc does. Each unit is its own LLVM module in its own
+context. Threads lower, optimize, and write one unit at a time, largest
+first, and the linker joins the objects.
+[`native_backend_llvm_units.rs`](../crates/aura-compiler/src/native_backend_llvm_units.rs)
+chooses the split:
+
+- A function's weight is the number of instructions the emitter recorded
+  for it. A module under 4,000 stays one unit, and that unit is the same
+  object `finish` writes. Hello world weighs about 110, and the six phase 2
+  benchmark programs 300 to 2,100, so they never split.
+- A larger module splits into one unit per 3,000, from 2 to 16 units.
+  Each unit takes a run of consecutive functions in declaration order, so
+  a source function stays with its thunks and its neighbours. Data goes to
+  the first unit that refers to it. The reference agent weighs about
+  21,000 and splits into 8 units.
+- A local function or data object that another unit refers to becomes a
+  hidden global, so the executable exports nothing new. A unit that calls a
+  function of at most 64 instructions in another unit, or one marked for
+  inlining, gets an `available_externally` copy, so LLVM can still inline
+  it. A unit that reads constant data of another unit gets a copy too, so
+  LLVM can still fold the loads. LLVM drops every copy before it writes the
+  object. Writable data is never copied.
+- The split depends only on the module, never on the host's cores or on
+  thread scheduling. Each unit's object comes from its own context, so
+  the same program gives the same objects and the same executable on every
+  run. `direct_objects_are_identical_across_repeated_builds` checks one
+  object, and the codegen unit tests and the reference agent CLI test check
+  split builds.
+
+Split programs lose some cross-unit optimization: LLVM cannot inline a
+large function of another unit, specialize its arguments, or change its
+calling convention. Forcing the six benchmark programs into two or four
+units moved their instruction counts by at most 0.15%.
 
 [`scripts/install-llvm.sh`](../scripts/install-llvm.sh) installs the
 static LLVM libraries `aura-compiler` links. See
