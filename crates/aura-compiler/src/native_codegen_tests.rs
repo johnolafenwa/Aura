@@ -14456,3 +14456,47 @@ def main():
         assert!(referenced.contains(required), "{required}: {referenced:?}");
     }
 }
+
+#[test]
+fn int64_keys_reach_the_runtime_without_a_box() {
+    let source = r#"
+def main():
+    mut seen = set[int64]()
+    mut counts: dict[int64, str] = {}
+    mut i = 0
+    while i < 20:
+        seen.add(i * 3)
+        counts[i] = "x"
+        i += 1
+    mut hits = 0
+    if 9 in seen:
+        hits += 1
+    if 7 in counts:
+        hits += 1
+    match counts.get(4):
+        case Lookup.Found(text):
+            hits += len(text)
+        case Lookup.Missing:
+            hits -= 1
+    print(hits)
+"#;
+    let mir = lower_source_to_mir(source).expect("the int64 keys should lower");
+    let object = emit_host_object(&mir).expect("the int64 keys should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    for required in [
+        "aura_direct_set_insert_int64_in_place",
+        "aura_direct_set_contains_int64",
+        "aura_direct_map_contains_int64",
+        "aura_direct_map_get_int64_payload",
+    ] {
+        assert!(referenced.contains(required), "{required}: {referenced:?}");
+    }
+    for boxed in [
+        "aura_direct_set_insert_in_place",
+        "aura_direct_set_contains",
+        "aura_direct_map_contains_key",
+        "aura_direct_map_get_payload",
+    ] {
+        assert!(!referenced.contains(boxed), "{boxed}: {referenced:?}");
+    }
+}

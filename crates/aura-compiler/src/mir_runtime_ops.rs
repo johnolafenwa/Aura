@@ -365,7 +365,10 @@ impl MirLoanValidationContext<'_> {
 ///   push and read the element without a box;
 /// - `get` with a literal key on a dict with `str` keys looks the key up
 ///   without a box;
-/// - `contains` on a set of `int64` searches for the needle without a box;
+/// - `contains` and `add` on a set of `int64` search for and add the
+///   element without a box;
+/// - `get` and `in` on a dict with `int64` keys search for the key without
+///   a box;
 /// - a queue or task call that binds `timeout` takes the timeout form.
 pub(crate) fn specialized_member_op(op: RuntimeOp, receiver: &Type, args: &[MirArg]) -> RuntimeOp {
     let element = first_type_arg(Some(receiver));
@@ -375,6 +378,13 @@ pub(crate) fn specialized_member_op(op: RuntimeOp, receiver: &Type, args: &[MirA
         (RuntimeOp::List(ListOp::Index), Some(kind)) => RuntimeOp::List(ListOp::IndexScalar(kind)),
         (RuntimeOp::Set(SetOp::Contains), Some(ScalarElement::Int64)) => {
             RuntimeOp::Set(SetOp::ContainsInt64)
+        }
+        (RuntimeOp::Set(SetOp::Add), Some(ScalarElement::Int64)) => RuntimeOp::Set(SetOp::AddInt64),
+        (RuntimeOp::Dict(DictOp::Get), Some(ScalarElement::Int64)) => {
+            RuntimeOp::Dict(DictOp::GetInt64)
+        }
+        (RuntimeOp::Dict(DictOp::ContainsKey), Some(ScalarElement::Int64)) => {
+            RuntimeOp::Dict(DictOp::ContainsKeyInt64)
         }
         (RuntimeOp::Dict(DictOp::Get), _)
             if element == Some(Type::named("str"))

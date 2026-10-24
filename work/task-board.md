@@ -126,6 +126,11 @@ Last updated: 2026-10-23
   literal in generated code. With LLVM, `string_list_scan` runs in 33
   million instructions instead of 129 million, 2.5 times Rust. Details
   are in `2026-10-24-batch-7-step-10c-strings.md`.
+- In progress: 10e, scalar-key hashing. `dict` and `set` hash a scalar
+  or `str` key with one SipHash write, and `int64` keys reach the runtime
+  without a box. With LLVM, `set_insert_contains` runs in 59 million
+  instructions instead of 135 million, 1.9 times Rust. Details are in
+  `2026-10-24-batch-7-step-10e-scalar-keys.md`.
 
 ## Aura 0.6.0 preview release (complete)
 

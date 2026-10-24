@@ -214,6 +214,7 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::VecElementMapGetStrPayload,
             RuntimeFn::MapGetPayload,
             RuntimeFn::MapGetStrPayload,
+            RuntimeFn::MapGetInt64Payload,
             RuntimeFn::SetRemoveInPlace,
         ]
     );

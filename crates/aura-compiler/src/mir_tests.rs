@@ -15115,7 +15115,7 @@ fn step8d_collection_members_lower_to_specialized_runtime_ops() {
         RuntimeOp::Dict(DictOp::SetIndex),
         RuntimeOp::Dict(DictOp::Index),
         RuntimeOp::Dict(DictOp::ContainsKey),
-        RuntimeOp::Set(SetOp::Add),
+        RuntimeOp::Set(SetOp::AddInt64),
         RuntimeOp::Set(SetOp::ContainsInt64),
         RuntimeOp::Array(ArrayOp::Clone),
         RuntimeOp::Array(ArrayOp::Sum),

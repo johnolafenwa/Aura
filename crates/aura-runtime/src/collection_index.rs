@@ -19,6 +19,7 @@ use std::sync::{Arc, OnceLock};
 
 use hashbrown::HashTable;
 
+use crate::integer::{IntegerRepresentation, IntegerValue};
 use crate::runtime_value::{nominal_runtime_base_name, Value, DIRECT_RUNTIME_TYPE_FIELD};
 
 /// Collections with at most this many entries scan instead of hashing.
@@ -35,20 +36,32 @@ fn hash_state() -> &'static RandomState {
 
 /// A hash of `value` that agrees with `Value`'s equality.
 pub fn hash_value(value: &Value) -> u64 {
-    let mut hasher = hash_state().build_hasher();
-    // A scalar or `str` key, the common case, writes what the walk below
-    // would write without allocating its stack.
+    // A scalar or `str` key, the common case, hashes with one write. The
+    // walk below hashes every other key, so the two never meet: equal
+    // values are of one kind and take the same path.
     let mut root = value;
     while let Value::Union(union) = root {
         root = &union.payload;
     }
-    if hash_scalar(root, &mut hasher) {
-        return hasher.finish();
-    }
-    if let Value::String(text) = root {
-        std::mem::discriminant(root).hash(&mut hasher);
-        text.hash(&mut hasher);
-        return hasher.finish();
+    let mut hasher = hash_state().build_hasher();
+    match root {
+        Value::Int(integer) => {
+            write_integer(integer, &mut hasher);
+            return hasher.finish();
+        }
+        Value::Float(float) => {
+            hasher.write_u64(float_word(*float));
+            return hasher.finish();
+        }
+        Value::Bool(flag) => {
+            hasher.write_u8(u8::from(*flag));
+            return hasher.finish();
+        }
+        Value::String(text) => {
+            hasher.write(text.as_bytes());
+            return hasher.finish();
+        }
+        _ => {}
     }
     let mut pending = vec![root];
     let mut budget = HASH_NODE_BUDGET;
@@ -129,9 +142,59 @@ pub fn hash_value(value: &Value) -> u64 {
 /// [`hash_value`] of a `str` value holding `text`, without building one.
 pub fn hash_str(text: &str) -> u64 {
     let mut hasher = hash_state().build_hasher();
-    std::mem::discriminant(&Value::String(String::new())).hash(&mut hasher);
-    text.hash(&mut hasher);
+    hasher.write(text.as_bytes());
     hasher.finish()
+}
+
+/// [`hash_value`] of an integer value equal to `integer`, of any width,
+/// without building one.
+pub fn hash_i64(integer: i64) -> u64 {
+    let mut hasher = hash_state().build_hasher();
+    hasher.write_i64(integer);
+    hasher.finish()
+}
+
+/// Writes an integer key as one word. Integers of different widths compare
+/// equal when their values do, so the word depends on the value alone: a
+/// value that fits in `i64` writes that `i64`, and any other value writes
+/// its 128 bits.
+#[inline(always)]
+fn write_integer(integer: &IntegerValue, hasher: &mut impl Hasher) {
+    match integer.representation() {
+        IntegerRepresentation::Signed(wide) => match i64::try_from(wide) {
+            Ok(word) => hasher.write_i64(word),
+            Err(_) => hasher.write_u128(wide as u128),
+        },
+        IntegerRepresentation::Unsigned(wide) => match i64::try_from(wide) {
+            Ok(word) => hasher.write_i64(word),
+            Err(_) => hasher.write_u128(wide),
+        },
+    }
+}
+
+/// The word a `float` key hashes as. `0.0 == -0.0`, so both are zero. NaN
+/// never equals anything, so its bits are as good as any word.
+fn float_word(float: f64) -> u64 {
+    if float == 0.0 {
+        0
+    } else {
+        float.to_bits()
+    }
+}
+
+/// Whether `key` is an integer equal to `integer`. A union equals its
+/// active member.
+fn key_is_i64(mut key: &Value, integer: i64) -> bool {
+    while let Value::Union(union) = key {
+        key = &union.payload;
+    }
+    let Value::Int(key) = key else {
+        return false;
+    };
+    match key.representation() {
+        IntegerRepresentation::Signed(wide) => wide == i128::from(integer),
+        IntegerRepresentation::Unsigned(wide) => integer >= 0 && wide == integer as u128,
+    }
 }
 
 /// Whether `key` equals a `str` value holding `text`. A union equals its
@@ -154,13 +217,7 @@ fn hash_scalar(value: &Value, hasher: &mut impl Hasher) -> bool {
         }
         Value::Float(float) => {
             std::mem::discriminant(value).hash(hasher);
-            // `0.0 == -0.0`, so both hash as zero. NaN never equals
-            // anything, so its bits are as good as any hash.
-            if *float == 0.0 {
-                0u64.hash(hasher);
-            } else {
-                float.to_bits().hash(hasher);
-            }
+            float_word(*float).hash(hasher);
         }
         Value::Bool(flag) => {
             std::mem::discriminant(value).hash(hasher);
@@ -358,34 +415,48 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
 
     /// The position of the entry whose key equals `key`.
     pub fn position(&self, key: &Value) -> Option<usize> {
-        match &self.storage {
-            Storage::Small(entries) => entries.iter().position(|entry| entry.key() == key),
-            Storage::Large(large) => {
-                let hash = hash_value(key);
-                large
-                    .index
-                    .find(hash, |&(entry_hash, position)| {
-                        entry_hash == hash && large.entries[position].key() == key
-                    })
-                    .map(|&(_, position)| position)
-            }
-        }
+        self.probe(|| hash_value(key), |candidate| candidate == key)
+            .0
     }
 
     /// [`Self::position`] of a `str` key holding `text`, without building it.
     pub fn position_str(&self, text: &str) -> Option<usize> {
+        self.probe(|| hash_str(text), |candidate| key_is_str(candidate, text))
+            .0
+    }
+
+    /// [`Self::position`] of an integer key equal to `integer`, without
+    /// building it.
+    pub fn position_i64(&self, integer: i64) -> Option<usize> {
+        self.probe(
+            || hash_i64(integer),
+            |candidate| key_is_i64(candidate, integer),
+        )
+        .0
+    }
+
+    /// The position of the entry whose key `matches`, and the key's hash
+    /// when the collection hashed it. A small collection scans and hashes
+    /// nothing. `hash` is the hash of every key that `matches`.
+    #[inline(always)]
+    fn probe(
+        &self,
+        hash: impl FnOnce() -> u64,
+        matches: impl Fn(&Value) -> bool,
+    ) -> (Option<usize>, Option<u64>) {
         match &self.storage {
-            Storage::Small(entries) => entries
-                .iter()
-                .position(|entry| key_is_str(entry.key(), text)),
+            Storage::Small(entries) => {
+                (entries.iter().position(|entry| matches(entry.key())), None)
+            }
             Storage::Large(large) => {
-                let hash = hash_str(text);
-                large
+                let hash = hash();
+                let position = large
                     .index
                     .find(hash, |&(entry_hash, position)| {
-                        entry_hash == hash && key_is_str(large.entries[position].key(), text)
+                        entry_hash == hash && matches(large.entries[position].key())
                     })
-                    .map(|&(_, position)| position)
+                    .map(|&(_, position)| position);
+                (position, Some(hash))
             }
         }
     }
@@ -400,6 +471,11 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
 
     /// Appends an entry whose key the caller knows is absent.
     pub fn push_new(&mut self, entry: T) {
+        self.push_new_hashed(entry, None);
+    }
+
+    /// [`Self::push_new`] with the key's hash when a probe already has it.
+    fn push_new_hashed(&mut self, entry: T, hash: Option<u64>) {
         match &mut self.storage {
             Storage::Small(entries) => {
                 let entries = Arc::make_mut(entries);
@@ -411,7 +487,7 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
             Storage::Large(large) => {
                 let large = Arc::make_mut(large);
                 let position = large.entries.len();
-                let hash = hash_value(entry.key());
+                let hash = hash.unwrap_or_else(|| hash_value(entry.key()));
                 large.entries.push(entry);
                 large
                     .index
@@ -520,6 +596,12 @@ impl DictEntries {
             .map(|position| &self.entries()[position].1)
     }
 
+    /// [`Self::value_of`] an integer key equal to `integer`.
+    pub fn value_of_i64(&self, integer: i64) -> Option<&Value> {
+        self.position_i64(integer)
+            .map(|position| &self.entries()[position].1)
+    }
+
     /// The value at `position`, for writing.
     pub fn value_at_mut(&mut self, position: usize) -> &mut Value {
         &mut self.entries_mut()[position].1
@@ -528,13 +610,13 @@ impl DictEntries {
     /// Stores `value` under `key`. An equal key keeps its slot and its
     /// original key, and the replaced value is returned.
     pub fn insert(&mut self, key: Value, value: Value) -> Option<Value> {
-        match self.position(&key) {
-            Some(position) => Some(std::mem::replace(
+        match self.probe(|| hash_value(&key), |candidate| *candidate == key) {
+            (Some(position), _) => Some(std::mem::replace(
                 &mut self.entries_mut()[position].1,
                 value,
             )),
-            None => {
-                self.push_new((key, value));
+            (None, hash) => {
+                self.push_new_hashed((key, value), hash);
                 None
             }
         }
@@ -544,11 +626,28 @@ impl DictEntries {
 impl SetElements {
     /// Adds `element` unless an equal one is present. Returns whether it was added.
     pub fn insert(&mut self, element: Value) -> bool {
-        if self.contains_key(&element) {
-            return false;
+        match self.probe(|| hash_value(&element), |candidate| *candidate == element) {
+            (Some(_), _) => false,
+            (None, hash) => {
+                self.push_new_hashed(element, hash);
+                true
+            }
         }
-        self.push_new(element);
-        true
+    }
+
+    /// [`Self::insert`] of `int64` `integer`, which is hashed and compared
+    /// before a value is built for it.
+    pub fn insert_i64(&mut self, integer: i64) -> bool {
+        match self.probe(
+            || hash_i64(integer),
+            |candidate| key_is_i64(candidate, integer),
+        ) {
+            (Some(_), _) => false,
+            (None, hash) => {
+                self.push_new_hashed(Value::Int(IntegerValue::from_i64(integer)), hash);
+                true
+            }
+        }
     }
 }
 

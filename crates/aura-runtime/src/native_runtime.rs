@@ -8205,6 +8205,25 @@ pub extern "C-unwind" fn aura_direct_map_get_str_payload(
     })
 }
 
+/// `aura_direct_map_get` for an `int64` key, which is hashed and compared
+/// without a box.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_get_int64(
+    map: *mut OpaqueValue,
+    key: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| with_map(map, |map| boxed_map_lookup(map.entries.value_of_i64(key))))
+}
+
+/// `aura_direct_map_get_int64`, as the found value's own box or null.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_get_int64_payload(
+    map: *mut OpaqueValue,
+    key: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| with_map(map, |map| boxed_map_payload(map.entries.value_of_i64(key))))
+}
+
 /// Turns an owned `Lookup` into the found value's own box, or null for
 /// `Lookup.Missing`. Generated code uses it when a lookup it keeps in that
 /// form came from a path that builds the `Lookup`.
@@ -8327,6 +8346,15 @@ pub extern "C-unwind" fn aura_direct_map_contains_key(
         i64::from(with_map(map, |map| unsafe {
             with_value(key, |key| map.entries.contains_key(key))
         }))
+    })
+}
+
+/// `aura_direct_map_contains_key` for an `int64` key, which is hashed and
+/// compared without a box.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_contains_int64(map: *mut OpaqueValue, key: i64) -> i64 {
+    task_runtime_boundary(|| {
+        i64::from(with_map(map, |map| map.entries.position_i64(key).is_some()))
     })
 }
 
@@ -8978,8 +9006,27 @@ pub extern "C-unwind" fn aura_direct_set_contains(
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_set_contains_int64(set: *mut OpaqueValue, value: i64) -> i64 {
     task_runtime_boundary(|| {
-        let needle = Value::Int(IntegerValue::from_i64(value));
-        i64::from(with_set(set, |set| set.elements.contains_key(&needle)))
+        i64::from(with_set(set, |set| {
+            set.elements.position_i64(value).is_some()
+        }))
+    })
+}
+
+/// `aura_direct_set_insert_in_place` for an `int64` element, which is
+/// hashed and compared before it is built and never goes in a box.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_set_insert_int64_in_place(
+    set: *mut OpaqueValue,
+    value: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let inserted = with_set_mut(set, |set| {
+            if is_unknown_runtime_type(&set.element_type) {
+                set.element_type = Type::named("int64");
+            }
+            set.elements.insert_i64(value)
+        });
+        i64::from(inserted)
     })
 }
 

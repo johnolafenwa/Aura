@@ -160,6 +160,14 @@ in this file.
   instead of 129 million. Literal text that is all ASCII is no longer
   validated as UTF-8 on every use, and an element compared with a `str`
   value skips the general comparison.
+- `dict` and `set` hash an integer, float, bool, or `str` key with one
+  write to the keyed SipHash hasher. Integers of different widths still
+  hash alike when their values are equal. An insert hashes its key once.
+  `add` and `in` on a `set[int64]`, and `get` and `in` on a dict with
+  `int64` keys, pass the key without a box. With LLVM,
+  `set_insert_contains` runs in 59 million instructions instead of 135
+  million, and `dict_build_get` in 349 million instead of 376 million.
+  Iteration order is unchanged.
 
 ### Fixed
 

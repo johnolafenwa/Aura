@@ -22,7 +22,7 @@ pub(super) fn is_dict_get(value: &Rvalue) -> bool {
         value,
         Rvalue::Call {
             callee: CallTarget::Runtime {
-                op: RuntimeOp::Dict(DictOp::Get | DictOp::GetStr),
+                op: RuntimeOp::Dict(DictOp::Get | DictOp::GetStr | DictOp::GetInt64),
                 ..
             },
             ..

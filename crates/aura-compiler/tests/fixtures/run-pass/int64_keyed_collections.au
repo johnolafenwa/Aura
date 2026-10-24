@@ -1,0 +1,49 @@
+def lookup(table: dict[int64, str], key: int64) -> str:
+    match table.get(key):
+        case Lookup.Found(text):
+            return text.clone()
+        case Lookup.Missing:
+            return "-"
+
+
+def main():
+    mut seen = set[int64]()
+    mut i = 0
+    while i < 40:
+        seen.add(i * 5 % 37 - 18)
+        i += 1
+    seen.add(-9223372036854775807 - 1)
+    seen.add(9223372036854775807)
+    seen.add(0)
+    print(seen.len())
+    print(-18 in seen)
+    print(-19 in seen)
+    print(9223372036854775807 in seen)
+    mut order = 0
+    for value in seen:
+        if value > -1000 and value < 1000:
+            order = (order * 31 + value + 1000) % 1000003
+    print(order)
+
+    mut names: dict[int64, str] = {}
+    mut k = 0
+    while k < 30:
+        names[k * k - 100] = f"n{k}"
+        k += 1
+    print(lookup(names, -100))
+    print(lookup(names, 741))
+    print(lookup(names, 742))
+    print(-99 in names)
+    print(-64 in names)
+    names[-64] = "again"
+    print(lookup(names, -64))
+    print(names.keys()[6])
+    mut tables = [names, {7: "seven"}]
+    mut found = 0
+    for table in tables:
+        match table.get(7):
+            case Lookup.Found(text):
+                found += len(text)
+            case Lookup.Missing:
+                found += 100
+    print(found)

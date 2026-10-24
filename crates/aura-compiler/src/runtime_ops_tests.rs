@@ -43,7 +43,9 @@ fn sample_receiver(op: RuntimeOp) -> Type {
         ) => named("list", vec![scalar_element_type(kind)]),
         RuntimeOp::List(_) | RuntimeOp::Span(_) => named("list", vec![Type::named("str")]),
         RuntimeOp::Dict(_) => named("dict", vec![Type::named("str"), Type::named("int64")]),
-        RuntimeOp::Set(SetOp::ContainsInt64) => named("set", vec![Type::named("int64")]),
+        RuntimeOp::Set(SetOp::ContainsInt64 | SetOp::AddInt64) => {
+            named("set", vec![Type::named("int64")])
+        }
         RuntimeOp::Set(_) => named("set", vec![Type::named("str")]),
         RuntimeOp::Array(_) => named("Array", vec![Type::named("float64")]),
         RuntimeOp::Function(_) | RuntimeOp::Print(_) | RuntimeOp::Host(_) => {
@@ -551,6 +553,15 @@ fn collection_ops_specialize_by_element_type_and_literal_key() {
         specialized_member_op(contains, &named("set", vec![Type::named("bool")]), &[]),
         contains
     );
+    let add = RuntimeOp::Set(SetOp::Add);
+    assert_eq!(
+        specialized_member_op(add, &named("set", vec![Type::named("int64")]), &[]),
+        RuntimeOp::Set(SetOp::AddInt64)
+    );
+    assert_eq!(
+        specialized_member_op(add, &named("set", vec![Type::named("int32")]), &[]),
+        add
+    );
 
     let get = RuntimeOp::Dict(DictOp::Get);
     let text_keys = named("dict", vec![Type::named("str"), Type::named("int64")]);
@@ -562,7 +573,21 @@ fn collection_ops_specialize_by_element_type_and_literal_key() {
     );
     assert_eq!(specialized_member_op(get, &text_keys, &place), get);
     let int_keys = named("dict", vec![Type::named("int64"), Type::named("int64")]);
-    assert_eq!(specialized_member_op(get, &int_keys, &literal), get);
+    assert_eq!(
+        specialized_member_op(get, &int_keys, &place),
+        RuntimeOp::Dict(DictOp::GetInt64)
+    );
+    let contains_key = RuntimeOp::Dict(DictOp::ContainsKey);
+    assert_eq!(
+        specialized_member_op(contains_key, &int_keys, &place),
+        RuntimeOp::Dict(DictOp::ContainsKeyInt64)
+    );
+    assert_eq!(
+        specialized_member_op(contains_key, &text_keys, &place),
+        contains_key
+    );
+    let int32_keys = named("dict", vec![Type::named("int32"), Type::named("int64")]);
+    assert_eq!(specialized_member_op(get, &int32_keys, &place), get);
 }
 
 #[test]
