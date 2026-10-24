@@ -1,6 +1,19 @@
 # Task Board
 
-Last updated: 2026-10-23
+Last updated: 2026-10-24
+
+## Batch 7 step 11: LLVM as the only native backend (in progress)
+
+- Target: remove the Cranelift code generator so LLVM 22 is the only
+  native backend, as John decided on 2026-10-24. The MIR interpreter
+  stays for `aura run` and parity. Details are in
+  `2026-10-24-batch-7-step-11-remove-cranelift.md`.
+- Measured first: a cold reference agent build takes 1.89 s on LLVM and
+  0.79 s on Cranelift, over the 1.5 s phase 2 target. Hello world meets
+  its 0.6 s target on both. John decides how to close the gap.
+- Done: 11a. The emitter tests that pin what the emitter defines and
+  calls read the object before LLVM optimizes it, so they hold on both
+  code generators.
 
 ## Collection reduction builtins (complete)
 

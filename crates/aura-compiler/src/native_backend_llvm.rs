@@ -274,9 +274,12 @@ impl LlvmModule {
     fn object_for(&self, machine: &TargetMachine) -> Result<Vec<u8>, String> {
         let context = Context::create();
         let module = self.lower(&context, machine)?;
-        if let Err(error) = module.run_passes(PASS_PIPELINE, machine, PassBuilderOptions::create())
-        {
-            return Err(format!("LLVM failed to optimize the module: {error}"));
+        if super::optimizes() {
+            if let Err(error) =
+                module.run_passes(PASS_PIPELINE, machine, PassBuilderOptions::create())
+            {
+                return Err(format!("LLVM failed to optimize the module: {error}"));
+            }
         }
         place_functions_in_own_sections(&module, &machine.get_triple());
         match machine.write_to_memory_buffer(&module, FileType::Object) {

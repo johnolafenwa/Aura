@@ -65,6 +65,35 @@ fn code_generator_for(setting: Option<&OsStr>) -> Result<CodeGenerator, String> 
     ))
 }
 
+#[cfg(test)]
+thread_local! {
+    static UNOPTIMIZED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `emit` with the code generator's optimizer off on this thread, so a
+/// test reads the object the emitter asked for: every function it defined
+/// and every call it built. Cranelift has no optimizer to turn off.
+#[cfg(test)]
+pub(crate) fn without_optimization<R>(emit: impl FnOnce() -> R) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            UNOPTIMIZED.with(|unoptimized| unoptimized.set(self.0));
+        }
+    }
+    let _restore = Restore(UNOPTIMIZED.with(|unoptimized| unoptimized.replace(true)));
+    emit()
+}
+
+/// Whether the code generator runs its optimizer on this thread's objects.
+#[cfg(feature = "llvm")]
+fn optimizes() -> bool {
+    #[cfg(test)]
+    return !UNOPTIMIZED.with(std::cell::Cell::get);
+    #[cfg(not(test))]
+    true
+}
+
 /// The module backend for the host, which the emitter writes one object
 /// through.
 pub(crate) fn host_module_backend() -> Result<Box<dyn ModuleBackend>, String> {
