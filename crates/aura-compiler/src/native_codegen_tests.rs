@@ -14293,9 +14293,13 @@ def main() -> int32:
         !referenced.contains("aura_direct_format_begin"),
         "{referenced:?}"
     );
+    // Both f-strings begin with `format_begin_i64`. Counting against it keeps
+    // the check true where each call takes two relocations, as on arm64
+    // Mach-O, which loads a callee's address from the GOT.
+    let begins = object_referenced_symbol_occurrences(&object, "aura_direct_format_begin_i64");
     assert_eq!(
-        object_referenced_symbol_occurrences(&object, "aura_direct_format_push_i64"),
-        1,
+        2 * object_referenced_symbol_occurrences(&object, "aura_direct_format_push_i64"),
+        begins,
         "only the second f-string's later `int64` part should push"
     );
 }
