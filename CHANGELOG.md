@@ -139,8 +139,9 @@ in this file.
   confined to its thread and the running task owns it. Each task keeps the
   values it owns in a list linked through their headers instead of a hash
   map, so a task that fails or is cancelled still frees every value it
-  held. With LLVM, `dict_build_get` runs in 854 million instructions
-  instead of 935 million, and `record_field_reads` in 623 million instead
+  held. A freed value box goes to a small per-thread cache that the next
+  box reuses. With LLVM, `dict_build_get` runs in 765 million instructions
+  instead of 935 million, and `record_field_reads` in 571 million instead
   of 690 million.
 
 ### Fixed

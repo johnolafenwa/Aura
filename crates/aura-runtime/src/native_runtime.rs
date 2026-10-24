@@ -133,6 +133,8 @@ pub struct DirectFfiCallSpec {
     pub result: DirectFfiType,
 }
 
+#[path = "native_box_cache.rs"]
+mod box_cache;
 #[path = "native_frame_stack.rs"]
 mod frame_stack;
 #[path = "native_owned_values.rs"]
@@ -1666,7 +1668,7 @@ fn boxed_typed_value(value: Value, runtime_type_name: &str) -> *mut OpaqueValue 
 }
 
 fn boxed_value_with_type(value: Value, runtime_type_name: Option<Arc<str>>) -> *mut OpaqueValue {
-    let value = Box::into_raw(Box::new(OpaqueValue::new(value, runtime_type_name)));
+    let value = box_cache::allocate(OpaqueValue::new(value, runtime_type_name));
     #[cfg(coverage)]
     DIRECT_VALUE_LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
     crate::runtime_value::representation_stats::note_opaque_box();
@@ -1752,7 +1754,7 @@ unsafe fn free_direct_value(value: *mut OpaqueValue) {
         debug_assert!(previous > 0, "direct runtime live-value counter underflow");
     }
     // SAFETY: the caller's contract.
-    drop(unsafe { Box::from_raw(value) });
+    unsafe { box_cache::free(value) };
 }
 
 unsafe fn with_value<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&Value) -> T) -> T {

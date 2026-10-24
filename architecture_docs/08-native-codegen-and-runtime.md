@@ -174,6 +174,9 @@ is cancelled, the runtime releases every reference in it, so no box leaks.
   `DirectOwnershipLayout`. The program checks its fingerprint at startup.
 - **Counters.** While the representation counters count ownership, no
   value links, so every retain and release reaches the runtime.
+- **Box cache.** Each thread keeps up to 256 freed boxes in
+  `native_box_cache.rs`, and boxing a value takes one before it calls the
+  allocator.
 
 ## A tiny direct-backend design example
 

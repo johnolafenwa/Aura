@@ -57,29 +57,40 @@ instructions for `record_field_reads` and `dict_build_get`.
   runtime. The main wrapper passes its fingerprint to
   `aura_direct_check_ownership_layout` at startup.
 
+### The box cache
+
+- A second commit adds `native_box_cache.rs`, a per-thread list of up to
+  256 freed boxes. Boxing a value takes one from the list before it calls
+  the allocator. glibc keeps only seven blocks of each size in its own
+  per-thread cache, so most frees in these programs went to its slower
+  bins.
+- The cache is a separate commit so it can be reviewed or dropped on its
+  own. It changes no semantics.
+
 ## Measurements
 
 Callgrind instructions for one whole run, startup included, from release
-builds. Before is `fb4caf82`, which is 10a. The method matches 10a.
+builds. Before is `fb4caf82`, which is 10a. Ledger is the first commit
+alone, and Cache adds the box cache. The method matches 10a.
 
-| Code generator | Program | Before | After | Change |
-| --- | --- | ---: | ---: | ---: |
-| Cranelift | `fib(30)` | 210,620,234 | 210,615,352 | 0.0% |
-| Cranelift | `int_list_sum` | 73,114,035 | 73,121,391 | 0.0% |
-| Cranelift | `string_list_scan` | 150,922,502 | 147,641,494 | -2.2% |
-| Cranelift | `dict_build_get` | 940,411,061 | 875,273,027 | -6.9% |
-| Cranelift | `set_insert_contains` | 148,897,021 | 144,245,014 | -3.1% |
-| Cranelift | `record_field_reads` | 693,162,094 | 640,871,858 | -7.5% |
-| LLVM | `fib(30)` | 115,028,528 | 115,032,275 | 0.0% |
-| LLVM | `int_list_sum` | 42,212,925 | 42,219,042 | 0.0% |
-| LLVM | `string_list_scan` | 137,548,742 | 133,436,344 | -3.0% |
-| LLVM | `dict_build_get` | 935,257,929 | 854,220,873 | -8.7% |
-| LLVM | `set_insert_contains` | 144,648,296 | 138,854,516 | -4.0% |
-| LLVM | `record_field_reads` | 690,486,333 | 623,169,779 | -9.7% |
+| Code generator | Program | Before | Ledger | Cache | Ledger change | Cache change |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Cranelift | `fib(30)` | 210,620,234 | 210,615,352 | 210,615,361 | 0.0% | 0.0% |
+| Cranelift | `int_list_sum` | 73,114,035 | 73,121,391 | 73,116,931 | 0.0% | 0.0% |
+| Cranelift | `string_list_scan` | 150,922,502 | 147,641,494 | 145,123,600 | -2.2% | -3.8% |
+| Cranelift | `dict_build_get` | 940,411,061 | 875,273,027 | 785,861,944 | -6.9% | -16.4% |
+| Cranelift | `set_insert_contains` | 148,897,021 | 144,245,014 | 141,932,235 | -3.1% | -4.7% |
+| Cranelift | `record_field_reads` | 693,162,094 | 640,871,858 | 588,291,778 | -7.5% | -15.1% |
+| LLVM | `fib(30)` | 115,028,528 | 115,032,275 | 115,026,843 | 0.0% | 0.0% |
+| LLVM | `int_list_sum` | 42,212,925 | 42,219,042 | 42,211,215 | 0.0% | 0.0% |
+| LLVM | `string_list_scan` | 137,548,742 | 133,436,344 | 130,914,297 | -3.0% | -4.8% |
+| LLVM | `dict_build_get` | 935,257,929 | 854,220,873 | 764,796,072 | -8.7% | -18.2% |
+| LLVM | `set_insert_contains` | 144,648,296 | 138,854,516 | 136,518,947 | -4.0% | -5.6% |
+| LLVM | `record_field_reads` | 690,486,333 | 623,169,779 | 570,595,535 | -9.7% | -17.4% |
 
 - The plan asked for 25% fewer instructions in `dict_build_get` and
-  `record_field_reads`. 10b gives 9% and 10% on LLVM, which misses the
-  target.
+  `record_field_reads`. The ledger alone gives 9% and 10% on LLVM, and
+  the cache brings them to 18% and 17%. Both miss the target.
 - The plan overestimated what the ledger cost. Before 10b, registering a
   value and the runtime boundary around retain and release took about 15%
   of each run: 151 million instructions in `dict_build_get` and 104
@@ -94,17 +105,16 @@ builds. Before is `fb4caf82`, which is 10a. The method matches 10a.
   the inline release rarely subtracts in place, and the lean call to
   `aura_direct_release_last_owned_value` does most of the work. That call
   is not marked cold for this reason.
-- `malloc` and `free` cost about 63 and 96 instructions a call in
-  `record_field_reads`. glibc's per-thread cache holds seven blocks of
-  each size, and these programs free boxes in bursts.
+- Before the cache, `malloc` and `free` cost about 63 and 96 instructions
+  a call in `record_field_reads`. glibc's per-thread cache holds seven
+  blocks of each size, and these programs free boxes in bursts.
 - On LLVM, `fib(30)` and `int_list_sum` are unchanged. Their hot paths
   hold no boxes.
 
 ### Sizes
 
-Stripped executables from `scripts/check-native-binaries.py`, in bytes,
-from the build that also has the box cache of the next commit. The gate
-passes before and after on both code generators.
+Stripped executables from `scripts/check-native-binaries.py`, in bytes.
+The gate passes before and after on both code generators.
 
 | Subject | Cranelift before | Cranelift after | LLVM before | LLVM after |
 | --- | ---: | ---: | ---: | ---: |
@@ -121,7 +131,7 @@ passes before and after on both code generators.
 ### Startup
 
 `aura run --backend direct examples/basics/hello_world.au` with a warm
-cache, median of 15 runs, in milliseconds, from the same build. Each cell is two separate
+cache, median of 15 runs, in milliseconds. Each cell is two separate
 sets of runs.
 
 | Code generator | Before | After |
@@ -156,7 +166,7 @@ sets of runs.
   another task links, overflow, freeing a linked value, a dropped ledger,
   and the generated code's rules against `DirectOwnershipLayout`.
 - Coverage is 96.57% of lines, 97.45% of functions, and 95.52% of
-  regions, above the floors, with the next commit's box cache.
+  regions, above the floors. `native_box_cache.rs` is fully covered, and
   `native_owned_values.rs` covers 99.7% of its lines. The run merged
   profiles per binary, as in 10a.
 
@@ -166,5 +176,5 @@ sets of runs.
   replaces it with static ids.
 - Registering a fresh box could link it without the checks a retain
   needs, which would save a few instructions per box.
-- A per-thread cache of freed boxes would skip glibc for most boxes. The
-  next commit adds one.
+- The box cache keeps up to 256 boxes per thread, about 48 KB. A worker
+  that stops frees its cache.
