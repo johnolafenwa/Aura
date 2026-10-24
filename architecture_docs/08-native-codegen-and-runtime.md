@@ -258,6 +258,37 @@ per process. A scalar or `str` key reaches it with one write.
 - **Order.** Entries stay in insertion order, so the hash never changes
   what a program prints.
 
+### In-Place Appends
+
+A list that keeps unboxed scalars can take an `append` without a runtime
+call.
+
+- **Room.** `OpaqueValue::list_capacity` is a `u32` count of the elements
+  the storage has room for. It shares a word with the ledger count, which
+  is a `u32` too, so the box keeps its 192 bytes. `DirectListLayout`
+  gives its offset, and the fingerprint covers it.
+- **Setting it.** Every write sets the room from the storage's capacity,
+  but only for a confined list in the `int64`, `float64`, or `bool` form
+  whose storage no other list shares. Any other value, a shared value, and
+  a new box have no room. A list's first `append` after boxing calls the
+  runtime and gives it room.
+- **Generated code.** `append` checks the form and that the view's length
+  is below the room. It then stores the element past the end and raises
+  the view's length. A full list, or one in another form, calls
+  `aura_direct_vec_push_scalar`, which grows the storage or converts the
+  form, and refreshes the view as every write does. A `str` view is not a
+  scalar form, so an append to that list calls the runtime and switches
+  the view back to `Values`.
+- **Taking elements in.** The storage's own length lags until the runtime
+  next touches the value. `OpaqueValue::access` checks the room first. When
+  it is set, the runtime sets the storage's length to the view's length
+  and takes the room back, so every read, copy, and move sees each
+  element, and a copy never shares room with the original. Sharing a value
+  with another thread takes the elements in first.
+- **Readers of other values.** The readers of a `dict`, a `set`, an enum
+  variant, or a scalar take `access_unlisted`, which skips the check. A
+  list handed to one of them only reaches its type error.
+
 ## A tiny direct-backend design example
 
 This miniature example does not use Cranelift, but it shows the same architectural split: simple values are direct, complex values are boxed.

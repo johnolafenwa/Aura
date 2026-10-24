@@ -1345,8 +1345,16 @@ pub struct OpaqueValue {
     /// Only the thread the value is confined to reads the four ledger
     /// fields, and a shared value is never linked.
     owner: std::cell::Cell<*mut DirectFrameStack>,
-    /// The references that ledger holds.
-    owned: std::cell::Cell<usize>,
+    /// The references that ledger holds. It never exceeds `ref_count`.
+    owned: std::cell::Cell<u32>,
+    /// How many elements a list that keeps unboxed scalars has room for, or
+    /// 0. It shares a word with `owned`, though it belongs to the list
+    /// view. Every write sets it, and only for a confined list
+    /// whose storage no other value shares. Generated code that appends
+    /// while `list_len` is below it stores the element past the end and
+    /// raises `list_len`. The next access adopts that length and sets this
+    /// back to 0, so runtime code always sees every element.
+    list_capacity: std::cell::Cell<u32>,
     prev: std::cell::Cell<*mut OpaqueValue>,
     next: std::cell::Cell<*mut OpaqueValue>,
     runtime_type_name: UnsafeCell<Option<Arc<str>>>,
@@ -1394,12 +1402,15 @@ fn direct_value_thread_identity() -> usize {
 
 impl OpaqueValue {
     fn new(value: Value, runtime_type_name: Option<Arc<str>>) -> Self {
-        let (access, elements, len) = list_view_of(&value);
+        // A new box has no room yet, so boxing a value costs no more. The
+        // first write to a list gives it room.
+        let (access, elements, len, _) = list_view_of(&value);
         Self {
             list_elements: std::cell::Cell::new(elements),
             list_len: std::cell::Cell::new(len),
             ref_count: AtomicU32::new(1),
             list_access: AtomicU32::new(access as u32),
+            list_capacity: std::cell::Cell::new(0),
             shared_lock: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
             owner: std::cell::Cell::new(std::ptr::null_mut()),
             owned: std::cell::Cell::new(0),
@@ -1420,10 +1431,30 @@ impl OpaqueValue {
             return;
         }
         // SAFETY: the caller has exclusive access, so no `&mut Value` exists.
-        let (access, elements, len) = list_view_of(unsafe { &*self.value.get() });
+        let (access, elements, len, capacity) = list_view_of(unsafe { &*self.value.get() });
         self.list_elements.set(elements);
         self.list_len.set(len);
+        self.list_capacity.set(capacity);
         self.list_access.store(access as u32, Ordering::Relaxed);
+    }
+
+    /// Takes in the elements generated code appended in place since the
+    /// last write, and takes back the room for more. Every access to a
+    /// confined value starts here, so runtime code reads and copies the
+    /// whole list, and a copy never shares room with the original. It stays
+    /// out of line, so the check in `access` stays small enough to inline.
+    #[cold]
+    #[inline(never)]
+    fn adopt_appended_elements(&self) {
+        self.list_capacity.set(0);
+        // SAFETY: room is only set by a write that has ended, and every
+        // access takes it back before it reads, so no reference into the
+        // value is live. The room also means the value is confined and its
+        // storage unshared, and generated code wrote each element up to
+        // `list_len` before it raised the length.
+        if let Value::Vec(vector) = unsafe { &mut *self.value.get() } {
+            unsafe { vector.elements.adopt_appended(self.list_len.get()) };
+        }
     }
 
     /// Counts one element read of a confined `list[str]` that missed the
@@ -1480,7 +1511,20 @@ impl OpaqueValue {
         unsafe { self.shared_lock.load(Ordering::Acquire).as_ref() }
     }
 
+    #[inline]
     fn access(&self, write: bool) -> DirectValueAccess<'_> {
+        if self.list_capacity.get() != 0 {
+            self.adopt_appended_elements();
+        }
+        self.access_unlisted(write)
+    }
+
+    /// [`Self::access`] for a reader that accepts no `list`, such as one of
+    /// a scalar, a `dict`, or a `set`. Only a list has appended elements to
+    /// take in, so the check is skipped. A list handed here by mistake only
+    /// reaches the reader's type error, which never reads its elements.
+    #[inline]
+    fn access_unlisted(&self, write: bool) -> DirectValueAccess<'_> {
         // Acquire pairs with the release store in `share_direct_value`. The
         // thread that shares a value is the only one that could have accessed
         // it unlocked, and every other thread reaches the value through a
@@ -1516,6 +1560,12 @@ unsafe fn share_direct_value(ptr: *mut OpaqueValue) {
     match unsafe { ptr.as_ref() } {
         Some(value) => {
             if value.shared_lock.load(Ordering::Acquire).is_null() {
+                // The value is still confined, so the elements generated
+                // code appended join its storage before another thread
+                // can read it.
+                if value.list_capacity.get() != 0 {
+                    value.adopt_appended_elements();
+                }
                 // Other threads may read the header once the value is
                 // shared, so its ledger counts it by address from now on.
                 // SAFETY: the caller is the thread the value is confined to.
@@ -1815,6 +1865,18 @@ unsafe fn with_value<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&Value) -> T) -
     // SAFETY: `access` returned either confinement to this thread, which no
     // other thread can access, or a read guard on the shared lock. Writers
     // take the write guard, so no `&mut Value` exists meanwhile.
+    read(unsafe { &*value.value.get() })
+}
+
+/// [`with_value`] for a reader that accepts no `list` (see
+/// [`OpaqueValue::access_unlisted`]).
+unsafe fn with_unlisted_value<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&Value) -> T) -> T {
+    let value = match ptr.as_ref() {
+        Some(value) => value,
+        None => runtime_error("direct runtime received a null opaque value pointer"),
+    };
+    let _access = value.access_unlisted(false);
+    // SAFETY: as in `with_value`.
     read(unsafe { &*value.value.get() })
 }
 
@@ -2315,7 +2377,9 @@ unsafe fn set_explicit_runtime_type_tag(ptr: *mut OpaqueValue, tag: &RuntimeType
     let runtime_type_name: &str = &tag.name;
     match ptr.as_ref() {
         Some(value) => {
-            let _access = value.access(true);
+            // The tag and the kind of value are all this reads, so a list's
+            // appended elements can wait for the next access.
+            let _access = value.access_unlisted(true);
             // SAFETY: as in `value_mut`.
             let stored = unsafe { &mut *value.runtime_type_name.get() };
             let already = stored.as_ref().is_some_and(|existing| {
@@ -2450,22 +2514,25 @@ unsafe fn value_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut Value) -> 
     write(unsafe { &mut *value.value.get() })
 }
 
-/// The access code, element address, and length of a `list` value or a
-/// rank-1 `Array`, or `None` and zeros for any other value. The storage is
-/// on the heap, so the address stays valid when the box holding the value
-/// moves.
-fn list_view_of(value: &Value) -> (DirectListAccess, usize, usize) {
+/// The access code, element address, length, and room for in-place
+/// appends of a `list` value or a rank-1 `Array`, or `None` and zeros for
+/// any other value. The storage is on the heap, so the address stays valid
+/// when the box holding the value moves. Only a list that keeps unboxed
+/// scalars in storage no other list shares has room.
+fn list_view_of(value: &Value) -> (DirectListAccess, usize, usize, u32) {
     use crate::list_elements::ListForm;
     use crate::runtime_value::ArrayStorage;
     match value {
         Value::Vec(vector) => {
-            let access = match vector.elements.form() {
+            let (form, elements, len, room) = vector.elements.view();
+            let access = match form {
                 ListForm::Values => DirectListAccess::Values,
                 ListForm::Int64 => DirectListAccess::Int64,
                 ListForm::Float64 => DirectListAccess::Float64,
                 ListForm::Bool => DirectListAccess::Bool,
             };
-            (access, vector.elements.as_ptr(), vector.elements.len())
+            let room = u32::try_from(room).unwrap_or(u32::MAX);
+            (access, elements, len, room)
         }
         Value::Array(array) if array.rank() == 1 => {
             let (access, elements) = match &array.storage {
@@ -2482,9 +2549,9 @@ fn list_view_of(value: &Value) -> (DirectListAccess, usize, usize) {
                     (DirectListAccess::ArrayFloat64, values.as_ptr() as usize)
                 }
             };
-            (access, elements, array.shape[0])
+            (access, elements, array.shape[0], 0)
         }
-        _ => (DirectListAccess::None, 0, 0),
+        _ => (DirectListAccess::None, 0, 0, 0),
     }
 }
 
@@ -2561,6 +2628,10 @@ pub struct DirectListLayout {
     pub elements_offset: i32,
     /// The offset of the element count in an [`OpaqueValue`].
     pub len_offset: i32,
+    /// The offset of the `u32` count of elements a list has room for, which
+    /// generated code may append in place while the count exceeds the
+    /// length.
+    pub capacity_offset: i32,
 }
 
 impl DirectListLayout {
@@ -2571,6 +2642,7 @@ impl DirectListLayout {
             i64::from(self.access_offset),
             i64::from(self.elements_offset),
             i64::from(self.len_offset),
+            i64::from(self.capacity_offset),
             DirectListAccess::Int64 as i64,
             DirectListAccess::Float64 as i64,
             DirectListAccess::Bool as i64,
@@ -2580,8 +2652,9 @@ impl DirectListLayout {
             i64::from(DIRECT_STR_VIEW_PTR_OFFSET),
             i64::from(DIRECT_STR_VIEW_LEN_OFFSET),
             // The element layouts: 8-byte `int64` and `float64`, 1-byte
-            // `bool`.
+            // `bool`. Then the 4-byte room count.
             0x0801,
+            4,
         ];
         fields.iter().fold(0x41_75_72_61_i64, |hash, field| {
             hash.wrapping_mul(0x100_0000_01b3).wrapping_add(*field)
@@ -2595,6 +2668,7 @@ pub fn direct_list_layout() -> DirectListLayout {
         access_offset: std::mem::offset_of!(OpaqueValue, list_access) as i32,
         elements_offset: std::mem::offset_of!(OpaqueValue, list_elements) as i32,
         len_offset: std::mem::offset_of!(OpaqueValue, list_len) as i32,
+        capacity_offset: std::mem::offset_of!(OpaqueValue, list_capacity) as i32,
     }
 }
 
@@ -6698,7 +6772,7 @@ fn with_vector_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut VecValue) -
 
 fn with_map<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&MapValue) -> T) -> T {
     unsafe {
-        with_value(ptr, |value| match value {
+        with_unlisted_value(ptr, |value| match value {
             Value::Map(map) => read(map),
             other => runtime_error(format!(
                 "expected `dict`, found `{}`",
@@ -6723,7 +6797,7 @@ fn with_map_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut MapValue) -> T
 
 fn with_set<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&SetValue) -> T) -> T {
     unsafe {
-        with_value(ptr, |value| match value {
+        with_unlisted_value(ptr, |value| match value {
             Value::Set(set) => read(set),
             other => runtime_error(format!(
                 "expected `set`, found `{}`",
@@ -9177,7 +9251,7 @@ fn celled_runtime_type_tag<'a>(cell: &'a AtomicPtr<c_void>, bytes: &[u8]) -> &'a
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_unbox_i64(value: *mut OpaqueValue) -> i64 {
-    task_runtime_boundary(|| unsafe { with_value(value, unbox_i64_of) })
+    task_runtime_boundary(|| unsafe { with_unlisted_value(value, unbox_i64_of) })
 }
 
 fn unbox_i64_of(value: &Value) -> i64 {
@@ -9195,7 +9269,7 @@ fn unbox_i64_of(value: &Value) -> i64 {
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_unbox_int64(value: *mut OpaqueValue) -> i64 {
-    task_runtime_boundary(|| unsafe { with_value(value, unbox_int64_of) })
+    task_runtime_boundary(|| unsafe { with_unlisted_value(value, unbox_int64_of) })
 }
 
 fn unbox_int64_of(value: &Value) -> i64 {
@@ -9314,7 +9388,7 @@ pub extern "C-unwind" fn aura_direct_integer_width_binary(
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_unbox_u64(value: *mut OpaqueValue) -> u64 {
-    task_runtime_boundary(|| unsafe { with_value(value, unbox_u64_of) })
+    task_runtime_boundary(|| unsafe { with_unlisted_value(value, unbox_u64_of) })
 }
 
 fn unbox_u64_of(value: &Value) -> u64 {
@@ -9343,7 +9417,7 @@ pub extern "C-unwind" fn aura_direct_unbox_f64(value: *mut OpaqueValue) -> f64 {
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_unbox_bool(value: *mut OpaqueValue) -> i64 {
-    task_runtime_boundary(|| unsafe { with_value(value, unbox_bool_of) })
+    task_runtime_boundary(|| unsafe { with_unlisted_value(value, unbox_bool_of) })
 }
 
 fn unbox_bool_of(value: &Value) -> i64 {
@@ -10323,7 +10397,7 @@ pub extern "C-unwind" fn aura_direct_variant_matches(
         let expected_enum = unsafe { slice::from_raw_parts(enum_ptr, enum_len) };
         let expected_variant = unsafe { slice::from_raw_parts(variant_ptr, variant_len) };
         unsafe {
-            with_value(value, |value| match value {
+            with_unlisted_value(value, |value| match value {
                 Value::EnumVariant(variant) => i64::from(
                     variant.variant_name.as_bytes() == expected_variant
                         && nominal_base_name_is(&variant.enum_name, expected_enum),
@@ -10354,7 +10428,7 @@ macro_rules! direct_variant_payload_scalar {
         #[cfg_attr(not(coverage), no_mangle)]
         pub extern "C-unwind" fn $name(value: *mut OpaqueValue, index: i64) -> $result {
             task_runtime_boundary(|| unsafe {
-                with_value(value, |value| $unbox(direct_variant_payload_ref(value, index)))
+                with_unlisted_value(value, |value| $unbox(direct_variant_payload_ref(value, index)))
             })
         }
     )+};

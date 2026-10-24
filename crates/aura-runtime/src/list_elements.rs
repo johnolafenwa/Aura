@@ -67,6 +67,29 @@ pub fn int64_bits(value: IntegerValue) -> Option<i64> {
     (IntegerValue::from_i64(bits).representation() == value.representation()).then_some(bits)
 }
 
+#[inline]
+fn unshared_capacity<T>(values: &SharedVec<T>) -> usize {
+    if values.is_shared() {
+        0
+    } else {
+        values.capacity()
+    }
+}
+
+/// [`ListElements::adopt_appended`] for one form.
+///
+/// # Safety
+///
+/// As for [`ListElements::adopt_appended`].
+unsafe fn adopt_appended<T>(values: &mut SharedVec<T>, len: usize) {
+    if let Some(values) = values.unshared_mut() {
+        if len > values.len() && len <= values.capacity() {
+            // SAFETY: the caller wrote each element up to `len`.
+            unsafe { values.set_len(len) };
+        }
+    }
+}
+
 fn int64_value(bits: i64) -> Value {
     Value::Int(IntegerValue::from_i64(bits))
 }
@@ -99,6 +122,52 @@ impl ListElements {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// The form, the address of the first element, the length, and how
+    /// many elements a scalar form has room for when no other list shares
+    /// its storage, or 0. Generated code reads the elements in place and
+    /// appends while the room lasts.
+    #[inline]
+    pub fn view(&self) -> (ListForm, usize, usize, usize) {
+        match self {
+            Self::Values(values) => (ListForm::Values, values.as_ptr() as usize, values.len(), 0),
+            Self::Int64(values) => (
+                ListForm::Int64,
+                values.as_ptr() as usize,
+                values.len(),
+                unshared_capacity(values),
+            ),
+            Self::Float64(values) => (
+                ListForm::Float64,
+                values.as_ptr() as usize,
+                values.len(),
+                unshared_capacity(values),
+            ),
+            Self::Bool(values) => (
+                ListForm::Bool,
+                values.as_ptr() as usize,
+                values.len(),
+                unshared_capacity(values),
+            ),
+        }
+    }
+
+    /// Takes in the elements generated code appended past the end of a
+    /// scalar form, so the storage holds `len` elements. A length that is
+    /// not past the end, or does not fit the storage, changes nothing.
+    ///
+    /// # Safety
+    ///
+    /// Every element from the current length up to `len` was written into
+    /// this storage's spare room as a valid value of its form.
+    pub unsafe fn adopt_appended(&mut self, len: usize) {
+        match self {
+            Self::Values(_) => {}
+            Self::Int64(values) => unsafe { adopt_appended(values, len) },
+            Self::Float64(values) => unsafe { adopt_appended(values, len) },
+            Self::Bool(values) => unsafe { adopt_appended(values, len) },
+        }
     }
 
     /// Whether another handle shares this storage.

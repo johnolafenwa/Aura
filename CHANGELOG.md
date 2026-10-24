@@ -168,6 +168,10 @@ in this file.
   `set_insert_contains` runs in 59 million instructions instead of 135
   million, and `dict_build_get` in 349 million instead of 376 million.
   Iteration order is unchanged.
+- `append` on a `list[int64]`, `list[float64]`, or `list[bool]` stores
+  the element in generated code while the list has room, and calls the
+  runtime only to grow it. With LLVM, `int_list_sum` runs in 16 million
+  instructions instead of 42 million, 1.2 times Rust.
 
 ### Fixed
 

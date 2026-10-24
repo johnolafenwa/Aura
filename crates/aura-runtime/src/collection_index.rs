@@ -666,6 +666,12 @@ impl<T> SharedVec<T> {
     pub fn is_shared(&self) -> bool {
         Arc::strong_count(&self.0) > 1
     }
+
+    /// The storage for writing when no other handle shares it, without a
+    /// copy.
+    pub fn unshared_mut(&mut self) -> Option<&mut Vec<T>> {
+        Arc::get_mut(&mut self.0)
+    }
 }
 
 impl<T> Default for SharedVec<T> {

@@ -313,7 +313,7 @@ fn counts_that_would_overflow_are_refused() {
     let task = Task::new();
     let linked = new_box();
     assert!(task.add(linked));
-    header(linked).owned.set(usize::MAX);
+    header(linked).owned.set(u32::MAX);
     assert!(!task.add(linked));
     header(linked).owned.set(1);
     assert!(task.remove(linked));

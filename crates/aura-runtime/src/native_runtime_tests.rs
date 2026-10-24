@@ -25968,11 +25968,187 @@ fn shared_lists_are_never_read_in_place() {
     unsafe { release_value(list) };
 }
 
+fn list_view_capacity(list: *mut OpaqueValue) -> usize {
+    let layout = super::direct_list_layout();
+    unsafe { *((list as *const u8).add(layout.capacity_offset as usize) as *const u32) as usize }
+}
+
+/// Appends `bits` the way generated code does: in place when the list view
+/// has form `access` and room, and through `aura_direct_vec_push_scalar`
+/// otherwise. Returns whether the element went in place.
+fn append_like_generated_code(
+    list: *mut OpaqueValue,
+    bits: i64,
+    access: super::DirectListAccess,
+) -> bool {
+    use super::DirectListAccess;
+    let layout = super::direct_list_layout();
+    let len = list_view_len(list);
+    if list_view_access(list) == access as u32 && len < list_view_capacity(list) {
+        let base = list as *mut u8;
+        unsafe {
+            let elements = *(base.add(layout.elements_offset as usize) as *const usize) as *mut u8;
+            match access {
+                DirectListAccess::Bool => *elements.add(len) = u8::from(bits != 0),
+                _ => *(elements.add(len * 8) as *mut i64) = bits,
+            }
+            *(base.add(layout.len_offset as usize) as *mut usize) = len + 1;
+        }
+        return true;
+    }
+    let kind = match access {
+        DirectListAccess::Int64 => 0,
+        DirectListAccess::Float64 => 1,
+        _ => 2,
+    };
+    super::aura_direct_vec_push_scalar(list, bits, kind);
+    false
+}
+
+fn list_ints(list: *mut OpaqueValue) -> Vec<i64> {
+    match unsafe { value_ref(list) } {
+        Value::Vec(vector) => vector
+            .elements
+            .iter()
+            .map(|element| match element.as_ref() {
+                Value::Int(integer) => integer.as_i128().expect("an int64") as i64,
+                other => panic!("expected an int64, found {other:?}"),
+            })
+            .collect(),
+        other => panic!("expected a list, found {other:?}"),
+    }
+}
+
+#[test]
+fn appends_in_place_join_the_list_at_the_next_access() {
+    use super::DirectListAccess;
+    let list = super::aura_direct_vec_empty();
+    // An empty list keeps `Value` elements and has no room, so the first
+    // append converts it.
+    assert_eq!(list_view_capacity(list), 0);
+    assert!(!append_like_generated_code(
+        list,
+        0,
+        DirectListAccess::Int64
+    ));
+    assert!(list_view_capacity(list) > 0);
+    let mut in_place = 0;
+    for value in 1..200 {
+        if append_like_generated_code(list, value, DirectListAccess::Int64) {
+            in_place += 1;
+        }
+    }
+    // Room runs out a few times as the storage doubles.
+    assert!(in_place > 150, "{in_place} of 199 appends went in place");
+    assert!(in_place < 199);
+    assert_eq!(list_view_len(list), 200);
+    assert_eq!(read_list_view_word(list, 199, DirectListAccess::Int64), 199);
+    // Any access takes the appended elements in and takes the room back.
+    assert_eq!(super::aura_direct_vec_len(list), 200);
+    assert_eq!(list_view_capacity(list), 0);
+    assert_eq!(list_ints(list), (0..200).collect::<Vec<_>>());
+    assert!(!append_like_generated_code(
+        list,
+        200,
+        DirectListAccess::Int64
+    ));
+    assert!(append_like_generated_code(
+        list,
+        201,
+        DirectListAccess::Int64
+    ));
+    assert_eq!(super::aura_direct_vec_index_scalar(list, 201, 0), 201);
+
+    let floats = super::aura_direct_vec_empty();
+    let flags = super::aura_direct_vec_empty();
+    for step in 0..40_i64 {
+        append_like_generated_code(
+            floats,
+            (step as f64 * 0.25).to_bits() as i64,
+            DirectListAccess::Float64,
+        );
+        append_like_generated_code(flags, step % 3, DirectListAccess::Bool);
+    }
+    match unsafe { value_ref(floats) } {
+        Value::Vec(vector) => {
+            assert_eq!(vector.elements.len(), 40);
+            assert_eq!(
+                vector.elements.get(39).as_deref(),
+                Some(&Value::Float(9.75))
+            );
+        }
+        other => panic!("expected a list, found {other:?}"),
+    }
+    match unsafe { value_ref(flags) } {
+        Value::Vec(vector) => {
+            let set = vector
+                .elements
+                .iter()
+                .filter(|flag| *flag.as_ref() == Value::Bool(true))
+                .count();
+            assert_eq!(set, 26);
+        }
+        other => panic!("expected a list, found {other:?}"),
+    }
+    for value in [list, floats, flags] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
+fn lists_that_share_storage_have_no_room() {
+    use super::DirectListAccess;
+    let int64 = DirectListAccess::Int64;
+    let append = |list, value| append_like_generated_code(list, value, int64);
+    let original = super::aura_direct_vec_empty();
+    for value in 0..3 {
+        append(original, value);
+    }
+    // A copy shares the storage, so neither box may write past its end.
+    let copy = boxed_value(unsafe { value_ref(original) });
+    assert_eq!(list_view_capacity(original), 0);
+    assert_eq!(list_view_capacity(copy), 0);
+    assert!(!append(copy, 10));
+    // The copy's write took its own storage, so it has room, and the
+    // original's next write finds its storage unshared again.
+    assert!(list_view_capacity(copy) > list_view_len(copy));
+    assert!(append(copy, 11));
+    assert!(!append(original, 3));
+    assert!(list_view_capacity(original) >= list_view_len(original));
+    append(original, 4);
+    assert_eq!(list_ints(original), vec![0, 1, 2, 3, 4]);
+    assert_eq!(list_ints(copy), vec![0, 1, 2, 10, 11]);
+
+    // Sharing a value with another thread takes in its appended elements
+    // first, and a shared value never has room.
+    assert!(!append(original, 5));
+    let full = list_view_capacity(original) <= list_view_len(original);
+    // A full list grows on this append instead.
+    assert_eq!(append(original, 6), !full);
+    unsafe { super::share_direct_value(original) };
+    assert_eq!(list_view_capacity(original), 0);
+    assert_eq!(list_view_access(original), DirectListAccess::None as u32);
+    assert!(!append(original, 7));
+    assert_eq!(list_view_capacity(original), 0);
+    assert_eq!(list_ints(original), vec![0, 1, 2, 3, 4, 5, 6, 7]);
+
+    // A list of other values never has room, and neither does its `str`
+    // view.
+    let names = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_in_place(names, boxed_value(Value::String("a".to_string())));
+    assert_eq!(list_view_access(names), DirectListAccess::Values as u32);
+    assert_eq!(list_view_capacity(names), 0);
+    for value in [original, copy, names] {
+        unsafe { release_value(value) };
+    }
+}
+
 #[test]
 fn opaque_values_keep_their_box_size() {
     // Every boxed value pays for these bytes. The list view fits in the
-    // space a confined value does not need for a lock. The ledger's owner,
-    // count, and links take the last 32.
+    // space a confined value does not need for a lock. The ledger's owner
+    // and links take 24, and its count shares 8 with the room for
+    // in-place appends.
     #[cfg(target_pointer_width = "64")]
     assert_eq!(std::mem::size_of::<OpaqueValue>(), 192);
 }

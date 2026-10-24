@@ -14500,3 +14500,31 @@ def main():
         assert!(!referenced.contains(boxed), "{boxed}: {referenced:?}");
     }
 }
+
+#[test]
+fn scalar_appends_keep_the_runtime_push_for_a_full_list() {
+    let source = r#"
+def main():
+    mut values: list[int64] = []
+    mut flags: list[bool] = []
+    mut i = 0
+    while i < 10:
+        values.append(i)
+        flags.append(i % 2 == 0)
+        i += 1
+    print(values.len() + flags.len())
+"#;
+    let mir = lower_source_to_mir(source).expect("the append loop should lower");
+    let object = emit_host_object(&mir).expect("the append loop should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    // Generated code stores an element in place while the list has room,
+    // and a full list, or one in another form, grows through the runtime.
+    assert!(
+        referenced.contains("aura_direct_vec_push_scalar"),
+        "{referenced:?}"
+    );
+    assert!(
+        !referenced.contains("aura_direct_vec_push_in_place"),
+        "{referenced:?}"
+    );
+}

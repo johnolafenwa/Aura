@@ -131,6 +131,11 @@ Last updated: 2026-10-23
   without a box. With LLVM, `set_insert_contains` runs in 59 million
   instructions instead of 135 million, 1.9 times Rust. Details are in
   `2026-10-24-batch-7-step-10e-scalar-keys.md`.
+- In progress: 10f, list push fast path. `append` on a list of unboxed
+  scalars stores the element in generated code while the list has room.
+  With LLVM, `int_list_sum` runs in 16 million instructions instead of 42
+  million, 1.2 times Rust. Details are in
+  `2026-10-24-batch-7-step-10f-list-push.md`.
 
 ## Aura 0.6.0 preview release (complete)
 
