@@ -372,8 +372,8 @@ fn runtime_member_type_identifies_every_backend_independent_payload_kind() {
     );
     assert_eq!(
         runtime_member_type(&Value::EnumVariant(EnumVariantValue {
-            enum_name: "Shape".to_string(),
-            variant_name: "Circle".to_string(),
+            enum_name: "Shape".into(),
+            variant_name: "Circle".into(),
             payloads: Vec::new(),
         })),
         Some(Type::named("Shape"))

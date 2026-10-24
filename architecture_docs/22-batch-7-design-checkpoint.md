@@ -662,6 +662,26 @@ Callgrind instructions, in millions:
   which 10d and 10e target.
 - A task that fails or is cancelled still frees every value it held.
 
+Step 10d keeps a `dict` lookup's found value without a `Lookup` box, reads
+scalar payloads in place, shares enum names, keeps each type tag in a
+static cell, and starts an f-string and its first `int64` in one call. The
+method and tables are in
+[the 10d note](../work/2026-10-24-batch-7-step-10d-lookups-and-variants.md).
+Callgrind instructions, in millions:
+
+| Program | Cranelift before | Cranelift after | LLVM before | LLVM after | LLVM / Rust |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `fib(30)` | 210.6 | 210.6 | 115.0 | 115.0 | 2.9x |
+| `int_list_sum` | 73.1 | 73.1 | 42.2 | 42.2 | 3.2x |
+| `string_list_scan` | 145.1 | 142.9 | 130.9 | 128.7 | 9.8x |
+| `dict_build_get` | 785.8 | 425.0 | 764.8 | 397.8 | 2.2x |
+| `set_insert_contains` | 141.9 | 140.5 | 136.5 | 135.1 | 4.3x |
+| `record_field_reads` | 588.3 | 252.2 | 570.6 | 233.3 | 6.5x |
+
+- `dict_build_get` is at 2.2 times Rust on LLVM, inside the 4x gate.
+  `record_field_reads` drops 2.4 times, past the 2x gate.
+- Error messages are unchanged.
+
 ## Owner Questions
 
 Each names the recommended default first.

@@ -2675,8 +2675,8 @@ fn task_vec(tasks: &[TaskValue]) -> *mut OpaqueValue {
 
 fn process_restart_never_value() -> *mut OpaqueValue {
     boxed_value(Value::EnumVariant(EnumVariantValue {
-        enum_name: "process.RestartPolicy".to_string(),
-        variant_name: "Never".to_string(),
+        enum_name: "process.RestartPolicy".into(),
+        variant_name: "Never".into(),
         payloads: Vec::new(),
     }))
 }
@@ -3183,8 +3183,8 @@ fn direct_json_host_abi_rejects_malformed_values_with_precise_diagnostics() {
     }
     fn json_variant(variant_name: &str, payloads: Vec<Value>) -> Value {
         Value::EnumVariant(EnumVariantValue {
-            enum_name: "json.Value".to_string(),
-            variant_name: variant_name.to_string(),
+            enum_name: "json.Value".into(),
+            variant_name: variant_name.to_string().into(),
             payloads,
         })
     }
@@ -3272,8 +3272,8 @@ fn direct_json_host_abi_rejects_malformed_values_with_precise_diagnostics() {
         direct_json_host_builtin_error(
             "json::into_string",
             vec![Some(Value::EnumVariant(EnumVariantValue {
-                enum_name: "Other".to_string(),
-                variant_name: "str".to_string(),
+                enum_name: "Other".into(),
+                variant_name: "str".into(),
                 payloads: vec![Value::String("value".to_string())],
             }))],
         ),
@@ -5160,8 +5160,8 @@ fn invalid_direct_host_timers_use_typed_io_and_process_errors() {
     let stdout = super::aura_direct_process_null();
     let stderr = super::aura_direct_process_null();
     let restart = boxed_value(Value::EnumVariant(EnumVariantValue {
-        enum_name: "process.RestartPolicy".to_string(),
-        variant_name: "Never".to_string(),
+        enum_name: "process.RestartPolicy".into(),
+        variant_name: "Never".into(),
         payloads: Vec::new(),
     }));
     let backoff = duration_value(-1);
@@ -5434,8 +5434,8 @@ fn direct_runtime_type_tags_are_interned_and_retagging_is_idempotent() {
 
     // Retagging an enum variant with the same descriptor keeps one suffix.
     let variant = boxed_value(Value::EnumVariant(EnumVariantValue {
-        enum_name: "Lookup".to_string(),
-        variant_name: "Found".to_string(),
+        enum_name: "Lookup".into(),
+        variant_name: "Found".into(),
         payloads: vec![Value::Int(IntegerValue::from_i32(7))],
     }));
     for _ in 0..3 {
@@ -5527,8 +5527,8 @@ fn direct_runtime_type_tags_are_interned_and_retagging_is_idempotent() {
 #[test]
 fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     let value = boxed_value(Value::EnumVariant(EnumVariantValue {
-        enum_name: "Lookup".to_string(),
-        variant_name: "Found".to_string(),
+        enum_name: "Lookup".into(),
+        variant_name: "Found".into(),
         payloads: vec![Value::Int(IntegerValue::from_i32(7))],
     }));
     super::aura_direct_tag_value_type(value, b"Lookup[int32]".as_ptr(), "Lookup[int32]".len());
@@ -5576,8 +5576,8 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     }
 
     let nested = boxed_value(Value::EnumVariant(EnumVariantValue {
-        enum_name: "Lookup".to_string(),
-        variant_name: "Found".to_string(),
+        enum_name: "Lookup".into(),
+        variant_name: "Found".into(),
         payloads: vec![Value::Vec(VecValue {
             element_type: Type::named("int64"),
             elements: vec![Value::Int(
@@ -5838,8 +5838,8 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     }
 
     let untagged = boxed_value(Value::EnumVariant(EnumVariantValue {
-        enum_name: "Lookup".to_string(),
-        variant_name: "Found".to_string(),
+        enum_name: "Lookup".into(),
+        variant_name: "Found".into(),
         payloads: vec![Value::Int(IntegerValue::from_i32(11))],
     }));
     assert_eq!(
@@ -6983,8 +6983,8 @@ fn native_runtime_direct_process_wrappers_cover_child_pipe_and_completed_paths()
 
     let completed = ProcessCompletedValue::new(
         Value::EnumVariant(EnumVariantValue {
-            enum_name: "process.ExitStatus".to_string(),
-            variant_name: "Exited".to_string(),
+            enum_name: "process.ExitStatus".into(),
+            variant_name: "Exited".into(),
             payloads: vec![Value::Int(IntegerValue::from_signed(0))],
         }),
         b"stdout".to_vec(),
@@ -7082,8 +7082,8 @@ fn native_runtime_direct_process_wrappers_cover_child_pipe_and_completed_paths()
 fn direct_completed_text_accessors_report_non_utf8_bytes_as_au4005() {
     let completed = ProcessCompletedValue::new(
         Value::EnumVariant(EnumVariantValue {
-            enum_name: "process.ExitStatus".to_string(),
-            variant_name: "Exited".to_string(),
+            enum_name: "process.ExitStatus".into(),
+            variant_name: "Exited".into(),
             payloads: vec![Value::Int(IntegerValue::from_signed(0))],
         }),
         vec![0xff],
@@ -7331,8 +7331,8 @@ fn native_runtime_direct_process_wrappers_cover_timeout_and_error_results() {
 
     let failed_completed = ProcessCompletedValue::new(
         Value::EnumVariant(EnumVariantValue {
-            enum_name: "process.ExitStatus".to_string(),
-            variant_name: "Exited".to_string(),
+            enum_name: "process.ExitStatus".into(),
+            variant_name: "Exited".into(),
             payloads: vec![Value::Int(IntegerValue::from_signed(7))],
         }),
         Vec::new(),
@@ -7568,8 +7568,8 @@ fn native_runtime_direct_process_wrappers_cover_timeout_and_error_results() {
         super::aura_direct_process_null(),
         super::aura_direct_process_null(),
         boxed_value(Value::EnumVariant(EnumVariantValue {
-            enum_name: "process.RestartPolicy".to_string(),
-            variant_name: "Never".to_string(),
+            enum_name: "process.RestartPolicy".into(),
+            variant_name: "Never".into(),
             payloads: Vec::new(),
         })),
         duration_value(0),
@@ -7653,8 +7653,8 @@ fn native_runtime_direct_process_run_wrapper_captures_both_streams() {
 fn native_runtime_direct_process_supervisor_wrappers_cover_start_wait_and_stop_paths() {
     fn restart_policy_never() -> *mut OpaqueValue {
         boxed_value(Value::EnumVariant(EnumVariantValue {
-            enum_name: "process.RestartPolicy".to_string(),
-            variant_name: "Never".to_string(),
+            enum_name: "process.RestartPolicy".into(),
+            variant_name: "Never".into(),
             payloads: Vec::new(),
         }))
     }
@@ -10642,8 +10642,9 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
         enum_name: format!(
             "Lookup{}Lookup[int64]",
             crate::runtime_value::DIRECT_RUNTIME_TYPE_SEPARATOR
-        ),
-        variant_name: "Missing".to_string(),
+        )
+        .into(),
+        variant_name: "Missing".into(),
         payloads: Vec::new(),
     }));
     for (enum_name, variant_name, expected) in [
@@ -11353,8 +11354,8 @@ fn direct_variant_take_payload_preserves_allocation_and_consumes_slot() {
     let text = "owned direct match".repeat(32);
     let text_ptr = text.as_ptr();
     let packet = boxed_value(Value::EnumVariant(EnumVariantValue {
-        enum_name: "Packet".to_string(),
-        variant_name: "Text".to_string(),
+        enum_name: "Packet".into(),
+        variant_name: "Text".into(),
         payloads: vec![Value::String(text)],
     }));
     let moved = super::aura_direct_variant_take_payload(packet, 0);
@@ -11554,8 +11555,8 @@ fn direct_owned_index_and_fallback_adapters_preserve_allocation_identity() {
 fn direct_task_producer_discovery_and_abandoned_args_do_not_clone_values() {
     let queue = ChannelValue::new();
     let nested = boxed_value(Value::EnumVariant(EnumVariantValue {
-        enum_name: "Envelope".to_string(),
-        variant_name: "Ready".to_string(),
+        enum_name: "Envelope".into(),
+        variant_name: "Ready".into(),
         payloads: vec![Value::Vec(VecValue {
             element_type: Type::named("Queue"),
             elements: vec![Value::Channel(queue)].into(),
@@ -11655,8 +11656,8 @@ fn direct_json_rejects_inexact_int_array_object_and_indent_metadata() {
     }
 
     let int = boxed_value(Value::EnumVariant(EnumVariantValue {
-        enum_name: "json.Value".to_string(),
-        variant_name: "Int".to_string(),
+        enum_name: "json.Value".into(),
+        variant_name: "Int".into(),
         payloads: vec![Value::Int(
             IntegerValue::from_typed_signed(7, IntegerKind::Int32).expect("7 fits int32"),
         )],
@@ -11665,8 +11666,8 @@ fn direct_json_rejects_inexact_int_array_object_and_indent_metadata() {
         .contains("malformed runtime `json.Value.Int` payload"));
 
     let array = boxed_value(Value::EnumVariant(EnumVariantValue {
-        enum_name: "json.Value".to_string(),
-        variant_name: "Array".to_string(),
+        enum_name: "json.Value".into(),
+        variant_name: "Array".into(),
         payloads: vec![Value::Vec(VecValue {
             element_type: Type::named("Unknown"),
             elements: vec![].into(),
@@ -11676,8 +11677,8 @@ fn direct_json_rejects_inexact_int_array_object_and_indent_metadata() {
         .contains("malformed runtime `json.Value.Array` payload"));
 
     let object = boxed_value(Value::EnumVariant(EnumVariantValue {
-        enum_name: "json.Value".to_string(),
-        variant_name: "Object".to_string(),
+        enum_name: "json.Value".into(),
+        variant_name: "Object".into(),
         payloads: vec![Value::Map(MapValue {
             key_type: Type::named("str"),
             value_type: Type::named("Unknown"),
@@ -15064,8 +15065,8 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         value_type_name(Value::EnumVariant(EnumVariantValue {
-            enum_name: "Status".to_string(),
-            variant_name: "Ready".to_string(),
+            enum_name: "Status".into(),
+            variant_name: "Ready".into(),
             payloads: Vec::new(),
         })),
         "Status"
@@ -15572,8 +15573,8 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
         fields: Default::default(),
     }));
     let enum_value = super::boxed_value(Value::EnumVariant(EnumVariantValue {
-        enum_name: "Status".to_string(),
-        variant_name: "Ready".to_string(),
+        enum_name: "Status".into(),
+        variant_name: "Ready".into(),
         payloads: Vec::new(),
     }));
     let unit_value = super::boxed_value(Value::Unit);
@@ -15997,8 +15998,8 @@ fn native_runtime_resource_metadata_reports_maintained_type_names() {
 
     let completed = ProcessCompletedValue::new(
         Value::EnumVariant(EnumVariantValue {
-            enum_name: "process.ExitStatus".to_string(),
-            variant_name: "Exited".to_string(),
+            enum_name: "process.ExitStatus".into(),
+            variant_name: "Exited".into(),
             payloads: vec![Value::Int(IntegerValue::from_signed(0))],
         }),
         Vec::new(),
@@ -16181,8 +16182,8 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
     );
     assert_eq!(
         value_type_name(Value::EnumVariant(EnumVariantValue {
-            enum_name: "Status".to_string(),
-            variant_name: "Ready".to_string(),
+            enum_name: "Status".into(),
+            variant_name: "Ready".into(),
             payloads: Vec::new(),
         })),
         "Status"
@@ -22331,8 +22332,8 @@ fn coverage_native_runtime_rejects_invalid_enum_payload_metadata_and_indices() {
     assert_eq!(invalid_count.message, "invalid enum payload count");
 
     let negative_index_value = boxed_value(Value::EnumVariant(EnumVariantValue {
-        enum_name: "Status".to_string(),
-        variant_name: "Ready".to_string(),
+        enum_name: "Status".into(),
+        variant_name: "Ready".into(),
         payloads: Vec::new(),
     }));
     let negative_index_address = negative_index_value as usize;
@@ -22344,8 +22345,8 @@ fn coverage_native_runtime_rejects_invalid_enum_payload_metadata_and_indices() {
     unsafe { release_value(negative_index_value) };
 
     let missing_payload_value = boxed_value(Value::EnumVariant(EnumVariantValue {
-        enum_name: "Status".to_string(),
-        variant_name: "Ready".to_string(),
+        enum_name: "Status".into(),
+        variant_name: "Ready".into(),
         payloads: Vec::new(),
     }));
     let missing_payload_address = missing_payload_value as usize;
@@ -22990,8 +22991,8 @@ fn direct_union_tag_take_and_inject_reject_invalid_metadata_and_identities() {
 #[test]
 fn direct_instance_field_access_follows_enum_and_union_payload_projections() {
     let some = boxed_value(Value::EnumVariant(EnumVariantValue {
-        enum_name: "Lookup".to_string(),
-        variant_name: "Found".to_string(),
+        enum_name: "Lookup".into(),
+        variant_name: "Found".into(),
         payloads: vec![coverage_int(41)],
     }));
     let projection = "__variant_payload_Found_0";
@@ -23118,8 +23119,8 @@ fn direct_owned_field_assignment_writes_through_enum_and_union_payloads() {
     }
 
     let some = boxed_value(Value::EnumVariant(EnumVariantValue {
-        enum_name: "Lookup".to_string(),
-        variant_name: "Found".to_string(),
+        enum_name: "Lookup".into(),
+        variant_name: "Found".into(),
         payloads: vec![holder(coverage_int(1))],
     }));
     assign(some, "__variant_payload_Found_0.value", coverage_int(2));
@@ -23645,8 +23646,8 @@ fn native_runtime_operator_helpers_cover_duration_comparisons_float_power_and_sh
     assert_eq!(inferred_collection_type(&handle), Type::named("Handle"));
     assert_eq!(
         inferred_collection_type(&Value::EnumVariant(EnumVariantValue {
-            enum_name: "Shape".to_string(),
-            variant_name: "Circle".to_string(),
+            enum_name: "Shape".into(),
+            variant_name: "Circle".into(),
             payloads: Vec::new(),
         })),
         Type::named("Shape")
@@ -24980,8 +24981,8 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
     let shapes = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("Shape"),
         elements: vec![Value::EnumVariant(EnumVariantValue {
-            enum_name: "Shape".to_string(),
-            variant_name: "Circle".to_string(),
+            enum_name: "Shape".into(),
+            variant_name: "Circle".into(),
             payloads: vec![Value::Int(IntegerValue::from_i64(5))],
         })]
         .into(),
@@ -25366,14 +25367,14 @@ fn native_runtime_records_only_failing_manager_exits_for_the_trap() {
     let class = "Flush";
     super::with_direct_task_runtime_scope(|| {
         let ok = boxed_value(Value::EnumVariant(EnumVariantValue {
-            enum_name: "Result".to_string(),
-            variant_name: "Ok".to_string(),
+            enum_name: "Result".into(),
+            variant_name: "Ok".into(),
             payloads: vec![Value::Unit],
         }));
         super::aura_direct_record_manager_exit_failure(ok, class.as_ptr(), class.len());
         let err = boxed_value(Value::EnumVariant(EnumVariantValue {
-            enum_name: "Result".to_string(),
-            variant_name: "Err".to_string(),
+            enum_name: "Result".into(),
+            variant_name: "Err".into(),
             payloads: vec![Value::String("flush failed".to_string())],
         }));
         super::aura_direct_record_manager_exit_failure(err, class.as_ptr(), class.len());
@@ -26013,4 +26014,512 @@ fn consuming_a_unique_box_moves_its_value() {
     };
     assert_eq!(stored.elements.len(), 1);
     unsafe { release_value(vec) };
+}
+
+/// The found value in a `Lookup`, as debug text, or `None` for `Missing`.
+fn lookup_debug(lookup: *mut OpaqueValue) -> Option<String> {
+    match unsafe { take_value(lookup) } {
+        Value::EnumVariant(variant) if variant.variant_name == "Found" => Some(format!(
+            "{:?}",
+            variant.single_payload().expect("a payload")
+        )),
+        Value::EnumVariant(variant) if variant.variant_name == "Missing" => None,
+        other => panic!("expected a `Lookup`, found {other:?}"),
+    }
+}
+
+/// A payload box as debug text, or `None` for null.
+fn payload_debug(payload: *mut OpaqueValue) -> Option<String> {
+    (!payload.is_null()).then(|| format!("{:?}", unsafe { take_value(payload) }))
+}
+
+#[test]
+fn direct_lookup_payload_gets_agree_with_lookup_gets() {
+    let map = string_map(&[("age", "41"), ("city", "Lagos")]);
+    let groups = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_in_place(groups, int_vec(&[1]));
+    super::aura_direct_vec_push_in_place(groups, string_map(&[("age", "41")]));
+    for key in ["age", "city", "missing", ""] {
+        let boxed = string_value(key);
+        let expected = lookup_debug(super::aura_direct_map_get(map, boxed));
+        assert_eq!(
+            payload_debug(super::aura_direct_map_get_payload(map, boxed)),
+            expected
+        );
+        assert_eq!(
+            payload_debug(super::aura_direct_map_get_str_payload(
+                map,
+                key.as_ptr(),
+                key.len()
+            )),
+            expected
+        );
+        let element = lookup_debug(super::aura_direct_vec_element_map_get(
+            groups, 1, boxed, 0, 0,
+        ));
+        assert_eq!(
+            payload_debug(super::aura_direct_vec_element_map_get_payload(
+                groups, 1, boxed, 0, 0,
+            )),
+            element
+        );
+        assert_eq!(
+            payload_debug(super::aura_direct_vec_element_map_get_str_payload(
+                groups,
+                1,
+                key.as_ptr(),
+                key.len(),
+                0,
+                0,
+            )),
+            element
+        );
+        assert_eq!(
+            payload_debug(super::aura_direct_lookup_payload(
+                super::aura_direct_map_get(map, boxed)
+            )),
+            expected
+        );
+        unsafe { release_value(boxed) };
+    }
+
+    // The payload is a copy: changing it leaves the map as it was.
+    let payload = super::aura_direct_map_get_str_payload(map, b"age".as_ptr(), 3);
+    unsafe {
+        value_mut(payload, |value| {
+            *value = Value::String("changed".to_string())
+        });
+        release_value(payload);
+    }
+    assert_eq!(
+        payload_debug(super::aura_direct_map_get_str_payload(
+            map,
+            b"age".as_ptr(),
+            3
+        )),
+        Some(format!("{:?}", Value::String("41".to_string())))
+    );
+
+    for value in [map, groups] {
+        unsafe { release_value(value) };
+    }
+
+    // Each form reports the same failures as the `Lookup` form.
+    fn list_of_ints() -> *mut OpaqueValue {
+        let groups = super::aura_direct_vec_empty();
+        super::aura_direct_vec_push_in_place(groups, int_vec(&[1]));
+        groups
+    }
+    let cases: [(fn(), fn()); 5] = [
+        (
+            || {
+                super::aura_direct_map_get_str_payload(int_value(3), b"age".as_ptr(), 3);
+            },
+            || {
+                super::aura_direct_map_get_str(int_value(3), b"age".as_ptr(), 3);
+            },
+        ),
+        (
+            || {
+                super::aura_direct_map_get_payload(int_value(3), string_value("age"));
+            },
+            || {
+                super::aura_direct_map_get(int_value(3), string_value("age"));
+            },
+        ),
+        (
+            || {
+                super::aura_direct_vec_element_map_get_str_payload(
+                    list_of_ints(),
+                    0,
+                    b"age".as_ptr(),
+                    3,
+                    0,
+                    0,
+                );
+            },
+            || {
+                super::aura_direct_vec_element_map_get_str(
+                    list_of_ints(),
+                    0,
+                    b"age".as_ptr(),
+                    3,
+                    0,
+                    0,
+                );
+            },
+        ),
+        (
+            || {
+                super::aura_direct_vec_element_map_get_payload(
+                    list_of_ints(),
+                    0,
+                    string_value("age"),
+                    0,
+                    0,
+                );
+            },
+            || {
+                super::aura_direct_vec_element_map_get(
+                    list_of_ints(),
+                    0,
+                    string_value("age"),
+                    0,
+                    0,
+                );
+            },
+        ),
+        (
+            || {
+                super::aura_direct_vec_element_map_get_payload(
+                    list_of_ints(),
+                    9,
+                    string_value("age"),
+                    0,
+                    0,
+                );
+            },
+            || {
+                super::aura_direct_vec_element_map_get(
+                    list_of_ints(),
+                    9,
+                    string_value("age"),
+                    0,
+                    0,
+                );
+            },
+        ),
+    ];
+    for (payload, lookup) in cases {
+        assert_eq!(
+            capture_direct_boundary_error_message(payload),
+            capture_direct_boundary_error_message(lookup)
+        );
+    }
+}
+
+#[test]
+fn direct_lookup_payload_rejects_values_that_are_not_lookups() {
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_lookup_payload(int_value(3));
+        }),
+        "expected `Lookup`, found `integer`"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_lookup_payload(boxed_value(Value::EnumVariant(EnumVariantValue {
+                enum_name: "Lookup".into(),
+                variant_name: "Found".into(),
+                payloads: Vec::new(),
+            })));
+        }),
+        "direct runtime received a malformed `Lookup`"
+    );
+}
+
+#[test]
+fn direct_scalar_variant_payloads_read_in_place_with_the_boxed_messages() {
+    let variant = |payloads: Vec<Value>| {
+        boxed_value(Value::EnumVariant(EnumVariantValue {
+            enum_name: "json.Value".into(),
+            variant_name: "Int".into(),
+            payloads,
+        }))
+    };
+    let int = variant(vec![Value::Int(IntegerValue::from_i32(41))]);
+    assert_eq!(super::aura_direct_variant_payload_i64(int, 0), 41);
+    assert_eq!(super::aura_direct_variant_payload_int64(int, 0), 41);
+    let flag = variant(vec![Value::Bool(true)]);
+    assert_eq!(super::aura_direct_variant_payload_bool(flag, 0), 1);
+    let wide = variant(vec![Value::Int(
+        IntegerValue::from_u64(u64::MAX)
+            .with_runtime_kind(IntegerKind::Uint64)
+            .unwrap(),
+    )]);
+    assert_eq!(super::aura_direct_variant_payload_u64(wide, 0), u64::MAX);
+
+    // Reading in place copies nothing.
+    let before = super::direct_value_clone_count();
+    super::aura_direct_variant_payload_int64(int, 0);
+    assert_eq!(super::direct_value_clone_count(), before);
+
+    for value in [int, flag, wide] {
+        unsafe { release_value(value) };
+    }
+
+    // Each fused read fails with the message of the boxed payload and unbox.
+    fn text_variant() -> *mut OpaqueValue {
+        boxed_value(Value::EnumVariant(EnumVariantValue {
+            enum_name: "json.Value".into(),
+            variant_name: "String".into(),
+            payloads: vec![Value::String("x".to_string())],
+        }))
+    }
+    fn wide_variant() -> *mut OpaqueValue {
+        boxed_value(Value::EnumVariant(EnumVariantValue {
+            enum_name: "json.Value".into(),
+            variant_name: "Int".into(),
+            payloads: vec![Value::Int(IntegerValue::from_u64(u64::MAX))],
+        }))
+    }
+    let cases: [(fn(), fn()); 7] = [
+        (
+            || {
+                super::aura_direct_variant_payload_int64(text_variant(), 0);
+            },
+            || {
+                super::aura_direct_unbox_int64(super::aura_direct_variant_payload(
+                    text_variant(),
+                    0,
+                ));
+            },
+        ),
+        (
+            || {
+                super::aura_direct_variant_payload_i64(text_variant(), 0);
+            },
+            || {
+                super::aura_direct_unbox_i64(super::aura_direct_variant_payload(text_variant(), 0));
+            },
+        ),
+        (
+            || {
+                super::aura_direct_variant_payload_int64(wide_variant(), 0);
+            },
+            || {
+                super::aura_direct_unbox_int64(super::aura_direct_variant_payload(
+                    wide_variant(),
+                    0,
+                ));
+            },
+        ),
+        (
+            || {
+                super::aura_direct_variant_payload_bool(text_variant(), 0);
+            },
+            || {
+                super::aura_direct_unbox_bool(super::aura_direct_variant_payload(
+                    text_variant(),
+                    0,
+                ));
+            },
+        ),
+        (
+            || {
+                super::aura_direct_variant_payload_u64(text_variant(), 0);
+            },
+            || {
+                super::aura_direct_unbox_u64(super::aura_direct_variant_payload(text_variant(), 0));
+            },
+        ),
+        (
+            || {
+                super::aura_direct_variant_payload_int64(text_variant(), 1);
+            },
+            || {
+                super::aura_direct_unbox_int64(super::aura_direct_variant_payload(
+                    text_variant(),
+                    1,
+                ));
+            },
+        ),
+        (
+            || {
+                super::aura_direct_variant_payload_int64(int_value(3), 0);
+            },
+            || {
+                super::aura_direct_unbox_int64(super::aura_direct_variant_payload(int_value(3), 0));
+            },
+        ),
+    ];
+    for (fused, boxed) in cases {
+        assert_eq!(
+            capture_direct_boundary_error_message(fused),
+            capture_direct_boundary_error_message(boxed)
+        );
+    }
+}
+
+#[test]
+fn direct_enum_variants_share_the_names_of_their_literals() {
+    let build = || {
+        super::aura_direct_enum_variant(
+            b"json.Value".as_ptr(),
+            10,
+            b"Int".as_ptr(),
+            3,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    let (first, second) = (build(), build());
+    let names = |value| match unsafe { take_value(value) } {
+        Value::EnumVariant(variant) => (variant.enum_name, variant.variant_name),
+        other => panic!("expected an enum variant, found {other:?}"),
+    };
+    let (first_enum, first_variant) = names(first);
+    let (second_enum, second_variant) = names(second);
+    assert_eq!(
+        (first_enum.as_str(), first_variant.as_str()),
+        ("json.Value", "Int")
+    );
+    assert!(std::ptr::eq(first_enum.as_ptr(), second_enum.as_ptr()));
+    assert!(std::ptr::eq(
+        first_variant.as_ptr(),
+        second_variant.as_ptr()
+    ));
+
+    // A buffer reused for other text gets its own name.
+    let mut buffer = *b"Alpha";
+    let alpha = super::literal_runtime_name(buffer.as_ptr(), buffer.len());
+    buffer.copy_from_slice(b"Omega");
+    let omega = super::literal_runtime_name(buffer.as_ptr(), buffer.len());
+    assert_eq!((alpha.as_str(), omega.as_str()), ("Alpha", "Omega"));
+
+    let message = capture_direct_boundary_error_message(|| {
+        super::aura_direct_enum_variant(
+            [0xff_u8].as_ptr(),
+            1,
+            b"Int".as_ptr(),
+            3,
+            std::ptr::null_mut(),
+            0,
+        );
+    });
+    assert_eq!(message, "aura direct runtime received invalid UTF-8 bytes");
+}
+
+#[test]
+fn direct_variant_matches_compare_the_untagged_enum_name() {
+    let variant = boxed_value(Value::EnumVariant(EnumVariantValue {
+        enum_name: "Lookup".into(),
+        variant_name: "Found".into(),
+        payloads: vec![Value::Int(IntegerValue::from_i32(7))],
+    }));
+    let matches = |value, enum_name: &str, variant_name: &str| {
+        super::aura_direct_variant_matches(
+            value,
+            enum_name.as_ptr(),
+            enum_name.len(),
+            variant_name.as_ptr(),
+            variant_name.len(),
+        )
+    };
+    assert_eq!(matches(variant, "Lookup", "Found"), 1);
+    assert_eq!(matches(variant, "Lookup", "Missing"), 0);
+    assert_eq!(matches(variant, "Look", "Found"), 0);
+    assert_eq!(matches(variant, "Lookups", "Found"), 0);
+    super::aura_direct_tag_value_type(variant, b"Lookup[int32]".as_ptr(), 13);
+    assert_eq!(matches(variant, "Lookup", "Found"), 1);
+    assert_eq!(matches(variant, "Look", "Found"), 0);
+    assert_eq!(matches(variant, "Lookup\0Lookup[int32]", "Found"), 0);
+    assert_eq!(matches(int_value(3), "Lookup", "Found"), 0);
+    for (name, expected) in [
+        ("Lookup", "Lookup"),
+        ("Lookup\0Lookup[int32]", "Lookup"),
+        ("Lookup\0Lookup[int32]", "Look"),
+        ("Look", "Lookup"),
+        ("", ""),
+        ("\0x", ""),
+        ("a\0b", "a\0b"),
+    ] {
+        assert_eq!(
+            super::nominal_base_name_is(name, expected.as_bytes()),
+            crate::runtime_value::nominal_runtime_base_name(name) == expected,
+            "{name:?} against {expected:?}"
+        );
+    }
+    unsafe { release_value(variant) };
+}
+
+#[test]
+fn direct_tag_cells_keep_the_decoded_tag() {
+    let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    let first = boxed_value(Value::Int(IntegerValue::from_i32(5)));
+    super::aura_direct_tag_value_type_cell(first, &cell, b"int64".as_ptr(), 5);
+    let stored = cell.load(Ordering::Acquire);
+    assert!(!stored.is_null());
+    // The cell answers later calls, whatever descriptor they pass.
+    let second = boxed_value(Value::Int(IntegerValue::from_i32(6)));
+    super::aura_direct_tag_value_type_cell(second, &cell, b"int32".as_ptr(), 5);
+    assert_eq!(cell.load(Ordering::Acquire), stored);
+    for value in [first, second] {
+        match unsafe { value_ref(value) } {
+            Value::Int(integer) => assert_eq!(integer.runtime_type_name(), Some("int64")),
+            other => panic!("expected a tagged integer, found {other:?}"),
+        }
+        assert_eq!(
+            unsafe { super::explicit_runtime_type_name(value) }.as_deref(),
+            Some("int64")
+        );
+    }
+
+    // A nominal tag names the value and changes nothing else in it.
+    let nominal = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    let variant = boxed_value(Value::EnumVariant(EnumVariantValue {
+        enum_name: "json.Value".into(),
+        variant_name: "Int".into(),
+        payloads: vec![Value::Int(IntegerValue::from_i32(7))],
+    }));
+    let before = format!("{:?}", unsafe { value_ref(variant) });
+    for _ in 0..2 {
+        super::aura_direct_tag_value_type_cell(variant, &nominal, b"json.Value".as_ptr(), 10);
+    }
+    assert_eq!(format!("{:?}", unsafe { value_ref(variant) }), before);
+    assert_eq!(
+        unsafe { super::explicit_runtime_type_name(variant) }.as_deref(),
+        Some("json.Value")
+    );
+
+    let message = capture_direct_boundary_error_message(|| {
+        super::aura_direct_tag_value_type_cell(
+            int_value(1),
+            std::ptr::null(),
+            b"int64".as_ptr(),
+            5,
+        );
+    });
+    assert_eq!(message, "direct runtime received a null type tag cell");
+    for value in [first, second, variant] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
+fn direct_fused_format_start_matches_begin_and_push() {
+    for (leading, value) in [
+        ("key-", 42_i64),
+        ("", 0),
+        ("n=", -7),
+        ("min ", i64::MIN),
+        ("max ", i64::MAX),
+    ] {
+        let fused = super::aura_direct_format_begin_i64(leading.as_ptr(), leading.len(), value, 8);
+        let split = super::aura_direct_format_begin(leading.as_ptr(), leading.len());
+        super::aura_direct_format_push_i64(split, value);
+        for builder in [fused, split] {
+            super::aura_direct_format_push_str(builder, b"!".as_ptr(), 1);
+        }
+        let expected = format!("{leading}{value}!");
+        for builder in [fused, split] {
+            match unsafe { take_value(builder) } {
+                Value::String(text) => assert_eq!(text, expected),
+                other => panic!("expected a string, found {other:?}"),
+            }
+        }
+    }
+    // A huge hint is bounded instead of reserved.
+    let builder = super::aura_direct_format_begin_i64(b"x".as_ptr(), 1, 3, usize::MAX);
+    match unsafe { take_value(builder) } {
+        Value::String(text) => {
+            assert_eq!(text, "x3");
+            assert!(text.capacity() <= 1 + super::I64_DECIMAL_BYTES + super::FORMAT_RESERVE_LIMIT);
+        }
+        other => panic!("expected a string, found {other:?}"),
+    }
+    let message = capture_direct_boundary_error_message(|| {
+        super::aura_direct_format_begin_i64([0xff_u8].as_ptr(), 1, 3, 0);
+    });
+    assert_eq!(message, "aura direct runtime received invalid UTF-8 bytes");
 }

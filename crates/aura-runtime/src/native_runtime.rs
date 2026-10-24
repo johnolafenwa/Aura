@@ -10,6 +10,7 @@ use std::cell::Cell;
 use std::cell::RefCell;
 use std::cell::UnsafeCell;
 use std::collections::{BTreeMap, HashMap};
+use std::ffi::c_void;
 use std::io::{self, Write};
 use std::mem;
 #[cfg(unix)]
@@ -18,6 +19,7 @@ use std::process;
 use std::ptr::NonNull;
 use std::slice;
 use std::str;
+use std::sync::atomic::AtomicPtr;
 #[cfg(any(test, coverage))]
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -69,11 +71,11 @@ use crate::runtime_value::{
     HttpResponseValue, InstanceValue, IntegerArithmeticMode, LightweightTaskFailureSignal,
     MapValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue,
     ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue,
-    RuntimeSchedulerWakeReason, SendValueError, SetElements, SetValue, TaskCancelledSignal,
-    TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue,
-    TlsStreamValue, TupleValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
-    VecValue, WebSocketListenerValue, WebSocketValue, DIRECT_RUNTIME_TYPE_FIELD,
-    DIRECT_RUNTIME_TYPE_SEPARATOR,
+    RuntimeName, RuntimeSchedulerWakeReason, SendValueError, SetElements, SetValue,
+    TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
+    TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpSocketValue,
+    UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
+    DIRECT_RUNTIME_TYPE_FIELD, DIRECT_RUNTIME_TYPE_SEPARATOR,
 };
 use crate::text_methods;
 use aura_core::ops::{BinaryOp, ReceiverKind, UnaryOp};
@@ -2158,6 +2160,10 @@ pub(crate) struct RuntimeTypeTag {
     /// True when tagging only records the name: the value itself never
     /// changes, so no value lock is taken.
     pub(crate) name_only: bool,
+    /// True when the tag changes nothing in a value but its name, except in
+    /// a channel or a task, which keep their own copy of the name. A plain
+    /// nominal type such as `json.Value` tags this way.
+    pub(crate) shape_free: bool,
 }
 
 fn runtime_type_tag_is_name_only(parsed: &Type) -> bool {
@@ -2236,11 +2242,15 @@ fn shared_runtime_type_tag(bytes: &[u8]) -> Arc<RuntimeTypeTag> {
         .unwrap_or_else(|_| runtime_error("aura direct runtime received invalid UTF-8 bytes"));
     let parsed = runtime_type_from_name(name);
     let name_only = runtime_type_tag_is_name_only(&parsed);
+    let integer_kind = IntegerKind::from_runtime_type_name(name);
+    let shape_free =
+        integer_kind.is_none() && matches!(&parsed, Type::Named(_, args) if args.is_empty());
     let tag = Arc::new(RuntimeTypeTag {
         name: Arc::from(name),
         parsed,
-        integer_kind: IntegerKind::from_runtime_type_name(name),
+        integer_kind,
         name_only,
+        shape_free,
     });
     let mut registry = registry
         .lock()
@@ -2261,8 +2271,19 @@ unsafe fn set_explicit_runtime_type_tag(ptr: *mut OpaqueValue, tag: &RuntimeType
             let _access = value.access(true);
             // SAFETY: as in `value_mut`.
             let stored = unsafe { &mut *value.runtime_type_name.get() };
-            if stored.as_deref() != Some(runtime_type_name) {
+            let already = stored.as_ref().is_some_and(|existing| {
+                Arc::ptr_eq(existing, &tag.name) || **existing == *runtime_type_name
+            });
+            if !already {
                 *stored = Some(Arc::clone(&tag.name));
+            }
+            // SAFETY: the access above still holds.
+            let keeps_name = matches!(
+                unsafe { &*value.value.get() },
+                Value::Channel(_) | Value::Task(_)
+            );
+            if tag.shape_free && !keeps_name {
+                return;
             }
         }
         None => runtime_error("direct runtime received a null opaque value pointer"),
@@ -2352,7 +2373,7 @@ unsafe fn set_explicit_runtime_type_tag(ptr: *mut OpaqueValue, tag: &RuntimeType
                     name.push_str(base);
                     name.push(DIRECT_RUNTIME_TYPE_SEPARATOR);
                     name.push_str(runtime_type_name);
-                    variant.enum_name = name;
+                    variant.enum_name = name.into();
                 }
             }
             Value::Channel(channel) => channel.set_runtime_type_name(runtime_type_name.to_string()),
@@ -3136,6 +3157,49 @@ fn direct_json_into_object(args: &DirectHostArgBuffer) -> std::result::Result<Va
             None => optional_absent(member),
         },
     )
+}
+
+const LITERAL_NAME_LOOKUP_SLOTS: usize = 64;
+
+type LiteralNameSlot = Option<(usize, usize, RuntimeName)>;
+
+thread_local! {
+    /// Per-thread direct-mapped names keyed by the literal's address and
+    /// length. A hit still compares the bytes, so a reused buffer cannot
+    /// return a stale name.
+    static LITERAL_NAME_LOOKUP: RefCell<[LiteralNameSlot; LITERAL_NAME_LOOKUP_SLOTS]> =
+        const { RefCell::new([const { None }; LITERAL_NAME_LOOKUP_SLOTS]) };
+}
+
+/// The name spelled by the UTF-8 literal at `ptr`. Generated code builds
+/// each enum variant from the same two literals every time, so the values
+/// share one copy of each name instead of allocating their own.
+fn literal_runtime_name(ptr: *const u8, len: usize) -> RuntimeName {
+    let bytes = unsafe { slice::from_raw_parts(ptr, len) };
+    let address = ptr as usize;
+    let slot = ((address >> 3) ^ (address >> 11) ^ len) % LITERAL_NAME_LOOKUP_SLOTS;
+    let cached = LITERAL_NAME_LOOKUP
+        .try_with(|lookup| match &lookup.borrow()[slot] {
+            Some((cached_address, cached_len, name))
+                if *cached_address == address && *cached_len == len && name.as_bytes() == bytes =>
+            {
+                Some(name.clone())
+            }
+            _ => None,
+        })
+        .ok()
+        .flatten();
+    if let Some(name) = cached {
+        return name;
+    }
+    let name = RuntimeName::from(
+        str::from_utf8(bytes)
+            .unwrap_or_else(|_| runtime_error("aura direct runtime received invalid UTF-8 bytes")),
+    );
+    let _ = LITERAL_NAME_LOOKUP.try_with(|lookup| {
+        lookup.borrow_mut()[slot] = Some((address, len, name.clone()));
+    });
+    name
 }
 
 fn decode_bytes(ptr: *const u8, len: usize) -> String {
@@ -5729,26 +5793,63 @@ pub extern "C-unwind" fn aura_direct_format_push_str(
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_format_push_i64(builder: *mut OpaqueValue, value: i64) {
     task_runtime_boundary(|| {
-        // Decimal digits written right to left; `i64::MIN` needs all 20 bytes.
-        let mut digits = [0_u8; 20];
-        let mut start = digits.len();
-        let mut magnitude = value.unsigned_abs();
-        loop {
-            start -= 1;
-            digits[start] = b'0' + (magnitude % 10) as u8;
-            magnitude /= 10;
-            if magnitude == 0 {
-                break;
-            }
+        let mut digits = [0_u8; I64_DECIMAL_BYTES];
+        push_format_text(builder, i64_decimal(value, &mut digits));
+    })
+}
+
+/// The most bytes an `i64` takes in decimal: `i64::MIN` needs all 20.
+const I64_DECIMAL_BYTES: usize = 20;
+
+/// The most bytes a fused f-string start reserves for the parts after the
+/// integer. Generated code passes a hint, and this bounds it.
+const FORMAT_RESERVE_LIMIT: usize = 4096;
+
+/// `value` in decimal, written right to left into `digits`.
+fn i64_decimal(value: i64, digits: &mut [u8; I64_DECIMAL_BYTES]) -> &str {
+    let mut start = digits.len();
+    let mut magnitude = value.unsigned_abs();
+    loop {
+        start -= 1;
+        digits[start] = b'0' + (magnitude % 10) as u8;
+        magnitude /= 10;
+        if magnitude == 0 {
+            break;
         }
-        if value < 0 {
-            start -= 1;
-            digits[start] = b'-';
+    }
+    if value < 0 {
+        start -= 1;
+        digits[start] = b'-';
+    }
+    // SAFETY: the bytes are ASCII digits and a minus sign.
+    unsafe { str::from_utf8_unchecked(&digits[start..]) }
+}
+
+/// Starts an f-string whose leading literal is followed by an `int64`. It
+/// does the work of `aura_direct_format_begin` and
+/// `aura_direct_format_push_i64` in one call, and sizes the buffer for the
+/// `reserve` more bytes that the later parts are expected to add.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_format_begin_i64(
+    ptr: *const u8,
+    len: usize,
+    value: i64,
+    reserve: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let bytes = unsafe { slice::from_raw_parts(ptr, len) };
+        let leading = str::from_utf8(bytes)
+            .unwrap_or_else(|_| runtime_error("aura direct runtime received invalid UTF-8 bytes"));
+        let mut output = String::with_capacity(
+            len.saturating_add(I64_DECIMAL_BYTES)
+                .saturating_add(reserve.min(FORMAT_RESERVE_LIMIT)),
+        );
+        output.push_str(leading);
+        let mut digits = [0_u8; I64_DECIMAL_BYTES];
+        if let Err(error) = append_string_checked(&mut output, i64_decimal(value, &mut digits)) {
+            runtime_diagnostic_error(error);
         }
-        // SAFETY: the bytes are ASCII digits and a minus sign.
-        push_format_text(builder, unsafe {
-            str::from_utf8_unchecked(&digits[start..])
-        });
+        boxed_value(Value::String(output))
     })
 }
 
@@ -7307,6 +7408,26 @@ pub extern "C-unwind" fn aura_direct_vec_element_map_get(
     })
 }
 
+/// `aura_direct_vec_element_map_get`, as the found value's own box or null.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_element_map_get_payload(
+    list: *mut OpaqueValue,
+    index: i64,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        with_vec_element(list, index, line, column, |element| match element {
+            Value::Map(map) => direct_map_lookup_as(map, key, boxed_map_payload),
+            other => runtime_error(format!(
+                "expected `dict`, found `{}`",
+                value_type_name(other)
+            )),
+        })
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_index_option(
     vec: *mut OpaqueValue,
@@ -7905,14 +8026,38 @@ pub extern "C-unwind" fn aura_direct_map_get(
 /// `Lookup.Found` with a copy of the value stored under `key`, or
 /// `Lookup.Missing`.
 fn direct_map_lookup(map: &MapValue, key: *mut OpaqueValue) -> *mut OpaqueValue {
-    unsafe { with_value(key, |key| boxed_map_lookup(map.entries.value_of(key))) }
+    direct_map_lookup_as(map, key, boxed_map_lookup)
+}
+
+fn direct_map_lookup_as(
+    map: &MapValue,
+    key: *mut OpaqueValue,
+    boxed: fn(Option<&Value>) -> *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    unsafe { with_value(key, |key| boxed(map.entries.value_of(key))) }
+}
+
+/// A copy of the value a map lookup found, or `None` when the key is
+/// missing.
+fn map_lookup_copy(found: Option<&Value>) -> Option<Value> {
+    let value = found.map(try_clone_array_containing_value).transpose();
+    direct_array_result(value, 0, 0)
 }
 
 /// The boxed `Lookup` for a value found in a map, or `Lookup.Missing`.
 fn boxed_map_lookup(found: Option<&Value>) -> *mut OpaqueValue {
-    let value = found.map(try_clone_array_containing_value).transpose();
-    let value = direct_array_result(value, 0, 0);
-    boxed_value(value.map(lookup_found).unwrap_or_else(lookup_missing))
+    boxed_value(
+        map_lookup_copy(found)
+            .map(lookup_found)
+            .unwrap_or_else(lookup_missing),
+    )
+}
+
+/// A box holding a copy of the value a map lookup found, or null when the
+/// key is missing. Generated code keeps a `Lookup` it only matches and
+/// unpacks in this form.
+fn boxed_map_payload(found: Option<&Value>) -> *mut OpaqueValue {
+    map_lookup_copy(found).map_or(std::ptr::null_mut(), boxed_value)
 }
 
 /// The key of a `dict[str, V]` lookup, a literal in the program image.
@@ -7935,6 +8080,53 @@ pub extern "C-unwind" fn aura_direct_map_get_str(
     })
 }
 
+/// `aura_direct_map_get`, as the found value's own box or null.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_get_payload(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| with_map(map, |map| direct_map_lookup_as(map, key, boxed_map_payload)))
+}
+
+/// `aura_direct_map_get_str`, as the found value's own box or null.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_get_str_payload(
+    map: *mut OpaqueValue,
+    key_ptr: *const u8,
+    key_len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let key = literal_str(key_ptr, key_len);
+        with_map(map, |map| boxed_map_payload(map.entries.value_of_str(key)))
+    })
+}
+
+/// Turns an owned `Lookup` into the found value's own box, or null for
+/// `Lookup.Missing`. Generated code uses it when a lookup it keeps in that
+/// form came from a path that builds the `Lookup`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_lookup_payload(lookup: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { consume_owned_value(lookup) } {
+        Value::EnumVariant(variant)
+            if nominal_runtime_base_name(&variant.enum_name) == "Lookup" =>
+        {
+            match (
+                variant.variant_name.as_str(),
+                variant.payloads.into_iter().next(),
+            ) {
+                ("Found", Some(payload)) => boxed_value(payload),
+                ("Missing", None) => std::ptr::null_mut(),
+                _ => runtime_error("direct runtime received a malformed `Lookup`"),
+            }
+        }
+        other => runtime_error(format!(
+            "expected `Lookup`, found `{}`",
+            value_type_name(other)
+        )),
+    })
+}
+
 /// `aura_direct_vec_element_map_get` with a `str` literal key.
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_element_map_get_str(
@@ -7949,6 +8141,29 @@ pub extern "C-unwind" fn aura_direct_vec_element_map_get_str(
         let key = literal_str(key_ptr, key_len);
         with_vec_element(list, index, line, column, |element| match element {
             Value::Map(map) => boxed_map_lookup(map.entries.value_of_str(key)),
+            other => runtime_error(format!(
+                "expected `dict`, found `{}`",
+                value_type_name(other)
+            )),
+        })
+    })
+}
+
+/// `aura_direct_vec_element_map_get_str`, as the found value's own box or
+/// null.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_element_map_get_str_payload(
+    list: *mut OpaqueValue,
+    index: i64,
+    key_ptr: *const u8,
+    key_len: usize,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let key = literal_str(key_ptr, key_len);
+        with_vec_element(list, index, line, column, |element| match element {
+            Value::Map(map) => boxed_map_payload(map.entries.value_of_str(key)),
             other => runtime_error(format!(
                 "expected `dict`, found `{}`",
                 value_type_name(other)
@@ -8759,9 +8974,61 @@ pub extern "C-unwind" fn aura_direct_tag_value_type(
     })
 }
 
+/// Tags `value` like `aura_direct_tag_value_type`, through a cell that
+/// generated code keeps for the descriptor. The first call decodes the
+/// descriptor and stores the tag in the cell. Every later call reads it
+/// from there, so it neither hashes nor compares the descriptor.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_tag_value_type_cell(
+    value: *mut OpaqueValue,
+    cell: *const AtomicPtr<c_void>,
+    type_ptr: *const u8,
+    type_len: usize,
+) {
+    task_runtime_boundary(|| unsafe {
+        let Some(cell) = cell.as_ref() else {
+            runtime_error("direct runtime received a null type tag cell");
+        };
+        let tag = celled_runtime_type_tag(cell, slice::from_raw_parts(type_ptr, type_len));
+        set_explicit_runtime_type_tag(value, tag);
+    })
+}
+
+/// The tag in `cell`, decoded from `bytes` and stored there on first use.
+/// The cell keeps its own reference to the tag for the life of the process.
+fn celled_runtime_type_tag<'a>(cell: &'a AtomicPtr<c_void>, bytes: &[u8]) -> &'a RuntimeTypeTag {
+    let stored = cell.load(Ordering::Acquire);
+    if !stored.is_null() {
+        // SAFETY: only this function stores into the cell, and the tag it
+        // stores is never released.
+        return unsafe { &*stored.cast::<RuntimeTypeTag>() };
+    }
+    let tag = Arc::into_raw(interned_runtime_type_tag(bytes)).cast_mut();
+    match cell.compare_exchange(
+        std::ptr::null_mut(),
+        tag.cast(),
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    ) {
+        // SAFETY: the cell now owns the reference `into_raw` gave up.
+        Ok(_) => unsafe { &*tag },
+        Err(winner) => {
+            // SAFETY: another thread stored its tag first, so this one
+            // gives back the reference it took.
+            unsafe { drop(Arc::from_raw(tag)) };
+            // SAFETY: as above.
+            unsafe { &*winner.cast::<RuntimeTypeTag>() }
+        }
+    }
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_unbox_i64(value: *mut OpaqueValue) -> i64 {
-    task_runtime_boundary(|| match unsafe { value_ref(value) } {
+    task_runtime_boundary(|| unsafe { with_value(value, unbox_i64_of) })
+}
+
+fn unbox_i64_of(value: &Value) -> i64 {
+    match value {
         Value::Int(value) => match value.as_i128().and_then(|value| i64::try_from(value).ok()) {
             Some(value) => value,
             None => runtime_error("direct backend expected an integer that fits in host i64"),
@@ -8770,12 +9037,16 @@ pub extern "C-unwind" fn aura_direct_unbox_i64(value: *mut OpaqueValue) -> i64 {
             "direct backend expected `int32`, found `{}`",
             value_type_name(other)
         )),
-    })
+    }
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_unbox_int64(value: *mut OpaqueValue) -> i64 {
-    task_runtime_boundary(|| match unsafe { value_ref(value) } {
+    task_runtime_boundary(|| unsafe { with_value(value, unbox_int64_of) })
+}
+
+fn unbox_int64_of(value: &Value) -> i64 {
+    match value {
         Value::Int(value) => match value.as_i128().and_then(|value| i64::try_from(value).ok()) {
             Some(value) => value,
             None => runtime_error(format!("integer value `{value}` does not fit in `int64`")),
@@ -8784,7 +9055,7 @@ pub extern "C-unwind" fn aura_direct_unbox_int64(value: *mut OpaqueValue) -> i64
             "direct backend expected `int64`, found `{}`",
             value_type_name(other)
         )),
-    })
+    }
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -8890,7 +9161,11 @@ pub extern "C-unwind" fn aura_direct_integer_width_binary(
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_unbox_u64(value: *mut OpaqueValue) -> u64 {
-    task_runtime_boundary(|| match unsafe { value_ref(value) } {
+    task_runtime_boundary(|| unsafe { with_value(value, unbox_u64_of) })
+}
+
+fn unbox_u64_of(value: &Value) -> u64 {
+    match value {
         Value::Int(value) => match value.as_i128().and_then(|value| u64::try_from(value).ok()) {
             Some(value) => value,
             None => runtime_error("direct backend expected an integer that fits in host u64"),
@@ -8899,7 +9174,7 @@ pub extern "C-unwind" fn aura_direct_unbox_u64(value: *mut OpaqueValue) -> u64 {
             "direct backend expected `uint64`, found `{}`",
             value_type_name(other)
         )),
-    })
+    }
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -8915,13 +9190,17 @@ pub extern "C-unwind" fn aura_direct_unbox_f64(value: *mut OpaqueValue) -> f64 {
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_unbox_bool(value: *mut OpaqueValue) -> i64 {
-    task_runtime_boundary(|| match unsafe { value_ref(value) } {
-        Value::Bool(value) => i64::from(value),
+    task_runtime_boundary(|| unsafe { with_value(value, unbox_bool_of) })
+}
+
+fn unbox_bool_of(value: &Value) -> i64 {
+    match value {
+        Value::Bool(value) => i64::from(*value),
         other => runtime_error(format!(
             "direct backend expected `bool`, found `{}`",
             value_type_name(other)
         )),
-    })
+    }
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -9735,8 +10014,8 @@ pub extern "C-unwind" fn aura_direct_enum_variant(
         let payload_count = usize::try_from(payload_count)
             .unwrap_or_else(|_| runtime_error("invalid enum payload count"));
         boxed_value(Value::EnumVariant(EnumVariantValue {
-            enum_name: decode_bytes(enum_ptr, enum_len),
-            variant_name: decode_bytes(variant_ptr, variant_len),
+            enum_name: literal_runtime_name(enum_ptr, enum_len),
+            variant_name: literal_runtime_name(variant_ptr, variant_len),
             payloads: if payload_count == 0 {
                 Vec::new()
             } else {
@@ -9865,6 +10144,18 @@ pub extern "C-unwind" fn aura_direct_tuple_take_element(
     })
 }
 
+/// Whether `nominal_runtime_base_name(name)` spells `expected`, found
+/// without searching all of `name` for the separator.
+fn nominal_base_name_is(name: &str, expected: &[u8]) -> bool {
+    let separator = DIRECT_RUNTIME_TYPE_SEPARATOR as u8;
+    let name = name.as_bytes();
+    name.starts_with(expected)
+        && name
+            .get(expected.len())
+            .is_none_or(|&next| next == separator)
+        && !expected.contains(&separator)
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_variant_matches(
     value: *mut OpaqueValue,
@@ -9882,8 +10173,7 @@ pub extern "C-unwind" fn aura_direct_variant_matches(
             with_value(value, |value| match value {
                 Value::EnumVariant(variant) => i64::from(
                     variant.variant_name.as_bytes() == expected_variant
-                        && nominal_runtime_base_name(&variant.enum_name).as_bytes()
-                            == expected_enum,
+                        && nominal_base_name_is(&variant.enum_name, expected_enum),
                 ),
                 _ => 0,
             })
@@ -9902,9 +10192,37 @@ pub extern "C-unwind" fn aura_direct_variant_payload(
 }
 
 fn direct_variant_payload_clone(value: &Value, index: i64) -> *mut OpaqueValue {
+    boxed_value(direct_variant_payload_ref(value, index).clone())
+}
+
+macro_rules! direct_variant_payload_scalar {
+    ($($(#[$doc:meta])* $name:ident => $unbox:ident -> $result:ty),+ $(,)?) => {$(
+        $(#[$doc])*
+        #[cfg_attr(not(coverage), no_mangle)]
+        pub extern "C-unwind" fn $name(value: *mut OpaqueValue, index: i64) -> $result {
+            task_runtime_boundary(|| unsafe {
+                with_value(value, |value| $unbox(direct_variant_payload_ref(value, index)))
+            })
+        }
+    )+};
+}
+
+direct_variant_payload_scalar! {
+    /// `aura_direct_variant_payload` then `aura_direct_unbox_i64`, without
+    /// a copy or a box.
+    aura_direct_variant_payload_i64 => unbox_i64_of -> i64,
+    /// `aura_direct_variant_payload` then `aura_direct_unbox_int64`.
+    aura_direct_variant_payload_int64 => unbox_int64_of -> i64,
+    /// `aura_direct_variant_payload` then `aura_direct_unbox_u64`.
+    aura_direct_variant_payload_u64 => unbox_u64_of -> u64,
+    /// `aura_direct_variant_payload` then `aura_direct_unbox_bool`.
+    aura_direct_variant_payload_bool => unbox_bool_of -> i64,
+}
+
+fn direct_variant_payload_ref(value: &Value, index: i64) -> &Value {
     match value {
         Value::EnumVariant(variant) => match variant.payloads.get(index.max(0) as usize) {
-            Some(payload) => boxed_value(payload.clone()),
+            Some(payload) => payload,
             None => runtime_error(format!(
                 "enum variant `{}.{}` does not carry a payload at index {}",
                 nominal_runtime_base_name(&variant.enum_name),

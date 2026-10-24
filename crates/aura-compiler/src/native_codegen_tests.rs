@@ -13618,7 +13618,7 @@ def main():
         "aura_direct_compare_str_literal_at",
         "aura_direct_compare_values_at",
         "aura_direct_vec_element_len",
-        "aura_direct_vec_element_map_get_str",
+        "aura_direct_vec_element_map_get_str_payload",
     ] {
         assert!(
             referenced.iter().any(|name| name.ends_with(symbol)),
@@ -13970,13 +13970,14 @@ def main():
     assert!(
         referenced
             .iter()
-            .any(|name| name.ends_with("aura_direct_vec_element_map_get")),
+            .any(|name| name.ends_with("aura_direct_vec_element_map_get_payload")),
         "a place key should be read through the boxed lookup, referenced: {referenced:?}"
     );
     assert!(
-        !referenced
-            .iter()
-            .any(|name| name.ends_with("aura_direct_vec_element_map_get_str")),
+        !referenced.iter().any(|name| {
+            name.ends_with("aura_direct_vec_element_map_get_str")
+                || name.ends_with("aura_direct_vec_element_map_get_str_payload")
+        }),
         "only a literal key is looked up without a box"
     );
 }
@@ -14185,4 +14186,247 @@ def main() -> int32:
         missing.contains("direct backend received member call `.speak` without a dispatch"),
         "{missing}"
     );
+}
+
+const LOOKUP_MATCH_SOURCE: &str = r#"
+def main() -> int32:
+    mut counts: dict[str, int32] = {}
+    counts["a"] = 3
+    match counts.get("a"):
+        case Lookup.Found(value):
+            print(value)
+        case Lookup.Missing:
+            print(0)
+    return 0
+"#;
+
+/// The symbols an object references, without any platform underscore.
+fn exact_referenced_symbols(object: &[u8]) -> BTreeSet<String> {
+    object_referenced_symbols(object)
+        .into_iter()
+        .map(|symbol| symbol.trim_start_matches('_').to_string())
+        .collect()
+}
+
+#[test]
+fn direct_lookup_matches_keep_the_found_value_without_a_lookup() {
+    let mir = lower_source_to_mir(LOOKUP_MATCH_SOURCE).expect("the lookup match should lower");
+    let object = emit_host_object(&mir).expect("the lookup match should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    for required in [
+        "aura_direct_map_get_str_payload",
+        "aura_direct_tag_value_type_cell",
+    ] {
+        assert!(
+            referenced.contains(required),
+            "lookup matches must reference `{required}`: {referenced:?}"
+        );
+    }
+    for forbidden in [
+        "aura_direct_map_get_str",
+        "aura_direct_lookup_payload",
+        "aura_direct_variant_matches",
+        "aura_direct_variant_payload",
+        "aura_direct_tag_value_type",
+    ] {
+        assert!(
+            !referenced.contains(forbidden),
+            "lookup matches must not reference `{forbidden}`: {referenced:?}"
+        );
+    }
+}
+
+#[test]
+fn direct_scalar_variant_payloads_read_without_a_box() {
+    let source = r#"
+enum Reading:
+    Count(int32)
+    Flag(bool)
+
+def main() -> int32:
+    readings = [Reading.Count(4), Reading.Flag(true)]
+    for reading in readings:
+        match reading:
+            case Reading.Count(count):
+                print(count)
+            case Reading.Flag(flag):
+                print(flag)
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("the enum match should lower");
+    let object = emit_host_object(&mir).expect("the enum match should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    for required in [
+        "aura_direct_variant_payload_i64",
+        "aura_direct_variant_payload_bool",
+    ] {
+        assert!(
+            referenced.contains(required),
+            "scalar payloads must reference `{required}`: {referenced:?}"
+        );
+    }
+    for forbidden in ["aura_direct_unbox_i64", "aura_direct_unbox_bool"] {
+        assert!(
+            !referenced.contains(forbidden),
+            "scalar payloads must not reference `{forbidden}`: {referenced:?}"
+        );
+    }
+}
+
+#[test]
+fn direct_fstrings_start_with_a_leading_int64_in_one_call() {
+    let source = r#"
+def main() -> int32:
+    mut i: int64 = 7
+    print(f"key-{i}")
+    print(f"{i} and {i}")
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("the f-strings should lower");
+    let object = emit_host_object(&mir).expect("the f-strings should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    assert!(
+        referenced.contains("aura_direct_format_begin_i64"),
+        "{referenced:?}"
+    );
+    assert!(
+        !referenced.contains("aura_direct_format_begin"),
+        "{referenced:?}"
+    );
+    // Both f-strings begin with `format_begin_i64`. Counting against it keeps
+    // the check true where each call takes two relocations, as on arm64
+    // Mach-O, which loads a callee's address from the GOT.
+    let begins = object_referenced_symbol_occurrences(&object, "aura_direct_format_begin_i64");
+    assert_eq!(
+        2 * object_referenced_symbol_occurrences(&object, "aura_direct_format_push_i64"),
+        begins,
+        "only the second f-string's later `int64` part should push"
+    );
+}
+
+/// The lookup slots of `LOOKUP_MATCH_SOURCE`'s `main` after `change`.
+fn lookup_slots_after(change: impl FnOnce(&mut MirFunction, &str)) -> BTreeSet<String> {
+    let mir = lower_source_to_mir(LOOKUP_MATCH_SOURCE).expect("the lookup match should lower");
+    let mut main = mir
+        .functions
+        .into_iter()
+        .find(|function| function.name == "main")
+        .expect("main");
+    let slots = super::lookups::lookup_payload_slots(&main);
+    let [slot] = slots.iter().collect::<Vec<_>>()[..] else {
+        panic!("the lookup match should have one slot: {slots:?}");
+    };
+    let slot = slot.clone();
+    change(&mut main, &slot);
+    super::lookups::lookup_payload_slots(&main)
+        .into_iter()
+        .collect()
+}
+
+/// The block and position of the instruction that unpacks `slot`.
+fn lookup_unpack_site(function: &MirFunction, slot: &str) -> (usize, usize) {
+    function
+        .blocks
+        .iter()
+        .enumerate()
+        .find_map(|(block_index, block)| {
+            block
+                .instructions
+                .iter()
+                .position(|instruction| {
+                    matches!(
+                        instruction,
+                        Instruction::Assign {
+                            value: Rvalue::VariantPayload {
+                                scrutinee: Operand::Place(place) | Operand::MovePlace(place),
+                                ..
+                            },
+                            ..
+                        } if place == slot
+                    )
+                })
+                .map(|position| (block_index, position))
+        })
+        .expect("the slot should be unpacked")
+}
+
+#[test]
+fn direct_lookup_slots_reject_every_other_use() {
+    assert_eq!(lookup_slots_after(|_, _| {}).len(), 1);
+
+    // Two copies of one payload would share one box.
+    assert!(lookup_slots_after(|main, slot| {
+        let (block, position) = lookup_unpack_site(main, slot);
+        let unpack = main.blocks[block].instructions[position].clone();
+        main.blocks[block].instructions.insert(position, unpack);
+    })
+    .is_empty());
+
+    // So would one unpack that runs twice for one lookup.
+    assert!(lookup_slots_after(|main, slot| {
+        let (block, _) = lookup_unpack_site(main, slot);
+        let label = main.blocks[block].label.clone();
+        main.blocks[block].terminator = Terminator::Goto(label);
+    })
+    .is_empty());
+
+    // Any other read needs the `Lookup` itself.
+    assert!(lookup_slots_after(|main, slot| {
+        main.blocks[0].instructions.push(Instruction::Assign {
+            target: "%copy".to_string(),
+            value: Rvalue::Use(Operand::Place(slot.to_string())),
+        });
+    })
+    .is_empty());
+
+    // So does an assignment that is not a `get`.
+    assert!(lookup_slots_after(|main, slot| {
+        main.blocks[0].instructions.push(Instruction::Assign {
+            target: slot.to_string(),
+            value: Rvalue::Use(Operand::Int(0)),
+        });
+    })
+    .is_empty());
+
+    // A parameter arrives as a `Lookup`.
+    assert!(lookup_slots_after(|main, slot| {
+        main.params.push(MirParam {
+            name: slot.to_string(),
+            passing: MirReceiverKind::Value,
+            ty: Type::named("int32"),
+            default_function: None,
+            keyword_only: false,
+        });
+    })
+    .is_empty());
+
+    // A match on any other variant reads the `Lookup`.
+    assert!(lookup_slots_after(|main, slot| {
+        for block in &mut main.blocks {
+            if let Terminator::Match {
+                scrutinee: Operand::Place(place),
+                arms,
+                ..
+            } = &mut block.terminator
+            {
+                if place == slot {
+                    arms[0].variant_name = Some("Other".to_string());
+                }
+            }
+        }
+    })
+    .is_empty());
+
+    // An unpack of a later payload has nothing to read.
+    assert!(lookup_slots_after(|main, slot| {
+        let (block, position) = lookup_unpack_site(main, slot);
+        if let Instruction::Assign {
+            value: Rvalue::VariantPayload { index, .. },
+            ..
+        } = &mut main.blocks[block].instructions[position]
+        {
+            *index = 1;
+        }
+    })
+    .is_empty());
 }

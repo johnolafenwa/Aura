@@ -526,6 +526,9 @@ struct NativeCodegen<'a> {
     function_writeback_types: HashMap<String, Vec<DirectType>>,
     runtime: RuntimeTable<FuncHandle>,
     string_data: HashMap<Vec<u8>, DataHandle>,
+    /// One writable word per runtime type descriptor, where the runtime
+    /// keeps the decoded tag after the first use.
+    tag_cells: HashMap<String, DataHandle>,
     /// Every function's frame descriptor, which the main wrapper validates.
     frame_descriptors: Vec<DataHandle>,
     /// The module's own retain and release, which `runtime` names in place
@@ -793,6 +796,7 @@ impl<'a> NativeCodegen<'a> {
             function_writeback_types,
             runtime,
             string_data: HashMap::new(),
+            tag_cells: HashMap::new(),
             frame_descriptors: Vec::new(),
             ownership,
         })
@@ -1222,6 +1226,15 @@ impl<'a> NativeCodegen<'a> {
             .clone()
             .unwrap_or_else(|| self.program_path.clone());
 
+        let lookup_slots = lookups::lookup_payload_slots(function)
+            .into_iter()
+            .filter(|name| {
+                matches!(
+                    variable_types.get(name),
+                    Some(DirectType::Opaque(Type::Named(lookup, _))) if lookup == "Lookup"
+                )
+            })
+            .collect();
         let mut compiler = FunctionCompiler {
             builder,
             blocks,
@@ -1247,6 +1260,8 @@ impl<'a> NativeCodegen<'a> {
             tracked_roots: explicit_locals.tracked,
             loan_locals: explicit_locals.loans,
             closed_matches: explicit_locals.closed_matches,
+            lookup_slots,
+            lookup_payload: None,
             emptied_store_root: None,
             lent_temps: HashMap::new(),
             retain_calls: HashMap::new(),
@@ -1264,6 +1279,7 @@ impl<'a> NativeCodegen<'a> {
             closure_capture_writebacks: HashMap::new(),
             host_builtin_refs: HashMap::new(),
             string_data: &mut self.string_data,
+            tag_cells: &mut self.tag_cells,
             callable_shapes: &self.callable_shapes,
             contract_descriptors: &mut self.contract_descriptors,
             cleanup_places,
@@ -2417,6 +2433,13 @@ struct FunctionCompiler<'a> {
     /// The match blocks whose fall-through the MIR treats as unreachable.
     /// It releases nothing there, so the edge traps.
     closed_matches: HashSet<String>,
+    /// The `Lookup` temporaries kept as the found value's box or null. See
+    /// `lookups::lookup_payload_slots`.
+    lookup_slots: HashSet<String>,
+    /// Set while a `get` for one of `lookup_slots` compiles: `Some(false)`
+    /// asks for the payload form, and the helper that emits it sets
+    /// `Some(true)`.
+    lookup_payload: Option<bool>,
     /// A tracked root the current instruction assigns. The MIR released its
     /// old value, so the store adds no release.
     emptied_store_root: Option<String>,
@@ -2456,6 +2479,7 @@ struct FunctionCompiler<'a> {
     /// object imports only the builtins the program calls.
     host_builtin_refs: HashMap<&'static str, FuncRef>,
     string_data: &'a mut HashMap<Vec<u8>, DataHandle>,
+    tag_cells: &'a mut HashMap<String, DataHandle>,
     callable_shapes: &'a HashMap<CallableShapeKey, CallableShape>,
     contract_descriptors: &'a mut HashMap<String, callables::ContractDescriptor>,
     cleanup_places: Vec<String>,
@@ -3664,6 +3688,10 @@ impl<'a> FunctionCompiler<'a> {
                         releases_on_error,
                         from.as_deref(),
                     )?;
+                } else if self.lookup_slots.contains(target.as_str()) {
+                    self.compile_lookup_slot_assign(target, value)?;
+                } else if let Some(scalar) = self.compile_scalar_variant_payload(target, value)? {
+                    self.store_place(target, scalar)?;
                 } else {
                     let target_ty = self.type_of_place(target)?;
                     let compiled = self.compile_rvalue_for_target(value, &target_ty)?;
@@ -3759,6 +3787,10 @@ impl<'a> FunctionCompiler<'a> {
                 arms,
                 otherwise,
             } => {
+                let lookup_slot = matches!(
+                    scrutinee,
+                    Operand::Place(place) if self.lookup_slots.contains(place.as_str())
+                );
                 let scrutinee = self.load_operand(scrutinee)?;
                 let DirectType::Opaque(scrutinee_ty) = &scrutinee.ty else {
                     return Err(
@@ -3782,11 +3814,19 @@ impl<'a> FunctionCompiler<'a> {
                         return Ok(());
                     }
                     let next_block = self.builder.create_block();
-                    let matched = self.variant_matches_value(
-                        scrutinee.values[0],
-                        arm.enum_name.as_deref().unwrap_or(scrutinee_enum_name),
-                        arm.variant_name.as_deref().unwrap_or_default(),
-                    )?;
+                    let matched = if lookup_slot {
+                        // A lookup slot is null exactly when the key was
+                        // missing.
+                        let found = arm.variant_name.as_deref() == Some("Found");
+                        let cc = if found { IntCC::NotEqual } else { IntCC::Equal };
+                        self.builder.icmp_imm(cc, scrutinee.values[0], 0)
+                    } else {
+                        self.variant_matches_value(
+                            scrutinee.values[0],
+                            arm.enum_name.as_deref().unwrap_or(scrutinee_enum_name),
+                            arm.variant_name.as_deref().unwrap_or_default(),
+                        )?
+                    };
                     let arm_block = self.compiled_block(&arm.label)?;
                     let matched_cleanup = self.builder.create_block();
                     let pending_owned = self.layout_scratch.clone();
@@ -4181,6 +4221,12 @@ impl<'a> FunctionCompiler<'a> {
                 variant_name: _,
                 index,
             } => {
+                if let Operand::Place(place) | Operand::MovePlace(place) = scrutinee {
+                    if self.lookup_slots.contains(place.as_str()) {
+                        let moved = matches!(scrutinee, Operand::MovePlace(_));
+                        return self.compile_lookup_slot_payload(place, moved);
+                    }
+                }
                 if let Operand::MovePlace(place) = scrutinee {
                     return self.compile_take_variant_payload(place, *index);
                 }
@@ -5827,11 +5873,37 @@ impl<'a> FunctionCompiler<'a> {
             _ => ("", parts),
         };
         let (ptr, len) = self.string_constant(leading.as_bytes())?;
-        let call = self
-            .builder
-            .call(self.runtime[RuntimeFn::FormatBegin], &[ptr, len]);
+        // A leading `int64` part joins the start, which also sizes the
+        // buffer for the parts after it.
+        let mut rest = rest;
+        let mut boxed_first = None;
+        let call = match rest.split_first() {
+            Some((MirFormatPart::Int64(value), after)) => {
+                rest = after;
+                let value = self.load_operand(value)?;
+                if value.ty == DirectType::Scalar(ScalarKind::Int64) {
+                    let reserve = self
+                        .builder
+                        .iconst(types::I64, format_reserve_hint(after) as i64);
+                    self.builder.call(
+                        self.runtime[RuntimeFn::FormatBeginI64],
+                        &[ptr, len, value.values[0], reserve],
+                    )
+                } else {
+                    boxed_first = Some(value);
+                    self.builder
+                        .call(self.runtime[RuntimeFn::FormatBegin], &[ptr, len])
+                }
+            }
+            _ => self
+                .builder
+                .call(self.runtime[RuntimeFn::FormatBegin], &[ptr, len]),
+        };
         let builder = self.owned_opaque_result(call.results, Type::named("str"));
         let handle = builder.values[0];
+        if let Some(value) = boxed_first {
+            self.push_format_value(handle, value)?;
+        }
         for part in rest {
             match part {
                 MirFormatPart::Literal(text) => {
@@ -6671,19 +6743,23 @@ impl<'a> FunctionCompiler<'a> {
                 // A literal `str` key is looked up without a box.
                 let (key_ptr, key_len) = self.string_constant(text.as_bytes())?;
                 let (list, index) = self.load_borrowed_list_element(&selection)?;
-                self.builder.call(
+                let function = self.lookup_function(
                     self.runtime[RuntimeFn::VecElementMapGetStr],
-                    &[list, index, key_ptr, key_len, line, column],
-                )
+                    RuntimeFn::VecElementMapGetStrPayload,
+                );
+                self.builder
+                    .call(function, &[list, index, key_ptr, key_len, line, column])
             }
             _ => {
                 let key_direct_ty = ensure_direct_type(&entry_types[0], &self.classes, "dict key")?;
                 let key = self.load_operand_as_opaque_direct(&key.value, &key_direct_ty)?;
                 let (list, index) = self.load_borrowed_list_element(&selection)?;
-                self.builder.call(
+                let function = self.lookup_function(
                     self.runtime[RuntimeFn::VecElementMapGet],
-                    &[list, index, key.values[0], line, column],
-                )
+                    RuntimeFn::VecElementMapGetPayload,
+                );
+                self.builder
+                    .call(function, &[list, index, key.values[0], line, column])
             }
         };
         Ok(Some(self.owned_opaque_result(
@@ -8181,12 +8257,39 @@ impl<'a> FunctionCompiler<'a> {
             }
         }
         let (type_ptr, type_len) = self.string_constant(encoded.as_bytes())?;
+        let cell = self.tag_cell(&encoded)?;
         let call = self.builder.call(
             self.runtime[RuntimeFn::TagValueType],
-            &[raw, type_ptr, type_len],
+            &[raw, cell, type_ptr, type_len],
         );
         self.last_runtime_type_tag = Some((call.inst, raw, encoded));
         Ok(())
+    }
+
+    /// The address of the module's tag cell for `encoded`. The runtime
+    /// stores the decoded tag there on first use and reads it back after.
+    fn tag_cell(&mut self, encoded: &str) -> std::result::Result<Val, String> {
+        let id = match self.tag_cells.get(encoded) {
+            Some(id) => *id,
+            None => {
+                let name = format!("aura_tag_cell_{}", self.tag_cells.len());
+                let module = self.builder.module();
+                let id = try_or_string_error!(
+                    module.declare_data(&name, Linkage::Local, true),
+                    "failed to declare a type tag cell: {}"
+                );
+                let mut data = DataDescription::new(vec![0u8; 8]);
+                data.align = Some(8);
+                try_or_string_error!(
+                    module.define_data(id, data),
+                    "failed to define a type tag cell: {}"
+                );
+                self.tag_cells.insert(encoded.to_string(), id);
+                id
+            }
+        };
+        let global = self.builder.import_data(id);
+        Ok(self.builder.symbol_value(types::I64, global))
     }
 
     /// Whether `inst` is in the current block and no call that could change
@@ -8743,7 +8846,13 @@ impl<'a> FunctionCompiler<'a> {
     /// union, drops the value the root held.
     fn store_root(&mut self, name: &str, value: ValueRef) -> std::result::Result<(), String> {
         let expected = self.local_type(name)?;
-        let value = self.coerce_value(value, &expected)?;
+        // A lookup slot holds a payload's box, which its `Lookup` type
+        // must not tag.
+        let value = if self.lookup_slots.contains(name) {
+            value
+        } else {
+            self.coerce_value(value, &expected)?
+        };
         let vars = self.local_vars(name)?;
         let stored = self.transfer_values(&value);
         if self.emptied_store_root.as_deref() == Some(name) {
@@ -9416,6 +9525,114 @@ impl<'a> FunctionCompiler<'a> {
             &[enum_ptr, enum_len, variant_ptr, variant_len, buffer, count],
         );
         Ok(self.owned_opaque_result(inst.results, target))
+    }
+
+    /// A payload bound to a scalar local, read where it lies instead of
+    /// copied into a box and unboxed. `None` for any other assignment.
+    fn compile_scalar_variant_payload(
+        &mut self,
+        target: &str,
+        value: &Rvalue,
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        let Rvalue::VariantPayload {
+            scrutinee: scrutinee @ Operand::Place(place),
+            index,
+            ..
+        } = value
+        else {
+            return Ok(None);
+        };
+        if self.lookup_slots.contains(place.as_str()) {
+            return Ok(None);
+        }
+        let target_ty = self.type_of_place(target)?;
+        let function = match target_ty {
+            DirectType::Scalar(ScalarKind::Int32) => RuntimeFn::VariantPayloadI64,
+            DirectType::Scalar(ScalarKind::Int64) => RuntimeFn::VariantPayloadInt64,
+            DirectType::Scalar(ScalarKind::Uint64) => RuntimeFn::VariantPayloadU64,
+            DirectType::Scalar(ScalarKind::Bool) => RuntimeFn::VariantPayloadBool,
+            _ => return Ok(None),
+        };
+        let scrutinee = self.load_operand(scrutinee)?;
+        let scrutinee = self.ensure_opaque(scrutinee)?;
+        let index = self.builder.iconst(types::I64, *index as i64);
+        let inst = self
+            .builder
+            .call(self.runtime[function], &[scrutinee.values[0], index]);
+        let scalar = ValueRef {
+            values: inst.results,
+            ty: target_ty.clone(),
+        };
+        // The same checks as unboxing a copy: an `int32` stays in range.
+        self.coerce_value(scalar, &target_ty).map(Some)
+    }
+
+    /// `payload` in place of `lookup` while a lookup slot asks for the
+    /// payload form, which this records. Otherwise `lookup`.
+    fn lookup_function(&mut self, lookup: FuncRef, payload: RuntimeFn) -> FuncRef {
+        if self.lookup_payload == Some(false) {
+            self.lookup_payload = Some(true);
+            self.runtime[payload]
+        } else {
+            lookup
+        }
+    }
+
+    /// Assigns a `get` to a lookup slot: the found value's box, or null.
+    /// A `get` that compiled to a path that builds the `Lookup` converts it.
+    fn compile_lookup_slot_assign(
+        &mut self,
+        target: &str,
+        value: &Rvalue,
+    ) -> std::result::Result<(), String> {
+        let target_ty = self.type_of_place(target)?;
+        self.lookup_payload = Some(false);
+        let compiled = self.compile_rvalue_for_target(value, &target_ty);
+        let payload_form = self.lookup_payload.take() == Some(true);
+        let compiled = self.ensure_opaque(compiled?)?;
+        let payload = if payload_form {
+            compiled
+        } else {
+            let lookup = self.transfer_owned_opaque_value(&compiled);
+            let inst = self
+                .builder
+                .call(self.runtime[RuntimeFn::LookupPayload], &[lookup]);
+            self.owned_opaque_result(inst.results, direct_type_to_type(&target_ty))
+        };
+        self.store_place(
+            target,
+            ValueRef {
+                values: payload.values,
+                ty: target_ty,
+            },
+        )
+    }
+
+    /// The payload of a lookup slot: a new reference to the found value's
+    /// box, or the box itself when the slot moves out.
+    fn compile_lookup_slot_payload(
+        &mut self,
+        place: &str,
+        moved: bool,
+    ) -> std::result::Result<ValueRef, String> {
+        let payload = if moved {
+            self.take_place(place)?
+        } else {
+            let slot = self.load_place(place)?;
+            let inst = self
+                .builder
+                .call(self.runtime[RuntimeFn::RetainValue], &[slot.values[0]]);
+            let retained = ValueRef {
+                values: inst.results,
+                ty: slot.ty,
+            };
+            self.mark_temporary_opaque_owned(&retained);
+            retained
+        };
+        Ok(ValueRef {
+            values: payload.values,
+            ty: DirectType::Opaque(Type::named("Unknown")),
+        })
     }
 
     fn variant_matches_value(
@@ -11014,11 +11231,17 @@ impl<'a> FunctionCompiler<'a> {
                     ));
                 };
                 let (key_ptr, key_len) = self.string_constant(text.as_bytes())?;
+                let function = self.lookup_function(function, RuntimeFn::MapGetStrPayload);
                 let results = self.runtime_call_results(function, &[map, key_ptr, key_len]);
                 Ok(self.owned_opaque_result(results, optional_type(value_ty)))
             }
             DictOp::Get | DictOp::Remove => {
                 let key = self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
+                let function = if op == DictOp::Get {
+                    self.lookup_function(function, RuntimeFn::MapGetPayload)
+                } else {
+                    function
+                };
                 let results = self.runtime_call_results(function, &[map, key.values[0]]);
                 if op == DictOp::Remove {
                     self.store_receiver_back(receiver_place, &object)?;
@@ -12299,6 +12522,19 @@ fn abi_type(ty: AbiType) -> ScalarType {
         AbiType::I64 => types::I64,
         AbiType::F64 => types::F64,
     }
+}
+
+/// About how many bytes `parts` add to an f-string: each literal's length,
+/// the widest `int64`, and a short guess for any other value.
+fn format_reserve_hint(parts: &[MirFormatPart]) -> usize {
+    parts
+        .iter()
+        .map(|part| match part {
+            MirFormatPart::Literal(text) => text.len(),
+            MirFormatPart::Int64(_) => 20,
+            MirFormatPart::Value(_) | MirFormatPart::Formatted { .. } => 16,
+        })
+        .sum()
 }
 
 fn declare_string_constant(
@@ -14025,6 +14261,9 @@ mod reachability;
 
 #[path = "native_codegen_callables.rs"]
 mod callables;
+
+#[path = "native_codegen_lookups.rs"]
+mod lookups;
 
 #[cfg(test)]
 #[path = "native_codegen_tests.rs"]
