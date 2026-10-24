@@ -1,0 +1,66 @@
+def fill(values: mut list[int64], count: int64):
+    mut i = 0
+    while i < count:
+        values.append(i * 3)
+        i += 1
+
+
+def total(values: list[int64]) -> int64:
+    mut sum = 0
+    for value in values:
+        sum += value
+    return sum
+
+
+def main():
+    mut values: list[int64] = []
+    fill(values, 50)
+    print(values.len())
+    print(total(values))
+    mut copy = values[:]
+    values.append(-1)
+    copy.append(1000)
+    copy.append(2000)
+    print(values.len())
+    print(copy.len())
+    print(values[50])
+    print(copy[51])
+    print(total(values))
+    print(total(copy))
+    print(values.pop())
+    values.append(7)
+    print(values[-1])
+    print(values.len())
+
+    mut floats: list[float64] = []
+    mut f = 0.0
+    while f < 10.0:
+        floats.append(f)
+        f += 0.5
+    mut float_sum = 0.0
+    for value in floats:
+        float_sum += value
+    print(float_sum)
+    print(floats[19])
+
+    mut flags: list[bool] = []
+    mut b = 0
+    while b < 21:
+        flags.append(b % 3 == 0)
+        b += 1
+    mut set_count = 0
+    for flag in flags:
+        if flag:
+            set_count += 1
+    print(set_count)
+    print(flags[20])
+    print(flags[18])
+
+    mut rows: list[list[int64]] = [[], [5]]
+    mut r = 0
+    while r < 12:
+        rows[r % 2].append(r)
+        r += 1
+    print(rows[0].len())
+    print(rows[1].len())
+    print(total(rows[1]))

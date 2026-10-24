@@ -8666,6 +8666,72 @@ impl<'a> FunctionCompiler<'a> {
         Ok(self.builder.block_params(join_block)[0])
     }
 
+    /// Appends a scalar's `bits` to `list`. A confined list that keeps the
+    /// scalars unboxed and has room stores the element past the end and
+    /// raises the view's length, and the runtime takes the element in at
+    /// its next access. Any other list, or a full one, calls `function`
+    /// with `words`, which grows the storage, converts the form, or refreshes
+    /// the view, as every write does.
+    fn emit_scalar_list_push(
+        &mut self,
+        list: Val,
+        bits: Val,
+        kind: ScalarElement,
+        function: FuncRef,
+        words: &[Val],
+    ) {
+        use aura_runtime::native_runtime::DirectListAccess;
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let (access, stride) = match kind {
+            ScalarElement::Int64 => (DirectListAccess::Int64, 8),
+            ScalarElement::Float64 => (DirectListAccess::Float64, 8),
+            ScalarElement::Bool => (DirectListAccess::Bool, 1),
+        };
+        let slow_block = self.builder.create_block();
+        let fast_block = self.builder.create_block();
+        let room_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.emit_list_access_check(list, access, &layout, slow_block, fast_block);
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let flags = MemFlags::trusted();
+        let len = self
+            .builder
+            .load(types::I64, flags, list, layout.len_offset);
+        let capacity = self.builder.uload32(flags, list, layout.capacity_offset);
+        let full = self
+            .builder
+            .icmp(IntCC::UnsignedGreaterThanOrEqual, len, capacity);
+        self.builder.brif(full, slow_block, &[], room_block, &[]);
+
+        self.builder.switch_to_block(room_block);
+        self.builder.seal_block(room_block);
+        let elements = self
+            .builder
+            .load(types::I64, flags, list, layout.elements_offset);
+        if stride == 1 {
+            // A `bool` element is one byte that holds 0 or 1.
+            let element = self.builder.iadd(elements, len);
+            let flag = self.builder.icmp_imm(IntCC::NotEqual, bits, 0);
+            self.builder.store(flags, flag, element, 0);
+        } else {
+            let offset = self.builder.imul_imm(len, stride);
+            let element = self.builder.iadd(elements, offset);
+            self.builder.store(flags, bits, element, 0);
+        }
+        let grown = self.builder.iadd_imm(len, 1);
+        self.builder.store(flags, grown, list, layout.len_offset);
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        self.builder.call(function, words);
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+    }
+
     /// Normalizes a negative `index` against a list view's length, and
     /// continues in a new block when the position is in range or in `slow`
     /// when it is not.
@@ -11120,7 +11186,7 @@ impl<'a> FunctionCompiler<'a> {
                 };
                 let mut words = vec![list, bits];
                 self.push_runtime_call_words(call, &mut words);
-                self.builder.call(function, &words);
+                self.emit_scalar_list_push(list, bits, kind, function, &words);
                 if let Some(place) = receiver_place {
                     if !self.receiver_store_is_redundant(place) {
                         self.store_place(place, object.clone())?;
@@ -12510,7 +12576,7 @@ fn emit_retain_fast_path(
     builder.switch_to_block(fast);
     let retained = builder.iadd_imm(ref_count, 1);
     builder.store(trusted, retained, blocks.value, layout.ref_count_offset);
-    let owned = builder.load(types::I64, trusted, blocks.value, layout.owned_offset);
+    let owned = builder.load(types::I32, trusted, blocks.value, layout.owned_offset);
     let owned = builder.iadd_imm(owned, 1);
     builder.store(trusted, owned, blocks.value, layout.owned_offset);
     builder.jump(blocks.done, &[]);
@@ -12538,7 +12604,7 @@ fn emit_release_fast_path(
     let layout = ownership_layout();
     let trusted = MemFlags::trusted();
     let blocks = emit_ownership_checks(builder, frame_stack);
-    let owned = builder.load(types::I64, trusted, blocks.value, layout.owned_offset);
+    let owned = builder.load(types::I32, trusted, blocks.value, layout.owned_offset);
     let ref_count = builder.load(types::I32, trusted, blocks.value, layout.ref_count_offset);
     let last_owned = builder.icmp_imm(IntCC::UnsignedLessThanOrEqual, owned, 1);
     let last_reference = builder.icmp_imm(IntCC::UnsignedLessThanOrEqual, ref_count, 1);

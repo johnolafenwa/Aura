@@ -70,7 +70,7 @@ impl DirectOwnedValues {
         let mut entries = Vec::new();
         let mut value = self.head;
         while let Some(current) = unsafe { value.as_ref() } {
-            entries.push((value as usize, current.owned.get()));
+            entries.push((value as usize, current.owned.get() as usize));
             value = current.next.get();
         }
         entries.extend(
@@ -203,7 +203,7 @@ impl DirectOwnedValues {
     pub(super) fn take_all(&mut self) -> Vec<(usize, usize)> {
         let mut entries = Vec::new();
         while let Some(head) = unsafe { self.head.as_ref() } {
-            entries.push((self.head as usize, head.owned.get()));
+            entries.push((self.head as usize, head.owned.get() as usize));
             head.owned.set(0);
             // SAFETY: the head is linked here.
             unsafe { self.unlink(head) };
@@ -272,7 +272,7 @@ pub(super) unsafe fn detach_for_sharing(value: *mut OpaqueValue, header: &Opaque
     header.owned.set(0);
     // SAFETY: the value is linked into `ledger`.
     unsafe { ledger.unlink(header) };
-    *ledger.others.entry(value as usize).or_default() += count;
+    *ledger.others.entry(value as usize).or_default() += count as usize;
 }
 
 /// Takes a value that is being freed out of the list that links it.
@@ -305,7 +305,7 @@ pub struct DirectOwnershipLayout {
     /// The offset of the address of the frame stack whose ledger links the
     /// value, or zero.
     pub owner_offset: i32,
-    /// The offset of the `usize` count of references that ledger holds.
+    /// The offset of the `u32` count of references that ledger holds.
     pub owned_offset: i32,
 }
 
@@ -317,8 +317,8 @@ impl DirectOwnershipLayout {
             i64::from(self.shared_lock_offset),
             i64::from(self.owner_offset),
             i64::from(self.owned_offset),
-            // The count widths: a 4-byte total and an 8-byte owned count.
-            0x0408,
+            // The count widths: a 4-byte total and a 4-byte owned count.
+            0x0404,
         ];
         fields.iter().fold(0x4f_77_6e_73_i64, |hash, field| {
             hash.wrapping_mul(0x100_0000_01b3).wrapping_add(*field)

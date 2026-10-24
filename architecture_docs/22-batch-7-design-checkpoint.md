@@ -720,6 +720,24 @@ Callgrind instructions, in millions:
 - Equal integers of different widths still hash alike, and iteration
   order is unchanged.
 
+Step 10f appends to a list of unboxed scalars in generated code while
+the list has room, and calls the runtime only to grow it. The method and
+tables are in
+[the 10f note](../work/2026-10-24-batch-7-step-10f-list-push.md).
+Callgrind instructions, in millions:
+
+| Program | Cranelift before | Cranelift after | LLVM before | LLVM after | LLVM / Rust |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `fib(30)` | 210.6 | 210.6 | 115.0 | 115.0 | 2.9x |
+| `int_list_sum` | 73.1 | 47.2 | 42.2 | 16.0 | 1.2x |
+| `string_list_scan` | 57.8 | 58.0 | 32.7 | 32.9 | 2.5x |
+| `dict_build_get` | 376.4 | 377.1 | 349.1 | 349.9 | 2.0x |
+| `set_insert_contains` | 64.8 | 65.0 | 59.4 | 59.6 | 1.9x |
+| `record_field_reads` | 245.2 | 246.0 | 226.3 | 227.1 | 6.3x |
+
+- `int_list_sum` is at 1.2 times Rust on LLVM, inside the 2x gate.
+- The check for appended elements costs the other programs 0.2% to 0.6%.
+
 ## Owner Questions
 
 Each names the recommended default first.
