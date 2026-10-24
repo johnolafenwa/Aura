@@ -30,16 +30,13 @@ Run these from the repository root.
 
 | Command | What it does |
 | --- | --- |
-| `npm run ci` | Runs the whole repository gate: formatting, the main Rust suite at default parallelism, the separately serialized backend-parity gate on Cranelift and on LLVM, the compiler library tests with the `llvm` feature, Node tests, coverage floors, the docs build, audits, Clippy with warnings as errors, and diff hygiene. |
+| `npm run ci` | Runs the whole repository gate: formatting, the main Rust suite at default parallelism, the separately serialized backend-parity gate, which compares every fixture on the MIR interpreter and on LLVM, Node tests, coverage floors, the docs build, audits, Clippy with warnings as errors, and diff hygiene. |
 | `npm run test:rust` | Runs the Rust test suite at Cargo/libtest's default parallelism. It uses a larger test stack so deep parser-limit regressions do not overflow the host test harness. |
 | `npm run coverage:compiler` | Measures Rust compiler coverage with `cargo-llvm-cov`. It runs the full Rust workspace tests and reports compiler production files. |
 | `npm run coverage:compiler:check` | Enforces the compiler coverage floor. |
 | `npm run coverage:lsp:check` | Enforces the language-server coverage floor. |
 | `npm run check:format` | Verifies Rust formatting. |
 | `npm run check:clippy` | Runs the Rust lint gate with warnings treated as errors. |
-| `npm run check:clippy:llvm` | Runs the same lint gate on `aura-compiler` and `aura` with the `llvm` feature. |
-| `npm run test:llvm` | Runs the compiler library tests with the `llvm` feature, then the repeat-build test with `AURA_NATIVE_CODEGEN=llvm`. |
-| `npm run test:backend-parity:llvm` | Runs the backend-parity gate with `AURA_NATIVE_CODEGEN=llvm`, so every fixture's native program comes from LLVM. |
 | `npm run check:audit` | Runs the npm and RustSec vulnerability gates. |
 | `npm run check:hygiene` | Rejects whitespace errors, tracked generated executables, editor metadata, and scratch evaluation corpora. |
 | `npm run docs:dev` | Starts the VitePress Aura book locally. |
@@ -48,14 +45,11 @@ Run these from the repository root.
 The instrumented compiler-coverage wrapper keeps its own single-threaded test
 setting, so coverage collection stays stable.
 
-## The LLVM Code Generator
+## LLVM
 
-The native backend generates code with Cranelift. An `aura` built with the
-`llvm` cargo feature can also generate it with LLVM 22, when
-`AURA_NATIVE_CODEGEN=llvm` is set. The feature is off by default, so a
-checkout without LLVM still builds, but `npm run ci` builds and tests it.
-
-The feature links LLVM's static libraries. Install them once with:
+The native backend generates code with LLVM 22 through inkwell, and every
+build of `aura-compiler` links LLVM's static libraries. Install them once
+with:
 
 ```sh
 scripts/install-llvm.sh
@@ -68,13 +62,17 @@ and the static libraries, about 360 MB. `llvm-config` also names
 `libzstd` and `libxml2`, so on Ubuntu install `libzstd-dev` and
 `libxml2-dev`.
 
-On macOS arm64, the script installs Homebrew's `llvm@22` and prints its
-prefix to use instead. The official macOS archive's static libraries hold
-LLVM bitcode, which Apple's linker cannot read.
+On macOS, arm64 or x86-64, the script installs Homebrew's `llvm@22` and
+prints the settings to export instead. The official macOS archive's static
+libraries hold LLVM bitcode, which Apple's linker cannot read. The script
+stops when Homebrew has no `llvm@22` bottle for the Mac, since building
+LLVM from source takes hours. It also prints an
+`LLVM_SYS_SYSTEM_LIBRARY_DIRS` setting that makes the build link
+Homebrew's static `libzstd.a`, so `aura` loads no Homebrew library.
 
-Then build or test with the feature, for example
-`cargo build -p aura --features llvm`, and run a program with
-`AURA_NATIVE_CODEGEN=llvm aura run --backend direct program.au`.
+`scripts/check-aura-libraries.py target/release/aura` lists the libraries
+an `aura` loads, and fails on one outside the system set. The release
+workflow and the native binaries CI job run it.
 
 ## GitHub Actions
 

@@ -3,76 +3,45 @@
 //! The emitter translates MIR and lays out values through these two traits
 //! only: `ModuleBackend` declares and defines functions and data and writes
 //! the object, and `FunctionBackend` builds one function's body. Handles are
-//! plain indices that each code generator maps to its own entities, so the
-//! emitter names no code generator types. Cranelift is the default
-//! implementation, and an `aura` built with the `llvm` feature also has an
-//! LLVM one, which `AURA_NATIVE_CODEGEN=llvm` selects.
+//! plain indices that the code generator maps to its own entities, so the
+//! emitter names no code generator types. LLVM 22, through inkwell,
+//! implements both.
 
-use std::ffi::OsStr;
-
-#[path = "native_backend_cranelift.rs"]
-mod cranelift;
-#[cfg(feature = "llvm")]
 #[path = "native_backend_llvm.rs"]
 mod llvm;
 
-/// The environment variable that selects the code generator.
-pub(crate) const NATIVE_CODEGEN_ENV: &str = "AURA_NATIVE_CODEGEN";
-
-/// A code generator the native emitter can write objects with.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CodeGenerator {
-    Cranelift,
-    #[cfg(feature = "llvm")]
-    Llvm,
+#[cfg(test)]
+thread_local! {
+    static UNOPTIMIZED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-impl CodeGenerator {
-    /// The name `AURA_NATIVE_CODEGEN` selects it by, which the native cache
-    /// key also carries.
-    pub fn name(self) -> &'static str {
-        match self {
-            CodeGenerator::Cranelift => "cranelift",
-            #[cfg(feature = "llvm")]
-            CodeGenerator::Llvm => "llvm",
+/// Runs `emit` with LLVM's optimizer off on this thread, so a test reads
+/// the object the emitter asked for: every function it defined and every
+/// call it built.
+#[cfg(test)]
+pub(crate) fn without_optimization<R>(emit: impl FnOnce() -> R) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            UNOPTIMIZED.with(|unoptimized| unoptimized.set(self.0));
         }
     }
+    let _restore = Restore(UNOPTIMIZED.with(|unoptimized| unoptimized.replace(true)));
+    emit()
 }
 
-/// The code generator `AURA_NATIVE_CODEGEN` selects. Unset, empty, or
-/// `cranelift` selects Cranelift.
-pub fn selected_code_generator() -> Result<CodeGenerator, String> {
-    code_generator_for(std::env::var_os(NATIVE_CODEGEN_ENV).as_deref())
-}
-
-/// The code generator one `AURA_NATIVE_CODEGEN` setting selects.
-fn code_generator_for(setting: Option<&OsStr>) -> Result<CodeGenerator, String> {
-    let setting = setting.unwrap_or_default();
-    if setting.is_empty() || setting == "cranelift" {
-        return Ok(CodeGenerator::Cranelift);
-    }
-    if setting == "llvm" {
-        #[cfg(feature = "llvm")]
-        return Ok(CodeGenerator::Llvm);
-        #[cfg(not(feature = "llvm"))]
-        return Err(format!(
-            "{NATIVE_CODEGEN_ENV}=llvm needs LLVM, but this aura was built without the `llvm` feature"
-        ));
-    }
-    Err(format!(
-        "{NATIVE_CODEGEN_ENV} must be `cranelift` or `llvm`, not `{}`",
-        setting.to_string_lossy()
-    ))
+/// Whether LLVM runs its pass pipeline on this thread's objects.
+fn optimizes() -> bool {
+    #[cfg(test)]
+    return !UNOPTIMIZED.with(std::cell::Cell::get);
+    #[cfg(not(test))]
+    true
 }
 
 /// The module backend for the host, which the emitter writes one object
 /// through.
 pub(crate) fn host_module_backend() -> Result<Box<dyn ModuleBackend>, String> {
-    match selected_code_generator()? {
-        CodeGenerator::Cranelift => Ok(Box::new(cranelift::CraneliftModule::for_host()?)),
-        #[cfg(feature = "llvm")]
-        CodeGenerator::Llvm => Ok(Box::new(llvm::LlvmModule::for_host()?)),
-    }
+    Ok(Box::new(llvm::LlvmModule::for_host()?))
 }
 
 /// An SSA value.
@@ -298,11 +267,11 @@ pub(crate) trait ModuleBackend {
 
     /// Declares that `function`, an import, touches no memory its callers
     /// see and returns the same value on every call from one task, so the
-    /// code generator may merge its calls. Cranelift ignores this.
+    /// code generator may merge its calls.
     fn mark_task_invariant(&mut self, function: FuncHandle);
 
     /// Asks the code generator to inline `function`, a small local
-    /// function, into every caller. Cranelift ignores this and calls it.
+    /// function, into every caller.
     fn mark_inline(&mut self, function: FuncHandle);
 
     /// Defines `function`, whose body `body` builds. A body that fails
@@ -433,7 +402,3 @@ pub(crate) trait FunctionBackend {
     fn fcvt_from_uint(&mut self, ty: ScalarType, value: Val) -> Val;
     fn fcvt_from_sint(&mut self, ty: ScalarType, value: Val) -> Val;
 }
-
-#[cfg(test)]
-#[path = "native_backend_tests.rs"]
-mod tests;

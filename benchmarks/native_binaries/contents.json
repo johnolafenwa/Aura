@@ -4,8 +4,10 @@
     "aws_lc": [
       "aws_lc"
     ],
-    "cranelift": [
-      "cranelift"
+    "llvm": [
+      "llvm::",
+      "inkwell::",
+      "LLVM"
     ],
     "parser": [
       "aura_compiler::parser::",
@@ -64,7 +66,7 @@
       "source": "examples/basics/hello_world.au",
       "absent": [
         "aws_lc",
-        "cranelift",
+        "llvm",
         "parser",
         "analysis",
         "builtin_registry",
@@ -86,7 +88,7 @@
       "source": "examples/agents/tool_runner/src/main.au",
       "absent": [
         "aws_lc",
-        "cranelift",
+        "llvm",
         "parser",
         "analysis",
         "builtin_registry",
@@ -108,7 +110,7 @@
       "source": "examples/json/dynamic_values.au",
       "absent": [
         "aws_lc",
-        "cranelift",
+        "llvm",
         "parser",
         "analysis",
         "builtin_registry",
@@ -123,7 +125,7 @@
       "source": "examples/io/unix_tls_roundtrip.au",
       "absent": [
         "aws_lc",
-        "cranelift",
+        "llvm",
         "parser",
         "analysis",
         "builtin_registry",
@@ -141,7 +143,7 @@
       "source": "examples/io/websocket_roundtrip.au",
       "absent": [
         "aws_lc",
-        "cranelift",
+        "llvm",
         "parser",
         "analysis",
         "builtin_registry",

@@ -410,7 +410,7 @@ Closing a resource explicitly before scope exit is permitted only where the reso
 
 These rules apply when Aura control flow or a maintained runtime failure exits the task through the language cleanup machinery. Internal scheduler abandonment is different. It is a last-resort containment path, used when the whole scheduler stops while a child is still suspended, such as after root completion or a fatal reactor failure.
 
-Scheduler abandonment marks the remaining task cancelled and releases scheduler-owned and direct-runtime host state. It does not invoke arbitrary Aura cleanup thunks, so no `__exit__` or `close` runs. A direct generated stack may be reset on this path, because it cannot be safely Rust-unwound across Cranelift frames. Use structured `TaskGroup` scopes. Do not depend on scheduler abandonment as a cleanup mechanism.
+Scheduler abandonment marks the remaining task cancelled and releases scheduler-owned and direct-runtime host state. It does not invoke arbitrary Aura cleanup thunks, so no `__exit__` or `close` runs. A direct generated stack may be reset on this path, because it cannot be safely Rust-unwound across generated native frames. Use structured `TaskGroup` scopes. Do not depend on scheduler abandonment as a cleanup mechanism.
 
 ## Tasks And Scheduler
 

@@ -127,7 +127,7 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
             workflow,
         )
 
-    def test_ci_installs_pinned_llvm_and_runs_the_llvm_gates(self) -> None:
+    def test_every_workflow_that_builds_the_compiler_installs_pinned_llvm(self) -> None:
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn(
             "      - name: Install LLVM\n"
@@ -135,6 +135,20 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
             workflow,
         )
         self.assertIn("path: ~/.cache/aura/llvm/22.1.2", workflow)
+        docs = DOCS_WORKFLOW.read_text(encoding="utf-8")
+        examples = docs[docs.index("\n  examples:\n"):docs.index("\n  deploy:\n")]
+        self.assertLess(
+            examples.index("run: bash scripts/install-llvm.sh"),
+            examples.index("run: cargo build -p aura"),
+        )
+        safety = (REPO_ROOT / ".github" / "workflows" / "safety.yml").read_text(
+            encoding="utf-8"
+        )
+        parts = re.split(r"^  ([a-z-]+):\n", safety.split("\njobs:\n", 1)[1], flags=re.MULTILINE)
+        jobs = dict(zip(parts[1::2], parts[2::2]))
+        for job in ("fuzz", "native-runtime-asan", "scheduler-stress-and-benchmark"):
+            self.assertIn("run: bash scripts/install-llvm.sh", jobs[job], job)
+        self.assertNotIn("install-llvm", jobs["scheduler-tsan"], "the runtime alone needs no LLVM")
         installer = (REPO_ROOT / "scripts" / "install-llvm.sh").read_text(
             encoding="utf-8"
         )
@@ -146,33 +160,52 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
             installer.index("tar -xJf"),
             "the checksum is checked before anything is extracted",
         )
+
+    def test_llvm_is_the_only_code_generator_the_gates_build(self) -> None:
         scripts = json.loads((REPO_ROOT / "package.json").read_text(encoding="utf-8"))[
             "scripts"
         ]
-        for gate in ("test:llvm", "test:backend-parity:llvm", "check:clippy:llvm"):
-            self.assertIn(f"npm run {gate} ", scripts["ci"] + " ")
-        self.assertIn("AURA_NATIVE_CODEGEN=llvm", scripts["test:backend-parity:llvm"])
-        # The repeat-build test also runs on LLVM, so its objects stay repeatable.
-        self.assertIn(
-            "AURA_NATIVE_CODEGEN=llvm RUST_MIN_STACK=33554432 cargo test -p aura-compiler"
-            " --lib --features llvm direct_objects_are_identical_across_repeated_builds",
-            scripts["test:llvm"],
-        )
-
-    def test_native_binary_gate_checks_both_code_generators(self) -> None:
-        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
-        job = workflow[workflow.index("  native-binaries:\n"):]
+        for name, command in scripts.items():
+            self.assertNotIn("--features llvm", command, name)
+            self.assertNotIn("AURA_NATIVE_CODEGEN", command, name)
+        for workflow in (CI_WORKFLOW, DOCS_WORKFLOW, RELEASE_WORKFLOW):
+            text = workflow.read_text(encoding="utf-8")
+            self.assertNotIn("AURA_NATIVE_CODEGEN", text, workflow.name)
+            self.assertNotIn("--features", text, workflow.name)
+        job = CI_WORKFLOW.read_text(encoding="utf-8")
+        job = job[job.index("  native-binaries:\n"):]
         self.assertIn("run: bash scripts/install-llvm.sh\n", job)
-        self.assertIn(
-            "cargo build --release --locked -p aura -p aura-runtime --features aura/llvm\n",
-            job,
+        self.assertIn("cargo build --release --locked -p aura -p aura-runtime\n", job)
+        self.assertEqual(job.count("run: python3 scripts/check-native-binaries.py\n"), 1)
+
+    def test_release_cli_links_llvm_and_checks_the_libraries_it_loads(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        job = workflow[workflow.index("  cli:\n"):workflow.index("  tools:\n")]
+        for runner in ("os: ubuntu-24.04", "os: macos-15-intel", "os: macos-15"):
+            self.assertIn(runner, job)
+        self.assertIn("        run: bash scripts/install-llvm.sh\n", job)
+        self.assertNotIn("actions/cache", job, "a release links no cached LLVM")
+        self.assertLess(
+            job.index("run: bash scripts/install-llvm.sh"),
+            job.index("run: cargo build -p aura --release --locked"),
         )
+        self.assertLess(
+            job.index("run: python3 scripts/check-aura-libraries.py target/release/aura"),
+            job.index("run: scripts/package-cli.sh"),
+            "the libraries are checked before the archive is packaged",
+        )
+        ci = CI_WORKFLOW.read_text(encoding="utf-8")
+        native = ci[ci.index("  native-binaries:\n"):]
+        self.assertIn("run: python3 scripts/check-aura-libraries.py target/release/aura\n", native)
+
+    def test_macos_llvm_install_links_static_zstd_and_needs_a_bottle(self) -> None:
+        installer = (REPO_ROOT / "scripts" / "install-llvm.sh").read_text(encoding="utf-8")
+        self.assertIn("  Darwin-arm64 | Darwin-x86_64)\n", installer)
+        darwin = installer[installer.index("  Darwin-arm64 | Darwin-x86_64)"):]
+        self.assertLess(darwin.index("check_bottle"), darwin.index("brew install llvm@22"))
+        self.assertIn('ln -sf "$zstd_static" "$static_dir/libzstd.a"', darwin)
         self.assertIn(
-            "      - name: Check native executable contents and sizes on LLVM\n"
-            "        run: python3 scripts/check-native-binaries.py\n"
-            "        env:\n"
-            "          AURA_NATIVE_CODEGEN: llvm\n",
-            job,
+            'echo "LLVM_SYS_SYSTEM_LIBRARY_DIRS=${static_dir}" >> "$GITHUB_ENV"', darwin
         )
 
     def test_linux_coverage_tests_export_process_ffi_symbols(self) -> None:

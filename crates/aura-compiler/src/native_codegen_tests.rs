@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use cranelift_object::object::{Object, ObjectSection, ObjectSymbol, RelocationTarget};
+use object::{Object, ObjectSection, ObjectSymbol, RelocationTarget};
 
 use super::{
     box_thunk_value, cleanup_place_type, collect_type_params_from_type, direct_ffi_type_for_source,
@@ -1231,23 +1231,69 @@ fn tuple_native_ownership_gates_separate_public_projection_from_private_destruct
     }
 }
 
+/// The object the emitter asked for, before the code generator optimizes
+/// it. A test that pins which functions the emitter defines, or which
+/// runtime helpers it calls, reads this object, since LLVM inlines local
+/// functions and folds checks it can prove.
+fn emit_unoptimized_object(module: &crate::mir::MirModule) -> std::result::Result<Vec<u8>, String> {
+    crate::native_backend::without_optimization(|| emit_host_object(module))
+}
+
+/// The name of the symbol a relocation refers to. LLVM's ELF objects refer
+/// to a local symbol through its section's symbol and an addend, so the name
+/// is the symbol defined at that place in the section. A 32-bit PC-relative
+/// field counts from its own end, 4 bytes past the place it patches.
+fn relocation_symbol_name(
+    object: &object::File<'_>,
+    relocation: &object::Relocation,
+) -> Option<String> {
+    use object::{RelocationKind, SymbolKind};
+
+    let RelocationTarget::Symbol(index) = relocation.target() else {
+        return None;
+    };
+    let symbol = object.symbol_by_index(index).ok()?;
+    if symbol.kind() != SymbolKind::Section {
+        return symbol.name().ok().map(str::to_string);
+    }
+    let section = symbol.section_index()?;
+    let offset = match relocation.kind() {
+        RelocationKind::Relative | RelocationKind::PltRelative if relocation.size() == 32 => {
+            relocation.addend() + 4
+        }
+        _ => relocation.addend(),
+    };
+    let offset = u64::try_from(offset).ok()?;
+    object
+        .symbols()
+        .filter(|candidate| {
+            candidate.section_index() == Some(section)
+                && candidate.kind() != SymbolKind::Section
+                && candidate.address() <= offset
+                && offset < candidate.address() + candidate.size().max(1)
+        })
+        .find_map(|candidate| {
+            candidate
+                .name()
+                .ok()
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+        })
+}
+
 fn object_referenced_symbols(bytes: &[u8]) -> BTreeSet<String> {
-    let object = cranelift_object::object::File::parse(bytes)
-        .expect("direct backend output should be a readable host object");
+    let object =
+        object::File::parse(bytes).expect("direct backend output should be a readable host object");
     object
         .sections()
         .flat_map(|section| section.relocations())
-        .filter_map(|(_, relocation)| match relocation.target() {
-            RelocationTarget::Symbol(index) => object.symbol_by_index(index).ok(),
-            _ => None,
-        })
-        .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+        .filter_map(|(_, relocation)| relocation_symbol_name(&object, &relocation))
         .collect()
 }
 
 fn object_function_referenced_symbols(bytes: &[u8], function: &str) -> BTreeSet<String> {
-    let object = cranelift_object::object::File::parse(bytes)
-        .expect("direct backend output should be a readable host object");
+    let object =
+        object::File::parse(bytes).expect("direct backend output should be a readable host object");
     let symbol = object
         .symbols()
         .find(|symbol| {
@@ -1278,25 +1324,17 @@ fn object_function_referenced_symbols(bytes: &[u8], function: &str) -> BTreeSet<
     section
         .relocations()
         .filter(|(offset, _)| *offset >= start && *offset < end)
-        .filter_map(|(_, relocation)| match relocation.target() {
-            RelocationTarget::Symbol(index) => object.symbol_by_index(index).ok(),
-            _ => None,
-        })
-        .filter_map(|symbol| symbol.name().ok().map(str::to_string))
+        .filter_map(|(_, relocation)| relocation_symbol_name(&object, &relocation))
         .collect()
 }
 
 fn object_referenced_symbol_occurrences(bytes: &[u8], needle: &str) -> usize {
-    let object = cranelift_object::object::File::parse(bytes)
-        .expect("direct backend output should be a readable host object");
+    let object =
+        object::File::parse(bytes).expect("direct backend output should be a readable host object");
     object
         .sections()
         .flat_map(|section| section.relocations())
-        .filter_map(|(_, relocation)| match relocation.target() {
-            RelocationTarget::Symbol(index) => object.symbol_by_index(index).ok(),
-            _ => None,
-        })
-        .filter_map(|symbol| symbol.name().ok())
+        .filter_map(|(_, relocation)| relocation_symbol_name(&object, &relocation))
         .filter(|name| name.contains(needle))
         .count()
 }
@@ -1501,7 +1539,7 @@ def main():
         "dynamic tuple specialization must consult runtime type matching: {referenced:?}"
     );
 
-    let object = cranelift_object::object::File::parse(bytes.as_slice())
+    let object = object::File::parse(bytes.as_slice())
         .expect("direct tuple-dispatch output should be a readable host object");
     let data_occurrences = |needle: &[u8]| {
         object
@@ -1808,7 +1846,8 @@ def main() -> int32:
     return 0
 "#;
     let mir = lower_source_to_mir(source).expect("monotonic clock source should lower to MIR");
-    let object = emit_host_object(&mir).expect("monotonic clock source should compile directly");
+    let object =
+        emit_unoptimized_object(&mir).expect("monotonic clock source should compile directly");
     let referenced = object_function_referenced_symbols(&object, "aura_fn_main");
 
     assert!(
@@ -2103,23 +2142,19 @@ fn generated_functions_push_frames_inline_and_keep_the_runtime_paths() {
 fn generated_retains_and_releases_count_in_place_and_keep_the_runtime_paths() {
     let source = "def echo(value: str):\n    print(value)\n\ndef main() -> int32:\n    mut text = \"hello\"\n    echo(text)\n    text = \"goodbye\"\n    print(text)\n    return 0\n";
     let mir = lower_source_to_mir(source).expect("source should lower");
-    let object = emit_host_object_with_metadata(&mir, "/workspace/main.au", source).expect("emit");
+    // LLVM removes this program's retains, so the test reads the object
+    // the emitter asked for.
+    let object = crate::native_backend::without_optimization(|| {
+        emit_host_object_with_metadata(&mir, "/workspace/main.au", source)
+    })
+    .expect("emit");
     let referenced = object_referenced_symbols(&object);
-    // LLVM removes this program's retains, as it did before the fast
-    // paths, so only Cranelift's object keeps the retain's cold call.
-    let cranelift = matches!(
-        crate::native_backend::selected_code_generator(),
-        Ok(crate::native_backend::CodeGenerator::Cranelift)
-    );
-    let retain = cranelift.then_some("aura_direct_retain_value");
     for symbol in [
         "aura_direct_release_value",
         "aura_direct_release_last_owned_value",
         "aura_direct_check_ownership_layout",
-    ]
-    .into_iter()
-    .chain(retain)
-    {
+        "aura_direct_retain_value",
+    ] {
         assert!(
             referenced.iter().any(|name| name.ends_with(symbol)),
             "generated code must reference `{symbol}`: {referenced:?}"
@@ -2246,7 +2281,7 @@ def main() -> int32:
         );
     }
 
-    let parsed = cranelift_object::object::File::parse(object.as_slice())
+    let parsed = object::File::parse(object.as_slice())
         .expect("frame-aware output should be a readable host object");
     let data_contains = |needle: &[u8]| {
         parsed.sections().any(|section| {
@@ -2434,7 +2469,8 @@ def main() -> int32:
 "#;
 
     let mir = lower_source_to_mir(source).expect("dynamic JSON source should lower to MIR");
-    let object = emit_host_object(&mir).expect("dynamic JSON source should compile directly");
+    let object =
+        emit_unoptimized_object(&mir).expect("dynamic JSON source should compile directly");
     let referenced = object_referenced_symbols(&object);
     for entry in [
         "aura_host_json_parse",
@@ -2688,7 +2724,8 @@ def main() -> int32:
 "#;
 
     let mir = lower_source_to_mir(source).expect("expected uint64 operands should lower");
-    let object = emit_host_object(&mir).expect("expected uint64 operands should emit directly");
+    let object =
+        emit_unoptimized_object(&mir).expect("expected uint64 operands should emit directly");
     let referenced = [
         "aura_fn_Holder_echo",
         "aura_fn_take",
@@ -2774,7 +2811,7 @@ def main() -> int32:
 "#;
 
     let mir = lower_source_to_mir(source).expect("source should lower to MIR");
-    let object = emit_host_object(&mir).expect("direct backend should emit an object");
+    let object = emit_unoptimized_object(&mir).expect("direct backend should emit an object");
     let rendered = String::from_utf8_lossy(&object);
 
     assert!(rendered.contains("aura_direct_retain_value"));
@@ -7289,8 +7326,8 @@ fn direct_callable_objects_pin_defaults_capability_writebacks_and_task_handoff_a
         .default_function
         .as_deref()
         .expect("offset should retain its default-expression thunk");
-    let defaults_object =
-        emit_host_object(&defaults_mir).expect("function-value defaults should emit directly");
+    let defaults_object = emit_unoptimized_object(&defaults_mir)
+        .expect("function-value defaults should emit directly");
     let binder_references = object_function_referenced_symbols(
         &defaults_object,
         &mangle_default_binder_symbol("offset"),
@@ -7359,7 +7396,7 @@ fn direct_callable_objects_pin_defaults_capability_writebacks_and_task_handoff_a
     let capabilities_path = fixtures.join("function_value_inferred_capabilities.au");
     let capabilities_mir =
         lower_path_to_mir(&capabilities_path).expect("capability function values should lower");
-    let capabilities_object = emit_host_object(&capabilities_mir)
+    let capabilities_object = emit_unoptimized_object(&capabilities_mir)
         .expect("shared, mutable, and owned function values should emit directly");
     let mutable_thunk_references =
         object_function_referenced_symbols(&capabilities_object, &mangle_thunk_symbol("increment"));
@@ -7392,8 +7429,8 @@ fn direct_callable_objects_pin_defaults_capability_writebacks_and_task_handoff_a
 
     let task_path = fixtures.join("function_values_task_targets.au");
     let task_mir = lower_path_to_mir(&task_path).expect("function-value task targets should lower");
-    let task_object =
-        emit_host_object(&task_mir).expect("function-value task targets should emit directly");
+    let task_object = emit_unoptimized_object(&task_mir)
+        .expect("function-value task targets should emit directly");
     let task_main_references = object_function_referenced_symbols(&task_object, "aura_fn_main");
     for runtime_symbol in [
         "aura_direct_task_arg_buffer_guard",
@@ -7510,8 +7547,8 @@ def main() -> int32:
         "the native thunk ABI must receive hidden captures before public parameters"
     );
 
-    let object =
-        emit_host_object(&module).expect("closure calls, callbacks, and task handoff should emit");
+    let object = emit_unoptimized_object(&module)
+        .expect("closure calls, callbacks, and task handoff should emit");
     let main_references = object_function_referenced_symbols(&object, "aura_fn_main");
     for runtime_symbol in [
         "aura_direct_task_arg_buffer_guard",
@@ -7537,7 +7574,6 @@ def main() -> int32:
         "aura_direct_arg_buffer_store_owned",
         "aura_direct_closure_value",
         "aura_direct_function_bind_defaults",
-        "aura_direct_function_call",
     ] {
         assert!(
             object_contains_symbol(&object, runtime_symbol),
@@ -7963,7 +7999,7 @@ def main() -> int32:
     assert_eq!(indirect_args.len(), 2);
     indirect_args[0].name = Some("first".to_string());
 
-    let object = emit_host_object(&mir)
+    let object = emit_unoptimized_object(&mir)
         .expect("a positional argument after a named slot should bind the next free parameter");
     let main_references = object_function_referenced_symbols(&object, "aura_fn_main");
     for runtime_symbol in ["aura_callable_"] {
@@ -9198,7 +9234,7 @@ def main() -> int32:
         "str.to_bytes must call its own host builtin entry: {referenced:?}"
     );
 
-    let object = cranelift_object::object::File::parse(bytes.as_slice())
+    let object = object::File::parse(bytes.as_slice())
         .expect("str.to_bytes direct output should be a readable host object");
     assert!(
         !object
@@ -10324,7 +10360,8 @@ def main() -> int32:
 "#;
 
     let module = lower_source_to_mir(source).expect("owned try source should lower to MIR");
-    let object = emit_host_object(&module).expect("owned try source should compile directly");
+    let object =
+        emit_unoptimized_object(&module).expect("owned try source should compile directly");
     let referenced = object_referenced_symbols(&object);
     assert!(
         referenced
@@ -12185,7 +12222,7 @@ fn dead_assignments_do_not_poison_reachable_cleanup_type_inference() {
         ownership: Default::default(),
     };
 
-    let object = emit_host_object(&module)
+    let object = emit_unoptimized_object(&module)
         .expect("dead scalar assignments must not erase reachable resource cleanup metadata");
     let referenced = object_referenced_symbols(&object);
     let close_symbol = mangle_symbol("Resource.close");
@@ -13490,8 +13527,8 @@ def main() -> int32:
 }
 
 fn object_defined_aura_functions(bytes: &[u8]) -> BTreeSet<String> {
-    let object = cranelift_object::object::File::parse(bytes)
-        .expect("direct backend output should be a readable host object");
+    let object =
+        object::File::parse(bytes).expect("direct backend output should be a readable host object");
     object
         .symbols()
         .filter(|symbol| symbol.section_index().is_some())
@@ -13524,7 +13561,7 @@ def main() -> int32:
             .any(|function| function.name == "toml::parse_string_map"),
         "the lowered module should carry every toml wrapper"
     );
-    let object = emit_host_object(&mir).expect("toml source should compile directly");
+    let object = emit_unoptimized_object(&mir).expect("toml source should compile directly");
     let defined = object_defined_aura_functions(&object);
     assert!(defined.contains("aura_fn_main"), "{defined:?}");
     assert!(
@@ -14064,7 +14101,7 @@ def main():
     print(arithmetic(7, 2, 9, 1.5))
 "#;
     let named = lower_source_to_mir(source).expect("arithmetic should lower");
-    let checked = emit_host_object(&named).expect("arithmetic should emit");
+    let checked = emit_unoptimized_object(&named).expect("arithmetic should emit");
     let referenced = object_referenced_symbols(&checked);
     for helper in [
         "aura_direct_fail_integer_overflow",
@@ -14092,9 +14129,11 @@ def main():
             *trap = crate::mir::ArithmeticTrap::None;
         }
     }
-    let object = NativeCodegen::with_validated_loans(&unchecked, "<aura>", "")
-        .and_then(|context| context.emit())
-        .expect("unchecked arithmetic should emit");
+    let object = crate::native_backend::without_optimization(|| {
+        NativeCodegen::with_validated_loans(&unchecked, "<aura>", "")
+            .and_then(|context| context.emit())
+    })
+    .expect("unchecked arithmetic should emit");
     let referenced = object_referenced_symbols(&object);
     assert!(
         !referenced

@@ -3012,13 +3012,6 @@ fn native_cache_key_for_semantic_schema(
     let runtime = native_runtime_identity_material(runtime_identity)?;
     let semantic_schema = semantic_schema_version.to_le_bytes();
     let keep_symbols = [u8::from(native_keep_symbols())];
-    // A setting that selects no code generator gets a key of its own, so the
-    // build reports the setting instead of reusing another generator's
-    // program. Its build fails, so nothing is ever stored under that key.
-    let code_generator = match aura_compiler::selected_code_generator() {
-        Ok(code_generator) => code_generator.name(),
-        Err(_) => "unavailable",
-    };
     let mut material = Vec::with_capacity(lowered.len() + 256);
     for part in [
         NATIVE_CACHE_FORMAT.as_bytes(),
@@ -3027,7 +3020,7 @@ fn native_cache_key_for_semantic_schema(
         std::env::consts::ARCH.as_bytes(),
         std::env::consts::OS.as_bytes(),
         b"direct",
-        code_generator.as_bytes(),
+        b"llvm",
         keep_symbols.as_slice(),
         runtime.as_slice(),
     ] {
@@ -3045,7 +3038,7 @@ fn native_runtime_identity_material(identity: &NativeRuntimeIdentity) -> Option<
 // The compiler-owned semantic schema version is an additional, independent
 // key component, so checked-source changes do not require a cache-container
 // format change.
-const NATIVE_CACHE_FORMAT: &str = "aura-native-cache-v9";
+const NATIVE_CACHE_FORMAT: &str = "aura-native-cache-v10";
 
 /// The exact runtime inputs that a warm native-cache lookup may reuse.
 ///

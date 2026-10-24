@@ -75,7 +75,7 @@ The main implementation files these docs refer to are:
 Aura is a language implementation monorepo. The current maintained execution architecture is:
 
 - `aura run` parses, checks, lowers to MIR, and executes with the MIR runtime
-- `aura build` parses, checks, lowers to MIR, lowers again into native code with Cranelift, and links against the direct runtime
+- `aura build` parses, checks, lowers to MIR, lowers again into native code with LLVM, and links against the direct runtime
 - editor tooling prefers compiler-produced analysis and only falls back to local JavaScript analysis when it has to
 
 These docs explain the maintained architecture implemented in this repository.

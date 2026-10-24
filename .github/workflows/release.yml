@@ -124,11 +124,24 @@ jobs:
         with:
           toolchain: 1.95.0
 
+      - name: Install LLVM's system libraries
+        if: runner.os == 'Linux'
+        # The Linux llvm-config names a static libzstd and libxml2.
+        run: sudo apt-get update && sudo apt-get install -y libzstd-dev libxml2-dev
+
+      # No cache: a release links only the pinned LLVM it downloads, or the
+      # Homebrew bottle Homebrew verifies.
+      - name: Install LLVM
+        run: bash scripts/install-llvm.sh
+
       - name: Build release CLI
         env:
           AURA_BUILD_COMMIT: ${{ needs.release_identity.outputs.implementation_commit }}
           AURA_BUILD_CHANNEL: preview
         run: cargo build -p aura --release --locked
+
+      - name: Check the libraries the CLI loads
+        run: python3 scripts/check-aura-libraries.py target/release/aura
 
       - name: Package CLI
         shell: bash

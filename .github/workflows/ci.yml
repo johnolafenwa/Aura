@@ -42,8 +42,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     # The repo gate runs the whole workspace twice (tests, then the
     # single-threaded instrumented coverage run); after Batch 1 phase 1 the
-    # Ubuntu runner needs about two hours for it. The LLVM parity matrix and
-    # library tests add about half an hour, so the limit leaves headroom.
+    # Ubuntu runner needs about two hours for it, so the limit leaves
+    # headroom.
     timeout-minutes: 210
 
     steps:
@@ -132,15 +132,11 @@ jobs:
       - name: Install LLVM
         run: bash scripts/install-llvm.sh
 
-      # One compiler checks both code generators. The `llvm` feature does
-      # not change what Cranelift emits or the runtime programs link.
       - name: Build release compiler and runtime
-        run: cargo build --release --locked -p aura -p aura-runtime --features aura/llvm
+        run: cargo build --release --locked -p aura -p aura-runtime
+
+      - name: Check the libraries the compiler loads
+        run: python3 scripts/check-aura-libraries.py target/release/aura
 
       - name: Check native executable contents and sizes
         run: python3 scripts/check-native-binaries.py
-
-      - name: Check native executable contents and sizes on LLVM
-        run: python3 scripts/check-native-binaries.py
-        env:
-          AURA_NATIVE_CODEGEN: llvm

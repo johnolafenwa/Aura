@@ -69,8 +69,8 @@ Use the guide for the system where the `aura` command will run:
 
 ## Build From Source
 
-To build Aura itself, you need the pinned Rust toolchain and a host C
-compiler.
+To build Aura itself, you need the pinned Rust toolchain, a host C
+compiler, and the static libraries of LLVM 22.
 
 - **Rust**: install it through [rustup](https://rustup.rs).
   `rust-toolchain.toml` selects Rust 1.95.0.
@@ -78,6 +78,11 @@ compiler.
   them with `xcode-select --install`. On Linux and on Ubuntu under WSL 2,
   `build-essential` supplies the supported host toolchain. Native Windows
   source builds are outside the distribution matrix.
+- **LLVM 22**: `aura` generates native code with LLVM and links it
+  statically. `scripts/install-llvm.sh` installs it and prints the
+  `LLVM_SYS_221_PREFIX` setting to export before you build. On Linux it
+  downloads the official LLVM 22.1.2 archive and needs `libzstd-dev` and
+  `libxml2-dev`. On macOS it installs Homebrew's `llvm@22`.
 
 ## Build The Compiler
 
@@ -86,8 +91,12 @@ Clone the repository and build a release binary:
 ```bash
 git clone https://github.com/johnolafenwa/Aura.git
 cd Aura
+scripts/install-llvm.sh
+export LLVM_SYS_221_PREFIX="$HOME/.cache/aura/llvm/22.1.2"
 cargo build --release -p aura
 ```
+
+On macOS, export the settings the script prints instead.
 
 The release build is at `./target/release/aura`. In a source checkout,
 `aura build` can use the sibling runtime that Cargo built. A distributed

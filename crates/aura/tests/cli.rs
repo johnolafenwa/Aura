@@ -5007,70 +5007,33 @@ fn native_keep_symbols_skips_strip_and_separates_cached_programs() {
 
 #[cfg(unix)]
 #[test]
-fn native_run_cache_keys_on_the_code_generator() {
+fn native_run_ignores_the_retired_code_generator_setting() {
+    // LLVM is the only code generator, so `AURA_NATIVE_CODEGEN`, which
+    // used to choose between Cranelift and LLVM, selects nothing. Every
+    // setting runs and reuses the program the fixture cached.
     let fixture = NativeCacheFixture::new("aura-codegen-cache");
     let entries = || {
         fs::read_dir(fixture.cache.path().join("programs"))
             .unwrap()
             .count()
     };
-    let run = |setting: &str| {
+    assert_eq!(entries(), 1);
+    for setting in ["cranelift", "llvm", "gcc", ""] {
         let mut command = fixture.command();
         command.env("AURA_NATIVE_CODEGEN", setting);
-        command_output_with_timeout(
+        let run = command_output_with_timeout(
             command,
             std::time::Duration::from_secs(60),
-            "code generator native cache",
-        )
-    };
-
-    // Cranelift is the default, so naming it reuses the default's entry.
-    let cranelift = run("cranelift");
-    assert!(
-        cranelift.status.success(),
-        "{}",
-        String::from_utf8_lossy(&cranelift.stderr)
-    );
-    assert_eq!(
-        entries(),
-        1,
-        "naming the default code generator keeps its key"
-    );
-
-    let llvm = run("llvm");
-    if cfg!(feature = "llvm") {
-        assert!(
-            llvm.status.success(),
-            "{}",
-            String::from_utf8_lossy(&llvm.stderr)
-        );
-        assert_eq!(String::from_utf8_lossy(&llvm.stdout), "cached\n");
-        assert_eq!(
-            entries(),
-            2,
-            "an LLVM run must build its own program, not reuse the Cranelift one"
-        );
-    } else {
-        assert!(
-            !llvm.status.success(),
-            "an aura without LLVM must refuse an LLVM run, not reuse the Cranelift program"
+            "retired code generator setting",
         );
         assert!(
-            String::from_utf8_lossy(&llvm.stderr).contains("built without the `llvm` feature"),
-            "{}",
-            String::from_utf8_lossy(&llvm.stderr)
+            run.status.success(),
+            "{setting:?}: {}",
+            String::from_utf8_lossy(&run.stderr)
         );
-        assert_eq!(entries(), 1);
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "cached\n");
+        assert_eq!(entries(), 1, "{setting:?} must reuse the cached program");
     }
-
-    let unknown = run("gcc");
-    assert!(!unknown.status.success());
-    assert!(
-        String::from_utf8_lossy(&unknown.stderr)
-            .contains("AURA_NATIVE_CODEGEN must be `cranelift` or `llvm`, not `gcc`"),
-        "{}",
-        String::from_utf8_lossy(&unknown.stderr)
-    );
 }
 
 #[cfg(unix)]
@@ -15263,11 +15226,11 @@ fn aura_test_registration_timeout_retains_stdout_in_the_single_json_document() {
 fn native_cache_format_carries_the_runtime_archive_epoch() {
     let main = include_str!("../src/main.rs");
     assert!(
-        main.contains(r#"const NATIVE_CACHE_FORMAT: &str = "aura-native-cache-v9";"#),
-        "native cache format must invalidate artifacts linked against the compiler archive"
+        main.contains(r#"const NATIVE_CACHE_FORMAT: &str = "aura-native-cache-v10";"#),
+        "native cache format must invalidate artifacts that Cranelift built"
     );
     assert!(
-        !main.contains("aura-native-cache-v8"),
+        !main.contains("aura-native-cache-v9"),
         "the prior cache format must not linger in key material"
     );
 }
