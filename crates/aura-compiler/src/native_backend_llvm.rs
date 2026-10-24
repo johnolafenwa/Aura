@@ -75,6 +75,7 @@ struct FunctionDecl {
     signature: Signature,
     body: Option<FunctionIr>,
     task_invariant: bool,
+    inline: bool,
 }
 
 struct DataDecl {
@@ -161,6 +162,7 @@ impl ModuleBackend for LlvmModule {
                     signature: signature.clone(),
                     body: None,
                     task_invariant: false,
+                    inline: false,
                 });
                 self.names.insert(name.to_string(), Symbol::Function(id));
                 Ok(FuncHandle(id))
@@ -217,6 +219,10 @@ impl ModuleBackend for LlvmModule {
 
     fn mark_task_invariant(&mut self, function: FuncHandle) {
         self.functions[function.0 as usize].task_invariant = true;
+    }
+
+    fn mark_inline(&mut self, function: FuncHandle) {
+        self.functions[function.0 as usize].inline = true;
     }
 
     fn define_function(
@@ -1241,6 +1247,8 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
             [("memory", MEMORY_NONE), ("nounwind", 0), ("willreturn", 0)].map(|(name, value)| {
                 context.create_enum_attribute(Attribute::get_named_enum_kind_id(name), value)
             });
+        let always_inline =
+            context.create_enum_attribute(Attribute::get_named_enum_kind_id("alwaysinline"), 0);
         let functions = object
             .functions
             .iter()
@@ -1261,6 +1269,9 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
                     for attribute in &task_invariant {
                         function.add_attribute(AttributeLoc::Function, *attribute);
                     }
+                }
+                if decl.inline {
+                    function.add_attribute(AttributeLoc::Function, always_inline);
                 }
                 function
             })

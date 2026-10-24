@@ -445,6 +445,13 @@ pub mod representation_stats {
         OWNERSHIP_COUNTING.store(on, Ordering::Relaxed);
     }
 
+    /// Whether the ownership counters count, so every retain and release
+    /// must reach the runtime.
+    #[inline]
+    pub fn ownership_counting() -> bool {
+        OWNERSHIP_COUNTING.load(Ordering::Relaxed)
+    }
+
     #[inline]
     fn note_ownership(counter: &AtomicU64) {
         if OWNERSHIP_COUNTING.load(Ordering::Relaxed) {

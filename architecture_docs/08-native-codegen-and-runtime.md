@@ -147,6 +147,34 @@ The key idea is:
 - generated native code can cheaply pass opaque values as pointer-sized handles
 - the runtime preserves Aura semantics by storing real `Value` data behind those handles
 
+### Ownership Ledger
+
+Each task keeps a ledger of the references it owns. When the task fails or
+is cancelled, the runtime releases every reference in it, so no box leaks.
+
+- **Links.** The ledger lives in the task's `DirectFrameStack`. A value
+  confined to its thread links into the ledger of the first task that owns
+  it. Its header names that stack, counts the references the task owns,
+  and holds the list links. Adding and removing a reference is O(1) and
+  needs no hashing.
+- **Counts by address.** A shared value never links, because another
+  thread may read its header. Neither does a value that another task's
+  ledger links. The ledger counts those references in a small map.
+  `share_direct_value` moves a linked value's count into that map before
+  it publishes the lock.
+- **Inline retain and release.** Each module defines `aura_owned_retain`
+  and `aura_owned_release`, and LLVM inlines them into every caller. They
+  read the lock word first. A confined value linked into the running
+  task's ledger has its count and its owned count changed in place. When
+  the ledger holds the last reference it links, the release calls
+  `aura_direct_release_last_owned_value`, which unlinks the value and
+  frees it at zero without a lookup. Every other value goes to
+  `aura_direct_retain_value` or `aura_direct_release_value`.
+- **Layout.** Generated code reads the offsets of
+  `DirectOwnershipLayout`. The program checks its fingerprint at startup.
+- **Counters.** While the representation counters count ownership, no
+  value links, so every retain and release reaches the runtime.
+
 ## A tiny direct-backend design example
 
 This miniature example does not use Cranelift, but it shows the same architectural split: simple values are direct, complex values are boxed.

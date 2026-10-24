@@ -135,11 +135,15 @@ pub struct DirectFfiCallSpec {
 
 #[path = "native_frame_stack.rs"]
 mod frame_stack;
+#[path = "native_owned_values.rs"]
+mod owned_values;
 
 pub use frame_stack::{direct_frame_stack_layout, DirectFrameStack, DirectFrameStackLayout};
 use frame_stack::{
     DIRECT_FRAME_FLAG_PENDING_SINKS, DIRECT_FRAME_FLAG_RETURNED_VIEWS, DIRECT_MAX_CALL_DEPTH,
 };
+use owned_values::DirectOwnedValues;
+pub use owned_values::{direct_ownership_layout, DirectOwnershipLayout};
 
 struct DirectCleanupRegistration {
     id: i64,
@@ -518,12 +522,7 @@ impl std::hash::Hasher for AddressHasher {
     }
 }
 
-/// Live owned references per opaque value address for one direct task.
-type OwnedValueLedger = HashMap<usize, usize, std::hash::BuildHasherDefault<AddressHasher>>;
-
 struct DirectTaskRuntimeState {
-    ownership_tracking_active: bool,
-    owned_value_refs: OwnedValueLedger,
     runtime_error_capture: bool,
     cleanup_stack: Vec<DirectCleanupRegistration>,
     next_cleanup_id: i64,
@@ -663,8 +662,6 @@ struct DirectMutableWritebackSlot {
 impl Default for DirectTaskRuntimeState {
     fn default() -> Self {
         Self {
-            ownership_tracking_active: false,
-            owned_value_refs: OwnedValueLedger::default(),
             runtime_error_capture: false,
             cleanup_stack: Vec::new(),
             next_cleanup_id: 1,
@@ -702,6 +699,15 @@ impl DirectTaskRuntimeState {
         unsafe { self.frames.as_mut() }
     }
 
+    /// The references the task owns.
+    fn owned_values(&self) -> &DirectOwnedValues {
+        &self.frames().owned_values
+    }
+
+    fn owned_values_mut(&mut self) -> &mut DirectOwnedValues {
+        &mut self.frames_mut().owned_values
+    }
+
     /// The calls active above the frame stack's floor.
     fn call_depth(&self) -> usize {
         self.frames().depth()
@@ -727,7 +733,9 @@ fn boxed_direct_task_runtime_state(
     task_ancestry: DirectTaskAncestry,
 ) -> Box<DirectTaskRuntimeState> {
     let mut state = Box::new(DirectTaskRuntimeState::default());
-    state.ownership_tracking_active = ownership_tracking_active;
+    state
+        .owned_values_mut()
+        .set_tracking(ownership_tracking_active);
     state.task_ancestry = task_ancestry;
     state
 }
@@ -880,29 +888,43 @@ fn with_direct_task_runtime_state<T>(work: impl FnOnce(&mut DirectTaskRuntimeSta
     with_direct_task_runtime_state_for_key(direct_task_runtime_key(), work)
 }
 
+/// The current task's frame stack, which also holds its ownership ledger,
+/// or `None` when this thread has no state for the task. Unlike
+/// `aura_direct_frame_stack`, it never creates a state.
+#[inline]
+fn current_direct_frame_stack() -> Option<NonNull<DirectFrameStack>> {
+    match NonNull::new(current_task_native_slot().cast::<DirectFrameStack>()) {
+        Some(stack) => Some(stack),
+        None => find_direct_frame_stack(),
+    }
+}
+
+/// Looks the current task's stack up when its slot is empty, and fills the
+/// slot.
+#[cold]
+fn find_direct_frame_stack() -> Option<NonNull<DirectFrameStack>> {
+    let key = direct_task_runtime_key();
+    let stack = DIRECT_TASK_RUNTIME_STATES
+        .with(|states| states.borrow_mut().get_mut(key).map(|state| state.frames))?;
+    set_current_task_native_slot(stack.as_ptr().cast());
+    Some(stack)
+}
+
 fn register_direct_owned_value(value: *mut OpaqueValue) {
     if value.is_null() {
         return;
     }
-    let key = direct_task_runtime_key();
-    let overflow = DIRECT_TASK_RUNTIME_STATES.with(|states| {
-        let mut states = states.borrow_mut();
-        let Some(state) = states.get_mut(key) else {
-            return false;
-        };
-        if !state.ownership_tracking_active {
-            return false;
-        }
-        let count = state.owned_value_refs.entry(value as usize).or_default();
-        match count.checked_add(1) {
-            Some(next) => {
-                *count = next;
-                false
-            }
-            None => true,
-        }
-    });
-    if overflow {
+    let Some(stack) = current_direct_frame_stack() else {
+        return;
+    };
+    // SAFETY: the stack belongs to the running task, and no other reference
+    // to its ledger is live while the runtime registers a value.
+    let ledger = unsafe { &mut (*stack.as_ptr()).owned_values };
+    if !ledger.tracking() {
+        return;
+    }
+    // SAFETY: callers register live boxes this thread may reach.
+    if !unsafe { ledger.add(stack.as_ptr(), value) } {
         runtime_error("direct task owned-value reference count overflow");
     }
 }
@@ -911,23 +933,13 @@ fn unregister_direct_owned_value(value: *mut OpaqueValue) -> bool {
     if value.is_null() {
         return false;
     }
-    let key = direct_task_runtime_key();
-    let removed = DIRECT_TASK_RUNTIME_STATES.with(|states| {
-        let mut states = states.borrow_mut();
-        let Some(state) = states.get_mut(key) else {
-            return false;
-        };
-        let address = value as usize;
-        let Some(count) = state.owned_value_refs.get_mut(&address) else {
-            return false;
-        };
-        *count -= 1;
-        if *count == 0 {
-            state.owned_value_refs.remove(&address);
-        }
-        true
-    });
-    removed
+    let Some(stack) = current_direct_frame_stack() else {
+        return false;
+    };
+    // SAFETY: as in `register_direct_owned_value`.
+    let ledger = unsafe { &mut (*stack.as_ptr()).owned_values };
+    // SAFETY: callers unregister live boxes this thread may reach.
+    unsafe { ledger.remove(stack.as_ptr(), value) }
 }
 
 struct DirectTaskRuntimeScopeGuard {
@@ -949,7 +961,7 @@ impl Drop for DirectTaskRuntimeScopeGuard {
         });
         let outstanding_owned_values = current
             .as_ref()
-            .map(|current| current.owned_value_refs.clone())
+            .map(|current| current.owned_values().entries())
             .unwrap_or_default();
         let mut outstanding_owned_value_types = outstanding_owned_values
             .iter()
@@ -1071,9 +1083,9 @@ fn discard_current_direct_task_runtime_state() {
 }
 
 fn release_direct_task_runtime_state(mut state: Box<DirectTaskRuntimeState>) {
-    let owned_value_refs = std::mem::take(&mut state.owned_value_refs);
+    let owned_values = state.owned_values_mut().take_all();
     drop(state);
-    for (address, count) in owned_value_refs {
+    for (address, count) in owned_values {
         for _ in 0..count {
             unsafe {
                 release_untracked_value(address as *mut OpaqueValue);
@@ -1305,8 +1317,9 @@ fn int32_overflow_message(value: i64) -> String {
 /// every access takes the shared lock.
 ///
 /// Generated code reads the list view and the shared lock in place (see
-/// [`DirectListLayout`]), so the layout is `repr(C)`. The fields fill 160
-/// bytes with no padding.
+/// [`DirectListLayout`]), and the reference counts and ledger owner (see
+/// [`DirectOwnershipLayout`]), so the layout is `repr(C)`. The fields fill
+/// 192 bytes with no padding.
 #[repr(C)]
 pub struct OpaqueValue {
     value: UnsafeCell<Value>,
@@ -1324,6 +1337,14 @@ pub struct OpaqueValue {
     /// from the list view. It is [`DirectListAccess::None`] once the value
     /// is shared.
     list_access: AtomicU32,
+    /// The frame stack of the task whose ledger links this value, or null.
+    /// Only the thread the value is confined to reads the four ledger
+    /// fields, and a shared value is never linked.
+    owner: std::cell::Cell<*mut DirectFrameStack>,
+    /// The references that ledger holds.
+    owned: std::cell::Cell<usize>,
+    prev: std::cell::Cell<*mut OpaqueValue>,
+    next: std::cell::Cell<*mut OpaqueValue>,
     runtime_type_name: UnsafeCell<Option<Arc<str>>>,
     #[cfg(all(debug_assertions, not(test)))]
     owner_thread: usize,
@@ -1331,6 +1352,10 @@ pub struct OpaqueValue {
 
 impl Drop for OpaqueValue {
     fn drop(&mut self) {
+        // A value freed while a ledger still lists it leaves the list, so no
+        // ledger releases it again.
+        // SAFETY: a linked value is confined to this thread.
+        unsafe { owned_values::detach_for_drop(self) };
         let lock = *self.shared_lock.get_mut();
         if !lock.is_null() {
             // SAFETY: `share_direct_value` leaked this box for the value.
@@ -1372,6 +1397,10 @@ impl OpaqueValue {
             ref_count: AtomicU32::new(1),
             list_access: AtomicU32::new(access as u32),
             shared_lock: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
+            owner: std::cell::Cell::new(std::ptr::null_mut()),
+            owned: std::cell::Cell::new(0),
+            prev: std::cell::Cell::new(std::ptr::null_mut()),
+            next: std::cell::Cell::new(std::ptr::null_mut()),
             #[cfg(all(debug_assertions, not(test)))]
             owner_thread: direct_value_thread_identity(),
             value: UnsafeCell::new(value),
@@ -1436,6 +1465,10 @@ unsafe fn share_direct_value(ptr: *mut OpaqueValue) {
     match unsafe { ptr.as_ref() } {
         Some(value) => {
             if value.shared_lock.load(Ordering::Acquire).is_null() {
+                // Other threads may read the header once the value is
+                // shared, so its ledger counts it by address from now on.
+                // SAFETY: the caller is the thread the value is confined to.
+                unsafe { owned_values::detach_for_sharing(ptr, value) };
                 let lock = Box::into_raw(Box::new(RwLock::new(())));
                 if value
                     .shared_lock
@@ -1702,15 +1735,24 @@ unsafe fn release_untracked_value(value: *mut OpaqueValue) {
             .unwrap_or_else(|| runtime_error("direct runtime received an invalid opaque value"))
     };
     if release_ref_count(&opaque.ref_count).unwrap_or_else(|message| runtime_error(message)) {
-        #[cfg(coverage)]
-        {
-            let previous = DIRECT_VALUE_LIVE_COUNT.fetch_sub(1, Ordering::AcqRel);
-            debug_assert!(previous > 0, "direct runtime live-value counter underflow");
-        }
-        unsafe {
-            drop(Box::from_raw(value));
-        }
+        // SAFETY: the count reached zero, so this was the last reference.
+        unsafe { free_direct_value(value) };
     }
+}
+
+/// Frees a value whose count reached zero.
+///
+/// # Safety
+///
+/// The caller dropped the last reference to `value`.
+unsafe fn free_direct_value(value: *mut OpaqueValue) {
+    #[cfg(coverage)]
+    {
+        let previous = DIRECT_VALUE_LIVE_COUNT.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0, "direct runtime live-value counter underflow");
+    }
+    // SAFETY: the caller's contract.
+    drop(unsafe { Box::from_raw(value) });
 }
 
 unsafe fn with_value<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&Value) -> T) -> T {
@@ -2463,6 +2505,19 @@ pub fn direct_list_layout() -> DirectListLayout {
         elements_offset: std::mem::offset_of!(OpaqueValue, list_elements) as i32,
         len_offset: std::mem::offset_of!(OpaqueValue, list_len) as i32,
     }
+}
+
+/// Stops a program whose generated code expects another reference count
+/// layout.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_check_ownership_layout(fingerprint: i64) {
+    task_runtime_boundary(|| {
+        if fingerprint != direct_ownership_layout().fingerprint() {
+            runtime_error(
+                "this executable was built for a different Aura runtime; rebuild it with `aura build`",
+            )
+        }
+    })
 }
 
 /// Stops a program whose generated code expects another runtime layout.
@@ -5444,14 +5499,63 @@ pub unsafe extern "C-unwind" fn aura_direct_retain_value(
 /// runtime. Each successful retain/release pair must be balanced according to the direct-runtime
 /// ownership contract.
 pub unsafe extern "C-unwind" fn aura_direct_release_value(value: *mut OpaqueValue) {
+    // SAFETY: the caller's contract.
+    task_runtime_boundary(|| unsafe { release_direct_value(value) })
+}
+
+/// Releases one reference the running task owns.
+///
+/// # Safety
+///
+/// As for [`aura_direct_release_value`].
+unsafe fn release_direct_value(value: *mut OpaqueValue) {
+    if !value.is_null() {
+        crate::runtime_value::representation_stats::note_release();
+    }
+    let owned = unregister_direct_owned_value(value);
+    check_released_value_is_owned(value, owned);
+    unsafe {
+        release_untracked_value(value);
+    }
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+/// Releases the last reference the running task's ledger holds to `value`,
+/// and frees the value when no other reference is left. Generated code
+/// calls it once it has seen that the value is confined to this thread and
+/// linked into the running task's ledger, so it needs no lookup. Any other
+/// value takes the whole path of `aura_direct_release_value`.
+///
+/// # Safety
+///
+/// As for [`aura_direct_release_value`].
+pub unsafe extern "C-unwind" fn aura_direct_release_last_owned_value(value: *mut OpaqueValue) {
     task_runtime_boundary(|| {
-        if !value.is_null() {
-            crate::runtime_value::representation_stats::note_release();
+        let removed = current_direct_frame_stack().is_some_and(|stack| {
+            // SAFETY: the stack belongs to the running task, and the caller
+            // passes a live box.
+            unsafe {
+                (*stack.as_ptr())
+                    .owned_values
+                    .remove_last(stack.as_ptr(), value)
+            }
+        });
+        if !removed {
+            // SAFETY: the caller's contract.
+            unsafe { release_direct_value(value) };
+            return;
         }
-        let owned = unregister_direct_owned_value(value);
-        check_released_value_is_owned(value, owned);
-        unsafe {
-            release_untracked_value(value);
+        // SAFETY: a value the ledger linked is live and confined to this
+        // thread, so no other thread changes its count.
+        let header = unsafe { &*value };
+        match header.ref_count.load(Ordering::Relaxed) {
+            0 => runtime_error("attempted to release an already-released direct runtime value"),
+            1 => {
+                header.ref_count.store(0, Ordering::Relaxed);
+                // SAFETY: the ledger held the last reference.
+                unsafe { free_direct_value(value) };
+            }
+            count => header.ref_count.store(count - 1, Ordering::Relaxed),
         }
     })
 }
@@ -5468,13 +5572,9 @@ fn check_released_value_is_owned(value: *mut OpaqueValue, owned: bool) {
 
 /// Whether the current task keeps a ledger of the values it owns.
 fn direct_ownership_tracking_active() -> bool {
-    let key = direct_task_runtime_key();
-    DIRECT_TASK_RUNTIME_STATES.with(|states| {
-        states
-            .borrow_mut()
-            .get_mut(key)
-            .is_some_and(|state| state.ownership_tracking_active)
-    })
+    // SAFETY: the stack belongs to the running task.
+    current_direct_frame_stack()
+        .is_some_and(|stack| unsafe { stack.as_ref() }.owned_values.tracking())
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -14846,7 +14946,9 @@ unsafe fn claim_direct_task_args(args: &[i64], claim_flag_address: usize) {
     // raw buffer references itself. Installing the finished map and flipping
     // the raw atomic flag are then allocation-free, so no partially claimed
     // prefix can exist.
-    let mut owned_value_refs = OwnedValueLedger::default();
+    let mut owned_value_refs = HashMap::<usize, usize, _>::with_hasher(
+        std::hash::BuildHasherDefault::<AddressHasher>::default(),
+    );
     for argument in args.iter().copied().filter(|argument| *argument != 0) {
         let count = owned_value_refs.entry(argument as usize).or_insert(0usize);
         *count = count
@@ -14855,14 +14957,14 @@ unsafe fn claim_direct_task_args(args: &[i64], claim_flag_address: usize) {
     }
     with_direct_task_runtime_state(|state| {
         assert!(
-            state.ownership_tracking_active,
+            state.owned_values().tracking(),
             "direct task arguments require an active ownership ledger"
         );
         assert!(
-            state.owned_value_refs.is_empty(),
+            state.owned_values().is_empty(),
             "direct task ownership ledger must be empty before argument claim"
         );
-        state.owned_value_refs = owned_value_refs;
+        state.owned_values_mut().install_others(owned_value_refs);
     });
     unsafe {
         mark_direct_task_args_claimed(claim_flag_address);

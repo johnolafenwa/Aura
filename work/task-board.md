@@ -109,6 +109,11 @@ Last updated: 2026-10-23
   `fib(30)` runs in 115 million instructions on LLVM instead of 484
   million, 2.9 times Rust. Details are in
   `2026-10-23-batch-7-step-10a-frame-fast-path.md`.
+- In progress: 10b, the ownership ledger. Each task links the values it
+  owns through their headers instead of a hash map, and generated code
+  retains and releases them in place. With LLVM, `dict_build_get` drops
+  9% and `record_field_reads` 10%, short of the plan's 25%. Details are in
+  `2026-10-23-batch-7-step-10b-ownership-ledger.md`.
 
 ## Aura 0.6.0 preview release (complete)
 

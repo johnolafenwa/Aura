@@ -2100,6 +2100,65 @@ fn generated_functions_push_frames_inline_and_keep_the_runtime_paths() {
 }
 
 #[test]
+fn generated_retains_and_releases_count_in_place_and_keep_the_runtime_paths() {
+    let source = "def echo(value: str):\n    print(value)\n\ndef main() -> int32:\n    mut text = \"hello\"\n    echo(text)\n    text = \"goodbye\"\n    print(text)\n    return 0\n";
+    let mir = lower_source_to_mir(source).expect("source should lower");
+    let object = emit_host_object_with_metadata(&mir, "/workspace/main.au", source).expect("emit");
+    let referenced = object_referenced_symbols(&object);
+    // LLVM removes this program's retains, as it did before the fast
+    // paths, so only Cranelift's object keeps the retain's cold call.
+    let cranelift = matches!(
+        crate::native_backend::selected_code_generator(),
+        Ok(crate::native_backend::CodeGenerator::Cranelift)
+    );
+    let retain = cranelift.then_some("aura_direct_retain_value");
+    for symbol in [
+        "aura_direct_release_value",
+        "aura_direct_release_last_owned_value",
+        "aura_direct_check_ownership_layout",
+    ]
+    .into_iter()
+    .chain(retain)
+    {
+        assert!(
+            referenced.iter().any(|name| name.ends_with(symbol)),
+            "generated code must reference `{symbol}`: {referenced:?}"
+        );
+    }
+}
+
+#[test]
+fn the_ownership_fast_paths_report_backend_errors() {
+    use super::{declare_ownership_fast_paths, declare_runtime_helper};
+    use crate::native_backend::{host_module_backend, Linkage};
+    use crate::runtime_abi::RuntimeTable;
+
+    for (name, expected) in [
+        (
+            "aura_owned_retain",
+            "failed to declare the retain fast path: ",
+        ),
+        (
+            "aura_owned_release",
+            "failed to declare the release fast path: ",
+        ),
+    ] {
+        let mut object = host_module_backend().expect("host module");
+        let mut runtime =
+            RuntimeTable::try_build(|function| declare_runtime_helper(&mut *object, function))
+                .expect("runtime helpers");
+        object
+            .declare_function(name, Linkage::Local, &Signature::new(CallConv::C))
+            .expect("declare the clashing function");
+        let error = match declare_ownership_fast_paths(object.as_mut(), &mut runtime) {
+            Ok(_) => panic!("`{name}` clashes"),
+            Err(error) => error,
+        };
+        assert!(error.starts_with(expected), "{error}");
+    }
+}
+
+#[test]
 fn the_frame_descriptor_table_reports_backend_errors() {
     use super::declare_frame_descriptor_table;
     use crate::native_backend::{host_module_backend, Linkage};

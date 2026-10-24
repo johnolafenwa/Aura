@@ -8,9 +8,13 @@
 //! while the header allows it, and calls `aura_direct_enter_frame` or
 //! `aura_direct_exit_call` otherwise. [`DirectFrameStackLayout`] tells the
 //! compiler where the header fields are.
+//!
+//! The stack's address also names its task to the ownership ledger, which
+//! the stack carries in [`DirectFrameStack::owned_values`].
 
 use std::ptr::{self, NonNull};
 
+use super::owned_values::DirectOwnedValues;
 use super::{DirectFrameDescriptor, DirectRuntimeCallFrame};
 use crate::diag::RuntimeCallFrame;
 
@@ -59,6 +63,10 @@ pub struct DirectFrameStack {
     /// The heap block, which holds `capacity` entries when not null.
     spill: *mut usize,
     inline: [usize; DIRECT_FRAME_STACK_INLINE_ENTRIES],
+    /// The references the task owns. A value the ledger links names this
+    /// stack, so generated code compares the value's owner with the
+    /// address it already holds.
+    pub(super) owned_values: DirectOwnedValues,
 }
 
 impl DirectFrameStack {
@@ -76,6 +84,7 @@ impl DirectFrameStack {
             owned_frames: 0,
             spill: ptr::null_mut(),
             inline: [0; DIRECT_FRAME_STACK_INLINE_ENTRIES],
+            owned_values: DirectOwnedValues::new(),
         })));
         // SAFETY: the box was just leaked, so nothing else refers to it.
         let header = unsafe { &mut *stack.as_ptr() };

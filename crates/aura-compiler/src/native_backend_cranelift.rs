@@ -161,6 +161,8 @@ impl ModuleBackend for CraneliftModule {
     /// Cranelift has no attribute for this, and it never merges calls.
     fn mark_task_invariant(&mut self, _function: FuncHandle) {}
 
+    fn mark_inline(&mut self, _function: FuncHandle) {}
+
     fn define_function(
         &mut self,
         function: FuncHandle,

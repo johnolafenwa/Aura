@@ -16,13 +16,8 @@ fn direct_union_injection_consumes_the_tracked_payload_registration() {
         // leave this test inspecting a freed allocation address.
         let control = unsafe { aura_direct_retain_value(payload) };
         let result = aura_direct_union_inject(encoded.as_ptr(), encoded.len(), 0, payload);
-        let remaining_registrations = with_direct_task_runtime_state(|state| {
-            state
-                .owned_value_refs
-                .get(&(payload as usize))
-                .copied()
-                .unwrap_or_default()
-        });
+        let remaining_registrations =
+            with_direct_task_runtime_state(|state| state.owned_values().count(payload));
 
         // The control reference owns the one expected remaining registration.
         // Remove only the red path's stale consumed registration without

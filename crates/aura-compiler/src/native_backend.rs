@@ -301,6 +301,10 @@ pub(crate) trait ModuleBackend {
     /// code generator may merge its calls. Cranelift ignores this.
     fn mark_task_invariant(&mut self, function: FuncHandle);
 
+    /// Asks the code generator to inline `function`, a small local
+    /// function, into every caller. Cranelift ignores this and calls it.
+    fn mark_inline(&mut self, function: FuncHandle);
+
     /// Defines `function`, whose body `body` builds. A body that fails
     /// leaves the function undefined.
     fn define_function(

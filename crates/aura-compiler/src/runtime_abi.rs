@@ -49,6 +49,7 @@ runtime_functions! {
     RuntimeInit => ("aura_direct_runtime_init", [I64, I64, I64, I64], None),
     CheckListLayout => ("aura_direct_check_list_layout", [I64], None),
     CheckFrameStackLayout => ("aura_direct_check_frame_stack_layout", [I64], None),
+    CheckOwnershipLayout => ("aura_direct_check_ownership_layout", [I64], None),
     ValidateFrameDescriptors => ("aura_direct_validate_frame_descriptors", [I64, I64], None),
     RunRoot => ("aura_direct_run_root", [I64], Some(I32)),
     FrameStack => ("aura_direct_frame_stack", [], Some(I64)),
@@ -216,6 +217,7 @@ runtime_functions! {
     SetTakeIndexInPlace => ("aura_direct_set_take_index_in_place", [I64, I64], Some(I64)),
     RetainValue => ("aura_direct_retain_value", [I64], Some(I64)),
     ReleaseValue => ("aura_direct_release_value", [I64], None),
+    ReleaseLastOwnedValue => ("aura_direct_release_last_owned_value", [I64], None),
     CloneValue => ("aura_direct_clone_value", [I64], Some(I64)),
     UnboxI64 => ("aura_direct_unbox_i64", [I64], Some(I64)),
     UnboxInt64 => ("aura_direct_unbox_int64", [I64], Some(I64)),
@@ -453,6 +455,13 @@ pub(crate) fn frame_stack_layout() -> aura_runtime::native_runtime::DirectFrameS
     aura_runtime::native_runtime::direct_frame_stack_layout()
 }
 
+/// Where generated code finds a boxed value's reference counts and ledger
+/// owner. The runtime owns the layout, and each executable checks the
+/// fingerprint at startup.
+pub(crate) fn ownership_layout() -> aura_runtime::native_runtime::DirectOwnershipLayout {
+    aura_runtime::native_runtime::direct_ownership_layout()
+}
+
 /// The bytes of one frame stack entry.
 pub(crate) const FRAME_STACK_ENTRY_BYTES: i64 =
     aura_runtime::native_runtime::DirectFrameStackLayout::ENTRY_BYTES;
@@ -473,6 +482,12 @@ impl<T> RuntimeTable<T> {
 
     pub(crate) fn map<U>(&self, entry: impl FnMut(&T) -> U) -> RuntimeTable<U> {
         RuntimeTable(self.0.iter().map(entry).collect())
+    }
+
+    /// Makes `function` resolve to `value` instead, and returns what it
+    /// resolved to before.
+    pub(crate) fn replace(&mut self, function: RuntimeFn, value: T) -> T {
+        std::mem::replace(&mut self.0[function as usize], value)
     }
 }
 
