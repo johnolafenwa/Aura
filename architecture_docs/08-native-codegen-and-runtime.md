@@ -178,6 +178,36 @@ is cancelled, the runtime releases every reference in it, so no box leaks.
   `native_box_cache.rs`, and boxing a value takes one before it calls the
   allocator.
 
+### Lookups, Variants, And Tags
+
+Native code skips work the runtime used to repeat on every lookup, match,
+and tag.
+
+- **Lookup slots.** `native_codegen_lookups.rs` finds each compiler
+  temporary that holds a `dict` `get` result and is only matched on
+  `Lookup.Found` or `Lookup.Missing`, unpacked once, and released. Such a
+  slot holds the found value's own box, or null for `Lookup.Missing`. The
+  `*_payload` forms of the `get` helpers fill it, so no `Lookup` is built
+  or tagged. The match tests the word for null, and the unpack retains the
+  box. A slot that is unpacked twice, or in a loop without a new `get`,
+  keeps the `Lookup`, because two copies would share one box.
+- **Scalar payloads.** A payload copied into an `int32`, `int64`,
+  `uint64`, or `bool` local is read in place by
+  `aura_direct_variant_payload_i64` and its siblings. Their errors match a
+  boxed payload followed by an unbox, word for word.
+- **Names.** `EnumVariantValue` keeps its names as `RuntimeName`, either
+  a static string or a shared `Arc<str>`. A copy of a value shares its
+  names. `aura_direct_enum_variant` keeps a small per-thread table of the
+  names it decoded from each literal, so a loop that builds variants
+  allocates no names.
+- **Tag cells.** Each module has one writable word per type descriptor.
+  `aura_direct_tag_value_type_cell` decodes the descriptor on first use
+  and keeps the tag in that word. A tag for a plain nominal type, such as
+  `json.Value`, records the name and touches nothing else in the value.
+- **f-strings.** An f-string that starts with an `int64` part begins with
+  `aura_direct_format_begin_i64`. It writes the leading literal and the
+  digits into one buffer sized for the later parts.
+
 ## A tiny direct-backend design example
 
 This miniature example does not use Cranelift, but it shows the same architectural split: simple values are direct, complex values are boxed.
@@ -378,6 +408,7 @@ not a second language-level cleanup mechanism.
 ## Files to study
 
 - [`native_codegen.rs`](../crates/aura-compiler/src/native_codegen.rs)
+- [`native_codegen_lookups.rs`](../crates/aura-compiler/src/native_codegen_lookups.rs)
 - [`native_backend.rs`](../crates/aura-compiler/src/native_backend.rs)
 - [`native_backend_cranelift.rs`](../crates/aura-compiler/src/native_backend_cranelift.rs)
 - [`native_backend_llvm.rs`](../crates/aura-compiler/src/native_backend_llvm.rs)

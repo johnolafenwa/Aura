@@ -115,6 +115,12 @@ Last updated: 2026-10-23
   freed value boxes. With LLVM, `dict_build_get` drops 18% and
   `record_field_reads` 17%, short of the plan's 25%. Details are in
   `2026-10-23-batch-7-step-10b-ownership-ledger.md`.
+- In progress: 10d, lookups and variants. Native code keeps a `dict`
+  lookup's found value without a `Lookup` box, reads scalar payloads in
+  place, shares enum names, and keeps each type tag in a static cell.
+  With LLVM, `dict_build_get` runs at 2.2 times Rust and
+  `record_field_reads` drops from 571 to 233 million instructions.
+  Details are in `2026-10-24-batch-7-step-10d-lookups-and-variants.md`.
 
 ## Aura 0.6.0 preview release (complete)
 

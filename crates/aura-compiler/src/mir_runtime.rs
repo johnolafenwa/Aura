@@ -66,7 +66,7 @@ use crate::runtime_value::{
     HttpListenerValue, HttpResponseValue, InstanceValue, IntegerArithmeticMode, MapValue,
     ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
     ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue,
-    RunOutput, RuntimeSchedulerWakeReason, SendValueError, SetElements, SetValue,
+    RunOutput, RuntimeName, RuntimeSchedulerWakeReason, SendValueError, SetElements, SetValue,
     TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
     TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue,
     UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
@@ -2189,8 +2189,8 @@ fn arg_default_value(default: ArgDefault) -> Result<Value> {
         ArgDefault::StdioNull => process_stdio_null(),
         ArgDefault::StdioInherit => process_stdio_inherit(),
         ArgDefault::RestartOnFailure => Value::EnumVariant(EnumVariantValue {
-            enum_name: "process.RestartPolicy".to_string(),
-            variant_name: "OnFailure".to_string(),
+            enum_name: RuntimeName::from_static("process.RestartPolicy"),
+            variant_name: RuntimeName::from_static("OnFailure"),
             payloads: Vec::new(),
         }),
         ArgDefault::Milliseconds(milliseconds) => {
@@ -4524,8 +4524,8 @@ impl MirRuntime {
                         let payload = self.convert_try_error_via_from(payload, &source_ty)?;
                         Ok(RvalueOutcome::Return(Value::EnumVariant(
                             EnumVariantValue {
-                                enum_name: "Result".to_string(),
-                                variant_name: "Err".to_string(),
+                                enum_name: RuntimeName::from_static("Result"),
+                                variant_name: RuntimeName::from_static("Err"),
                                 payloads: vec![payload],
                             },
                         )))
@@ -4797,8 +4797,8 @@ impl MirRuntime {
                 variant_name,
                 payloads,
             } => Ok(RvalueOutcome::Value(Value::EnumVariant(EnumVariantValue {
-                enum_name: enum_name.clone(),
-                variant_name: variant_name.clone(),
+                enum_name: enum_name.as_str().into(),
+                variant_name: variant_name.as_str().into(),
                 payloads: payloads
                     .iter()
                     .map(|payload| take_mir_operand(payload, env))

@@ -87,8 +87,8 @@ fn adr0061_element_place_segments_round_trip_keys_and_refuse_invalid_encodings()
     };
     let variant = |name: &str, payloads: Vec<Value>| {
         Value::EnumVariant(EnumVariantValue {
-            enum_name: "Slot".to_string(),
-            variant_name: name.to_string(),
+            enum_name: "Slot".into(),
+            variant_name: name.to_string().into(),
             payloads,
         })
     };
@@ -4506,8 +4506,8 @@ fn call_name(
 
 fn json_value(variant_name: &str, payloads: Vec<Value>) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "json.Value".to_string(),
-        variant_name: variant_name.to_string(),
+        enum_name: "json.Value".into(),
+        variant_name: variant_name.to_string().into(),
         payloads,
     })
 }
@@ -4829,8 +4829,8 @@ fn mir_move_variant_payload_preserves_allocation_and_marks_slot_consumed() {
         "packet",
         Type::named("Packet"),
         Value::EnumVariant(EnumVariantValue {
-            enum_name: "Packet".to_string(),
-            variant_name: "Text".to_string(),
+            enum_name: "Packet".into(),
+            variant_name: "Text".into(),
             payloads: vec![Value::String(text)],
         }),
     );
@@ -5640,8 +5640,8 @@ fn mir_failed_owned_place_moves_preserve_unmoved_state() {
                         fields: BTreeMap::from([(
                             "payload".to_string(),
                             Value::EnumVariant(EnumVariantValue {
-                                enum_name: "Packet".to_string(),
-                                variant_name: "Text".to_string(),
+                                enum_name: "Packet".into(),
+                                variant_name: "Text".into(),
                                 payloads: vec![Value::String("owned".repeat(32))],
                             }),
                         )]),
@@ -7140,8 +7140,8 @@ fn mir_runtime_infers_resource_value_types_for_runtime_backed_surfaces() {
 
     let completed = ProcessCompletedValue::new(
         Value::EnumVariant(EnumVariantValue {
-            enum_name: "process.ExitStatus".to_string(),
-            variant_name: "Exited".to_string(),
+            enum_name: "process.ExitStatus".into(),
+            variant_name: "Exited".into(),
             payloads: vec![Value::Int(IntegerValue::from_signed(0))],
         }),
         b"out".to_vec(),
@@ -7471,8 +7471,8 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
 
     let completed = ProcessCompletedValue::new(
         Value::EnumVariant(EnumVariantValue {
-            enum_name: "ExitStatus".to_string(),
-            variant_name: "Exited".to_string(),
+            enum_name: "ExitStatus".into(),
+            variant_name: "Exited".into(),
             payloads: vec![Value::Int(IntegerValue::from_signed(0))],
         }),
         b"out".to_vec(),
@@ -10437,8 +10437,8 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
 
     let failed_completed = ProcessCompletedValue::new(
         Value::EnumVariant(EnumVariantValue {
-            enum_name: "ExitStatus".to_string(),
-            variant_name: "Exited".to_string(),
+            enum_name: "ExitStatus".into(),
+            variant_name: "Exited".into(),
             payloads: vec![Value::Int(IntegerValue::from_signed(7))],
         }),
         vec![0xff],
@@ -10689,8 +10689,8 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
     );
     let stdio_variant = |variant_name: &str| {
         Value::EnumVariant(EnumVariantValue {
-            enum_name: "process.Stdio".to_string(),
-            variant_name: variant_name.to_string(),
+            enum_name: "process.Stdio".into(),
+            variant_name: variant_name.to_string().into(),
             payloads: Vec::new(),
         })
     };
@@ -10726,8 +10726,8 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
         "restart_never",
         Type::named("process.RestartPolicy"),
         Value::EnumVariant(EnumVariantValue {
-            enum_name: "process.RestartPolicy".to_string(),
-            variant_name: "Never".to_string(),
+            enum_name: "process.RestartPolicy".into(),
+            variant_name: "Never".into(),
             payloads: Vec::new(),
         }),
     );
@@ -12223,8 +12223,8 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
         "status",
         Type::named("Status"),
         Value::EnumVariant(EnumVariantValue {
-            enum_name: "Status".to_string(),
-            variant_name: "Done".to_string(),
+            enum_name: "Status".into(),
+            variant_name: "Done".into(),
             payloads: Vec::new(),
         }),
     );
@@ -12714,8 +12714,8 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
         "status",
         Type::named("Status"),
         Value::EnumVariant(EnumVariantValue {
-            enum_name: "Status".to_string(),
-            variant_name: "Ready".to_string(),
+            enum_name: "Status".into(),
+            variant_name: "Ready".into(),
             payloads: Vec::new(),
         }),
     );
@@ -13077,8 +13077,8 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
         "status",
         Type::named("Status"),
         Value::EnumVariant(EnumVariantValue {
-            enum_name: "Status".to_string(),
-            variant_name: "Ready".to_string(),
+            enum_name: "Status".into(),
+            variant_name: "Ready".into(),
             payloads: Vec::new(),
         }),
     );
@@ -13692,8 +13692,8 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
     );
     assert_eq!(
         MirRuntime::infer_value_type(&Value::EnumVariant(EnumVariantValue {
-            enum_name: "SendError".to_string(),
-            variant_name: "Cancelled".to_string(),
+            enum_name: "SendError".into(),
+            variant_name: "Cancelled".into(),
             payloads: vec![Value::String("payload".to_string())],
         })),
         Some(Type::Named(
@@ -13703,24 +13703,24 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
     );
     assert_eq!(
         MirRuntime::infer_value_type(&Value::EnumVariant(EnumVariantValue {
-            enum_name: "Wait".to_string(),
-            variant_name: "TimedOut".to_string(),
+            enum_name: "Wait".into(),
+            variant_name: "TimedOut".into(),
             payloads: Vec::new(),
         })),
         Some(Type::Named("process.Wait".to_string(), Vec::new()))
     );
     assert_eq!(
         MirRuntime::infer_value_type(&Value::EnumVariant(EnumVariantValue {
-            enum_name: "Error".to_string(),
-            variant_name: "TimedOut".to_string(),
+            enum_name: "Error".into(),
+            variant_name: "TimedOut".into(),
             payloads: Vec::new(),
         })),
         Some(Type::Named("process.Error".to_string(), Vec::new()))
     );
     assert_eq!(
         MirRuntime::infer_value_type(&Value::EnumVariant(EnumVariantValue {
-            enum_name: "Stdio".to_string(),
-            variant_name: "Pipe".to_string(),
+            enum_name: "Stdio".into(),
+            variant_name: "Pipe".into(),
             payloads: Vec::new(),
         })),
         Some(Type::Named("process.Stdio".to_string(), Vec::new()))
@@ -14689,8 +14689,8 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     assert_eq!(
         recv,
         Value::EnumVariant(EnumVariantValue {
-            enum_name: "QueueReceive".to_string(),
-            variant_name: "Item".to_string(),
+            enum_name: "QueueReceive".into(),
+            variant_name: "Item".into(),
             payloads: vec![Value::Int(IntegerValue::from_signed(5))],
         })
     );
@@ -17816,8 +17816,8 @@ fn mir_runtime_terminator_and_cleanup_helpers_cover_branch_and_error_paths() {
         "status",
         Type::named("Status"),
         Value::EnumVariant(crate::runtime_value::EnumVariantValue {
-            enum_name: "Status".to_string(),
-            variant_name: "Ready".to_string(),
+            enum_name: "Status".into(),
+            variant_name: "Ready".into(),
             payloads: Vec::new(),
         }),
     );
@@ -18401,8 +18401,8 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         Type::named("process.Completed"),
         Value::ProcessCompleted(ProcessCompletedValue::new(
             Value::EnumVariant(EnumVariantValue {
-                enum_name: "process.ExitStatus".to_string(),
-                variant_name: "Exited".to_string(),
+                enum_name: "process.ExitStatus".into(),
+                variant_name: "Exited".into(),
                 payloads: vec![Value::Int(IntegerValue::from_signed(0))],
             }),
             Vec::new(),
@@ -18736,8 +18736,8 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
             vec![Type::named("int32"), Type::named("str")],
         ),
         Value::EnumVariant(EnumVariantValue {
-            enum_name: "Result".to_string(),
-            variant_name: "Ok".to_string(),
+            enum_name: "Result".into(),
+            variant_name: "Ok".into(),
             payloads: Vec::new(),
         }),
     );
@@ -18773,8 +18773,8 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         "payload_status",
         Type::named("Status"),
         Value::EnumVariant(EnumVariantValue {
-            enum_name: "Status".to_string(),
-            variant_name: "Ready".to_string(),
+            enum_name: "Status".into(),
+            variant_name: "Ready".into(),
             payloads: vec![Value::String("ok".to_string())],
         }),
     );
@@ -18797,8 +18797,8 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         "status",
         Type::named("Status"),
         Value::EnumVariant(EnumVariantValue {
-            enum_name: "Status".to_string(),
-            variant_name: "Ready".to_string(),
+            enum_name: "Status".into(),
+            variant_name: "Ready".into(),
             payloads: Vec::new(),
         }),
     );
@@ -20832,8 +20832,8 @@ fn union_payload_projections_check_the_active_member_and_symbolic_layouts() {
 #[test]
 fn enum_payload_projections_reject_malformed_and_inactive_segments() {
     let variant = EnumVariantValue {
-        enum_name: "Lookup".to_string(),
-        variant_name: "Found".to_string(),
+        enum_name: "Lookup".into(),
+        variant_name: "Found".into(),
         payloads: vec![Value::Unit],
     };
     assert_eq!(
@@ -20917,8 +20917,8 @@ fn mir_try_rejects_unknown_result_variants() {
             vec![Type::named("int64"), Type::named("str")],
         ),
         Value::EnumVariant(EnumVariantValue {
-            enum_name: "Result".to_string(),
-            variant_name: "Maybe".to_string(),
+            enum_name: "Result".into(),
+            variant_name: "Maybe".into(),
             payloads: vec![Value::Unit],
         }),
     );

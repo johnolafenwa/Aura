@@ -64,7 +64,7 @@ pub fn runtime_member_type(value: &Value) -> Option<Type> {
         Value::Unit => Some(Type::Unit),
         Value::FfiHandle(handle) => Some(Type::named(handle.type_name())),
         Value::Instance(instance) => Some(Type::named(&instance.class_name)),
-        Value::EnumVariant(variant) => Some(Type::named(&variant.enum_name)),
+        Value::EnumVariant(variant) => Some(Type::named(variant.enum_name.as_str())),
         _ => None,
     }
 }

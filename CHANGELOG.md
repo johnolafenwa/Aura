@@ -143,6 +143,16 @@ in this file.
   box reuses. With LLVM, `dict_build_get` runs in 765 million instructions
   instead of 935 million, and `record_field_reads` in 571 million instead
   of 690 million.
+- `match table.get(key)` on a `dict` no longer builds a `Lookup` in
+  native code when the match only unpacks the found value. It keeps the
+  found value's box and tests it for null. A payload read into an
+  integer or `bool` local is read in place, and unboxing an integer no
+  longer copies the value first. Enum variants share their names instead
+  of copying them, and a type tag is decoded once per program instead of
+  looked up on every use. An f-string that starts with an `int64` builds
+  its text in one buffer. With LLVM, `dict_build_get` runs in 398
+  million instructions instead of 765 million, and `record_field_reads`
+  in 233 million instead of 571 million. Error messages are unchanged.
 
 ### Fixed
 

@@ -180,7 +180,8 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
     // Every `list`, `dict`, `set`, and `Array` helper a member call makes
     // has an op. The shared collection operation pops and removes, an
     // element path checks its index, and a lent element's `len` and `get`
-    // are read in place.
+    // are read in place. A `get` whose `Lookup` is kept as its found value
+    // calls the `_payload` form of the op's helper.
     let uncovered = RuntimeFn::ALL
         .iter()
         .copied()
@@ -208,7 +209,11 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::VecCheckIndex,
             RuntimeFn::VecElementLen,
             RuntimeFn::VecElementMapGet,
+            RuntimeFn::VecElementMapGetPayload,
             RuntimeFn::VecElementMapGetStr,
+            RuntimeFn::VecElementMapGetStrPayload,
+            RuntimeFn::MapGetPayload,
+            RuntimeFn::MapGetStrPayload,
             RuntimeFn::SetRemoveInPlace,
         ]
     );

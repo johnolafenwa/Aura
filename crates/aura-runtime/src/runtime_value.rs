@@ -717,9 +717,164 @@ pub struct InstanceValue {
 
 #[derive(Clone, Debug)]
 pub struct EnumVariantValue {
-    pub enum_name: String,
-    pub variant_name: String,
+    pub enum_name: RuntimeName,
+    pub variant_name: RuntimeName,
     pub payloads: Vec<Value>,
+}
+
+/// An enum or variant name. A copy of a value shares its names' text
+/// instead of copying it, and a name the runtime spells in its own source
+/// is never allocated.
+#[derive(Clone)]
+pub struct RuntimeName(RuntimeNameText);
+
+#[derive(Clone)]
+enum RuntimeNameText {
+    Static(&'static str),
+    Shared(Arc<str>),
+}
+
+impl RuntimeName {
+    pub const fn from_static(name: &'static str) -> Self {
+        Self(RuntimeNameText::Static(name))
+    }
+
+    pub fn as_str(&self) -> &str {
+        match &self.0 {
+            RuntimeNameText::Static(name) => name,
+            RuntimeNameText::Shared(name) => name,
+        }
+    }
+}
+
+impl Default for RuntimeName {
+    fn default() -> Self {
+        Self::from_static("")
+    }
+}
+
+impl std::ops::Deref for RuntimeName {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl std::borrow::Borrow<str> for RuntimeName {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl AsRef<str> for RuntimeName {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl PartialEq for RuntimeName {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for RuntimeName {}
+
+impl PartialOrd for RuntimeName {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RuntimeName {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+
+impl std::hash::Hash for RuntimeName {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+
+impl From<&str> for RuntimeName {
+    fn from(name: &str) -> Self {
+        Self(RuntimeNameText::Shared(Arc::from(name)))
+    }
+}
+
+impl From<String> for RuntimeName {
+    fn from(name: String) -> Self {
+        Self(RuntimeNameText::Shared(Arc::from(name)))
+    }
+}
+
+impl From<&String> for RuntimeName {
+    fn from(name: &String) -> Self {
+        Self::from(name.as_str())
+    }
+}
+
+impl From<RuntimeName> for String {
+    fn from(name: RuntimeName) -> Self {
+        name.as_str().to_string()
+    }
+}
+
+impl From<&RuntimeName> for String {
+    fn from(name: &RuntimeName) -> Self {
+        name.as_str().to_string()
+    }
+}
+
+impl fmt::Display for RuntimeName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self.as_str(), f)
+    }
+}
+
+impl fmt::Debug for RuntimeName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self.as_str(), f)
+    }
+}
+
+impl PartialEq<str> for RuntimeName {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for RuntimeName {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl PartialEq<String> for RuntimeName {
+    fn eq(&self, other: &String) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl PartialEq<RuntimeName> for str {
+    fn eq(&self, other: &RuntimeName) -> bool {
+        self == other.as_str()
+    }
+}
+
+impl PartialEq<RuntimeName> for &str {
+    fn eq(&self, other: &RuntimeName) -> bool {
+        *self == other.as_str()
+    }
+}
+
+impl PartialEq<RuntimeName> for String {
+    fn eq(&self, other: &RuntimeName) -> bool {
+        self.as_str() == other.as_str()
+    }
 }
 
 /// The note a trap carries when a manager's `__exit__` also returned
@@ -14812,32 +14967,32 @@ pub fn json_into_member_type(expected: &str) -> aura_core::types::Type {
 
 pub fn lookup_found(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "Lookup".to_string(),
-        variant_name: "Found".to_string(),
+        enum_name: RuntimeName::from_static("Lookup"),
+        variant_name: RuntimeName::from_static("Found"),
         payloads: vec![value],
     })
 }
 
 pub fn lookup_missing() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "Lookup".to_string(),
-        variant_name: "Missing".to_string(),
+        enum_name: RuntimeName::from_static("Lookup"),
+        variant_name: RuntimeName::from_static("Missing"),
         payloads: Vec::new(),
     })
 }
 
 pub fn poll_ready(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "Poll".to_string(),
-        variant_name: "Ready".to_string(),
+        enum_name: RuntimeName::from_static("Poll"),
+        variant_name: RuntimeName::from_static("Ready"),
         payloads: vec![value],
     })
 }
 
 pub fn poll_unavailable() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "Poll".to_string(),
-        variant_name: "Unavailable".to_string(),
+        enum_name: RuntimeName::from_static("Poll"),
+        variant_name: RuntimeName::from_static("Unavailable"),
         payloads: Vec::new(),
     })
 }
@@ -14995,16 +15150,16 @@ pub fn task_group_cleanup_should_cancel(
 
 pub fn result_ok(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "Result".to_string(),
-        variant_name: "Ok".to_string(),
+        enum_name: RuntimeName::from_static("Result"),
+        variant_name: RuntimeName::from_static("Ok"),
         payloads: vec![value],
     })
 }
 
 pub fn result_err(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "Result".to_string(),
-        variant_name: "Err".to_string(),
+        enum_name: RuntimeName::from_static("Result"),
+        variant_name: RuntimeName::from_static("Err"),
         payloads: vec![value],
     })
 }
@@ -15251,8 +15406,8 @@ fn bytes_runtime_enum_value(
     payloads: Vec<Value>,
 ) -> Result<Value> {
     Ok(Value::EnumVariant(EnumVariantValue {
-        enum_name: bytes_runtime_owned_string(enum_name)?,
-        variant_name: bytes_runtime_owned_string(variant_name)?,
+        enum_name: bytes_runtime_owned_string(enum_name)?.into(),
+        variant_name: bytes_runtime_owned_string(variant_name)?.into(),
         payloads,
     }))
 }
@@ -15795,8 +15950,8 @@ fn json_runtime_enum_value(
     payloads: Vec<Value>,
 ) -> Result<Value> {
     Ok(Value::EnumVariant(EnumVariantValue {
-        enum_name: json_parse_owned_string(enum_name)?,
-        variant_name: json_parse_owned_string(variant_name)?,
+        enum_name: json_parse_owned_string(enum_name)?.into(),
+        variant_name: json_parse_owned_string(variant_name)?.into(),
         payloads,
     }))
 }
@@ -16492,144 +16647,144 @@ pub fn evaluate_host_builtin_with_program_args(
 
 pub fn send_error_closed(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "SendError".to_string(),
-        variant_name: "Closed".to_string(),
+        enum_name: RuntimeName::from_static("SendError"),
+        variant_name: RuntimeName::from_static("Closed"),
         payloads: vec![value],
     })
 }
 
 pub fn send_error_cancelled(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "SendError".to_string(),
-        variant_name: "Cancelled".to_string(),
+        enum_name: RuntimeName::from_static("SendError"),
+        variant_name: RuntimeName::from_static("Cancelled"),
         payloads: vec![value],
     })
 }
 
 pub fn send_error_timed_out(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "SendError".to_string(),
-        variant_name: "TimedOut".to_string(),
+        enum_name: RuntimeName::from_static("SendError"),
+        variant_name: RuntimeName::from_static("TimedOut"),
         payloads: vec![value],
     })
 }
 
 pub fn send_error_full(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "SendError".to_string(),
-        variant_name: "Full".to_string(),
+        enum_name: RuntimeName::from_static("SendError"),
+        variant_name: RuntimeName::from_static("Full"),
         payloads: vec![value],
     })
 }
 
 pub fn queue_receive_item(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "QueueReceive".to_string(),
-        variant_name: "Item".to_string(),
+        enum_name: RuntimeName::from_static("QueueReceive"),
+        variant_name: RuntimeName::from_static("Item"),
         payloads: vec![value],
     })
 }
 
 pub fn queue_receive_closed() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "QueueReceive".to_string(),
-        variant_name: "Closed".to_string(),
+        enum_name: RuntimeName::from_static("QueueReceive"),
+        variant_name: RuntimeName::from_static("Closed"),
         payloads: Vec::new(),
     })
 }
 
 pub fn queue_receive_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "QueueReceive".to_string(),
-        variant_name: "TimedOut".to_string(),
+        enum_name: RuntimeName::from_static("QueueReceive"),
+        variant_name: RuntimeName::from_static("TimedOut"),
         payloads: Vec::new(),
     })
 }
 
 pub fn queue_receive_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "QueueReceive".to_string(),
-        variant_name: "Cancelled".to_string(),
+        enum_name: RuntimeName::from_static("QueueReceive"),
+        variant_name: RuntimeName::from_static("Cancelled"),
         payloads: Vec::new(),
     })
 }
 
 pub fn task_result_ready(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "TaskResult".to_string(),
-        variant_name: "Ready".to_string(),
+        enum_name: RuntimeName::from_static("TaskResult"),
+        variant_name: RuntimeName::from_static("Ready"),
         payloads: vec![value],
     })
 }
 
 pub fn task_result_error(message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "TaskResult".to_string(),
-        variant_name: "Error".to_string(),
+        enum_name: RuntimeName::from_static("TaskResult"),
+        variant_name: RuntimeName::from_static("Error"),
         payloads: vec![Value::String(message)],
     })
 }
 
 pub fn task_result_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "TaskResult".to_string(),
-        variant_name: "TimedOut".to_string(),
+        enum_name: RuntimeName::from_static("TaskResult"),
+        variant_name: RuntimeName::from_static("TimedOut"),
         payloads: Vec::new(),
     })
 }
 
 pub fn task_result_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "TaskResult".to_string(),
-        variant_name: "Cancelled".to_string(),
+        enum_name: RuntimeName::from_static("TaskResult"),
+        variant_name: RuntimeName::from_static("Cancelled"),
         payloads: Vec::new(),
     })
 }
 
 pub fn select_outcome_queue(index: i64, outcome: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "SelectOutcome".to_string(),
-        variant_name: "Queue".to_string(),
+        enum_name: RuntimeName::from_static("SelectOutcome"),
+        variant_name: RuntimeName::from_static("Queue"),
         payloads: vec![Value::Int(IntegerValue::from_i64(index)), outcome],
     })
 }
 
 pub fn select_outcome_task(index: i64, outcome: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "SelectOutcome".to_string(),
-        variant_name: "Task".to_string(),
+        enum_name: RuntimeName::from_static("SelectOutcome"),
+        variant_name: RuntimeName::from_static("Task"),
         payloads: vec![Value::Int(IntegerValue::from_i64(index)), outcome],
     })
 }
 
 pub fn select_outcome_deadline(index: i64) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "SelectOutcome".to_string(),
-        variant_name: "Deadline".to_string(),
+        enum_name: RuntimeName::from_static("SelectOutcome"),
+        variant_name: RuntimeName::from_static("Deadline"),
         payloads: vec![Value::Int(IntegerValue::from_i64(index))],
     })
 }
 
 pub fn select_outcome_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "SelectOutcome".to_string(),
-        variant_name: "Cancelled".to_string(),
+        enum_name: RuntimeName::from_static("SelectOutcome"),
+        variant_name: RuntimeName::from_static("Cancelled"),
         payloads: Vec::new(),
     })
 }
 
 pub fn wait_any_ready(index: i64, value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "WaitAny".to_string(),
-        variant_name: "Ready".to_string(),
+        enum_name: RuntimeName::from_static("WaitAny"),
+        variant_name: RuntimeName::from_static("Ready"),
         payloads: vec![Value::Int(IntegerValue::from_i64(index)), value],
     })
 }
 
 pub fn wait_any_error(index: i64, message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "WaitAny".to_string(),
-        variant_name: "Error".to_string(),
+        enum_name: RuntimeName::from_static("WaitAny"),
+        variant_name: RuntimeName::from_static("Error"),
         payloads: vec![
             Value::Int(IntegerValue::from_i64(index)),
             Value::String(message),
@@ -16639,24 +16794,24 @@ pub fn wait_any_error(index: i64, message: String) -> Value {
 
 pub fn wait_any_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "WaitAny".to_string(),
-        variant_name: "TimedOut".to_string(),
+        enum_name: RuntimeName::from_static("WaitAny"),
+        variant_name: RuntimeName::from_static("TimedOut"),
         payloads: Vec::new(),
     })
 }
 
 pub fn wait_any_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "WaitAny".to_string(),
-        variant_name: "Cancelled".to_string(),
+        enum_name: RuntimeName::from_static("WaitAny"),
+        variant_name: RuntimeName::from_static("Cancelled"),
         payloads: Vec::new(),
     })
 }
 
 pub fn wait_all_ready(values: Vec<Value>) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "WaitAll".to_string(),
-        variant_name: "Ready".to_string(),
+        enum_name: RuntimeName::from_static("WaitAll"),
+        variant_name: RuntimeName::from_static("Ready"),
         payloads: vec![Value::Vec(VecValue {
             element_type: Type::named("Unknown"),
             elements: values.into(),
@@ -16666,8 +16821,8 @@ pub fn wait_all_ready(values: Vec<Value>) -> Value {
 
 pub fn wait_all_error(index: i64, message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "WaitAll".to_string(),
-        variant_name: "Error".to_string(),
+        enum_name: RuntimeName::from_static("WaitAll"),
+        variant_name: RuntimeName::from_static("Error"),
         payloads: vec![
             Value::Int(IntegerValue::from_i64(index)),
             Value::String(message),
@@ -16677,40 +16832,40 @@ pub fn wait_all_error(index: i64, message: String) -> Value {
 
 pub fn wait_all_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "WaitAll".to_string(),
-        variant_name: "TimedOut".to_string(),
+        enum_name: RuntimeName::from_static("WaitAll"),
+        variant_name: RuntimeName::from_static("TimedOut"),
         payloads: Vec::new(),
     })
 }
 
 pub fn wait_all_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "WaitAll".to_string(),
-        variant_name: "Cancelled".to_string(),
+        enum_name: RuntimeName::from_static("WaitAll"),
+        variant_name: RuntimeName::from_static("Cancelled"),
         payloads: Vec::new(),
     })
 }
 
 pub fn process_stdio_inherit() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "Stdio".to_string(),
-        variant_name: "Inherit".to_string(),
+        enum_name: RuntimeName::from_static("Stdio"),
+        variant_name: RuntimeName::from_static("Inherit"),
         payloads: Vec::new(),
     })
 }
 
 pub fn process_stdio_null() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "Stdio".to_string(),
-        variant_name: "Null".to_string(),
+        enum_name: RuntimeName::from_static("Stdio"),
+        variant_name: RuntimeName::from_static("Null"),
         payloads: Vec::new(),
     })
 }
 
 pub fn process_stdio_pipe() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "Stdio".to_string(),
-        variant_name: "Pipe".to_string(),
+        enum_name: RuntimeName::from_static("Stdio"),
+        variant_name: RuntimeName::from_static("Pipe"),
         payloads: Vec::new(),
     })
 }
@@ -16721,72 +16876,72 @@ pub fn process_exit_status(status: StdExitStatus) -> Value {
         use std::os::unix::process::ExitStatusExt;
         if let Some(signal) = status.signal() {
             return Value::EnumVariant(EnumVariantValue {
-                enum_name: "ExitStatus".to_string(),
-                variant_name: "Signaled".to_string(),
+                enum_name: RuntimeName::from_static("ExitStatus"),
+                variant_name: RuntimeName::from_static("Signaled"),
                 payloads: vec![Value::Int(IntegerValue::from_signed(signal as i128))],
             });
         }
     }
     let code = status.code().unwrap_or_default();
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "ExitStatus".to_string(),
-        variant_name: "Exited".to_string(),
+        enum_name: RuntimeName::from_static("ExitStatus"),
+        variant_name: RuntimeName::from_static("Exited"),
         payloads: vec![Value::Int(IntegerValue::from_signed(code as i128))],
     })
 }
 
 pub fn process_wait_exited(status: StdExitStatus) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "Wait".to_string(),
-        variant_name: "Exited".to_string(),
+        enum_name: RuntimeName::from_static("Wait"),
+        variant_name: RuntimeName::from_static("Exited"),
         payloads: vec![process_exit_status(status)],
     })
 }
 
 pub fn process_wait_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "Wait".to_string(),
-        variant_name: "TimedOut".to_string(),
+        enum_name: RuntimeName::from_static("Wait"),
+        variant_name: RuntimeName::from_static("TimedOut"),
         payloads: Vec::new(),
     })
 }
 
 pub fn process_wait_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "Wait".to_string(),
-        variant_name: "Cancelled".to_string(),
+        enum_name: RuntimeName::from_static("Wait"),
+        variant_name: RuntimeName::from_static("Cancelled"),
         payloads: Vec::new(),
     })
 }
 
 pub fn process_wait_failed(error: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "Wait".to_string(),
-        variant_name: "Failed".to_string(),
+        enum_name: RuntimeName::from_static("Wait"),
+        variant_name: RuntimeName::from_static("Failed"),
         payloads: vec![error],
     })
 }
 
 pub fn process_supervisor_wait_event(event: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "SupervisorWait".to_string(),
-        variant_name: "Event".to_string(),
+        enum_name: RuntimeName::from_static("SupervisorWait"),
+        variant_name: RuntimeName::from_static("Event"),
         payloads: vec![event],
     })
 }
 
 pub fn process_supervisor_wait_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "SupervisorWait".to_string(),
-        variant_name: "TimedOut".to_string(),
+        enum_name: RuntimeName::from_static("SupervisorWait"),
+        variant_name: RuntimeName::from_static("TimedOut"),
         payloads: Vec::new(),
     })
 }
 
 pub fn process_supervisor_wait_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "SupervisorWait".to_string(),
-        variant_name: "Cancelled".to_string(),
+        enum_name: RuntimeName::from_static("SupervisorWait"),
+        variant_name: RuntimeName::from_static("Cancelled"),
         payloads: Vec::new(),
     })
 }
@@ -16797,8 +16952,8 @@ pub fn process_supervisor_event_exited(
     restart_count: IntegerValue,
 ) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "SupervisorEvent".to_string(),
-        variant_name: "Exited".to_string(),
+        enum_name: RuntimeName::from_static("SupervisorEvent"),
+        variant_name: RuntimeName::from_static("Exited"),
         payloads: vec![
             Value::String(name),
             process_exit_status(status),
@@ -16813,8 +16968,8 @@ pub fn process_supervisor_event_restarted(
     restart_count: IntegerValue,
 ) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "SupervisorEvent".to_string(),
-        variant_name: "Restarted".to_string(),
+        enum_name: RuntimeName::from_static("SupervisorEvent"),
+        variant_name: RuntimeName::from_static("Restarted"),
         payloads: vec![
             Value::String(name),
             process_exit_status(status),
@@ -16829,56 +16984,56 @@ pub fn process_supervisor_event_failed(
     restart_count: IntegerValue,
 ) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "SupervisorEvent".to_string(),
-        variant_name: "Failed".to_string(),
+        enum_name: RuntimeName::from_static("SupervisorEvent"),
+        variant_name: RuntimeName::from_static("Failed"),
         payloads: vec![Value::String(name), error, Value::Int(restart_count)],
     })
 }
 
 pub fn process_error_no_command() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "Error".to_string(),
-        variant_name: "NoCommand".to_string(),
+        enum_name: RuntimeName::from_static("Error"),
+        variant_name: RuntimeName::from_static("NoCommand"),
         payloads: Vec::new(),
     })
 }
 
 pub fn process_error_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "Error".to_string(),
-        variant_name: "TimedOut".to_string(),
+        enum_name: RuntimeName::from_static("Error"),
+        variant_name: RuntimeName::from_static("TimedOut"),
         payloads: Vec::new(),
     })
 }
 
 pub fn process_error_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "Error".to_string(),
-        variant_name: "Cancelled".to_string(),
+        enum_name: RuntimeName::from_static("Error"),
+        variant_name: RuntimeName::from_static("Cancelled"),
         payloads: Vec::new(),
     })
 }
 
 pub fn process_error_io(error: io::Error) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "Error".to_string(),
-        variant_name: "Io".to_string(),
+        enum_name: RuntimeName::from_static("Error"),
+        variant_name: RuntimeName::from_static("Io"),
         payloads: vec![io_error(error)],
     })
 }
 
 pub fn process_error_spawn(message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "Error".to_string(),
-        variant_name: "Spawn".to_string(),
+        enum_name: RuntimeName::from_static("Error"),
+        variant_name: RuntimeName::from_static("Spawn"),
         payloads: vec![Value::String(message)],
     })
 }
 
 pub fn process_error_other(message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "Error".to_string(),
-        variant_name: "Other".to_string(),
+        enum_name: RuntimeName::from_static("Error"),
+        variant_name: RuntimeName::from_static("Other"),
         payloads: vec![Value::String(message)],
     })
 }
@@ -16959,8 +17114,8 @@ pub fn io_error(error: io::Error) -> Value {
         _ => ("Other", vec![Value::String(error.to_string())]),
     };
     Value::EnumVariant(EnumVariantValue {
-        enum_name: "io.Error".to_string(),
-        variant_name: variant_name.to_string(),
+        enum_name: RuntimeName::from_static("io.Error"),
+        variant_name: variant_name.to_string().into(),
         payloads,
     })
 }
