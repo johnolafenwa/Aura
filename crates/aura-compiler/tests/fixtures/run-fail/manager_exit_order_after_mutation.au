@@ -1,0 +1,16 @@
+class Counter:
+    name: str
+    count: int64
+
+    def __exit__(mut self) -> None:
+        print(f"exit {self.name} count={self.count}")
+
+def check(count: int64) -> None:
+    assert count > 100, "count is too small"
+
+def main():
+    with first = Counter(name="first", count=0), second = Counter(name="second", count=0):
+        first.count += 1
+        second.count += 2
+        first.count += 3
+        check(first.count)

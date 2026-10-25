@@ -13,6 +13,24 @@ in this file.
   a class instance, so it never lent the field to the call. AuraDB's single
   inserts ran about 8 times slower than on 0.6.0 and its updates about 16
   times slower. Both are back to 0.6.0's speed or better.
+- Native code probes the stack one page at a time for every function whose
+  frame is larger than a page. A frame that big used to move the stack
+  pointer past a task stack's single guard page in one step, so deep
+  recursion could write below the stack instead of failing.
+- In a native build, when a `with` body traps on a list index, division,
+  or integer overflow and an exit then traps too, the body's diagnostic
+  stays primary, as the manual says and as `aura run` reports. The exit's
+  trap used to replace it.
+- In a native build, a `with` exit no longer moves later in the exit order
+  when the body changes its resource. Exits run in reverse registration
+  order, as `aura run` runs them, even when a trap unwinds the body.
+- `aura build` writes its temporary object files and staged runtime
+  library as new files that only the owner can read. On Linux they go in
+  the shared `/tmp`, where a path another user created first is now
+  refused instead of written through.
+- The language server starts `aura` by the absolute path it found on
+  `PATH`, and skips relative `PATH` entries such as `.`, which resolve
+  inside the opened workspace.
 
 ## VS Code extension 0.7.0 — 2026-10-25
 

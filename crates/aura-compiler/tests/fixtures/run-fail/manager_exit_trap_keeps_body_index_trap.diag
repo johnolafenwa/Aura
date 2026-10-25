@@ -1,0 +1,6 @@
+error[AU4003]: list index `3` is out of bounds for length `2`
+ --> crates/aura-compiler/tests/fixtures/run-fail/manager_exit_trap_keeps_body_index_trap.au:11:22
+   |
+11 |         return items[index]
+   |                      ^
+  = note: Aura call chain (innermost first): pick at 9:1 -> main at 13:1

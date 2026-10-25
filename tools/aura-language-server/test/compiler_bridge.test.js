@@ -6865,6 +6865,11 @@ test("compiler discovery searches PATH, then the usual install directories", () 
     fs.writeFileSync(path.join(onPath, binaryName()), "");
     assert.equal(findOnPath(binaryName(), ["", path.join(root, "missing"), onPath].join(path.delimiter)), path.join(onPath, binaryName()));
     assert.equal(findOnPath(binaryName(), path.join(root, "missing")), null);
+    // A relative entry such as `.` names a directory under the workspace the
+    // compiler starts in, so it is skipped even when it holds the compiler.
+    const relativeEntry = path.relative(process.cwd(), onPath);
+    assert.equal(path.isAbsolute(relativeEntry), false);
+    assert.equal(findOnPath(binaryName(), relativeEntry), null);
     const savedPath = process.env.PATH;
     delete process.env.PATH;
     try {
@@ -6931,6 +6936,13 @@ test("without aura on PATH the server uses an installed compiler or reports it m
     fs.mkdirSync(path.dirname(installed), { recursive: true });
     fs.writeFileSync(installed, "");
     assert.deepEqual(resolveCompilerCommand(), { cmd: installed, args: [], cwd: root });
+
+    // A compiler on PATH wins, and is spawned by its absolute path.
+    const onPath = path.join(root, "path-bin", binaryName());
+    fs.mkdirSync(path.dirname(onPath), { recursive: true });
+    fs.writeFileSync(onPath, "");
+    process.env.PATH = path.dirname(onPath);
+    assert.deepEqual(resolveCompilerCommand(), { cmd: onPath, args: [], cwd: root });
   } finally {
     setCompilerUnavailableHandler(null);
     disposeCompilerService();

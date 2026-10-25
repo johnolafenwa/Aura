@@ -16186,10 +16186,22 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
         0
     );
 
+    // A refreshed registration keeps its id and its place below a later one,
+    // so the exits still drain in reverse registration order.
     let replaced_cleanup_id = super::aura_direct_register_cleanup(1, std::ptr::null_mut(), 0);
+    let later_cleanup_id = super::aura_direct_register_cleanup(2, std::ptr::null_mut(), 0);
     let refreshed_cleanup_id =
-        super::aura_direct_refresh_cleanup(1, replaced_cleanup_id, 1, std::ptr::null_mut(), 0);
-    assert!(refreshed_cleanup_id > 0);
+        super::aura_direct_refresh_cleanup(1, replaced_cleanup_id, 3, std::ptr::null_mut(), 0);
+    assert_eq!(refreshed_cleanup_id, replaced_cleanup_id);
+    super::with_direct_task_runtime_state(|state| {
+        let order = state
+            .cleanup_stack
+            .iter()
+            .map(|registration| (registration.id, registration.thunk_ptr))
+            .collect::<Vec<_>>();
+        assert_eq!(order, vec![(replaced_cleanup_id, 3), (later_cleanup_id, 2)]);
+    });
+    super::aura_direct_unregister_cleanup(later_cleanup_id);
     super::aura_direct_unregister_cleanup(refreshed_cleanup_id);
 
     let new_cleanup_id = super::aura_direct_refresh_cleanup(1, 0, 1, std::ptr::null_mut(), 0);

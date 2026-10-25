@@ -1,0 +1,6 @@
+error[AU4004]: division by zero
+ --> crates/aura-compiler/tests/fixtures/run-fail/manager_exit_trap_keeps_body_division_trap.au:10:16
+   |
+10 |         return total // parts
+   |                ^
+  = note: Aura call chain (innermost first): share at 8:1 -> main at 12:1
