@@ -1,0 +1,13 @@
+class Tracer:
+    name: str
+
+    def __exit__(mut self) -> None:
+        print("exit " + self.name)
+        assert false, "exit of " + self.name + " failed"
+
+def share(total: int64, parts: int64) -> int64:
+    with tracer = Tracer(name="tracer"):
+        return total // parts
+
+def main():
+    print(share(10, 0))

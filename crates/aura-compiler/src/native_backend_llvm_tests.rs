@@ -504,6 +504,63 @@ fn mach_o_objects_are_split_by_symbol() {
     }
 }
 
+/// A module whose one exported function keeps a 64 KiB frame: it hands the
+/// address of a stack slot that large to a function LLVM cannot see.
+fn large_frame_module() -> LlvmModule {
+    let mut module = module();
+    let effect = signature(CallConv::C, &[types::I64], &[]);
+    let sink = module
+        .declare_function("opaque_sink", Linkage::Import, &effect)
+        .expect("the import should declare");
+    let sig = signature(CallConv::C, &[], &[]);
+    define(
+        &mut module,
+        "large_frame",
+        Linkage::Export,
+        &sig,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.switch_to_block(entry);
+            let slot = builder.create_sized_stack_slot(64 * 1024, 3);
+            let address = builder.stack_addr(types::I64, slot, 0);
+            let sink = builder.import_function(sink);
+            builder.call(sink, &[address]);
+            builder.return_(&[]);
+        },
+    );
+    module
+}
+
+#[test]
+fn every_defined_function_probes_frames_larger_than_a_page() {
+    let module = large_frame_module();
+    let ir = ir(&module);
+    assert!(ir.contains("\"probe-stack\"=\"inline-asm\""), "{ir}");
+
+    // A task stack has one guard page, so x86-64 code must move the stack
+    // pointer a page at a time (`sub $0x1000, %rsp`) instead of past the
+    // whole frame in one step.
+    let bytes = object_for_triple(&module, "x86_64-unknown-linux-gnu");
+    let object = object::File::parse(bytes.as_slice()).expect("the object should parse");
+    let symbol = object
+        .symbol_by_name("large_frame")
+        .expect("the function should be defined");
+    let section = object
+        .section_by_index(
+            symbol
+                .section_index()
+                .expect("a defined symbol has a section"),
+        )
+        .unwrap();
+    let code = section.data().expect("the section should have code");
+    let page_step = [0x48, 0x81, 0xec, 0x00, 0x10, 0x00, 0x00];
+    assert!(
+        code.windows(page_step.len())
+            .any(|window| window == page_step),
+        "the frame should be probed a page at a time: {code:02x?}"
+    );
+}
+
 /// The module's LLVM IR after the object's pass pipeline.
 fn optimized_ir(module: &LlvmModule) -> String {
     let machine = host_target_machine().expect("the host target machine should exist");

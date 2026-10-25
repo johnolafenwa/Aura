@@ -1137,6 +1137,30 @@ fn push_direct_cleanup_registration(thunk_ptr: i64, args: *mut i64, arg_count: u
     })
 }
 
+/// Points registration `id` at fresh arguments where it stands, so a
+/// refreshed exit keeps its place in reverse registration order. Returns the
+/// arguments it held, or `None` when no registration has that id.
+fn replace_direct_cleanup_registration_args(
+    id: i64,
+    thunk_ptr: i64,
+    args: *mut i64,
+    arg_count: usize,
+) -> Option<(*mut i64, usize)> {
+    if id == 0 {
+        return None;
+    }
+    with_direct_task_runtime_state(|state| {
+        let registration = state
+            .cleanup_stack
+            .iter_mut()
+            .rfind(|registration| registration.id == id)?;
+        registration.thunk_ptr = thunk_ptr;
+        let previous_args = std::mem::replace(&mut registration.args, args);
+        let previous_count = std::mem::replace(&mut registration.arg_count, arg_count);
+        Some((previous_args, previous_count))
+    })
+}
+
 fn take_direct_cleanup_registration(id: i64) -> Option<DirectCleanupRegistration> {
     if id == 0 {
         return None;
@@ -11714,8 +11738,15 @@ pub extern "C-unwind" fn aura_direct_refresh_cleanup(
             drop(take_direct_cleanup_registration(id));
             runtime_error("invalid cleanup thunk pointer");
         }
-        drop(take_direct_cleanup_registration(id));
-        push_direct_cleanup_registration(thunk_ptr, args, arg_count)
+        match replace_direct_cleanup_registration_args(id, thunk_ptr, args, arg_count) {
+            Some((previous_args, previous_count)) => {
+                unsafe {
+                    release_direct_cleanup_args(previous_args, previous_count);
+                }
+                id
+            }
+            None => push_direct_cleanup_registration(thunk_ptr, args, arg_count),
+        }
     })
 }
 

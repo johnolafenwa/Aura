@@ -54,6 +54,13 @@ const PASS_PIPELINE: &str = "default<O3>";
 /// unwind through generated frames, so every function needs one.
 const UWTABLE_ASYNC: u64 = 2;
 
+/// How a function whose frame is larger than a page touches the stack
+/// before it uses it: one page at a time, inline, as rustc asks for. A task
+/// stack has a single guard page below it, and a frame that moved the stack
+/// pointer past that page in one step could write into whatever lies below
+/// the stack instead of faulting.
+const PROBE_STACK: (&str, &str) = ("probe-stack", "inline-asm");
+
 /// The LLVM `memory` attribute value that allows no memory access.
 const MEMORY_NONE: u64 = 0;
 
@@ -1333,6 +1340,7 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
     ) -> Result<Self, String> {
         let uwtable = context
             .create_enum_attribute(Attribute::get_named_enum_kind_id("uwtable"), UWTABLE_ASYNC);
+        let probe_stack = context.create_string_attribute(PROBE_STACK.0, PROBE_STACK.1);
         // A task-invariant helper reads and writes no memory LLVM can see,
         // cannot unwind, and returns, so LLVM may merge its calls.
         let task_invariant =
@@ -1369,6 +1377,7 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
                 }
                 if placement != Placement::Elsewhere {
                     function.add_attribute(AttributeLoc::Function, uwtable);
+                    function.add_attribute(AttributeLoc::Function, probe_stack);
                     bodies.push(index);
                 }
                 if decl.task_invariant {

@@ -5552,7 +5552,8 @@ impl<'a> FunctionCompiler<'a> {
         self.builder
             .brif(overflow, fail_block, &[], continue_block, &[]);
         self.builder.switch_to_block(fail_block);
-        self.emit_pending_cleanups(true)?;
+        // The runtime runs the registered exits after it records this
+        // trap as primary, so a trapping exit cannot replace it.
         let kind_code = self.builder.iconst(types::I64, kind as i64);
         let op_code = self.builder.iconst(types::I64, op as i64);
         let (line, column) = self.span_values(span);
@@ -5587,7 +5588,8 @@ impl<'a> FunctionCompiler<'a> {
         self.builder
             .brif(is_zero, fail_block, &[], continue_block, &[]);
         self.builder.switch_to_block(fail_block);
-        self.emit_pending_cleanups(true)?;
+        // The runtime runs the registered exits after it records this
+        // trap as primary, so a trapping exit cannot replace it.
         let (line, column) = self.span_values(span);
         self.builder
             .call(self.runtime[RuntimeFn::FailDivisionByZero], &[line, column]);
@@ -8527,7 +8529,8 @@ impl<'a> FunctionCompiler<'a> {
         self.builder
             .brif(overflow, fail_block, &[], continue_block, &[]);
         self.builder.switch_to_block(fail_block);
-        self.emit_pending_cleanups(true)?;
+        // The runtime runs the registered exits after it records this
+        // trap as primary, so a trapping exit cannot replace it.
         let (line, column) = self.span_values(span);
         self.builder.call(
             self.runtime[RuntimeFn::FailInt32Overflow],
@@ -8942,7 +8945,8 @@ impl<'a> FunctionCompiler<'a> {
         self.builder
             .brif(out_of_bounds, fail_block, &[], continue_block, &[]);
         self.builder.switch_to_block(fail_block);
-        self.emit_pending_cleanups(true)?;
+        // The runtime runs the registered exits after it records this
+        // trap as primary, so a trapping exit cannot replace it.
         self.builder.call(
             self.runtime[RuntimeFn::VecIndex],
             &[object, index, line, column],
@@ -10531,8 +10535,11 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     /// Runs every still-registered cleanup inline before `try` propagation
-    /// or a trap. On a trap path, a failing manager exit is recorded for the
-    /// trap's notes; on the `try` path its `Result.Err` is dropped (F5).
+    /// or a trap that no runtime call raises. A trap that a runtime call
+    /// raises leaves the cleanups registered, and the runtime runs them after
+    /// it records the trap as primary. On a trap path, a failing manager exit
+    /// is recorded for the trap's notes; on the `try` path its `Result.Err` is
+    /// dropped (F5).
     fn emit_pending_cleanups(
         &mut self,
         cancel_before_cleanup: bool,
@@ -12111,7 +12118,8 @@ impl<'a> FunctionCompiler<'a> {
             // No static write-back path exists for the payload of a union
             // behind an erased place; refuse at run time rather than mutate
             // a detached copy.
-            self.emit_pending_cleanups(true)?;
+            // The runtime runs the registered exits after it records this
+            // trap as primary, so a trapping exit cannot replace it.
             let line = self.builder.iconst(types::I64, 0);
             let column = self.builder.iconst(types::I64, 0);
             self.builder.call(
