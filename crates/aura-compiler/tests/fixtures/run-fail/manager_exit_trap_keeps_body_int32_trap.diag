@@ -1,0 +1,6 @@
+error[AU4002]: integer value `2147483648` does not fit in `int32`
+ --> crates/aura-compiler/tests/fixtures/run-fail/manager_exit_trap_keeps_body_int32_trap.au:10:16
+   |
+10 |         return value + step
+   |                ^
+  = note: Aura call chain (innermost first): grow at 8:1 -> main at 12:1

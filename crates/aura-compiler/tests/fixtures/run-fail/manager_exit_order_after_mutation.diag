@@ -1,0 +1,8 @@
+error[AU4001]: count is too small
+ --> crates/aura-compiler/tests/fixtures/run-fail/manager_exit_order_after_mutation.au:9:5
+  |
+9 |     assert count > 100, "count is too small"
+  |     ^
+  = note: left = 4
+  = note: right = 100
+  = note: Aura call chain (innermost first): check at 8:1 -> main at 11:1

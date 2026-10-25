@@ -1,0 +1,14 @@
+class Tracer:
+    name: str
+
+    def __exit__(mut self) -> None:
+        print("exit " + self.name)
+        ys: list[int64] = [1]
+        print(ys[5])
+
+def pick(items: list[int64], index: int64) -> int64:
+    with tracer = Tracer(name="tracer"):
+        return items[index]
+
+def main():
+    print(pick([1, 2], 3))
