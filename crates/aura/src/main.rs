@@ -2953,7 +2953,10 @@ fn native_process_is_live(pid: u32) -> bool {
     }
 }
 
-fn write_private_cache_file(path: &Path, contents: &[u8]) -> io::Result<()> {
+/// Writes `contents` to a new file that only its owner can read. It refuses a
+/// path that already exists, so a file another user planted in a shared
+/// temporary directory is never written through.
+fn write_private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -3277,7 +3280,7 @@ fn write_runtime_identity_memo(memo: &Path, stamp: &str, identity: &NativeRuntim
     let Ok(native_link_args) = serde_json::to_string(&identity.native_link_args) else {
         return;
     };
-    if write_private_cache_file(
+    if write_private_file(
         &staged,
         format!("{stamp}\n{}\n{native_link_args}\n", identity.archive_digest).as_bytes(),
     )
@@ -3797,14 +3800,14 @@ fn store_native_binary(key: &str, built: &Path) {
         return;
     };
     let digest = aura_compiler::sha256_hex(&contents);
-    if write_private_cache_file(&staged_digest, format!("{digest}\n").as_bytes()).is_err() {
+    if write_private_file(&staged_digest, format!("{digest}\n").as_bytes()).is_err() {
         remove_native_cache_path(&staged);
         return;
     }
     let entry_nonce =
         aura_compiler::sha256_hex(format!("{key}:{}:{nonce}", std::process::id()).as_bytes());
     let entry_id = format!("{key}:{entry_nonce}");
-    if write_private_cache_file(&staged_entry_id, format!("{entry_id}\n").as_bytes()).is_err() {
+    if write_private_file(&staged_entry_id, format!("{entry_id}\n").as_bytes()).is_err() {
         remove_native_cache_path(&staged);
         return;
     }
@@ -4096,7 +4099,7 @@ fn build_direct_native_binary_with_identity(
         }
     };
     for (temp_object, object_bytes) in temp_objects.iter().zip(objects) {
-        if let Err(error) = fs::write(temp_object, object_bytes) {
+        if let Err(error) = write_private_file(temp_object, &object_bytes) {
             remove_temp_objects();
             return Err(format!(
                 "failed to write direct backend object `{}`: {}",
@@ -4135,7 +4138,7 @@ fn build_direct_native_binary_with_identity(
         archive_digest: memo_digest.unwrap_or_else(|| runtime_archive_digest(&staticlib_bytes)),
         native_link_args: native_runtime.native_link_args.clone(),
     };
-    fs::write(&temp_staticlib, &staticlib_bytes).map_err(|error| {
+    write_private_file(&temp_staticlib, &staticlib_bytes).map_err(|error| {
         format!(
             "failed to stage Aura runtime library `{}` as `{}`: {}",
             native_runtime.staticlib.display(),

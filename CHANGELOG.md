@@ -18,6 +18,10 @@ in this file.
 - In a native build, a `with` exit no longer moves later in the exit order
   when the body changes its resource. Exits run in reverse registration
   order, as `aura run` runs them, even when a trap unwinds the body.
+- `aura build` writes its temporary object files and staged runtime
+  library as new files that only the owner can read. On Linux they go in
+  the shared `/tmp`, where a path another user created first is now
+  refused instead of written through.
 - The language server starts `aura` by the absolute path it found on
   `PATH`, and skips relative `PATH` entries such as `.`, which resolve
   inside the opened workspace.
