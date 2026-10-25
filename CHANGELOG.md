@@ -7,6 +7,47 @@ in this file.
 
 ## Unreleased
 
+## VS Code extension 0.7.1 — 2026-10-25
+
+- Bundles language server 0.7.1. The semantic interface version stays 20.
+- The language server starts `aura` by the absolute path it found on
+  `PATH`, and skips relative `PATH` entries such as `.`, which resolve
+  inside the opened workspace.
+
+## 0.7.1 — 2026-10-25 (technical preview)
+
+Aura 0.7.1 fixes the AuraDB slowdowns that 0.7.0 introduced, closes more of
+AuraDB's gap to Python, and fixes the findings of the 0.7.0 security review
+and bug hunt. It has no syntax or interface changes.
+
+### Security
+
+- Native code probes the stack one page at a time for every function whose
+  frame is larger than a page. A frame that big used to move the stack
+  pointer past a task stack's single guard page in one step, so deep
+  recursion could write below the stack instead of failing.
+- `aura build` writes its temporary object files and staged runtime
+  library as new files that only the owner can read. On Linux they go in
+  the shared `/tmp`, where a path another user created first is now
+  refused instead of written through.
+
+### Fixed
+
+- In a native build, when a `with` body traps on a list index, division,
+  or integer overflow and an exit then traps too, the body's diagnostic
+  stays primary, as the manual says and as `aura run` reports. The exit's
+  trap used to replace it.
+- When a `with` exit traps, every exit registered before it still runs, in
+  its own frame and in its callers' frames, on both backends. The body's
+  diagnostic stays primary when the body was already failing. `aura run`
+  used to skip the rest of that frame's exits, and a native build ran no
+  more exits at all.
+- In a native build, a `with` exit no longer moves later in the exit order
+  when the body changes its resource. Exits run in reverse registration
+  order, as `aura run` runs them, even when a trap unwinds the body.
+
+### Performance
+
 - Native programs no longer copy a whole `list` or `dict` field each time
   they change it when the call also passes a `json.Value` or another
   recursive enum. 0.7.0 read every recursive enum as a type that might hold
@@ -26,29 +67,6 @@ in this file.
   pattern that only binds it. AuraDB's equality scans and counts take about
   37% fewer instructions, and opening a 5,000-document database about 56%
   fewer.
-- Native code probes the stack one page at a time for every function whose
-  frame is larger than a page. A frame that big used to move the stack
-  pointer past a task stack's single guard page in one step, so deep
-  recursion could write below the stack instead of failing.
-- In a native build, when a `with` body traps on a list index, division,
-  or integer overflow and an exit then traps too, the body's diagnostic
-  stays primary, as the manual says and as `aura run` reports. The exit's
-  trap used to replace it.
-- When a `with` exit traps, every exit registered before it still runs, in
-  its own frame and in its callers' frames, on both backends. The body's
-  diagnostic stays primary when the body was already failing. `aura run`
-  used to skip the rest of that frame's exits, and a native build ran no
-  more exits at all.
-- In a native build, a `with` exit no longer moves later in the exit order
-  when the body changes its resource. Exits run in reverse registration
-  order, as `aura run` runs them, even when a trap unwinds the body.
-- `aura build` writes its temporary object files and staged runtime
-  library as new files that only the owner can read. On Linux they go in
-  the shared `/tmp`, where a path another user created first is now
-  refused instead of written through.
-- The language server starts `aura` by the absolute path it found on
-  `PATH`, and skips relative `PATH` entries such as `.`, which resolve
-  inside the opened workspace.
 
 ## VS Code extension 0.7.0 — 2026-10-25
 

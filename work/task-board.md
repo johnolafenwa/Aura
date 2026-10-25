@@ -2,7 +2,17 @@
 
 Last updated: 2026-10-25
 
-## AuraDB regressions in 0.7.0 (in progress)
+## Aura 0.7.1 preview release (in progress)
+
+- Target: release 0.7.1 with the AuraDB regression fixes and the 0.7.0
+  security review fixes, as John asked on 2026-10-25.
+- Release preparation bumps every package to 0.7.1. Details are in
+  `2026-10-25-v0.7.1-preview-release.md`.
+- Remaining: green hosted CI on the release pull request, merge, and the
+  `v0.7.1-preview` tag, which John approves.
+- `VSCE_PAT` must be an org-scoped token before 2026-12-01.
+
+## AuraDB regressions in 0.7.0 (complete)
 
 - Target: fix the 0.7.0 slowdowns John's AuraDB benchmark found, single
   inserts and updates above all. Details are in
@@ -15,10 +25,12 @@ Last updated: 2026-10-25
   `doc_from_json` matches Python, and scans and open take about a third
   and a half fewer instructions. Details are in
   `2026-10-25-auradb-python-gap.md`.
+- Merged as PRs #139 (`4fd0e232`) and #142 (`1f5c1374`). They ship in
+  0.7.1.
 - Remaining: a Mac run of the fixed build, and the gaps that note lists
   (lent dict-items loops, per-iteration field lends, retagging).
 
-## Aura 0.7.0 security review and bug hunt (in progress)
+## Aura 0.7.0 security review and bug hunt (complete)
 
 - Target: review the released 0.7.0 preview for security issues and bugs,
   and fix what turns up. Details are in
@@ -28,10 +40,11 @@ Last updated: 2026-10-25
   remaining exit runs after one traps, as John decided), language server
   compiler path hardening, private build temporaries.
 - Verification: new run-fail fixtures fail on 0.7.0 native and pass now.
-  Local suites pass. Hosted CI runs on the fix PR.
-- Remaining: merge the fix PR. The follow-ups are listed in the note.
+  Local suites pass.
+- Merged as PRs #140 (`ac8327c0`) and #141 (`404605a9`). They ship in
+  0.7.1. The follow-ups are listed in the note.
 
-## Aura 0.7.0 preview release (in progress)
+## Aura 0.7.0 preview release (complete)
 
 - Target: release 0.7.0-preview with phase 2 of Batch 7. This is step 12
   of the Batch 7 delivery plan.
@@ -40,8 +53,10 @@ Last updated: 2026-10-25
 - Verification: local release checks pass. On Linux, all six phase 2
   programs meet their targets by instruction count, and both build targets
   are met. Hosted CI runs on the release PR.
-- Remaining: fill the macOS cells from the Mac14,9 run, merge the release
-  PR, and push the tag after John approves.
+- Merged as PR #138 (`ab1c970e`). John chose to skip the Mac14,9
+  re-timing. The `v0.7.0-preview` tag was pushed on 2026-10-25, and the
+  Release workflow published the archives, docs, VSIX, and extension
+  0.7.0.
 
 ## Batch 7 step 11: LLVM as the only native backend (complete)
 

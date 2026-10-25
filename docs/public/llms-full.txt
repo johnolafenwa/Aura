@@ -232,7 +232,7 @@ limits.
 
 # Why Aura
 
-Aura 0.7.0 is a technical preview of a compiled, statically typed language for
+Aura 0.7.1 is a technical preview of a compiled, statically typed language for
 reliable software. It combines Python-inspired syntax, deterministic
 ownership, structured concurrency, typed failure, and native executables.
 
@@ -388,7 +388,7 @@ exact boundaries of that surface.
 
 # Downloads
 
-Aura 0.7.0 is a technical preview. The compiler, command-line tools, editor
+Aura 0.7.1 is a technical preview. The compiler, command-line tools, editor
 extension, reference manual, and source all ship from the
 [Aura GitHub repository](https://github.com/johnolafenwa/Aura).
 
@@ -413,7 +413,7 @@ For step-by-step instructions, pick a platform guide:
 - [Windows 11 through Ubuntu on WSL 2](/install/windows-wsl)
 
 To install by hand, download the archive for your platform from the
-[v0.7.0-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.7.0-preview).
+[v0.7.1-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.7.1-preview).
 Each release includes Linux x64, macOS x64, and macOS arm64 archives and a
 `SHA256SUMS` manifest.
 
@@ -432,7 +432,7 @@ Install **Aura Programming Language** from either public extension registry:
 - [Open VSX](https://open-vsx.org/extension/JohnOlafenwa/vscode-aura-lang)
 
 Both registries carry the same package, with the plain extension version
-`0.7.0`. The extension needs the `aura` executable on `PATH`. Its semantic
+`0.7.1`. The extension needs the `aura` executable on `PATH`. Its semantic
 editor features run through the `aura lsp` server that the compiler provides.
 
 To install from a terminal:
@@ -442,7 +442,7 @@ code --install-extension JohnOlafenwa.vscode-aura-lang
 ```
 
 To install by hand, download
-[`aura-language.vsix`](https://github.com/johnolafenwa/Aura/releases/download/v0.7.0-preview/aura-language.vsix)
+[`aura-language.vsix`](https://github.com/johnolafenwa/Aura/releases/download/v0.7.1-preview/aura-language.vsix)
 from the GitHub Release. Then run **Extensions: Install from VSIX...** in
 VS Code.
 
@@ -488,7 +488,7 @@ curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 aura --version
 ```
 
-The output begins with `aura 0.7.0-preview`. The rest of the line is the
+The output begins with `aura 0.7.1-preview`. The rest of the line is the
 source commit the binary was built from.
 
 ## What Gets Installed
@@ -598,7 +598,7 @@ command -v aura
 aura --version
 ```
 
-The version begins with `aura 0.7.0-preview`.
+The version begins with `aura 0.7.1-preview`.
 
 ## 6. Run A Program
 
@@ -709,7 +709,7 @@ The installer uses `curl`, `tar`, and `shasum`, which macOS already includes:
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
-The script downloads the matching `v0.7.0-preview` archive. It checks the
+The script downloads the matching `v0.7.1-preview` archive. It checks the
 archive against the release's `SHA256SUMS` file before it copies anything
 into the installation prefix.
 
@@ -737,7 +737,7 @@ aura --version
 The command path ends in `.local/bin/aura`. The version begins with:
 
 ```text
-aura 0.7.0-preview
+aura 0.7.1-preview
 ```
 
 ## 5. Run A Program
@@ -861,7 +861,7 @@ codium --install-extension JohnOlafenwa.vscode-aura-lang
 A VSIX file is a packaged VS Code extension.
 
 1. Download `aura-language.vsix` from the
-   [v0.7.0-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.7.0-preview).
+   [v0.7.1-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.7.1-preview).
 2. Open the Command Palette and choose **Extensions: Install from VSIX...**.
 
 To install from a terminal instead:
@@ -1113,7 +1113,7 @@ runtime. It covers the complete syntax, name and type rules, ownership,
 execution, module APIs, diagnostics, limits, and tool contracts, in enough
 detail to reconstruct the language accurately.
 
-This Manual documents **Aura 0.7.0 (technical preview)**. The release stamp
+This Manual documents **Aura 0.7.1 (technical preview)**. The release stamp
 below records the implementation baseline commit the Manual was rendered from.
 
 The stamp uses the first commit source that applies:
@@ -2857,7 +2857,7 @@ aura check app.au
 | `aura upgrade` | Download and run the verified installer to replace the compiler and bundled runtime with the latest published release. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
-| `aura version` / `aura --version` | Print the build channel and 12-hex-digit source commit. Release archives print `aura 0.7.0-preview (0123456789ab)`. Source builds print `aura 0.7.0-dev (0123456789ab)`. |
+| `aura version` / `aura --version` | Print the build channel and 12-hex-digit source commit. Release archives print `aura 0.7.1-preview (0123456789ab)`. Source builds print `aura 0.7.1-dev (0123456789ab)`. |
 
 MIR is Aura's mid-level intermediate representation. The editor query
 commands `signature-help`, `references`, `prepare-rename`, and `rename` are
@@ -2970,7 +2970,7 @@ build.
 
 ## Native Executable Profile
 
-Workspace release builds of Aura 0.7.0 use `opt-level=3`, fat LTO, one codegen
+Workspace release builds of Aura 0.7.1 use `opt-level=3`, fat LTO, one codegen
 unit, `debug=false`, and `strip="symbols"`. Panic unwinding stays enabled for
 the runtime's `extern "C-unwind"` boundaries. This profile reduces shipped
 compiler metadata. It does not strip the runtime archive's linkable symbols or
@@ -14288,7 +14288,7 @@ Any behavior change MUST update these in the same pass:
 - the work record
 
 The repository commit identifies the precise revision of the specification.
-The rendered Manual is stamped with source version 0.7.0 (technical preview)
+The rendered Manual is stamped with source version 0.7.1 (technical preview)
 and its implementation baseline commit. Release builds supply that commit
 without writing a self-referential hash into this source page. The
 [Manual overview](/manual/) gives the exact precedence and the local fallback.
@@ -20073,7 +20073,7 @@ The local `main` takes no parameters and returns `None` or `int32`. An imported 
 
 # Status And Compatibility
 
-Aura 0.7.0 is a technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments. It is not a production systems-language release, and it is not a security boundary for untrusted programs.
+Aura 0.7.1 is a technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments. It is not a production systems-language release, and it is not a security boundary for untrusted programs.
 
 This page states what the maintained language contract is, which surface it currently covers, and how that surface may change.
 
@@ -22978,7 +22978,7 @@ To install by hand, download the archive for a supported host and extract it.
 Keep its directory layout intact:
 
 ```text
-aura-v0.7.0-preview-<target>/
+aura-v0.7.1-preview-<target>/
 ├── bin/aura
 ├── lib/aura/
 │   ├── libaura_runtime.a
@@ -23057,8 +23057,8 @@ aura --version
 On Unix shells, consider adding that export to your shell profile.
 
 Preview builds print their channel and source commit, for example
-`aura 0.7.0-preview (0123456789ab)`. Source-checkout builds print the channel
-as `aura 0.7.0-dev (0123456789ab)`.
+`aura 0.7.1-preview (0123456789ab)`. Source-checkout builds print the channel
+as `aura 0.7.1-dev (0123456789ab)`.
 
 ## Install The VS Code Extension
 
@@ -24958,8 +24958,8 @@ cargo run -p aura -- --version
 ```
 
 `--version` prints the build channel and a 12-hex-digit source commit. A
-source checkout prints something like `aura 0.7.0-dev (0123456789ab)`. A
-release archive prints `aura 0.7.0-preview (0123456789ab)`.
+source checkout prints something like `aura 0.7.1-dev (0123456789ab)`. A
+release archive prints `aura 0.7.1-preview (0123456789ab)`.
 
 Use `deps update` to refresh git dependencies. You do not need to delete
 `Aura.lock` by hand:
