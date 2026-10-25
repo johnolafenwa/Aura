@@ -17790,8 +17790,8 @@ misses on macOS arm64. Phase 2 of Batch 7 owns both gaps.
 ### Phase 2 Release Check
 
 Aura 0.7.0 generates native code with LLVM 22. It ran against the Rust
-references on the shared Linux x86-64 container. A macOS arm64 Mac14,9 run
-is in progress, and each cell marked **TBD (macOS)** waits for it.
+references on the shared Linux x86-64 container. The macOS arm64 baseline
+host was not re-timed for this release, because it had no LLVM 22.
 
 Wall times on the container are noisy, so the Linux columns count callgrind
 instructions for one whole run, startup included. `fib(30)` reads its GO
@@ -17799,14 +17799,14 @@ line first. The Aura counts come from the release `aura` of Batch 7 step
 11d, which `main` holds at `4b3a6713`. The Rust counts come from the step
 9c run, built with Rust 1.95.0.
 
-| Program | Linux, Aura instructions | Linux, Rust instructions | Linux, Aura / Rust | macOS, Aura | macOS, Rust | macOS, Aura / Rust | Phase 2 target |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `fib(30)` | 115,025,097 | 39,454,411 | 2.92x | TBD (macOS) | TBD (macOS) | TBD (macOS) | 3x |
-| `int_list_sum` | 16,015,568 | 13,247,624 | 1.21x | TBD (macOS) | TBD (macOS) | TBD (macOS) | 2x |
-| `string_list_scan` | 32,942,620 | 13,135,652 | 2.51x | TBD (macOS) | TBD (macOS) | TBD (macOS) | 4x |
-| `dict_build_get` | 344,784,267 | 179,017,701 | 1.93x | TBD (macOS) | TBD (macOS) | TBD (macOS) | 4x |
-| `set_insert_contains` | 59,570,448 | 31,558,085 | 1.89x | TBD (macOS) | TBD (macOS) | TBD (macOS) | 3x |
-| `record_field_reads` | 135,096,748 | 36,000,215 | 3.75x | TBD (macOS) | TBD (macOS) | TBD (macOS) | 4x |
+| Program | Linux, Aura instructions | Linux, Rust instructions | Linux, Aura / Rust | Phase 2 target |
+| --- | ---: | ---: | ---: | ---: |
+| `fib(30)` | 115,025,097 | 39,454,411 | 2.92x | 3x |
+| `int_list_sum` | 16,015,568 | 13,247,624 | 1.21x | 2x |
+| `string_list_scan` | 32,942,620 | 13,135,652 | 2.51x | 4x |
+| `dict_build_get` | 344,784,267 | 179,017,701 | 1.93x | 4x |
+| `set_insert_contains` | 59,570,448 | 31,558,085 | 1.89x | 3x |
+| `record_field_reads` | 135,096,748 | 36,000,215 | 3.75x | 4x |
 
 All six programs meet their phase 2 targets on Linux by instruction count.
 The targets are ratios of time, so an instruction ratio does not stand in
