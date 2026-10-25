@@ -7,6 +7,13 @@ in this file.
 
 ## Unreleased
 
+- Native programs no longer copy a whole `list` or `dict` field each time
+  they change it when the call also passes a `json.Value` or another
+  recursive enum. 0.7.0 read every recursive enum as a type that might hold
+  a class instance, so it never lent the field to the call. AuraDB's single
+  inserts ran about 8 times slower than on 0.6.0 and its updates about 16
+  times slower. Both are back to 0.6.0's speed or better.
+
 ## VS Code extension 0.7.0 — 2026-10-25
 
 - Bundles language server 0.7.0. The semantic interface version stays 20.

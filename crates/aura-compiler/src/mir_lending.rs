@@ -180,9 +180,23 @@ fn overlaps(lent: &Resolved, other: &Resolved) -> bool {
 
 /// Whether a value of `ty` can hold a handle to a class instance or a
 /// callable, and so might reach a lent place's owner.
-fn may_reach_instance(context: &MirLoanValidationContext<'_>, ty: &Type, depth: usize) -> bool {
-    // A type nested this deep is treated as reaching one.
-    if depth > 32 {
+fn may_reach_instance(context: &MirLoanValidationContext<'_>, ty: &Type) -> bool {
+    reaches_instance(context, ty, &mut Vec::new())
+}
+
+/// [`may_reach_instance`] for `ty` inside the enums in `expanding`. A
+/// recursive enum, such as `json.Value` holding `list[json.Value]`, meets
+/// itself again: that occurrence adds nothing the outer expansion does not
+/// already check, so it reaches nothing.
+fn reaches_instance(
+    context: &MirLoanValidationContext<'_>,
+    ty: &Type,
+    expanding: &mut Vec<Type>,
+) -> bool {
+    // An enum whose arguments keep growing, such as `Nest[list[T]]` inside
+    // `Nest[T]`, never meets itself, so a deep enough expansion is treated
+    // as reaching one.
+    if expanding.len() > 32 {
         return true;
     }
     match ty {
@@ -190,38 +204,44 @@ fn may_reach_instance(context: &MirLoanValidationContext<'_>, ty: &Type, depth: 
             if context.classes.contains_key(name.as_str())
                 || args
                     .iter()
-                    .any(|arg| may_reach_instance(context, arg, depth + 1))
+                    .any(|arg| reaches_instance(context, arg, expanding))
             {
                 return true;
             }
             let Some(enum_decl) = context.enums.get(name.as_str()) else {
                 return false;
             };
+            if expanding.contains(ty) {
+                return false;
+            }
             let substitutions = enum_decl
                 .type_params
                 .iter()
                 .cloned()
                 .zip(args.iter().cloned())
                 .collect::<HashMap<_, _>>();
-            enum_decl
+            expanding.push(ty.clone());
+            let reaches = enum_decl
                 .variants
                 .iter()
                 .flat_map(|variant| &variant.payloads)
                 .any(|payload| {
-                    may_reach_instance(
+                    reaches_instance(
                         context,
                         &substitute_type(payload, &substitutions),
-                        depth + 1,
+                        expanding,
                     )
-                })
+                });
+            expanding.pop();
+            reaches
         }
         Type::Tuple(items) => items
             .iter()
-            .any(|item| may_reach_instance(context, item, depth + 1)),
+            .any(|item| reaches_instance(context, item, expanding)),
         Type::Union(union) => union
             .members
             .iter()
-            .any(|member| may_reach_instance(context, member, depth + 1)),
+            .any(|member| reaches_instance(context, member, expanding)),
         Type::Unit | Type::Module(_) => false,
         _ => true,
     }
@@ -419,7 +439,7 @@ impl Planner<'_, '_> {
                 continue;
             };
             if overlaps(&resolved, &self.sources.resolve(other)?)
-                || may_reach_instance(self.context, &self.place_type(other)?, 0)
+                || may_reach_instance(self.context, &self.place_type(other)?)
             {
                 return None;
             }
@@ -463,7 +483,7 @@ impl Planner<'_, '_> {
             else {
                 return Vec::new();
             };
-            if may_reach_instance(self.context, &ty, 0) {
+            if may_reach_instance(self.context, &ty) {
                 return Vec::new();
             }
             resolved.push(Some((place_resolved, ty)));

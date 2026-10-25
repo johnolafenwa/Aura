@@ -688,3 +688,64 @@ fn direct_borrowed_loop_reads_copy_no_element() {
         direct.opaque_boxes
     );
 }
+
+/// A document store whose documents hold `json.Value`, a recursive enum:
+/// fields passed to a `mut` helper, appended to, and changed through a
+/// `mut` lookup.
+const JSON_DOCUMENT_FIELDS: &str = r#"import json
+
+def keep(docs: mut list[dict[str, json.Value]], by_id: mut dict[str, int64], doc: own dict[str, json.Value]):
+    by_id[f"s:{docs.len()}"] = docs.len()
+    docs.append(doc)
+
+class Store:
+    docs: list[dict[str, json.Value]] = []
+    by_id: dict[str, int64] = {}
+    values: list[json.Value] = []
+
+    def insert(mut self, doc: own dict[str, json.Value]):
+        keep(self.docs, self.by_id, doc)
+
+    def update(mut self, position: int64, changes: dict[str, json.Value]):
+        match mut self.docs.lookup(position):
+            case Lookup.Found(doc):
+                for field, value in own changes.items():
+                    doc[field] = value
+            case Lookup.Missing:
+                pass
+
+def main():
+    mut store = Store()
+    mut changes: dict[str, json.Value] = {}
+    changes["score"] = json.Value.Float(99.5)
+    mut i = 0
+    while i < 200:
+        mut doc: dict[str, json.Value] = {}
+        doc["name"] = json.Value.String(f"user-{i}")
+        store.insert(doc)
+        store.values.append(json.Value.Int(i))
+        i += 1
+    i = 0
+    while i < 200:
+        store.update(i, changes)
+        i += 1
+    print(store.docs.len() + store.values.len() + store.by_id.len())
+    match store.docs.get(7):
+        case Lookup.Found(doc):
+            print(doc.len())
+        case Lookup.Missing:
+            print(0)
+"#;
+
+#[test]
+fn direct_json_document_fields_are_lent_not_copied() {
+    let (_, direct) = assert_both_backends("repr-json-fields", JSON_DOCUMENT_FIELDS, "600\n2\n");
+    // `json.Value` holds `list[json.Value]`, which once read as a type
+    // that might hold an instance. No field was lent, so each write copied
+    // the whole list: 99,704 elements.
+    assert!(
+        direct.cloned_elements <= 10,
+        "json document fields cloned {} elements on the direct backend",
+        direct.cloned_elements
+    );
+}
