@@ -27105,6 +27105,93 @@ fn direct_variant_matches_compare_the_untagged_enum_name() {
 }
 
 #[test]
+fn direct_tags_share_one_tagged_name_across_fresh_variants() {
+    // Every fresh `Result.Ok` tagged with the same descriptor takes the
+    // tag's prebuilt name instead of allocating its own.
+    let tag = super::interned_runtime_type_tag(b"Result[bool, str]");
+    let shared = tag
+        .tagged_enum_name
+        .clone()
+        .expect("a generic enum tag prebuilds its variant name");
+    let variants = (0..2)
+        .map(|_| {
+            let variant = boxed_value(Value::EnumVariant(EnumVariantValue {
+                enum_name: crate::runtime_value::RuntimeName::from_static("Result"),
+                variant_name: crate::runtime_value::RuntimeName::from_static("Ok"),
+                payloads: vec![Value::Bool(true)],
+            }));
+            super::aura_direct_tag_value_type(variant, b"Result[bool, str]".as_ptr(), 17);
+            variant
+        })
+        .collect::<Vec<_>>();
+    for &variant in &variants {
+        match unsafe { value_ref(variant) } {
+            Value::EnumVariant(variant) => {
+                assert_eq!(variant.enum_name, shared);
+                assert_eq!(variant.enum_name.as_ptr(), shared.as_ptr());
+            }
+            other => panic!("expected a tagged variant, found {other:?}"),
+        }
+    }
+    // A variant of another enum still gets a name of its own base.
+    let other = boxed_value(Value::EnumVariant(EnumVariantValue {
+        enum_name: crate::runtime_value::RuntimeName::from_static("Outcome"),
+        variant_name: crate::runtime_value::RuntimeName::from_static("Ok"),
+        payloads: Vec::new(),
+    }));
+    super::aura_direct_tag_value_type(other, b"Result[bool, str]".as_ptr(), 17);
+    match unsafe { value_ref(other) } {
+        Value::EnumVariant(variant) => {
+            assert_eq!(
+                crate::runtime_value::nominal_runtime_base_name(&variant.enum_name),
+                "Outcome"
+            );
+            assert_eq!(
+                crate::runtime_value::embedded_nominal_runtime_type_name(&variant.enum_name),
+                Some("Result[bool, str]")
+            );
+        }
+        other => panic!("expected a tagged variant, found {other:?}"),
+    }
+    assert!(super::interned_runtime_type_tag(b"json.Value")
+        .tagged_enum_name
+        .is_none());
+    for value in variants.into_iter().chain([other]) {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
+fn direct_union_helpers_decode_each_descriptor_once() {
+    let union = Type::normalize_union(vec![Type::named("int64"), Type::Unit], "", &BTreeMap::new())
+        .expect("two distinct members form a union");
+    let encoded = super::canonical_runtime_type_name(&union);
+    let first = super::descriptor_runtime_type_tag(encoded.as_ptr(), encoded.len(), "invalid");
+    let copy = encoded.clone();
+    let second = super::descriptor_runtime_type_tag(copy.as_ptr(), copy.len(), "invalid");
+    assert!(Arc::ptr_eq(&first, &second));
+    assert!(first.descriptor);
+    assert_eq!(first.parsed, union);
+    // An injected value carries the descriptor's shared name.
+    let injected = super::with_direct_task_runtime_scope(|| {
+        let payload = super::aura_direct_box_i64(3);
+        let injected = super::aura_direct_union_inject(encoded.as_ptr(), encoded.len(), 0, payload);
+        let name = unsafe { super::explicit_runtime_type_name(injected) };
+        let value = unsafe { value_ref(injected) };
+        unsafe { super::aura_direct_release_value(injected) };
+        (name, value)
+    });
+    assert_eq!(injected.0.as_deref(), Some(encoded.as_str()));
+    assert!(matches!(injected.1, Value::Union(union) if union.member_index == 0));
+    // A display name is not a descriptor, even when the tag table has it.
+    assert!(!super::interned_runtime_type_tag(b"int64").descriptor);
+    let message = capture_unscoped_error_message(|| {
+        super::descriptor_runtime_type_tag(b"int64".as_ptr(), 5, "not a descriptor");
+    });
+    assert_eq!(message, "not a descriptor");
+}
+
+#[test]
 fn direct_tag_cells_keep_the_decoded_tag() {
     let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
     let first = boxed_value(Value::Int(IntegerValue::from_i32(5)));

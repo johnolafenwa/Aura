@@ -593,7 +593,8 @@ unspecified.
 
 **JSON parsing.** Dynamic `json.parse` uses a separate process-global codec
 service with two workers, each with a 2 MiB stack, and a total in-flight
-capacity of two.
+capacity of two. A source of at most 16 KiB that nests at most 8 levels is
+parsed on the calling task instead and never waits for the service.
 
 - The runtime reserves one of those slots before it makes the fallible owned
   copy of the source.

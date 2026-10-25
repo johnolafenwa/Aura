@@ -530,7 +530,7 @@ The protocol-step pool is lazily initialized and shared by every lightweight sch
 
 The first runtime preflight reads these settings once. They stay fixed for the process lifetime. That preflight starts no worker. The first blocking submission creates the complete configured set of workers, which production reuses until process exit. There is no Aura shutdown or join surface.
 
-**JSON parse service.** Dynamic `json.parse` uses a third, independent service with two 2 MiB-stack workers and a total in-flight capacity of two.
+**JSON parse service.** Dynamic `json.parse` uses a third, independent service with two 2 MiB-stack workers and a total in-flight capacity of two. A source of at most 16 KiB that nests at most 8 levels is parsed on the calling task instead.
 
 A task reserves capacity before it makes the fallible owned copy of its parse source. When the service is saturated, a lightweight task parks through the scheduler instead of spinning. Once admitted, synchronous `json.parse` waits through codec completion. Cancellation is observed at the task's next ordinary cancellation boundary. The codec job is not abandoned.
 

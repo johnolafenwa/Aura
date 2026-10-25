@@ -311,6 +311,9 @@ pub fn host_path_is_absolute(args: Vec<Value>, _program_args: Option<&[String]>)
 pub fn host_json_parse(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
     let name = "json::parse";
     host_expect_arity(name, &args, 1)?;
+    if let Some(parsed) = json_parse_inline(host_string_ref_arg(&args, 0, name)?) {
+        return parsed.into_runtime();
+    }
     let (source, reservation) = prepare_json_codec_source(|| {
         clone_json_codec_source(host_string_ref_arg(&args, 0, name)?)
     })?;

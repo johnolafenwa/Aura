@@ -191,6 +191,28 @@ impl JsonValue {
 }
 
 fn validate_source_depth(source: &str) -> Result<(), JsonCodecError> {
+    match first_offset_deeper_than(source, MAX_JSON_DEPTH) {
+        Some(offset) => {
+            let (line, column) = line_column_for_offset(source, offset);
+            Err(JsonCodecError::NestingTooDeep {
+                limit: MAX_JSON_DEPTH,
+                line,
+                column,
+                offset,
+            })
+        }
+        None => Ok(()),
+    }
+}
+
+/// Whether no array or object in `source` opens deeper than `limit`. Text
+/// inside strings does not count.
+pub fn nesting_at_most(source: &str, limit: usize) -> bool {
+    first_offset_deeper_than(source, limit).is_none()
+}
+
+/// The offset of the first `[` or `{` that opens past `limit` levels.
+fn first_offset_deeper_than(source: &str, limit: usize) -> Option<usize> {
     let bytes = source.as_bytes();
     let mut index = 0usize;
     let mut depth = 0usize;
@@ -218,14 +240,8 @@ fn validate_source_depth(source: &str) -> Result<(), JsonCodecError> {
             }
             b'[' | b'{' => {
                 depth += 1;
-                if depth > MAX_JSON_DEPTH {
-                    let (line, column) = line_column_for_offset(source, index);
-                    return Err(JsonCodecError::NestingTooDeep {
-                        limit: MAX_JSON_DEPTH,
-                        line,
-                        column,
-                        offset: index,
-                    });
+                if depth > limit {
+                    return Some(index);
                 }
                 index += 1;
             }
@@ -238,7 +254,7 @@ fn validate_source_depth(source: &str) -> Result<(), JsonCodecError> {
             }
         }
     }
-    Ok(())
+    None
 }
 
 fn validate_syntax(source: &str) -> Result<(), JsonCodecError> {

@@ -730,3 +730,14 @@ fn bounded_numeric_writer_flush_is_transparent_and_preserves_followup_writes() {
 
     assert_eq!(output.text, "123");
 }
+
+#[test]
+fn nesting_at_most_counts_arrays_and_objects_outside_strings() {
+    assert!(nesting_at_most("1", 0));
+    assert!(nesting_at_most("\"[{[{\"", 0));
+    assert!(!nesting_at_most("[]", 0));
+    assert!(nesting_at_most("[{\"a\": [1]}, {}]", 3));
+    assert!(!nesting_at_most("[{\"a\": [1]}, {}]", 2));
+    // An escaped quote does not end the string, so its brackets stay text.
+    assert!(nesting_at_most("[\"\\\"[[[\"]", 1));
+}

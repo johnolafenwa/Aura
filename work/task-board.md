@@ -10,8 +10,13 @@ Last updated: 2026-10-25
 - Done: the lending pass no longer reads a recursive enum such as
   `json.Value` as one that might hold a class instance, so fields are lent
   again. Every AuraDB operation takes fewer instructions than on 0.6.0.
-- Remaining: a Mac run of the fixed build, and the larger gaps to Python
-  (JSON parse, scans, open).
+- Done: short JSON parses stay on the calling task, and union values,
+  tagged generic values, and lent fields cost less. AuraDB's
+  `doc_from_json` matches Python, and scans and open take about a third
+  and a half fewer instructions. Details are in
+  `2026-10-25-auradb-python-gap.md`.
+- Remaining: a Mac run of the fixed build, and the gaps that note lists
+  (lent dict-items loops, per-iteration field lends, retagging).
 
 ## Aura 0.7.0 security review and bug hunt (in progress)
 

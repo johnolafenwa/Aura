@@ -5,6 +5,8 @@
 - Accepted: 2026-07-29 (Batch 4 checkpoint)
 - Roadmap decision: Batch 4, Phase 5.4
 - Amended: 2026-09-12 (maintained default recorded as 768 KiB; see below)
+- Amended: 2026-10-25 (short, shallow `json.parse` sources parse on the
+  calling task; see below)
 
 ## Amendment (2026-09-12): the maintained default is 768 KiB
 
@@ -22,6 +24,25 @@ made the interpreter's headroom probe exclude the allocator's guard layout
 from the published writable limit and sized its reserve from measured call
 transitions; `docs/manual/concurrency.md` describes the resulting `AU4005`
 behavior.
+
+## Amendment (2026-10-25): short, shallow `json.parse` sources stay on the caller
+
+`json.parse` of a source of at most 16 KiB (`JSON_INLINE_PARSE_MAX_BYTES`)
+that nests at most 8 arrays or objects (`JSON_INLINE_PARSE_MAX_DEPTH`) parses
+on the calling task instead of the codec service. The handoff to a codec
+worker and back cost about three futex calls a parse and dominated parsing a
+small document: AuraDB's `doc_from_json` of a five-field object spent more
+time waiting on the worker than parsing.
+
+The isolation exists because the dependency's parser recurses once per
+nesting level. Eight levels bound that recursion, and a test parses an
+eight-level document on a thread with half of the 256 KiB opt-in minimum
+stack. The bounded depth scan runs before the parser, so a deep source still
+goes to the service. The size bound keeps the inline parse short, so it needs
+no yield, and the source is parsed in place without the owned copy that
+admission bounds. Larger or deeper sources, `json.is_valid`, and the
+compatibility helpers keep the behavior described below. Results and
+diagnostics are the same on both paths.
 
 ## Context
 

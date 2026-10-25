@@ -46,15 +46,16 @@ use crate::runtime_value::{
     fail_current_lightweight_task, float_floor_divmod, float_power, format_runtime_value_with,
     host_builtins, io_error, io_read_line, is_clone_leaf, json_array_metadata_is_exact,
     json_dump_error_to_diagnostic, json_int_metadata_is_exact, json_object_metadata_is_exact,
-    json_parse_owned_to_runtime, lookup_found, lookup_missing, nominal_runtime_base_name,
-    optional_absent, optional_bytes_value, optional_present, optional_str_value, optional_value,
-    poll_cancellation, poll_ready, poll_unavailable, prepare_json_codec_source,
-    process_error_cancelled, process_error_io, process_error_no_command, process_error_spawn,
-    process_error_timed_out, process_exit_status, process_stdio_inherit, process_stdio_null,
-    process_stdio_pipe, process_supervisor_event_failed, process_supervisor_wait_cancelled,
-    process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
-    process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
-    queue_receive_closed, queue_receive_item, queue_receive_timed_out, read_file_limited,
+    json_parse_inline, json_parse_owned_to_runtime, lookup_found, lookup_missing,
+    nominal_runtime_base_name, optional_absent, optional_bytes_value, optional_present,
+    optional_str_value, optional_value, poll_cancellation, poll_ready, poll_unavailable,
+    prepare_json_codec_source, process_error_cancelled, process_error_io, process_error_no_command,
+    process_error_spawn, process_error_timed_out, process_exit_status, process_stdio_inherit,
+    process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
+    process_supervisor_wait_cancelled, process_supervisor_wait_event,
+    process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
+    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
+    queue_receive_item, queue_receive_timed_out, read_file_limited,
     recv_for_registered_producers_iteration, recv_for_task_group_iteration, render_float,
     render_float32, result_err, result_ok, round_numeric_value, run_blocking_io,
     run_lightweight_root_task_with_forced_exit_cleanup, runtime_value_to_json,
@@ -2298,6 +2299,25 @@ pub(crate) struct RuntimeTypeTag {
     /// a channel or a task, which keep their own copy of the name. A plain
     /// nominal type such as `json.Value` tags this way.
     pub(crate) shape_free: bool,
+    /// True when `name` is a canonical descriptor, so `parsed` is the type
+    /// it decodes to rather than a best-effort reading of a display name.
+    pub(crate) descriptor: bool,
+    /// For a generic enum type such as `Result[bool, E]`, the name a fresh
+    /// variant of that enum takes when tagged, built once so that tagging
+    /// each new `Result.Ok(...)` shares it instead of allocating.
+    pub(crate) tagged_enum_name: Option<RuntimeName>,
+}
+
+/// The name of a variant of enum `base` tagged with `runtime_type_name`.
+fn tagged_enum_name(base: &str, runtime_type_name: &str) -> String {
+    // Sized up front: `format!` costs more than the tag lookup.
+    let mut name = String::with_capacity(
+        base.len() + DIRECT_RUNTIME_TYPE_SEPARATOR.len_utf8() + runtime_type_name.len(),
+    );
+    name.push_str(base);
+    name.push(DIRECT_RUNTIME_TYPE_SEPARATOR);
+    name.push_str(runtime_type_name);
+    name
 }
 
 fn runtime_type_tag_is_name_only(parsed: &Type) -> bool {
@@ -2374,17 +2394,27 @@ fn shared_runtime_type_tag(bytes: &[u8]) -> Arc<RuntimeTypeTag> {
     // Decode outside the lock: a malformed descriptor raises a runtime error.
     let name = str::from_utf8(bytes)
         .unwrap_or_else(|_| runtime_error("aura direct runtime received invalid UTF-8 bytes"));
-    let parsed = runtime_type_from_name(name);
+    let canonical = canonical_runtime_type_from_name(name);
+    let descriptor = canonical.is_some();
+    let parsed = canonical.unwrap_or_else(|| runtime_type_from_name(name));
     let name_only = runtime_type_tag_is_name_only(&parsed);
     let integer_kind = IntegerKind::from_runtime_type_name(name);
     let shape_free =
         integer_kind.is_none() && matches!(&parsed, Type::Named(_, args) if args.is_empty());
+    let tagged_enum_name = match &parsed {
+        Type::Named(base, args) if !args.is_empty() => {
+            Some(RuntimeName::from(tagged_enum_name(base, name)))
+        }
+        _ => None,
+    };
     let tag = Arc::new(RuntimeTypeTag {
         name: Arc::from(name),
         parsed,
         integer_kind,
         name_only,
         shape_free,
+        descriptor,
+        tagged_enum_name,
     });
     let mut registry = registry
         .lock()
@@ -2393,6 +2423,23 @@ fn shared_runtime_type_tag(bytes: &[u8]) -> Arc<RuntimeTypeTag> {
         registry.clear();
     }
     Arc::clone(registry.entry(Box::from(bytes)).or_insert(tag))
+}
+
+/// The tag for the descriptor a union helper receives. Generated code passes
+/// a static literal, so the thread's tag table decodes it once rather than
+/// on every call. `invalid` is the error for bytes that are not a canonical
+/// descriptor.
+fn descriptor_runtime_type_tag(
+    type_ptr: *const u8,
+    type_len: usize,
+    invalid: &str,
+) -> Arc<RuntimeTypeTag> {
+    // SAFETY: generated code passes the address and length of a literal.
+    let tag = interned_runtime_type_tag(unsafe { slice::from_raw_parts(type_ptr, type_len) });
+    if !tag.descriptor {
+        runtime_error(invalid);
+    }
+    tag
 }
 
 /// Applies an interned tag to a value. Each update first checks whether the
@@ -2500,16 +2547,21 @@ unsafe fn set_explicit_runtime_type_tag(ptr: *mut OpaqueValue, tag: &RuntimeType
                     None => Some(enum_name),
                 };
                 if let Some(base) = base {
-                    // Sized up front: `format!` costs more than the tag lookup.
-                    let mut name = String::with_capacity(
-                        base.len()
-                            + DIRECT_RUNTIME_TYPE_SEPARATOR.len_utf8()
-                            + runtime_type_name.len(),
-                    );
-                    name.push_str(base);
-                    name.push(DIRECT_RUNTIME_TYPE_SEPARATOR);
-                    name.push_str(runtime_type_name);
-                    variant.enum_name = name.into();
+                    let name = match &tag.tagged_enum_name {
+                        // A variant of the tag's own enum: the length and
+                        // prefix show `base` is the enum the tag names.
+                        Some(tagged)
+                            if tagged.len()
+                                == base.len()
+                                    + DIRECT_RUNTIME_TYPE_SEPARATOR.len_utf8()
+                                    + runtime_type_name.len()
+                                && tagged.starts_with(base) =>
+                        {
+                            tagged.clone()
+                        }
+                        _ => tagged_enum_name(base, runtime_type_name).into(),
+                    };
+                    variant.enum_name = name;
                 }
             }
             Value::Channel(channel) => channel.set_runtime_type_name(runtime_type_name.to_string()),
@@ -3180,6 +3232,13 @@ fn direct_json_indent(value: &Value) -> std::result::Result<Option<i64>, Diagnos
 
 fn direct_json_parse(args: &DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic> {
     let name = "json::parse";
+    let inline = args.with_borrow(name, 0, |value| match value {
+        Value::String(text) => Ok(json_parse_inline(text)),
+        _ => Ok(None),
+    })?;
+    if let Some(parsed) = inline {
+        return parsed.into_runtime();
+    }
     let (source, reservation) = prepare_json_codec_source(|| {
         args.with_borrow(name, 0, |value| {
             let Value::String(text) = value else {
@@ -10304,9 +10363,8 @@ pub extern "C-unwind" fn aura_direct_union_tag_test(
     member_index: usize,
 ) -> i64 {
     task_runtime_boundary(|| {
-        let expected = canonical_runtime_type_from_name(&decode_bytes(type_ptr, type_len))
-            .unwrap_or_else(|| runtime_error("invalid union tag type"));
-        let Type::Union(target) = &expected else {
+        let expected = descriptor_runtime_type_tag(type_ptr, type_len, "invalid union tag type");
+        let Type::Union(target) = &expected.parsed else {
             runtime_error("union tag test requires a union type");
         };
         unsafe {
@@ -10379,9 +10437,8 @@ pub extern "C-unwind" fn aura_direct_union_take_payload(
     member_index: usize,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let expected = canonical_runtime_type_from_name(&decode_bytes(type_ptr, type_len))
-            .unwrap_or_else(|| runtime_error("invalid union take type"));
-        let Type::Union(target) = &expected else {
+        let expected = descriptor_runtime_type_tag(type_ptr, type_len, "invalid union take type");
+        let Type::Union(target) = &expected.parsed else {
             runtime_error("union take requires a union type");
         };
         let payload = unsafe {
@@ -10485,10 +10542,8 @@ pub extern "C-unwind" fn aura_direct_union_inject_copy(
             aura_direct_release_value(payload);
         }
         let copied = copied.unwrap_or_else(|error| runtime_diagnostic_error(error));
-        let name = decode_bytes(type_ptr, type_len);
-        let union_type = canonical_runtime_type_from_name(&name)
-            .unwrap_or_else(|| runtime_error("invalid union injection type"));
-        let Type::Union(union) = &union_type else {
+        let tag = descriptor_runtime_type_tag(type_ptr, type_len, "invalid union injection type");
+        let Type::Union(union) = &tag.parsed else {
             runtime_error("union injection requires a union type");
         };
         if member_index >= union.members.len() {
@@ -10496,7 +10551,7 @@ pub extern "C-unwind" fn aura_direct_union_inject_copy(
         }
         let injected = crate::union_runtime::inject_union_member(union, member_index, copied)
             .unwrap_or_else(|message| runtime_error(message));
-        boxed_typed_value(injected, &name)
+        boxed_value_with_type(injected, Some(Arc::clone(&tag.name)))
     })
 }
 
@@ -10508,10 +10563,8 @@ pub extern "C-unwind" fn aura_direct_union_inject(
     payload: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let name = decode_bytes(type_ptr, type_len);
-        let union_type = canonical_runtime_type_from_name(&name)
-            .unwrap_or_else(|| runtime_error("invalid union injection type"));
-        let Type::Union(union) = &union_type else {
+        let tag = descriptor_runtime_type_tag(type_ptr, type_len, "invalid union injection type");
+        let Type::Union(union) = &tag.parsed else {
             runtime_error("union injection requires a union type");
         };
         if member_index >= union.members.len() {
@@ -10522,7 +10575,7 @@ pub extern "C-unwind" fn aura_direct_union_inject(
         let payload = unsafe { consume_owned_value(payload) };
         let injected = crate::union_runtime::inject_union_member(union, member_index, payload)
             .unwrap_or_else(|message| runtime_error(message));
-        boxed_typed_value(injected, &name)
+        boxed_value_with_type(injected, Some(Arc::clone(&tag.name)))
     })
 }
 
@@ -10961,6 +11014,17 @@ fn take_direct_instance_field(
     take_direct_instance_field(nested, rest, full_path)
 }
 
+/// Runs `work` on the `.`-separated segments of a field path. A loop that
+/// lends `self.items` each iteration takes and restores a one-segment path,
+/// so that case allocates nothing.
+fn with_path_segments<T>(path: &str, work: impl FnOnce(&[&str]) -> T) -> T {
+    if path.contains('.') {
+        work(&path.split('.').collect::<Vec<_>>())
+    } else {
+        work(&[path])
+    }
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_instance_take_field(
     value: *mut OpaqueValue,
@@ -10968,16 +11032,17 @@ pub extern "C-unwind" fn aura_direct_instance_take_field(
     field_len: usize,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let field_path = decode_bytes(field_ptr, field_len);
-        let segments = field_path.split('.').collect::<Vec<_>>();
-        if segments.iter().any(|segment| segment.is_empty()) {
-            runtime_error(format!("invalid instance move path `{field_path}`"));
-        }
-        let moved = unsafe {
-            value_mut(value, |value| {
-                take_direct_instance_field(value, &segments, &field_path)
-            })
-        }
+        let field_path = literal_str(field_ptr, field_len);
+        let moved = with_path_segments(field_path, |segments| {
+            if segments.iter().any(|segment| segment.is_empty()) {
+                runtime_error(format!("invalid instance move path `{field_path}`"));
+            }
+            unsafe {
+                value_mut(value, |value| {
+                    take_direct_instance_field(value, segments, field_path)
+                })
+            }
+        })
         .unwrap_or_else(|message| runtime_error(message));
         boxed_value(moved)
     })
@@ -11060,7 +11125,14 @@ fn set_direct_instance_field_owned(
         }
         Value::Instance(instance) => {
             if rest.is_empty() {
-                instance.fields.insert((*projection).to_string(), new_value);
+                // A field that is present keeps its key, so restoring a lent
+                // field allocates no new name.
+                match instance.fields.get_mut(*projection) {
+                    Some(slot) => *slot = new_value,
+                    None => {
+                        instance.fields.insert((*projection).to_string(), new_value);
+                    }
+                }
                 return Ok(());
             }
             let nested = instance.fields.get_mut(*projection).ok_or_else(|| {
@@ -11106,17 +11178,18 @@ pub extern "C-unwind" fn aura_direct_instance_set_field_owned(
     new_value: *mut OpaqueValue,
 ) {
     task_runtime_boundary(|| {
-        let field_path = decode_bytes(field_ptr, field_len);
-        let segments = field_path.split('.').collect::<Vec<_>>();
-        if segments.iter().any(|segment| segment.is_empty()) {
-            runtime_error(format!("invalid instance assignment path `{field_path}`"));
-        }
-        let new_value = unsafe { consume_owned_value(new_value) };
-        unsafe {
-            value_mut(value, |value| {
-                set_direct_instance_field_owned(value, &segments, &field_path, new_value)
-            })
-        }
+        let field_path = literal_str(field_ptr, field_len);
+        with_path_segments(field_path, |segments| {
+            if segments.iter().any(|segment| segment.is_empty()) {
+                runtime_error(format!("invalid instance assignment path `{field_path}`"));
+            }
+            let new_value = unsafe { consume_owned_value(new_value) };
+            unsafe {
+                value_mut(value, |value| {
+                    set_direct_instance_field_owned(value, segments, field_path, new_value)
+                })
+            }
+        })
         .unwrap_or_else(|message| runtime_error(message));
     })
 }

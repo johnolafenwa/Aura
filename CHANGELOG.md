@@ -13,6 +13,19 @@ in this file.
   a class instance, so it never lent the field to the call. AuraDB's single
   inserts ran about 8 times slower than on 0.6.0 and its updates about 16
   times slower. Both are back to 0.6.0's speed or better.
+- `json.parse` of a source of at most 16 KiB that nests at most 8 levels
+  now runs on the calling task instead of waiting for a JSON worker thread.
+  Parsing a small document takes about half the instructions, and AuraDB's
+  `doc_from_json` benchmark went from 88 ms to 7 ms on Linux. Larger or
+  deeper sources still use the JSON codec service.
+- Native programs build union values, such as the `None` default of
+  `json.dumps`'s `indent`, without decoding the union's type on every call,
+  share one name across `Result` and other generic enum values of the same
+  type, and copy `(key, value)` pairs and lent class fields with fewer
+  allocations. `match own` no longer copies a variant's payload to test a
+  pattern that only binds it. AuraDB's equality scans and counts take about
+  37% fewer instructions, and opening a 5,000-document database about 56%
+  fewer.
 - Native code probes the stack one page at a time for every function whose
   frame is larger than a page. A frame that big used to move the stack
   pointer past a task stack's single guard page in one step, so deep
