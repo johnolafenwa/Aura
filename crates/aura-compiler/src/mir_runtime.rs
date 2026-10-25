@@ -4132,17 +4132,24 @@ impl MirRuntime {
         exit_failures: &mut Vec<String>,
     ) -> Result<()> {
         while let Some((place, action)) = cleanup_stack.pop() {
-            if let Some(failure) =
-                self.run_cleanup_place(&place, &action, env, cancel_before_cleanup)?
-            {
-                exit_failures.push(failure);
+            match self.run_cleanup_place(&place, &action, env, cancel_before_cleanup) {
+                Ok(Some(failure)) => exit_failures.push(failure),
+                Ok(None) => {}
+                // A trapping exit fails the frame, and the exits below it
+                // still run, as they do after any other trap.
+                Err(error) => {
+                    let error = self.annotate_runtime_trap_once(error);
+                    env.loans.clear();
+                    return Err(self.unwind_cleanups_after_trap(cleanup_stack, env, error));
+                }
             }
         }
         Ok(())
     }
 
     /// Runs the frame's exit actions after a trap. The trap stays primary,
-    /// and each exit failure is attached to it as a note.
+    /// and each exit failure is attached to it as a note. An exit that traps
+    /// too cannot replace it, and every exit below that one still runs.
     fn unwind_cleanups_after_trap(
         &mut self,
         cleanup_stack: &mut CleanupStack,
@@ -4150,7 +4157,11 @@ impl MirRuntime {
         error: Diagnostic,
     ) -> Diagnostic {
         let mut exit_failures = Vec::new();
-        let _ = self.unwind_cleanups(cleanup_stack, env, true, &mut exit_failures);
+        while let Some((place, action)) = cleanup_stack.pop() {
+            if let Ok(Some(failure)) = self.run_cleanup_place(&place, &action, env, true) {
+                exit_failures.push(failure);
+            }
+        }
         exit_failures
             .into_iter()
             .fold(error, |error, failure| error.with_note(failure))

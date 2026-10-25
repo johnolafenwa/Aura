@@ -67,14 +67,14 @@ use crate::runtime_value::{
     wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_error,
     wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
     yield_now_with_runtime_scheduler, ArrayBinaryOp, ArrayDType, ArrayReduction, ArrayValue,
-    CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, DictEntries,
-    EnumVariantValue, FfiHandleValue, FileValue, FloatPowerWidth, FunctionValue, HttpListenerValue,
-    HttpResponseValue, InstanceValue, IntegerArithmeticMode, LightweightTaskFailureSignal,
-    MapValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue,
-    ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue,
-    RuntimeName, RuntimeSchedulerWakeReason, SendValueError, SetElements, SetValue,
-    TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
-    TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpSocketValue,
+    CancellationContext, ChannelValue, CleanupTrapSignal, ClosureCaptureValue, ClosureEnvironment,
+    DictEntries, EnumVariantValue, FfiHandleValue, FileValue, FloatPowerWidth, FunctionValue,
+    HttpListenerValue, HttpResponseValue, InstanceValue, IntegerArithmeticMode,
+    LightweightTaskFailureSignal, MapValue, ProcessChildValue, ProcessChildWaitStatus,
+    ProcessCompletedValue, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
+    RecvValueResult, RngValue, RuntimeName, RuntimeSchedulerWakeReason, SendValueError,
+    SetElements, SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus,
+    TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpSocketValue,
     UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
     DIRECT_RUNTIME_TYPE_FIELD, DIRECT_RUNTIME_TYPE_SEPARATOR,
 };
@@ -4236,6 +4236,27 @@ unsafe fn release_direct_cleanup_args(args: *mut i64, arg_count: usize) {
 
 fn drain_direct_cleanup_stack() {
     let key = direct_task_runtime_key();
+    let had_primary = with_direct_task_runtime_state_for_key(key, |state| {
+        state.primary_runtime_diagnostic.is_some()
+    });
+    if !drain_direct_cleanup_registrations(key) {
+        return;
+    }
+    // With no trap unwinding the task, as under cancellation, the first exit
+    // that trapped is the failure, once every exit has run.
+    if !had_primary {
+        let trapped = with_direct_task_runtime_state_for_key(key, |state| {
+            state.primary_runtime_diagnostic.take()
+        });
+        if let Some(diagnostic) = trapped {
+            emit_runtime_diagnostic_error(attach_direct_manager_exit_failures(diagnostic));
+        }
+    }
+}
+
+/// Runs the task's registered exits, innermost first. Returns `false` when
+/// a drain is already running further out.
+fn drain_direct_cleanup_registrations(key: u64) -> bool {
     let already_draining = with_direct_task_runtime_state_for_key(key, |state| {
         if state.cleanup_draining {
             true
@@ -4245,7 +4266,7 @@ fn drain_direct_cleanup_stack() {
         }
     });
     if already_draining {
-        return;
+        return false;
     }
     let _guard = DirectCleanupDrainGuard { key };
     let previous_depth = with_direct_task_runtime_state_for_key(key, |state| {
@@ -4288,12 +4309,50 @@ fn drain_direct_cleanup_stack() {
         }
         if thunk_ptr != 0 {
             let thunk: NativeThunk = unsafe { std::mem::transmute(thunk_ptr as usize) };
-            let result = unsafe { thunk(args as *const i64, arg_count) };
             unsafe {
-                aura_direct_release_value(result);
+                run_drained_cleanup_thunk(key, thunk, args, arg_count);
             }
         }
         drop(take_direct_cleanup_registration(id));
+    }
+    true
+}
+
+/// Runs one exit while the cleanups drain. An exit that traps unwinds back
+/// here with [`CleanupTrapSignal`]. The calls it left active are dropped, so
+/// the next exit starts at the drain's own depth, and the drain goes on:
+/// every registered exit still runs once.
+unsafe fn run_drained_cleanup_thunk(
+    key: u64,
+    thunk: NativeThunk,
+    args: *mut i64,
+    arg_count: usize,
+) {
+    let (returned_views, had_pending_sinks) =
+        with_direct_task_runtime_state_for_key(key, |state| {
+            (
+                state.returned_views.entries.len(),
+                state.pending_mutable_sinks.is_some(),
+            )
+        });
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        thunk(args as *const i64, arg_count)
+    }));
+    match outcome {
+        Ok(result) => unsafe {
+            aura_direct_release_value(result);
+        },
+        Err(payload) if payload.is::<CleanupTrapSignal>() => {
+            with_direct_task_runtime_state_for_key(key, |state| {
+                while state.frames_mut().pop_call() {}
+                state.returned_views.entries.truncate(returned_views);
+                if !had_pending_sinks {
+                    state.pending_mutable_sinks = None;
+                }
+                state.refresh_frame_flags();
+            });
+        }
+        Err(payload) => std::panic::resume_unwind(payload),
     }
 }
 
@@ -4389,9 +4448,13 @@ fn runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
     let mut diagnostic = diagnostic.into_runtime_trap();
     capture_direct_runtime_frames_once(&mut diagnostic);
     if direct_cleanup_is_draining() {
-        emit_runtime_diagnostic_error(attach_direct_manager_exit_failures(
-            direct_primary_runtime_diagnostic().unwrap_or(diagnostic),
-        ));
+        // An exit trapped while the cleanups drain. A trap already unwinding
+        // the task stays primary; otherwise this one becomes the failure. The
+        // drain runs the remaining exits either way.
+        with_direct_task_runtime_state(|state| {
+            state.primary_runtime_diagnostic.get_or_insert(diagnostic);
+        });
+        std::panic::panic_any(CleanupTrapSignal);
     }
     let _primary_guard = DirectPrimaryDiagnosticGuard::install(diagnostic.clone());
     drain_direct_cleanup_stack();

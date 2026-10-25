@@ -18866,6 +18866,80 @@ unsafe extern "C-unwind" fn direct_task_frame_trap(
     super::runtime_error_at(Span::new(4, 11), "child frame trap")
 }
 
+static DRAINED_CLEANUP_RUNS: AtomicUsize = AtomicUsize::new(0);
+
+unsafe extern "C-unwind" fn counting_cleanup_thunk(
+    _args: *const i64,
+    _arg_count: usize,
+) -> *mut OpaqueValue {
+    DRAINED_CLEANUP_RUNS.fetch_add(1, Ordering::SeqCst);
+    super::aura_direct_box_i64(0)
+}
+
+unsafe extern "C-unwind" fn trapping_cleanup_thunk(
+    _args: *const i64,
+    _arg_count: usize,
+) -> *mut OpaqueValue {
+    unsafe {
+        super::aura_direct_enter_call_with_frame(
+            6,
+            5,
+            b"/workspace/exit.au".as_ptr(),
+            b"/workspace/exit.au".len(),
+            b"Guard.__exit__".as_ptr(),
+            b"Guard.__exit__".len(),
+        );
+    }
+    super::runtime_error_at(Span::new(7, 9), "exit trap")
+}
+
+unsafe extern "C-unwind" fn cancelled_cleanup_thunk(
+    _args: *const i64,
+    _arg_count: usize,
+) -> *mut OpaqueValue {
+    panic::panic_any(TaskCancelledSignal)
+}
+
+#[test]
+fn native_runtime_drain_runs_every_exit_after_one_traps() {
+    let result = crate::runtime_value::run_lightweight_root_task(|| {
+        super::with_direct_task_runtime_scope(|| {
+            DRAINED_CLEANUP_RUNS.store(0, Ordering::SeqCst);
+            let counting = counting_cleanup_thunk as *const () as usize as i64;
+            let trapping = trapping_cleanup_thunk as *const () as usize as i64;
+            super::push_direct_cleanup_registration(counting, std::ptr::null_mut(), 0);
+            super::push_direct_cleanup_registration(trapping, std::ptr::null_mut(), 0);
+            super::push_direct_cleanup_registration(counting, std::ptr::null_mut(), 0);
+            let depth = super::with_direct_task_runtime_state(|state| state.call_depth());
+
+            let primary = super::DirectPrimaryDiagnosticGuard::install(Diagnostic::new("body"));
+            super::drain_direct_cleanup_stack();
+            drop(primary);
+
+            // Both exits around the trapping one ran, and the trapping exit's
+            // frame is gone.
+            assert_eq!(DRAINED_CLEANUP_RUNS.load(Ordering::SeqCst), 2);
+            super::with_direct_task_runtime_state(|state| {
+                assert!(state.cleanup_stack.is_empty());
+                assert!(!state.cleanup_draining);
+                assert_eq!(state.call_depth(), depth);
+            });
+
+            // Any other unwind still leaves the drain, and the registration
+            // stays with the task until it is reclaimed.
+            let cancelled = cancelled_cleanup_thunk as *const () as usize as i64;
+            let id = super::push_direct_cleanup_registration(cancelled, std::ptr::null_mut(), 0);
+            let payload = panic::catch_unwind(super::drain_direct_cleanup_stack)
+                .expect_err("cancellation should leave the drain");
+            assert!(payload.is::<TaskCancelledSignal>());
+            assert!(!super::direct_cleanup_is_draining());
+            assert!(super::take_direct_cleanup_registration(id).is_some());
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(result.expect("the drain should finish"), Value::Unit);
+}
+
 #[cfg(unix)]
 #[test]
 fn native_runtime_internal_diagnostic_channels_are_hidden_cloexec_and_one_shot() {

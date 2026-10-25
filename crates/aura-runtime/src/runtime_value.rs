@@ -5687,6 +5687,12 @@ pub fn current_lightweight_worker_index() -> Option<usize> {
 #[derive(Debug)]
 pub struct TaskCancelledSignal;
 
+/// Unwinds a native exit that trapped while the task's cleanups were
+/// draining back to the drain, which goes on to the next exit. The trap that
+/// started the drain stays primary.
+#[derive(Debug)]
+pub struct CleanupTrapSignal;
+
 fn task_panic_message(payload: &(dyn Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<String>() {
         message.clone()
@@ -5703,6 +5709,7 @@ fn install_lightweight_task_panic_hook() {
         panic::set_hook(Box::new(move |info| {
             if info.payload().is::<TaskCancelledSignal>()
                 || info.payload().is::<LightweightTaskFailureSignal>()
+                || info.payload().is::<CleanupTrapSignal>()
             {
                 return;
             }
