@@ -40,7 +40,7 @@ aura check app.au
 | `aura upgrade` | Download and run the verified installer to replace the compiler and bundled runtime with the latest published release. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
-| `aura version` / `aura --version` | Print the build channel and 12-hex-digit source commit. Release archives print `aura 0.7.0-preview (0123456789ab)`. Source builds print `aura 0.7.0-dev (0123456789ab)`. |
+| `aura version` / `aura --version` | Print the build channel and 12-hex-digit source commit. Release archives print `aura 0.7.1-preview (0123456789ab)`. Source builds print `aura 0.7.1-dev (0123456789ab)`. |
 
 MIR is Aura's mid-level intermediate representation. The editor query
 commands `signature-help`, `references`, `prepare-rename`, and `rename` are
@@ -153,7 +153,7 @@ build.
 
 ## Native Executable Profile
 
-Workspace release builds of Aura 0.7.0 use `opt-level=3`, fat LTO, one codegen
+Workspace release builds of Aura 0.7.1 use `opt-level=3`, fat LTO, one codegen
 unit, `debug=false`, and `strip="symbols"`. Panic unwinding stays enabled for
 the runtime's `extern "C-unwind"` boundaries. This profile reduces shipped
 compiler metadata. It does not strip the runtime archive's linkable symbols or

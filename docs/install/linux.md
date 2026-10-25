@@ -55,7 +55,7 @@ command -v aura
 aura --version
 ```
 
-The version begins with `aura 0.7.0-preview`.
+The version begins with `aura 0.7.1-preview`.
 
 ## 6. Run A Program
 
