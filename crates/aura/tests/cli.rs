@@ -101,6 +101,31 @@ fn reference_tool_runner_package_has_pinned_output_on_both_backends() {
                 "{}",
                 String::from_utf8_lossy(&build.stderr)
             );
+            // The agent splits into codegen units that threads write in
+            // parallel, and a second build links the same executable.
+            let again = temp.path().join("tool-runner-again");
+            let rebuild = Command::new(aura_bin())
+                .current_dir(temp.path())
+                .args(["build", "--backend", "direct", "-o"])
+                .arg(&again)
+                .arg("src/main.au")
+                .output()
+                .expect("rebuild reference package");
+            assert!(
+                rebuild.status.success(),
+                "{}",
+                String::from_utf8_lossy(&rebuild.stderr)
+            );
+            // On macOS, ld64 folds each object's temporary path into the
+            // executable's UUID and names the output file in its ad hoc
+            // signature, so only an ELF link can match byte for byte. The
+            // backend tests check that the units' objects match on every host.
+            if cfg!(target_os = "linux") {
+                assert!(
+                    fs::read(&binary).unwrap() == fs::read(&again).unwrap(),
+                    "two builds of the reference agent link different executables"
+                );
+            }
             generated_binary(&binary)
         };
         command.env("AURA_WORKERS", "2");

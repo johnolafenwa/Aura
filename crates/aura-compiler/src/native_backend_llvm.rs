@@ -4,7 +4,9 @@
 //! instruction list of this file's own, so the emitter's inspections and
 //! rewrites see the same instructions they built. `finish` then lowers the
 //! whole object to LLVM IR in one context, runs LLVM's `O3` pipeline, and
-//! writes the object.
+//! writes the object. `finish_units` splits a large object into codegen
+//! units first, and threads lower, optimize, and write one unit each, as
+//! `native_backend_llvm_units.rs` describes.
 //!
 //! Lowering keeps every value a 64-bit integer, as the emitter does:
 //! loads and stores turn the address into a pointer, and addresses turn
@@ -15,6 +17,7 @@
 //! callee in the object shares; the C convention uses the C ABI.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
 use inkwell::attributes::{Attribute, AttributeLoc};
@@ -32,7 +35,9 @@ use inkwell::values::{
     AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
     InstructionValue, IntValue, PhiValue, PointerValue,
 };
-use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
+use inkwell::{AddressSpace, FloatPredicate, GlobalVisibility, IntPredicate, OptimizationLevel};
+
+use units::{Partition, Placement};
 
 use super::{
     Blk, Call, CallConv, DataAddress, DataDescription, DataHandle, DataRef, DefineError, FloatCC,
@@ -55,6 +60,10 @@ const MEMORY_NONE: u64 = 0;
 /// The `branch_weights` of a branch to a cold block, against the other
 /// edge, as Clang weighs `__builtin_expect`.
 const COLD_BRANCH_WEIGHTS: (u64, u64) = (1, 2000);
+
+/// The stack of a thread that writes one unit, as large as a main
+/// thread's.
+const UNIT_THREAD_STACK: usize = 8 << 20;
 
 /// One object built with LLVM for the host.
 pub(super) struct LlvmModule {
@@ -100,16 +109,33 @@ impl LlvmModule {
 
 impl LlvmModule {
     /// The object as one verified LLVM module, before any pass runs.
+    #[cfg(test)]
     fn lower<'ctx>(
         &self,
         context: &'ctx Context,
         machine: &TargetMachine,
     ) -> Result<Module<'ctx>, String> {
-        let module = context.create_module("aura_direct");
-        module.set_source_file_name("aura_direct");
+        self.lower_unit(context, machine, &Partition::whole(self), 0)
+    }
+
+    /// One unit of `partition` as a verified LLVM module, before any pass
+    /// runs.
+    fn lower_unit<'ctx>(
+        &self,
+        context: &'ctx Context,
+        machine: &TargetMachine,
+        partition: &Partition,
+        unit: usize,
+    ) -> Result<Module<'ctx>, String> {
+        let name = match partition.units() {
+            1 => "aura_direct".to_string(),
+            _ => format!("aura_direct.{unit}"),
+        };
+        let module = context.create_module(&name);
+        module.set_source_file_name(&name);
         module.set_triple(&machine.get_triple());
         module.set_data_layout(&machine.get_target_data().get_data_layout());
-        ObjectLowerer::new(context, &module, self)?.lower_bodies(self)?;
+        ObjectLowerer::new(context, &module, self, partition, unit)?.lower_bodies(self)?;
         if let Err(error) = module.verify() {
             return Err(format!("LLVM rejected the generated module: {error}"));
         }
@@ -264,16 +290,75 @@ impl ModuleBackend for LlvmModule {
     }
 
     fn finish(self: Box<Self>) -> Result<Vec<u8>, String> {
-        self.object_for(&host_target_machine()?)
+        self.unit_object(
+            &host_target_machine()?,
+            &Partition::whole(&self),
+            0,
+            super::optimizes(),
+        )
+    }
+
+    fn finish_units(self: Box<Self>) -> Result<Vec<Vec<u8>>, String> {
+        let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+        self.unit_objects(&Partition::split(&self), threads)
     }
 }
 
 impl LlvmModule {
     /// The object for `machine`: lowered, optimized, and written.
+    #[cfg(test)]
     fn object_for(&self, machine: &TargetMachine) -> Result<Vec<u8>, String> {
+        self.unit_object(machine, &Partition::whole(self), 0, super::optimizes())
+    }
+
+    /// The objects of every unit of `partition`, in unit order, written
+    /// by up to `threads` threads. Threads take the units largest first,
+    /// and each writes its unit in its own LLVM context, so the bytes do
+    /// not depend on which thread wrote them or how many ran.
+    fn unit_objects(&self, partition: &Partition, threads: usize) -> Result<Vec<Vec<u8>>, String> {
+        // The optimizer setting is this thread's, as a test sets it.
+        let optimize = super::optimizes();
+        let order = partition.units_by_weight();
+        let next = AtomicUsize::new(0);
+        let objects = (0..partition.units())
+            .map(|_| OnceLock::new())
+            .collect::<Vec<OnceLock<Result<Vec<u8>, String>>>>();
+        let work = || {
+            while let Some(&unit) = order.get(next.fetch_add(1, Ordering::Relaxed)) {
+                let object = host_target_machine()
+                    .and_then(|machine| self.unit_object(&machine, partition, unit, optimize));
+                let _ = objects[unit].set(object);
+            }
+        };
+        std::thread::scope(|scope| {
+            // This thread works too, so the units are written even when no
+            // other thread starts.
+            for _ in 1..threads.min(partition.units()) {
+                let _ = std::thread::Builder::new()
+                    .name("aura-llvm-unit".to_string())
+                    .stack_size(UNIT_THREAD_STACK)
+                    .spawn_scoped(scope, work);
+            }
+            work();
+        });
+        objects
+            .into_iter()
+            .map(|object| object.into_inner().expect("every unit is written"))
+            .collect()
+    }
+
+    /// One unit's object for `machine`: lowered, optimized unless
+    /// `optimize` is off, and written.
+    fn unit_object(
+        &self,
+        machine: &TargetMachine,
+        partition: &Partition,
+        unit: usize,
+        optimize: bool,
+    ) -> Result<Vec<u8>, String> {
         let context = Context::create();
-        let module = self.lower(&context, machine)?;
-        if super::optimizes() {
+        let module = self.lower_unit(&context, machine, partition, unit)?;
+        if optimize {
             if let Err(error) =
                 module.run_passes(PASS_PIPELINE, machine, PassBuilderOptions::create())
             {
@@ -1232,13 +1317,19 @@ struct ObjectLowerer<'ctx, 'm> {
     module: &'m Module<'ctx>,
     functions: Vec<FunctionValue<'ctx>>,
     globals: Vec<GlobalValue<'ctx>>,
+    /// The functions whose bodies this unit lowers, in declaration order.
+    bodies: Vec<usize>,
 }
 
 impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
+    /// Declares every function and data object of `object` in `module`, as
+    /// `unit` of `partition` holds it.
     fn new(
         context: &'ctx Context,
         module: &'m Module<'ctx>,
         object: &LlvmModule,
+        partition: &Partition,
+        unit: usize,
     ) -> Result<Self, String> {
         let uwtable = context
             .create_enum_attribute(Attribute::get_named_enum_kind_id("uwtable"), UWTABLE_ASYNC);
@@ -1250,21 +1341,35 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
             });
         let always_inline =
             context.create_enum_attribute(Attribute::get_named_enum_kind_id("alwaysinline"), 0);
+        let mut bodies = Vec::new();
         let functions = object
             .functions
             .iter()
-            .map(|decl| {
-                let linkage = match (decl.linkage, decl.body.is_some()) {
-                    (Linkage::Local, true) => LlvmLinkage::Internal,
-                    _ => LlvmLinkage::External,
+            .enumerate()
+            .map(|(index, decl)| {
+                let local = decl.linkage == Linkage::Local;
+                let placement = partition.function(unit, index);
+                let (linkage, hidden) = match placement {
+                    Placement::Private if local => (LlvmLinkage::Internal, false),
+                    Placement::Private => (LlvmLinkage::External, false),
+                    Placement::Shared => (LlvmLinkage::External, local),
+                    Placement::Copy => (LlvmLinkage::AvailableExternally, local),
+                    // A body here means another unit defines it.
+                    Placement::Elsewhere => (LlvmLinkage::External, local && decl.body.is_some()),
                 };
                 let function = module.add_function(
                     &decl.name,
                     function_type(context, &decl.signature),
                     Some(linkage),
                 );
-                if decl.body.is_some() {
+                if hidden {
+                    function
+                        .as_global_value()
+                        .set_visibility(GlobalVisibility::Hidden);
+                }
+                if placement != Placement::Elsewhere {
                     function.add_attribute(AttributeLoc::Function, uwtable);
+                    bodies.push(index);
                 }
                 if decl.task_invariant {
                     for attribute in &task_invariant {
@@ -1280,17 +1385,30 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
         // Every global exists before any initializer, since data may hold
         // the address of data declared after it.
         let mut globals = Vec::new();
-        for decl in &object.data {
+        let mut initialized = Vec::new();
+        for (index, decl) in object.data.iter().enumerate() {
+            let local = decl.linkage == Linkage::Local;
+            let placement = partition.data(unit, index);
             let global = match &decl.contents {
                 Some(contents) => {
                     let fields = data_fields(&decl.name, contents)?;
                     let global = module.add_global(data_type(context, &fields), None, &decl.name);
                     global.set_constant(!decl.writable);
-                    global.set_linkage(match decl.linkage {
-                        Linkage::Local => LlvmLinkage::Internal,
-                        _ => LlvmLinkage::External,
-                    });
+                    let (linkage, hidden) = match placement {
+                        Placement::Private if local => (LlvmLinkage::Internal, false),
+                        Placement::Private => (LlvmLinkage::External, false),
+                        Placement::Shared => (LlvmLinkage::External, local),
+                        Placement::Copy => (LlvmLinkage::AvailableExternally, local),
+                        Placement::Elsewhere => (LlvmLinkage::External, local),
+                    };
+                    global.set_linkage(linkage);
+                    if hidden {
+                        global.set_visibility(GlobalVisibility::Hidden);
+                    }
                     global.set_alignment(contents.align.unwrap_or(1) as u32);
+                    if placement != Placement::Elsewhere {
+                        initialized.push((index, fields));
+                    }
                     global
                 }
                 None => {
@@ -1307,11 +1425,12 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
             module,
             functions,
             globals,
+            bodies,
         };
-        for (decl, global) in object.data.iter().zip(&lowerer.globals) {
-            if let Some(contents) = &decl.contents {
-                let fields = data_fields(&decl.name, contents)?;
-                global.set_initializer(&lowerer.data_initializer(contents, &fields));
+        for (index, fields) in initialized {
+            if let Some(contents) = &object.data[index].contents {
+                lowerer.globals[index]
+                    .set_initializer(&lowerer.data_initializer(contents, &fields));
             }
         }
         Ok(lowerer)
@@ -1347,9 +1466,9 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
     }
 
     fn lower_bodies(&self, object: &LlvmModule) -> Result<(), String> {
-        for (index, decl) in object.functions.iter().enumerate() {
-            if let Some(body) = &decl.body {
-                FunctionLowerer::new(self, self.functions[index], body).lower()?;
+        for index in &self.bodies {
+            if let Some(body) = &object.functions[*index].body {
+                FunctionLowerer::new(self, self.functions[*index], body).lower()?;
             }
         }
         Ok(())
@@ -2111,6 +2230,9 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
         Ok(built(value)?.into())
     }
 }
+
+#[path = "native_backend_llvm_units.rs"]
+mod units;
 
 #[cfg(test)]
 #[path = "native_backend_llvm_tests.rs"]

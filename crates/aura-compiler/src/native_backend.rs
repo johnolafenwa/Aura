@@ -283,8 +283,13 @@ pub(crate) trait ModuleBackend {
         body: FunctionBody<'_>,
     ) -> Result<(), DefineError>;
 
-    /// The object file's bytes.
+    /// The object file's bytes, as one object.
     fn finish(self: Box<Self>) -> Result<Vec<u8>, String>;
+
+    /// The object files' bytes. A large module splits into several
+    /// objects, which the code generator writes in parallel; a small one
+    /// writes the one object `finish` would.
+    fn finish_units(self: Box<Self>) -> Result<Vec<Vec<u8>>, String>;
 }
 
 /// Builds one function body: blocks, variables, stack slots, and

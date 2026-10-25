@@ -2,10 +2,11 @@ use inkwell::context::Context;
 use inkwell::targets::{InitializationConfig, Target, TargetTriple};
 use object::{Object, ObjectSection, ObjectSymbol};
 
+use super::units::{Partition, Placement};
 use super::{host_target_machine, target_machine, LlvmModule};
 use crate::native_backend::{
     types, CallConv, DataDescription, DefineError, FuncHandle, FunctionBackend, IntCC, Linkage,
-    ModuleBackend, ScalarType, Signature, TrapCode, Var,
+    MemFlags, ModuleBackend, ScalarType, Signature, TrapCode, Var,
 };
 
 fn signature(call_conv: CallConv, params: &[ScalarType], returns: &[ScalarType]) -> Signature {
@@ -621,4 +622,382 @@ fn branches_to_cold_blocks_carry_branch_weights() {
         "{ir}"
     );
     assert_eq!(ir.matches("!prof").count(), 2, "{ir}");
+}
+
+/// The handles of `large_module`.
+struct LargeModule {
+    module: LlvmModule,
+    count: usize,
+}
+
+/// A module over the split weight. `count` local functions `step_i`, in
+/// order, each add one `length` times, call the small `tiny` and the
+/// inline-marked `bump`, read the constant `table`, write the writable
+/// `counter`, and call the next step. The exported `entry` calls the first.
+fn large_module(count: usize, length: usize) -> LargeModule {
+    let mut module = module();
+    let unary = signature(CallConv::C, &[types::I64], &[types::I64]);
+    let tiny = define(&mut module, "tiny", Linkage::Local, &unary, |builder| {
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        let value = builder.block_params(entry)[0];
+        let next = builder.iadd_imm(value, 1);
+        builder.return_(&[next]);
+    });
+    // Larger than a copy, but marked for inlining.
+    let bump = define(&mut module, "bump", Linkage::Local, &unary, |builder| {
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        let mut value = builder.block_params(entry)[0];
+        for _ in 0..super::units::COPY_WEIGHT {
+            value = builder.bxor_imm(value, 3);
+        }
+        builder.return_(&[value]);
+    });
+    module.mark_inline(bump);
+    let table = module.declare_data("table", Linkage::Local, false).unwrap();
+    module
+        .define_data(table, DataDescription::new(7u64.to_le_bytes().to_vec()))
+        .unwrap();
+    let counter = module
+        .declare_data("counter", Linkage::Local, true)
+        .unwrap();
+    module
+        .define_data(counter, DataDescription::new(vec![0; 8]))
+        .unwrap();
+    let steps = (0..count)
+        .map(|index| {
+            module
+                .declare_function(&format!("step_{index}"), Linkage::Local, &unary)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    for (index, step) in steps.iter().enumerate() {
+        let next = steps.get(index + 1).copied();
+        module
+            .define_function(
+                *step,
+                &unary,
+                Box::new(move |builder| {
+                    let entry = builder.create_block();
+                    builder.append_block_params_for_function_params(entry);
+                    builder.switch_to_block(entry);
+                    let mut value = builder.block_params(entry)[0];
+                    for _ in 0..length {
+                        value = builder.iadd_imm(value, 1);
+                    }
+                    let tiny = builder.import_function(tiny);
+                    let bump = builder.import_function(bump);
+                    value = builder.call(tiny, &[value]).results[0];
+                    value = builder.call(bump, &[value]).results[0];
+                    let table = builder.import_data(table);
+                    let table = builder.symbol_value(types::I64, table);
+                    let read = builder.load(types::I64, MemFlags::trusted(), table, 0);
+                    let counter = builder.import_data(counter);
+                    let counter = builder.symbol_value(types::I64, counter);
+                    builder.store(MemFlags::trusted(), value, counter, 0);
+                    value = builder.iadd(value, read);
+                    if let Some(next) = next {
+                        let next = builder.import_function(next);
+                        value = builder.call(next, &[value]).results[0];
+                    }
+                    builder.return_(&[value]);
+                    builder.verify()
+                }),
+            )
+            .unwrap();
+    }
+    let first = steps[0];
+    define(
+        &mut module,
+        "entry",
+        Linkage::Export,
+        &unary,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            let value = builder.block_params(entry)[0];
+            let first = builder.import_function(first);
+            let result = builder.call(first, &[value]).results[0];
+            builder.return_(&[result]);
+        },
+    );
+    LargeModule { module, count }
+}
+
+/// The index of the declared function `name`.
+fn function_index(module: &LlvmModule, name: &str) -> usize {
+    match module.names[name] {
+        super::Symbol::Function(index) => index as usize,
+        super::Symbol::Data(_) => panic!("{name} is data"),
+    }
+}
+
+/// The index of the declared data object `name`.
+fn data_index(module: &LlvmModule, name: &str) -> usize {
+    match module.names[name] {
+        super::Symbol::Data(index) => index as usize,
+        super::Symbol::Function(_) => panic!("{name} is a function"),
+    }
+}
+
+/// The unit that defines function `name`.
+fn defining_unit(partition: &Partition, module: &LlvmModule, name: &str) -> usize {
+    let index = function_index(module, name);
+    (0..partition.units())
+        .find(|unit| {
+            matches!(
+                partition.function(*unit, index),
+                Placement::Private | Placement::Shared
+            )
+        })
+        .unwrap_or_else(|| panic!("no unit defines {name}"))
+}
+
+#[test]
+fn unit_counts_follow_the_recorded_weight_alone() {
+    use super::units::{unit_count, MAX_UNITS, SPLIT_WEIGHT, UNIT_WEIGHT};
+    assert_eq!(unit_count(0), 1);
+    assert_eq!(unit_count(SPLIT_WEIGHT - 1), 1);
+    assert_eq!(
+        unit_count(SPLIT_WEIGHT),
+        SPLIT_WEIGHT.div_ceil(UNIT_WEIGHT).max(2)
+    );
+    assert_eq!(unit_count(UNIT_WEIGHT * 5), 5);
+    assert_eq!(unit_count(UNIT_WEIGHT * MAX_UNITS * 10), MAX_UNITS);
+}
+
+#[test]
+fn small_modules_write_the_one_object_finish_writes() {
+    let partition = Partition::split(&two_function_module());
+    assert_eq!(partition.units(), 1);
+    let units = Box::new(two_function_module())
+        .finish_units()
+        .expect("the objects should write");
+    let whole = Box::new(two_function_module())
+        .finish()
+        .expect("the object should write");
+    assert_eq!(units, vec![whole]);
+}
+
+#[test]
+fn large_modules_split_into_runs_of_consecutive_functions() {
+    let LargeModule { module, count } = large_module(40, 250);
+    let partition = Partition::split(&module);
+    assert!(partition.units() > 2, "{} units", partition.units());
+    // Each unit defines one run of functions, in declaration order.
+    let units = (0..count)
+        .map(|index| defining_unit(&partition, &module, &format!("step_{index}")))
+        .collect::<Vec<_>>();
+    assert!(units.windows(2).all(|pair| pair[0] <= pair[1]), "{units:?}");
+    assert_eq!(units.first(), Some(&0));
+    assert_eq!(units.last(), Some(&(partition.units() - 1)));
+    // Data belongs to the first unit that reads or writes it.
+    for name in ["table", "counter"] {
+        let index = data_index(&module, name);
+        assert_eq!(partition.data(0, index), Placement::Shared, "{name}");
+    }
+    // The largest units come first.
+    let mut order = partition.units_by_weight();
+    assert_eq!(order.len(), partition.units());
+    order.sort_unstable();
+    assert_eq!(order, (0..partition.units()).collect::<Vec<_>>());
+}
+
+#[test]
+fn a_function_larger_than_a_unit_leaves_no_empty_unit() {
+    let mut module = module();
+    let unary = signature(CallConv::C, &[types::I64], &[types::I64]);
+    for (name, length) in [
+        ("large", super::units::UNIT_WEIGHT * 3),
+        ("after", 10),
+        ("last", 10),
+    ] {
+        define(&mut module, name, Linkage::Export, &unary, move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            let mut value = builder.block_params(entry)[0];
+            for _ in 0..length {
+                value = builder.iadd_imm(value, 1);
+            }
+            builder.return_(&[value]);
+        });
+    }
+    let partition = Partition::split(&module);
+    assert_eq!(partition.units(), 2);
+    assert_eq!(defining_unit(&partition, &module, "large"), 0);
+    assert_eq!(defining_unit(&partition, &module, "after"), 1);
+    assert_eq!(defining_unit(&partition, &module, "last"), 1);
+}
+
+#[test]
+fn units_reach_each_other_through_hidden_symbols_and_copy_small_code() {
+    let LargeModule { module, count } = large_module(40, 250);
+    let partition = Partition::split(&module);
+    let machine = host_target_machine().expect("the host target machine should exist");
+    let last = partition.units() - 1;
+    let irs = (0..partition.units())
+        .map(|unit| {
+            let context = Context::create();
+            let lowered = module
+                .lower_unit(&context, &machine, &partition, unit)
+                .expect("the unit should lower and verify");
+            lowered.print_to_string().to_string()
+        })
+        .collect::<Vec<_>>();
+    // The first step of the last unit is called from the unit before it.
+    let first_of_last = (0..count)
+        .find(|index| defining_unit(&partition, &module, &format!("step_{index}")) == last)
+        .unwrap();
+    let shared = format!("step_{first_of_last}");
+    let caller = format!("step_{}", first_of_last - 1);
+    let caller_unit = defining_unit(&partition, &module, &caller);
+    assert!(
+        irs[last].contains(&format!("define hidden i64 @{shared}(")),
+        "{}",
+        irs[last]
+    );
+    assert!(
+        irs[caller_unit].contains(&format!("declare hidden i64 @{shared}(")),
+        "{}",
+        irs[caller_unit]
+    );
+    // A step that only its own unit calls stays internal.
+    let private = format!("step_{}", first_of_last + 1);
+    assert!(
+        irs[last].contains(&format!("define internal i64 @{private}(")),
+        "{}",
+        irs[last]
+    );
+    assert_eq!(
+        partition.function(last, function_index(&module, &private)),
+        Placement::Private
+    );
+    // The small function and the inline one are copied into the other
+    // units, and constant data too. Writable data never is.
+    assert!(irs[0].contains("define hidden i64 @tiny("), "{}", irs[0]);
+    assert!(irs[0].contains("@table = hidden constant"), "{}", irs[0]);
+    assert!(irs[0].contains("@counter = hidden global"), "{}", irs[0]);
+    for ir in &irs[1..] {
+        assert!(
+            ir.contains("define available_externally hidden i64 @tiny("),
+            "{ir}"
+        );
+        assert!(
+            ir.contains("define available_externally hidden i64 @bump("),
+            "{ir}"
+        );
+        assert!(
+            ir.contains("@table = available_externally hidden constant"),
+            "{ir}"
+        );
+        assert!(ir.contains("@counter = external hidden global"), "{ir}");
+    }
+    assert_eq!(
+        partition.function(last, function_index(&module, "tiny")),
+        Placement::Copy
+    );
+    assert_eq!(
+        partition.data(last, data_index(&module, "counter")),
+        Placement::Elsewhere
+    );
+}
+
+/// Every unit object's symbols, by name: whether it defines each and in
+/// which scope.
+fn unit_symbols(objects: &[Vec<u8>]) -> Vec<Vec<(String, bool, object::SymbolScope)>> {
+    objects
+        .iter()
+        .map(|bytes| {
+            let object = object::File::parse(bytes.as_slice()).expect("the object should parse");
+            object
+                .symbols()
+                .filter_map(|symbol| {
+                    let name = symbol.name().ok()?.trim_start_matches('_').to_string();
+                    (name == "entry"
+                        || name == "tiny"
+                        || name == "bump"
+                        || name == "table"
+                        || name == "counter"
+                        || name.starts_with("step"))
+                    .then(|| (name, !symbol.is_undefined(), symbol.scope()))
+                })
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn unit_objects_join_at_link_time_whatever_the_thread_count() {
+    let LargeModule { module, count } = large_module(40, 250);
+    let partition = Partition::split(&module);
+    let one_thread = module
+        .unit_objects(&partition, 1)
+        .expect("the objects should write");
+    let four_threads = module
+        .unit_objects(&partition, 4)
+        .expect("the objects should write");
+    assert_eq!(one_thread.len(), partition.units());
+    assert_eq!(one_thread, four_threads);
+    let finished = Box::new(large_module(count, 250).module)
+        .finish_units()
+        .expect("the objects should write");
+    assert_eq!(finished, one_thread);
+
+    let symbols = unit_symbols(&one_thread);
+    let defined = |name: &str| {
+        symbols
+            .iter()
+            .flatten()
+            .filter(|(symbol, defined, _)| symbol == name && *defined)
+            .map(|(_, _, scope)| *scope)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(defined("entry"), vec![object::SymbolScope::Dynamic]);
+    // Copies are gone: the owner alone defines the small function and the
+    // constant data, as hidden symbols the other units reach.
+    for name in ["tiny", "table", "counter"] {
+        assert_eq!(defined(name), vec![object::SymbolScope::Linkage], "{name}");
+    }
+    // Each symbol a unit leaves undefined, another unit defines once.
+    for (name, _, _) in symbols.iter().flatten().filter(|(_, defined, _)| !defined) {
+        assert_eq!(defined(name).len(), 1, "{name}");
+    }
+}
+
+#[test]
+fn unoptimized_unit_objects_keep_every_function() {
+    let LargeModule { module, count } = large_module(40, 250);
+    let partition = Partition::split(&module);
+    let objects = crate::native_backend::without_optimization(|| {
+        module
+            .unit_objects(&partition, 4)
+            .expect("the objects should write")
+    });
+    let symbols = unit_symbols(&objects);
+    for index in 0..count {
+        let name = format!("step_{index}");
+        assert_eq!(
+            symbols
+                .iter()
+                .flatten()
+                .filter(|(symbol, defined, _)| *symbol == name && *defined)
+                .count(),
+            1,
+            "{name}"
+        );
+    }
+    // The inline function's copies are dropped unoptimized too.
+    assert_eq!(
+        symbols
+            .iter()
+            .flatten()
+            .filter(|(symbol, defined, _)| symbol == "bump" && *defined)
+            .count(),
+        1
+    );
 }

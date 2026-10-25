@@ -13799,6 +13799,71 @@ fn direct_objects_are_identical_across_repeated_builds() {
     );
 }
 
+/// A program of `count` functions that call the next, large enough to
+/// split into several codegen units.
+fn many_function_program(count: usize) -> String {
+    let mut source = String::new();
+    for index in 0..count {
+        let next = if index + 1 < count {
+            format!("step_{}(value + {index})", index + 1)
+        } else {
+            "value".to_string()
+        };
+        source.push_str(&format!(
+            "def step_{index}(value: int64) -> int64:\n    mut total = value\n    for item in [1, 2, 3]:\n        total = total + item * {index}\n    print(f\"step {index} {{total}}\")\n    return total + {next}\n\n"
+        ));
+    }
+    source.push_str("def main():\n    print(step_0(1))\n");
+    source
+}
+
+#[test]
+fn large_programs_emit_several_objects_and_small_programs_one() {
+    let small = lower_source_to_mir("def main():\n    print(\"hello\")\n")
+        .expect("hello world should lower");
+    let objects = super::emit_host_objects_with_metadata(&small, "<aura>", "")
+        .expect("hello world should emit");
+    assert_eq!(
+        objects,
+        vec![emit_host_object(&small).expect("hello world should emit")]
+    );
+
+    let large =
+        lower_source_to_mir(&many_function_program(40)).expect("the large program should lower");
+    let objects = super::emit_host_objects_with_metadata(&large, "<aura>", "")
+        .expect("the large program should emit");
+    assert!(objects.len() > 1, "{} objects", objects.len());
+    // The entry point is defined once, and each unit defines its own run
+    // of the program's functions.
+    let mut defined = BTreeSet::new();
+    let mut entries = 0;
+    for bytes in &objects {
+        let object = object::File::parse(bytes.as_slice()).expect("each object should parse");
+        entries += object
+            .symbols()
+            .filter(|symbol| {
+                symbol.section_index().is_some()
+                    && symbol
+                        .name()
+                        .is_ok_and(|name| name.trim_start_matches('_') == "main")
+            })
+            .count();
+        let functions = object_defined_aura_functions(bytes);
+        assert!(!functions.is_empty());
+        assert!(
+            defined.is_disjoint(&functions),
+            "{:?}",
+            defined.intersection(&functions).collect::<Vec<_>>()
+        );
+        defined.extend(functions);
+    }
+    assert_eq!(entries, 1);
+    // A repeated build writes the same objects.
+    let again = super::emit_host_objects_with_metadata(&large, "<aura>", "")
+        .expect("a repeated build should emit");
+    assert_eq!(again, objects);
+}
+
 /// Emits `main` of `module` after `forge` changes its first `print` call,
 /// without the shared validator, so the emitter's own guards are reached.
 fn define_main_with_forged_print(

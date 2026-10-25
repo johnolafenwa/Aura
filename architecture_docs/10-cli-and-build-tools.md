@@ -109,9 +109,10 @@ and silently stop protecting MIR behavior.
 Every build uses the direct backend. Aura:
 
 1. checks and lowers to MIR
-2. asks `emit_host_native_object_with_metadata` for object bytes
+2. asks `emit_host_native_objects_with_metadata` for object bytes, one
+   object per codegen unit
 3. ensures the Aura runtime static library exists
-4. writes temporary object/runtime files
+4. writes temporary object/runtime files, the objects in unit order
 5. invokes the host C compiler/linker
 6. produces the final executable
 
