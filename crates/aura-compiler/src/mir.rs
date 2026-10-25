@@ -16223,6 +16223,23 @@ impl<'a> Lowerer<'a> {
                 for (index, subpattern) in pattern.subpatterns.iter().enumerate() {
                     self.switch_to(next_block);
                     let payload_ty = payload_types[index].clone();
+                    let subpattern_success = if index + 1 == pattern.subpatterns.len() {
+                        success_block
+                    } else {
+                        self.new_block("match_payload")
+                    };
+                    // A consumed payload that only binds or is ignored needs
+                    // no test: the arm moves it out when it runs, so reading
+                    // a copy here would only build a box to release.
+                    if options.consume_payloads
+                        && !options.collect_writeback
+                        && !pattern_requires_runtime_test(subpattern)
+                    {
+                        self.register_consuming_pattern_bindings(subpattern, &payload_ty);
+                        self.terminate(Terminator::Goto(self.label(subpattern_success)));
+                        next_block = subpattern_success;
+                        continue;
+                    }
                     let payload_target = if options.typed_payload_views {
                         let Operand::Place(root) = &scrutinee else {
                             unreachable!("typed enum patterns use captured places");
@@ -16239,11 +16256,6 @@ impl<'a> Lowerer<'a> {
                             },
                         });
                         target
-                    };
-                    let subpattern_success = if index + 1 == pattern.subpatterns.len() {
-                        success_block
-                    } else {
-                        self.new_block("match_payload")
                     };
                     let child_failure = self.pattern_failure_cleanup(failure_block, first_loan);
                     if let Some(writeback) = self.lower_pattern(

@@ -6898,6 +6898,108 @@ fn dynamic_json_runtime_conversion_round_trips_every_variant_and_preserves_objec
 }
 
 #[test]
+fn flat_tuples_clone_like_their_elements() {
+    let pair = Value::Tuple(TupleValue {
+        element_types: vec![Type::named("str"), Type::named("json.Value")],
+        elements: vec![
+            Value::String("city".to_string()),
+            Value::EnumVariant(EnumVariantValue {
+                enum_name: "json.Value".into(),
+                variant_name: "String".into(),
+                payloads: vec![Value::String("Lagos".to_string())],
+            }),
+        ],
+    });
+    assert_eq!(
+        super::try_clone_array_containing_value(&pair).unwrap(),
+        pair
+    );
+    // A tuple holding a collection still goes through the full copy.
+    let nested = Value::Tuple(TupleValue {
+        element_types: vec![Type::named("list[int64]")],
+        elements: vec![Value::Vec(VecValue {
+            element_type: Type::named("int64"),
+            elements: vec![Value::Int(IntegerValue::from_i64(1))].into(),
+            str_view: Default::default(),
+        })],
+    });
+    assert_eq!(
+        super::try_clone_array_containing_value(&nested).unwrap(),
+        nested
+    );
+}
+
+#[test]
+fn dynamic_json_parse_keeps_short_shallow_sources_on_the_caller() {
+    fn parse(source: &str) -> Value {
+        super::evaluate_host_builtin("json::parse", vec![Value::String(source.to_string())])
+            .unwrap_or_else(|error| panic!("json::parse should return a Result: {error}"))
+    }
+    fn on_service(source: &str) -> Value {
+        let (owned, reservation) =
+            super::prepare_json_codec_source(|| super::clone_json_codec_source(source))
+                .expect("the codec service should admit the source");
+        super::json_parse_owned_to_runtime(owned, reservation)
+            .expect("the codec service should return a Result")
+    }
+
+    let depth = super::JSON_INLINE_PARSE_MAX_DEPTH;
+    let shallow = format!("{}1{}", "[".repeat(depth), "]".repeat(depth));
+    let deep = format!("{}1{}", "[".repeat(depth + 1), "]".repeat(depth + 1));
+    let long = format!("\"{}\"", "a".repeat(super::JSON_INLINE_PARSE_MAX_BYTES));
+    let document = "{\"name\": \"Ada\", \"age\": 36, \"tags\": [\"x\", null], \"ok\": true}";
+    let invalid = "{\"name\": }";
+
+    for (source, inline) in [
+        (document, true),
+        (shallow.as_str(), true),
+        (invalid, true),
+        (deep.as_str(), false),
+        (long.as_str(), false),
+    ] {
+        super::reset_json_codec_source_clone_count();
+        let parsed = parse(source);
+        assert_eq!(
+            super::json_codec_source_clone_count(),
+            usize::from(!inline),
+            "only a long or deep source should be copied for the codec service"
+        );
+        assert_eq!(
+            parsed,
+            on_service(source),
+            "the caller and the service should agree on {source:.40}"
+        );
+    }
+}
+
+#[test]
+fn dynamic_json_inline_parse_fits_in_half_the_smallest_task_stack() {
+    let depth = super::JSON_INLINE_PARSE_MAX_DEPTH;
+    let mut source = String::new();
+    for _ in 0..depth / 2 {
+        source.push_str("{\"a\": [");
+    }
+    source.push_str("\"leaf\"");
+    for _ in 0..depth / 2 {
+        source.push_str("]}");
+    }
+    let stack = usize::try_from(aura_core::task::MIN_TASK_STACK_BYTES / 2)
+        .expect("the task stack size fits in usize");
+    let parsed = std::thread::Builder::new()
+        .stack_size(stack)
+        .spawn(move || {
+            super::json_parse_inline(&source)
+                .expect("the source is short and shallow enough to parse inline")
+                .into_runtime()
+                .is_ok()
+        })
+        .expect("the parse thread should start")
+        .join()
+        .expect("the inline parse should not overflow the stack");
+    assert!(parsed);
+}
+
+#[test]
 fn dynamic_json_parse_runtime_materialization_allocation_failure_is_au4005() {
     let error = super::with_json_runtime_allocation_budget(0, || {
         super::evaluate_host_builtin("json::parse", vec![Value::String("[null]".to_string())])
@@ -17582,9 +17684,13 @@ fn websocket_handshake_rejections_are_observable_on_both_transport_roles() {
     malformed_client
         .write_all(b"not an HTTP websocket request\r\n\r\n")
         .expect("write malformed handshake");
-    malformed_client
-        .shutdown(std::net::Shutdown::Both)
-        .expect("close malformed client");
+    match malformed_client.shutdown(std::net::Shutdown::Both) {
+        Ok(()) => {}
+        // The server may close the rejected connection first, and macOS then
+        // reports `ENOTCONN` for the client's shutdown.
+        Err(error) if error.kind() == io::ErrorKind::NotConnected => {}
+        Err(error) => panic!("close malformed client: {error:?}"),
+    }
     accepting.join().expect("malformed accept worker");
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind rejecting server");

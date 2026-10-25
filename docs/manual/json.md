@@ -246,9 +246,11 @@ budget, traps with `AU4005`. These are not input errors and never become a
 
 ### The JSON Codec Service
 
-`json.parse` uses a recursive parser from a dependency. That parser runs on
-Aura's dedicated JSON codec service, not on a lightweight task's coroutine
-stack.
+`json.parse` uses a recursive parser from a dependency. A source of at most
+16 KiB that nests at most 8 arrays or objects is parsed on the calling task,
+where that recursion fits on the smallest task stack. Every other source runs
+on Aura's dedicated JSON codec service, not on a lightweight task's coroutine
+stack. Results and diagnostics are the same either way.
 
 - The service is global to the process. It is separate from the protocol pool
   and the general blocking-I/O pool.
@@ -299,9 +301,9 @@ argument. Consuming accessors move one payload out of the value, or consume
 the value when it does not match.
 
 Parsing and dumping are synchronous calls with visible effects. Argument and
-receiver expressions evaluate in source order, as at any call site. Once a
-`json.parse` call is admitted to the codec service, cancellation does not
-abandon the job. The call waits for its result, and the task sees the
+receiver expressions evaluate in source order, as at any call site. A parse on
+the calling task runs to completion. Once a `json.parse` call is admitted to
+the codec service, cancellation does not abandon the job. The call waits for its result, and the task sees the
 cancellation at its next ordinary cancellation point.
 
 There is no global mutable parser configuration, serializer setting, or
@@ -529,10 +531,11 @@ The MIR runtime and the direct native backend share the same behavior for:
 For the same input or value, both backends must produce the same Aura result
 and the same dump bytes.
 
-Both backends use the same bounded codec service for `json.parse`. The direct
-backend holds read access to the value table only while it validates and
-copies the shared source str. It releases that access before it waits for the
-service to admit or finish the job.
+Both backends parse short, shallow sources on the calling task and use the
+same bounded codec service for the rest. The direct backend holds read access
+to the value table only while it validates and copies the shared source str
+for the service. It releases that access before it waits for the service to
+admit or finish the job.
 
 Runtime, direct-codegen, analysis, language-server, fixture, and executable
 reference tests cover this surface on both backends.
@@ -567,6 +570,7 @@ The fixed limits are:
 
 The codec service for `json.parse` admits two operations across the process.
 Its two 2 MiB-stack workers start lazily and live until the process exits.
+Sources of at most 16 KiB and 8 levels of nesting do not use it.
 Aura 0.7 has no API to shut down, join, size, or configure the service. The
 service capacity does not apply to `json.is_valid`, `json.parse_string_map`,
 or `json.stringify_map`.

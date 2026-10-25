@@ -2605,12 +2605,17 @@ pub(crate) fn is_clone_leaf(value: &Value) -> bool {
 pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
     // Leaves have no children to visit, so skip the frame machinery. An enum
     // variant whose payloads are all leaves, such as `json.Value.Int(3)`,
-    // clones the same way.
-    match value {
-        leaf if is_clone_leaf(leaf) => return Ok(value.clone()),
-        Value::EnumVariant(variant) if variant.payloads.iter().all(is_clone_leaf) => {
-            return Ok(value.clone())
+    // clones the same way, and so does a tuple of such values, such as the
+    // `(str, json.Value)` pairs of `items()`.
+    fn is_flat_clone(value: &Value) -> bool {
+        match value {
+            Value::EnumVariant(variant) => variant.payloads.iter().all(is_clone_leaf),
+            value => is_clone_leaf(value),
         }
+    }
+    match value {
+        Value::Tuple(tuple) if tuple.elements.iter().all(is_flat_clone) => return Ok(value.clone()),
+        value if is_flat_clone(value) => return Ok(value.clone()),
         _ => {}
     }
     if let Some(shared) = shared_collection_clone(value) {
@@ -15982,14 +15987,16 @@ fn json_runtime_single_payload(value: Value) -> Result<Vec<Value>> {
     Ok(payloads)
 }
 
+/// A value of a JSON-facing enum. The names are the runtime's own text, so
+/// the value shares them and allocates nothing for them.
 fn json_runtime_enum_value(
-    enum_name: &str,
-    variant_name: &str,
+    enum_name: &'static str,
+    variant_name: &'static str,
     payloads: Vec<Value>,
 ) -> Result<Value> {
     Ok(Value::EnumVariant(EnumVariantValue {
-        enum_name: json_parse_owned_string(enum_name)?.into(),
-        variant_name: json_parse_owned_string(variant_name)?.into(),
+        enum_name: RuntimeName::from_static(enum_name),
+        variant_name: RuntimeName::from_static(variant_name),
         payloads,
     }))
 }
@@ -16156,7 +16163,49 @@ pub fn json_parse_owned_to_runtime(
     source: String,
     reservation: JsonCodecReservation,
 ) -> Result<Value> {
-    match run_json_codec_parse_on_pool(source, reservation) {
+    json_parse_outcome_to_runtime(run_json_codec_parse_on_pool(source, reservation))
+}
+
+/// The longest source `json.parse` parses on the calling task.
+pub const JSON_INLINE_PARSE_MAX_BYTES: usize = 16 * 1024;
+
+/// The deepest nesting `json.parse` parses on the calling task. The
+/// dependency's parser recurses once per level, so this bounds the stack
+/// it takes from the caller (ADR-0032).
+pub const JSON_INLINE_PARSE_MAX_DEPTH: usize = 8;
+
+/// Parses `source` on the calling task when it is short and shallow, or
+/// returns `None` to send it to the codec service. A handoff to the
+/// service costs more than parsing a small document, and such a source
+/// cannot recurse deep enough to threaten a task stack.
+pub fn json_parse_inline(source: &str) -> Option<JsonInlineParse> {
+    if source.len() > JSON_INLINE_PARSE_MAX_BYTES
+        || !json_codec::nesting_at_most(source, JSON_INLINE_PARSE_MAX_DEPTH)
+    {
+        return None;
+    }
+    let outcome = panic::catch_unwind(AssertUnwindSafe(|| json_codec::parse(source)))
+        .map_err(|payload| JsonCodecServiceError::Panicked(task_panic_message(&*payload)))
+        .and_then(|parsed| parsed.map_err(JsonCodecServiceError::Codec));
+    Some(JsonInlineParse(outcome))
+}
+
+/// A source [`json_parse_inline`] parsed on the calling task.
+pub struct JsonInlineParse(std::result::Result<JsonValue, JsonCodecServiceError>);
+
+impl JsonInlineParse {
+    /// The `Result[json.Value, json.Error]` the parse produced. Call it
+    /// after any borrow of the source has ended: building a large tree
+    /// yields to other tasks.
+    pub fn into_runtime(self) -> Result<Value> {
+        json_parse_outcome_to_runtime(self.0)
+    }
+}
+
+fn json_parse_outcome_to_runtime(
+    outcome: std::result::Result<JsonValue, JsonCodecServiceError>,
+) -> Result<Value> {
+    match outcome {
         Ok(value) => json_parse_success_value(value),
         Err(JsonCodecServiceError::Codec(
             error @ JsonCodecError::MaterializationTooLarge { .. },
@@ -16174,6 +16223,9 @@ pub fn json_parse_owned_to_runtime(
 
 #[cfg(test)]
 pub fn json_parse_to_runtime(source: &str) -> Result<Value> {
+    if let Some(parsed) = json_parse_inline(source) {
+        return parsed.into_runtime();
+    }
     let (source, reservation) = prepare_json_codec_source(|| clone_json_codec_source(source))?;
     json_parse_owned_to_runtime(source, reservation)
 }
@@ -16452,7 +16504,7 @@ fn json_runtime_conversion_try_reserve<T>(values: &mut Vec<T>, additional: usize
         .map_err(json_runtime_allocation_error)
 }
 
-fn json_error_variant(variant_name: &str, payloads: Vec<Value>) -> Result<Value> {
+fn json_error_variant(variant_name: &'static str, payloads: Vec<Value>) -> Result<Value> {
     json_runtime_enum_value("json.Error", variant_name, payloads)
 }
 

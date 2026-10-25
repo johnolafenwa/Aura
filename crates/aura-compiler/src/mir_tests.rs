@@ -6633,6 +6633,62 @@ def unwrap(packet: own Packet) -> str:
 }
 
 #[test]
+fn consuming_match_reads_a_binding_only_payload_once() {
+    let module = crate::lower_source_to_mir(
+        r#"
+enum Packet:
+    Text(str)
+    Pair(str, int64)
+
+def unwrap(packet: own Packet) -> str:
+    match own packet:
+        case Packet.Pair(text, 1):
+            return text
+        case Packet.Text(text):
+            return text
+        case _:
+            return ""
+"#,
+    )
+    .expect("consuming match should lower");
+    let unwrap = module
+        .functions
+        .iter()
+        .find(|function| function.name == "unwrap")
+        .expect("unwrap should lower");
+    let payload_reads = |moved: bool| {
+        unwrap
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::VariantPayload {
+                            scrutinee,
+                            variant_name,
+                            index,
+                        },
+                    ..
+                } if matches!(scrutinee, Operand::MovePlace(_)) == moved => {
+                    Some((variant_name.clone(), *index))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    // Only the literal `1` needs its payload read to test the pattern; the
+    // bindings are moved out once their arm runs.
+    assert_eq!(payload_reads(false), vec![("Pair".to_string(), 1)]);
+    let mut moved = payload_reads(true);
+    moved.sort();
+    assert_eq!(
+        moved,
+        vec![("Pair".to_string(), 0), ("Text".to_string(), 0)]
+    );
+}
+
+#[test]
 fn guarded_consuming_or_pattern_commits_with_destructive_payload_operands() {
     let module = crate::lower_source_to_mir(
         r#"

@@ -76,9 +76,10 @@ stack from 256 KiB through 64 MiB for an individual child.
 Dedicated process-lifetime services keep blocking and stack-heavy host work off
 the coroutine stacks: the blocking-I/O pool owns ordinary blocking calls, the
 protocol service owns TLS/HTTP/WebSocket steps, and the JSON codec service owns
-the recursive parser frames for dynamic `json.parse`. The bounded
-`json.is_valid` and `json.parse_string_map` operations remain
-bounded caller-side operations and do not enter that service. These services
+the recursive parser frames for dynamic `json.parse` of sources over 16 KiB
+or 8 levels of nesting (ADR-0032's 2026-10-25 amendment). Shorter, shallower
+sources, and the bounded `json.is_valid` and `json.parse_string_map`
+operations, stay on the caller and do not enter that service. These services
 resume the pinned coroutine after completion; they do not execute Aura task
 bodies and are distinct from the pinned-worker task-execution parallelism.
 
