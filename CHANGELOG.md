@@ -7,6 +7,21 @@ in this file.
 
 ## Unreleased
 
+- Native code probes the stack one page at a time for every function whose
+  frame is larger than a page. A frame that big used to move the stack
+  pointer past a task stack's single guard page in one step, so deep
+  recursion could write below the stack instead of failing.
+- In a native build, when a `with` body traps on a list index, division,
+  or integer overflow and an exit then traps too, the body's diagnostic
+  stays primary, as the manual says and as `aura run` reports. The exit's
+  trap used to replace it.
+- In a native build, a `with` exit no longer moves later in the exit order
+  when the body changes its resource. Exits run in reverse registration
+  order, as `aura run` runs them, even when a trap unwinds the body.
+- The language server starts `aura` by the absolute path it found on
+  `PATH`, and skips relative `PATH` entries such as `.`, which resolve
+  inside the opened workspace.
+
 ## VS Code extension 0.7.0 — 2026-10-25
 
 - Bundles language server 0.7.0. The semantic interface version stays 20.

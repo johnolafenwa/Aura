@@ -568,9 +568,11 @@ function isFile(candidate) {
   }
 }
 
+// Only absolute `PATH` entries count. The compiler starts in the workspace,
+// so a relative entry such as `.` would pick up a binary the workspace ships.
 function findOnPath(name, searchPath = process.env.PATH || "") {
   for (const directory of searchPath.split(path.delimiter)) {
-    if (directory && isFile(path.join(directory, name))) {
+    if (path.isAbsolute(directory) && isFile(path.join(directory, name))) {
       return path.join(directory, name);
     }
   }
@@ -627,14 +629,12 @@ function resolveCompilerCommand() {
   return defaultCompilerCommand();
 }
 
+// Spawns the compiler by the absolute path it was found at. A bare name is
+// searched for again at spawn time, and on Windows that search looks in the
+// workspace before `PATH`.
 function defaultCompilerCommand() {
-  if (!findOnPath(binaryName())) {
-    const installed = installedCompiler();
-    if (installed) {
-      return { cmd: installed, args: [], cwd: workspaceRoots[0] };
-    }
-  }
-  return { cmd: "aura", args: [], cwd: workspaceRoots[0] };
+  const compiler = findOnPath(binaryName()) || installedCompiler();
+  return { cmd: compiler || "aura", args: [], cwd: workspaceRoots[0] };
 }
 
 function binaryName(platform = process.platform) {
