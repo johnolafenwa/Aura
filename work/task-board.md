@@ -2,6 +2,17 @@
 
 Last updated: 2026-10-25
 
+## AuraDB regressions in 0.7.0 (in progress)
+
+- Target: fix the 0.7.0 slowdowns John's AuraDB benchmark found, single
+  inserts and updates above all. Details are in
+  `2026-10-25-auradb-lending-regression.md`.
+- Done: the lending pass no longer reads a recursive enum such as
+  `json.Value` as one that might hold a class instance, so fields are lent
+  again. Every AuraDB operation takes fewer instructions than on 0.6.0.
+- Remaining: a Mac run of the fixed build, and the larger gaps to Python
+  (JSON parse, scans, open).
+
 ## Aura 0.7.0 security review and bug hunt (in progress)
 
 - Target: review the released 0.7.0 preview for security issues and bugs,

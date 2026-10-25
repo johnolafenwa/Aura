@@ -87,6 +87,45 @@ def main():
     print(registry.size("a"))
 "#;
 
+/// Lists of recursive enums: `json.Value` and `Tree` hold only themselves
+/// and scalars, and `Holder` can hold a `Store`.
+const RECURSIVE: &str = r#"
+import json
+
+enum Tree:
+    Leaf(value: int64)
+    Node(children: list[Tree])
+
+enum Holder:
+    Empty
+    Owner(store: Store)
+    Many(items: list[Holder])
+
+class Store:
+    docs: list[json.Value] = []
+    trees: list[Tree] = []
+    holders: list[Holder] = []
+
+    def add(mut self, value: int64):
+        self.docs.append(json.Value.Int(value))
+        self.trees.append(Tree.Leaf(value))
+        self.holders.append(Holder.Empty)
+
+    def add_doc(mut self, doc: dict[str, json.Value]):
+        keep(self.docs, doc)
+
+def keep(docs: mut list[json.Value], doc: dict[str, json.Value]):
+    docs.append(json.Value.Object(doc.copy()))
+
+def main():
+    mut s = Store()
+    s.add(1)
+    s.add_doc({})
+    print(s.docs.len())
+    print(s.trees.len())
+    print(s.holders.len())
+"#;
+
 fn lowered(source: &str) -> MirModule {
     crate::lower_source_to_mir(source).expect("the program should lower")
 }
@@ -193,6 +232,19 @@ fn a_place_another_operand_reaches_is_not_lent() {
 }
 
 #[test]
+fn a_recursive_enum_that_holds_no_instance_does_not_block_a_lend() {
+    let module = lowered(RECURSIVE);
+    checks(&module).expect("the lent module should check");
+    // `json.Value` and `Tree` meet themselves, not an instance, so the
+    // field moves out for the call. A `Holder` can hold a `Store`.
+    assert_eq!(
+        lends(function(&module, "Store.add")),
+        ["mut self.docs", "mut self.trees"]
+    );
+    assert_eq!(lends(function(&module, "Store.add_doc")), ["mut self.docs"]);
+}
+
+#[test]
 fn a_covered_element_read_is_lent_before_its_fact() {
     let module = lowered(STORE);
     let scan = function(&module, "Store.scan");
@@ -225,7 +277,7 @@ fn an_element_a_loan_selects_is_lent_to_a_method() {
 
 #[test]
 fn stripping_undoes_the_lends_and_the_pass_makes_them_again() {
-    for source in [STORE, REGISTRY] {
+    for source in [STORE, REGISTRY, RECURSIVE] {
         let module = lowered(source);
         let mut stripped = module.clone();
         strip_ownership(&mut stripped);
@@ -241,7 +293,11 @@ fn stripping_undoes_the_lends_and_the_pass_makes_them_again() {
 
 #[test]
 fn the_interpreter_runs_lends() {
-    for (source, expected) in [(STORE, "8\n6\n8\n4\n"), (REGISTRY, "2\n")] {
+    for (source, expected) in [
+        (STORE, "8\n6\n8\n4\n"),
+        (REGISTRY, "2\n"),
+        (RECURSIVE, "2\n1\n1\n"),
+    ] {
         let module = lowered(source);
         let output = crate::mir_runtime::run(&module).expect("the lent module should run");
         assert_eq!(output.stdout, expected);
