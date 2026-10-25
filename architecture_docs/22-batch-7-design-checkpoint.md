@@ -812,6 +812,43 @@ in seconds:
 - The reference agent's executable grows by 18,040 bytes, or 1.0%, and
   the TLS subject's by 6,496 bytes, inside the size gate.
 
+### Step 12 Results
+
+Step 12 measures the 0.7.0 release candidate against the phase 2 targets.
+On the Linux container, the figures are callgrind instructions for one
+whole run, startup included. The Aura counts come from the release `aura`
+of step 11d, at `4b3a6713` on `main`. The Rust counts come from 9c. The
+macOS arm64 run on the Mac14,9 is in progress, and each cell marked
+**TBD (macOS)** waits for it.
+
+| Program | Linux, Aura | Linux, Rust | Linux, Aura / Rust | macOS, Aura | macOS, Rust | macOS, Aura / Rust | Phase 2 target |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `fib(30)` | 115,025,097 | 39,454,411 | 2.92x | TBD (macOS) | TBD (macOS) | TBD (macOS) | 3x |
+| `int_list_sum` | 16,015,568 | 13,247,624 | 1.21x | TBD (macOS) | TBD (macOS) | TBD (macOS) | 2x |
+| `string_list_scan` | 32,942,620 | 13,135,652 | 2.51x | TBD (macOS) | TBD (macOS) | TBD (macOS) | 4x |
+| `dict_build_get` | 344,784,267 | 179,017,701 | 1.93x | TBD (macOS) | TBD (macOS) | TBD (macOS) | 4x |
+| `set_insert_contains` | 59,570,448 | 31,558,085 | 1.89x | TBD (macOS) | TBD (macOS) | TBD (macOS) | 3x |
+| `record_field_reads` | 135,096,748 | 36,000,215 | 3.75x | TBD (macOS) | TBD (macOS) | TBD (macOS) | 4x |
+
+- All six programs meet their phase 2 targets on Linux by instruction
+  count. The targets are ratios of time, so the macOS run decides them on
+  the baseline host.
+- In 0.6.0, `fib(30)` and `record_field_reads` missed their phase 1
+  targets on macOS arm64, at 14.5x and 13.4x.
+
+Cold builds on the Linux container, from the step 11d run of
+`scripts/bench-compile-time.py --repetitions 10`. Medians, in seconds:
+
+| Program | Cold build | Range | Phase 2 target |
+| --- | ---: | ---: | ---: |
+| Hello world | 0.404 | 0.357 to 0.764 | 0.600 |
+| Reference agent | 0.960 | 0.895 to 1.060 | 1.500 |
+| `unix_tls_roundtrip` | 0.927 | 0.818 to 1.459 | |
+
+- Both build targets are met on Linux.
+- Every native binaries subject passes the size gate, and no subject links
+  LLVM. The `aura` release binary is about 66 MB stripped on Linux.
+
 ## Owner Questions
 
 Each names the recommended default first.

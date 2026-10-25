@@ -130,6 +130,7 @@ recovery layer, not a second Aura type system.
 From the repo root:
 
 - `npm ci`
+- `scripts/install-llvm.sh`, then export the settings it prints
 - `cargo build -p aura`
 - `npm run check:lsp`
 - `npm run test:lsp`
