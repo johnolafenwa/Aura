@@ -1,0 +1,19 @@
+class Tracer:
+    name: str
+    trap: bool
+
+    def __exit__(mut self) -> None:
+        print("exit " + self.name)
+        assert not self.trap, "exit of " + self.name + " failed"
+
+def pick(items: list[int64], index: int64) -> int64:
+    with first = Tracer(name="first", trap=false), second = Tracer(name="second", trap=true):
+        return items[index]
+
+def outer(items: list[int64]) -> int64:
+    with guard = Tracer(name="guard", trap=true):
+        return pick(items, 5)
+
+def main():
+    with root = Tracer(name="root", trap=false):
+        print(outer([1, 2]))

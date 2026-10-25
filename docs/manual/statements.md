@@ -466,7 +466,7 @@ Each registered exit runs exactly once when control leaves the body by:
 - a maintained Aura runtime failure
 - task cancellation
 
-An exit runs while cancellation is still pending, so a cancellable wait inside an exit observes it. Nested exits run in reverse registration order. If the body is already failing and an exit traps, the body's diagnostic stays primary.
+An exit runs while cancellation is still pending, so a cancellable wait inside an exit observes it. Nested exits run in reverse registration order. If an exit traps, the exits registered before it still run. If the body is already failing, the body's diagnostic stays primary. Otherwise the first exit to trap reports the diagnostic.
 
 Scheduler abandonment runs no `__exit__` or `close`. See [Execution Model](/manual/execution-model#resource-lifetime-and-cleanup).
 

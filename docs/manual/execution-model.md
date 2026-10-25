@@ -404,7 +404,7 @@ Exits run on:
 
 Nested active exits run in reverse registration order. Under cancellation, exits run while the cancellation is still pending, so a cancellable wait inside an exit reports cancellation.
 
-An exit that returns `Result[None, E]` propagates its `Err` like `try` only on the normal paths: fallthrough, `return`, and loop control. When the body is already leaving through `try` propagation or cancellation, the exit's `Err` is dropped. When the body traps, the trap stays primary and each failing exit adds a note to it. If an exit itself traps while the body is already failing, the original body diagnostic stays primary. Each resource's API chapter defines its `close()` behavior.
+An exit that returns `Result[None, E]` propagates its `Err` like `try` only on the normal paths: fallthrough, `return`, and loop control. When the body is already leaving through `try` propagation or cancellation, the exit's `Err` is dropped. When the body traps, the trap stays primary and each failing exit adds a note to it. An exit that traps does not stop the others. Each exit registered before it still runs, in this frame and in the callers' frames. If the body is already failing, the original body diagnostic stays primary. Otherwise the first exit to trap reports the diagnostic. Each resource's API chapter defines its `close()` behavior.
 
 Closing a resource explicitly before scope exit is permitted only where the resource contract makes a repeated close harmless. Otherwise, let the lexical owner perform cleanup.
 

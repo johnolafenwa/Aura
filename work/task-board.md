@@ -8,8 +8,9 @@ Last updated: 2026-10-25
   and fix what turns up. Details are in
   `2026-10-25-v0.7.0-security-review.md`.
 - Done: stack probes for large native frames, native `with` exit fixes
-  (body trap stays primary, exit order kept after a refresh), language
-  server compiler path hardening, private build temporaries.
+  (body trap stays primary, exit order kept after a refresh, and every
+  remaining exit runs after one traps, as John decided), language server
+  compiler path hardening, private build temporaries.
 - Verification: new run-fail fixtures fail on 0.7.0 native and pass now.
   Local suites pass. Hosted CI runs on the fix PR.
 - Remaining: merge the fix PR. The follow-ups are listed in the note.

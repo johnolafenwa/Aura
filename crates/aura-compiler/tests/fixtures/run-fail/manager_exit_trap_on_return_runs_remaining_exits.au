@@ -1,0 +1,19 @@
+class Tracer:
+    name: str
+    trap: bool
+
+    def __exit__(mut self) -> None:
+        print("exit " + self.name)
+        if self.trap:
+            items: list[int64] = [1]
+            print(items[7])
+
+def work() -> int64:
+    with first = Tracer(name="first", trap=false):
+        with second = Tracer(name="second", trap=true):
+            with third = Tracer(name="third", trap=true):
+                return 5
+    return 0
+
+def main():
+    print(work())

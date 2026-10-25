@@ -1,0 +1,6 @@
+exit second
+3
+inner exit second
+exit first
+3
+inner exit first

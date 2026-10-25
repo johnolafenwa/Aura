@@ -1,0 +1,6 @@
+error[AU4003]: list index `7` is out of bounds for length `1`
+ --> crates/aura-compiler/tests/fixtures/run-fail/manager_exit_trap_on_return_runs_remaining_exits.au:9:25
+  |
+9 |             print(items[7])
+  |                         ^
+  = note: Aura call chain (innermost first): Tracer.__exit__ at 5:5 -> work at 11:1 -> main at 18:1

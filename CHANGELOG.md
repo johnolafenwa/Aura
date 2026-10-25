@@ -15,6 +15,11 @@ in this file.
   or integer overflow and an exit then traps too, the body's diagnostic
   stays primary, as the manual says and as `aura run` reports. The exit's
   trap used to replace it.
+- When a `with` exit traps, every exit registered before it still runs, in
+  its own frame and in its callers' frames, on both backends. The body's
+  diagnostic stays primary when the body was already failing. `aura run`
+  used to skip the rest of that frame's exits, and a native build ran no
+  more exits at all.
 - In a native build, a `with` exit no longer moves later in the exit order
   when the body changes its resource. Exits run in reverse registration
   order, as `aura run` runs them, even when a trap unwinds the body.

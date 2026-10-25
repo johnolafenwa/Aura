@@ -1,0 +1,6 @@
+error[AU4003]: list index `4` is out of bounds for length `1`
+ --> crates/aura-compiler/tests/fixtures/run-fail/manager_exit_trap_runs_exits_inside_exit.au:21:22
+   |
+21 |         return items[4]
+   |                      ^
+  = note: Aura call chain (innermost first): work at 19:1 -> main at 23:1
