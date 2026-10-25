@@ -2,14 +2,17 @@
 
 Last updated: 2026-10-25
 
-## Aura 0.7.1 preview release (in progress)
+## Aura 0.7.1 preview release (complete)
 
 - Target: release 0.7.1 with the AuraDB regression fixes and the 0.7.0
   security review fixes, as John asked on 2026-10-25.
 - Release preparation bumps every package to 0.7.1. Details are in
   `2026-10-25-v0.7.1-preview-release.md`.
-- Remaining: green hosted CI on the release pull request, merge, and the
-  `v0.7.1-preview` tag, which John approves.
+- Merged as PR #143 (`57ca4688`) after hosted CI passed on Linux and
+  macOS. The annotated `v0.7.1-preview` tag (`e6df10ba`) was pushed on
+  2026-10-25, and Release run `40231220392` published the three archives,
+  docs, VSIX, and `SHA256SUMS`, and extension 0.7.1 to the Marketplace and
+  Open VSX.
 - `VSCE_PAT` must be an org-scoped token before 2026-12-01.
 
 ## AuraDB regressions in 0.7.0 (complete)
