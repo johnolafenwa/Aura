@@ -1,6 +1,6 @@
 # Install Aura On Linux
 
-The Aura 0.6 preview supports x86-64 Ubuntu 24.04 and compatible Linux
+The Aura 0.7 preview supports x86-64 Ubuntu 24.04 and compatible Linux
 distributions that use glibc. The release has no Linux ARM64 or musl
 archives.
 
@@ -55,7 +55,7 @@ command -v aura
 aura --version
 ```
 
-The version begins with `aura 0.6.0-preview`.
+The version begins with `aura 0.7.0-preview`.
 
 ## 6. Run A Program
 
@@ -125,6 +125,15 @@ sudo apt install -y coreutils
 The published Linux binary targets x86-64 glibc systems. Check the
 architecture with `uname -m` and the C library with `ldd --version`. Alpine
 Linux and other musl systems are not in the current distribution matrix.
+
+`aura` links LLVM statically, and it also loads `libstdc++.so.6`,
+`libz.so.1`, and `libzstd.so.1`. Ubuntu installs all three by default. To
+find a missing one, run `ldd`. To install them on Ubuntu:
+
+```bash
+ldd "$HOME/.local/bin/aura"
+sudo apt install -y libstdc++6 zlib1g libzstd1
+```
 
 Continue with the [VS Code extension guide](/install/vscode) or
 [Getting Aura Running](/learn/install-and-run).

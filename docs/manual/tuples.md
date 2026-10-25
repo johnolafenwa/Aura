@@ -203,7 +203,7 @@ Maintained parity fixtures require both backends to produce the same output and 
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.6 does not have these tuple features:
+Aura 0.7 does not have these tuple features:
 
 - an empty tuple
 - tuple iteration

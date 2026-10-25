@@ -7,6 +7,51 @@ in this file.
 
 ## Unreleased
 
+## VS Code extension 0.7.0 — 2026-10-25
+
+- Bundles language server 0.7.0. The semantic interface version stays 20.
+- The language server offers semantic highlighting, inlay hints with the
+  inferred type of each unannotated local and loop variable, highlighting of
+  the other uses of the name under the cursor, quick fixes that apply
+  compiler-suggested edits or prefix an unused local with `_`, workspace
+  symbol search, and go-to-implementation from a trait or type to its
+  `impl` blocks.
+- The VS Code extension adds **Aura: Run File**, **Build File**, **Test
+  File**, and **Run Workspace Tests**, a Run button in the editor title, and
+  a **▶ Run** lens above `def main`. Each saves the file and runs `aura` in
+  an integrated terminal.
+- The VS Code extension finds `aura` in `~/.local/bin`, `~/.cargo/bin`,
+  `/opt/homebrew/bin`, and `/usr/local/bin` when VS Code does not see it on
+  `PATH`, as when VS Code starts from the Dock. It adds an
+  `aura.compilerPath` setting and an **Aura: Restart Language Server**
+  command, and warns once when it cannot start the compiler or the compiler
+  speaks another editor interface version. It used to fall back silently to
+  keyword-only completion. Untitled Aura files get language features too.
+- The VS Code extension treats the inside of f-string braces as code, so
+  suggestions appear there as you type. VS Code used to treat it as string
+  text, where it turns suggestions off.
+
+## 0.7.0 — 2026-10-25 (technical preview)
+
+Aura 0.7.0 generates native code with LLVM 22, which replaces Cranelift.
+Native calls, strings, `dict`, `set`, list appends, and record reads run
+faster. On the Linux measurement host, all six phase 2 benchmark programs
+meet their instruction-count targets against Rust. `aura build` writes a
+large program as parallel codegen units. `sum`, `any`, `all`, `min`, and
+`max` reduce collections, and the editor gains semantic highlighting,
+inlay hints, and Run commands.
+
+### Breaking changes
+
+- `sum`, `any`, and `all` are builtin function names, so a top-level
+  function with one of those names is rejected with `AU2007`. Rename it.
+  Methods and local variables with those names are unaffected.
+- The native cache format is `aura-native-cache-v10`, so programs cached
+  by earlier versions rebuild once.
+- Building `aura` from source needs LLVM 22's static libraries.
+  `scripts/install-llvm.sh` installs them. `AURA_NATIVE_CODEGEN`, which
+  chose a code generator in source builds, is ignored.
+
 ### Added
 
 - `sum(values)`, `any(values)`, and `all(values)` reduce a `list[T]`,
@@ -18,19 +63,6 @@ in this file.
   program with `AU4001`.
 - `min` and `max` take two or more numbers of one type, as in
   `min(3, 1, 2)`.
-
-### Breaking changes
-
-- `sum`, `any`, and `all` are builtin function names, so a top-level
-  function with one of those names is rejected with `AU2007`. Rename it.
-  Methods and local variables with those names are unaffected.
-
-### Documentation
-
-- The manual and tutorials now show that `{}` is an empty set when the
-  expected type is `set[T]`, as in `seen: set[int32] = {}`. The checker
-  already accepted this form; the docs said an empty set needed
-  `set[T]()`.
 
 ### Changed
 
@@ -46,25 +78,9 @@ in this file.
   optimize and write them on parallel threads. That halves the reference
   agent's cold build, from 1.91 s to 0.96 s. Small programs stay one unit
   and build exactly as before. The executable is the same on every build.
-- The native cache format is `aura-native-cache-v10`, so programs cached
-  by earlier versions rebuild once.
-- Building `aura` from source needs LLVM 22's static libraries.
-  `scripts/install-llvm.sh` installs them. `AURA_NATIVE_CODEGEN`, which
-  chose a code generator in source builds, is ignored.
-
-- The language server offers semantic highlighting, inlay hints with the
-  inferred type of each unannotated local and loop variable, highlighting of
-  the other uses of the name under the cursor, quick fixes that apply
-  compiler-suggested edits or prefix an unused local with `_`, workspace
-  symbol search, and go-to-implementation from a trait or type to its
-  `impl` blocks.
 - Editor analysis warns `AU5001` about a local that nothing reads. VS Code
   fades it. A name that starts with `_` and a `with` binding are exempt.
   `aura check` does not report it.
-- The VS Code extension adds **Aura: Run File**, **Build File**, **Test
-  File**, and **Run Workspace Tests**, a Run button in the editor title, and
-  a **▶ Run** lens above `def main`. Each saves the file and runs `aura` in
-  an integrated terminal.
 - `aura mir` prints built-in calls on files, sockets, processes,
   `random.Rng`, numbers, `Duration`, `str`, queues, tasks, lists, dicts,
   sets, and arrays, the private reads, writes, slices, and span operations
@@ -207,13 +223,6 @@ in this file.
   trigger, as in `s.up` or `Array[int32].from_`.
 - A local binding shadows a builtin function name. Calling a local function
   value named `min` or `sum` now calls that value instead of the builtin.
-- The VS Code extension finds `aura` in `~/.local/bin`, `~/.cargo/bin`,
-  `/opt/homebrew/bin`, and `/usr/local/bin` when VS Code does not see it on
-  `PATH`, as when VS Code starts from the Dock. It adds an
-  `aura.compilerPath` setting and an **Aura: Restart Language Server**
-  command, and warns once when it cannot start the compiler or the compiler
-  speaks another editor interface version. It used to fall back silently to
-  keyword-only completion. Untitled Aura files get language features too.
 - A direct runtime helper that takes a boxed value, such as `append`,
   copies the value when another reference still holds the box. It used to
   empty the box under the other reference.
@@ -240,9 +249,13 @@ in this file.
   arguments have not bound yet, as `denominator=` for
   `is_divisible(4, de`, ranked first in VS Code. Locals and parameters now
   show with the variable icon instead of plain text.
-- The VS Code extension treats the inside of f-string braces as code, so
-  suggestions appear there as you type. VS Code used to treat it as string
-  text, where it turns suggestions off.
+
+### Documentation
+
+- The manual and tutorials now show that `{}` is an empty set when the
+  expected type is `set[T]`, as in `seen: set[int32] = {}`. The checker
+  already accepted this form; the docs said an empty set needed
+  `set[T]()`.
 
 ## VS Code extension 0.6.0 — 2026-10-21
 

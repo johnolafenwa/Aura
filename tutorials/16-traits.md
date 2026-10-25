@@ -121,7 +121,7 @@ The contract comes only from default bodies:
 - A signature-only trait method has no inferred obligation.
 - An explicit `impl` may satisfy the trait contract, but it may not
   strengthen it with hidden generic clone-producing behavior.
-- Aura 0.6 has no written clone-safety bound. When cloning is part of the
+- Aura 0.7 has no written clone-safety bound. When cloning is part of the
   intended contract, put it in a default trait body.
 
 See [examples/traits/clone_safety_contract.au](../examples/traits/clone_safety_contract.au) for a runnable default-method contract.

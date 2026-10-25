@@ -5,7 +5,9 @@ quick references and as a companion to the chapters in `tutorials/`.
 
 Every table lists the file, what it shows, and what it prints. Run any example
 from the repository root with `cargo run -p aura -- run <path>`. See
-[Run Examples](#run-examples) for the full command list.
+[Run Examples](#run-examples) for the full command list. Building `aura`
+from source needs LLVM 22. Run `scripts/install-llvm.sh` first, as
+CONTRIBUTING.md describes.
 
 Aura has two backends. The MIR backend runs Aura's mid-level intermediate
 representation, and the direct backend compiles native code.

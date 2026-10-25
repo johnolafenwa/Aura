@@ -237,12 +237,12 @@ The secure byte count is an `int64`, but each request is capped at `2147483647`.
 
 The operating system chooses the secure entropy implementation and the actual values returned. Secure calls have no deterministic ordering across calls, tasks, backends, processes, or hosts.
 
-The deterministic algorithm and seeded results are not implementation-defined. They stay fixed, as specified above, throughout the Aura 0.3.x, 0.4.x, 0.5.x, and 0.6.x series. They are unsuitable for cryptography even when the seed is secret.
+The deterministic algorithm and seeded results are not implementation-defined. They stay fixed, as specified above, throughout the Aura 0.3.x, 0.4.x, 0.5.x, 0.6.x, and 0.7.x series. They are unsuitable for cryptography even when the seed is secret.
 
 ## Status
 
-The constructor, deterministic methods, secure functions, move-only ownership, backend parity, and the diagnostics on this page are maintained Aura 0.6 API. The exact algorithm, mapping, compatibility window, identity and rendering policy, and secure-failure boundary are accepted design decisions.
+The constructor, deterministic methods, secure functions, move-only ownership, backend parity, and the diagnostics on this page are maintained Aura 0.7 API. The exact algorithm, mapping, compatibility window, identity and rendering policy, and secure-failure boundary are accepted design decisions.
 
-Aura 0.6 has no other random distributions, no secure float function, no global generator, no derived sampling trait, and no `random.Error` type.
+Aura 0.7 has no other random distributions, no secure float function, no global generator, no derived sampling trait, and no `random.Error` type.
 
 Design records: [ADR-0020: Randomness algorithm and security boundary](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0020-randomness-algorithm-and-security-boundary.md) and [ADR-0033: Structural Transfer and task-result consumption](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0033-structural-transfer-and-task-results.md).

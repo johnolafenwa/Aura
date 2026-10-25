@@ -1,8 +1,20 @@
 # Task Board
 
-Last updated: 2026-10-24
+Last updated: 2026-10-25
 
-## Batch 7 step 11: LLVM as the only native backend (in progress)
+## Aura 0.7.0 preview release (in progress)
+
+- Target: release 0.7.0-preview with phase 2 of Batch 7. This is step 12
+  of the Batch 7 delivery plan.
+- Done: versions, docs, and CHANGELOG moved to 0.7.0. Details are in
+  `2026-10-25-v0.7.0-preview-release.md`.
+- Verification: local release checks pass. On Linux, all six phase 2
+  programs meet their targets by instruction count, and both build targets
+  are met. Hosted CI runs on the release PR.
+- Remaining: fill the macOS cells from the Mac14,9 run, merge the release
+  PR, and push the tag after John approves.
+
+## Batch 7 step 11: LLVM as the only native backend (complete)
 
 - Target: remove the Cranelift code generator so LLVM 22 is the only
   native backend, as John decided on 2026-10-24. The MIR interpreter
@@ -27,7 +39,8 @@ Last updated: 2026-10-24
   takes 0.96 s, inside the 1.5 s target. Small programs stay one unit and
   build byte-identical executables. Details are in
   `2026-10-24-batch-7-step-11d-parallel-codegen.md`.
-- Remaining: a first Release workflow run to confirm the macOS archives.
+- Done: merged in PRs #136 and #137. The 0.7.0 release is the first
+  Release workflow run, which confirms the macOS archives.
 
 ## Collection reduction builtins (complete)
 
@@ -36,12 +49,12 @@ Last updated: 2026-10-24
   now shadows a builtin function name. Details are in
   `2026-10-23-collection-reduction-builtins.md`.
 
-## Editor experience pass (in progress)
+## Editor experience pass (complete)
 
 - Target: fix every gap John listed for the VS Code extension and language
   server on 2026-10-23. Details are in `2026-10-23-editor-experience.md`.
-- In review: PRs #119, #121, #123, #124, and the Run commands PR.
-- Remaining: a debugger, which needs DWARF from the LLVM backend.
+- Done: merged in PRs #119, #121, #123, #124, and #125.
+- Next: a debugger, which needs DWARF from the LLVM backend.
 
 ## Batch 7 step 8: semantics in MIR (in progress)
 

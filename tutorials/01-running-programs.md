@@ -3,6 +3,10 @@
 You run Aura programs with the `aura` command-line interface (CLI). From a
 source checkout, invoke it from the repository root with `cargo run -p aura --`.
 
+Building `aura` from source needs the static libraries of LLVM 22. Install
+them once with `scripts/install-llvm.sh`, and export the
+`LLVM_SYS_221_PREFIX` setting it prints. CONTRIBUTING.md has the details.
+
 ## Your First Program
 
 Create a file called `hello.au`:
@@ -87,8 +91,8 @@ cargo run -p aura -- --version
 ```
 
 `--version` prints the build channel and a 12-hex-digit source commit. A
-source checkout prints something like `aura 0.6.0-dev (0123456789ab)`. A
-release archive prints `aura 0.6.0-preview (0123456789ab)`.
+source checkout prints something like `aura 0.7.0-dev (0123456789ab)`. A
+release archive prints `aura 0.7.0-preview (0123456789ab)`.
 
 Use `deps update` to refresh git dependencies. You do not need to delete
 `Aura.lock` by hand:

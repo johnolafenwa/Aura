@@ -252,10 +252,13 @@ host C compiler's link take the rest. `aura build` writes a new executable
 every time and does not read the native cache. `aura run` reuses a cached
 executable when the program is unchanged.
 
+These figures predate LLVM. [Phase 2 Release Check](#phase-2-release-check)
+has the Aura 0.7 build times.
+
 ## Optimization Level
 
-This comparison is from the foundations session. It predates the Array kernel
-rewrite measured above.
+This comparison is from the foundations session, when Cranelift generated
+Aura's native code. It predates the Array kernel rewrite measured above.
 
 The same-session before and after comparison includes three changes: Cranelift
 `speed`, Cargo release-profile tuning, and user link and strip changes. It
@@ -299,17 +302,17 @@ M2 Pro host feed later performance decisions.
 
 | Workload | Aura compared with its reference |
 | --- | --- |
-| fib | 29.664884 times the exact Rust comparison on the foundations host; in 0.6.0, about 5.8 times on Linux and 14.5 times on macOS arm64 |
+| fib | 29.664884 times the exact Rust comparison on the foundations host; in 0.6.0, about 5.8 times on Linux and 14.5 times on macOS arm64; in 0.7.0, 2.92 times in instructions on Linux |
 | Task creation | 29.068501 times the exact Rust comparison |
 | TCP | near parity |
 | Retry | favors Aura |
 | Array addition | 1.006974 times NumPy, 1.006524 times the same-session Rust kernel |
 | Array reduction | 6.682308 times NumPy, 1.339087 times the same-session Rust kernel |
-| `record_field_reads` | about 11 times Rust |
-| `string_list_scan` | about 5.3 times Rust |
-| `dict_build_get` | about 4.4 times Rust |
-| `set_insert_contains` | about 3.4 times Rust |
-| `int_list_sum` | about 3.7 times Rust |
+| `record_field_reads` | 3.75 times Rust in instructions on Linux in 0.7.0 |
+| `string_list_scan` | 2.51 times Rust in instructions on Linux in 0.7.0 |
+| `dict_build_get` | 1.93 times Rust in instructions on Linux in 0.7.0 |
+| `set_insert_contains` | 1.89 times Rust in instructions on Linux in 0.7.0 |
+| `int_list_sum` | 1.21 times Rust in instructions on Linux in 0.7.0 |
 | AuraDB `update` by id | about 3 times Python 3.13 |
 
 These gaps are specific to these workloads. Scheduling, runtime
@@ -335,6 +338,47 @@ the whole process. The Rust references build with Rust 1.95.0.
 Four programs meet their phase 1 targets on both hosts.
 `record_field_reads` misses on both. `fib(30)` meets its target on Linux and
 misses on macOS arm64. Phase 2 of Batch 7 owns both gaps.
+
+### Phase 2 Release Check
+
+Aura 0.7.0 generates native code with LLVM 22. It ran against the Rust
+references on the shared Linux x86-64 container. The macOS arm64 baseline
+host was not re-timed for this release, because it had no LLVM 22.
+
+Wall times on the container are noisy, so the Linux columns count callgrind
+instructions for one whole run, startup included. `fib(30)` reads its GO
+line first. The Aura counts come from the release `aura` of Batch 7 step
+11d, which `main` holds at `4b3a6713`. The Rust counts come from the step
+9c run, built with Rust 1.95.0.
+
+| Program | Linux, Aura instructions | Linux, Rust instructions | Linux, Aura / Rust | Phase 2 target |
+| --- | ---: | ---: | ---: | ---: |
+| `fib(30)` | 115,025,097 | 39,454,411 | 2.92x | 3x |
+| `int_list_sum` | 16,015,568 | 13,247,624 | 1.21x | 2x |
+| `string_list_scan` | 32,942,620 | 13,135,652 | 2.51x | 4x |
+| `dict_build_get` | 344,784,267 | 179,017,701 | 1.93x | 4x |
+| `set_insert_contains` | 59,570,448 | 31,558,085 | 1.89x | 3x |
+| `record_field_reads` | 135,096,748 | 36,000,215 | 3.75x | 4x |
+
+All six programs meet their phase 2 targets on Linux by instruction count.
+The targets are ratios of time, so an instruction ratio does not stand in
+for them exactly. In Aura 0.6.0, `fib(30)` and `record_field_reads` missed
+their phase 1 targets on macOS arm64.
+
+`scripts/bench-compile-time.py --repetitions 10` timed cold builds on the
+same container. Medians, in seconds:
+
+| Program | Cold build | Range | Phase 2 target |
+| --- | ---: | ---: | ---: |
+| Hello world | 0.404 | 0.357 to 0.764 | 0.600 |
+| Reference agent | 0.960 | 0.895 to 1.060 | 1.500 |
+| `unix_tls_roundtrip` | 0.927 | 0.818 to 1.459 | |
+
+Both build targets are met. The reference agent splits into 8 codegen units
+that LLVM optimizes and writes on parallel threads. Hello world stays one
+unit. The
+[step 11d note](https://github.com/johnolafenwa/Aura/blob/main/work/2026-10-24-batch-7-step-11d-parallel-codegen.md)
+has the method and the raw counts.
 
 ### Per-Call Attribution
 
@@ -677,9 +721,10 @@ include unboxed scalar lists. The size gate records them as its baselines.
 | TLS example | 3,303,264 | 2,860,000 |
 | WebSocket example | 3,608,752 | 3,137,448 |
 
-On Linux x86-64, the `aura` compiler is 17,571,560 bytes and the runtime
-archive `libaura_runtime.a` is 62,558,760 bytes. User executables link the
-runtime archive. It contains no compiler code.
+On Linux x86-64, the `aura` compiler is about 66 MB stripped, because it
+links LLVM statically. The runtime archive `libaura_runtime.a` is about
+63 MB. User executables link the runtime archive. It contains no compiler
+code, and the size gate checks that no user program links LLVM.
 
 The JSON example is `examples/json/dynamic_values.au`. The TLS example is
 `examples/io/unix_tls_roundtrip.au`, and the WebSocket example is

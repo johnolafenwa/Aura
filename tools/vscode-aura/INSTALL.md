@@ -7,14 +7,16 @@ Aura as a packaged VS Code extension.
 
 - Node.js 22 or later
 - VS Code 1.91 or later
-- a Rust toolchain, for compiler-backed diagnostics and navigation from the
-  repo workspace
+- a Rust toolchain and LLVM 22's static libraries, for compiler-backed
+  diagnostics and navigation from the repo workspace.
+  `scripts/install-llvm.sh` installs LLVM and prints the settings to export.
 
 ## Install From This Repo For Development
 
 1. Open a terminal at the repo root, `Aura/`.
 2. Install workspace dependencies with `npm ci`.
-3. Build the repo-local compiler server with `cargo build -p aura`.
+3. Run `scripts/install-llvm.sh` and export the settings it prints. Then
+   build the repo-local compiler server with `cargo build -p aura`.
 4. Build the extension bundles with `npm run build:extension`.
 5. Verify the editor packages:
    - `npm run check:lsp`

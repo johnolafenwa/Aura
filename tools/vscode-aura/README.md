@@ -48,14 +48,19 @@ transport. The Aura compiler does the semantic analysis through its
 
 Download a prebuilt CLI archive from
 [Aura Releases](https://github.com/johnolafenwa/Aura/releases), or install from
-source with Rust:
+source with Rust and LLVM 22:
 
 ```bash
 git clone https://github.com/johnolafenwa/Aura.git
 cd Aura
+scripts/install-llvm.sh
+export LLVM_SYS_221_PREFIX="$HOME/.cache/aura/llvm/22.1.2"
 cargo install --path crates/aura --locked --force
 aura --version
 ```
+
+The prefix shown is the Linux default. On macOS, export the settings the
+script prints instead.
 
 Reload VS Code after you install the CLI, then open any `.au` file. The
 extension also looks in `~/.local/bin`, `~/.cargo/bin`, `/opt/homebrew/bin`,

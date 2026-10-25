@@ -168,7 +168,7 @@ follows the general runtime diagnostic rules.
 
 ## Status
 
-Everything on this page is implemented in Aura 0.6 on both the MIR and direct
+Everything on this page is implemented in Aura 0.7 on both the MIR and direct
 backends: the constants and functions, their exact bits and signatures, the
 exceptional-value classifications, initialization and evaluation order, and
 diagnostics.
