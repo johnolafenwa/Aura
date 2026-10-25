@@ -17684,9 +17684,13 @@ fn websocket_handshake_rejections_are_observable_on_both_transport_roles() {
     malformed_client
         .write_all(b"not an HTTP websocket request\r\n\r\n")
         .expect("write malformed handshake");
-    malformed_client
-        .shutdown(std::net::Shutdown::Both)
-        .expect("close malformed client");
+    match malformed_client.shutdown(std::net::Shutdown::Both) {
+        Ok(()) => {}
+        // The server may close the rejected connection first, and macOS then
+        // reports `ENOTCONN` for the client's shutdown.
+        Err(error) if error.kind() == io::ErrorKind::NotConnected => {}
+        Err(error) => panic!("close malformed client: {error:?}"),
+    }
     accepting.join().expect("malformed accept worker");
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind rejecting server");
