@@ -2,6 +2,18 @@
 
 Last updated: 2026-10-25
 
+## Aura 0.7.0 security review and bug hunt (in progress)
+
+- Target: review the released 0.7.0 preview for security issues and bugs,
+  and fix what turns up. Details are in
+  `2026-10-25-v0.7.0-security-review.md`.
+- Done: stack probes for large native frames, native `with` exit fixes
+  (body trap stays primary, exit order kept after a refresh), language
+  server compiler path hardening, private build temporaries.
+- Verification: new run-fail fixtures fail on 0.7.0 native and pass now.
+  Local suites pass. Hosted CI runs on the fix PR.
+- Remaining: merge the fix PR. The follow-ups are listed in the note.
+
 ## Aura 0.7.0 preview release (in progress)
 
 - Target: release 0.7.0-preview with phase 2 of Batch 7. This is step 12
