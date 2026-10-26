@@ -41,11 +41,16 @@ in this file.
   the whole list, so a loop that indexes such a list is no longer quadratic.
 - A list slice `values[a:b]` copies only its elements. It used to step over
   the first `a` elements one by one, so slicing far into a long list cost
-  time proportional to `a`.
+  time proportional to `a`. The `mini_browser` benchmark spent 38% of its
+  instructions slicing a `list[uint8]` and now spends 1%, and runs 37%
+  fewer instructions in all.
+- A slice of a list of `int64`, `float64`, or `bool` elements copies the
+  elements as the list stores them, so the slice keeps the compact storage,
+  instead of building a value for each element.
 - A `str` slice whose text before the end is ASCII finds its endpoints as
   byte positions with one fast scan instead of decoding every character up
   to the end, and copies only the result. `text[5000:5010]` of a
-  10,000-character ASCII string takes about 10 times fewer instructions.
+  10,000-character ASCII string takes 2,647 instructions instead of 13,336.
 
 ## VS Code extension 0.7.1 — 2026-10-25
 
