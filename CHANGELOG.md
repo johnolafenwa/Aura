@@ -20,6 +20,14 @@ in this file.
   a loop costs 26 instructions instead of 1,318. Writes and appends
   through a `mut` list parameter no longer store the list back after each
   one.
+- A list of `int8`, `int16`, `int32`, `uint8`, `uint16`, `uint32`,
+  `uint64`, or `float32` values is stored unboxed, and native code reads,
+  writes, and appends its elements in place. Native code also runs `as`
+  casts between scalar types, integer `&`, `|`, `^`, and `~`, and shifts
+  inline, and reads a module constant written as a scalar literal without
+  a runtime call. Errors are unchanged. At check size, hashing runs 88%
+  fewer instructions, markdown_render 81%, file_io 56%, lzw_compress 55%,
+  mini_browser 48%, spreadsheet 44%, and sql_engine 38%.
 
 ## VS Code extension 0.7.1 — 2026-10-25
 

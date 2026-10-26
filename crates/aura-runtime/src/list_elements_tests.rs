@@ -10,10 +10,16 @@ fn untyped(value: i64) -> Value {
 }
 
 fn int32(value: i32) -> Value {
-    Value::Int(
-        IntegerValue::from_typed_signed(i128::from(value), IntegerKind::Int32)
-            .expect("an i32 fits int32"),
-    )
+    typed(value.into(), IntegerKind::Int32)
+}
+
+/// An integer of `kind`, built the way the runtime builds one.
+fn typed(value: i128, kind: IntegerKind) -> Value {
+    Value::Int(if kind.is_signed() {
+        IntegerValue::from_typed_signed(value, kind).expect("the value fits its kind")
+    } else {
+        IntegerValue::from_typed_unsigned(value as u128, kind).expect("the value fits its kind")
+    })
 }
 
 /// Debug output shows an integer's representation and kind, so equal
@@ -37,7 +43,34 @@ fn lists_keep_scalars_only_when_every_element_fits_one_form() {
         (vec![Value::Bool(true), Value::Bool(false)], ListForm::Bool),
         (vec![], ListForm::Values),
         (vec![untyped(1), untyped(2)], ListForm::Values),
-        (vec![int32(1)], ListForm::Values),
+        (vec![int32(1), int32(i32::MIN)], ListForm::Int32),
+        (
+            vec![
+                typed(-128, IntegerKind::Int8),
+                typed(127, IntegerKind::Int8),
+            ],
+            ListForm::Int8,
+        ),
+        (vec![typed(-300, IntegerKind::Int16)], ListForm::Int16),
+        (
+            vec![typed(0, IntegerKind::Uint8), typed(255, IntegerKind::Uint8)],
+            ListForm::Uint8,
+        ),
+        (vec![typed(65_535, IntegerKind::Uint16)], ListForm::Uint16),
+        (
+            vec![typed(4_294_967_295, IntegerKind::Uint32)],
+            ListForm::Uint32,
+        ),
+        (
+            vec![typed(u64::MAX.into(), IntegerKind::Uint64)],
+            ListForm::Uint64,
+        ),
+        (vec![typed(1, IntegerKind::Int128)], ListForm::Values),
+        (vec![int32(1), int(2)], ListForm::Values),
+        (
+            vec![typed(1, IntegerKind::Uint8), typed(1, IntegerKind::Int8)],
+            ListForm::Values,
+        ),
         (vec![int(1), untyped(2)], ListForm::Values),
         (vec![int(1), Value::Float(2.0)], ListForm::Values),
         (vec![Value::Float(1.0), Value::Bool(true)], ListForm::Values),
@@ -80,7 +113,7 @@ fn sample_value(steps: &mut Steps, family: usize) -> Value {
     // Most values match the family's form, so lists stay scalar for a
     // while before a mismatch moves them to the value form.
     let family = if steps.next(10) == 0 {
-        steps.next(5)
+        steps.next(FAMILIES)
     } else {
         family
     };
@@ -90,15 +123,26 @@ fn sample_value(steps: &mut Steps, family: usize) -> Value {
         1 => Value::Float(small as f64 / 2.0),
         2 => Value::Bool(small > 0),
         3 => untyped(small),
-        _ => Value::String(format!("s{small}")),
+        4 => Value::String(format!("s{small}")),
+        5 => typed(small.into(), IntegerKind::Int8),
+        6 => int32(small as i32 * 1_000_000),
+        7 => typed((small + 3).into(), IntegerKind::Uint8),
+        8 => typed((small + 3).into(), IntegerKind::Uint16),
+        _ => typed(
+            u128::from(u64::MAX - (small + 3) as u64) as i128,
+            IntegerKind::Uint64,
+        ),
     }
 }
 
+/// The value families `sample_value` draws from.
+const FAMILIES: usize = 10;
+
 #[test]
 fn every_edit_matches_a_plain_vector_of_values() {
-    for seed in 0..60u64 {
+    for seed in 0..120u64 {
         let mut steps = Steps(seed);
-        let family = (seed % 5) as usize;
+        let family = seed as usize % FAMILIES;
         let mut model: Vec<Value> = (0..steps.next(4))
             .map(|_| sample_value(&mut steps, family))
             .collect();
@@ -327,8 +371,19 @@ fn reads_iterate_in_both_directions_and_report_their_length() {
         vec![Value::Float(1.0), Value::Float(2.0), Value::Float(3.0)],
         vec![Value::Bool(true), Value::Bool(false), Value::Bool(true)],
         vec![untyped(1), untyped(2), untyped(3)],
+        vec![
+            typed(1, IntegerKind::Uint8),
+            typed(2, IntegerKind::Uint8),
+            typed(3, IntegerKind::Uint8),
+        ],
     ] {
         let list = ListElements::from(values.clone());
+        // `skip` steps over elements without building them.
+        assert_eq!(
+            exact(&list.iter().skip(1).map(Cow::into_owned).collect::<Vec<_>>()),
+            exact(&values[1..])
+        );
+        assert!(list.iter().nth(3).is_none());
         let mut iter = list.iter();
         assert_eq!(iter.len(), 3);
         assert_eq!(iter.size_hint(), (3, Some(3)));

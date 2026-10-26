@@ -190,8 +190,8 @@ and tag.
   or tagged. The match tests the word for null, and the unpack retains the
   box. A slot that is unpacked twice, or in a loop without a new `get`,
   keeps the `Lookup`, because two copies would share one box.
-- **Scalar payloads.** A payload copied into an `int32`, `int64`,
-  `uint64`, or `bool` local is read in place by
+- **Scalar payloads.** A payload copied into an integer or `bool` local
+  is read in place by
   `aura_direct_variant_payload_i64` and its siblings. Their errors match a
   boxed payload followed by an unbox, word for word.
 - **Names.** `EnumVariantValue` keeps its names as `RuntimeName`, either
@@ -267,8 +267,8 @@ call.
   is a `u32` too, so the box keeps its 192 bytes. `DirectListLayout`
   gives its offset, and the fingerprint covers it.
 - **Setting it.** Every write sets the room from the storage's capacity,
-  but only for a confined list in the `int64`, `float64`, or `bool` form
-  whose storage no other list shares. Any other value, a shared value, and
+  but only for a confined list in a scalar form whose storage no other
+  list shares. Any other value, a shared value, and
   a new box have no room. A list's first `append` after boxing calls the
   runtime and gives it room.
 - **Generated code.** `append` checks the form and that the view's length
@@ -290,8 +290,8 @@ call.
 
 ### In-Place Element Writes
 
-`xs[i] = v` and `xs[i] op= v` on a `list[int64]`, `list[float64]`, or
-`list[bool]` store the element without a runtime call or a box.
+`xs[i] = v` and `xs[i] op= v` on a list of any fixed-width scalar type
+store the element without a runtime call or a box.
 
 - **The op.** Lowering picks `ListOp::SetIndexScalar(kind)` for a write to
   a list of one of these element types, as it picks `IndexScalar` for a
@@ -315,6 +315,36 @@ call.
   its first use, and caches it in a variable. A write on a call without a
   sink then costs one compare.
 
+### Integer Widths, Casts, And Constants
+
+Every fixed-width scalar runs in machine words, so code over bytes, hashes,
+and narrow counters needs no box and no runtime call.
+
+- **Narrow integers.** An `int8`, `int16`, `int32`, `uint8`, `uint16`, or
+  `uint32` value is a `ScalarKind` whose `int64` word holds the exact
+  value. Arithmetic runs in 64 bits, then one biased unsigned compare checks
+  that the result is in range. A `uint32` product can pass 63 bits, so its
+  failure message reads the word as unsigned
+  (`aura_direct_fail_narrow_overflow`).
+- **Lists.** Each width has its own list form and `DirectListAccess` code.
+  Reads sign- or zero-extend the element, and appends and writes store the
+  low bytes.
+- **Bitwise operators.** `&`, `|`, `^`, and `~` on integers of one type run
+  inline and cannot fail, so MIR gives them no trap. `<<` and `>>` run
+  inline when the count is in `0..width` and, for `<<`, the result keeps
+  its value. Any other shift calls `aura_direct_binary_value_at`, which
+  reports the same error.
+- **Casts.** `as` between scalar kinds runs inline when the value converts:
+  an integer in the target's range, an integer the float holds exactly,
+  or a float whose truncation is in range. A value that does not convert
+  calls `aura_direct_cast_integer_to_integer`, `_to_float`, or
+  `aura_direct_cast_float_to_integer`, which convert a value that happens
+  to be exact or report the error word for word.
+- **Constants.** A module constant whose initializer is a scalar literal,
+  a negated literal, or a cast of one is read as that literal in MIR. The
+  program still runs the initializer at startup, so nothing else changes.
+  Any other constant reads through `aura_direct_module_constant`.
+
 ### Lent Lookups
 
 A lookup slot whose found value is only read borrows the stored value
@@ -324,8 +354,7 @@ instead of copying it into a new box.
   takes a lookup slot that is assigned once and read from a local
   collection. It follows the found value into each local it is copied
   into. Each of them must be assigned once and only retained, released,
-  matched, or unpacked into an `int32`, `int64`, `uint64`, or `bool`
-  local. While any of them is live, the function may run only those
+  matched, or unpacked into an integer or `bool` local. While any of them is live, the function may run only those
   steps, scalar arithmetic, and plain branches. A call, a write, or a
   release of the collection fails the proof, and the slot keeps the copy.
 - **The word.** A lent slot holds null for `Lookup.Missing`, an owned box

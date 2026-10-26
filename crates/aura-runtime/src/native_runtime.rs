@@ -2596,6 +2596,8 @@ unsafe fn value_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut Value) -> 
 /// any other value. The storage is on the heap, so the address stays valid
 /// when the box holding the value moves. Only a list that keeps unboxed
 /// scalars in storage no other list shares has room.
+// Inlined into the write paths, where a call costs as much as the body.
+#[inline(always)]
 fn list_view_of(value: &Value) -> (DirectListAccess, usize, usize, u32) {
     use crate::list_elements::ListForm;
     use crate::runtime_value::ArrayStorage;
@@ -2607,6 +2609,13 @@ fn list_view_of(value: &Value) -> (DirectListAccess, usize, usize, u32) {
                 ListForm::Int64 => DirectListAccess::Int64,
                 ListForm::Float64 => DirectListAccess::Float64,
                 ListForm::Bool => DirectListAccess::Bool,
+                ListForm::Int8 => DirectListAccess::Int8,
+                ListForm::Int16 => DirectListAccess::Int16,
+                ListForm::Int32 => DirectListAccess::Int32,
+                ListForm::Uint8 => DirectListAccess::Uint8,
+                ListForm::Uint16 => DirectListAccess::Uint16,
+                ListForm::Uint32 => DirectListAccess::Uint32,
+                ListForm::Uint64 => DirectListAccess::Uint64,
             };
             let room = u32::try_from(room).unwrap_or(u32::MAX);
             (access, elements, len, room)
@@ -2662,20 +2671,165 @@ pub enum DirectListAccess {
     /// A list of `Value`s that are all `str`. The view's elements are
     /// [`DirectStrViewEntry`] records, one per element.
     Str = 5,
+    /// A list of `int8` elements, 1 byte each.
+    Int8 = 6,
+    /// A list of `int16` elements, 2 bytes each.
+    Int16 = 7,
+    /// A list of `int32` elements, 4 bytes each.
+    Int32 = 8,
+    /// A list of `uint8` elements, 1 byte each.
+    Uint8 = 9,
+    /// A list of `uint16` elements, 2 bytes each.
+    Uint16 = 10,
+    /// A list of `uint32` elements, 4 bytes each.
+    Uint32 = 11,
+    /// A list of `uint64` elements, 8 bytes each.
+    Uint64 = 12,
     /// A rank-1 `Array[int32]`.
-    ArrayInt32 = 6,
+    ArrayInt32 = 13,
     /// A rank-1 `Array[int64]`.
-    ArrayInt64 = 7,
+    ArrayInt64 = 14,
     /// A rank-1 `Array[float32]`.
-    ArrayFloat32 = 8,
+    ArrayFloat32 = 15,
     /// A rank-1 `Array[float64]`.
-    ArrayFloat64 = 9,
+    ArrayFloat64 = 16,
 }
 
 impl DirectListAccess {
     /// The codes of the list forms, which all keep their length in the
     /// view. They are consecutive from [`DirectListAccess::Values`].
-    pub const LIST_FORMS: u32 = 5;
+    pub const LIST_FORMS: u32 = 12;
+}
+
+/// The scalar types generated code names to the runtime in one word: the
+/// element kind of a list read, write, or append, and the source and
+/// target of a cast. A `float32` list element is kept as a `float64`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(i64)]
+pub enum DirectScalarKind {
+    Int64 = 0,
+    Float64 = 1,
+    Bool = 2,
+    Int8 = 3,
+    Int16 = 4,
+    Int32 = 5,
+    Uint8 = 6,
+    Uint16 = 7,
+    Uint32 = 8,
+    Uint64 = 9,
+    Float32 = 10,
+}
+
+impl DirectScalarKind {
+    const ALL: [Self; 11] = [
+        Self::Int64,
+        Self::Float64,
+        Self::Bool,
+        Self::Int8,
+        Self::Int16,
+        Self::Int32,
+        Self::Uint8,
+        Self::Uint16,
+        Self::Uint32,
+        Self::Uint64,
+        Self::Float32,
+    ];
+
+    /// The kind generated code passed as `code`.
+    pub fn from_code(code: i64) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| *kind as i64 == code)
+    }
+
+    fn of_code(code: i64) -> Self {
+        Self::from_code(code)
+            .unwrap_or_else(|| runtime_error(format!("unknown direct scalar kind `{code}`")))
+    }
+
+    /// The integer kind, for an integer.
+    pub fn integer_kind(self) -> Option<IntegerKind> {
+        Some(match self {
+            Self::Int64 => IntegerKind::Int64,
+            Self::Int8 => IntegerKind::Int8,
+            Self::Int16 => IntegerKind::Int16,
+            Self::Int32 => IntegerKind::Int32,
+            Self::Uint8 => IntegerKind::Uint8,
+            Self::Uint16 => IntegerKind::Uint16,
+            Self::Uint32 => IntegerKind::Uint32,
+            Self::Uint64 => IntegerKind::Uint64,
+            Self::Float64 | Self::Bool | Self::Float32 => return None,
+        })
+    }
+
+    pub fn type_name(self) -> &'static str {
+        match self {
+            Self::Float64 => "float64",
+            Self::Bool => "bool",
+            Self::Float32 => "float32",
+            integer => integer
+                .integer_kind()
+                .expect("every other kind is an integer")
+                .runtime_type_name(),
+        }
+    }
+
+    /// The value generated code passes as `bits`: an integer's value, a
+    /// float's bit pattern, or 0 or 1 for a `bool`. An integer outside its
+    /// type stops the program.
+    fn value(self, bits: i64) -> Value {
+        match self {
+            Self::Float64 | Self::Float32 => Value::Float(f64::from_bits(bits as u64)),
+            Self::Bool => Value::Bool(bits != 0),
+            Self::Uint64 => Value::Int(IntegerValue::from_u64(bits as u64)),
+            integer => {
+                let kind = integer
+                    .integer_kind()
+                    .expect("every other kind is an integer");
+                let value = IntegerValue::from_signed(i128::from(bits));
+                Value::Int(value.with_runtime_kind(kind).unwrap_or_else(|| {
+                    runtime_error(format!(
+                        "integer value `{value}` does not fit in `{}`",
+                        kind.runtime_type_name()
+                    ))
+                }))
+            }
+        }
+    }
+
+    /// `value` as generated code takes it: the inverse of
+    /// [`DirectScalarKind::value`]. A value of another type stops the
+    /// program.
+    fn bits(self, value: &Value) -> i64 {
+        match (self, value) {
+            (Self::Float64 | Self::Float32, Value::Float(float)) => float.to_bits() as i64,
+            (Self::Bool, Value::Bool(flag)) => i64::from(*flag),
+            (Self::Uint64, Value::Int(integer)) => match integer
+                .as_i128()
+                .and_then(|value| u64::try_from(value).ok())
+            {
+                Some(value) => value as i64,
+                None => runtime_error(format!(
+                    "integer value `{integer}` does not fit in `uint64`"
+                )),
+            },
+            (kind, Value::Int(integer)) if kind.integer_kind().is_some() => {
+                match integer
+                    .as_i128()
+                    .and_then(|value| i64::try_from(value).ok())
+                {
+                    Some(value) => value,
+                    None => runtime_error(format!(
+                        "integer value `{integer}` does not fit in `{}`",
+                        kind.type_name()
+                    )),
+                }
+            }
+            (kind, other) => runtime_error(format!(
+                "direct backend expected `{}`, found `{}`",
+                kind.type_name(),
+                value_type_name(other)
+            )),
+        }
+    }
 }
 
 /// Where one element of a [`DirectListAccess::Str`] view keeps its UTF-8
@@ -2725,12 +2879,16 @@ impl DirectListLayout {
             DirectListAccess::Bool as i64,
             DirectListAccess::ArrayFloat64 as i64,
             DirectListAccess::Str as i64,
+            DirectListAccess::Uint64 as i64,
+            i64::from(DirectListAccess::LIST_FORMS),
+            DirectScalarKind::Float32 as i64,
             i64::from(DIRECT_STR_VIEW_ENTRY_BYTES),
             i64::from(DIRECT_STR_VIEW_PTR_OFFSET),
             i64::from(DIRECT_STR_VIEW_LEN_OFFSET),
-            // The element layouts: 8-byte `int64` and `float64`, 1-byte
-            // `bool`. Then the 4-byte room count.
-            0x0801,
+            // The element layouts: 8-byte `int64`, `uint64`, and `float64`,
+            // 1-byte `bool`, and each narrower integer in its own width.
+            // Then the 4-byte room count.
+            0x0801_0204,
             4,
         ];
         fields.iter().fold(0x41_75_72_61_i64, |hash, field| {
@@ -3684,15 +3842,7 @@ fn decode_direct_ffi_call_spec(bytes: &[u8]) -> std::result::Result<DirectFfiCal
 fn bytes_vec_value(bytes: Vec<u8>) -> Value {
     Value::Vec(VecValue {
         element_type: Type::named("uint8"),
-        elements: bytes
-            .into_iter()
-            .map(|byte| {
-                Value::Int(
-                    IntegerValue::from_typed_unsigned(byte as u128, IntegerKind::Uint8)
-                        .expect("every byte fits the uint8 runtime kind"),
-                )
-            })
-            .collect(),
+        elements: ListElements::from_uint8(bytes),
         str_view: Default::default(),
     })
 }
@@ -5431,6 +5581,17 @@ pub extern "C-unwind" fn aura_direct_box_i32(value: i64) -> *mut OpaqueValue {
     })
 }
 
+/// Boxes an integer of the [`DirectScalarKind`] `kind` names, given as its
+/// value. Generated code keeps `int8`, `int16`, `uint8`, `uint16`, and
+/// `uint32` values this way.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_box_integer(value: i64, kind: i64) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let kind = DirectScalarKind::of_code(kind);
+        boxed_typed_value(kind.value(value), kind.type_name())
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_box_u64(value: u64) -> *mut OpaqueValue {
     task_runtime_boundary(|| boxed_typed_value(Value::Int(IntegerValue::from_u64(value)), "uint64"))
@@ -7066,19 +7227,14 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
     })
 }
 
-/// The scalar a list write passes as `bits`: `kind` is 0 for `int64`, 1
-/// for `float64` (its bit pattern), and 2 for `bool`.
+/// The scalar a list write passes as `bits`, of the
+/// [`DirectScalarKind`] `kind` names.
 fn scalar_list_value(bits: i64, kind: i64) -> Value {
-    match kind {
-        0 => Value::Int(IntegerValue::from_i64(bits)),
-        1 => Value::Float(f64::from_bits(bits as u64)),
-        2 => Value::Bool(bits != 0),
-        _ => runtime_error("unknown direct scalar list write kind"),
-    }
+    DirectScalarKind::of_code(kind).value(bits)
 }
 
-/// Appends a scalar given as its bits, with no box. `kind` is 0 for
-/// `int64`, 1 for `float64` (its bit pattern), and 2 for `bool`.
+/// Appends a scalar given as its bits, with no box. `kind` names its
+/// [`DirectScalarKind`].
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_push_scalar(vec: *mut OpaqueValue, bits: i64, kind: i64) {
     task_runtime_boundary(|| {
@@ -7551,8 +7707,9 @@ pub extern "C-unwind" fn aura_direct_vec_index(
 }
 
 /// Reads a scalar list element without boxing it. The caller has already
-/// normalized and bounds-checked `index`. `kind` is 0 for `int64`, 1 for
-/// `float64` (returned as its bit pattern), and 2 for `bool`.
+/// normalized and bounds-checked `index`. `kind` names the element's
+/// [`DirectScalarKind`], and the element comes back as generated code
+/// keeps it: an integer's value, a float's bit pattern, or 0 or 1.
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_index_scalar(
     vec: *mut OpaqueValue,
@@ -7560,32 +7717,18 @@ pub extern "C-unwind" fn aura_direct_vec_index_scalar(
     kind: i64,
 ) -> i64 {
     task_runtime_boundary(|| {
+        let kind = DirectScalarKind::of_code(kind);
         with_vector(vec, |vector| {
             let element = usize::try_from(index)
                 .ok()
                 .and_then(|index| vector.elements.get(index));
-            match (kind, element.as_deref()) {
-                (0, Some(Value::Int(value))) => {
-                    match value.as_i128().and_then(|value| i64::try_from(value).ok()) {
-                        Some(value) => value,
-                        None => runtime_error(format!(
-                            "integer value `{value}` does not fit in `int64`"
-                        )),
-                    }
-                }
-                (1, Some(Value::Float(value))) => value.to_bits() as i64,
-                (2, Some(Value::Bool(value))) => i64::from(*value),
-                (_, None) => runtime_error(format!(
+            match element {
+                Some(element) => kind.bits(&element),
+                None => runtime_error(format!(
                     "list index `{}` is out of bounds for length `{}`",
                     index,
                     vector.elements.len()
                 )),
-                (0..=2, Some(other)) => runtime_error(format!(
-                    "direct backend expected `{}`, found `{}`",
-                    ["int64", "float64", "bool"][kind as usize],
-                    value_type_name(other)
-                )),
-                _ => runtime_error("unknown direct scalar list read kind"),
             }
         })
     })
@@ -10141,21 +10284,22 @@ fn direct_integer_cast_source(value: u64, unsigned: i64) -> Value {
     }
 }
 
+/// The integer type a [`DirectScalarKind`] code names.
 fn direct_integer_cast_target(kind: i64) -> Type {
-    Type::named(match kind {
-        0 => "int32",
-        1 => "int64",
-        2 => "uint64",
-        other => runtime_error(format!("unknown direct integer target kind `{other}`")),
-    })
+    match DirectScalarKind::from_code(kind).and_then(DirectScalarKind::integer_kind) {
+        Some(kind) => Type::named(kind.runtime_type_name()),
+        None => runtime_error(format!("unknown direct integer target kind `{kind}`")),
+    }
 }
 
+/// The float type a [`DirectScalarKind`] code names.
 fn direct_float_cast_target(kind: i64) -> Type {
-    Type::named(match kind {
-        0 => "float32",
-        1 => "float64",
-        other => runtime_error(format!("unknown direct float target kind `{other}`")),
-    })
+    match DirectScalarKind::from_code(kind) {
+        Some(kind @ (DirectScalarKind::Float32 | DirectScalarKind::Float64)) => {
+            Type::named(kind.type_name())
+        }
+        _ => runtime_error(format!("unknown direct float target kind `{kind}`")),
+    }
 }
 
 fn direct_cast_failure(error: Diagnostic, line: i64, column: i64) -> ! {
@@ -16660,6 +16804,35 @@ pub extern "C-unwind" fn aura_direct_fail_erased_union_mutable_receiver(
 pub extern "C-unwind" fn aura_direct_fail_int32_overflow(value: i64, line: i64, column: i64) -> ! {
     task_runtime_boundary(|| {
         let message = int32_overflow_message(value);
+        match runtime_span(line, column) {
+            Some(span) => runtime_error_at(span, message),
+            None => runtime_error(message),
+        }
+    })
+}
+
+/// Stops the program because an integer result does not fit the
+/// narrow integer type the [`DirectScalarKind`] `kind` names. `value` is
+/// the result, which generated code computed in 64 bits, read as unsigned
+/// when `unsigned` is 1.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_fail_narrow_overflow(
+    value: i64,
+    unsigned: i64,
+    kind: i64,
+    line: i64,
+    column: i64,
+) -> ! {
+    task_runtime_boundary(|| {
+        let value = if unsigned == 0 {
+            i128::from(value)
+        } else {
+            i128::from(value as u64)
+        };
+        let message = format!(
+            "integer value `{value}` does not fit in `{}`",
+            DirectScalarKind::of_code(kind).type_name()
+        );
         match runtime_span(line, column) {
             Some(span) => runtime_error_at(span, message),
             None => runtime_error(message),

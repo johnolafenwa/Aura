@@ -1,0 +1,5 @@
+def main() -> int32:
+    values: list[uint32] = [4294967295, 4294967295]
+    product: uint32 = values[0] * values[1]
+    print(product)
+    return 0

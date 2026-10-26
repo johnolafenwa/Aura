@@ -358,6 +358,14 @@ This step, added after step 6, stores scalar list elements without a
   layout. `emit_list_len` accepts any list form.
 - The reference count overflows at 4,294,967,295 references to one box,
   which reports the existing overflow error.
+- Rust-speed step 1c added a form for every other fixed-width integer:
+  `Int8`, `Int16`, `Int32`, `Uint8`, `Uint16`, `Uint32`, and `Uint64`, each
+  element in its own width. The rule is the same: a list takes a form only
+  when every element is of that exact integer kind and the form rebuilds
+  it exactly. A `float32` element is a `Value::Float`, so a `list[float32]`
+  uses the `Float64` form. `DirectListAccess` names each new form, and
+  `DirectScalarKind` gives generated code one word per scalar kind for the
+  list and cast helpers.
 
 ## Batch 1 phase 1: normalized types and alias expansion
 

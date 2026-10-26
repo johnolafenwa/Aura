@@ -1,11 +1,12 @@
 //! Storage for the elements of a `list`.
 //!
-//! A list whose elements are all `int64`, all `float64`, or all `bool` keeps
-//! the scalars themselves: 8 bytes for each `int64` or `float64` element and
-//! 1 byte for each `bool`, instead of a whole `Value`. Any other list keeps
-//! `Value`s. The storage follows the elements alone, and moving between the
-//! two forms loses nothing, so a program cannot observe which one a list
-//! uses. Generated code reads the scalar forms in place.
+//! A list whose elements are all of one fixed-width scalar type keeps the
+//! scalars themselves: each `int8`..`int64` or `uint8`..`uint64` element
+//! in its own width, each `float32` or `float64` element in 8 bytes, and
+//! each `bool` in 1 byte, instead of a whole `Value`. Any other list keeps
+//! `Value`s. The storage follows the elements alone, and moving between
+//! the forms loses nothing, so a program cannot observe which one a list
+//! uses. Generated code reads and writes the scalar forms in place.
 //!
 //! Every form sits in a [`SharedVec`], so a clone shares the storage and the
 //! first write through a shared handle copies it.
@@ -15,7 +16,7 @@ use std::collections::TryReserveError;
 use std::fmt;
 
 use crate::collection_index::SharedVec;
-use crate::integer::{IntegerKind, IntegerValue};
+use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::randomness::DeterministicRng;
 use crate::runtime_value::Value;
 
@@ -26,45 +27,202 @@ pub enum ListElements {
     Int64(SharedVec<i64>),
     Float64(SharedVec<f64>),
     Bool(SharedVec<bool>),
+    Int8(SharedVec<i8>),
+    Int16(SharedVec<i16>),
+    Int32(SharedVec<i32>),
+    Uint8(SharedVec<u8>),
+    Uint16(SharedVec<u16>),
+    Uint32(SharedVec<u32>),
+    Uint64(SharedVec<u64>),
 }
 
-/// Which form a [`ListElements`] uses.
+/// Which form a [`ListElements`] uses. The discriminants are the native
+/// list access codes for the same layouts, so a list view converts its form
+/// without a table.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
 pub enum ListForm {
-    Values,
-    Int64,
-    Float64,
-    Bool,
+    Values = 1,
+    Int64 = 2,
+    Float64 = 3,
+    Bool = 4,
+    Int8 = 6,
+    Int16 = 7,
+    Int32 = 8,
+    Uint8 = 9,
+    Uint16 = 10,
+    Uint32 = 11,
+    Uint64 = 12,
 }
 
-/// A value that one of the scalar forms keeps exactly.
-#[derive(Clone, Copy)]
-enum Scalar {
-    Int64(i64),
-    Float64(f64),
-    Bool(bool),
+/// A scalar one of the forms keeps unboxed.
+trait Element: Copy + PartialEq {
+    /// The value this element stands for.
+    fn value(self) -> Value;
+
+    /// The element that stands for `value`, when this form keeps `value`
+    /// exactly: the same type, and nothing [`Element::value`] would not
+    /// rebuild.
+    fn of(value: &Value) -> Option<Self>;
+
+    /// The element equal to `value` as `==` compares, when there is one.
+    fn equal_to(value: &Value) -> Option<Self> {
+        Self::of(value)
+    }
 }
 
-impl Scalar {
+impl Element for f64 {
+    fn value(self) -> Value {
+        Value::Float(self)
+    }
+
     fn of(value: &Value) -> Option<Self> {
         match value {
-            Value::Int(integer) => int64_bits(*integer).map(Self::Int64),
-            Value::Float(float) => Some(Self::Float64(*float)),
-            Value::Bool(flag) => Some(Self::Bool(*flag)),
+            Value::Float(float) => Some(*float),
             _ => None,
         }
     }
+}
+
+impl Element for bool {
+    fn value(self) -> Value {
+        Value::Bool(self)
+    }
+
+    fn of(value: &Value) -> Option<Self> {
+        match value {
+            Value::Bool(flag) => Some(*flag),
+            _ => None,
+        }
+    }
+}
+
+macro_rules! integer_elements {
+    ($($ty:ty => $kind:ident, $element:ident => $build:expr;)*) => {$(
+        impl Element for $ty {
+            #[inline]
+            fn value(self) -> Value {
+                let $element = self;
+                Value::Int($build)
+            }
+
+            #[inline]
+            fn of(value: &Value) -> Option<Self> {
+                let Value::Int(integer) = value else {
+                    return None;
+                };
+                if integer.runtime_kind() != Some(IntegerKind::$kind) {
+                    return None;
+                }
+                // The constructors keep a value at or above zero as
+                // `Unsigned` and a negative one as `Signed`, so only that
+                // representation is rebuilt exactly.
+                match integer.representation() {
+                    IntegerRepresentation::Unsigned(value) => <$ty>::try_from(value).ok(),
+                    IntegerRepresentation::Signed(value) if value < 0 => {
+                        <$ty>::try_from(value).ok()
+                    }
+                    IntegerRepresentation::Signed(_) => None,
+                }
+            }
+
+            #[inline]
+            fn equal_to(value: &Value) -> Option<Self> {
+                match value {
+                    Value::Int(integer) => <$ty>::try_from(integer.as_i128()?).ok(),
+                    _ => None,
+                }
+            }
+        }
+    )*};
+}
+
+integer_elements! {
+    i64 => Int64, element => IntegerValue::from_i64(element);
+    i8 => Int8, element => signed(element.into(), IntegerKind::Int8);
+    i16 => Int16, element => signed(element.into(), IntegerKind::Int16);
+    i32 => Int32, element => IntegerValue::from_i32(element);
+    u8 => Uint8, element => unsigned(element.into(), IntegerKind::Uint8);
+    u16 => Uint16, element => unsigned(element.into(), IntegerKind::Uint16);
+    u32 => Uint32, element => unsigned(element.into(), IntegerKind::Uint32);
+    u64 => Uint64, element => IntegerValue::from_u64(element);
+}
+
+fn signed(value: i128, kind: IntegerKind) -> IntegerValue {
+    IntegerValue::from_typed_signed(value, kind).expect("every element fits its integer kind")
+}
+
+fn unsigned(value: u128, kind: IntegerKind) -> IntegerValue {
+    IntegerValue::from_typed_unsigned(value, kind).expect("every element fits its integer kind")
 }
 
 /// The bits of an `int64` value, when [`IntegerValue::from_i64`] rebuilds
 /// exactly the same value from them. Integers of other kinds, and untyped
 /// integer literals, stay boxed.
 pub fn int64_bits(value: IntegerValue) -> Option<i64> {
-    if value.runtime_kind() != Some(IntegerKind::Int64) {
-        return None;
-    }
-    let bits = i64::try_from(value.as_i128()?).ok()?;
-    (IntegerValue::from_i64(bits).representation() == value.representation()).then_some(bits)
+    i64::of(&Value::Int(value))
+}
+
+/// Matches `$list` against every form, binding the storage to `$values`.
+/// `$body` runs once per form, with `$values` a `SharedVec` of that form's
+/// element type.
+macro_rules! each_form {
+    ($list:expr, $values:ident => $body:expr) => {
+        match $list {
+            ListElements::Values($values) => $body,
+            ListElements::Int64($values) => $body,
+            ListElements::Float64($values) => $body,
+            ListElements::Bool($values) => $body,
+            ListElements::Int8($values) => $body,
+            ListElements::Int16($values) => $body,
+            ListElements::Int32($values) => $body,
+            ListElements::Uint8($values) => $body,
+            ListElements::Uint16($values) => $body,
+            ListElements::Uint32($values) => $body,
+            ListElements::Uint64($values) => $body,
+        }
+    };
+}
+
+/// Matches `$list` against the scalar forms, binding the storage to
+/// `$values` for `$body`, and runs `$fallback` for the `Value` form.
+macro_rules! each_scalar_form {
+    ($list:expr, $values:ident => $body:expr, $other:pat => $fallback:expr) => {
+        match $list {
+            ListElements::Int64($values) => $body,
+            ListElements::Float64($values) => $body,
+            ListElements::Bool($values) => $body,
+            ListElements::Int8($values) => $body,
+            ListElements::Int16($values) => $body,
+            ListElements::Int32($values) => $body,
+            ListElements::Uint8($values) => $body,
+            ListElements::Uint16($values) => $body,
+            ListElements::Uint32($values) => $body,
+            ListElements::Uint64($values) => $body,
+            $other => $fallback,
+        }
+    };
+}
+
+/// Matches a pair of lists that use the same scalar form, binding their
+/// storage to `$left` and `$right` for `$body`, and runs `$fallback` for
+/// any other pair.
+macro_rules! same_scalar_forms {
+    ($pair:expr, ($left:ident, $right:ident) => $body:expr, $other:pat => $fallback:expr) => {
+        match $pair {
+            (ListElements::Int64($left), ListElements::Int64($right)) => $body,
+            (ListElements::Float64($left), ListElements::Float64($right)) => $body,
+            (ListElements::Bool($left), ListElements::Bool($right)) => $body,
+            (ListElements::Int8($left), ListElements::Int8($right)) => $body,
+            (ListElements::Int16($left), ListElements::Int16($right)) => $body,
+            (ListElements::Int32($left), ListElements::Int32($right)) => $body,
+            (ListElements::Uint8($left), ListElements::Uint8($right)) => $body,
+            (ListElements::Uint16($left), ListElements::Uint16($right)) => $body,
+            (ListElements::Uint32($left), ListElements::Uint32($right)) => $body,
+            (ListElements::Uint64($left), ListElements::Uint64($right)) => $body,
+            $other => $fallback,
+        }
+    };
 }
 
 #[inline]
@@ -81,6 +239,7 @@ fn unshared_capacity<T>(values: &SharedVec<T>) -> usize {
 /// # Safety
 ///
 /// As for [`ListElements::adopt_appended`].
+#[inline]
 unsafe fn adopt_appended<T>(values: &mut SharedVec<T>, len: usize) {
     if let Some(values) = values.unshared_mut() {
         if len > values.len() && len <= values.capacity() {
@@ -90,13 +249,97 @@ unsafe fn adopt_appended<T>(values: &mut SharedVec<T>, len: usize) {
     }
 }
 
-fn int64_value(bits: i64) -> Value {
-    Value::Int(IntegerValue::from_i64(bits))
+/// The scalar form that keeps `value` exactly, if any.
+fn scalar_form_of(value: &Value) -> Option<ListForm> {
+    match value {
+        Value::Float(_) => Some(ListForm::Float64),
+        Value::Bool(_) => Some(ListForm::Bool),
+        Value::Int(integer) => {
+            let form = match integer.runtime_kind()? {
+                IntegerKind::Int64 => ListForm::Int64,
+                IntegerKind::Int8 => ListForm::Int8,
+                IntegerKind::Int16 => ListForm::Int16,
+                IntegerKind::Int32 => ListForm::Int32,
+                IntegerKind::Uint8 => ListForm::Uint8,
+                IntegerKind::Uint16 => ListForm::Uint16,
+                IntegerKind::Uint32 => ListForm::Uint32,
+                IntegerKind::Uint64 => ListForm::Uint64,
+                IntegerKind::Int128
+                | IntegerKind::IntSize
+                | IntegerKind::Uint128
+                | IntegerKind::UintSize => return None,
+            };
+            // A value with a representation the form would not rebuild
+            // stays boxed.
+            keeps(form, value).then_some(form)
+        }
+        _ => None,
+    }
+}
+
+/// Whether `form` keeps `value` exactly.
+fn keeps(form: ListForm, value: &Value) -> bool {
+    match form {
+        ListForm::Values => true,
+        ListForm::Int64 => i64::of(value).is_some(),
+        ListForm::Float64 => f64::of(value).is_some(),
+        ListForm::Bool => bool::of(value).is_some(),
+        ListForm::Int8 => i8::of(value).is_some(),
+        ListForm::Int16 => i16::of(value).is_some(),
+        ListForm::Int32 => i32::of(value).is_some(),
+        ListForm::Uint8 => u8::of(value).is_some(),
+        ListForm::Uint16 => u16::of(value).is_some(),
+        ListForm::Uint32 => u32::of(value).is_some(),
+        ListForm::Uint64 => u64::of(value).is_some(),
+    }
+}
+
+/// `values` as one form's elements, when the form keeps every one exactly.
+fn collect_form<T: Element>(values: &[Value]) -> Option<SharedVec<T>> {
+    values
+        .iter()
+        .map(T::of)
+        .collect::<Option<Vec<_>>>()
+        .map(SharedVec::from)
 }
 
 impl ListElements {
     pub fn new() -> Self {
         Self::Values(SharedVec::new())
+    }
+
+    /// A `list[uint8]` that keeps `bytes` unboxed.
+    pub fn from_uint8(bytes: Vec<u8>) -> Self {
+        if bytes.is_empty() {
+            Self::new()
+        } else {
+            Self::Uint8(bytes.into())
+        }
+    }
+
+    /// The elements as bytes, when the list keeps `uint8` elements unboxed.
+    pub fn as_uint8(&self) -> Option<&[u8]> {
+        match self {
+            Self::Uint8(bytes) => Some(bytes),
+            _ => None,
+        }
+    }
+
+    /// `values` in `form`, when the form keeps every one exactly.
+    fn collect(form: ListForm, values: &[Value]) -> Option<Self> {
+        Some(match form {
+            ListForm::Values => Self::Values(values.to_vec().into()),
+            ListForm::Int64 => Self::Int64(collect_form(values)?),
+            ListForm::Float64 => Self::Float64(collect_form(values)?),
+            ListForm::Bool => Self::Bool(collect_form(values)?),
+            ListForm::Int8 => Self::Int8(collect_form(values)?),
+            ListForm::Int16 => Self::Int16(collect_form(values)?),
+            ListForm::Int32 => Self::Int32(collect_form(values)?),
+            ListForm::Uint8 => Self::Uint8(collect_form(values)?),
+            ListForm::Uint16 => Self::Uint16(collect_form(values)?),
+            ListForm::Uint32 => Self::Uint32(collect_form(values)?),
+            ListForm::Uint64 => Self::Uint64(collect_form(values)?),
+        })
     }
 
     #[inline]
@@ -106,17 +349,19 @@ impl ListElements {
             Self::Int64(_) => ListForm::Int64,
             Self::Float64(_) => ListForm::Float64,
             Self::Bool(_) => ListForm::Bool,
+            Self::Int8(_) => ListForm::Int8,
+            Self::Int16(_) => ListForm::Int16,
+            Self::Int32(_) => ListForm::Int32,
+            Self::Uint8(_) => ListForm::Uint8,
+            Self::Uint16(_) => ListForm::Uint16,
+            Self::Uint32(_) => ListForm::Uint32,
+            Self::Uint64(_) => ListForm::Uint64,
         }
     }
 
     #[inline]
     pub fn len(&self) -> usize {
-        match self {
-            Self::Values(values) => values.len(),
-            Self::Int64(values) => values.len(),
-            Self::Float64(values) => values.len(),
-            Self::Bool(values) => values.len(),
-        }
+        each_form!(self, values => values.len())
     }
 
     #[inline]
@@ -130,26 +375,23 @@ impl ListElements {
     /// appends while the room lasts.
     #[inline]
     pub fn view(&self) -> (ListForm, usize, usize, usize) {
+        #[inline]
+        fn scalar<T>(form: ListForm, values: &SharedVec<T>) -> (ListForm, usize, usize, usize) {
+            let room = unshared_capacity(values);
+            (form, values.as_ptr() as usize, values.len(), room)
+        }
         match self {
             Self::Values(values) => (ListForm::Values, values.as_ptr() as usize, values.len(), 0),
-            Self::Int64(values) => (
-                ListForm::Int64,
-                values.as_ptr() as usize,
-                values.len(),
-                unshared_capacity(values),
-            ),
-            Self::Float64(values) => (
-                ListForm::Float64,
-                values.as_ptr() as usize,
-                values.len(),
-                unshared_capacity(values),
-            ),
-            Self::Bool(values) => (
-                ListForm::Bool,
-                values.as_ptr() as usize,
-                values.len(),
-                unshared_capacity(values),
-            ),
+            Self::Int64(values) => scalar(ListForm::Int64, values),
+            Self::Float64(values) => scalar(ListForm::Float64, values),
+            Self::Bool(values) => scalar(ListForm::Bool, values),
+            Self::Int8(values) => scalar(ListForm::Int8, values),
+            Self::Int16(values) => scalar(ListForm::Int16, values),
+            Self::Int32(values) => scalar(ListForm::Int32, values),
+            Self::Uint8(values) => scalar(ListForm::Uint8, values),
+            Self::Uint16(values) => scalar(ListForm::Uint16, values),
+            Self::Uint32(values) => scalar(ListForm::Uint32, values),
+            Self::Uint64(values) => scalar(ListForm::Uint64, values),
         }
     }
 
@@ -161,47 +403,34 @@ impl ListElements {
     ///
     /// Every element from the current length up to `len` was written into
     /// this storage's spare room as a valid value of its form.
+    #[inline]
     pub unsafe fn adopt_appended(&mut self, len: usize) {
-        match self {
+        each_scalar_form!(
+            self,
+            values => unsafe { adopt_appended(values, len) },
             Self::Values(_) => {}
-            Self::Int64(values) => unsafe { adopt_appended(values, len) },
-            Self::Float64(values) => unsafe { adopt_appended(values, len) },
-            Self::Bool(values) => unsafe { adopt_appended(values, len) },
-        }
+        )
     }
 
     /// Whether another handle shares this storage.
     pub fn is_shared(&self) -> bool {
-        match self {
-            Self::Values(values) => values.is_shared(),
-            Self::Int64(values) => values.is_shared(),
-            Self::Float64(values) => values.is_shared(),
-            Self::Bool(values) => values.is_shared(),
-        }
+        each_form!(self, values => values.is_shared())
     }
 
     /// The address of the first element. Two lists with the same address
     /// share their storage.
     #[inline]
     pub fn as_ptr(&self) -> usize {
-        match self {
-            Self::Values(values) => values.as_ptr() as usize,
-            Self::Int64(values) => values.as_ptr() as usize,
-            Self::Float64(values) => values.as_ptr() as usize,
-            Self::Bool(values) => values.as_ptr() as usize,
-        }
+        each_form!(self, values => values.as_ptr() as usize)
     }
 
     #[inline]
     pub fn get(&self, index: usize) -> Option<Cow<'_, Value>> {
-        match self {
-            Self::Values(values) => values.get(index).map(Cow::Borrowed),
-            Self::Int64(values) => values.get(index).map(|bits| Cow::Owned(int64_value(*bits))),
-            Self::Float64(values) => values
-                .get(index)
-                .map(|float| Cow::Owned(Value::Float(*float))),
-            Self::Bool(values) => values.get(index).map(|flag| Cow::Owned(Value::Bool(*flag))),
-        }
+        each_scalar_form!(
+            self,
+            values => values.get(index).map(|element| Cow::Owned(element.value())),
+            Self::Values(values) => values.get(index).map(Cow::Borrowed)
+        )
     }
 
     /// The element at `index`.
@@ -234,6 +463,13 @@ impl ListElements {
             Self::Int64(values) => Iter::Int64(values.iter()),
             Self::Float64(values) => Iter::Float64(values.iter()),
             Self::Bool(values) => Iter::Bool(values.iter()),
+            Self::Int8(values) => Iter::Int8(values.iter()),
+            Self::Int16(values) => Iter::Int16(values.iter()),
+            Self::Int32(values) => Iter::Int32(values.iter()),
+            Self::Uint8(values) => Iter::Uint8(values.iter()),
+            Self::Uint16(values) => Iter::Uint16(values.iter()),
+            Self::Uint32(values) => Iter::Uint32(values.iter()),
+            Self::Uint64(values) => Iter::Uint64(values.iter()),
         }
     }
 
@@ -296,57 +532,45 @@ impl ListElements {
 
     #[inline]
     pub fn push(&mut self, value: Value) {
-        match (&mut *self, Scalar::of(&value)) {
-            (Self::Int64(values), Some(Scalar::Int64(bits))) => values.push(bits),
-            (Self::Float64(values), Some(Scalar::Float64(float))) => values.push(float),
-            (Self::Bool(values), Some(Scalar::Bool(flag))) => values.push(flag),
-            (list, Some(scalar)) if list.is_empty() => *list = Self::single(scalar),
-            (list, None) if list.is_empty() && !matches!(list, Self::Values(_)) => {
-                *list = Self::Values(vec![value].into());
+        let pushed = each_scalar_form!(
+            &mut *self,
+            values => match Element::of(&value) {
+                Some(element) => {
+                    values.push(element);
+                    true
+                }
+                None => false,
+            },
+            Self::Values(_) => false
+        );
+        if pushed {
+            return;
+        }
+        if self.is_empty() {
+            match scalar_form_of(&value) {
+                Some(form) => {
+                    *self = Self::collect(form, std::slice::from_ref(&value))
+                        .expect("the form keeps the value it was picked for");
+                    return;
+                }
+                // An empty `Values` list keeps its capacity, such as after
+                // `clear`.
+                None if !matches!(self, Self::Values(_)) => {
+                    *self = Self::Values(vec![value].into());
+                    return;
+                }
+                None => {}
             }
-            (list, _) => list.values_mut().push(value),
         }
-    }
-
-    fn single(scalar: Scalar) -> Self {
-        match scalar {
-            Scalar::Int64(bits) => Self::Int64(vec![bits].into()),
-            Scalar::Float64(float) => Self::Float64(vec![float].into()),
-            Scalar::Bool(flag) => Self::Bool(vec![flag].into()),
-        }
+        self.values_mut().push(value);
     }
 
     pub fn pop(&mut self) -> Option<Value> {
-        match self {
-            Self::Values(values) => {
-                if values.is_empty() {
-                    None
-                } else {
-                    values.pop()
-                }
-            }
-            Self::Int64(values) => {
-                if values.is_empty() {
-                    None
-                } else {
-                    values.pop().map(int64_value)
-                }
-            }
-            Self::Float64(values) => {
-                if values.is_empty() {
-                    None
-                } else {
-                    values.pop().map(Value::Float)
-                }
-            }
-            Self::Bool(values) => {
-                if values.is_empty() {
-                    None
-                } else {
-                    values.pop().map(Value::Bool)
-                }
-            }
-        }
+        each_scalar_form!(
+            self,
+            values => values.pop().map(Element::value),
+            Self::Values(values) => values.pop()
+        )
     }
 
     /// Replaces the element at `index` and returns the previous one.
@@ -360,17 +584,15 @@ impl ListElements {
             "list replace index {index} is out of range for length {}",
             self.len()
         );
-        match (&mut *self, Scalar::of(&value)) {
-            (Self::Int64(values), Some(Scalar::Int64(bits))) => {
-                int64_value(std::mem::replace(&mut values[index], bits))
-            }
-            (Self::Float64(values), Some(Scalar::Float64(float))) => {
-                Value::Float(std::mem::replace(&mut values[index], float))
-            }
-            (Self::Bool(values), Some(Scalar::Bool(flag))) => {
-                Value::Bool(std::mem::replace(&mut values[index], flag))
-            }
-            (list, _) => std::mem::replace(&mut list.values_mut()[index], value),
+        let replaced = each_scalar_form!(
+            &mut *self,
+            values => Element::of(&value)
+                .map(|element| std::mem::replace(&mut values[index], element).value()),
+            Self::Values(_) => None
+        );
+        match replaced {
+            Some(previous) => previous,
+            None => std::mem::replace(&mut self.values_mut()[index], value),
         }
     }
 
@@ -385,12 +607,24 @@ impl ListElements {
             "list insert index {index} is out of range for length {}",
             self.len()
         );
-        match (&mut *self, Scalar::of(&value)) {
-            (Self::Int64(values), Some(Scalar::Int64(bits))) => values.insert(index, bits),
-            (Self::Float64(values), Some(Scalar::Float64(float))) => values.insert(index, float),
-            (Self::Bool(values), Some(Scalar::Bool(flag))) => values.insert(index, flag),
-            (list, _) if list.is_empty() => list.push(value),
-            (list, _) => list.values_mut().insert(index, value),
+        let inserted = each_scalar_form!(
+            &mut *self,
+            values => match Element::of(&value) {
+                Some(element) => {
+                    values.insert(index, element);
+                    true
+                }
+                None => false,
+            },
+            Self::Values(_) => false
+        );
+        if inserted {
+            return;
+        }
+        if self.is_empty() {
+            self.push(value);
+        } else {
+            self.values_mut().insert(index, value);
         }
     }
 
@@ -400,35 +634,24 @@ impl ListElements {
     ///
     /// Panics when `index` is out of range.
     pub fn remove(&mut self, index: usize) -> Value {
+        let len = self.len();
         assert!(
-            index < self.len(),
-            "list remove index {index} is out of range for length {}",
-            self.len()
+            index < len,
+            "list remove index {index} is out of range for length {len}"
         );
-        match self {
-            Self::Values(values) => values.remove(index),
-            Self::Int64(values) => int64_value(values.remove(index)),
-            Self::Float64(values) => Value::Float(values.remove(index)),
-            Self::Bool(values) => Value::Bool(values.remove(index)),
-        }
+        each_scalar_form!(
+            self,
+            values => values.remove(index).value(),
+            Self::Values(values) => values.remove(index)
+        )
     }
 
     pub fn swap(&mut self, first: usize, second: usize) {
-        match self {
-            Self::Values(values) => values.swap(first, second),
-            Self::Int64(values) => values.swap(first, second),
-            Self::Float64(values) => values.swap(first, second),
-            Self::Bool(values) => values.swap(first, second),
-        }
+        each_form!(self, values => values.swap(first, second))
     }
 
     pub fn reverse(&mut self) {
-        match self {
-            Self::Values(values) => values.reverse(),
-            Self::Int64(values) => values.reverse(),
-            Self::Float64(values) => values.reverse(),
-            Self::Bool(values) => values.reverse(),
-        }
+        each_form!(self, values => values.reverse())
     }
 
     pub fn clear(&mut self) {
@@ -440,12 +663,7 @@ impl ListElements {
         if len >= self.len() {
             return;
         }
-        match self {
-            Self::Values(values) => values.truncate(len),
-            Self::Int64(values) => values.truncate(len),
-            Self::Float64(values) => values.truncate(len),
-            Self::Bool(values) => values.truncate(len),
-        }
+        each_form!(self, values => values.truncate(len))
     }
 
     /// Appends every element of `other`.
@@ -454,16 +672,15 @@ impl ListElements {
             *self = other;
             return;
         }
-        match (&mut *self, other) {
-            (Self::Int64(values), Self::Int64(more)) => values.extend_from_slice(&more),
-            (Self::Float64(values), Self::Float64(more)) => values.extend_from_slice(&more),
-            (Self::Bool(values), Self::Bool(more)) => values.extend_from_slice(&more),
+        same_scalar_forms!(
+            (&mut *self, other),
+            (values, more) => values.extend_from_slice(&more),
             (list, other) => {
                 for value in other {
                     list.push(value);
                 }
             }
-        }
+        )
     }
 
     /// Removes the elements in `start..end` and returns them as a list.
@@ -482,6 +699,13 @@ impl ListElements {
             Self::Int64(values) => Self::Int64(values.drain(start..end).collect()),
             Self::Float64(values) => Self::Float64(values.drain(start..end).collect()),
             Self::Bool(values) => Self::Bool(values.drain(start..end).collect()),
+            Self::Int8(values) => Self::Int8(values.drain(start..end).collect()),
+            Self::Int16(values) => Self::Int16(values.drain(start..end).collect()),
+            Self::Int32(values) => Self::Int32(values.drain(start..end).collect()),
+            Self::Uint8(values) => Self::Uint8(values.drain(start..end).collect()),
+            Self::Uint16(values) => Self::Uint16(values.drain(start..end).collect()),
+            Self::Uint32(values) => Self::Uint32(values.drain(start..end).collect()),
+            Self::Uint64(values) => Self::Uint64(values.drain(start..end).collect()),
         }
     }
 
@@ -503,61 +727,39 @@ impl ListElements {
             *self = other;
             return;
         }
-        match (&mut *self, other) {
-            (Self::Int64(values), Self::Int64(more)) => {
+        same_scalar_forms!(
+            (&mut *self, other),
+            (values, more) => {
                 values.splice(index..index, more.iter().copied());
-            }
-            (Self::Float64(values), Self::Float64(more)) => {
-                values.splice(index..index, more.iter().copied());
-            }
-            (Self::Bool(values), Self::Bool(more)) => {
-                values.splice(index..index, more.iter().copied());
-            }
+            },
             (list, other) => {
                 list.update(|values| {
                     values.splice(index..index, other);
                 });
             }
-        }
+        )
     }
 
     pub fn capacity(&self) -> usize {
-        match self {
-            Self::Values(values) => values.capacity(),
-            Self::Int64(values) => values.capacity(),
-            Self::Float64(values) => values.capacity(),
-            Self::Bool(values) => values.capacity(),
-        }
+        each_form!(self, values => values.capacity())
     }
 
     pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        match self {
-            Self::Values(values) => values.try_reserve(additional),
-            Self::Int64(values) => values.try_reserve(additional),
-            Self::Float64(values) => values.try_reserve(additional),
-            Self::Bool(values) => values.try_reserve(additional),
-        }
+        each_form!(self, values => values.try_reserve(additional))
     }
 
     /// Shuffles the elements in place with `rng`.
     pub fn shuffle(&mut self, rng: &mut DeterministicRng) {
-        match self {
-            Self::Values(values) => rng.shuffle(values),
-            Self::Int64(values) => rng.shuffle(values),
-            Self::Float64(values) => rng.shuffle(values),
-            Self::Bool(values) => rng.shuffle(values),
-        }
+        each_form!(self, values => rng.shuffle(values))
     }
 
     pub fn contains(&self, needle: &Value) -> bool {
-        match (self, needle) {
-            (Self::Int64(values), Value::Int(integer)) => integer
-                .as_i128()
-                .and_then(|value| i64::try_from(value).ok())
-                .is_some_and(|bits| values.contains(&bits)),
-            (Self::Bool(values), Value::Bool(flag)) => values.contains(flag),
-            _ => self.iter().any(|element| *element == *needle),
-        }
+        let found = each_scalar_form!(
+            self,
+            values => Element::equal_to(needle).map(|element| values.contains(&element)),
+            Self::Values(_) => None
+        );
+        found.unwrap_or_else(|| self.iter().any(|element| *element == *needle))
     }
 }
 
@@ -570,46 +772,11 @@ impl Default for ListElements {
 impl From<Vec<Value>> for ListElements {
     /// Keeps the scalars when every element fits one scalar form.
     fn from(values: Vec<Value>) -> Self {
-        match values.first().and_then(Scalar::of) {
-            Some(Scalar::Int64(_)) => {
-                let scalars = values
-                    .iter()
-                    .map(|value| match value {
-                        Value::Int(integer) => int64_bits(*integer),
-                        _ => None,
-                    })
-                    .collect::<Option<Vec<_>>>();
-                if let Some(scalars) = scalars {
-                    return Self::Int64(scalars.into());
-                }
-            }
-            Some(Scalar::Float64(_)) => {
-                let scalars = values
-                    .iter()
-                    .map(|value| match value {
-                        Value::Float(float) => Some(*float),
-                        _ => None,
-                    })
-                    .collect::<Option<Vec<_>>>();
-                if let Some(scalars) = scalars {
-                    return Self::Float64(scalars.into());
-                }
-            }
-            Some(Scalar::Bool(_)) => {
-                let scalars = values
-                    .iter()
-                    .map(|value| match value {
-                        Value::Bool(flag) => Some(*flag),
-                        _ => None,
-                    })
-                    .collect::<Option<Vec<_>>>();
-                if let Some(scalars) = scalars {
-                    return Self::Bool(scalars.into());
-                }
-            }
-            None => {}
-        }
-        Self::Values(values.into())
+        values
+            .first()
+            .and_then(scalar_form_of)
+            .and_then(|form| Self::collect(form, &values))
+            .unwrap_or_else(|| Self::Values(values.into()))
     }
 }
 
@@ -627,10 +794,9 @@ impl FromIterator<Value> for ListElements {
 
 impl PartialEq for ListElements {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Int64(left), Self::Int64(right)) => left[..] == right[..],
-            (Self::Float64(left), Self::Float64(right)) => left[..] == right[..],
-            (Self::Bool(left), Self::Bool(right)) => left[..] == right[..],
+        same_scalar_forms!(
+            (self, other),
+            (left, right) => left[..] == right[..],
             // No pointer shortcut: a list holding NaN is not equal to itself.
             _ => {
                 self.len() == other.len()
@@ -639,7 +805,7 @@ impl PartialEq for ListElements {
                         .zip(other.iter())
                         .all(|(left, right)| left == right)
             }
-        }
+        )
     }
 }
 
@@ -678,18 +844,54 @@ pub enum Iter<'a> {
     Int64(std::slice::Iter<'a, i64>),
     Float64(std::slice::Iter<'a, f64>),
     Bool(std::slice::Iter<'a, bool>),
+    Int8(std::slice::Iter<'a, i8>),
+    Int16(std::slice::Iter<'a, i16>),
+    Int32(std::slice::Iter<'a, i32>),
+    Uint8(std::slice::Iter<'a, u8>),
+    Uint16(std::slice::Iter<'a, u16>),
+    Uint32(std::slice::Iter<'a, u32>),
+    Uint64(std::slice::Iter<'a, u64>),
+}
+
+/// Matches `$iter` against every scalar iterator, binding it to
+/// `$values`, and runs `$fallback` for the `Value` iterator.
+macro_rules! each_scalar_iter {
+    ($iter:expr, $values:ident => $body:expr, $other:pat => $fallback:expr) => {
+        match $iter {
+            Iter::Int64($values) => $body,
+            Iter::Float64($values) => $body,
+            Iter::Bool($values) => $body,
+            Iter::Int8($values) => $body,
+            Iter::Int16($values) => $body,
+            Iter::Int32($values) => $body,
+            Iter::Uint8($values) => $body,
+            Iter::Uint16($values) => $body,
+            Iter::Uint32($values) => $body,
+            Iter::Uint64($values) => $body,
+            $other => $fallback,
+        }
+    };
 }
 
 impl<'a> Iterator for Iter<'a> {
     type Item = Cow<'a, Value>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::Values(values) => values.next().map(Cow::Borrowed),
-            Self::Int64(values) => values.next().map(|bits| Cow::Owned(int64_value(*bits))),
-            Self::Float64(values) => values.next().map(|float| Cow::Owned(Value::Float(*float))),
-            Self::Bool(values) => values.next().map(|flag| Cow::Owned(Value::Bool(*flag))),
-        }
+        each_scalar_iter!(
+            self,
+            values => values.next().map(|element| Cow::Owned(element.value())),
+            Self::Values(values) => values.next().map(Cow::Borrowed)
+        )
+    }
+
+    /// Skips `n` elements without building them, so `skip` on a long list
+    /// costs one step.
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        each_scalar_iter!(
+            self,
+            values => values.nth(n).map(|element| Cow::Owned(element.value())),
+            Self::Values(values) => values.nth(n).map(Cow::Borrowed)
+        )
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -700,29 +902,21 @@ impl<'a> Iterator for Iter<'a> {
 
 impl DoubleEndedIterator for Iter<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::Values(values) => values.next_back().map(Cow::Borrowed),
-            Self::Int64(values) => values
-                .next_back()
-                .map(|bits| Cow::Owned(int64_value(*bits))),
-            Self::Float64(values) => values
-                .next_back()
-                .map(|float| Cow::Owned(Value::Float(*float))),
-            Self::Bool(values) => values
-                .next_back()
-                .map(|flag| Cow::Owned(Value::Bool(*flag))),
-        }
+        each_scalar_iter!(
+            self,
+            values => values.next_back().map(|element| Cow::Owned(element.value())),
+            Self::Values(values) => values.next_back().map(Cow::Borrowed)
+        )
     }
 }
 
 impl ExactSizeIterator for Iter<'_> {
     fn len(&self) -> usize {
-        match self {
-            Self::Values(values) => values.len(),
-            Self::Int64(values) => values.len(),
-            Self::Float64(values) => values.len(),
-            Self::Bool(values) => values.len(),
-        }
+        each_scalar_iter!(
+            self,
+            values => values.len(),
+            Self::Values(values) => values.len()
+        )
     }
 }
 

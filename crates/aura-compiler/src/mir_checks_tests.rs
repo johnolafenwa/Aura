@@ -234,7 +234,7 @@ fn each_operation_names_the_trap_its_operands_need() {
             "Add None",
             "Pow Runtime",
             "Shl Runtime",
-            "Add Runtime",
+            "Add Overflow",
             "Less None",
             "Neg None",
         ]
@@ -249,9 +249,35 @@ fn the_trap_table_covers_every_operator() {
         binary_trap(BinaryOp::Eq, K::Other, K::Int64),
         ArithmeticTrap::Runtime
     );
+    // The bitwise operators cannot fail on two integers of one type.
     assert_eq!(
         binary_trap(BinaryOp::BitXor, K::Int64, K::Int64),
+        ArithmeticTrap::None
+    );
+    assert_eq!(
+        binary_trap(BinaryOp::BitAnd, K::Uint8, K::Uint8),
+        ArithmeticTrap::None
+    );
+    assert_eq!(
+        binary_trap(BinaryOp::BitOr, K::Int8, K::Int64),
         ArithmeticTrap::Runtime
+    );
+    assert_eq!(
+        binary_trap(BinaryOp::Shl, K::Int16, K::Int16),
+        ArithmeticTrap::Runtime
+    );
+    // Only a signed quotient can overflow.
+    assert_eq!(
+        binary_trap(BinaryOp::FloorDiv, K::Int16, K::Int16),
+        ArithmeticTrap::DivisionByZeroOrOverflow
+    );
+    assert_eq!(
+        binary_trap(BinaryOp::FloorDiv, K::Uint32, K::Uint32),
+        ArithmeticTrap::DivisionByZero
+    );
+    assert_eq!(
+        binary_trap(BinaryOp::Sub, K::Uint16, K::Uint16),
+        ArithmeticTrap::Overflow
     );
     assert_eq!(
         binary_trap(BinaryOp::Mul, K::Uint64, K::Uint64),
@@ -273,9 +299,15 @@ fn the_trap_table_covers_every_operator() {
         binary_trap(BinaryOp::Add, K::Unit, K::Unit),
         ArithmeticTrap::None
     );
+    assert_eq!(unary_trap(UnaryOp::BitNot, K::Int64), ArithmeticTrap::None);
+    assert_eq!(unary_trap(UnaryOp::BitNot, K::Uint8), ArithmeticTrap::None);
     assert_eq!(
-        unary_trap(UnaryOp::BitNot, K::Int64),
+        unary_trap(UnaryOp::BitNot, K::Float64),
         ArithmeticTrap::Runtime
+    );
+    assert_eq!(
+        unary_trap(UnaryOp::Neg, K::Uint32),
+        ArithmeticTrap::Overflow
     );
     assert_eq!(unary_trap(UnaryOp::Not, K::Other), ArithmeticTrap::Runtime);
     assert_eq!(unary_trap(UnaryOp::Not, K::Bool), ArithmeticTrap::None);
@@ -285,6 +317,8 @@ fn the_trap_table_covers_every_operator() {
         K::Other
     );
     assert_eq!(NumericKind::of_literal(5, Some(K::Int32)), K::Int32);
+    assert_eq!(NumericKind::of_literal(300, Some(K::Uint8)), K::Uint8);
+    assert!(K::Uint16.is_scalar() && K::Bool.is_scalar() && !K::Other.is_scalar());
     assert!(ArithmeticTrap::Runtime.checks_divisor() && ArithmeticTrap::Runtime.checks_overflow());
     assert!(!ArithmeticTrap::None.checks_divisor() && !ArithmeticTrap::Overflow.checks_divisor());
 }

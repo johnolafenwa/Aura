@@ -496,6 +496,8 @@ enum UnaryOp {
     Fdemote,
     FcvtFromUint,
     FcvtFromSint,
+    FcvtToUint,
+    FcvtToSint,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -510,6 +512,9 @@ enum BinaryOp {
     Band,
     Bor,
     Bxor,
+    Ishl,
+    Ushr,
+    Sshr,
     Fadd,
     Fsub,
     Fmul,
@@ -543,6 +548,9 @@ impl OverflowOp {
 enum LoadKind {
     Plain,
     Uload8,
+    Sload8,
+    Uload16,
+    Sload16,
     Uload32,
     Sload32,
 }
@@ -1078,6 +1086,18 @@ impl FunctionBackend for LlvmFunction<'_> {
         self.binary_imm(BinaryOp::Bxor, value, imm)
     }
 
+    fn ishl(&mut self, value: Val, count: Val) -> Val {
+        self.binary(BinaryOp::Ishl, value, count)
+    }
+
+    fn ushr(&mut self, value: Val, count: Val) -> Val {
+        self.binary(BinaryOp::Ushr, value, count)
+    }
+
+    fn sshr(&mut self, value: Val, count: Val) -> Val {
+        self.binary(BinaryOp::Sshr, value, count)
+    }
+
     fn icmp(&mut self, cond: IntCC, left: Val, right: Val) -> Val {
         self.ir
             .push_value(Op::Icmp(cond, left, right), ScalarType::I8)
@@ -1138,6 +1158,18 @@ impl FunctionBackend for LlvmFunction<'_> {
         self.load_kind(LoadKind::Uload8, ty, flags, address, offset)
     }
 
+    fn sload8(&mut self, flags: MemFlags, address: Val, offset: i32) -> Val {
+        self.load_kind(LoadKind::Sload8, ScalarType::I64, flags, address, offset)
+    }
+
+    fn uload16(&mut self, flags: MemFlags, address: Val, offset: i32) -> Val {
+        self.load_kind(LoadKind::Uload16, ScalarType::I64, flags, address, offset)
+    }
+
+    fn sload16(&mut self, flags: MemFlags, address: Val, offset: i32) -> Val {
+        self.load_kind(LoadKind::Sload16, ScalarType::I64, flags, address, offset)
+    }
+
     fn uload32(&mut self, flags: MemFlags, address: Val, offset: i32) -> Val {
         self.load_kind(LoadKind::Uload32, ScalarType::I64, flags, address, offset)
     }
@@ -1192,6 +1224,14 @@ impl FunctionBackend for LlvmFunction<'_> {
     fn fcvt_from_sint(&mut self, ty: ScalarType, value: Val) -> Val {
         self.unary(UnaryOp::FcvtFromSint, ty, value)
     }
+
+    fn fcvt_to_sint(&mut self, ty: ScalarType, value: Val) -> Val {
+        self.unary(UnaryOp::FcvtToSint, ty, value)
+    }
+
+    fn fcvt_to_uint(&mut self, ty: ScalarType, value: Val) -> Val {
+        self.unary(UnaryOp::FcvtToUint, ty, value)
+    }
 }
 
 fn built<T>(result: Result<T, BuilderError>) -> Result<T, String> {
@@ -1201,6 +1241,7 @@ fn built<T>(result: Result<T, BuilderError>) -> Result<T, String> {
 fn basic_type<'ctx>(context: &'ctx Context, ty: ScalarType) -> BasicTypeEnum<'ctx> {
     match ty {
         ScalarType::I8 => context.i8_type().into(),
+        ScalarType::I16 => context.i16_type().into(),
         ScalarType::I32 => context.i32_type().into(),
         ScalarType::I64 => context.i64_type().into(),
         ScalarType::F32 => context.f32_type().into(),
@@ -1264,6 +1305,7 @@ fn access_alignment(ty: ScalarType, flags: MemFlags) -> u32 {
     }
     match ty {
         ScalarType::I8 => 1,
+        ScalarType::I16 => 2,
         ScalarType::I32 | ScalarType::F32 => 4,
         ScalarType::I64 | ScalarType::F64 => 8,
     }
@@ -1633,6 +1675,7 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
     fn int_type(&self, ty: ScalarType) -> IntType<'ctx> {
         match ty {
             ScalarType::I8 => self.context.i8_type(),
+            ScalarType::I16 => self.context.i16_type(),
             ScalarType::I32 => self.context.i32_type(),
             _ => self.context.i64_type(),
         }
@@ -1890,7 +1933,8 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                 let pointer = self.address(*address, *offset)?;
                 let loaded_ty = match kind {
                     LoadKind::Plain => ty,
-                    LoadKind::Uload8 => ScalarType::I8,
+                    LoadKind::Uload8 | LoadKind::Sload8 => ScalarType::I8,
+                    LoadKind::Uload16 | LoadKind::Sload16 => ScalarType::I16,
                     LoadKind::Uload32 | LoadKind::Sload32 => ScalarType::I32,
                 };
                 let loaded = built(self.builder.build_load(
@@ -1903,7 +1947,7 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                 }
                 let value = match kind {
                     LoadKind::Plain => loaded,
-                    LoadKind::Uload8 | LoadKind::Uload32 => {
+                    LoadKind::Uload8 | LoadKind::Uload16 | LoadKind::Uload32 => {
                         built(self.builder.build_int_z_extend(
                             loaded.into_int_value(),
                             self.int_type(ty),
@@ -1911,12 +1955,14 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                         ))?
                         .into()
                     }
-                    LoadKind::Sload32 => built(self.builder.build_int_s_extend(
-                        loaded.into_int_value(),
-                        self.int_type(ty),
-                        "",
-                    ))?
-                    .into(),
+                    LoadKind::Sload8 | LoadKind::Sload16 | LoadKind::Sload32 => {
+                        built(self.builder.build_int_s_extend(
+                            loaded.into_int_value(),
+                            self.int_type(ty),
+                            "",
+                        ))?
+                        .into()
+                    }
                 };
                 self.define(inst, value);
             }
@@ -2135,6 +2181,18 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                 "",
             ))?
             .into(),
+            UnaryOp::FcvtToUint => built(self.builder.build_float_to_unsigned_int(
+                value.into_float_value(),
+                self.int_type(ty),
+                "",
+            ))?
+            .into(),
+            UnaryOp::FcvtToSint => built(self.builder.build_float_to_signed_int(
+                value.into_float_value(),
+                self.int_type(ty),
+                "",
+            ))?
+            .into(),
         })
     }
 
@@ -2167,6 +2225,9 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
             BinaryOp::Band => self.builder.build_and(left, right, ""),
             BinaryOp::Bor => self.builder.build_or(left, right, ""),
             BinaryOp::Bxor => self.builder.build_xor(left, right, ""),
+            BinaryOp::Ishl => self.builder.build_left_shift(left, right, ""),
+            BinaryOp::Ushr => self.builder.build_right_shift(left, right, false, ""),
+            BinaryOp::Sshr => self.builder.build_right_shift(left, right, true, ""),
             BinaryOp::Udiv | BinaryOp::Urem => {
                 // Division by zero traps. LLVM leaves it undefined.
                 let zero = built(self.builder.build_int_compare(

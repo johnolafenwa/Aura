@@ -11984,12 +11984,14 @@ def main() -> int32:
             ("right", &Type::named("int8"))
         ]
     );
-    assert!(instructions.iter().any(|instruction| matches!(
+    // A literal constant is read as its literal, so no read asks for the
+    // initialized value.
+    assert!(!instructions.iter().any(|instruction| matches!(
         instruction,
         Instruction::Assign {
-            value: Rvalue::ModuleConstant { key, initializer },
+            value: Rvalue::ModuleConstant { .. },
             ..
-        } if key == "<main>::base" && initializer == "__aura_const_init::<main>::base"
+        }
     )));
 
     let output = crate::run_mir(&module).expect("canonical numeric MIR should execute");

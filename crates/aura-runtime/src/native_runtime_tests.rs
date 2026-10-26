@@ -6360,35 +6360,81 @@ fn direct_integer_to_float_helper_rounds_without_consuming_the_integer() {
 #[test]
 fn direct_unboxed_wide_cast_helpers_preserve_checked_numeric_semantics() {
     assert_eq!(
-        super::aura_direct_cast_integer_to_integer((-42_i64) as u64, 0, 0, 0, 0),
+        super::aura_direct_cast_integer_to_integer(
+            (-42_i64) as u64,
+            0,
+            super::DirectScalarKind::Int32 as i64,
+            0,
+            0
+        ),
         (-42_i64) as u64
     );
     assert_eq!(
-        super::aura_direct_cast_integer_to_integer(42, 0, 1, 0, 0),
+        super::aura_direct_cast_integer_to_integer(
+            42,
+            0,
+            super::DirectScalarKind::Int64 as i64,
+            0,
+            0
+        ),
         42
     );
     assert_eq!(
-        super::aura_direct_cast_integer_to_integer(u64::MAX, 1, 2, 0, 0),
+        super::aura_direct_cast_integer_to_integer(
+            u64::MAX,
+            1,
+            super::DirectScalarKind::Uint64 as i64,
+            0,
+            0
+        ),
         u64::MAX
     );
     assert_eq!(
-        super::aura_direct_cast_integer_to_float(1_u64 << 53, 0, 1, 0, 0),
+        super::aura_direct_cast_integer_to_float(
+            1_u64 << 53,
+            0,
+            super::DirectScalarKind::Float64 as i64,
+            0,
+            0
+        ),
         (1_u64 << 53) as f64
     );
     assert_eq!(
-        super::aura_direct_cast_integer_to_float(1_u64 << 63, 1, 1, 0, 0),
+        super::aura_direct_cast_integer_to_float(
+            1_u64 << 63,
+            1,
+            super::DirectScalarKind::Float64 as i64,
+            0,
+            0
+        ),
         (1_u64 << 63) as f64
     );
     assert_eq!(
-        super::aura_direct_cast_integer_to_float(42, 0, 0, 0, 0),
+        super::aura_direct_cast_integer_to_float(
+            42,
+            0,
+            super::DirectScalarKind::Float32 as i64,
+            0,
+            0
+        ),
         42.0_f32 as f64
     );
     assert_eq!(
-        super::aura_direct_cast_float_to_integer(4_294_967_296.75, 1, 0, 0),
+        super::aura_direct_cast_float_to_integer(
+            4_294_967_296.75,
+            super::DirectScalarKind::Int64 as i64,
+            0,
+            0
+        ),
         4_294_967_296
     );
     assert_eq!(
-        super::aura_direct_cast_float_to_integer(-42.75, 1, 0, 0),
+        super::aura_direct_cast_float_to_integer(
+            -42.75,
+            super::DirectScalarKind::Int64 as i64,
+            0,
+            0
+        ),
         (-42_i64) as u64
     );
 }
@@ -12344,10 +12390,21 @@ fn wide_integer_overflow_and_cast_helpers_report_precise_diagnostics() {
                     source.as_ptr(),
                     source.len(),
                 );
-                super::aura_direct_cast_integer_to_integer(u64::MAX, 1, 1, 2, 13);
+                super::aura_direct_cast_integer_to_integer(
+                    u64::MAX,
+                    1,
+                    super::DirectScalarKind::Int64 as i64,
+                    2,
+                    13,
+                );
             }
             "float-cast-without-span" => {
-                super::aura_direct_cast_float_to_integer(4_294_967_296.75, 0, 0, 0);
+                super::aura_direct_cast_float_to_integer(
+                    4_294_967_296.75,
+                    super::DirectScalarKind::Int32 as i64,
+                    0,
+                    0,
+                );
             }
             other => panic!("unknown wide-integer error helper `{other}`"),
         }
@@ -13956,7 +14013,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                 super::aura_direct_vec_check_index(int_vec(&[1]), -2, 3, 9);
             }
             "vec-push-scalar-kind" => {
-                super::aura_direct_vec_push_scalar(super::aura_direct_vec_empty(), 1, 9);
+                super::aura_direct_vec_push_scalar(super::aura_direct_vec_empty(), 1, 99);
             }
             "list-layout-mismatch" => {
                 super::aura_direct_check_list_layout(
@@ -13995,7 +14052,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                 super::aura_direct_vec_index_scalar(vec, 0, 1);
             }
             "vec-index-scalar-kind" => {
-                super::aura_direct_vec_index_scalar(int_vec(&[1]), 0, 9);
+                super::aura_direct_vec_index_scalar(int_vec(&[1]), 0, 99);
             }
             "vec-index-scalar-overflow" => {
                 let vec = super::aura_direct_vec_empty();
@@ -14017,7 +14074,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                 super::aura_direct_vec_set_index_scalar(int_vec(&[1]), -2, 9, 2, 7, 0);
             }
             "vec-set-scalar-kind" => {
-                super::aura_direct_vec_set_index_scalar(int_vec(&[1]), 0, 9, 0, 0, 9);
+                super::aura_direct_vec_set_index_scalar(int_vec(&[1]), 0, 9, 0, 0, 99);
             }
             "vec-method-set-too-negative" => {
                 super::aura_direct_vec_set_in_place(int_vec(&[1, 2, 3, 4]), -5, int_value(9));
@@ -14991,10 +15048,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "vec-check-index-oob",
             "list index `-2` is out of bounds for length `1`",
         ),
-        (
-            "vec-push-scalar-kind",
-            "unknown direct scalar list write kind",
-        ),
+        ("vec-push-scalar-kind", "unknown direct scalar kind `99`"),
         (
             "list-layout-mismatch",
             "this executable was built for a different Aura runtime",
@@ -15019,10 +15073,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "vec-index-scalar-type",
             "direct backend expected `float64`, found `bool`",
         ),
-        (
-            "vec-index-scalar-kind",
-            "unknown direct scalar list read kind",
-        ),
+        ("vec-index-scalar-kind", "unknown direct scalar kind `99`"),
         (
             "vec-index-scalar-overflow",
             "integer value `9223372036854775808` does not fit in `int64`",
@@ -15039,10 +15090,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "vec-set-scalar-oob",
             "list index `-2` is out of bounds for length `1`",
         ),
-        (
-            "vec-set-scalar-kind",
-            "unknown direct scalar list write kind",
-        ),
+        ("vec-set-scalar-kind", "unknown direct scalar kind `99`"),
         (
             "vec-method-set-too-negative",
             "list set index `-5` is out of bounds for length `4`",
@@ -23768,15 +23816,21 @@ fn direct_operator_and_cast_wrappers_reject_unknown_codes() {
     );
     assert_eq!(
         capture_direct_boundary_error_message(|| {
-            super::aura_direct_cast_integer_to_integer(1, 2, 1, 0, 0);
+            super::aura_direct_cast_integer_to_integer(
+                1,
+                2,
+                super::DirectScalarKind::Int64 as i64,
+                0,
+                0,
+            );
         }),
         "unknown direct integer source kind `2`"
     );
     assert_eq!(
         capture_direct_boundary_error_message(|| {
-            super::aura_direct_cast_integer_to_integer(1, 0, 5, 0, 0);
+            super::aura_direct_cast_integer_to_integer(1, 0, 99, 0, 0);
         }),
-        "unknown direct integer target kind `5`"
+        "unknown direct integer target kind `99`"
     );
     assert_eq!(
         capture_direct_boundary_error_message(|| {
@@ -26009,6 +26063,27 @@ fn read_list_view_word(
 fn list_view_len(list: *mut OpaqueValue) -> usize {
     let layout = super::direct_list_layout();
     unsafe { *((list as *const u8).add(layout.len_offset as usize) as *const usize) }
+}
+
+#[test]
+fn list_forms_share_the_access_codes_of_their_layouts() {
+    use super::DirectListAccess;
+    use crate::list_elements::ListForm;
+    for (form, access) in [
+        (ListForm::Values, DirectListAccess::Values),
+        (ListForm::Int64, DirectListAccess::Int64),
+        (ListForm::Float64, DirectListAccess::Float64),
+        (ListForm::Bool, DirectListAccess::Bool),
+        (ListForm::Int8, DirectListAccess::Int8),
+        (ListForm::Int16, DirectListAccess::Int16),
+        (ListForm::Int32, DirectListAccess::Int32),
+        (ListForm::Uint8, DirectListAccess::Uint8),
+        (ListForm::Uint16, DirectListAccess::Uint16),
+        (ListForm::Uint32, DirectListAccess::Uint32),
+        (ListForm::Uint64, DirectListAccess::Uint64),
+    ] {
+        assert_eq!(form as u32, access as u32, "{form:?}");
+    }
 }
 
 #[test]

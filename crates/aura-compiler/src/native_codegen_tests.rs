@@ -2577,7 +2577,8 @@ def main() -> int32:
 fn ticket9_wide_scalar_casts_avoid_boxed_runtime_dispatch() {
     let source = r#"
 def main() -> int32:
-    signed: int64 = 42
+    values: list[int64] = [42]
+    signed: int64 = values[0]
     unsigned: uint64 = signed as uint64
     signed_again: int64 = unsigned as int64
     floating: float64 = signed_again as float64
@@ -2601,19 +2602,19 @@ def main() -> int32:
         referenced
             .iter()
             .any(|symbol| symbol.contains("aura_direct_cast_integer_to_integer")),
-        "wide integer casts should use the unboxed checked helper"
+        "a wide integer cast that fails should report through the unboxed checked helper"
     );
     assert!(
         referenced
             .iter()
             .any(|symbol| symbol.contains("aura_direct_cast_integer_to_float")),
-        "wide integer-to-float casts should use the unboxed exactness helper"
+        "an inexact integer-to-float cast should take the unboxed exactness helper"
     );
     assert!(
         referenced
             .iter()
             .any(|symbol| symbol.contains("aura_direct_cast_float_to_integer")),
-        "float-to-wide-integer casts should use the unboxed checked helper"
+        "a float-to-wide-integer cast out of range should report through the unboxed checked helper"
     );
 }
 

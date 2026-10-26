@@ -1,0 +1,69 @@
+LIMIT: int32 = 1000
+MASK: uint32 = 0xFF
+SCALE: float64 = 2.5
+OFFSET: int8 = -7
+
+def mix(a: uint32, b: uint32) -> uint32:
+    return ((a << 3) ^ (b >> 2)) & 0xFFFF
+
+def checksum(data: list[uint8]) -> uint32:
+    mut total: uint32 = 0
+    for byte in data:
+        total = (total * 31 + (byte as uint32)) & 0xFFFFFF
+    return total
+
+def main():
+    # Lists of every narrow width keep their elements unboxed, and reads,
+    # writes, and appends agree with the boxed form.
+    mut bytes: list[uint8] = []
+    for i in range(10):
+        bytes.append((i * 25) as uint8)
+    bytes[2] = 255
+    print(f"{bytes} {checksum(bytes)}")
+    mut small: list[int8] = [-128, 0, 127]
+    small[1] = OFFSET
+    print(small)
+    mut shorts: list[int16] = [1000, -1000]
+    shorts.append(32767)
+    print(f"{shorts} {shorts[-1]}")
+    mut halves: list[uint16] = [65535, 1]
+    below = halves[0] - 1
+    halves[1] = below
+    print(halves)
+    mut ints: list[int32] = [1, 2, 3]
+    product = ints[1] * ints[2]
+    ints[0] = product
+    print(ints)
+    words: list[uint32] = [4294967295, 1]
+    print(words[0] - words[1])
+    mut wides: list[uint64] = [18446744073709551615]
+    wides.append(5)
+    print(f"{wides} {wides[0] >> 60}")
+    mut singles: list[float32] = [1.5, -2.25]
+    singles.append(0.75)
+    doubled = singles[1] * 2.0
+    singles[0] = doubled
+    print(f"{singles} {singles[2] as float64}")
+
+    # Bitwise operators and shifts on each signedness.
+    print(mix(12345, 678))
+    x: int8 = -3
+    print(f"{~x} {-x} {x >> 1} {x << 2} {x & 0x0F} {x | 1} {x ^ -1}")
+    y: uint8 = 5
+    print(f"{~y} {y << 4} {y & 3} {y | 8} {y ^ 255}")
+    u: uint64 = 18446744073709551615
+    print(f"{u >> 63} {u & 255} {~u}")
+
+    # Casts between scalar kinds.
+    z: int64 = 123456789
+    print(f"{z as float64} {(z // 1000) as float32} {z as int32} {z as uint64}")
+    f: float64 = -3.7
+    print(f"{f as int32} {f as int64} {(2.9 as float64) as uint8} {-0.5 as uint32}")
+    print(f"{(u - 2047) as float64} {(9007199254740992 as int64) as float64}")
+    big: float64 = 18446744073709549568.0
+    print(f"{big as uint64} {(-9223372036854775808.0 as float64) as int64}")
+    q: int16 = -7
+    print(f"{q // 2} {q % 3} {(q as int8) as int32}")
+
+    # Literal module constants read as their literal.
+    print(f"{LIMIT * 2} {MASK} {SCALE * 2.0} {OFFSET * 3}")
