@@ -1,0 +1,50 @@
+# Allocation: build and walk many complete binary trees (Benchmarks Game).
+#
+# Builds a stretch tree of depth N + 1, keeps one long-lived tree of depth N, and
+# for each even depth from 4 to N builds 2^(N - depth + 4) short-lived trees,
+# counting the nodes of each. It measures allocation, recursion, and freeing.
+import sys
+
+
+enum Tree:
+    Leaf
+    Node(left: indirect Tree, right: indirect Tree)
+
+
+def make(depth: int64) -> Tree:
+    if depth == 0:
+        return Tree.Leaf
+    return Tree.Node(left=make(depth - 1), right=make(depth - 1))
+
+
+def check(tree: Tree) -> int64:
+    match tree:
+        case Tree.Leaf:
+            return 1
+        case Tree.Node(left, right):
+            return 1 + check(left) + check(right)
+
+
+def main():
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(requested):
+            run(max(6, requested))
+        case Result.Err(_):
+            print("usage: binary_trees <depth>")
+
+
+def run(n: int64):
+    stretch = check(make(n + 1))
+    long_lived = make(n)
+    mut rows: list[str] = []
+    mut depth = 4
+    while depth <= n:
+        iterations = 1 << (n - depth + 4)
+        mut total = 0
+        for _ in range(iterations):
+            total += check(make(depth))
+        rows.append(f"{depth}:{iterations}:{total}")
+        depth += 2
+    print(
+        f"binary_trees depth={n} stretch={stretch} rows={",".join(rows)} long_lived={check(long_lived)}"
+    )

@@ -1,0 +1,127 @@
+# JSON parse and serialize: an API-style payload parsed, walked, and dumped N times.
+#
+# Builds a 1,000-record order payload, serializes it once, then each round
+# parses the text, walks the tree for statistics, and serializes it again.
+import json
+import sys
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+class Stats:
+    ints: int64 = 0
+    floats: int64 = 0
+    strings: int64 = 0
+    string_bytes: int64 = 0
+    nulls: int64 = 0
+    bools: int64 = 0
+    containers: int64 = 0
+
+
+def build_payload(rng: mut Rng) -> json.Value:
+    records = 1000
+    mut orders: list[json.Value] = []
+    for i in range(records):
+        r = rng.next()
+        mut note = json.Value.Null
+        if r % 4 == 0:
+            note = json.Value.String(f"gift \"wrap\" \\ {i}\n")
+        mut items: list[json.Value] = []
+        for _ in range(1 + r % 3):
+            items.append(
+                json.Value.Object(
+                    {
+                        "sku": json.Value.String(f"SKU-{(r // 11) % 900}"),
+                        "units": json.Value.Int(1 + (r // 13) % 5),
+                    }
+                )
+            )
+        address = json.Value.Object(
+            {
+                "city": json.Value.String(f"city-{r % 40}"),
+                "zip": json.Value.Int(10000 + r % 90000),
+            }
+        )
+        orders.append(
+            json.Value.Object(
+                {
+                    "id": json.Value.Int(i),
+                    "customer": json.Value.String(f"customer-{r % 500}"),
+                    "price": json.Value.Float(
+                        (2 * (r % 50000) + 1).to_float() / 1000.0
+                    ),
+                    "quantity": json.Value.Int(1 + (r // 7) % 20),
+                    "express": json.Value.Bool(r % 3 == 0),
+                    "note": note,
+                    "items": json.Value.Array(items),
+                    "address": address,
+                }
+            )
+        )
+    return json.Value.Object(
+        {
+            "version": json.Value.Int(3),
+            "source": json.Value.String("benchmark"),
+            "orders": json.Value.Array(orders),
+        }
+    )
+
+
+def walk(value: json.Value, stats: mut Stats):
+    match value:
+        case json.Value.Null:
+            stats.nulls += 1
+        case json.Value.Bool(_):
+            stats.bools += 1
+        case json.Value.Int(number):
+            stats.ints += number
+        case json.Value.Float(number):
+            stats.floats += round(number * 1000.0)
+        case json.Value.String(text):
+            stats.strings += 1
+            stats.string_bytes += text.byte_len()
+        case json.Value.Array(items):
+            stats.containers += 1
+            for item in items:
+                walk(item, stats)
+        case json.Value.Object(fields):
+            stats.containers += 1
+            for key in fields.keys():
+                match fields.lookup(key):
+                    case Lookup.Found(item):
+                        walk(item, stats)
+                    case Lookup.Missing:
+                        pass
+
+
+def main() -> int32:
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(rounds):
+            mut rng = Rng(state=5)
+            text = json.dumps(build_payload(rng))
+            mut stats = Stats()
+            mut dumped_bytes = 0
+            for _ in range(rounds):
+                match own json.parse(text):
+                    case Result.Ok(value):
+                        walk(value, stats)
+                        again = json.dumps(value)
+                        if again != text:
+                            print("round trip changed the text")
+                            return 1
+                        dumped_bytes += again.byte_len()
+                    case Result.Err(error):
+                        print(error)
+                        return 1
+            print(
+                f"json_roundtrip rounds={rounds} text_bytes={text.byte_len()} ints={stats.ints} floats={stats.floats} strings={stats.strings} string_bytes={stats.string_bytes} nulls={stats.nulls} bools={stats.bools} containers={stats.containers} dumped_bytes={dumped_bytes}"
+            )
+            return 0
+        case Result.Err(_):
+            return 2

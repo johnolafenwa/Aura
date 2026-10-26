@@ -1,0 +1,171 @@
+# Web rendering: a Mustache-style template engine producing HTML pages.
+#
+# Compiles one page template with escaped variables ({{name}}), raw variables
+# ({{&name}}), and a repeated section ({{#rows}}...{{/rows}}) into segments, then
+# renders N pages, each from its own context with 20 table rows. Text that goes
+# through {{name}} is HTML-escaped. Reports the pages, rows, bytes rendered, the
+# escapes written, and a checksum of every page's length.
+import sys
+
+LITERAL = 0
+ESCAPED = 1
+RAW = 2
+SECTION = 3
+END = 4
+MOD = 1000000007
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+class Template:
+    kinds: list[int64]
+    texts: list[str]
+
+
+def template_source() -> str:
+    return "<!doctype html>\n<html><head><title>{{title}}</title></head>\n<body><h1>{{title}}</h1>\n<p class=\"greeting\">Welcome back, {{user}}!</p>\n<table>\n{{#rows}}<tr><td>{{name}}</td><td class=\"price\">${{price}}</td><td>{{note}}</td><td>{{user}}</td></tr>\n{{/rows}}</table>\n<footer>{{&footer}}</footer>\n</body></html>\n"
+
+
+def compile_template(source: str) -> Template:
+    mut template = Template(kinds=[], texts=[])
+    parts = source.split("{{")
+    template.kinds.append(LITERAL)
+    template.texts.append(parts[0].clone())
+    for k in range(1, parts.len()):
+        pair = parts[k].split_once("}}")
+        if pair is None:
+            continue
+        tag, literal = pair
+        match own tag.strip_prefix("#"):
+            case str as name:
+                template.kinds.append(SECTION)
+                template.texts.append(name)
+            case None:
+                match own tag.strip_prefix("/"):
+                    case str as name:
+                        template.kinds.append(END)
+                        template.texts.append(name)
+                    case None:
+                        match own tag.strip_prefix("&"):
+                            case str as name:
+                                template.kinds.append(RAW)
+                                template.texts.append(name)
+                            case None:
+                                template.kinds.append(ESCAPED)
+                                template.texts.append(tag.clone())
+        template.kinds.append(LITERAL)
+        template.texts.append(literal)
+    return template
+
+
+def escape(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace(
+        "\"",
+        "&quot;",
+    ).replace("'", "&#39;")
+
+
+def lookup(name: str, row: dict[str, str], context: dict[str, str]) -> str:
+    match row.get(name):
+        case Lookup.Found(value):
+            return value.clone()
+        case Lookup.Missing:
+            return context[name].clone()
+
+
+def render_range(
+    template: Template,
+    start: int64,
+    end: int64,
+    row: dict[str, str],
+    context: dict[str, str],
+    rows: list[dict[str, str]],
+    out: mut list[str],
+):
+    mut i = start
+    while i < end:
+        kind = template.kinds[i]
+        if kind == LITERAL:
+            out.append(template.texts[i].clone())
+        elif kind == ESCAPED:
+            out.append(escape(lookup(template.texts[i], row, context)))
+        elif kind == RAW:
+            out.append(lookup(template.texts[i], row, context))
+        elif kind == SECTION:
+            mut close = i + 1
+            while template.kinds[close] != END:
+                close += 1
+            for item in rows:
+                render_range(template, i + 1, close, item, context, rows, out)
+            i = close
+        i += 1
+
+
+def make_context(rng: mut Rng, page: int64) -> dict[str, str]:
+    syllables = ["ka", "lo", "mi", "ra", "to", "ne", "su", "vi"]
+    view syllable = syllables[page % 8]
+    mut context: dict[str, str] = {}
+    context["title"] = f"Catalog page {page} <{syllable}>"
+    context["user"] = f"user<{rng.next() % 1000}>&co"
+    context["footer"] = f"<small>Generated page {page}</small>"
+    return context
+
+
+def make_rows(rng: mut Rng) -> list[dict[str, str]]:
+    syllables = ["ka", "lo", "mi", "ra", "to", "ne", "su", "vi"]
+    notes = [
+        "fresh & local",
+        "<limited>",
+        "\"best\" seller",
+        "it's new",
+        "plain",
+        "a < b > c",
+    ]
+    mut rows: list[dict[str, str]] = []
+    for _ in range(20):
+        r = rng.next()
+        cents = r % 100000
+        view first = syllables[r % 8]
+        view second = syllables[(r // 8) % 8]
+        view third = syllables[(r // 64) % 8]
+        mut row: dict[str, str] = {}
+        row["name"] = f"{first}{second}{third}"
+        row["price"] = f"{cents // 100}.{cents % 100:02}"
+        row["note"] = notes[(r // 512) % 6].clone()
+        rows.append(row)
+    return rows
+
+
+def main():
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            run(n)
+        case Result.Err(_):
+            print("usage: template_render <pages>")
+
+
+def run(n: int64):
+    mut rng = Rng(state=61)
+    template = compile_template(template_source())
+    empty: dict[str, str] = {}
+    mut total_bytes = 0
+    mut escapes = 0
+    mut checksum = 0
+    for page in range(n):
+        context = make_context(rng, page)
+        rows = make_rows(rng)
+        mut out: list[str] = []
+        render_range(template, 0, template.kinds.len(), empty, context, rows, out)
+        html = "".join(out)
+        total_bytes += html.byte_len()
+        escapes += html.count("&")
+        checksum = (checksum * 31 + html.byte_len()) % MOD
+    print(
+        f"template_render pages={n} segments={template.kinds.len()} rows={n * 20} bytes={total_bytes} escapes={escapes} checksum={checksum}"
+    )

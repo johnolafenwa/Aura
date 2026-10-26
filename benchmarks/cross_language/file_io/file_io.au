@@ -1,0 +1,118 @@
+# File I/O: a line log, a binary record file, and a directory of small files.
+#
+# Writes N log lines one write call at a time, reads the log back and parses it,
+# writes N four-byte little-endian records and decodes them, then creates N / 100
+# small files in a subdirectory, lists and reads them, replaces a manifest
+# atomically (write a temporary file, rename it over the target), and deletes
+# everything it wrote. Takes the line count and a scratch directory.
+import fs
+import io
+import path
+import sys
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+def main() -> int32:
+    args = sys.args()
+    match parse_int64(args[0]):
+        case Result.Ok(n):
+            match run(n, args[1].clone()):
+                case Result.Ok(summary):
+                    print(summary)
+                    return 0
+                case Result.Err(error):
+                    print(error)
+                    return 1
+        case Result.Err(_):
+            print("usage: file_io <lines> <workdir>")
+            return 2
+
+
+def run(n: int64, workdir: str) -> Result[str, io.Error]:
+    mut rng = Rng(state=37)
+
+    log_path = path.join(workdir.clone(), "events.log")
+    with log = try fs.create(log_path.clone()):
+        for i in range(n):
+            try log.write_all(f"event {i} value {rng.next() % 100000}\n")
+        try log.flush()
+    text = try fs.read_to_string(log_path.clone())
+    mut lines = 0
+    mut value_sum = 0
+    for line in text.split("\n"):
+        if line == "":
+            continue
+        fields = line.split(" ")
+        lines += 1
+        value_sum += try_int(fields[3])
+
+    mut records: list[uint8] = []
+    for _ in range(n):
+        v = rng.next()
+        records.append((v & 255) as uint8)
+        records.append(((v >> 8) & 255) as uint8)
+        records.append(((v >> 16) & 255) as uint8)
+        records.append(((v >> 24) & 255) as uint8)
+    binary_path = path.join(workdir.clone(), "records.bin")
+    try fs.write_bytes(binary_path.clone(), records)
+    loaded = try fs.read_bytes(binary_path.clone())
+    mut checksum = 0
+    mut i = 0
+    while i < loaded.len():
+        v = (loaded[i] as int64) | ((loaded[i + 1] as int64) << 8) | (
+            (loaded[i + 2] as int64) << 16
+        ) | ((loaded[i + 3] as int64) << 24)
+        checksum = (checksum * 31 + v) % 1000000007
+        i += 4
+
+    shard = path.join(workdir.clone(), "shard")
+    match own fs.create_dir(shard.clone()):
+        case Result.Ok(_):
+            pass
+        case Result.Err(io.Error.AlreadyExists):
+            pass
+        case Result.Err(error):
+            return Result.Err(error)
+    files = max(1, n // 100)
+    for k in range(files):
+        mut content: list[str] = []
+        for _ in range(k % 10 + 1):
+            content.append(f"shard {k}\n")
+        try fs.write_string(path.join(shard.clone(), f"part-{k}.txt"), "".join(content))
+    names = try fs.read_dir(shard.clone())
+    mut file_bytes = 0
+    for name in names:
+        part = try fs.read_to_string(path.join(shard.clone(), name.clone()))
+        file_bytes += part.byte_len()
+    manifest = path.join(workdir.clone(), "manifest.txt")
+    temporary = f"{manifest}.tmp"
+    with out = try fs.create(temporary.clone()):
+        try out.write_all("\n".join(names))
+        try out.sync()
+    try fs.rename(temporary, manifest.clone())
+    manifest_bytes = (try fs.read_to_string(manifest.clone())).byte_len()
+
+    for name in names:
+        try fs.remove_file(path.join(shard.clone(), name.clone()))
+    try fs.remove_file(manifest)
+    try fs.remove_file(binary_path)
+    try fs.remove_file(log_path)
+    left = (try fs.read_dir(shard)).len()
+    return Result.Ok(
+        f"file_io lines={lines} value_sum={value_sum} record_bytes={loaded.len()} checksum={checksum} files={files} listed={names.len()} file_bytes={file_bytes} manifest_bytes={manifest_bytes} left={left}"
+    )
+
+
+def try_int(text: str) -> int64:
+    match parse_int64(text):
+        case Result.Ok(value):
+            return value
+        case Result.Err(_):
+            return 0

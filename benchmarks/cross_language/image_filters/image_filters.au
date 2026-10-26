@@ -1,0 +1,107 @@
+# Image processing: blur, edge detection, histogram, downscale, PGM encoding.
+#
+# Generates an N x N grayscale image (a gradient plus noise), applies a 3 x 3 box
+# blur with clamped edges, runs a Sobel edge detector on the result, builds a
+# 16-bin histogram of edge strength, halves the image with 2 x 2 averaging, and
+# encodes the small image as a binary PGM file in memory. Pixels live in flat
+# integer lists indexed by y * width + x.
+import sys
+
+MOD = 1000000007
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+def zeros(n: int64) -> list[int64]:
+    mut values: list[int64] = []
+    for _ in range(n):
+        values.append(0)
+    return values
+
+
+def blur(pixels: list[int64], n: int64) -> list[int64]:
+    mut out = zeros(n * n)
+    for y in range(n):
+        for x in range(n):
+            mut total = 0
+            for dy in range(-1, 2):
+                yy = min(n - 1, max(0, y + dy))
+                for dx in range(-1, 2):
+                    xx = min(n - 1, max(0, x + dx))
+                    total += pixels[yy * n + xx]
+            out[y * n + x] = total // 9
+    return out
+
+
+def sobel(pixels: list[int64], n: int64) -> list[int64]:
+    mut out = zeros(n * n)
+    for y in range(1, n - 1):
+        for x in range(1, n - 1):
+            i = y * n + x
+            gx = (pixels[i - n + 1] + 2 * pixels[i + 1] + pixels[i + n + 1]) - (
+                pixels[i - n - 1] + 2 * pixels[i - 1] + pixels[i + n - 1]
+            )
+            gy = (pixels[i + n - 1] + 2 * pixels[i + n] + pixels[i + n + 1]) - (
+                pixels[i - n - 1] + 2 * pixels[i - n] + pixels[i - n + 1]
+            )
+            out[i] = min(255, abs(gx) + abs(gy))
+    return out
+
+
+def downscale(pixels: list[int64], n: int64) -> list[int64]:
+    half = n // 2
+    mut out: list[int64] = []
+    for y in range(half):
+        for x in range(half):
+            i = 2 * y * n + 2 * x
+            out.append(
+                (pixels[i] + pixels[i + 1] + pixels[i + n] + pixels[i + n + 1]) // 4
+            )
+    return out
+
+
+def main():
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            run(n)
+        case Result.Err(_):
+            print("usage: image_filters <size>")
+
+
+def run(n: int64):
+    mut rng = Rng(state=71)
+    mut pixels: list[int64] = []
+    for y in range(n):
+        for x in range(n):
+            pixels.append((x * x + 3 * y * y + rng.next() % 32) % 256)
+    blurred = blur(pixels, n)
+    edges = sobel(blurred, n)
+    mut histogram = zeros(16)
+    mut strong = 0
+    for value in edges:
+        histogram[value // 16] += 1
+        if value > 128:
+            strong += 1
+    small = downscale(blurred, n)
+    half = n // 2
+    mut pgm: list[uint8] = f"P5\n{half} {half}\n255\n".to_bytes()
+    for value in small:
+        pgm.append(value as uint8)
+    mut blur_check = 0
+    for value in blurred:
+        blur_check = (blur_check * 31 + value) % MOD
+    mut pgm_check = 0
+    for value in pgm:
+        pgm_check = (pgm_check * 131 + (value as int64)) % MOD
+    mut bins: list[str] = []
+    for h in histogram:
+        bins.append(f"{h}")
+    print(
+        f"image_filters size={n} blur={blur_check} strong={strong} histogram={",".join(bins)} pgm_bytes={pgm.len()} pgm={pgm_check}"
+    )

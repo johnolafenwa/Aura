@@ -1,0 +1,119 @@
+# Checksums and content-defined chunking over a byte buffer.
+#
+# Generates N bytes from 64 random 200-byte blocks (some with one byte changed),
+# then computes FNV-1a (32-bit), CRC-32 (table driven), and Adler-32 over the
+# whole buffer. It also splits the buffer into chunks where a rolling hash over a
+# 16-byte window hits a boundary, as backup and sync tools do, and counts the
+# distinct chunks by their FNV-1a hash.
+import sys
+
+WINDOW = 16
+BASE = 257
+MOD = 1000000007
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+def generate(rng: mut Rng, n: int64) -> list[uint8]:
+    mut blocks: list[list[uint8]] = []
+    for _ in range(64):
+        mut block: list[uint8] = []
+        for _byte in range(200):
+            block.append((rng.next() % 256) as uint8)
+        blocks.append(block)
+    mut data: list[uint8] = []
+    while data.len() < n:
+        r = rng.next()
+        if r % 5 == 0:
+            mut block = blocks[r % 64].copy()
+            block[(r // 5) % 200] = ((r // 1000) % 256) as uint8
+            data.extend(block)
+        else:
+            data.extend(blocks[r % 64].copy())
+    return data[0:n]
+
+
+def fnv1a(data: list[uint8], start: int64, end: int64) -> int64:
+    mut h = 2166136261
+    for i in range(start, end):
+        h = ((h ^ (data[i] as int64)) * 16777619) % 4294967296
+    return h
+
+
+def crc_table() -> list[int64]:
+    mut table: list[int64] = []
+    for i in range(256):
+        mut c = i
+        for _bit in range(8):
+            if c & 1 != 0:
+                c = 0xEDB88320 ^ (c >> 1)
+            else:
+                c = c >> 1
+        table.append(c)
+    return table
+
+
+def crc32(table: list[int64], data: list[uint8]) -> int64:
+    mut c = 0xFFFFFFFF
+    for b in data:
+        c = table[(c ^ (b as int64)) & 255] ^ (c >> 8)
+    return c ^ 0xFFFFFFFF
+
+
+def adler32(data: list[uint8]) -> int64:
+    mut a = 1
+    mut b = 0
+    for x in data:
+        a = (a + (x as int64)) % 65521
+        b = (b + a) % 65521
+    return b * 65536 + a
+
+
+def main():
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            run(n)
+        case Result.Err(_):
+            print("usage: hashing <bytes>")
+
+
+def run(n: int64):
+    mut rng = Rng(state=43)
+    data = generate(rng, n)
+    whole = fnv1a(data, 0, data.len())
+    crc = crc32(crc_table(), data)
+    adler = adler32(data)
+
+    mut power = 1
+    for _ in range(WINDOW - 1):
+        power = power * BASE % MOD
+    mut seen: set[int64] = {}
+    mut chunks = 0
+    mut chunk_sum = 0
+    mut start = 0
+    mut h = 0
+    for i in range(data.len()):
+        if i >= WINDOW:
+            h = (h + MOD - (data[i - WINDOW] as int64) * power % MOD) % MOD
+        h = (h * BASE + (data[i] as int64)) % MOD
+        size = i + 1 - start
+        if size >= 32 and (h % 128 == 0 or size >= 1024):
+            digest = fnv1a(data, start, i + 1)
+            seen.add(digest)
+            chunks += 1
+            chunk_sum = (chunk_sum + digest % 1000003 * size) % MOD
+            start = i + 1
+    if start < data.len():
+        digest = fnv1a(data, start, data.len())
+        seen.add(digest)
+        chunks += 1
+        chunk_sum = (chunk_sum + digest % 1000003 * (data.len() - start)) % MOD
+    print(
+        f"hashing bytes={data.len()} fnv={whole} crc32={crc} adler32={adler} chunks={chunks} unique={seen.len()} chunk_sum={chunk_sum}"
+    )

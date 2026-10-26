@@ -1,0 +1,657 @@
+# Web browser: fetch pages over HTTP, parse HTML and CSS, lay out text, follow links.
+#
+# A server task generates a site of N HTML pages, each with a style sheet,
+# headings, paragraphs, lists, inline links, and hidden ad blocks. The browser
+# crawls the site breadth first from /page/0, one request per connection. For
+# each page it tokenizes the HTML into a DOM tree, parses the <style> sheet,
+# computes each element's style with tag and class selectors and specificity,
+# and lays the visible text out into lines with word wrapping, indents, margins,
+# and numbered link markers, like a text-mode browser. Links to missing pages get
+# 404 replies. Reports crawl counts and a checksum over every rendered line.
+import io
+import net
+import sys
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+def word_pool() -> list[str]:
+    return [
+        "alpha",
+        "bravo",
+        "cache",
+        "delta",
+        "engine",
+        "fabric",
+        "gamma",
+        "harbor",
+        "index",
+        "jolly",
+        "kernel",
+        "lambda",
+        "matrix",
+        "nectar",
+        "orbit",
+        "packet",
+        "quartz",
+        "router",
+        "socket",
+        "tensor",
+        "update",
+        "vector",
+        "widget",
+        "xenon",
+        "yield",
+        "zephyr",
+        "browser",
+        "layout",
+        "render",
+        "stream",
+        "token",
+        "cursor",
+    ]
+
+
+def style_sheet() -> str:
+    return "body { width: 72 }\nh1 { transform: upper; margin: 1 }\nh2 { margin: 1 }\np { indent: 2 }\nul { margin: 1 }\nli { indent: 4 }\n.note { indent: 6; width: 56 }\n.wide { width: 96 }\n.hidden, .ad { display: none }\na.ext { transform: upper }\n"
+
+
+def not_found_page() -> str:
+    return "<html><body><h1>Not found</h1></body></html>"
+
+
+def words(rng: mut Rng, pool: list[str], count: int64) -> str:
+    mut out: list[str] = []
+    for _ in range(count):
+        out.append(pool[rng.next() % 32].clone())
+    return " ".join(out)
+
+
+def inline_text(rng: mut Rng, pool: list[str], total: int64, count: int64) -> str:
+    mut parts: list[str] = []
+    for _ in range(count):
+        r = rng.next()
+        kind = r % 20
+        word = pool[(r // 20) % 32].clone()
+        if kind == 0:
+            target = (r // 640) % (total + total // 10 + 1)
+            second = pool[(r // 7) % 32].clone()
+            parts.append(f"<a href=\"/page/{target}\">{word} {second}</a>")
+        elif kind == 1:
+            parts.append(
+                f"<a class=\"ext\" href=\"http://example.com/{word}\">{word}</a>"
+            )
+        elif kind == 2:
+            parts.append(f"<b>{word}</b>")
+        elif kind == 3:
+            parts.append(f"<em>{word}</em>")
+        elif kind == 4:
+            parts.append(f"{word} &amp; co")
+        elif kind == 5:
+            parts.append(f"&lt;{word}&gt;")
+        else:
+            parts.append(word)
+    return " ".join(parts)
+
+
+def page_html(page: int64, total: int64) -> str:
+    pool = word_pool()
+    class_options = ["", " class=\"note\"", " class=\"wide\"", " class=\"note wide\""]
+    mut rng = Rng(state=(page + 1) * 7919)
+    mut out: list[str] = [
+        f"<!doctype html>\n<html><head><title>Page {page}</title>\n<style>\n{style_sheet()}</style></head>\n<body>\n"
+    ]
+    title = words(rng, pool, 3)
+    out.append(f"<h1>Page {page}: {title}</h1>\n")
+    sections = 3 + rng.next() % 4
+    for _section in range(sections):
+        count = 2 + rng.next() % 3
+        heading = words(rng, pool, count)
+        out.append(f"<h2>{heading}</h2>\n")
+        paragraphs = 1 + rng.next() % 3
+        for _paragraph in range(paragraphs):
+            r = rng.next()
+            classes = class_options[r % 4].clone()
+            text = inline_text(rng, pool, total, 20 + (r // 4) % 40)
+            out.append(f"<p{classes}>{text}</p>\n")
+        r = rng.next()
+        if r % 3 == 0:
+            items = 2 + (r // 3) % 4
+            out.append("<ul>\n")
+            for _item in range(items):
+                item_count = 3 + rng.next() % 6
+                text = inline_text(rng, pool, total, item_count)
+                out.append(f"<li>{text}</li>\n")
+            out.append("</ul>\n")
+        if r % 5 == 1:
+            out.append("<div class=\"ad\">Buy <b>now</b> &amp; save</div>\n")
+        if r % 7 == 2:
+            out.append("<!-- generated section -->\n<p>see<br>also</p>\n")
+    out.append("</body></html>\n")
+    return "".join(out)
+
+
+class Node:
+    tag: str
+    classes: list[str]
+    href: str
+    text: str
+    children: list[int64]
+
+
+def text_node(text: own str) -> Node:
+    return Node(tag="", classes=[], href="", text=text, children=[])
+
+
+def add_child(nodes: mut list[Node], parent: int64, node: own Node) -> int64:
+    nodes.append(node)
+    index = nodes.len() - 1
+    nodes[parent].children.append(index)
+    return index
+
+
+def is_hidden(tag: str) -> bool:
+    return tag == "head" or tag == "title" or tag == "style" or tag == "script"
+
+
+def is_block(tag: str) -> bool:
+    return tag == "html" or tag == "body" or tag == "h1" or tag == "h2" or tag == "p" or tag == "div" or tag == "ul" or tag == "li"
+
+
+def is_void(tag: str) -> bool:
+    return tag == "br" or tag == "img" or tag == "meta" or tag == "hr"
+
+
+def decode_entities(text: str) -> str:
+    if not text.contains("&"):
+        return text.clone()
+    return text.replace("&lt;", "<").replace("&gt;", ">").replace(
+        "&quot;",
+        "\"",
+    ).replace("&amp;", "&")
+
+
+def attribute_name(part: str) -> str:
+    trimmed = part.trim()
+    match own trimmed.strip_suffix("="):
+        case str as bare:
+            return bare.trim().to_lower()
+        case None:
+            return trimmed.to_lower()
+
+
+def parse_tag(inner: str) -> Node:
+    mut name = inner.clone()
+    mut rest = ""
+    pair = inner.split_once(" ")
+    if pair is not None:
+        head, tail = pair
+        name = head
+        rest = tail
+    mut classes: list[str] = []
+    mut href = ""
+    parts = rest.split("\"")
+    mut k = 0
+    while k + 1 < parts.len():
+        attribute = attribute_name(parts[k])
+        if attribute == "class":
+            classes = parts[k + 1].split_whitespace()
+        elif attribute == "href":
+            href = parts[k + 1].clone()
+        k += 2
+    return Node(tag=name.to_lower(), classes=classes, href=href, text="", children=[])
+
+
+def find_byte(bytes: list[uint8], start: int64, target: uint8) -> int64:
+    mut i = start
+    while i < bytes.len():
+        if bytes[i] == target:
+            return i
+        i += 1
+    return bytes.len()
+
+
+def matches_at(bytes: list[uint8], start: int64, needle: list[uint8]) -> bool:
+    if start + needle.len() > bytes.len():
+        return false
+    for k in range(needle.len()):
+        if bytes[start + k] != needle[k]:
+            return false
+    return true
+
+
+def find_text(bytes: list[uint8], start: int64, needle: list[uint8]) -> int64:
+    mut i = start
+    while i + needle.len() <= bytes.len():
+        if bytes[i] == needle[0] and matches_at(bytes, i, needle):
+            return i
+        i += 1
+    return bytes.len()
+
+
+def text_between(bytes: list[uint8], start: int64, end: int64) -> str:
+    match own str.from_bytes(bytes[start:end]):
+        case Result.Ok(text):
+            return text
+        case Result.Err(_):
+            return ""
+
+
+def parse_html(html: str) -> list[Node]:
+    bytes: list[uint8] = html.to_bytes()
+    comment_open: list[uint8] = "<!--".to_bytes()
+    comment_close: list[uint8] = "-->".to_bytes()
+    n = bytes.len()
+    mut nodes: list[Node] = [
+        Node(tag="#document", classes=[], href="", text="", children=[])
+    ]
+    mut stack: list[int64] = [0]
+    mut i = 0
+    while i < n:
+        if bytes[i] != 60:
+            end = find_byte(bytes, i, 60)
+            text = text_between(bytes, i, end)
+            i = end
+            if text.trim() != "":
+                add_child(
+                    nodes,
+                    stack[stack.len() - 1],
+                    text_node(decode_entities(text)),
+                )
+            continue
+        if matches_at(bytes, i, comment_open):
+            i = min(find_text(bytes, i + 4, comment_close) + 3, n)
+            continue
+        end = find_byte(bytes, i, 62)
+        if end >= n:
+            break
+        inner = text_between(bytes, i + 1, end)
+        i = end + 1
+        if inner.starts_with("!"):
+            continue
+        match own inner.strip_prefix("/"):
+            case str as closing:
+                name = closing.trim().to_lower()
+                mut depth = stack.len() - 1
+                while depth > 0:
+                    if nodes[stack[depth]].tag == name:
+                        while stack.len() > depth:
+                            stack.pop()
+                        break
+                    depth -= 1
+                continue
+            case None:
+                pass
+        node = parse_tag(inner)
+        tag = node.tag.clone()
+        index = add_child(nodes, stack[stack.len() - 1], node)
+        if tag == "style" or tag == "script":
+            closing_tag: list[uint8] = ("</" + tag).to_bytes()
+            close = find_text(bytes, i, closing_tag)
+            add_child(nodes, index, text_node(text_between(bytes, i, close)))
+            i = close
+            stack.append(index)
+        elif not is_void(tag):
+            stack.append(index)
+    return nodes
+
+
+class Rule:
+    tag: str
+    class_name: str
+    specificity: int64
+    prop: int64
+    value: int64
+
+
+copy class Declaration:
+    prop: int64
+    value: int64
+
+
+def property_index(name: str) -> int64:
+    if name == "width":
+        return 0
+    if name == "indent":
+        return 1
+    if name == "margin":
+        return 2
+    if name == "transform":
+        return 3
+    if name == "display":
+        return 4
+    return -1
+
+
+def property_value(prop: int64, text: str) -> int64:
+    if prop == 3:
+        if text == "upper":
+            return 1
+        return 0
+    if prop == 4:
+        if text == "none":
+            return 0
+        if text == "block":
+            return 1
+        return 2
+    match parse_int64(text):
+        case Result.Ok(value):
+            return value
+        case Result.Err(_):
+            return 0
+
+
+def parse_css(text: str) -> list[Rule]:
+    mut rules: list[Rule] = []
+    for block in text.split("}"):
+        pair = block.split_once("{")
+        if pair is None:
+            continue
+        selectors, body = pair
+        mut declarations: list[Declaration] = []
+        for declaration in body.split(";"):
+            entry = declaration.split_once(":")
+            if entry is None:
+                continue
+            name, value = entry
+            prop = property_index(name.trim())
+            if prop >= 0:
+                declarations.append(
+                    Declaration(prop=prop, value=property_value(prop, value.trim()))
+                )
+        for selector in selectors.split(","):
+            trimmed = selector.trim()
+            mut tag = trimmed.clone()
+            mut class_name = ""
+            parts = trimmed.split_once(".")
+            if parts is not None:
+                head, tail = parts
+                tag = head
+                class_name = tail
+            mut specificity = 0
+            if tag != "":
+                specificity += 1
+            if class_name != "":
+                specificity += 10
+            for declared in declarations:
+                rules.append(
+                    Rule(
+                        tag=tag.clone(),
+                        class_name=class_name.clone(),
+                        specificity=specificity,
+                        prop=declared.prop,
+                        value=declared.value,
+                    )
+                )
+    return rules
+
+
+copy class Style:
+    width: int64
+    indent: int64
+    margin: int64
+    upper: int64
+    display: int64
+
+
+def compute_style(node: Node, parent: Style, rules: list[Rule]) -> Style:
+    mut values: list[int64] = [parent.width, parent.indent, 0, parent.upper, 2]
+    if is_hidden(node.tag):
+        values[4] = 0
+    elif is_block(node.tag):
+        values[4] = 1
+    mut best: list[int64] = [-1, -1, -1, -1, -1]
+    for rule in rules:
+        if rule.tag != "" and rule.tag != node.tag:
+            continue
+        if rule.class_name != "" and not (rule.class_name in node.classes):
+            continue
+        if rule.specificity >= best[rule.prop]:
+            best[rule.prop] = rule.specificity
+            values[rule.prop] = rule.value
+    return Style(
+        width=values[0],
+        indent=values[1],
+        margin=values[2],
+        upper=values[3],
+        display=values[4],
+    )
+
+
+class Layout:
+    lines: list[str]
+    words: list[str]
+    line_len: int64
+    width: int64
+    indent: int64
+    links: list[str]
+    word_count: int64
+
+    def flush(mut self):
+        if self.words.len() > 0:
+            self.lines.append(" ".repeat(self.indent) + " ".join(self.words))
+            self.words.clear()
+            self.line_len = 0
+
+    def add_word(mut self, word: own str):
+        available = max(self.width - self.indent, 1)
+        if self.words.len() > 0 and self.line_len + 1 + word.byte_len() > available:
+            self.flush()
+        if self.words.len() > 0:
+            self.line_len += 1
+        self.line_len += word.byte_len()
+        self.words.append(word)
+        self.word_count += 1
+
+
+def render(
+    nodes: list[Node],
+    index: int64,
+    parent: Style,
+    rules: list[Rule],
+    layout: mut Layout,
+):
+    view node = nodes[index]
+    if node.tag == "":
+        for word in node.text.split_whitespace():
+            if parent.upper == 1:
+                layout.add_word(word.to_upper())
+            else:
+                layout.add_word(word.clone())
+        return
+    style = compute_style(node, parent, rules)
+    if style.display == 0:
+        return
+    if node.tag == "br":
+        layout.flush()
+        return
+    block = style.display == 1
+    saved_width = layout.width
+    saved_indent = layout.indent
+    if block:
+        layout.flush()
+        for _blank in range(style.margin):
+            layout.lines.append("")
+        layout.width = style.width
+        layout.indent = style.indent
+    for child in node.children:
+        render(nodes, child, style, rules, layout)
+    if node.tag == "a" and node.href != "":
+        layout.links.append(node.href.clone())
+        marker = f"[{layout.links.len()}]"
+        layout.add_word(marker)
+    if block:
+        layout.flush()
+        layout.width = saved_width
+        layout.indent = saved_indent
+
+
+class Page:
+    nodes: int64
+    title_bytes: int64
+    layout: Layout
+
+
+def browse(html: str) -> Page:
+    nodes = parse_html(html)
+    mut sheet: list[str] = []
+    mut title_bytes = 0
+    for node in nodes:
+        if node.tag == "style":
+            for child in node.children:
+                sheet.append(nodes[child].text.clone())
+        elif node.tag == "title":
+            for child in node.children:
+                title_bytes += nodes[child].text.byte_len()
+    rules = parse_css("".join(sheet))
+    mut layout = Layout(
+        lines=[],
+        words=[],
+        line_len=0,
+        width=80,
+        indent=0,
+        links=[],
+        word_count=0,
+    )
+    render(
+        nodes,
+        0,
+        Style(width=80, indent=0, margin=0, upper=0, display=1),
+        rules,
+        layout,
+    )
+    layout.flush()
+    return Page(nodes=nodes.len(), title_bytes=title_bytes, layout=layout)
+
+
+def page_number(path: str) -> int64:
+    match own path.strip_prefix("/page/"):
+        case str as digits:
+            match parse_int64(digits):
+                case Result.Ok(page):
+                    return page
+                case Result.Err(_):
+                    return -1
+        case None:
+            return -1
+
+
+def serve(addresses: Queue[str], total: int64) -> Result[int64, io.Error]:
+    mut served = 0
+    with listener = try net.http_listen("127.0.0.1:0"):
+        addresses.put(try listener.local_addr())
+        mut running = true
+        while running:
+            exchange = try listener.accept()
+            with request = exchange:
+                path = request.path()
+                mut status: int32 = 200
+                mut payload = "bye"
+                if path == "/quit":
+                    running = false
+                else:
+                    served += 1
+                    page = page_number(path)
+                    if page >= 0 and page < total:
+                        payload = page_html(page, total)
+                    else:
+                        status = 404
+                        payload = not_found_page()
+                try request.respond_text(status, payload, {"Content-Type": "text/html"})
+    return Result.Ok(served)
+
+
+def receive_address(addresses: Queue[str]) -> Result[str, io.Error]:
+    match own addresses.get(timeout=5s):
+        case QueueReceive.Item(address):
+            return Result.Ok(address)
+        case _:
+            return Result.Err(io.Error.TimedOut)
+
+
+class Reply:
+    status: int32
+    body: str
+
+
+def fetch(address: str, path: str) -> Result[Reply, io.Error]:
+    headers: dict[str, str] = {}
+    response = try net.http_request_text("GET", "http://" + address + path, "", headers)
+    with reply = response:
+        return Result.Ok(Reply(status=reply.status(), body=try reply.text()))
+
+
+def run(total: int64) -> Result[str, io.Error]:
+    mut queue: list[str] = ["/page/0"]
+    mut seen: set[str] = {"/page/0"}
+    mut head = 0
+    mut fetched = 0
+    mut not_found = 0
+    mut html_bytes = 0
+    mut nodes = 0
+    mut links = 0
+    mut external = 0
+    mut lines = 0
+    mut words_seen = 0
+    mut title_bytes = 0
+    mut checksum = 0
+    with TaskGroup() as group:
+        addresses = Queue[str](capacity=1)
+        server = group.start(serve, addresses, total)
+        address = try receive_address(addresses)
+        while head < queue.len():
+            path = queue[head].clone()
+            head += 1
+            reply = try fetch(address, path)
+            fetched += 1
+            if reply.status != 200:
+                not_found += 1
+                continue
+            html_bytes += reply.body.byte_len()
+            page = browse(reply.body)
+            nodes += page.nodes
+            title_bytes += page.title_bytes
+            words_seen += page.layout.word_count
+            for line in page.layout.lines:
+                lines += 1
+                line_bytes: list[uint8] = line.to_bytes()
+                for byte in line_bytes:
+                    checksum = (checksum * 31 + byte as int64) % 1000000007
+                checksum = (checksum * 31 + 10) % 1000000007
+            for href in page.layout.links:
+                links += 1
+                if href.starts_with("/"):
+                    if not (href in seen):
+                        seen.add(href.clone())
+                        queue.append(href.clone())
+                else:
+                    external += 1
+        try fetch(address, "/quit")
+        match own server.result():
+            case TaskResult.Ready(result):
+                served = try result
+                return Result.Ok(
+                    f"mini_browser site={total} fetched={fetched} served={served} not_found={not_found} html_bytes={html_bytes} nodes={nodes} links={links} external={external} lines={lines} words={words_seen} title_bytes={title_bytes} checksum={checksum}"
+                )
+            case _:
+                return Result.Err(io.Error.Other(message="server task failed"))
+
+
+def main() -> int32:
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(total):
+            match run(total):
+                case Result.Ok(line):
+                    print(line)
+                    return 0
+                case Result.Err(error):
+                    print(error)
+                    return 1
+        case Result.Err(_):
+            return 2

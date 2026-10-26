@@ -1,0 +1,283 @@
+# Text search: a small regular-expression engine run over generated log lines.
+#
+# Compiles ten patterns (literals, `.`, `*`, `+`, `?`, `^`, `$`, `[...]`
+# classes, `\d`, `\w`, `\s`) into a token program with one 256-entry byte
+# table per token, then runs each pattern over N log lines with a Thompson NFA
+# simulation (a Pike VM without captures). It counts which lines each pattern
+# matches. The engine is written out so all three languages do the same work.
+import sys
+
+ONE = 0
+OPTIONAL = 1
+STAR = 2
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+class Program:
+    tables: list[bool]
+    quants: list[int64]
+    count: int64
+    anchored_start: bool
+    anchored_end: bool
+
+    def class_table(mut self) -> int64:
+        base = self.count * 256
+        for _ in range(256):
+            self.tables.append(false)
+        self.count += 1
+        return base
+
+    def set_range(mut self, base: int64, low: int64, high: int64):
+        for b in range(low, high + 1):
+            self.tables[base + b] = true
+
+
+# Visited marks shared by every pattern; the generation only grows.
+class Matcher:
+    marks: list[int64]
+    generation: int64
+
+    def add_state(mut self, program: Program, states: mut list[int64], start: int64):
+        mut s = start
+        while self.marks[s] != self.generation:
+            self.marks[s] = self.generation
+            states.append(s)
+            if s == program.count or program.quants[s] == ONE:
+                return
+            s += 1
+
+    def search(mut self, program: Program, data: list[uint8]) -> bool:
+        accept = program.count
+        self.generation += 1
+        mut current: list[int64] = []
+        self.add_state(program, current, 0)
+        mut pos = 0
+        while true:
+            if self.marks[accept] == self.generation and (
+                not program.anchored_end or pos == data.len()
+            ):
+                return true
+            if pos == data.len() or current.len() == 0:
+                return false
+            byte = data[pos] as int64
+            self.generation += 1
+            mut following: list[int64] = []
+            for s in current:
+                if s < accept and program.tables[s * 256 + byte]:
+                    if program.quants[s] == STAR:
+                        self.add_state(program, following, s)
+                    else:
+                        self.add_state(program, following, s + 1)
+            pos += 1
+            if not program.anchored_start:
+                self.add_state(program, following, 0)
+            current = following
+        return false
+
+
+def patterns() -> list[str]:
+    return [
+        "ERROR",
+        "^\\d+-\\d+-\\d+ \\d+:\\d+:\\d+ WARN",
+        "user=[a-z]+\\d+ ",
+        "latency=\\d\\d\\d\\d+ms",
+        "GET /api/v\\d/items/\\d+ ok$",
+        "[A-Z][a-z]+Exception$",
+        "id=[0-9a-f]+-[0-9a-f]+",
+        "^.*timeout.*retry \\d$",
+        "\\s[a-z]+\\s[a-z]+\\s[a-z]+$",
+        "co?u?nn?ection re[a-z]*t",
+    ]
+
+
+def to_hex(start: int64) -> str:
+    if start == 0:
+        return "0"
+    digits = [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f",
+    ]
+    mut parts: list[str] = []
+    mut value = start
+    while value > 0:
+        parts.append(digits[value % 16].clone())
+        value = value // 16
+    parts.reverse()
+    return "".join(parts)
+
+
+def pad2(value: int64) -> str:
+    if value < 10:
+        return f"0{value}"
+    return f"{value}"
+
+
+def make_line(rng: mut Rng) -> str:
+    levels = ["INFO", "WARN", "ERROR", "DEBUG"]
+    components = ["auth", "db", "cache", "api", "queue"]
+    names = ["alice", "bob", "carol", "dave", "erin", "frank"]
+    errors = ["Value", "Key", "Io"]
+    r1 = rng.next()
+    r2 = rng.next()
+    r3 = rng.next()
+    day = 1 + r1 % 28
+    hour = (r1 // 28) % 24
+    minute = (r1 // 672) % 60
+    second = r2 % 60
+    view level = levels[(r2 // 60) % 4]
+    view component = components[(r2 // 240) % 5]
+    mut name = names[r3 % 6].clone()
+    if r3 % 3 == 0:
+        name = f"{name}{(r3 // 6) % 100}"
+    latency = (r3 // 7) % 2000
+    kind = (r3 // 14000) % 6
+    a = 1 + r1 % 3
+    b = r2 % 10000
+    mut message = "connection reset by peer"
+    if kind == 0:
+        message = f"GET /api/v{a}/items/{b} ok"
+    elif kind == 1:
+        message = f"timeout after {b}ms, retry {a}"
+    elif kind == 2:
+        message = f"cache miss for id={to_hex(b * 7919)}-{to_hex(r3 % 65536)}"
+    elif kind == 3:
+        view error = errors[a - 1]
+        message = f"raised {error}Exception"
+    elif kind == 4:
+        message = f"POST /api/v{a}/orders/{b} created"
+    return f"2026-10-{pad2(day)} {pad2(hour)}:{pad2(minute)}:{pad2(second)} {level} {component} user={name} latency={latency}ms {message}"
+
+
+def compile_pattern(pattern: str) -> Program:
+    p = pattern.to_bytes()
+    mut program = Program(
+        tables=[],
+        quants=[],
+        count=0,
+        anchored_start=false,
+        anchored_end=false,
+    )
+    mut i = 0
+    if p[0] == 94:  # ^
+        program.anchored_start = true
+        i = 1
+    while i < p.len():
+        c = p[i] as int64
+        if c == 36 and i == p.len() - 1:  # $
+            program.anchored_end = true
+            break
+        base = program.class_table()
+        if c == 46:  # .
+            program.set_range(base, 0, 255)
+            program.tables[base + 10] = false
+        elif c == 92:  # backslash
+            i += 1
+            e = p[i] as int64
+            if e == 100:  # d
+                program.set_range(base, 48, 57)
+            elif e == 119:  # w
+                program.set_range(base, 48, 57)
+                program.set_range(base, 97, 122)
+                program.set_range(base, 65, 90)
+                program.tables[base + 95] = true
+            elif e == 115:  # s
+                program.tables[base + 32] = true
+                program.tables[base + 9] = true
+            else:
+                program.tables[base + e] = true
+        elif c == 91:  # [
+            i += 1
+            while p[i] != 93:  # ]
+                if p[i + 1] == 45 and p[i + 2] != 93:  # a-z
+                    program.set_range(base, p[i] as int64, p[i + 2] as int64)
+                    i += 3
+                else:
+                    program.tables[base + (p[i] as int64)] = true
+                    i += 1
+        else:
+            program.tables[base + c] = true
+        i += 1
+        mut quant = ONE
+        if i < p.len():
+            if p[i] == 63:  # ?
+                quant = OPTIONAL
+                i += 1
+            elif p[i] == 42:  # *
+                quant = STAR
+                i += 1
+            elif p[i] == 43:  # +, which is x followed by x*
+                program.quants.append(ONE)
+                copy = program.class_table()
+                for b in range(256):
+                    bit = program.tables[base + b]
+                    program.tables[copy + b] = bit
+                quant = STAR
+                i += 1
+        program.quants.append(quant)
+    return program
+
+
+def main():
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            run(n)
+        case Result.Err(_):
+            print("usage: regex_match <lines>")
+
+
+def run(n: int64):
+    mut rng = Rng(state=31)
+    mut programs: list[Program] = []
+    mut size = 0
+    mut tokens = 0
+    for pattern in patterns():
+        program = compile_pattern(pattern)
+        size = max(size, program.count + 1)
+        tokens += program.count
+        programs.append(program)
+    mut marks: list[int64] = []
+    for _ in range(size):
+        marks.append(0)
+    mut matcher = Matcher(marks=marks, generation=0)
+    mut counts: list[int64] = []
+    for _ in range(programs.len()):
+        counts.append(0)
+    mut checksum = 0
+    mut total_bytes = 0
+    for line_number in range(n):
+        data = make_line(rng).to_bytes()
+        total_bytes += data.len()
+        mut mask = 0
+        for k in range(programs.len()):
+            view program = programs[k]
+            if matcher.search(program, data):
+                counts[k] += 1
+                mask = mask | (1 << k)
+        checksum = (checksum * 31 + mask * (line_number % 13 + 1)) % 1000000007
+    mut rendered: list[str] = []
+    for count in counts:
+        rendered.append(f"{count}")
+    print(
+        f"regex_match lines={n} bytes={total_bytes} tokens={tokens} counts={",".join(rendered)} checksum={checksum}"
+    )

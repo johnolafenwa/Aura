@@ -1,0 +1,293 @@
+# Sorting: built-in sorts, key sorts, string sorts, and two hand-written sorts.
+#
+# Builds N employee records, then sorts the salaries with the built-in sort,
+# sorts the records by a composite integer key, sorts the names as text, runs a
+# hand-written quicksort (iterative, median of three, insertion sort for short
+# ranges) and a bottom-up merge sort, and finishes with binary searches over the
+# sorted salaries. Checksums over each result make every order visible.
+import sys
+
+MOD = 1000000007
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+class Record:
+    id: int64
+    dept: int64
+    salary: int64
+    name: str
+
+
+# Aura's str has no ordering yet, so text sorts by comparing UTF-8 bytes,
+# which is the order Python and Rust use for strings. A `sort(key=...)` whose
+# key type implements a user `Ord` trait would be the direct route, but today it
+# copies every key on each comparison, which makes it quadratic.
+def compare_bytes(left: list[uint8], right: list[uint8]) -> int64:
+    n = min(left.len(), right.len())
+    for i in range(n):
+        if left[i] != right[i]:
+            if left[i] < right[i]:
+                return -1
+            return 1
+    return left.len() - right.len()
+
+
+# A stable bottom-up merge sort of the texts by their bytes.
+def sort_text(texts: list[str]) -> list[str]:
+    n = texts.len()
+    mut keys: list[list[uint8]] = []
+    mut source: list[int64] = []
+    mut target: list[int64] = []
+    for i in range(n):
+        keys.append(texts[i].to_bytes())
+        source.append(i)
+        target.append(0)
+    mut width = 1
+    while width < n:
+        mut start = 0
+        while start < n:
+            mid = min(start + width, n)
+            end = min(start + 2 * width, n)
+            mut i = start
+            mut j = mid
+            mut k = start
+            while i < mid and j < end:
+                if compare_bytes(keys[source[j]], keys[source[i]]) < 0:
+                    target[k] = source[j]
+                    j += 1
+                else:
+                    target[k] = source[i]
+                    i += 1
+                k += 1
+            while i < mid:
+                target[k] = source[i]
+                i += 1
+                k += 1
+            while j < end:
+                target[k] = source[j]
+                j += 1
+                k += 1
+            start += 2 * width
+        swap = source
+        source = target
+        target = swap
+        width *= 2
+    mut sorted: list[str] = []
+    for index in source:
+        sorted.append(texts[index].clone())
+    return sorted
+
+
+def record_key(record: Record) -> int64:
+    # Department ascending, salary descending, id ascending.
+    return record.dept * 1000000000000 + (999999 - record.salary) * 1000000 + record.id
+
+
+def quicksort(xs: mut list[int64]):
+    mut stack: list[int64] = [0, xs.len() - 1]
+    while stack.len() > 0:
+        mut hi = stack.pop()
+        mut lo = stack.pop()
+        while lo < hi:
+            if hi - lo < 16:
+                for i in range(lo + 1, hi + 1):
+                    value = xs[i]
+                    mut j = i - 1
+                    while j >= lo and xs[j] > value:
+                        moved = xs[j]
+                        xs[j + 1] = moved
+                        j -= 1
+                    xs[j + 1] = value
+                break
+            mid = (lo + hi) // 2
+            a = xs[lo]
+            b = xs[mid]
+            c = xs[hi]
+            mut pivot = 0
+            if a < b:
+                if b < c:
+                    pivot = b
+                elif a < c:
+                    pivot = c
+                else:
+                    pivot = a
+            elif a < c:
+                pivot = a
+            elif b < c:
+                pivot = c
+            else:
+                pivot = b
+            mut i = lo
+            mut j = hi
+            while i <= j:
+                while xs[i] < pivot:
+                    i += 1
+                while xs[j] > pivot:
+                    j -= 1
+                if i <= j:
+                    xs.swap(i, j)
+                    i += 1
+                    j -= 1
+            if j - lo < hi - i:
+                stack.append(i)
+                stack.append(hi)
+                hi = j
+            else:
+                stack.append(lo)
+                stack.append(j)
+                lo = i
+
+
+def merge_sort(order: own list[int64], keys: list[int64]) -> list[int64]:
+    n = order.len()
+    mut source = order
+    mut target: list[int64] = []
+    for _ in range(n):
+        target.append(0)
+    mut width = 1
+    while width < n:
+        mut start = 0
+        while start < n:
+            mid = min(start + width, n)
+            end = min(start + 2 * width, n)
+            mut i = start
+            mut j = mid
+            mut k = start
+            while i < mid and j < end:
+                if keys[source[j]] < keys[source[i]]:
+                    target[k] = source[j]
+                    j += 1
+                else:
+                    target[k] = source[i]
+                    i += 1
+                k += 1
+            while i < mid:
+                target[k] = source[i]
+                i += 1
+                k += 1
+            while j < end:
+                target[k] = source[j]
+                j += 1
+                k += 1
+            start += 2 * width
+        swap = source
+        source = target
+        target = swap
+        width *= 2
+    return source
+
+
+def lower_bound(xs: list[int64], value: int64) -> int64:
+    mut lo = 0
+    mut hi = xs.len()
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if xs[mid] < value:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo
+
+
+def main():
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            run(n)
+        case Result.Err(_):
+            print("usage: sort_records <records>")
+
+
+def run(n: int64):
+    syllables = [
+        "ka",
+        "lo",
+        "mi",
+        "ra",
+        "to",
+        "ne",
+        "su",
+        "vi",
+        "de",
+        "an",
+        "or",
+        "el",
+        "ix",
+        "um",
+        "po",
+        "ze",
+    ]
+    mut rng = Rng(state=41)
+    mut records: list[Record] = []
+    for i in range(n):
+        r = rng.next()
+        view first = syllables[r % 16]
+        view second = syllables[(r // 16) % 16]
+        view third = syllables[(r // 256) % 16]
+        records.append(
+            Record(
+                id=i,
+                dept=r % 20,
+                salary=30000 + (r // 20) % 170000,
+                name=f"{first}{second}{third}",
+            )
+        )
+
+    mut salaries: list[int64] = []
+    for record in records:
+        salaries.append(record.salary)
+    mut sorted_salaries = salaries.copy()
+    sorted_salaries.sort()
+    mut salary_check = 0
+    mut position = 0
+    for salary in sorted_salaries:
+        salary_check = (salary_check * 31 + salary * (position % 7 + 1)) % MOD
+        position += 1
+
+    mut by_key = records.copy()
+    by_key.sort(key=record_key)
+    mut key_check = 0
+    for record in by_key:
+        key_check = (key_check * 31 + record.id) % MOD
+
+    mut unsorted: list[str] = []
+    for record in records:
+        unsorted.append(record.name.clone())
+    names = sort_text(unsorted)
+    mut distinct = 1
+    mut name_check = 0
+    for i in range(names.len()):
+        view name = names[i]
+        if i > 0 and name != names[i - 1]:
+            distinct += 1
+        name_check = (
+            name_check * 31 + name.byte_len() * (i % 5 + 1) + (
+                name.to_bytes()[0] as int64
+            )
+        ) % MOD
+
+    mut quick = salaries.copy()
+    quicksort(quick)
+    quick_ok = quick == sorted_salaries
+
+    mut indices: list[int64] = []
+    for i in range(n):
+        indices.append(i)
+    order = merge_sort(indices, salaries)
+    mut merge_check = 0
+    for index in order:
+        merge_check = (merge_check * 31 + index) % MOD
+
+    mut search_sum = 0
+    for _ in range(n):
+        search_sum += lower_bound(sorted_salaries, 30000 + rng.next() % 170000)
+
+    print(
+        f"sort_records n={n} salary_check={salary_check} key_check={key_check} distinct={distinct} name_check={name_check} quick_ok={quick_ok} merge_check={merge_check} search_sum={search_sum}"
+    )

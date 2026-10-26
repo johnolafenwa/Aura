@@ -1,0 +1,152 @@
+{
+  "astar_pathfinding": {
+    "check": ["30"],
+    "bench": ["500"],
+    "expected": "astar_pathfinding grid=30 queries=12 reachable=12 total_cost=527 expanded=1837 checksum=201164293"
+  },
+  "bank_ledger": {
+    "check": ["1000"],
+    "bench": ["200000"],
+    "expected": "bank_ledger ops=1000 ok=297 unknown=79 frozen=10 insufficient=423 over_limit=191 shortfall=799314 supply=1595586 balanced=true entries=409 checksum=303454792"
+  },
+  "binary_trees": {
+    "check": ["6"],
+    "bench": ["14"],
+    "expected": "binary_trees depth=6 stretch=255 rows=4:64:1984,6:16:2032 long_lived=127"
+  },
+  "bytecode_vm": {
+    "check": ["1000"],
+    "bench": ["200000"],
+    "expected": "bytecode_vm n=1000 code=188 steps=68143 output=1002,168,498402"
+  },
+  "csv_aggregate": {
+    "check": ["1000"],
+    "bench": ["200000"],
+    "expected": "csv_aggregate rows=1000 bytes=36496 revenue=938446855 products=422 busiest_month=96 regions=north:180059757 south:133367555 east:171656437 west:151435481 central:156262053 coastal:145665572 top=SKU-83:226 SKU-278:197 SKU-472:193 SKU-370:192 SKU-77:184"
+  },
+  "docdb": {
+    "check": ["200", "{workdir}"],
+    "bench": ["50000", "{workdir}"],
+    "expected": "docdb docs=200 live=190 hits=368 misses=32 score=182058 matched=71 deleted=10 averages=403546 bytes=18710 checksum=104204"
+  },
+  "file_io": {
+    "check": ["1000", "{workdir}"],
+    "bench": ["300000", "{workdir}"],
+    "expected": "file_io lines=1000 value_sum=50147041 record_bytes=4000 checksum=799134171 files=10 listed=10 file_bytes=440 manifest_bytes=109 left=0"
+  },
+  "graph_paths": {
+    "check": ["1000"],
+    "bench": ["200000"],
+    "expected": "graph_paths nodes=1000 edges=5000 reachable=1000 hops=4327 max_hops=7 settled=1000 pushes=1388 dist_sum=151999 max_dist=249 components=1 largest=1000"
+  },
+  "hashing": {
+    "check": ["10000"],
+    "bench": ["2000000"],
+    "expected": "hashing bytes=10000 fnv=2838164920 crc32=4202898368 adler32=1656386341 chunks=71 unique=66 chunk_sum=964786005"
+  },
+  "http_api": {
+    "check": ["100"],
+    "bench": ["3000"],
+    "expected": "http_api requests=100 stored=65 statuses=22105 quantities=1373 body_bytes=2830"
+  },
+  "image_filters": {
+    "check": ["20"],
+    "bench": ["1000"],
+    "expected": "image_filters size=20 blur=237525522 strong=195 histogram=77,13,12,13,25,13,26,24,16,17,7,15,16,9,11,106 pgm_bytes=113 pgm=881426771"
+  },
+  "interpreter": {
+    "check": ["100"],
+    "bench": ["20000"],
+    "expected": "interpreter tokens=171 nodes=97 variables=8 output=3142,25,-142"
+  },
+  "json_roundtrip": {
+    "check": ["2"],
+    "bench": ["50"],
+    "expected": "json_roundtrip rounds=2 text_bytes=204535 ints=110640704 floats=99739120 strings=8510 string_bytes=73272 nulls=1532 bools=2000 containers=10044 dumped_bytes=409070"
+  },
+  "kv_server": {
+    "check": ["1000"],
+    "bench": ["50000"],
+    "expected": "kv_server sessions=2 commands=1000 hits=45 nils=362 ints=632 checksum=4204"
+  },
+  "lru_cache": {
+    "check": ["5000"],
+    "bench": ["200000"],
+    "expected": "lru_cache ops=5000 hits=2447 misses=2553 evictions=553 size=2000 checksum=160806866 recent=user:992,user:851,user:938,user:525,user:1333"
+  },
+  "lzw_compress": {
+    "check": ["1000"],
+    "bench": ["1000000"],
+    "expected": "lzw_compress bytes=1000 codes=340 restored=true checksum=433492572 rle_pairs=7 rle_restored=true"
+  },
+  "markdown_render": {
+    "check": ["30"],
+    "bench": ["20000"],
+    "expected": "markdown_render blocks=30 markdown_bytes=4195 html_bytes=7029 headings=4 paragraphs=5 items=35 code=9 quotes=3 checksum=241473028"
+  },
+  "mini_browser": {
+    "check": ["20"],
+    "bench": ["500"],
+    "expected": "mini_browser site=20 fetched=23 served=23 not_found=3 html_bytes=119745 nodes=5659 links=856 external=433 lines=1354 words=10833 title_bytes=130 checksum=609676441"
+  },
+  "nbody": {
+    "check": ["1000"],
+    "bench": ["300000"],
+    "expected": "nbody steps=1000 before=-0.169075164 after=-0.169087605"
+  },
+  "order_book": {
+    "check": ["1000"],
+    "bench": ["100000"],
+    "expected": "order_book events=1000 orders=774 trades=599 volume=9741 notional=4839758 cancels=34 resting=117 best_bid=491 best_ask=494 checksum=753767155"
+  },
+  "pubsub_broker": {
+    "check": ["1000"],
+    "bench": ["50000"],
+    "expected": "pubsub_broker sessions=4 commands=1000 published=1991 delivered=1991 received=1242 checksum=217734586"
+  },
+  "raytracer": {
+    "check": ["32"],
+    "bench": ["500"],
+    "expected": "raytracer size=32 rays=1850 hits=938 mean=128 checksum=858214934"
+  },
+  "regex_match": {
+    "check": ["100"],
+    "bench": ["5000"],
+    "expected": "regex_match lines=100 bytes=8169 tokens=136 counts=27,29,37,52,20,19,16,19,12,12 checksum=143238089"
+  },
+  "sort_records": {
+    "check": ["1000"],
+    "bench": ["20000"],
+    "expected": "sort_records n=1000 salary_check=798673168 key_check=630733553 distinct=897 name_check=654570230 quick_ok=true merge_check=550978239 search_sum=491459"
+  },
+  "spreadsheet": {
+    "check": ["40"],
+    "bench": ["1200"],
+    "expected": "spreadsheet cells=320 formulas=160 formula_bytes=2466 ordered=320 first_total=462 edits=10 recomputed=271 total=303613 checksum=602271284"
+  },
+  "sql_engine": {
+    "check": ["2000"],
+    "bench": ["10000"],
+    "expected": "sql_engine statements=4000 inserted=2380 selected=1071 groups=24 updated=383 deleted=206 scans=12 live=2174 checksum=300992313"
+  },
+  "task_pool": {
+    "check": ["1000"],
+    "bench": ["100000"],
+    "expected": "task_pool jobs=1000 pool_sum=499929509 pool_max=999982 items=1000 pipeline_sum=491731895 tasks=20 task_sum=10011495"
+  },
+  "template_render": {
+    "check": ["10"],
+    "bench": ["10000"],
+    "expected": "template_render pages=10 segments=21 rows=200 bytes=24436 escapes=931 checksum=953246839"
+  },
+  "text_diff": {
+    "check": ["200"],
+    "bench": ["20000"],
+    "expected": "text_diff old=200 new=191 distinct=211 distance=31 kept=180 deleted=20 inserted=11 hunks=22 bytes=2710 checksum=742644784"
+  },
+  "word_freq": {
+    "check": ["1000"],
+    "bench": ["500000"],
+    "expected": "word_freq tokens=1000 bytes=6220 distinct=358 bigrams=897 weight=5070 top=te:32 ra:31 gu:27 mi:22 bi:18 zu:18 sa:17 pe:17 lo:15 de:15"
+  }
+}

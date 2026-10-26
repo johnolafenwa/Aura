@@ -7,8 +7,170 @@ publish = false
 
 [dependencies]
 tokio = { version = "=1.53.1", features = ["rt-multi-thread", "net", "io-util", "time"] }
+serde_json = { version = "=1.0.149", optional = true }
+
+[features]
+# The cross-language programs in ../cross_language. Off by default, so the
+# release-performance references build exactly as before.
+cross-language = ["dep:serde_json", "tokio/sync"]
 
 [profile.release]
 opt-level = 3
 lto = "fat"
 codegen-units = 1
+
+# Aura checks every integer operation, so the cross-language references keep
+# Rust's overflow checks on as well.
+[profile.cross-language]
+inherits = "release"
+overflow-checks = true
+
+[[bin]]
+name = "astar_pathfinding"
+path = "../cross_language/astar_pathfinding/astar_pathfinding.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "bank_ledger"
+path = "../cross_language/bank_ledger/bank_ledger.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "binary_trees"
+path = "../cross_language/binary_trees/binary_trees.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "bytecode_vm"
+path = "../cross_language/bytecode_vm/bytecode_vm.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "csv_aggregate"
+path = "../cross_language/csv_aggregate/csv_aggregate.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "docdb"
+path = "../cross_language/docdb/docdb.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "file_io"
+path = "../cross_language/file_io/file_io.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "graph_paths"
+path = "../cross_language/graph_paths/graph_paths.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "hashing"
+path = "../cross_language/hashing/hashing.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "http_api"
+path = "../cross_language/http_api/http_api.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "image_filters"
+path = "../cross_language/image_filters/image_filters.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "interpreter"
+path = "../cross_language/interpreter/interpreter.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "json_roundtrip"
+path = "../cross_language/json_roundtrip/json_roundtrip.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "kv_server"
+path = "../cross_language/kv_server/kv_server.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "lru_cache"
+path = "../cross_language/lru_cache/lru_cache.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "lzw_compress"
+path = "../cross_language/lzw_compress/lzw_compress.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "markdown_render"
+path = "../cross_language/markdown_render/markdown_render.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "mini_browser"
+path = "../cross_language/mini_browser/mini_browser.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "nbody"
+path = "../cross_language/nbody/nbody.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "order_book"
+path = "../cross_language/order_book/order_book.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "pubsub_broker"
+path = "../cross_language/pubsub_broker/pubsub_broker.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "raytracer"
+path = "../cross_language/raytracer/raytracer.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "regex_match"
+path = "../cross_language/regex_match/regex_match.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "sort_records"
+path = "../cross_language/sort_records/sort_records.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "spreadsheet"
+path = "../cross_language/spreadsheet/spreadsheet.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "sql_engine"
+path = "../cross_language/sql_engine/sql_engine.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "task_pool"
+path = "../cross_language/task_pool/task_pool.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "template_render"
+path = "../cross_language/template_render/template_render.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "text_diff"
+path = "../cross_language/text_diff/text_diff.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "word_freq"
+path = "../cross_language/word_freq/word_freq.rs"
+required-features = ["cross-language"]

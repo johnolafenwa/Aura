@@ -1,0 +1,176 @@
+# Developer tools: a line diff with the Myers O(ND) algorithm.
+#
+# Generates a text of N lines and an edited copy (about 4% of lines deleted, 4%
+# inserted, 4% changed), interns every distinct line as an integer, finds a
+# shortest edit script with Myers' greedy algorithm (keeping one snapshot of the
+# frontier per edit distance for the backtrack), and renders it as diff lines
+# prefixed with ' ', '-', or '+'. Reports the edit distance, the operations, the
+# hunks, and a checksum of the rendered diff.
+import sys
+
+KEEP = 0
+DELETE = 1
+INSERT = 2
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+def make_line(rng: mut Rng) -> str:
+    words = [
+        "let",
+        "value",
+        "return",
+        "if",
+        "else",
+        "for",
+        "item",
+        "count",
+        "total",
+        "name",
+        "}",
+        "{",
+    ]
+    r = rng.next()
+    view first = words[r % 12]
+    view second = words[(r // 12) % 12]
+    return f"{first} {second} {(r // 144) % 60}"
+
+
+def intern(lines: list[str], table: mut dict[str, int64]) -> list[int64]:
+    mut ids: list[int64] = []
+    for line in lines:
+        match table.get(line):
+            case Lookup.Found(found):
+                ids.append(found)
+            case Lookup.Missing:
+                found = table.len()
+                table[line.clone()] = found
+                ids.append(found)
+    return ids
+
+
+def myers(a: list[int64], b: list[int64]) -> list[int64]:
+    n = a.len()
+    m = b.len()
+    limit = n + m
+    offset = limit + 1
+    mut v: list[int64] = []
+    for _ in range(2 * limit + 3):
+        v.append(0)
+    mut trace: list[list[int64]] = []
+    for d in range(limit + 1):
+        trace.append(v[offset - d:offset + d + 1])
+        mut k = -d
+        while k <= d:
+            mut x = 0
+            if k == -d or (k != d and v[offset + k - 1] < v[offset + k + 1]):
+                x = v[offset + k + 1]
+            else:
+                x = v[offset + k - 1] + 1
+            mut y = x - k
+            while x < n and y < m and a[x] == b[y]:
+                x += 1
+                y += 1
+            v[offset + k] = x
+            if x >= n and y >= m:
+                return backtrack(trace, n, m)
+            k += 2
+    return []
+
+
+def backtrack(trace: list[list[int64]], n: int64, m: int64) -> list[int64]:
+    mut ops: list[int64] = []
+    mut x = n
+    mut y = m
+    mut d = trace.len() - 1
+    while d >= 0:
+        view snapshot = trace[d]
+        k = x - y
+        mut previous_k = k - 1
+        if k == -d or (k != d and snapshot[k - 1 + d] < snapshot[k + 1 + d]):
+            previous_k = k + 1
+        mut previous_x = 0
+        if d > 0:
+            previous_x = snapshot[previous_k + d]
+        previous_y = previous_x - previous_k
+        while x > previous_x and y > previous_y:
+            x -= 1
+            y -= 1
+            ops.append(KEEP)
+        if d > 0:
+            if x == previous_x:
+                ops.append(INSERT)
+            else:
+                ops.append(DELETE)
+        x = previous_x
+        y = previous_y
+        d -= 1
+    ops.reverse()
+    return ops
+
+
+def main():
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            run(n)
+        case Result.Err(_):
+            print("usage: text_diff <lines>")
+
+
+def run(n: int64):
+    mut rng = Rng(state=73)
+    mut old: list[str] = []
+    for _ in range(n):
+        old.append(make_line(rng))
+    mut new: list[str] = []
+    for line in old:
+        r = rng.next() % 100
+        if r < 4:
+            continue
+        if r < 8:
+            new.append(make_line(rng))
+        if r >= 8 and r < 12:
+            new.append(make_line(rng))
+            continue
+        new.append(line.clone())
+    mut table: dict[str, int64] = {}
+    a = intern(old, table)
+    b = intern(new, table)
+    ops = myers(a, b)
+    mut out: list[str] = []
+    mut i = 0
+    mut j = 0
+    mut hunks = 0
+    mut previous = KEEP
+    mut counts = [0, 0, 0]
+    for op in ops:
+        counts[op] += 1
+        if op != KEEP and previous == KEEP:
+            hunks += 1
+        previous = op
+        if op == KEEP:
+            view line = old[i]
+            out.append(f" {line}")
+            i += 1
+            j += 1
+        elif op == DELETE:
+            view line = old[i]
+            out.append(f"-{line}")
+            i += 1
+        else:
+            view line = new[j]
+            out.append(f"+{line}")
+            j += 1
+    text = "\n".join(out)
+    mut checksum = 0
+    for line in out:
+        checksum = (checksum * 31 + line.byte_len()) % 1000000007
+    print(
+        f"text_diff old={n} new={new.len()} distinct={table.len()} distance={counts[1] + counts[2]} kept={counts[0]} deleted={counts[1]} inserted={counts[2]} hunks={hunks} bytes={text.byte_len()} checksum={checksum}"
+    )

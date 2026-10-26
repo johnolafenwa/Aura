@@ -1,0 +1,370 @@
+# Tree-walking interpreter: lex, parse, and run a small imperative language.
+#
+# The guest program sums Collatz sequence lengths for 1..N and counts primes
+# below N by trial division. Variables live in one string-keyed environment.
+import sys
+
+
+def guest_source(limit: int64) -> str:
+    text = """
+let total = 0;
+let i = 1;
+while (i <= LIMIT) {
+    let x = i;
+    let steps = 0;
+    while (x != 1) {
+        if (x % 2 == 0) { x = x / 2; } else { x = 3 * x + 1; }
+        steps = steps + 1;
+    }
+    total = total + steps;
+    i = i + 1;
+}
+print total;
+let primes = 0;
+let k = 2;
+while (k < LIMIT) {
+    let d = 2;
+    let prime = 1;
+    while (d * d <= k && prime) {
+        if (k % d == 0) { prime = 0; }
+        d = d + 1;
+    }
+    primes = primes + prime;
+    k = k + 1;
+}
+print primes;
+print -(total % 1000) + !primes;
+"""
+    return text.replace("LIMIT", f"{limit}")
+
+
+enum Kind:
+    Number
+    Name
+    Symbol
+    End
+
+
+class Token:
+    kind: Kind
+    text: str
+
+
+def is_digit(c: uint8) -> bool:
+    return c >= 48 and c <= 57
+
+
+def is_alpha(c: uint8) -> bool:
+    return (c >= 97 and c <= 122) or (c >= 65 and c <= 90) or c == 95
+
+
+def is_two_char(first: uint8, second: uint8) -> bool:
+    if second == 61:
+        return first == 61 or first == 33 or first == 60 or first == 62
+    return (first == 38 and second == 38) or (first == 124 and second == 124)
+
+
+def tokenize(source: str) -> list[Token]:
+    bytes = source.to_bytes()
+    n = bytes.len()
+    mut tokens: list[Token] = []
+    mut i = 0
+    while i < n:
+        c = bytes[i]
+        start = i
+        if c == 32 or c == 10 or c == 9 or c == 13:
+            i += 1
+            continue
+        mut kind = Kind.Symbol
+        if is_digit(c):
+            while i < n and is_digit(bytes[i]):
+                i += 1
+            kind = Kind.Number
+        elif is_alpha(c):
+            while i < n and (is_alpha(bytes[i]) or is_digit(bytes[i])):
+                i += 1
+            kind = Kind.Name
+        elif i + 1 < n and is_two_char(c, bytes[i + 1]):
+            i += 2
+        else:
+            i += 1
+        match own str.from_bytes(bytes[start:i]):
+            case Result.Ok(text):
+                tokens.append(Token(kind=kind, text=text))
+            case Result.Err(_):
+                pass
+    tokens.append(Token(kind=Kind.End, text=""))
+    return tokens
+
+
+enum Op:
+    Or
+    And
+    Eq
+    Ne
+    Lt
+    Le
+    Gt
+    Ge
+    Add
+    Sub
+    Mul
+    Div
+    Rem
+    Neg
+    Not
+
+
+enum Expr:
+    Num(value: int64)
+    Var(name: str)
+    Unary(op: Op, operand: indirect Expr)
+    Binary(op: Op, left: indirect Expr, right: indirect Expr)
+
+
+enum Stmt:
+    Assign(name: str, value: Expr)
+    While(condition: Expr, body: list[Stmt])
+    If(condition: Expr, then_body: list[Stmt], else_body: list[Stmt])
+    Print(value: Expr)
+
+
+def eval(expr: Expr, env: dict[str, int64]) -> int64:
+    match expr:
+        case Expr.Num(value):
+            return value
+        case Expr.Var(name):
+            return env[name]
+        case Expr.Unary(op, operand):
+            value = eval(operand, env)
+            match op:
+                case Op.Neg:
+                    return -value
+                case _:
+                    if value == 0:
+                        return 1
+                    return 0
+        case Expr.Binary(op, left, right):
+            match op:
+                case Op.And:
+                    if eval(left, env) != 0 and eval(right, env) != 0:
+                        return 1
+                    return 0
+                case Op.Or:
+                    if eval(left, env) != 0 or eval(right, env) != 0:
+                        return 1
+                    return 0
+                case _:
+                    pass
+            a = eval(left, env)
+            b = eval(right, env)
+            match op:
+                case Op.Add:
+                    return a + b
+                case Op.Sub:
+                    return a - b
+                case Op.Mul:
+                    return a * b
+                case Op.Div:
+                    return a // b
+                case Op.Rem:
+                    return a % b
+                case Op.Eq:
+                    return 1 if a == b else 0
+                case Op.Ne:
+                    return 1 if a != b else 0
+                case Op.Lt:
+                    return 1 if a < b else 0
+                case Op.Le:
+                    return 1 if a <= b else 0
+                case Op.Gt:
+                    return 1 if a > b else 0
+                case _:
+                    return 1 if a >= b else 0
+
+
+def run(body: list[Stmt], env: mut dict[str, int64], out: mut list[int64]):
+    for statement in body:
+        match statement:
+            case Stmt.Assign(name, value):
+                result = eval(value, env)
+                match mut env.lookup(name):
+                    case Lookup.Found(slot):
+                        slot = result
+                    case Lookup.Missing:
+                        env[name.clone()] = result
+            case Stmt.While(condition, inner):
+                while eval(condition, env) != 0:
+                    run(inner, env, out)
+            case Stmt.If(condition, then_body, else_body):
+                if eval(condition, env) != 0:
+                    run(then_body, env, out)
+                else:
+                    run(else_body, env, out)
+            case Stmt.Print(value):
+                out.append(eval(value, env))
+
+
+def binary_op(level: int64, text: str) -> Op | None:
+    if level == 0 and text == "||":
+        return Op.Or
+    if level == 1 and text == "&&":
+        return Op.And
+    if level == 2:
+        if text == "==":
+            return Op.Eq
+        if text == "!=":
+            return Op.Ne
+    if level == 3:
+        if text == "<":
+            return Op.Lt
+        if text == "<=":
+            return Op.Le
+        if text == ">":
+            return Op.Gt
+        if text == ">=":
+            return Op.Ge
+    if level == 4:
+        if text == "+":
+            return Op.Add
+        if text == "-":
+            return Op.Sub
+    if level == 5:
+        if text == "*":
+            return Op.Mul
+        if text == "/":
+            return Op.Div
+        if text == "%":
+            return Op.Rem
+    return None
+
+
+class Parser:
+    tokens: list[Token]
+    pos: int64 = 0
+    nodes: int64 = 0
+
+    def peek_is(self, text: str) -> bool:
+        return self.tokens[self.pos].text == text
+
+    def take(mut self) -> str:
+        self.pos += 1
+        return self.tokens[self.pos - 1].text.clone()
+
+    def expect(mut self, text: str):
+        assert self.take() == text, "expected " + text
+
+    def at_end(self) -> bool:
+        match self.tokens[self.pos].kind:
+            case Kind.End:
+                return true
+            case _:
+                return false
+
+    def program(mut self) -> list[Stmt]:
+        mut statements: list[Stmt] = []
+        while not self.at_end():
+            statements.append(self.statement())
+        return statements
+
+    def block(mut self) -> list[Stmt]:
+        self.expect("{")
+        mut statements: list[Stmt] = []
+        while not self.peek_is("}"):
+            statements.append(self.statement())
+        self.expect("}")
+        return statements
+
+    def statement(mut self) -> Stmt:
+        self.nodes += 1
+        word = self.take()
+        if word == "let":
+            name = self.take()
+            self.expect("=")
+            value = self.expression(0)
+            self.expect(";")
+            return Stmt.Assign(name=name, value=value)
+        if word == "while":
+            self.expect("(")
+            condition = self.expression(0)
+            self.expect(")")
+            return Stmt.While(condition=condition, body=self.block())
+        if word == "if":
+            self.expect("(")
+            condition = self.expression(0)
+            self.expect(")")
+            then_body = self.block()
+            mut else_body: list[Stmt] = []
+            if self.peek_is("else"):
+                self.take()
+                else_body = self.block()
+            return Stmt.If(
+                condition=condition,
+                then_body=then_body,
+                else_body=else_body,
+            )
+        if word == "print":
+            value = self.expression(0)
+            self.expect(";")
+            return Stmt.Print(value=value)
+        self.expect("=")
+        value = self.expression(0)
+        self.expect(";")
+        return Stmt.Assign(name=word, value=value)
+
+    def expression(mut self, level: int64) -> Expr:
+        if level == 6:
+            return self.unary()
+        mut left = self.expression(level + 1)
+        while true:
+            next = binary_op(level, self.tokens[self.pos].text)
+            match next:
+                case Op as op:
+                    self.take()
+                    right = self.expression(level + 1)
+                    self.nodes += 1
+                    left = Expr.Binary(op=op, left=left, right=right)
+                case None:
+                    break
+        return left
+
+    def unary(mut self) -> Expr:
+        self.nodes += 1
+        if self.peek_is("-") or self.peek_is("!"):
+            mut op = Op.Not
+            if self.take() == "-":
+                op = Op.Neg
+            return Expr.Unary(op=op, operand=self.unary())
+        kind = self.tokens[self.pos].kind
+        match kind:
+            case Kind.Number:
+                match parse_int64(self.take()):
+                    case Result.Ok(value):
+                        return Expr.Num(value=value)
+                    case Result.Err(_):
+                        return Expr.Num(value=0)
+            case Kind.Name:
+                return Expr.Var(name=self.take())
+            case _:
+                self.take()
+                value = self.expression(0)
+                self.expect(")")
+                return value
+
+
+def main():
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(limit):
+            tokens = tokenize(guest_source(limit))
+            token_count = tokens.len()
+            mut parser = Parser(tokens=tokens)
+            program = parser.program()
+            mut env: dict[str, int64] = {}
+            mut out: list[int64] = []
+            run(program, env, out)
+            printed = ",".join([f"{value}" for value in out])
+            print(
+                f"interpreter tokens={token_count} nodes={parser.nodes} variables={env.len()} output={printed}"
+            )
+        case Result.Err(_):
+            print("usage: interpreter <limit>")

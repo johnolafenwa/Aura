@@ -1,0 +1,196 @@
+# HTTP JSON API over loopback: an item service and a client that drives it.
+#
+# The server answers POST /items/<id>, GET /items/<id>, and GET /stats with
+# JSON bodies. The client sends one request per connection, which is how the
+# Aura HTTP client works, and checks every reply.
+import io
+import json
+import net
+import sys
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+def to_int(text: str) -> int64:
+    match parse_int64(text):
+        case Result.Ok(value):
+            return value
+        case Result.Err(_):
+            return -1
+
+
+def field_int(value: json.Value, name: str) -> int64:
+    match value:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(field):
+                    match json.as_int(field):
+                        case int64 as number:
+                            return number
+                        case None:
+                            return -1
+                case Lookup.Missing:
+                    return -1
+        case _:
+            return -1
+
+
+def error_body(message: str) -> str:
+    return json.dumps(json.Value.Object({"error": json.Value.String(message.clone())}))
+
+
+def route(
+    items: mut dict[int64, json.Value],
+    method: str,
+    path: str,
+    body: str,
+) -> (int32, str):
+    match path.strip_prefix("/items/"):
+        case str as id_text:
+            id = to_int(id_text)
+            if method == "POST":
+                match own json.parse(body):
+                    case Result.Ok(item):
+                        reply = json.dumps(
+                            json.Value.Object(
+                                {
+                                    "id": json.Value.Int(field_int(item, "id")),
+                                    "ok": json.Value.Bool(true),
+                                }
+                            )
+                        )
+                        items[id] = item
+                        return (201, reply)
+                    case Result.Err(_):
+                        return (400, error_body("bad json"))
+            match items.lookup(id):
+                case Lookup.Found(item):
+                    return (200, json.dumps(item))
+                case Lookup.Missing:
+                    return (404, error_body("not found"))
+        case None:
+            pass
+    if method == "GET" and path == "/stats":
+        return (
+            200,
+            json.dumps(json.Value.Object({"count": json.Value.Int(items.len())})),
+        )
+    return (400, error_body("bad request"))
+
+
+def serve(addresses: Queue[str], requests: int64) -> Result[int64, io.Error]:
+    mut items: dict[int64, json.Value] = {}
+    with listener = try net.http_listen("127.0.0.1:0"):
+        addresses.put(try listener.local_addr())
+        for _ in range(requests):
+            exchange = try listener.accept()
+            with request = exchange:
+                body = try request.body_text()
+                status, payload = route(items, request.method(), request.path(), body)
+                try request.respond_text(
+                    status,
+                    payload,
+                    {"Content-Type": "application/json"},
+                )
+    return Result.Ok(items.len())
+
+
+def receive_address(addresses: Queue[str]) -> Result[str, io.Error]:
+    match own addresses.get(timeout=5s):
+        case QueueReceive.Item(address):
+            return Result.Ok(address)
+        case _:
+            return Result.Err(io.Error.TimedOut)
+
+
+class Reply:
+    status: int32
+    body: str
+
+
+def request(address: str, method: str, path: str, body: str) -> Result[Reply, io.Error]:
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    response = try net.http_request_text(
+        method,
+        "http://" + address + path,
+        body,
+        headers,
+    )
+    with reply = response:
+        return Result.Ok(Reply(status=reply.status(), body=try reply.text()))
+
+
+def run(n: int64) -> Result[str, io.Error]:
+    mut rng = Rng(state=11)
+    mut statuses = 0
+    mut quantities = 0
+    mut body_bytes = 0
+    with TaskGroup() as group:
+        addresses = Queue[str](capacity=1)
+        server = group.start(serve, addresses, n)
+        address = try receive_address(addresses)
+        for i in range(n):
+            r = rng.next()
+            mut reply = Reply(status=0, body="")
+            if i % 50 == 49:
+                reply = try request(address, "GET", "/stats", "")
+                match own json.parse(reply.body):
+                    case Result.Ok(value):
+                        quantities += field_int(value, "count")
+                    case Result.Err(_):
+                        return Result.Err(io.Error.InvalidData)
+            elif i % 3 != 2:
+                tags = [json.Value.String("new"), json.Value.String(f"batch-{r % 7}")]
+                item = json.Value.Object(
+                    {
+                        "id": json.Value.Int(i),
+                        "name": json.Value.String(f"item-{i}"),
+                        "qty": json.Value.Int(r % 100),
+                        "tags": json.Value.Array(tags),
+                    }
+                )
+                reply = try request(address, "POST", f"/items/{i}", json.dumps(item))
+                match own json.parse(reply.body):
+                    case Result.Ok(value):
+                        if field_int(value, "id") != i:
+                            return Result.Err(io.Error.InvalidData)
+                    case Result.Err(_):
+                        return Result.Err(io.Error.InvalidData)
+            else:
+                reply = try request(address, "GET", f"/items/{r % (i + 1)}", "")
+                match own json.parse(reply.body):
+                    case Result.Ok(value):
+                        if reply.status == 200:
+                            quantities += field_int(value, "qty")
+                    case Result.Err(_):
+                        return Result.Err(io.Error.InvalidData)
+            statuses += reply.status as int64
+            body_bytes += reply.body.byte_len()
+        match own server.result():
+            case TaskResult.Ready(result):
+                stored = try result
+                return Result.Ok(
+                    f"http_api requests={n} stored={stored} statuses={statuses} quantities={quantities} body_bytes={body_bytes}"
+                )
+            case _:
+                return Result.Err(io.Error.Other(message="server task failed"))
+
+
+def main() -> int32:
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            match run(n):
+                case Result.Ok(line):
+                    print(line)
+                    return 0
+                case Result.Err(error):
+                    print(error)
+                    return 1
+        case Result.Err(_):
+            return 2

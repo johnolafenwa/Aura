@@ -1,0 +1,151 @@
+# Game AI: A* path finding on a weighted grid.
+#
+# Builds an N x N grid where 28% of the cells are walls and the rest cost 1 to 3
+# to enter, then answers 12 path queries between random open cells with A*
+# (Manhattan heuristic, four neighbours, a hand-written binary heap of packed
+# (f, cell) keys). Visited marks are stamped per query, so no array is cleared.
+# Reports the reachable queries, the total path cost, and the cells expanded.
+import sys
+
+QUERIES = 12
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+def heap_push(heap: mut list[int64], key: int64):
+    heap.append(key)
+    mut i = heap.len() - 1
+    while i > 0:
+        parent = (i - 1) // 2
+        if heap[parent] <= heap[i]:
+            break
+        heap.swap(parent, i)
+        i = parent
+
+
+def heap_pop(heap: mut list[int64]) -> int64:
+    top = heap[0]
+    last = heap.pop()
+    if heap.len() > 0:
+        heap[0] = last
+        size = heap.len()
+        mut i = 0
+        while true:
+            left = 2 * i + 1
+            right = left + 1
+            mut smallest = i
+            if left < size and heap[left] < heap[smallest]:
+                smallest = left
+            if right < size and heap[right] < heap[smallest]:
+                smallest = right
+            if smallest == i:
+                break
+            heap.swap(smallest, i)
+            i = smallest
+    return top
+
+
+def random_open_cell(rng: mut Rng, grid: list[int64], cells: int64) -> int64:
+    while true:
+        cell = rng.next() % cells
+        if grid[cell] > 0:
+            return cell
+    return 0
+
+
+def filled(n: int64, value: int64) -> list[int64]:
+    mut values: list[int64] = []
+    for _ in range(n):
+        values.append(value)
+    return values
+
+
+def main():
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            run(n)
+        case Result.Err(_):
+            print("usage: astar_pathfinding <grid size>")
+
+
+def run(n: int64):
+    cells = n * n
+    mut rng = Rng(state=67)
+    mut grid: list[int64] = []
+    for _ in range(cells):
+        r = rng.next() % 100
+        if r < 28:
+            grid.append(0)
+        else:
+            grid.append(1 + r % 3)
+    mut best = filled(cells, 0)
+    mut seen = filled(cells, -1)
+    mut done = filled(cells, -1)
+    mut reachable = 0
+    mut total_cost = 0
+    mut expanded = 0
+    mut checksum = 0
+    for query in range(QUERIES):
+        start = random_open_cell(rng, grid, cells)
+        goal = random_open_cell(rng, grid, cells)
+        gx = goal % n
+        gy = goal // n
+        best[start] = 0
+        seen[start] = query
+        mut heap: list[int64] = [
+            (abs(start % n - gx) + abs(start // n - gy)) * cells + start
+        ]
+        mut cost = -1
+        while heap.len() > 0:
+            key = heap_pop(heap)
+            node = key % cells
+            if done[node] == query:
+                continue
+            done[node] = query
+            expanded += 1
+            g = best[node]
+            if node == goal:
+                cost = g
+                break
+            x = node % n
+            y = node // n
+            for step in range(4):
+                mut neighbour = 0
+                if step == 0:
+                    if x + 1 >= n:
+                        continue
+                    neighbour = node + 1
+                elif step == 1:
+                    if x == 0:
+                        continue
+                    neighbour = node - 1
+                elif step == 2:
+                    if y + 1 >= n:
+                        continue
+                    neighbour = node + n
+                else:
+                    if y == 0:
+                        continue
+                    neighbour = node - n
+                weight = grid[neighbour]
+                if weight == 0 or done[neighbour] == query:
+                    continue
+                candidate = g + weight
+                if seen[neighbour] != query or candidate < best[neighbour]:
+                    seen[neighbour] = query
+                    best[neighbour] = candidate
+                    h = abs(neighbour % n - gx) + abs(neighbour // n - gy)
+                    heap_push(heap, (candidate + h) * cells + neighbour)
+        if cost >= 0:
+            reachable += 1
+            total_cost += cost
+        checksum = (checksum * 31 + cost + 7 * expanded) % 1000000007
+    print(
+        f"astar_pathfinding grid={n} queries={QUERIES} reachable={reachable} total_cost={total_cost} expanded={expanded} checksum={checksum}"
+    )
