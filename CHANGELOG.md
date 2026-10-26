@@ -7,6 +7,24 @@ in this file.
 
 ## Unreleased
 
+### Added
+
+- `str` values compare with `<`, `<=`, `>`, and `>=` by their UTF-8 bytes,
+  which is the order of their Unicode scalar values. `list[str].sort()`,
+  `sort(reverse = true)`, and `str` sort keys use the same order.
+
+### Changed
+
+- Sorting `float64` values puts NaN after every other value, and NaNs keep
+  their input order. `-0.0` and `0.0` sort as equal, so they also keep
+  their input order.
+- Sorting a type through its own `Ord` implementation sorts the element
+  positions first and moves the elements once, so a trapping `lt` leaves
+  the list unchanged. It also works in generic code bounded by `T: Ord[T]`,
+  which used to fail to compile.
+- A user `impl Ord[str] for str` no longer changes what `<` means on `str`,
+  in the same way as the other built-in operators.
+
 ### Performance
 
 - A `for` loop over a `range(...)` call counts on plain integers instead of
@@ -20,6 +38,24 @@ in this file.
   a loop costs 26 instructions instead of 1,318. Writes and appends
   through a `mut` list parameter no longer store the list back after each
   one.
+- `list.sort()` and `list.sort(key = ...)` are a stable merge sort in the
+  runtime, so sorting takes O(n log n) comparisons on `aura run` and in
+  native builds. They used to be an insertion sort, which took O(n²) and
+  made 100,000 elements impractical to sort.
+- On `aura run`, reading an element of a list of class instances, enums, or
+  other values that could hold an `Array` copies that element instead of
+  the whole list, so a loop that indexes such a list is no longer quadratic.
+
+### Fixed
+
+- A `for` loop over `text.to_bytes()`, directly or through an unannotated
+  local, iterates the bytes. It passed `aura check` and then failed at run
+  time with AU4001 "MIR `for` requires a `Range`" on both backends.
+- A call in an `if`, `elif`, or `while` condition, or in a `match`
+  scrutinee, that borrows a list element, as in `if ready(rows[i]):`, ends
+  that loan once the call returns. A body that then wrote the element,
+  such as `rows[i][j] = v`, passed `aura check` but failed `aura run` and
+  `aura build` with "invalid MIR loan ... overlaps active shared loan".
 
 ## VS Code extension 0.7.1 — 2026-10-25
 

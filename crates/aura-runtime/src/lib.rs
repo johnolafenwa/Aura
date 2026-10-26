@@ -15,6 +15,7 @@ pub mod collection_index;
 pub mod ffi;
 pub mod json_codec;
 pub mod list_elements;
+pub mod list_sort;
 pub mod native_runtime;
 pub mod randomness;
 pub mod runtime_config;

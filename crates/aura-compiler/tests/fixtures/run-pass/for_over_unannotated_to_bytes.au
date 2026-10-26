@@ -1,0 +1,20 @@
+# A `for` loop over an unannotated local that holds `text.to_bytes()`, or
+# over the call itself, iterates the bytes on both backends.
+def byte_sum(text: str) -> int64:
+    data = text.to_bytes()
+    mut total = 0
+    for b in data:
+        total += b as int64
+    return total
+
+
+def main() -> int32:
+    print(byte_sum("abc"))
+    mut count = 0
+    for b in "héllo".to_bytes():
+        if b >= 128:
+            count += 1
+    print(count)
+    letters = "xyz".to_bytes()
+    print([b as int64 - 119 for b in letters])
+    return 0

@@ -479,7 +479,7 @@ const COLLECTIONS: &str = "import random\ndef main():\n    mut values = [3, 1, 2
 /// storage; dropping the place would strand the mutation on a temporary.
 const MUTATING_RECEIVER_FIELDS: &[&str] = &[
     "append", "pop", "insert", "remove", "reverse", "extend", "reserve", "swap", "clear", "add",
-    "discard", "shuffle",
+    "discard", "shuffle", "__sort",
 ];
 
 /// Member calls that only read through their receiver place.

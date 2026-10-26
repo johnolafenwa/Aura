@@ -10,8 +10,9 @@ tokio = { version = "=1.53.1", features = ["rt-multi-thread", "net", "io-util", 
 serde_json = { version = "=1.0.149", optional = true }
 
 [features]
-# The cross-language programs in ../cross_language. Off by default, so the
-# release-performance references build exactly as before.
+# The cross-language programs in ../cross_language and the operation probes
+# in ../operation_probes. Off by default, so the release-performance
+# references build exactly as before.
 cross-language = ["dep:serde_json", "tokio/sync"]
 
 [profile.release]
@@ -173,4 +174,9 @@ required-features = ["cross-language"]
 [[bin]]
 name = "word_freq"
 path = "../cross_language/word_freq/word_freq.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "operation_probes"
+path = "../operation_probes/operation_probes.rs"
 required-features = ["cross-language"]

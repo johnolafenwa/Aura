@@ -25,66 +25,6 @@ class Record:
     name: str
 
 
-# Aura's str has no ordering yet, so text sorts by comparing UTF-8 bytes,
-# which is the order Python and Rust use for strings. A `sort(key=...)` whose
-# key type implements a user `Ord` trait would be the direct route, but today it
-# copies every key on each comparison, which makes it quadratic.
-def compare_bytes(left: list[uint8], right: list[uint8]) -> int64:
-    n = min(left.len(), right.len())
-    for i in range(n):
-        if left[i] != right[i]:
-            if left[i] < right[i]:
-                return -1
-            return 1
-    return left.len() - right.len()
-
-
-# A stable bottom-up merge sort of the texts by their bytes.
-def sort_text(texts: list[str]) -> list[str]:
-    n = texts.len()
-    mut keys: list[list[uint8]] = []
-    mut source: list[int64] = []
-    mut target: list[int64] = []
-    for i in range(n):
-        keys.append(texts[i].to_bytes())
-        source.append(i)
-        target.append(0)
-    mut width = 1
-    while width < n:
-        mut start = 0
-        while start < n:
-            mid = min(start + width, n)
-            end = min(start + 2 * width, n)
-            mut i = start
-            mut j = mid
-            mut k = start
-            while i < mid and j < end:
-                if compare_bytes(keys[source[j]], keys[source[i]]) < 0:
-                    target[k] = source[j]
-                    j += 1
-                else:
-                    target[k] = source[i]
-                    i += 1
-                k += 1
-            while i < mid:
-                target[k] = source[i]
-                i += 1
-                k += 1
-            while j < end:
-                target[k] = source[j]
-                j += 1
-                k += 1
-            start += 2 * width
-        swap = source
-        source = target
-        target = swap
-        width *= 2
-    mut sorted: list[str] = []
-    for index in source:
-        sorted.append(texts[index].clone())
-    return sorted
-
-
 def record_key(record: Record) -> int64:
     # Department ascending, salary descending, id ascending.
     return record.dept * 1000000000000 + (999999 - record.salary) * 1000000 + record.id
@@ -256,10 +196,10 @@ def run(n: int64):
     for record in by_key:
         key_check = (key_check * 31 + record.id) % MOD
 
-    mut unsorted: list[str] = []
+    mut names: list[str] = []
     for record in records:
-        unsorted.append(record.name.clone())
-    names = sort_text(unsorted)
+        names.append(record.name.clone())
+    names.sort()
     mut distinct = 1
     mut name_check = 0
     for i in range(names.len()):

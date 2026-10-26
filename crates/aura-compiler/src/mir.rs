@@ -144,7 +144,7 @@ fn is_builtin_binary_operator(op: BinaryOp, left_ty: &Type, right_ty: &Type) -> 
         BinaryOp::Eq | BinaryOp::NotEq => true,
         BinaryOp::Less | BinaryOp::LessEq | BinaryOp::Greater | BinaryOp::GreaterEq => {
             crate::sema::integer_type_bounds(left_ty).is_some()
-                || matches!(left_ty, Type::Named(name, _) if name == "float32" || name == "float64")
+                || matches!(left_ty, Type::Named(name, _) if name == "float32" || name == "float64" || name == "str")
         }
     }
 }
@@ -3082,7 +3082,10 @@ impl<'a> MirLoanValidationContext<'a> {
                 {
                     return Ok(Some(lower_receiver_kind(member.receiver_passing())));
                 }
-                if name == "list" && spans::span_member_mutates_receiver(field) {
+                if name == "list"
+                    && (spans::span_member_mutates_receiver(field)
+                        || crate::runtime_ops::is_list_sort_member(field))
+                {
                     return Ok(Some(MirReceiverKind::BorrowMut));
                 }
             }
@@ -5671,6 +5674,7 @@ fn container_mutation_callables(
         }
         "pop" | "popitem" | "remove" | "discard" | "clear" | "reverse" | "sort" | "swap"
         | "shuffle" | "truncate" | "retain" | "drain" => None,
+        _ if crate::runtime_ops::is_list_sort_member(field) => None,
         _ if spans::span_member_mutates_receiver(field) => None,
         _ => return Ok(None),
     };
@@ -15529,6 +15533,8 @@ impl<'a> Lowerer<'a> {
             && scrutinee_ty
                 .as_ref()
                 .is_some_and(|ty| !type_is_copy_in_program(ty, self.program));
+        let contextual_before = self.contextual_element_loans.clone();
+        let mut lends_element = false;
         let scrutinee = if consumes_scrutinee {
             let source =
                 self.lower_expr_for_owned_value(&match_stmt.scrutinee, scrutinee_ty.as_ref());
@@ -15547,6 +15553,7 @@ impl<'a> Lowerer<'a> {
         ) {
             // `match items[i]:` and `match mut items[i]:` inspect the element
             // in place through a loan that lasts for the match.
+            lends_element = true;
             loan
         } else if match_stmt
             .arms
@@ -15559,6 +15566,12 @@ impl<'a> Lowerer<'a> {
         } else {
             self.lower_expr(&match_stmt.scrutinee)
         };
+        // `match parse(rows[i]):` matches a call's result. Unless the call
+        // returns a view, the result holds nothing its arguments lent, so
+        // their element loans end before the arms, which may write `rows[i]`.
+        if !lends_element && !self.operand_is_view(&scrutinee) {
+            self.end_contextual_element_loans_since(&contextual_before);
+        }
         let writeback_root = if match_stmt.capability == ReceiverKind::BorrowMut {
             match &scrutinee {
                 Operand::Place(place) if self.contextual_element_loans.contains(place) => {
@@ -18914,7 +18927,15 @@ impl<'a> Lowerer<'a> {
                 }
             }
             _ => {
+                let contextual_before = self.contextual_element_loans.clone();
                 let condition = self.lower_expr(condition);
+                // `if ready(rows[i]):` lends `rows[i]` to the call. The
+                // `bool` holds no view of it, so the loan ends here rather
+                // than with the statement, and the branch may write the
+                // element.
+                if !self.operand_is_view(&condition) {
+                    self.end_contextual_element_loans_since(&contextual_before);
+                }
                 self.terminate(Terminator::Branch {
                     condition,
                     then_label,
@@ -20145,187 +20166,6 @@ impl<'a> Lowerer<'a> {
         self.switch_to(done);
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn lower_stable_vec_sort(
-        &mut self,
-        source: Operand,
-        source_place: &str,
-        ordering_ty: &Type,
-        keys: Option<(&str, &Type)>,
-        reverse: Operand,
-        span: Span,
-        result: &str,
-    ) {
-        let ordering_source = keys
-            .map(|(keys, _)| Operand::Place(keys.to_string()))
-            .unwrap_or_else(|| source.clone());
-        let length = self.new_typed_temp(Type::named("int64"));
-        self.emit(Instruction::Assign {
-            target: length.clone(),
-            value: Rvalue::Call {
-                callee: CallTarget::Member {
-                    object: ordering_source.clone(),
-                    field: "len".to_string(),
-                    receiver_place: None,
-                    dispatch: None,
-                },
-                args: Vec::new(),
-                type_args: Default::default(),
-            },
-        });
-        let outer_index = self.new_typed_temp(Type::named("int64"));
-        self.emit(Instruction::Assign {
-            target: outer_index.clone(),
-            value: Rvalue::Use(Operand::Int(1)),
-        });
-
-        let outer_condition = self.new_block("vec_sort_outer_condition");
-        let outer_body = self.new_block("vec_sort_outer_body");
-        let outer_advance = self.new_block("vec_sort_outer_advance");
-        let inner_condition = self.new_block("vec_sort_inner_condition");
-        let inner_compare = self.new_block("vec_sort_inner_compare");
-        let swap = self.new_block("vec_sort_swap");
-        let done = self.new_block("vec_sort_done");
-        self.terminate(Terminator::Goto(self.label(outer_condition)));
-
-        self.switch_to(outer_condition);
-        let has_element = self.new_typed_temp(Type::named("bool"));
-        self.emit(Instruction::Assign {
-            target: has_element.clone(),
-            value: Rvalue::Binary {
-                op: BinaryOp::Less,
-                left: Operand::Place(outer_index.clone()),
-                right: Operand::Place(length),
-                span,
-                trap: ArithmeticTrap::None,
-            },
-        });
-        self.terminate(Terminator::Branch {
-            condition: Operand::Place(has_element),
-            then_label: self.label(outer_body),
-            else_label: self.label(done),
-        });
-
-        let inner_index = self.new_typed_temp(Type::named("int64"));
-        self.switch_to(outer_body);
-        self.emit(Instruction::Assign {
-            target: inner_index.clone(),
-            value: Rvalue::Use(Operand::Place(outer_index.clone())),
-        });
-        self.terminate(Terminator::Goto(self.label(inner_condition)));
-
-        self.switch_to(inner_condition);
-        let can_compare = self.new_typed_temp(Type::named("bool"));
-        self.emit(Instruction::Assign {
-            target: can_compare.clone(),
-            value: Rvalue::Binary {
-                op: BinaryOp::Greater,
-                left: Operand::Place(inner_index.clone()),
-                right: Operand::Int(0),
-                span,
-                trap: ArithmeticTrap::None,
-            },
-        });
-        self.terminate(Terminator::Branch {
-            condition: Operand::Place(can_compare),
-            then_label: self.label(inner_compare),
-            else_label: self.label(outer_advance),
-        });
-
-        self.switch_to(inner_compare);
-        let previous_index = self.new_typed_temp(Type::named("int64"));
-        self.emit(Instruction::Assign {
-            target: previous_index.clone(),
-            value: Rvalue::Binary {
-                op: BinaryOp::Sub,
-                left: Operand::Place(inner_index.clone()),
-                right: Operand::Int(1),
-                span,
-                trap: ArithmeticTrap::None,
-            },
-        });
-        let current = self.emit_vec_read(ordering_source.clone(), &inner_index, ordering_ty, span);
-        let previous =
-            self.emit_vec_read(ordering_source.clone(), &previous_index, ordering_ty, span);
-        let ascending = self.emit_vec_ordering_less(&current, &previous, ordering_ty, span);
-        let descending = self.emit_vec_ordering_less(&previous, &current, ordering_ty, span);
-        let not_reverse = self.new_typed_temp(Type::named("bool"));
-        self.emit(Instruction::Assign {
-            target: not_reverse.clone(),
-            value: Rvalue::Unary {
-                op: UnaryOp::Not,
-                value: reverse.clone(),
-                span,
-                trap: ArithmeticTrap::None,
-            },
-        });
-        let ascending_selected = self.new_typed_temp(Type::named("bool"));
-        self.emit(Instruction::Assign {
-            target: ascending_selected.clone(),
-            value: Rvalue::Binary {
-                op: BinaryOp::And,
-                left: Operand::Place(not_reverse),
-                right: Operand::Place(ascending),
-                span,
-                trap: ArithmeticTrap::None,
-            },
-        });
-        let descending_selected = self.new_typed_temp(Type::named("bool"));
-        self.emit(Instruction::Assign {
-            target: descending_selected.clone(),
-            value: Rvalue::Binary {
-                op: BinaryOp::And,
-                left: reverse,
-                right: Operand::Place(descending),
-                span,
-                trap: ArithmeticTrap::None,
-            },
-        });
-        let comes_before = self.new_typed_temp(Type::named("bool"));
-        self.emit(Instruction::Assign {
-            target: comes_before.clone(),
-            value: Rvalue::Binary {
-                op: BinaryOp::Or,
-                left: Operand::Place(ascending_selected),
-                right: Operand::Place(descending_selected),
-                span,
-                trap: ArithmeticTrap::None,
-            },
-        });
-        self.terminate(Terminator::Branch {
-            condition: Operand::Place(comes_before),
-            then_label: self.label(swap),
-            else_label: self.label(outer_advance),
-        });
-
-        self.switch_to(swap);
-        self.emit_vec_swap(source.clone(), source_place, &inner_index, &previous_index);
-        if let Some((keys, _)) = keys {
-            self.emit_vec_swap(
-                Operand::Place(keys.to_string()),
-                keys,
-                &inner_index,
-                &previous_index,
-            );
-        }
-        self.emit(Instruction::Assign {
-            target: inner_index.clone(),
-            value: Rvalue::Use(Operand::Place(previous_index)),
-        });
-        self.emit(Instruction::Safepoint);
-        self.terminate(Terminator::Goto(self.label(inner_condition)));
-
-        self.switch_to(outer_advance);
-        self.emit_vec_index_increment(&outer_index, span);
-        self.terminate(Terminator::Goto(self.label(outer_condition)));
-
-        self.switch_to(done);
-        self.emit(Instruction::Assign {
-            target: result.to_string(),
-            value: Rvalue::Use(Operand::Unit),
-        });
-    }
-
     fn emit_vec_optional_read(&mut self, target: &str, source: Operand, index: &str) {
         self.emit(Instruction::Assign {
             target: target.to_string(),
@@ -20346,79 +20186,6 @@ impl<'a> Lowerer<'a> {
         });
     }
 
-    fn emit_vec_read(
-        &mut self,
-        source: Operand,
-        index: &str,
-        element_ty: &Type,
-        span: Span,
-    ) -> String {
-        let target = self.new_typed_temp(element_ty.clone());
-        self.emit(Instruction::Assign {
-            target: target.clone(),
-            value: Rvalue::Call {
-                callee: CallTarget::Member {
-                    object: source,
-                    field: INTERNAL_VEC_INDEX_FIELD.to_string(),
-                    receiver_place: None,
-                    dispatch: None,
-                },
-                args: vec![
-                    MirArg {
-                        name: None,
-                        value: Operand::Place(index.to_string()),
-                        writeback_place: None,
-                    },
-                    MirArg {
-                        name: None,
-                        value: Operand::Int(span.line as u128),
-                        writeback_place: None,
-                    },
-                    MirArg {
-                        name: None,
-                        value: Operand::Int(span.column as u128),
-                        writeback_place: None,
-                    },
-                ],
-                type_args: Default::default(),
-            },
-        });
-        target
-    }
-
-    fn emit_vec_ordering_less(&mut self, left: &str, right: &str, ty: &Type, span: Span) -> String {
-        let result = self.new_typed_temp(Type::named("bool"));
-        let value = if is_builtin_binary_operator(BinaryOp::Less, ty, ty) {
-            Rvalue::Binary {
-                op: BinaryOp::Less,
-                left: Operand::Place(left.to_string()),
-                right: Operand::Place(right.to_string()),
-                span,
-                trap: ArithmeticTrap::None,
-            }
-        } else {
-            Rvalue::Call {
-                callee: CallTarget::Member {
-                    object: Operand::Place(left.to_string()),
-                    field: "lt".to_string(),
-                    receiver_place: None,
-                    dispatch: None,
-                },
-                args: vec![MirArg {
-                    name: None,
-                    value: Operand::Place(right.to_string()),
-                    writeback_place: None,
-                }],
-                type_args: Default::default(),
-            }
-        };
-        self.emit(Instruction::Assign {
-            target: result.clone(),
-            value,
-        });
-        result
-    }
-
     fn emit_vec_push(&mut self, vector: Operand, vector_place: &str, value: Operand) {
         let ignored = self.new_typed_temp(Type::Unit);
         self.emit(Instruction::Assign {
@@ -20435,34 +20202,6 @@ impl<'a> Lowerer<'a> {
                     value,
                     writeback_place: None,
                 }],
-                type_args: Default::default(),
-            },
-        });
-    }
-
-    fn emit_vec_swap(&mut self, vector: Operand, vector_place: &str, first: &str, second: &str) {
-        let ignored = self.new_typed_temp(Type::Unit);
-        self.emit(Instruction::Assign {
-            target: ignored,
-            value: Rvalue::Call {
-                callee: CallTarget::Member {
-                    object: vector,
-                    field: "swap".to_string(),
-                    receiver_place: Some(vector_place.to_string()),
-                    dispatch: None,
-                },
-                args: vec![
-                    MirArg {
-                        name: None,
-                        value: Operand::Place(first.to_string()),
-                        writeback_place: None,
-                    },
-                    MirArg {
-                        name: None,
-                        value: Operand::Place(second.to_string()),
-                        writeback_place: None,
-                    },
-                ],
                 type_args: Default::default(),
             },
         });
@@ -24812,6 +24551,34 @@ impl<'a> Lowerer<'a> {
                 .any(|source| source.split('.').next() == Some(root.as_str()))
     }
 
+    /// Whether `value` reads through a loan or view, such as a call's
+    /// returned view, rather than holding a value of its own.
+    fn operand_is_view(&self, value: &Operand) -> bool {
+        match value {
+            Operand::Place(place) | Operand::MovePlace(place) => self
+                .view_sources
+                .contains_key(place.split('.').next().unwrap_or(place)),
+            _ => false,
+        }
+    }
+
+    /// Ends the hidden element loans taken since `before`. A caller uses it
+    /// once a call's arguments are no longer needed: its result is a value
+    /// that holds no view of the elements they lent.
+    fn end_contextual_element_loans_since(&mut self, before: &BTreeSet<String>) {
+        let mut loans = self
+            .contextual_element_loans
+            .difference(before)
+            .cloned()
+            .collect::<Vec<_>>();
+        // Temporaries are numbered in creation order, and a reborrow ends
+        // before the loan it borrows from.
+        loans.sort_by_key(|loan| (loan.len(), loan.clone()));
+        for loan in loans.into_iter().rev() {
+            self.end_contextual_element_loan(loan);
+        }
+    }
+
     /// Ends a hidden element loan at once instead of with its statement.
     fn end_contextual_element_loan(&mut self, loan: String) {
         self.view_sources.remove(&loan);
@@ -26531,6 +26298,12 @@ impl<'a> Lowerer<'a> {
             ("TaskGroup", "start_soon") | ("TaskGroup", "start_soon_with_stack") => {
                 Some(Type::Unit)
             }
+            // `to_bytes` lowers to the named host built-in `str.to_bytes`,
+            // so it has no resolved operation either. Without its type a
+            // `for` over the result would lower as a `Range` loop.
+            ("str", "to_bytes") => {
+                Some(Type::Named("list".to_string(), vec![Type::named("uint8")]))
+            }
             _ => None,
         }
     }
@@ -26735,6 +26508,9 @@ impl<'a> Lowerer<'a> {
                 }
                 if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
                     return builtin_member.receiver_passing() == ReceiverKind::BorrowMut;
+                }
+                if receiver_name == "list" && crate::runtime_ops::is_list_sort_member(field) {
+                    return true;
                 }
             }
         }
@@ -27307,6 +27083,9 @@ fn mir_class_type_name(
 
 #[path = "mir_spans.rs"]
 mod spans;
+
+#[path = "mir_sort.rs"]
+mod sort;
 
 #[path = "mir_type_param_calls.rs"]
 mod type_param_calls;

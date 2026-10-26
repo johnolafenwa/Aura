@@ -20,6 +20,7 @@ use crate::integer::{
     IntegerKind, IntegerPowerError, IntegerRepresentation, IntegerShiftError, IntegerValue,
 };
 use crate::json_codec;
+use crate::list_sort;
 use crate::mir::{
     CallTarget, CleanupAction, Instruction, ManagerExitResult, MirArg, MirClass, MirExternCall,
     MirExternParam, MirFormatPart, MirFunction, MirMethod, MirModule, MirParam, MirReceiverKind,
@@ -28,7 +29,7 @@ use crate::mir::{
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_ops::{
     builtin_function_for_name, builtin_member_for_receiver, ArgDefault, FunctionOp, RuntimeOp,
-    StrOp,
+    StrOp, INDEX_MEMBER, PERMUTE_MEMBER, SORT_BY_KEYS_MEMBER, SORT_MEMBER,
 };
 use crate::runtime_value::{
     append_string_checked, cast_numeric_value, catch_lightweight_task_failure,
@@ -5685,6 +5686,20 @@ impl MirRuntime {
             }
         }
 
+        // An element read clones the element, not the list: a list whose
+        // elements may hold an `Array` cannot share its storage, so cloning
+        // it would copy every element.
+        if field == INDEX_MEMBER {
+            if let Operand::Place(place) = object {
+                if matches!(*env.place_ref(place)?, Value::Vec(_)) {
+                    let values = evaluate_named_args(args, env)?;
+                    if let Value::Vec(vector) = &*env.place_ref(place)? {
+                        return self.evaluate_vec_index(vector, values);
+                    }
+                }
+            }
+        }
+
         let receiver_static_ty = self
             .resolve_operand_type(object, env)
             .filter(|ty| !matches!(ty, Type::TypeParam(_)));
@@ -6892,6 +6907,33 @@ impl MirRuntime {
         }
     }
 
+    /// `vector[index]` for the `__index` member: `values` holds the index
+    /// and the line and column a bounds failure reports.
+    fn evaluate_vec_index(&self, vector: &VecValue, values: Vec<EvaluatedMirArg>) -> Result<Value> {
+        if values.len() != 3 {
+            return Err(Diagnostic::new(
+                "internal vector indexing requires index, line, and column operands",
+            ));
+        }
+        let line = self.mir_index_from_value(values[1].value.clone())?;
+        let column = self.mir_index_from_value(values[2].value.clone())?;
+        let (supplied_index, index) =
+            self.mir_vec_index_from_value(values[0].value.clone(), vector.elements.len())?;
+        let value = index
+            .and_then(|index| vector.elements.get(index))
+            .ok_or_else(|| {
+                Diagnostic::at(
+                    crate::diag::Span::new(line, column),
+                    format!(
+                        "list index `{}` is out of bounds for length `{}`",
+                        supplied_index,
+                        vector.elements.len()
+                    ),
+                )
+            })?;
+        try_clone_mir_value(&value)
+    }
+
     fn evaluate_vec_method(
         &mut self,
         vector: VecValue,
@@ -6996,28 +7038,7 @@ impl MirRuntime {
             }
             "__index" => {
                 let values = evaluate_named_args(args, env)?;
-                if values.len() != 3 {
-                    return Err(Diagnostic::new(
-                        "internal vector indexing requires index, line, and column operands",
-                    ));
-                }
-                let line = self.mir_index_from_value(values[1].value.clone())?;
-                let column = self.mir_index_from_value(values[2].value.clone())?;
-                let (supplied_index, index) =
-                    self.mir_vec_index_from_value(values[0].value.clone(), vector.elements.len())?;
-                let value = index
-                    .and_then(|index| vector.elements.get(index))
-                    .ok_or_else(|| {
-                        Diagnostic::at(
-                            crate::diag::Span::new(line, column),
-                            format!(
-                                "list index `{}` is out of bounds for length `{}`",
-                                supplied_index,
-                                vector.elements.len()
-                            ),
-                        )
-                    })?;
-                try_clone_mir_value(&value)
+                self.evaluate_vec_index(&vector, values)
             }
             "__slice" => {
                 let values = evaluate_named_args(args, env)?;
@@ -7222,6 +7243,41 @@ impl MirRuntime {
                 updated.elements.reverse();
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new("`reverse` requires a mutable list place"));
+                };
+                env.write_place(place, Value::Vec(updated))?;
+                Ok(Value::Unit)
+            }
+            SORT_MEMBER | SORT_BY_KEYS_MEMBER | PERMUTE_MEMBER => {
+                let values = evaluate_named_args(args, env)?;
+                let list_arg = |value: &Value| match value {
+                    Value::Vec(list) => Ok(list.elements.clone()),
+                    _ => Err(Diagnostic::new(format!(
+                        "`{field}` requires a list argument"
+                    ))),
+                };
+                let mut updated = vector;
+                match field {
+                    SORT_MEMBER => {
+                        let bound = bind_builtin_args(&["reverse"], values)?;
+                        let reverse = expect_bool_value(&bound[0].value, "sort reverse")?;
+                        list_sort::sort_elements(&mut updated.elements, reverse)?;
+                    }
+                    SORT_BY_KEYS_MEMBER => {
+                        let bound = bind_builtin_args(&["keys", "reverse"], values)?;
+                        let keys = list_arg(&bound[0].value)?;
+                        let reverse = expect_bool_value(&bound[1].value, "sort reverse")?;
+                        list_sort::sort_elements_by_keys(&mut updated.elements, &keys, reverse)?;
+                    }
+                    _ => {
+                        let bound = bind_builtin_args(&["order"], values)?;
+                        let order = list_arg(&bound[0].value)?;
+                        list_sort::permute_elements(&mut updated.elements, &order)?;
+                    }
+                }
+                let Some(place) = receiver_place else {
+                    return Err(Diagnostic::new(format!(
+                        "`{field}` requires a mutable list place"
+                    )));
                 };
                 env.write_place(place, Value::Vec(updated))?;
                 Ok(Value::Unit)
@@ -11726,8 +11782,16 @@ fn eval_ordering(op: crate::ast::BinaryOp, left: Value, right: Value) -> Result<
             crate::ast::BinaryOp::GreaterEq => left >= right,
             _ => unreachable!("non-ordering op passed to eval_ordering"),
         })),
+        // UTF-8 byte order is the order of the Unicode scalar values.
+        (Value::String(left), Value::String(right)) => Ok(Value::Bool(match op {
+            crate::ast::BinaryOp::Less => left < right,
+            crate::ast::BinaryOp::LessEq => left <= right,
+            crate::ast::BinaryOp::Greater => left > right,
+            crate::ast::BinaryOp::GreaterEq => left >= right,
+            _ => unreachable!("non-ordering op passed to eval_ordering"),
+        })),
         _ => Err(Diagnostic::new(
-            "MIR ordering comparisons require matching numeric or Duration operands",
+            "MIR ordering comparisons require matching numeric, Duration, or str operands",
         )),
     }
 }
