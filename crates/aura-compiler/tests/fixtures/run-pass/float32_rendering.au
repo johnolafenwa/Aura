@@ -1,0 +1,34 @@
+# A float32 renders its shortest float32 spelling wherever it is rendered
+# directly or held in a typed container, not the digits of its float64
+# widening.
+def maybe(value: float32, present: bool) -> float32 | None:
+    if present:
+        return value
+    return None
+
+
+def main():
+    x: float32 = 0.1
+    tiny: float32 = 0.0000001
+    negative: float32 = -0.0
+    print(x)
+    print(x.to_string())
+    print(str(x))
+    print(f"{x} {tiny} {negative}")
+    print(f"[{x:>6}] [{x:.3f}] [{x:+}]")
+    values: list[float32] = [x, 1.5, tiny]
+    print(values)
+    print(str(values))
+    nested: list[list[float32]] = [[x], []]
+    print(nested)
+    pair = (x, 2)
+    print(pair)
+    scores: dict[str, float32] = {"a": x}
+    print(scores)
+    print(maybe(x, true))
+    print(maybe(x, false))
+    wide: float64 = 0.1
+    print(f"{wide} {x as float64}")
+    root = sqrt(-x)
+    print(root)
+    print(f"{root} [{root:>4}]")
