@@ -1,0 +1,250 @@
+# Per-operation probes: one operation repeated `count` times.
+#
+# `operation_probes <operation> <count> run` sets up the operation's data and
+# then performs the operation `count` times. `... setup` only sets up. The
+# difference in executed instructions between the two, divided by `count`, is
+# what one operation costs. operation_probes.rs does the same work in Rust,
+# and both print the same line.
+import sys
+
+
+class Point:
+    x: float64
+    y: float64
+
+
+class Counter:
+    name: str
+    count: int64
+
+
+enum Shape:
+    Circle(float64)
+    Rect(float64, float64)
+
+
+def area(shape: Shape) -> float64:
+    match shape:
+        case Shape.Circle(r):
+            return r * r
+        case Shape.Rect(w, h):
+            return w * h
+
+
+def while_step(n: int64, run: bool) -> int64:
+    mut total = 0
+    if run:
+        mut i = 0
+        while i < n:
+            total += i
+            i += 1
+    return total
+
+
+def range_step(n: int64, run: bool) -> int64:
+    mut total = 0
+    if run:
+        for i in range(n):
+            total += i
+    return total
+
+
+def floats(n: int64) -> list[float64]:
+    mut xs = list[float64]()
+    for i in range(n):
+        xs.append((i % 7) as float64)
+    return xs
+
+
+def float_read(n: int64, run: bool) -> int64:
+    xs = floats(n)
+    mut total = 0.0
+    if run:
+        mut i = 0
+        while i < xs.len():
+            total += xs[i]
+            i += 1
+    return total as int64
+
+
+def float_write(n: int64, run: bool) -> int64:
+    mut xs = floats(n)
+    if run:
+        mut i = 0
+        while i < xs.len():
+            xs[i] *= 2.0
+            i += 1
+    return xs[n - 1] as int64
+
+
+def int32_read(n: int64, run: bool) -> int64:
+    mut xs = list[int32]()
+    for i in range(n):
+        xs.append((i % 100) as int32)
+    mut total: int32 = 0
+    if run:
+        mut i = 0
+        while i < xs.len():
+            total += xs[i]
+            i += 1
+    return total as int64
+
+
+def u8_cast(n: int64, run: bool) -> int64:
+    mut bytes = list[uint8]()
+    for i in range(n):
+        bytes.append((i % 200) as uint8)
+    mut total: uint32 = 0
+    if run:
+        mut i = 0
+        while i < bytes.len():
+            total += bytes[i] as uint32
+            i += 1
+    return total as int64
+
+
+def sort_ints(n: int64, run: bool) -> int64:
+    mut xs = list[int64]()
+    mut seed = 12345
+    while xs.len() < n:
+        seed = seed * 48271 % 2147483647
+        xs.append(seed)
+    if run:
+        xs.sort()
+    return xs[0] + xs[n - 1]
+
+
+def str_slice(n: int64, run: bool) -> int64:
+    mut text = ""
+    while text.len() < 10000:
+        text = text + "abcdefghij"
+    mut total = 0
+    if run:
+        mut i = 0
+        while i < n:
+            part = text[5000:5010]
+            total += part.len()
+            i += 1
+    return total
+
+
+def dict_remove(n: int64, run: bool) -> int64:
+    mut table: dict[int64, int64] = {}
+    for i in range(n):
+        table[i] = i
+    if run:
+        for i in range(n):
+            table.remove(i)
+    return table.len()
+
+
+def dict_get_str(n: int64, run: bool) -> int64:
+    mut keys = list[str]()
+    mut table: dict[str, int64] = {}
+    for i in range(1000):
+        keys.append(f"key{i}")
+        table[f"key{i}"] = i
+    mut total = 0
+    if run:
+        for i in range(n):
+            match table.get(keys[i % 1000]):
+                case Lookup.Found(value):
+                    total += value
+                case Lookup.Missing:
+                    pass
+    return total
+
+
+def list_push(n: int64, run: bool) -> int64:
+    mut xs = list[float64]()
+    mut ps = list[Point]()
+    if run:
+        for i in range(n):
+            xs.append(1.5)
+            ps.append(Point(x=1.0, y=2.0))
+    return xs.len() + ps.len()
+
+
+def class_field_read(n: int64, run: bool) -> int64:
+    mut ps = list[Point]()
+    for i in range(n):
+        ps.append(Point(x=(i % 7) as float64, y=2.0))
+    mut total = 0.0
+    if run:
+        mut i = 0
+        while i < ps.len():
+            total += ps[i].x
+            i += 1
+    return total as int64
+
+
+def field_write(n: int64, run: bool) -> int64:
+    mut counters = list[Counter]()
+    for i in range(n):
+        counters.append(Counter(name="c", count=i))
+    if run:
+        mut i = 0
+        while i < counters.len():
+            counters[i].count += 1
+            i += 1
+    return counters[n - 1].count
+
+
+def enum_match(n: int64, run: bool) -> int64:
+    mut shapes = list[Shape]()
+    for i in range(n):
+        if i % 2 == 0:
+            shapes.append(Shape.Circle(2.0))
+        else:
+            shapes.append(Shape.Rect(1.0, 3.0))
+    mut total = 0.0
+    if run:
+        mut i = 0
+        while i < shapes.len():
+            total += area(shapes[i])
+            i += 1
+    return total as int64
+
+
+def probe(operation: str, n: int64, run: bool) -> int64:
+    if operation == "while_step":
+        return while_step(n, run)
+    elif operation == "range_step":
+        return range_step(n, run)
+    elif operation == "float_read":
+        return float_read(n, run)
+    elif operation == "float_write":
+        return float_write(n, run)
+    elif operation == "int32_read":
+        return int32_read(n, run)
+    elif operation == "u8_cast":
+        return u8_cast(n, run)
+    elif operation == "sort_ints":
+        return sort_ints(n, run)
+    elif operation == "str_slice":
+        return str_slice(n, run)
+    elif operation == "dict_remove":
+        return dict_remove(n, run)
+    elif operation == "dict_get_str":
+        return dict_get_str(n, run)
+    elif operation == "list_push":
+        return list_push(n, run)
+    elif operation == "class_field_read":
+        return class_field_read(n, run)
+    elif operation == "field_write":
+        return field_write(n, run)
+    elif operation == "enum_match":
+        return enum_match(n, run)
+    return -1
+
+
+def main():
+    args = sys.args()
+    if args.len() != 3:
+        print("usage: operation_probes <operation> <count> run|setup")
+        return
+    match parse_int64(args[1]):
+        case Result.Ok(count):
+            print(f"{args[0]} {probe(args[0], count, args[2] == "run")}")
+        case Result.Err(_):
+            print("usage: operation_probes <operation> <count> run|setup")
