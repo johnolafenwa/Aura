@@ -1,0 +1,26 @@
+class Entry:
+    name: str
+
+
+def before(left: str, right: str) -> bool:
+    return left < right
+
+
+def main():
+    # `str` orders by UTF-8 bytes, which is the order of the Unicode scalar
+    # values: uppercase before lowercase, a prefix before a longer text.
+    print(f"{"apple" < "banana"} {"banana" <= "apple"} {"Zebra" < "apple"}")
+    print(f"{"app" < "apple"} {"" < "a"} {"é" > "z"} {"€" > "é"} {"😀" > "€"}")
+    a = "pear"
+    b = "peach"
+    print(f"{a < b} {a > b} {a <= a} {a >= a} {a >= b} {before(b, a)}")
+    print(f"{a < "pears"} {"pea" < a} {a > "pea"} {"zz" >= a}")
+    names = ["kiwi", "fig", "lime"]
+    print(f"{names[0] < names[1]} {names[1] < names[2]} {names[2] >= "lime"}")
+    entries = [Entry(name="b"), Entry(name="a")]
+    print(entries[0].name > entries[1].name)
+    mut smallest = names[0].clone()
+    for name in names:
+        if name < smallest:
+            smallest = name.clone()
+    print(smallest)

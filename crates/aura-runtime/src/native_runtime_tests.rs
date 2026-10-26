@@ -9189,6 +9189,42 @@ fn direct_runtime_vec_helpers_cover_collection_surface() {
 }
 
 #[test]
+fn direct_runtime_vec_sorts_reorder_in_place() {
+    let vec = int_vec(&[3, 1, 2]);
+    assert_eq!(super::aura_direct_vec_sort_in_place(vec, 0), 1);
+    assert_eq!(
+        expect_vec_ints(super::aura_direct_clone_value(vec)),
+        vec![1, 2, 3]
+    );
+    assert_eq!(super::aura_direct_vec_sort_in_place(vec, 1), 1);
+    assert_eq!(
+        expect_vec_ints(super::aura_direct_clone_value(vec)),
+        vec![3, 2, 1]
+    );
+
+    let keys = int_vec(&[2, 0, 0]);
+    assert_eq!(
+        super::aura_direct_vec_sort_by_keys_in_place(vec, keys, 0),
+        1
+    );
+    assert_eq!(
+        expect_vec_ints(super::aura_direct_clone_value(vec)),
+        vec![2, 1, 3]
+    );
+    assert_eq!(
+        expect_vec_ints(super::aura_direct_clone_value(keys)),
+        vec![2, 0, 0]
+    );
+
+    let order = int_vec(&[2, 0, 1]);
+    assert_eq!(super::aura_direct_vec_permute_in_place(vec, order), 1);
+    assert_eq!(
+        expect_vec_ints(super::aura_direct_clone_value(vec)),
+        vec![3, 2, 1]
+    );
+}
+
+#[test]
 fn direct_runtime_vec_helpers_normalize_negative_indices_uniformly() {
     let vec = int_vec(&[10, 20, 30, 40]);
 
@@ -14128,6 +14164,18 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "vec-method-swap-too-negative" => {
                 super::aura_direct_vec_swap_in_place(int_vec(&[1, 2, 3, 4]), -5, -1);
             }
+            "vec-sort-without-order" => {
+                let flags = super::aura_direct_vec_empty();
+                super::aura_direct_vec_push_in_place(flags, bool_value(true));
+                super::aura_direct_vec_push_in_place(flags, bool_value(false));
+                super::aura_direct_vec_sort_in_place(flags, 0);
+            }
+            "vec-sort-short-keys" => {
+                super::aura_direct_vec_sort_by_keys_in_place(int_vec(&[1, 2]), int_vec(&[1]), 0);
+            }
+            "vec-permute-repeated" => {
+                super::aura_direct_vec_permute_in_place(int_vec(&[1, 2]), int_vec(&[0, 0]));
+            }
             "vec-indexed-write-too-negative" => {
                 super::aura_direct_vec_set_index_in_place(
                     int_vec(&[1, 2, 3, 4]),
@@ -15153,6 +15201,12 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         (
             "vec-method-swap-too-negative",
             "list swap indices `-5` and `-1` are out of bounds for length `4`",
+        ),
+        ("vec-sort-without-order", "cannot order `bool` values"),
+        ("vec-sort-short-keys", "1 keys for 2 elements"),
+        (
+            "vec-permute-repeated",
+            "list sort positions are not a permutation of the list",
         ),
         (
             "vec-indexed-write-too-negative",

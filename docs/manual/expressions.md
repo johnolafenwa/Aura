@@ -279,6 +279,13 @@ Built-in arithmetic works on two operands of the same integer type or the
 same floating-point type. `str + str` concatenates strings. Aura does not
 implicitly widen non-literal numeric values.
 
+`<`, `<=`, `>`, and `>=` on two `str` values compare their UTF-8 bytes from
+the first, and a text that is a prefix of another orders first. Byte order is
+the order of the Unicode scalar values, so `"Zebra" < "apple"`, `"app" <
+"apple"`, and `"z" < "é"` all hold. The comparison does not normalize,
+case-fold, or apply a locale. A user `Ord` implementation for `str` does not
+change these operators, because built-in rules come first.
+
 ### Operator Result Types
 
 | Operators | Builtin result |
@@ -294,7 +301,7 @@ implicitly widen non-literal numeric values.
 | `&`, `\|`, `^`, unary `~` | Same exact integer type |
 | `<<`, `>>` | Same exact integer type for value and count |
 | `==`, `!=` | `bool` for equal operand types |
-| `<`, `<=`, `>`, `>=` | `bool` for equal numeric types or two Duration values |
+| `<`, `<=`, `>`, `>=` | `bool` for equal numeric types, two Duration values, or two `str` values |
 | `in`, `not in` | `bool` for a supported container |
 
 ### Division And Remainder

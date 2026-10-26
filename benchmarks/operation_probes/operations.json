@@ -1,0 +1,72 @@
+{
+  "while_step": {
+    "count": 100000,
+    "plan_step": "-",
+    "measures": "one step of a `while i < n` loop that adds `i` to an `int64` total"
+  },
+  "range_step": {
+    "count": 100000,
+    "plan_step": "1a",
+    "measures": "one step of a `for i in range(n)` loop that adds `i` to an `int64` total"
+  },
+  "float_read": {
+    "count": 100000,
+    "plan_step": "2d",
+    "measures": "reading one element of a `list[float64]` and adding it to a total"
+  },
+  "float_write": {
+    "count": 100000,
+    "plan_step": "1b",
+    "measures": "`xs[i] *= 2.0` on one element of a `list[float64]`"
+  },
+  "int32_read": {
+    "count": 100000,
+    "plan_step": "1c",
+    "measures": "reading one element of a `list[int32]` and adding it to an `int32` total"
+  },
+  "u8_cast": {
+    "count": 100000,
+    "plan_step": "1c",
+    "measures": "reading one element of a `list[uint8]`, casting it to `uint32` and adding it"
+  },
+  "sort_ints": {
+    "count": 2000,
+    "plan_step": "1d",
+    "measures": "sorting a `list[int64]` of `count` pseudo-random values, per element"
+  },
+  "str_slice": {
+    "count": 100000,
+    "plan_step": "1e",
+    "measures": "`text[5000:5010]` on a 10,000-byte `str`, and the slice's length"
+  },
+  "dict_remove": {
+    "count": 2000,
+    "plan_step": "1f",
+    "measures": "removing one key from a `dict[int64, int64]` of `count` keys, oldest key first"
+  },
+  "dict_get_str": {
+    "count": 100000,
+    "plan_step": "3",
+    "measures": "one `get` on a `dict[str, int64]` of 1,000 keys, matching the result"
+  },
+  "list_push": {
+    "count": 100000,
+    "plan_step": "2d",
+    "measures": "appending one `float64` and one two-field class instance to lists"
+  },
+  "class_field_read": {
+    "count": 100000,
+    "plan_step": "2d, 2e",
+    "measures": "reading one `float64` field of a class instance held in a list"
+  },
+  "field_write": {
+    "count": 100000,
+    "plan_step": "2e",
+    "measures": "`items[i].count += 1` on a class instance held in a list"
+  },
+  "enum_match": {
+    "count": 100000,
+    "plan_step": "2f",
+    "measures": "passing one enum value from a list to a function that matches on it"
+  }
+}

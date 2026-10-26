@@ -4431,7 +4431,32 @@ def main():
 ```
 
 Natural sorting requires `T: Ord`. Key sorting requires an orderable key type.
-Equal elements or keys keep their input order in both directions.
+Equal elements or keys keep their input order in both directions, and
+`reverse=true` sorts by the mirrored order rather than reversing the result.
+
+Integers, `float32`, `float64`, `Duration`, and `str` have a built-in order:
+
+- Numbers and `Duration` sort by `<`.
+- NaN, which `<` cannot place, sorts after every other float, and all NaNs
+  are equal. `-0.0` and `0.0` are equal, so they keep their input order.
+- `str` sorts by its UTF-8 bytes, which is the order of its Unicode scalar
+  values.
+
+```aura
+def main():
+    mut names = ["pear", "Apple", "fig", "apple"]
+    names.sort()
+    print(names)
+```
+
+This program prints `[Apple, apple, fig, pear]`: uppercase letters come
+before lowercase ones in byte order.
+
+A list or key type with a built-in order sorts in the runtime. Any other type
+orders through its `Ord` implementation's `lt`, so a nominal type or a type
+parameter bounded by `Ord[T]` sorts too. Both kinds are stable merge sorts
+that take O(n log n) comparisons. A sort through `lt` computes the new order
+before it moves any element, so an `lt` that traps leaves the list unchanged.
 
 The key function runs exactly once per element, from first to last. All keys
 are stored before the list changes. If an argument, key, ordering, or
@@ -6343,8 +6368,8 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 - `for value in mut set:` is not supported.
 - Callable-powered list algorithms are eager. `map` and `filter` return owned lists, and `filter` requires clone-safe elements.
-- Built-in natural sorting covers all integer types, `float32`, `float64`, and `Duration`. `str` has no built-in `Ord[str]`.
-- To order text records, preserve insertion order, use `sort(key=callback)` with an orderable key or index, or define a nominal type with an application-specific `Ord` implementation.
+- Built-in natural sorting covers all integer types, `float32`, `float64`, `Duration`, and `str`. `str` orders by its UTF-8 bytes, with no locale, case folding, or normalization.
+- Tuples have no order, so a multi-part sort key needs a nominal type with an `Ord` implementation, or an integer or `str` key that encodes the parts.
 - Keyed `sort`, `map`, and `filter` accept only their exact bare or shared callback parameter capabilities. The callback may be a named function, a repeatable closure, or a packed Shared callable value.
 - There is no comparator-form sort, lazy map or filter, parallel traversal, mutable standard-library algorithm callback contract, or algorithm callback with mutable or owned element access.
 
@@ -8727,7 +8752,7 @@ Rely on ordering only where the relevant API promises it.
 
 `list.map` and `list.filter` traverse from the first element to the last and produce their eager result in that order. Their shared receiver stays unchanged. `map` invokes its callback once per source element, and the new list owns each returned value. `filter` invokes its predicate once per source element and clones accepted elements into the new list.
 
-Natural and keyed `list.sort` calls mutate their receiver into a stable order. Equal elements or keys keep their prior relative order. Keyed sorting evaluates its key function exactly once for every element, from first to last. It stores all keys before it moves any receiver element. So a trap during key evaluation propagates before mutation and leaves the source order unchanged.
+Natural and keyed `list.sort` calls mutate their receiver into a stable order. Equal elements or keys keep their prior relative order. Keyed sorting evaluates its key function exactly once for every element, from first to last. It stores all keys before it moves any receiver element. So a trap during key evaluation propagates before mutation and leaves the source order unchanged. A sort through a user `Ord` implementation runs every `lt` comparison before it moves any element, so a trap in `lt` leaves the source order unchanged too. The number and order of those `lt` calls follow the merge sort and are not part of the contract.
 
 Iteration over a `list` or `set` depends on the loop form:
 
@@ -9306,6 +9331,13 @@ Built-in arithmetic works on two operands of the same integer type or the
 same floating-point type. `str + str` concatenates strings. Aura does not
 implicitly widen non-literal numeric values.
 
+`<`, `<=`, `>`, and `>=` on two `str` values compare their UTF-8 bytes from
+the first, and a text that is a prefix of another orders first. Byte order is
+the order of the Unicode scalar values, so `"Zebra" < "apple"`, `"app" <
+"apple"`, and `"z" < "é"` all hold. The comparison does not normalize,
+case-fold, or apply a locale. A user `Ord` implementation for `str` does not
+change these operators, because built-in rules come first.
+
 ### Operator Result Types
 
 | Operators | Builtin result |
@@ -9321,7 +9353,7 @@ implicitly widen non-literal numeric values.
 | `&`, `\|`, `^`, unary `~` | Same exact integer type |
 | `<<`, `>>` | Same exact integer type for value and count |
 | `==`, `!=` | `bool` for equal operand types |
-| `<`, `<=`, `>`, `>=` | `bool` for equal numeric types or two Duration values |
+| `<`, `<=`, `>`, `>=` | `bool` for equal numeric types, two Duration values, or two `str` values |
 | `in`, `not in` | `bool` for a supported container |
 
 ### Division And Remainder
@@ -20674,6 +20706,8 @@ A bare `value: str` parameter grants shared access. Bare parameters grant shared
 
 `list[uint8]` is Aura's bytes representation.
 
+`<`, `<=`, `>`, and `>=` order two `str` values by their UTF-8 bytes, which is the order of their Unicode scalar values. `list[str]` sorts by the same order.
+
 Aura has no distinct character type, no integer str indexing, and no `chars()`, `ord()`, or `chr()`. String slicing accepts `int64` scalar endpoints and runs in O(n) over the source. It returns a fresh owned str. It is not a view or a byte-indexing operation.
 
 ## Copy And Move Categories
@@ -30636,11 +30670,10 @@ Sorting:
   mutations.
 - Keyed sorting evaluates one shared key per element, from left to right,
   before it mutates anything. A key that traps leaves the source unchanged.
-- Built-in ordering covers all integer types, `float32`, `float64`, and
-  `Duration`.
-- `str` has no built-in `Ord[str]`. To order strings, keep insertion order,
-  use `sort(key=callback)` with an orderable key or index, or define a
-  nominal application type with the `Ord` behavior you need.
+- Built-in ordering covers all integer types, `float32`, `float64`,
+  `Duration`, and `str`. `str` orders by its UTF-8 bytes, so `"Zebra"` sorts
+  before `"apple"`.
+- Sorting takes O(n log n) comparisons. NaN sorts after every other float.
 
 Callbacks:
 
