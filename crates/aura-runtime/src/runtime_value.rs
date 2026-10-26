@@ -2305,13 +2305,28 @@ pub fn slice_vec_owned(
     end: Option<i128>,
 ) -> Result<VecValue> {
     let (start, end) = normalize_slice_bounds(start, end, vector.elements.len())?;
-    let mut elements = try_array_buffer(end - start, "Array-containing Vec slice")?;
-    for value in vector.elements.iter().skip(start).take(end - start) {
-        elements.push(try_clone_array_containing_value(&value)?);
+    // Each form copies only the slice, so the cost follows its length and
+    // not how far into the list it starts.
+    fn copy_scalars<T: Copy>(values: &[T]) -> Result<SharedVec<T>> {
+        let mut copy = try_array_buffer(values.len(), "Array-containing Vec slice")?;
+        copy.extend_from_slice(values);
+        Ok(copy.into())
     }
+    let elements = match &vector.elements {
+        ListElements::Values(values) => {
+            let mut elements = try_array_buffer(end - start, "Array-containing Vec slice")?;
+            for value in &values[start..end] {
+                elements.push(try_clone_array_containing_value(value)?);
+            }
+            ListElements::from(elements)
+        }
+        ListElements::Int64(values) => ListElements::Int64(copy_scalars(&values[start..end])?),
+        ListElements::Float64(values) => ListElements::Float64(copy_scalars(&values[start..end])?),
+        ListElements::Bool(values) => ListElements::Bool(copy_scalars(&values[start..end])?),
+    };
     Ok(VecValue {
         element_type: vector.element_type.clone(),
-        elements: elements.into(),
+        elements,
         str_view: Default::default(),
     })
 }
@@ -2449,9 +2464,60 @@ pub fn span_fill(vector: &mut VecValue, start: i128, len: i128, value: &Value) -
 }
 
 pub fn slice_string_owned(text: &str, start: Option<i128>, end: Option<i128>) -> Result<String> {
+    let range = string_slice_byte_range(text, start, end)?;
+    Ok(text[range].to_owned())
+}
+
+/// The bytes of `text` that the `str` slice `text[start:end]` covers.
+/// Endpoints count Unicode scalar values. Where the text up to them is
+/// ASCII, each scalar is one byte, so the endpoints are byte positions and
+/// no character is decoded.
+pub fn string_slice_byte_range(
+    text: &str,
+    start: Option<i128>,
+    end: Option<i128>,
+) -> Result<std::ops::Range<usize>> {
+    let bytes = text.as_bytes();
+    // Non-negative endpoints short of the end need only the text before the
+    // end: when it is ASCII, the text holds at least that many scalars. Any
+    // other endpoint counts from the true end, which needs the whole text.
+    let prefix = match (start, end) {
+        (None | Some(0..), Some(end @ 0..)) => {
+            usize::try_from(end).ok().filter(|end| *end < bytes.len())
+        }
+        _ => None,
+    };
+    match prefix {
+        Some(end) if bytes[..end].is_ascii() => {
+            let start = start.unwrap_or(0);
+            if start <= end as i128 {
+                return Ok(start as usize..end);
+            }
+        }
+        None if bytes.is_ascii() => {
+            let (start, end) = normalize_slice_bounds(start, end, bytes.len())?;
+            return Ok(start..end);
+        }
+        _ => {}
+    }
     let scalar_len = text.chars().count();
     let (start, end) = normalize_slice_bounds(start, end, scalar_len)?;
-    Ok(text.chars().skip(start).take(end - start).collect())
+    // One pass finds both byte offsets. The end of the text is the offset
+    // of the position one past the last scalar.
+    let mut offsets = text
+        .char_indices()
+        .map(|(offset, _)| offset)
+        .chain(std::iter::once(bytes.len()));
+    let first = offsets
+        .nth(start)
+        .expect("start is at most the scalar count");
+    let last = match end - start {
+        0 => first,
+        len => offsets
+            .nth(len - 1)
+            .expect("end is at most the scalar count"),
+    };
+    Ok(first..last)
 }
 
 #[derive(Clone, Debug)]

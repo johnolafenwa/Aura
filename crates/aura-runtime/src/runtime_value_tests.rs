@@ -2477,6 +2477,123 @@ fn owned_slice_helpers_normalize_once_reject_without_clamping_and_copy_values() 
 }
 
 #[test]
+fn list_slices_copy_only_the_slice_and_keep_the_scalar_form() {
+    let lists = [
+        (0..10)
+            .map(|value| Value::Int(IntegerValue::from_i64(value)))
+            .collect::<Vec<_>>(),
+        (0..10).map(|value| Value::Float(value as f64)).collect(),
+        (0..10).map(|value| Value::Bool(value % 3 == 0)).collect(),
+        (0..10)
+            .map(|value| Value::String(value.to_string()))
+            .collect(),
+    ];
+    for values in lists {
+        let vector = VecValue {
+            element_type: Type::named("T"),
+            elements: values.clone().into(),
+            str_view: Default::default(),
+        };
+        for (start, end, expected) in [
+            (Some(7), Some(9), &values[7..9]),
+            (Some(-3), None, &values[7..]),
+            (None, Some(2), &values[..2]),
+            (Some(4), Some(4), &values[4..4]),
+        ] {
+            let slice = slice_vec_owned(&vector, start, end).expect("bounds are in range");
+            assert_eq!(slice.elements, expected.to_vec());
+            assert_eq!(slice.elements.form(), vector.elements.form());
+        }
+        let error = slice_vec_owned(&vector, Some(11), None).expect_err("start is past the end");
+        assert_eq!(error.message, "slice start `11` is outside `0..=10`");
+    }
+    let one = VecValue {
+        element_type: Type::named("int64"),
+        elements: vec![Value::Int(IntegerValue::from_i64(1))].into(),
+        str_view: Default::default(),
+    };
+    let error = super::with_array_allocation_budget(0, || slice_vec_owned(&one, None, None))
+        .expect_err("a scalar slice allocates its storage fallibly");
+    assert_eq!(error.code, "AU4005");
+}
+
+#[test]
+fn str_slices_find_byte_ranges_without_decoding_ascii_prefixes() {
+    let ascii = "abcdefghij".repeat(3);
+    for (start, end, expected) in [
+        (Some(5), Some(8), "fgh"),
+        (None, Some(3), "abc"),
+        (Some(0), Some(0), ""),
+        (Some(27), Some(30), "hij"),
+        (Some(28), None, "ij"),
+        (Some(-3), Some(-1), "hi"),
+        (None, None, ascii.as_str()),
+    ] {
+        assert_eq!(
+            slice_string_owned(&ascii, start, end).expect("bounds are in range"),
+            expected,
+            "{start:?}..{end:?}"
+        );
+    }
+    // Errors report the scalar count, as when every character is decoded.
+    for (text, start, end, message) in [
+        (
+            "abc",
+            Some(4),
+            Some(5),
+            "slice start `4` is outside `0..=3`",
+        ),
+        (
+            "abc",
+            Some(2),
+            Some(1),
+            "slice start `2` is greater than slice end `1`",
+        ),
+        (
+            "abcdé",
+            Some(9),
+            Some(2),
+            "slice start `9` is outside `0..=5`",
+        ),
+        (
+            "abcdé",
+            Some(3),
+            Some(2),
+            "slice start `3` is greater than slice end `2`",
+        ),
+        (
+            "abc",
+            None,
+            Some(-4),
+            "slice end `-4` normalizes to `-1`, outside `0..=3`",
+        ),
+    ] {
+        let error = slice_string_owned(text, start, end).expect_err("bounds are out of range");
+        assert_eq!(error.message, message);
+    }
+    // A prefix that is not ASCII, and text that is not ASCII after an
+    // ASCII prefix, both count scalars.
+    let mixed = "héllo wörld";
+    for (start, end, expected) in [
+        (Some(1), Some(4), "éll"),
+        (Some(0), Some(5), "héllo"),
+        (Some(7), Some(9), "ör"),
+        (Some(-5), None, "wörld"),
+        (Some(11), None, ""),
+    ] {
+        assert_eq!(
+            slice_string_owned(mixed, start, end).expect("bounds are in range"),
+            expected,
+            "{start:?}..{end:?}"
+        );
+    }
+    assert_eq!(
+        super::string_slice_byte_range(mixed, Some(6), Some(8)).unwrap(),
+        7..10
+    );
+}
+
+#[test]
 fn retry_runtime_policy_validates_host_limits_and_checked_doubling() {
     for (attempts, backoff, code) in [(0, 0, "AU4003"), (1, -1, "AU4001")] {
         let error = validate_retry_runtime_policy(attempts, backoff)
