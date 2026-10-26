@@ -1004,7 +1004,7 @@ fn type_key(ty: &Type) -> String {
 }
 
 /// How deeply `ty`'s tuples, unions, and type arguments nest.
-fn type_depth(ty: &Type) -> usize {
+pub fn type_depth(ty: &Type) -> usize {
     1 + match ty {
         Type::Named(_, args) => args.iter().map(type_depth).max().unwrap_or(0),
         Type::Tuple(elements) => elements.iter().map(type_depth).max().unwrap_or(0),

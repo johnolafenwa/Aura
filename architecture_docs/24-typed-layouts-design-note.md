@@ -42,7 +42,7 @@ on every offset without sharing a table.
 | A class or tuple | A struct. Each field sits at the next offset its alignment allows, in declaration order. The size rounds up to the largest alignment. |
 | An enum or union | A tag, then a payload area. Each variant lays its payloads out as a struct at the start of the area, so variants overlap. |
 | `str`, collections, resources, tasks, queues, callables | A handle: one pointer to a box. |
-| A type that names a type parameter | A handle. Generic code keeps it erased until step 2b specializes it. |
+| A type that names a type parameter | A handle. Step 2b copies generic functions for the concrete types their calls use, so only code it cannot copy keeps such a type. |
 
 The tag is the variant's declaration index, or a union member's index in
 canonical order, in the smallest unsigned width that holds every tag. That
@@ -223,7 +223,7 @@ In step 2a the converters allocate blocks with the system allocator through
 | Step | Adds |
 | --- | --- |
 | 2a | The shared layout builder, `LayoutPlan`, descriptors, the runtime converters, and their tests. No change to generated code. |
-| 2b | Specialized generic user functions, so fewer types name a type parameter. |
+| 2b | Specialized generic user functions, so fewer types name a type parameter. See "Specialized Generic Functions" in [06-mir.md](06-mir.md). |
 | 2c | `copy class` values and tuples inline everywhere: locals, list elements, fields, payloads. |
 | 2d | `list[T]` as a buffer of inline `T`, with inline index, length, push, set, and iteration, and lent element reads. |
 | 2e | Classes as structs inline in their owners, field reads that lend, writes in place, and generated drop functions. |

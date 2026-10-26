@@ -3689,6 +3689,40 @@ fn assert_valid_on_both_backends(source: &str, label: &str) {
         .unwrap_or_else(|error| panic!("{label} native validation remains valid: {error}"));
 }
 
+/// Points every call `caller` makes to a function whose name starts with
+/// `prefix` at `callee` instead, with no recorded type arguments.
+fn redirect_calls(encoded: &mut Value, caller: &str, prefix: &str, callee: &str) {
+    fn redirect(value: &mut Value, prefix: &str, callee: &str) {
+        match value {
+            Value::Array(values) => values
+                .iter_mut()
+                .for_each(|value| redirect(value, prefix, callee)),
+            Value::Object(fields) => {
+                if let Some(call) = fields.get_mut("Call") {
+                    let named = call["callee"]["Name"]
+                        .as_str()
+                        .is_some_and(|name| name.starts_with(prefix));
+                    if named {
+                        call["callee"]["Name"] = json!(callee);
+                        call["type_args"] = json!({});
+                    }
+                }
+                fields
+                    .values_mut()
+                    .for_each(|value| redirect(value, prefix, callee));
+            }
+            _ => {}
+        }
+    }
+    let function = encoded["functions"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|function| function["name"] == caller)
+        .unwrap();
+    redirect(&mut function["blocks"], prefix, callee);
+}
+
 fn holder_prelude() -> &'static str {
     "class Holder:\n    values: list[int64]\ndef consume(item: own Holder):\n    pass\ndef peek(item: Holder):\n    pass\n"
 }
@@ -3874,6 +3908,9 @@ fn type_parameter_callee_requires_authoritative_contract() {
         holder_prelude()
     );
     let mut encoded = serde_json::to_value(lower_implicit(&source).unwrap()).unwrap();
+    // `inspect` calls the copy of `invoke` made for `consume`'s type. The
+    // forgery calls the erased original, whose callee is a type parameter.
+    redirect_calls(&mut encoded, "inspect", "invoke[", "invoke");
     let invoke = encoded["functions"]
         .as_array_mut()
         .unwrap()

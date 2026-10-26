@@ -11605,6 +11605,12 @@ ok = Result[int32, str].Ok(7)
 
 Explicit arguments must have the exact arity and satisfy every substituted bound. Specialization and indexing share bracket syntax. [Grammar](/manual/grammar#explicit-specialization) gives the parser rules that tell them apart.
 
+### Compiled Copies
+
+A native build compiles a generic function once for each set of concrete type arguments its calls use. `identity(3)` and `identity("Aura")` run separate machine code for `int64` and for `str`, and each works on its own type's values directly. A call whose type arguments are not all known when the program is built, such as a call inside another generic function that the build could not copy, runs one shared version of the function that holds its values boxed. Both give the same results. `aura run` interprets one version of each function.
+
+An error's call chain names the function as it is written, such as `identity`, never a copy.
+
 ### Type Parameters As Union Members
 
 A declared type parameter can be a union member, and a generic alias can name such a union. Substitution renormalizes the union. With `V = int64 | None`, the union `V | None` is `int64 | None`. With `V = None`, it is unit `None`. A generic union never keeps a phantom outer tag to tell those results apart.

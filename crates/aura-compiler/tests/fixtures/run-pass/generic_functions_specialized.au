@@ -1,0 +1,73 @@
+class Box[T]:
+    value: T
+
+    def get(own self) -> T:
+        return self.value
+
+class Tally[T]:
+    items: list[T]
+
+    def add(mut self, item: own T):
+        self.items.append(item)
+
+    def count(self) -> int64:
+        return self.items.len()
+
+class Scope[T]:
+    label: T
+
+    def __enter__(mut self) -> None:
+        print(f"enter {self.label}")
+
+    def __exit__(mut self) -> None:
+        print(f"exit {self.label}")
+
+def identity[T](value: own T) -> T:
+    return value
+
+def first_or[T](values: own list[T], fallback: own T) -> T:
+    mut items = values
+    if items.len() == 0:
+        return fallback
+    return items.pop(0)
+
+def describe[T](value: T, label: own str = "value") -> str:
+    show: def(T) -> str = lambda item: f"{label}={item}"
+    return show(value)
+
+def twice[T](value: T) -> str:
+    plain = describe(value)
+    named = describe(value, label="again")
+    return f"{plain} {named}"
+
+def present[T](value: T | None) -> bool:
+    return value is not None
+
+def pair[A, B](first: own A, second: own B) -> str:
+    return f"{first}/{second}"
+
+def nest[T](value: own T, depth: int64) -> int64:
+    if depth == 0:
+        return 0
+    return 1 + nest([value], depth - 1)
+
+def main():
+    print(identity(3))
+    print(identity("x"))
+    print(first_or([1, 2], 0))
+    empty: list[str] = []
+    print(first_or(empty, "none"))
+    box = Box[str](value="boxed")
+    print(box.get())
+    mut tally = Tally[float64](items=[])
+    tally.add(1.5)
+    tally.add(2.5)
+    print(tally.count())
+    print(twice(2.5))
+    print(present("x"))
+    missing: str | None = None
+    print(present(missing))
+    print(pair(second="b", first=1))
+    with scope = Scope[int64](label=7):
+        print("inside")
+    print(nest(1, 40))

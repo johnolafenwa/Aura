@@ -9893,8 +9893,7 @@ fn validate_initializer_slot(
                 || target != "self"
                 || function.receiver.is_some()
                 || !returns_class
-                || !function
-                    .name
+                || !public_function_name(&function.name)
                     .ends_with(&format!(".{}", crate::sema::INITIALIZER_NAME))
             {
                 return Err(format!(
@@ -10271,9 +10270,23 @@ fn arg_place_mentions<'a>(args: &'a [MirArg], mentions: &mut Vec<&'a str>) {
 }
 
 /// Lowers `program` and states its checks and its ownership: the module is
-/// explicit. `aura mir` and the native build path use this form.
+/// explicit. `aura mir` and the native build path use this form. Generic
+/// functions are copied for the concrete types their calls use.
 pub fn lower(program: &Program) -> MirModule {
-    let mut module = lower_implicit(program);
+    let mut module = lower_unresolved(program);
+    specialize::specialize_generic_functions(&mut module);
+    make_explicit(program, module)
+}
+
+/// Lowers `program` as `lower` does but keeps every generic call erased,
+/// for tests of the paths a call takes when no copy is made.
+#[cfg(test)]
+pub(crate) fn lower_unspecialized(program: &Program) -> MirModule {
+    make_explicit(program, lower_unresolved(program))
+}
+
+fn make_explicit(program: &Program, mut module: MirModule) -> MirModule {
+    resolve_runtime_ops_and_unions(program, &mut module);
     checks::resolve_checks(&mut module);
     ownership::insert_ownership(&mut module);
     type_args::record_call_type_args(&mut module);
@@ -10281,10 +10294,40 @@ pub fn lower(program: &Program) -> MirModule {
     module
 }
 
-/// Lowers `program` without the checks and ownership passes, for the
-/// interpreter. It checks every access and decides ownership itself, so it
-/// gains nothing from either pass.
+/// Lowers `program` without the specialization, checks, and ownership
+/// passes, for the interpreter. It reads values rather than layouts, checks
+/// every access, and decides ownership itself, so it gains nothing from
+/// them.
 pub fn lower_implicit(program: &Program) -> MirModule {
+    let mut module = lower_unresolved(program);
+    resolve_runtime_ops_and_unions(program, &mut module);
+    module
+}
+
+/// The name a backtrace shows for a MIR function: a default argument
+/// helper shows as its function, and a copy of a generic function as the
+/// function it copies, so `pair[int64, str]::__default_b` shows as `pair`.
+/// Source names never hold `[`, so every bracketed part is a list of type
+/// arguments.
+pub(crate) fn public_function_name(name: &str) -> String {
+    let name = name
+        .split_once("::__default_")
+        .map_or(name, |(public, _)| public);
+    let mut public = String::with_capacity(name.len());
+    let mut depth = 0usize;
+    for ch in name.chars() {
+        match ch {
+            '[' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            ch if depth == 0 => public.push(ch),
+            _ => {}
+        }
+    }
+    public
+}
+
+/// Lowers `program` up to the calls runtime operations make.
+fn lower_unresolved(program: &Program) -> MirModule {
     let mut functions = program
         .functions
         .values()
@@ -10438,13 +10481,17 @@ pub fn lower_implicit(program: &Program) -> MirModule {
         ownership: MirOwnership::Implicit,
     };
     type_param_calls::specialize_type_param_calls(program, &mut module);
-    runtime_ops::resolve_runtime_ops(&mut module);
+    module
+}
+
+/// Names the runtime operation each call runs and plans every union.
+fn resolve_runtime_ops_and_unions(program: &Program, module: &mut MirModule) {
+    runtime_ops::resolve_runtime_ops(module);
     // Every union the module holds or operates on gets one explicit-tag
     // layout and drop plan (ADR-0052 A9).
-    crate::union_layout::plan_module_unions(&mut module, |member| {
+    crate::union_layout::plan_module_unions(module, |member| {
         type_is_copy_in_program(member, program)
     });
-    module
 }
 
 fn lower_enum_layouts(program: &Program) -> Vec<MirEnum> {
@@ -15307,6 +15354,25 @@ impl<'a> Lowerer<'a> {
         self.take_lowered_returned_view_origin(&origin_expr)
     }
 
+    /// The pointee type of a view a trait method returns when called on a
+    /// receiver whose type is a bounded type parameter, as in
+    /// `h.inner().right` with `h: T` and `T: Wrapped`. A specialized copy
+    /// of the function checks the loan against the concrete type, so the
+    /// loan must carry the view's type rather than the outer view's.
+    fn bounded_trait_view_call_type(&self, call: &Expr) -> Option<Type> {
+        let ExprKind::Call { callee, .. } = &call.kind else {
+            return None;
+        };
+        let ExprKind::Member { object, field } = &callee.kind else {
+            return None;
+        };
+        let receiver = self.infer_expr_type(object)?;
+        let (_, _, method, substitutions) =
+            self.bounded_trait_method_for_receiver(&receiver, field)?;
+        let return_type = substitute_type(&method.signature.return_type, &substitutions);
+        Some(crate::sema::returned_view_pointee(&return_type).clone())
+    }
+
     fn lower_returned_view_into_loan(
         &mut self,
         expr: &Expr,
@@ -15318,6 +15384,7 @@ impl<'a> Lowerer<'a> {
         let (fallback_origin, projections) = self.returned_view_source(call)?;
         let call_type = self
             .infer_expr_type(call)
+            .or_else(|| self.bounded_trait_view_call_type(call))
             .or_else(|| expected.cloned())
             .unwrap_or_else(|| Type::named("Unknown"));
         let _ = self.lower_expr_with_expected(call, Some(&call_type));
@@ -27110,6 +27177,9 @@ pub(crate) mod checks;
 
 #[path = "mir_type_args.rs"]
 pub(crate) mod type_args;
+
+#[path = "mir_specialize.rs"]
+pub(crate) mod specialize;
 
 // Code generation reads layout plans from step 2c of the typed-layout work;
 // until then only tests do.

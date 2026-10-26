@@ -13,6 +13,10 @@
 //! - every `PushCleanup` names its `CleanupCallee`: the class's `close` or
 //!   `__exit__`, the resource's `close` op, a `TaskGroup` close, or nothing.
 //!
+//! A member call or cleanup that runs a generic method names the copy
+//! `mir::specialize` made for its receiver and arguments, when there is
+//! one.
+//!
 //! `lower` runs the pass after the ownership pass, and the native boundary
 //! runs it on an implicit module. `lower_implicit` skips it, so `aura run`
 //! pays nothing: the interpreter reads the runtime value instead.
@@ -24,6 +28,7 @@
 //! it names no callee: a generic builtin body can call a method that no
 //! type of the program declares.
 
+use super::specialize::{concrete_call_type_args, specialized_name};
 use super::{
     collect_type_params_from_type, CallTarget, CleanupAction, CleanupCallee, Instruction,
     MethodCandidate, MethodDispatch, MirArg, MirClass, MirFunction, MirLoanValidationContext,
@@ -161,28 +166,30 @@ impl Resolver<'_, '_> {
         for (block_index, block) in function.blocks.iter().enumerate() {
             for (index, instruction) in block.instructions.iter().enumerate() {
                 let resolved = match instruction {
-                    Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. } => {
-                        match value {
-                            Rvalue::Call {
-                                callee:
-                                    callee @ (CallTarget::Member { dispatch: None, .. }
-                                    | CallTarget::TraitMember { dispatch: None, .. }),
-                                args,
-                                ..
-                            } => self
-                                .call_dispatch(function, callee, args)
-                                .ok()
-                                .map(Resolved::Dispatch),
-                            Rvalue::Try {
-                                value, from: None, ..
-                            } => self
-                                .try_from(function, value)
-                                .ok()
-                                .flatten()
-                                .map(Resolved::From),
-                            _ => None,
-                        }
-                    }
+                    Instruction::Assign { target, value }
+                    | Instruction::WriteLoan {
+                        loan: target,
+                        value,
+                    } => match value {
+                        Rvalue::Call {
+                            callee:
+                                callee @ (CallTarget::Member { dispatch: None, .. }
+                                | CallTarget::TraitMember { dispatch: None, .. }),
+                            args,
+                            ..
+                        } => self
+                            .call_dispatch(function, callee, args, Some(target))
+                            .ok()
+                            .map(Resolved::Dispatch),
+                        Rvalue::Try {
+                            value, from: None, ..
+                        } => self
+                            .try_from(function, value)
+                            .ok()
+                            .flatten()
+                            .map(Resolved::From),
+                        _ => None,
+                    },
                     Instruction::PushCleanup {
                         place,
                         action,
@@ -209,7 +216,11 @@ impl Resolver<'_, '_> {
     ) -> std::result::Result<(), String> {
         let name = &function.name;
         match instruction {
-            Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. } => {
+            Instruction::Assign { target, value }
+            | Instruction::WriteLoan {
+                loan: target,
+                value,
+            } => {
                 match value {
                     Rvalue::Call {
                         callee:
@@ -221,7 +232,7 @@ impl Resolver<'_, '_> {
                         let field = callee.member_parts().map_or("", |parts| parts.field);
                         check_named(
                             dispatch.as_ref(),
-                            self.call_dispatch(function, callee, args),
+                            self.call_dispatch(function, callee, args, Some(target)),
                             consumer,
                             |reason| {
                                 format!(
@@ -286,12 +297,51 @@ impl Resolver<'_, '_> {
         }
     }
 
+    /// What a member call in `function` that stores into `target` runs,
+    /// with the copy `mir::specialize` made in place of each generic
+    /// method it has one of.
     fn call_dispatch(
         &self,
         function: &MirFunction,
         callee: &CallTarget,
         args: &[MirArg],
+        target: Option<&str>,
     ) -> std::result::Result<MethodDispatch, String> {
+        let (dispatch, receiver) = self.generic_call_dispatch(function, callee, args)?;
+        Ok(match dispatch {
+            MethodDispatch::Static { function: method } => MethodDispatch::Static {
+                function: self.specialized_method(function, method, &receiver, args, target),
+            },
+            MethodDispatch::Union(arms) => {
+                let members = self.union_members(&receiver).unwrap_or_default();
+                let arms = arms.into_iter().enumerate().map(|(index, arm)| match arm {
+                    MethodDispatch::Static { function: method } if index < members.len() => {
+                        MethodDispatch::Static {
+                            function: self.specialized_method(
+                                function,
+                                method,
+                                &members[index],
+                                args,
+                                target,
+                            ),
+                        }
+                    }
+                    other => other,
+                });
+                MethodDispatch::Union(arms.collect())
+            }
+            other => other,
+        })
+    }
+
+    /// What a member call runs before specialization, with its receiver's
+    /// type.
+    fn generic_call_dispatch(
+        &self,
+        function: &MirFunction,
+        callee: &CallTarget,
+        args: &[MirArg],
+    ) -> std::result::Result<(MethodDispatch, Type), String> {
         let Some(parts) = callee.member_parts() else {
             return Err("the call is not a member call".to_string());
         };
@@ -304,7 +354,37 @@ impl Resolver<'_, '_> {
             args,
             writes_back: parts.receiver_place.is_some(),
         };
-        self.dispatch(&receiver, &call)
+        let dispatch = self.dispatch(&receiver, &call)?;
+        Ok((dispatch, receiver))
+    }
+
+    /// The copy of `method` that `mir::specialize` made for a call on
+    /// `receiver` with `args`, or `method` itself when it made none.
+    fn specialized_method(
+        &self,
+        function: &MirFunction,
+        method: String,
+        receiver: &Type,
+        args: &[MirArg],
+        target: Option<&str>,
+    ) -> String {
+        let copy = self
+            .context
+            .functions
+            .get(method.as_str())
+            .and_then(|callee| {
+                concrete_call_type_args(
+                    self.context,
+                    function,
+                    callee,
+                    Some(receiver),
+                    args,
+                    target,
+                )
+            })
+            .map(|type_args| specialized_name(&method, &type_args))
+            .filter(|copy| self.context.functions.contains_key(copy.as_str()));
+        copy.unwrap_or(method)
     }
 
     /// What `receiver.field(args)` runs.
@@ -657,13 +737,32 @@ impl Resolver<'_, '_> {
     }
 
     /// What the cleanup of `place` runs: the class's `__exit__` for a
-    /// manager or its `close`, or the built-in resource's close.
+    /// manager or its `close`, or the built-in resource's close. A generic
+    /// class's method runs as the copy for the place's type, when there is
+    /// one.
     fn cleanup_callee(
         &self,
         function: &MirFunction,
         place: &str,
         action: &CleanupAction,
     ) -> std::result::Result<CleanupCallee, String> {
+        let (callee, ty) = self.generic_cleanup_callee(function, place, action)?;
+        Ok(match callee {
+            CleanupCallee::Method { function: method } => CleanupCallee::Method {
+                function: self.specialized_method(function, method, &ty, &[], None),
+            },
+            other => other,
+        })
+    }
+
+    /// What the cleanup of `place` runs before specialization, with the
+    /// place's type.
+    fn generic_cleanup_callee(
+        &self,
+        function: &MirFunction,
+        place: &str,
+        action: &CleanupAction,
+    ) -> std::result::Result<(CleanupCallee, Type), String> {
         let ty = self
             .context
             .place_type(function, place)
@@ -680,23 +779,64 @@ impl Resolver<'_, '_> {
         if let Some(class) = self.context.classes.get(name.as_str()) {
             let method = class_method_named(class, exit)
                 .ok_or_else(|| format!("class `{name}` has no `{exit}` method"))?;
-            return Ok(CleanupCallee::Method {
+            let callee = CleanupCallee::Method {
                 function: method.function_name.clone(),
-            });
+            };
+            return Ok((callee, ty));
         }
         if matches!(action, CleanupAction::ManagerExit { .. }) {
             return Err(format!("`{name}` is not a class"));
         }
         if name == "TaskGroup" {
-            return Ok(CleanupCallee::CloseTaskGroup);
+            return Ok((CleanupCallee::CloseTaskGroup, ty));
         }
         if let Some(op) = RuntimeOp::resolve_member(&ty, "close", |_| false) {
-            return Ok(CleanupCallee::Runtime(op));
+            return Ok((CleanupCallee::Runtime(op), ty));
         }
         if crate::sema::is_builtin_io_resource_type(name, &[]) {
-            return Ok(CleanupCallee::Nothing);
+            return Ok((CleanupCallee::Nothing, ty));
         }
         Err(format!("`{ty}` is not a class or a resource"))
+    }
+}
+
+/// Each method a member call runs statically, with the type of the
+/// receiver it runs on: the method of its receiver, or of each union
+/// member it switches on.
+pub(super) fn member_call_methods(
+    context: &MirLoanValidationContext<'_>,
+    function: &MirFunction,
+    callee: &CallTarget,
+    args: &[MirArg],
+) -> Vec<(String, Type)> {
+    let resolver = Resolver { context };
+    let Ok((dispatch, receiver)) = resolver.generic_call_dispatch(function, callee, args) else {
+        return Vec::new();
+    };
+    match dispatch {
+        MethodDispatch::Static { function } => vec![(function, receiver)],
+        MethodDispatch::Union(arms) => arms
+            .into_iter()
+            .zip(resolver.union_members(&receiver).unwrap_or_default())
+            .filter_map(|(arm, member)| match arm {
+                MethodDispatch::Static { function } => Some((function, member)),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The class method the cleanup of `place` runs, with the place's type.
+pub(super) fn cleanup_method(
+    context: &MirLoanValidationContext<'_>,
+    function: &MirFunction,
+    place: &str,
+    action: &CleanupAction,
+) -> Option<(String, Type)> {
+    match (Resolver { context }).generic_cleanup_callee(function, place, action) {
+        Ok((CleanupCallee::Method { function }, ty)) => Some((function, ty)),
+        _ => None,
     }
 }
 

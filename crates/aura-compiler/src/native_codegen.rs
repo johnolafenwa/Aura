@@ -659,7 +659,7 @@ impl<'a> NativeCodegen<'a> {
         for class in &module.classes {
             classes.insert(class.name.clone(), class.clone());
         }
-        let method_receivers = module
+        let mut method_receivers: HashMap<_, _> = module
             .classes
             .iter()
             .flat_map(|class| &class.methods)
@@ -671,6 +671,15 @@ impl<'a> NativeCodegen<'a> {
             )
             .map(|method| (method.function_name.clone(), method.receiver))
             .collect();
+        // A specialized copy of a generic method is no class's method, but
+        // takes its receiver as the method does.
+        for function in &module.functions {
+            if function.receiver.is_some() {
+                method_receivers
+                    .entry(function.name.clone())
+                    .or_insert(function.receiver);
+            }
+        }
 
         let mut object = crate::native_backend::host_module_backend()?;
 
@@ -14530,8 +14539,7 @@ fn mangle_symbol(name: &str) -> String {
 }
 
 fn public_direct_function_name(name: &str) -> String {
-    name.split_once("::__default_")
-        .map_or_else(|| name.to_string(), |(public, _)| public.to_string())
+    crate::mir::public_function_name(name)
 }
 
 fn mangle_thunk_symbol(name: &str) -> String {
