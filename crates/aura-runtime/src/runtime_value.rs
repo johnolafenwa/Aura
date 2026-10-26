@@ -7786,6 +7786,19 @@ impl Value {
             Value(&'a Value),
             Text(&'a str),
             Static(&'static str),
+            Float32(f32),
+        }
+
+        /// Renders `value`, held where its static type is `ty`. A `float32`
+        /// is stored widened to `float64`, so the enclosing value's type
+        /// says to render its shortest `float32` spelling, as `print` does.
+        fn typed<'a>(value: &'a Value, ty: &Type) -> RenderAction<'a> {
+            match value {
+                Value::Float(number) if is_float32_type(ty) => {
+                    RenderAction::Float32(*number as f32)
+                }
+                _ => RenderAction::Value(value),
+            }
         }
 
         let mut rendered = String::new();
@@ -7795,6 +7808,7 @@ impl Value {
                 RenderAction::Text(text) | RenderAction::Static(text) => {
                     rendered.push_str(text);
                 }
+                RenderAction::Float32(number) => rendered.push_str(&render_float32(number)),
                 RenderAction::Value(value) => {
                     if let Some(hook) = hook.as_mut() {
                         let nominal = match value {
@@ -7821,7 +7835,10 @@ impl Value {
                                 actions.push(RenderAction::Static(","));
                             }
                             for (index, value) in tuple.elements.iter().enumerate().rev() {
-                                actions.push(RenderAction::Value(value));
+                                actions.push(match tuple.element_types.get(index) {
+                                    Some(ty) => typed(value, ty),
+                                    None => RenderAction::Value(value),
+                                });
                                 if index > 0 {
                                     actions.push(RenderAction::Static(", "));
                                 }
@@ -7829,12 +7846,20 @@ impl Value {
                         }
                         Value::Vec(values) if values.elements.as_values().is_none() => {
                             // Scalars render the same with or without a hook.
+                            let float32 = is_float32_type(&values.element_type);
                             rendered.push('[');
                             for (index, value) in values.elements.iter().enumerate() {
                                 if index > 0 {
                                     rendered.push_str(", ");
                                 }
-                                render_scalar(&value, &mut rendered);
+                                match &*value {
+                                    Value::Float(number) if float32 => {
+                                        rendered.push_str(&render_float32(*number as f32))
+                                    }
+                                    value => {
+                                        render_scalar(value, &mut rendered);
+                                    }
+                                }
                             }
                             rendered.push(']');
                         }
@@ -7843,7 +7868,7 @@ impl Value {
                             actions.push(RenderAction::Static("]"));
                             let elements = values.elements.as_values().unwrap_or_default();
                             for (index, value) in elements.iter().enumerate().rev() {
-                                actions.push(RenderAction::Value(value));
+                                actions.push(typed(value, &values.element_type));
                                 if index > 0 {
                                     actions.push(RenderAction::Static(", "));
                                 }
@@ -7858,7 +7883,7 @@ impl Value {
                             rendered.push('{');
                             actions.push(RenderAction::Static("}"));
                             for (index, value) in values.elements.iter().enumerate().rev() {
-                                actions.push(RenderAction::Value(value));
+                                actions.push(typed(value, &values.element_type));
                                 if index > 0 {
                                     actions.push(RenderAction::Static(", "));
                                 }
@@ -7868,9 +7893,9 @@ impl Value {
                             rendered.push('{');
                             actions.push(RenderAction::Static("}"));
                             for (index, (key, value)) in map.entries.iter().enumerate().rev() {
-                                actions.push(RenderAction::Value(value));
+                                actions.push(typed(value, &map.value_type));
                                 actions.push(RenderAction::Static(": "));
-                                actions.push(RenderAction::Value(key));
+                                actions.push(typed(key, &map.key_type));
                                 if index > 0 {
                                     actions.push(RenderAction::Static(", "));
                                 }
@@ -7943,7 +7968,13 @@ impl Value {
                                 }
                             }
                         }
-                        Value::Union(union) => actions.push(RenderAction::Value(&union.payload)),
+                        Value::Union(union) => actions.push(match &union.union_type {
+                            Type::Union(members) => match members.members.get(union.member_index) {
+                                Some(member) => typed(&union.payload, member),
+                                None => RenderAction::Value(&union.payload),
+                            },
+                            _ => RenderAction::Value(&union.payload),
+                        }),
                         Value::EnumVariant(variant) => {
                             rendered.push_str(nominal_runtime_base_name(&variant.enum_name));
                             rendered.push('.');
@@ -7978,6 +8009,10 @@ pub fn render_float(value: f64) -> String {
 
 pub fn render_float32(value: f32) -> String {
     format!("{value:?}")
+}
+
+fn is_float32_type(ty: &Type) -> bool {
+    matches!(ty, Type::Named(name, args) if name == "float32" && args.is_empty())
 }
 
 pub const MAX_FORMAT_COMPONENT: usize = 1_000_000;
@@ -8461,8 +8496,7 @@ pub fn format_runtime_value_with(
             format_numeric_integer(*integer, code, &spec)
         }
         (Some(code @ ('f' | 'e' | '%')), Value::Float(number)) => {
-            let mut number = if matches!(value_type, Type::Named(name, args) if name == "float32" && args.is_empty())
-            {
+            let mut number = if is_float32_type(value_type) {
                 *number as f32 as f64
             } else {
                 *number
@@ -8473,15 +8507,15 @@ pub fn format_runtime_value_with(
             format_numeric_float(number, code, &spec)
         }
         (None, Value::Float(number)) => {
-            let rendered = if matches!(value_type, Type::Named(name, args) if name == "float32" && args.is_empty())
-            {
+            let rendered = if is_float32_type(value_type) {
                 render_float32(*number as f32)
             } else {
                 render_float(*number)
             };
+            // A NaN renders without a sign, as `print` writes it.
             apply_numeric_sign(
                 rendered.trim_start_matches('-').to_string(),
-                number.is_sign_negative(),
+                number.is_sign_negative() && !number.is_nan(),
                 spec.sign,
             )
         }

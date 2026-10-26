@@ -1,6 +1,6 @@
 use super::{bind_runtime_op_args, resolve_runtime_ops};
-use crate::mir::{CallTarget, Instruction, MirArg, MirModule, Operand, Rvalue};
-use crate::runtime_ops::{ArgDefault, FunctionOp, ListOp, ResourceOp, RuntimeOp};
+use crate::mir::{CallTarget, Instruction, MirArg, MirFormatPart, MirModule, Operand, Rvalue};
+use crate::runtime_ops::{ArgDefault, FunctionOp, ListOp, ResourceOp, RuntimeOp, ValueOp};
 
 const BOUND_CALLS: &str = r#"
 import process
@@ -257,4 +257,73 @@ fn runtime_op_arguments_bind_by_name_and_position() {
             "expected `select(source, ...)` to receive one or more positional sources"
         );
     }
+}
+
+#[test]
+fn float32_renderings_take_the_formatter_with_the_float32_type() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    x: float32 = 0.1
+    wide: float64 = 0.1
+    count = 3
+    text = x.to_string()
+    joined = f"{x} {wide} {count} {str(x)}"
+    print(text + joined)
+"#,
+    )
+    .expect("source should lower");
+    let instructions = module
+        .functions
+        .iter()
+        .filter(|function| function.name == "main")
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.instructions)
+        .collect::<Vec<_>>();
+    // `to_string()` on a `float32` no longer calls the boxed `ToString`.
+    assert!(instructions.iter().all(|instruction| !matches!(
+        instruction,
+        Instruction::Assign {
+            value: Rvalue::Call {
+                callee: CallTarget::Runtime {
+                    op: RuntimeOp::Value(ValueOp::ToString),
+                    ..
+                },
+                ..
+            },
+            ..
+        }
+    )));
+    let parts = instructions
+        .iter()
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::FormatString { parts },
+                ..
+            } => Some(parts),
+            _ => None,
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    let float32_parts = parts
+        .iter()
+        .filter(|part| {
+            matches!(
+                part,
+                MirFormatPart::Formatted { spec, value_type, .. }
+                    if spec.is_empty() && *value_type == crate::sema::Type::named("float32")
+            )
+        })
+        .count();
+    // `to_string()`, `{x}`, and `str(x)`.
+    assert_eq!(float32_parts, 3);
+    assert!(parts
+        .iter()
+        .any(|part| matches!(part, MirFormatPart::Int64(_))));
+    // The `float64` part keeps its boxed rendering.
+    assert!(parts.iter().all(|part| !matches!(
+        part,
+        MirFormatPart::Formatted { value_type, .. }
+            if *value_type == crate::sema::Type::named("float64")
+    )));
 }

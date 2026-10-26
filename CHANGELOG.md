@@ -50,6 +50,13 @@ in this file.
   that loan once the call returns. A body that then wrote the element,
   such as `rows[i][j] = v`, passed `aura check` but failed `aura run` and
   `aura build` with "invalid MIR loan ... overlaps active shared loan".
+- A `float32` renders its shortest `float32` spelling in f-strings, `str`,
+  and `to_string()`, and inside lists, sets, dicts, tuples, and unions, as
+  `print` already wrote it. `f"{x}"` for `x: float32 = 0.1` used to give
+  `0.10000000149011612`, the digits of its `float64` widening. A `float32`
+  in a class field or an enum payload still renders widened.
+- A formatted NaN, as in `f"{x:>6}"`, no longer renders as `-NaN` when
+  its sign bit is set, matching `print`.
 
 ## VS Code extension 0.7.1 — 2026-10-25
 

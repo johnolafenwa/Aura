@@ -15,8 +15,12 @@
 //!   call. `print` and `wait_any` are specialized by their arguments here.
 //!
 //! It also marks each f-string part whose operand is an `int64` as
-//! `MirFormatPart::Int64`. The pass is idempotent, so lowering, the
-//! interpreter's MIR loader, and the native emitter can each run it.
+//! `MirFormatPart::Int64`. A `float32` f-string part, and `to_string()` on
+//! a `float32`, render through the formatter with an empty spec and the
+//! `float32` type (see `float32_part`), because the boxed value they would
+//! otherwise render holds the widened `float64`. The pass is idempotent,
+//! so lowering, the interpreter's MIR loader, and the native emitter can
+//! each run it.
 //!
 //! `validate_runtime_ops` rejects an op that does not apply to its receiver
 //! or arguments, or that is called with arguments its parameters do not
@@ -28,7 +32,7 @@ use crate::call::CallableParam;
 use crate::mir::{ArithmeticTrap, MirArg, MirFormatPart, Operand};
 use crate::runtime_ops::{
     builtin_function_for_name, first_type_arg, DictOp, FunctionOp, ListOp, PrintKind, RuntimeOp,
-    ScalarElement, SetOp,
+    ScalarElement, SetOp, ValueOp,
 };
 use crate::sema::Type;
 
@@ -43,8 +47,8 @@ pub(crate) fn is_builtin_wrapper(function: &MirFunction) -> bool {
         && crate::builtin_modules::is_builtin_root_module(&function.module_name)
 }
 
-/// Rewrites every call that names a resolved runtime operation, and every
-/// `int64` f-string part.
+/// Rewrites every call that names a resolved runtime operation, every
+/// `int64` and `float32` f-string part, and `to_string()` on a `float32`.
 pub(crate) fn resolve_runtime_ops(module: &mut MirModule) {
     let rewrites = {
         // A module the validator cannot read keeps its calls; the validator
@@ -80,14 +84,51 @@ pub(crate) fn resolve_runtime_ops(module: &mut MirModule) {
     }
 }
 
+/// The f-string part that renders `value`, a `float32`, in its shortest
+/// `float32` spelling, as `print` writes it.
+fn float32_part(value: Operand) -> MirFormatPart {
+    MirFormatPart::Formatted {
+        value,
+        spec: String::new(),
+        value_type: Type::named("float32"),
+    }
+}
+
 fn apply_rewrite(value: &mut Rvalue, kind: RewriteKind, bound_args: Option<Vec<MirArg>>) {
     if let Rvalue::FormatString { parts } = value {
-        if let RewriteKind::FormatInt64(index) = kind {
+        if let RewriteKind::FormatInt64(index) | RewriteKind::FormatFloat32(index) = kind {
             if let MirFormatPart::Value(operand) = &mut parts[index] {
                 let operand = std::mem::replace(operand, Operand::Unit);
-                parts[index] = MirFormatPart::Int64(operand);
+                parts[index] = match kind {
+                    RewriteKind::FormatInt64(_) => MirFormatPart::Int64(operand),
+                    _ => float32_part(operand),
+                };
             }
         }
+        return;
+    }
+    if let RewriteKind::Float32ToString = kind {
+        let receiver = match value {
+            Rvalue::Call {
+                callee:
+                    CallTarget::Member {
+                        object: receiver, ..
+                    },
+                ..
+            }
+            | Rvalue::Call {
+                callee:
+                    CallTarget::Runtime {
+                        receiver: Some(receiver),
+                        ..
+                    },
+                ..
+            } => std::mem::replace(receiver, Operand::Unit),
+            _ => return,
+        };
+        *value = Rvalue::FormatString {
+            parts: vec![float32_part(receiver)],
+        };
         return;
     }
     if let (RewriteKind::ScalarLeftArray(op), Rvalue::Call { callee, args, .. }) =
@@ -155,6 +196,10 @@ enum RewriteKind {
     Named(RuntimeOp),
     /// The f-string part at this index appends an `int64`.
     FormatInt64(usize),
+    /// The f-string part at this index renders a `float32`.
+    FormatFloat32(usize),
+    /// `to_string()` on a `float32` becomes an f-string of its receiver.
+    Float32ToString,
     /// A resolved op's call binds its arguments.
     Bind,
     /// A scalar's arithmetic member call with an `Array` argument becomes
@@ -197,7 +242,13 @@ fn collect_rewrites(
                     ..
                 } => {
                     if let Some(op) = context.resolved_runtime_op(function, object, field, args) {
-                        push(RewriteKind::Member(op), Some(op), args);
+                        if op == RuntimeOp::Value(ValueOp::ToString)
+                            && context.is_float32_operand(function, object)
+                        {
+                            push(RewriteKind::Float32ToString, None, &[]);
+                        } else {
+                            push(RewriteKind::Member(op), Some(op), args);
+                        }
                     } else if let Some(op) =
                         context.scalar_left_array_op(function, object, field, args)
                     {
@@ -214,6 +265,17 @@ fn collect_rewrites(
                     }
                 }
                 Rvalue::Call {
+                    callee:
+                        CallTarget::Runtime {
+                            op: RuntimeOp::Value(ValueOp::ToString),
+                            receiver: Some(receiver),
+                            ..
+                        },
+                    ..
+                } if context.is_float32_operand(function, receiver) => {
+                    push(RewriteKind::Float32ToString, None, &[])
+                }
+                Rvalue::Call {
                     callee: CallTarget::Runtime { op, .. },
                     args,
                     ..
@@ -223,6 +285,8 @@ fn collect_rewrites(
                         if let MirFormatPart::Value(value) = part {
                             if context.is_int64_operand(function, value) {
                                 push(RewriteKind::FormatInt64(index), None, &[]);
+                            } else if context.is_float32_operand(function, value) {
+                                push(RewriteKind::FormatFloat32(index), None, &[]);
                             }
                         }
                     }
@@ -355,6 +419,10 @@ impl MirLoanValidationContext<'_> {
 
     fn is_int64_operand(&self, function: &MirFunction, operand: &Operand) -> bool {
         self.layout_type(function, operand) == Some(Type::named("int64"))
+    }
+
+    fn is_float32_operand(&self, function: &MirFunction, operand: &Operand) -> bool {
+        self.layout_type(function, operand) == Some(Type::named("float32"))
     }
 }
 
