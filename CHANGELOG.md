@@ -56,6 +56,10 @@ in this file.
 
 ### Fixed
 
+- A `for` loop over a queue whose registered producer tasks were finishing
+  no longer ends early. When a producer sent its last item and finished
+  between the loop's receive and its check for running producers, the loop
+  ended without that item, on both backends.
 - A `for` loop over `text.to_bytes()`, directly or through an unannotated
   local, iterates the bytes. It passed `aura check` and then failed at run
   time with AU4001 "MIR `for` requires a `Range`" on both backends.

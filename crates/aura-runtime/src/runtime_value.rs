@@ -15094,6 +15094,7 @@ pub fn recv_for_registered_producers_iteration(
     channel: &ChannelValue,
     cancellation: &CancellationContext,
 ) -> RecvValueResult {
+    let mut producers_finished = false;
     loop {
         match channel.try_recv() {
             TryRecvResult::Value(value) => {
@@ -15103,6 +15104,7 @@ pub fn recv_for_registered_producers_iteration(
                 return RecvValueResult::Value(value);
             }
             TryRecvResult::Closed => return RecvValueResult::Closed,
+            TryRecvResult::Empty if producers_finished => return RecvValueResult::Closed,
             TryRecvResult::Empty => {}
         }
         let running_producers = channel
@@ -15111,7 +15113,11 @@ pub fn recv_for_registered_producers_iteration(
             .filter(|task| task.completed_result().is_none())
             .collect::<Vec<_>>();
         if running_producers.is_empty() {
-            return RecvValueResult::Closed;
+            // A producer can send its last item and finish between the
+            // receive above and this check, so receive once more before
+            // reporting the end.
+            producers_finished = true;
+            continue;
         }
         match wait_for_runtime_scheduler(
             vec![channel.clone()],
