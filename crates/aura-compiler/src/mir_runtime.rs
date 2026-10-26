@@ -37,15 +37,15 @@ use crate::runtime_value::{
     decode_process_restart_policy, decode_process_stdio, divmod_numeric_values,
     duration_to_host_timer, duration_to_milliseconds, duration_to_seconds,
     evaluate_bytes_host_builtin_ref, evaluate_host_builtin_with_program_args,
-    evaluate_string_to_bytes_host_ref, float_floor_divmod, float_power, format_runtime_value_with,
-    host_process_args, io_error, io_read_line, json_array_metadata_is_exact,
-    json_dump_error_to_diagnostic, json_int_metadata_is_exact, json_object_metadata_is_exact,
-    json_parse_owned_to_runtime, lookup_found, lookup_missing, manager_exit_failure_note,
-    nominal_runtime_base_name, optional_absent, optional_bytes_value, optional_present,
-    optional_str_value, optional_value, poll_cancellation, poll_ready, poll_unavailable,
-    prepare_json_codec_source, process_error_cancelled, process_error_io, process_error_no_command,
-    process_error_spawn, process_error_timed_out, process_exit_status, process_stdio_inherit,
-    process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
+    evaluate_string_to_bytes_host_ref, float_floor_divmod, float_power, flush_buffered_files,
+    format_runtime_value_with, host_process_args, io_error, io_read_line,
+    json_array_metadata_is_exact, json_dump_error_to_diagnostic, json_int_metadata_is_exact,
+    json_object_metadata_is_exact, json_parse_owned_to_runtime, lookup_found, lookup_missing,
+    manager_exit_failure_note, nominal_runtime_base_name, optional_absent, optional_bytes_value,
+    optional_present, optional_str_value, optional_value, poll_cancellation, poll_ready,
+    poll_unavailable, prepare_json_codec_source, process_error_cancelled, process_error_io,
+    process_error_no_command, process_error_spawn, process_error_timed_out, process_exit_status,
+    process_stdio_inherit, process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
     process_supervisor_wait_cancelled, process_supervisor_wait_event,
     process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
@@ -8182,6 +8182,11 @@ impl MirRuntime {
         name: &str,
         values: Vec<EvaluatedMirArg>,
     ) -> Result<Value> {
+        if name.starts_with("fs::") {
+            // A filesystem operation sees every buffered `fs.File` write,
+            // as in a native build.
+            flush_buffered_files();
+        }
         match name {
             "process::inherit" => {
                 bind_builtin_args(&[], values)?;
