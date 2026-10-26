@@ -22,6 +22,10 @@ npm run bench:cross-language   # median wall time of each version, in ms
 python3 scripts/bench-cross-language.py --callgrind --repetitions 1 nbody sql_engine
 ```
 
+The [operation probes](../operation_probes/README.md) measure single
+operations, such as a class field read or a `range` loop step, in Aura and
+Rust, for work aimed at one cost.
+
 `npm run ci` runs the check, which records no times. The timed mode builds
 the Rust versions with the `cross-language` profile, which is the release
 profile with overflow checks on, builds the Aura versions with `aura build`,
