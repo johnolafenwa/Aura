@@ -3,8 +3,8 @@
 use super::{
     check_callable_positions, function_type_mismatch_message, is_array_dtype, is_builtin_type,
     preserves_qualified_builtin_type_name, resolve_param_passing, BTreeMap, BTreeSet, CallableType,
-    ClosureCallKind, ClosureCapture, Diagnostic, FunctionParamContract, HashMap, ReceiverKind,
-    Result, TraitImplInfo, TypeRef,
+    ClosureCallKind, Diagnostic, FunctionParamContract, HashMap, ReceiverKind, Result,
+    TraitImplInfo, TypeRef,
 };
 use aura_core::types::{ReturnedViewType, TraitBound, Type, UnionType};
 
@@ -988,119 +988,7 @@ fn substitute_type_in_context(
     substitutions: &HashMap<String, Type>,
     context: Option<(&str, &BTreeMap<String, String>)>,
 ) -> Type {
-    match ty {
-        Type::Union(union) => {
-            let empty = BTreeMap::new();
-            let (module, names) = context.unwrap_or((&union.module_name, &empty));
-            Type::normalize_union(
-                union
-                    .members
-                    .iter()
-                    .map(|member| substitute_type_in_context(member, substitutions, context))
-                    .collect(),
-                module,
-                names,
-            )
-            .expect("substitution preserves nonempty normalized union members")
-        }
-        Type::Unit => Type::Unit,
-        Type::Module(name) => Type::Module(name.clone()),
-        Type::ReturnedView(view) => Type::ReturnedView(Box::new(ReturnedViewType {
-            mutable: view.mutable,
-            pointee: substitute_type_in_context(&view.pointee, substitutions, context),
-            origin: view.origin,
-        })),
-        Type::TypeParam(name) => substitutions
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| Type::TypeParam(name.clone())),
-        Type::Tuple(elements) => Type::Tuple(
-            elements
-                .iter()
-                .map(|element| substitute_type_in_context(element, substitutions, context))
-                .collect(),
-        ),
-        Type::Function {
-            params,
-            return_type,
-        } => Type::Function {
-            params: params
-                .iter()
-                .map(|param| FunctionParamContract {
-                    keyword_only: param.keyword_only,
-                    name: param.name.clone(),
-                    ty: substitute_type_in_context(&param.ty, substitutions, context),
-                    passing: param.passing,
-                    has_default: param.has_default,
-                })
-                .collect(),
-            return_type: Box::new(substitute_type_in_context(
-                return_type,
-                substitutions,
-                context,
-            )),
-        },
-        Type::Callable(callable) => Type::Callable(Box::new(CallableType {
-            task: callable.task,
-            call_kind: callable.call_kind,
-            params: callable
-                .params
-                .iter()
-                .map(|param| FunctionParamContract {
-                    keyword_only: param.keyword_only,
-                    name: param.name.clone(),
-                    ty: substitute_type_in_context(&param.ty, substitutions, context),
-                    passing: param.passing,
-                    has_default: param.has_default,
-                })
-                .collect(),
-            return_type: substitute_type_in_context(&callable.return_type, substitutions, context),
-        })),
-        Type::Closure {
-            params,
-            return_type,
-            captures,
-            call_kind,
-        } => Type::Closure {
-            params: Box::new(
-                params
-                    .iter()
-                    .map(|param| FunctionParamContract {
-                        keyword_only: param.keyword_only,
-                        name: param.name.clone(),
-                        ty: substitute_type_in_context(&param.ty, substitutions, context),
-                        passing: param.passing,
-                        has_default: param.has_default,
-                    })
-                    .collect(),
-            ),
-            return_type: Box::new(substitute_type_in_context(
-                return_type,
-                substitutions,
-                context,
-            )),
-            captures: Box::new(
-                captures
-                    .iter()
-                    .map(|capture| ClosureCapture {
-                        name: capture.name.clone(),
-                        ty: substitute_type_in_context(&capture.ty, substitutions, context),
-                        mode: capture.mode,
-                        span: capture.span,
-                        mutated: capture.mutated,
-                    })
-                    .collect(),
-            ),
-            call_kind: *call_kind,
-        },
-        Type::Named(name, args) => {
-            let substituted_args = args
-                .iter()
-                .map(|arg| substitute_type_in_context(arg, substitutions, context))
-                .collect::<Vec<_>>();
-            Type::Named(name.clone(), substituted_args)
-        }
-    }
+    aura_core::types::substitute_type_in_context(ty, substitutions, context)
 }
 
 pub(crate) fn substitute_trait_bound(

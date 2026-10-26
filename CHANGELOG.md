@@ -24,6 +24,13 @@ in this file.
   which used to fail to compile.
 - A user `impl Ord[str] for str` no longer changes what `<` means on `str`,
   in the same way as the other built-in operators.
+- The compiler and the native runtime share one rule for laying out each
+  type in native memory: scalars at their width, classes and tuples as
+  structs, enums and unions as a tag followed by the payload, runtime
+  objects as a pointer, and a pointer to a heap block on a recursive edge.
+  Generated code does not use the layouts yet, so programs build and run
+  exactly as before. The design is in
+  `architecture_docs/24-typed-layouts-design-note.md`.
 
 ### Performance
 

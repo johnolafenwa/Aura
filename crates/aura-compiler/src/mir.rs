@@ -27111,6 +27111,12 @@ pub(crate) mod checks;
 #[path = "mir_type_args.rs"]
 pub(crate) mod type_args;
 
+// Code generation reads layout plans from step 2c of the typed-layout work;
+// until then only tests do.
+#[cfg_attr(not(test), allow(dead_code))]
+#[path = "mir_layout.rs"]
+pub(crate) mod layout;
+
 #[path = "mir_methods.rs"]
 pub(crate) mod methods;
 

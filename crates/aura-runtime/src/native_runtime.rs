@@ -143,6 +143,11 @@ mod box_cache;
 mod frame_stack;
 #[path = "native_owned_values.rs"]
 mod owned_values;
+// Generated code converts through typed layouts once values live in them,
+// from step 2c of the typed-layout work; until then only tests do.
+#[cfg_attr(not(test), allow(dead_code))]
+#[path = "native_typed_layout.rs"]
+mod typed_layout;
 
 pub use frame_stack::{direct_frame_stack_layout, DirectFrameStack, DirectFrameStackLayout};
 use frame_stack::{
@@ -1793,11 +1798,19 @@ fn boxed_typed_value(value: Value, runtime_type_name: &str) -> *mut OpaqueValue 
 }
 
 fn boxed_value_with_type(value: Value, runtime_type_name: Option<Arc<str>>) -> *mut OpaqueValue {
+    let value = untracked_boxed_value(value, runtime_type_name);
+    register_direct_owned_value(value);
+    value
+}
+
+/// A new box that no task's ledger links. Its owner releases it with
+/// `release_untracked_value`.
+#[inline]
+fn untracked_boxed_value(value: Value, runtime_type_name: Option<Arc<str>>) -> *mut OpaqueValue {
     let value = box_cache::allocate(OpaqueValue::new(value, runtime_type_name));
     #[cfg(coverage)]
     DIRECT_VALUE_LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
     crate::runtime_value::representation_stats::note_opaque_box();
-    register_direct_owned_value(value);
     value
 }
 
@@ -2474,105 +2487,110 @@ unsafe fn set_explicit_runtime_type_tag(ptr: *mut OpaqueValue, tag: &RuntimeType
     if tag.name_only {
         return;
     }
+    unsafe { value_mut(ptr, |value| retag_value(value, tag)) }
+}
+
+/// Gives `value` the shape a tag records: integer kinds, element types,
+/// and the type arguments of a generic class or enum.
+#[inline]
+fn retag_value(value: &mut Value, tag: &RuntimeTypeTag) {
+    let runtime_type_name: &str = &tag.name;
     let parsed = &tag.parsed;
     fn assign_type(slot: &mut Type, ty: &Type) {
         if slot != ty {
             *slot = ty.clone();
         }
     }
-    unsafe {
-        value_mut(ptr, |value| match value {
-            Value::Int(integer) => {
-                if let Some(kind) = tag.integer_kind {
-                    if let Some(typed) = integer.with_runtime_kind(kind) {
-                        *integer = typed;
-                    }
+    match value {
+        Value::Int(integer) => {
+            if let Some(kind) = tag.integer_kind {
+                if let Some(typed) = integer.with_runtime_kind(kind) {
+                    *integer = typed;
                 }
             }
-            Value::Vec(vector) => {
-                if let Type::Named(name, args) = parsed {
-                    if name == "list" && args.len() == 1 {
-                        assign_type(&mut vector.element_type, &args[0]);
-                    }
+        }
+        Value::Vec(vector) => {
+            if let Type::Named(name, args) = parsed {
+                if name == "list" && args.len() == 1 {
+                    assign_type(&mut vector.element_type, &args[0]);
                 }
             }
-            Value::Set(set) => {
-                if let Type::Named(name, args) = parsed {
-                    if name == "set" && args.len() == 1 {
-                        assign_type(&mut set.element_type, &args[0]);
-                    }
+        }
+        Value::Set(set) => {
+            if let Type::Named(name, args) = parsed {
+                if name == "set" && args.len() == 1 {
+                    assign_type(&mut set.element_type, &args[0]);
                 }
             }
-            Value::Map(map) => {
-                if let Type::Named(name, args) = parsed {
-                    if name == "dict" && args.len() == 2 {
-                        assign_type(&mut map.key_type, &args[0]);
-                        assign_type(&mut map.value_type, &args[1]);
-                    }
+        }
+        Value::Map(map) => {
+            if let Type::Named(name, args) = parsed {
+                if name == "dict" && args.len() == 2 {
+                    assign_type(&mut map.key_type, &args[0]);
+                    assign_type(&mut map.value_type, &args[1]);
                 }
             }
-            Value::Tuple(tuple) => {
-                if let Type::Tuple(element_types) = parsed {
-                    if element_types.len() == tuple.elements.len()
-                        && tuple.element_types != *element_types
-                    {
-                        tuple.element_types = element_types.clone();
-                    }
+        }
+        Value::Tuple(tuple) => {
+            if let Type::Tuple(element_types) = parsed {
+                if element_types.len() == tuple.elements.len()
+                    && tuple.element_types != *element_types
+                {
+                    tuple.element_types = element_types.clone();
                 }
             }
-            Value::Instance(instance) if matches!(parsed, Type::Named(_, args) if !args.is_empty()) =>
-            {
-                let already_tagged = matches!(
-                    instance.fields.get(DIRECT_RUNTIME_TYPE_FIELD),
-                    Some(Value::String(existing)) if existing == runtime_type_name
+        }
+        Value::Instance(instance) if matches!(parsed, Type::Named(_, args) if !args.is_empty()) => {
+            let already_tagged = matches!(
+                instance.fields.get(DIRECT_RUNTIME_TYPE_FIELD),
+                Some(Value::String(existing)) if existing == runtime_type_name
+            );
+            if !already_tagged {
+                instance.fields.insert(
+                    DIRECT_RUNTIME_TYPE_FIELD.to_string(),
+                    Value::String(runtime_type_name.to_string()),
                 );
-                if !already_tagged {
-                    instance.fields.insert(
-                        DIRECT_RUNTIME_TYPE_FIELD.to_string(),
-                        Value::String(runtime_type_name.to_string()),
-                    );
-                }
             }
-            Value::EnumVariant(variant) if matches!(parsed, Type::Named(_, args) if !args.is_empty()) =>
-            {
-                // `enum_name` is `base`, or `base SEPARATOR descriptor` once
-                // tagged. A matching descriptor means the rebuilt name would
-                // equal the current one.
-                let enum_name = variant.enum_name.as_str();
-                let separator =
-                    memchr::memchr(DIRECT_RUNTIME_TYPE_SEPARATOR as u8, enum_name.as_bytes());
-                let base = match separator {
-                    Some(at) if &enum_name[at + 1..] == runtime_type_name => None,
-                    Some(at) => Some(&enum_name[..at]),
-                    None => Some(enum_name),
+        }
+        Value::EnumVariant(variant) if matches!(parsed, Type::Named(_, args) if !args.is_empty()) =>
+        {
+            // `enum_name` is `base`, or `base SEPARATOR descriptor` once
+            // tagged. A matching descriptor means the rebuilt name would
+            // equal the current one.
+            let enum_name = variant.enum_name.as_str();
+            let separator =
+                memchr::memchr(DIRECT_RUNTIME_TYPE_SEPARATOR as u8, enum_name.as_bytes());
+            let base = match separator {
+                Some(at) if &enum_name[at + 1..] == runtime_type_name => None,
+                Some(at) => Some(&enum_name[..at]),
+                None => Some(enum_name),
+            };
+            if let Some(base) = base {
+                let name = match &tag.tagged_enum_name {
+                    // A variant of the tag's own enum: the length and
+                    // prefix show `base` is the enum the tag names.
+                    Some(tagged)
+                        if tagged.len()
+                            == base.len()
+                                + DIRECT_RUNTIME_TYPE_SEPARATOR.len_utf8()
+                                + runtime_type_name.len()
+                            && tagged.starts_with(base) =>
+                    {
+                        tagged.clone()
+                    }
+                    _ => tagged_enum_name(base, runtime_type_name).into(),
                 };
-                if let Some(base) = base {
-                    let name = match &tag.tagged_enum_name {
-                        // A variant of the tag's own enum: the length and
-                        // prefix show `base` is the enum the tag names.
-                        Some(tagged)
-                            if tagged.len()
-                                == base.len()
-                                    + DIRECT_RUNTIME_TYPE_SEPARATOR.len_utf8()
-                                    + runtime_type_name.len()
-                                && tagged.starts_with(base) =>
-                        {
-                            tagged.clone()
-                        }
-                        _ => tagged_enum_name(base, runtime_type_name).into(),
-                    };
-                    variant.enum_name = name;
-                }
+                variant.enum_name = name;
             }
-            Value::Channel(channel) => channel.set_runtime_type_name(runtime_type_name.to_string()),
-            Value::Task(task) => task.set_runtime_type_name(runtime_type_name.to_string()),
-            Value::Function(function) => {
-                if matches!(parsed, Type::Function { .. } | Type::Closure { .. }) {
-                    assign_type(&mut function.signature, parsed);
-                }
+        }
+        Value::Channel(channel) => channel.set_runtime_type_name(runtime_type_name.to_string()),
+        Value::Task(task) => task.set_runtime_type_name(runtime_type_name.to_string()),
+        Value::Function(function) => {
+            if matches!(parsed, Type::Function { .. } | Type::Closure { .. }) {
+                assign_type(&mut function.signature, parsed);
             }
-            _ => {}
-        });
+        }
+        _ => {}
     }
 }
 
