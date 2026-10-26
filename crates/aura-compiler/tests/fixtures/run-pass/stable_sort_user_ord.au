@@ -1,0 +1,116 @@
+trait Ord[Rhs]:
+    def lt(self, rhs: Rhs) -> bool
+    def le(self, rhs: Rhs) -> bool
+    def gt(self, rhs: Rhs) -> bool
+    def ge(self, rhs: Rhs) -> bool
+
+
+class Score:
+    value: int64
+    id: int64
+
+
+impl Ord[Score] for Score:
+    def lt(self, rhs: Score) -> bool:
+        return self.value < rhs.value
+
+    def le(self, rhs: Score) -> bool:
+        return self.value <= rhs.value
+
+    def gt(self, rhs: Score) -> bool:
+        return self.value > rhs.value
+
+    def ge(self, rhs: Score) -> bool:
+        return self.value >= rhs.value
+
+
+def score_of(text: str) -> Score:
+    return Score(value=text.byte_len(), id=0)
+
+
+def ids(scores: list[Score]) -> list[int64]:
+    mut out: list[int64] = []
+    for score in scores:
+        out.append(score.id)
+    return out
+
+
+def sort_any[T: Ord[T]](items: mut list[T], reverse: bool):
+    items.sort(reverse=reverse)
+
+
+class Board:
+    scores: list[Score]
+
+    def rank(mut self):
+        self.scores.sort(reverse=true)
+
+
+def is_stable_ascending(scores: list[Score]) -> bool:
+    for i in range(1, scores.len()):
+        if scores[i].value < scores[i - 1].value:
+            return false
+        if scores[i].value == scores[i - 1].value and scores[i].id < scores[i - 1].id:
+            return false
+    return true
+
+
+def main():
+    values = [3, 1, 3, 2, 1, 2, 3]
+    mut scores: list[Score] = []
+    for i in range(values.len()):
+        scores.append(Score(value=values[i], id=i))
+    scores.sort()
+    print(ids(scores))
+    scores.sort(reverse=true)
+    print(ids(scores))
+
+    # Keys with a user `Ord` sort the same way.
+    mut words = ["ccc", "a", "bb", "dd", "e", "fff"]
+    words.sort(key=score_of)
+    print(words)
+    words.sort(key=score_of, reverse=true)
+    print(words)
+
+    # A type parameter bounded by `Ord` sorts through the bound.
+    mut generic = [Score(value=2, id=0), Score(value=1, id=1), Score(value=2, id=2)]
+    sort_any(generic, false)
+    print(ids(generic))
+    sort_any(generic, true)
+    print(ids(generic))
+
+    mut empty: list[Score] = []
+    empty.sort()
+    mut one = [Score(value=1, id=7)]
+    one.sort(reverse=true)
+    print(f"{empty.len()} {ids(one)}")
+
+    mut part = [
+        Score(value=4, id=0),
+        Score(value=3, id=1),
+        Score(value=2, id=2),
+        Score(value=1, id=3),
+    ]
+    view mut middle = part[1:3]
+    middle.sort()
+    print(ids(part))
+
+    # Lists inside a list or a field sort in place.
+    mut rows = [
+        [Score(value=2, id=0), Score(value=1, id=1)],
+        [Score(value=5, id=2), Score(value=4, id=3), Score(value=5, id=4)],
+    ]
+    rows[1].sort()
+    print(ids(rows[1]))
+    mut board = Board(scores=[Score(value=1, id=0), Score(value=2, id=1)])
+    board.rank()
+    print(ids(board.scores))
+
+    # Enough elements for several merge passes and a short last run.
+    mut state = 41
+    mut many: list[Score] = []
+    for i in range(150):
+        state = state * 48271 % 2147483647
+        many.append(Score(value=state % 50, id=i))
+    many.sort()
+    print(is_stable_ascending(many))

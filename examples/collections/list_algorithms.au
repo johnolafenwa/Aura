@@ -32,10 +32,14 @@ def main():
     ]
     jobs.sort(key = job_priority)
 
+    mut names = ["pear", "Apple", "fig"]
+    names.sort()
+
     print(mapped)
     print(filtered)
     print(ascending)
     print(descending)
     for job in own jobs:
         print(job.label)
+    print(names)
     print(values)

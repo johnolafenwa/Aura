@@ -315,7 +315,7 @@ Rely on ordering only where the relevant API promises it.
 
 `list.map` and `list.filter` traverse from the first element to the last and produce their eager result in that order. Their shared receiver stays unchanged. `map` invokes its callback once per source element, and the new list owns each returned value. `filter` invokes its predicate once per source element and clones accepted elements into the new list.
 
-Natural and keyed `list.sort` calls mutate their receiver into a stable order. Equal elements or keys keep their prior relative order. Keyed sorting evaluates its key function exactly once for every element, from first to last. It stores all keys before it moves any receiver element. So a trap during key evaluation propagates before mutation and leaves the source order unchanged.
+Natural and keyed `list.sort` calls mutate their receiver into a stable order. Equal elements or keys keep their prior relative order. Keyed sorting evaluates its key function exactly once for every element, from first to last. It stores all keys before it moves any receiver element. So a trap during key evaluation propagates before mutation and leaves the source order unchanged. A sort through a user `Ord` implementation runs every `lt` comparison before it moves any element, so a trap in `lt` leaves the source order unchanged too. The number and order of those `lt` calls follow the merge sort and are not part of the contract.
 
 Iteration over a `list` or `set` depends on the loop form:
 

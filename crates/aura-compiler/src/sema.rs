@@ -9173,7 +9173,9 @@ impl<'a> FunctionChecker<'a> {
             }
             (BinaryOp::Less | BinaryOp::LessEq | BinaryOp::Greater | BinaryOp::GreaterEq, _, _)
                 if left_ty == right_ty
-                    && (is_integer_type(&left_ty) || is_float_type(&left_ty)) =>
+                    && (is_integer_type(&left_ty)
+                        || is_float_type(&left_ty)
+                        || left_ty == Type::named("str")) =>
             {
                 Ok(Type::named("bool"))
             }

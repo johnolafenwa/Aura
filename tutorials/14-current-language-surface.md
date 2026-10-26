@@ -710,11 +710,10 @@ Sorting:
   mutations.
 - Keyed sorting evaluates one shared key per element, from left to right,
   before it mutates anything. A key that traps leaves the source unchanged.
-- Built-in ordering covers all integer types, `float32`, `float64`, and
-  `Duration`.
-- `str` has no built-in `Ord[str]`. To order strings, keep insertion order,
-  use `sort(key=callback)` with an orderable key or index, or define a
-  nominal application type with the `Ord` behavior you need.
+- Built-in ordering covers all integer types, `float32`, `float64`,
+  `Duration`, and `str`. `str` orders by its UTF-8 bytes, so `"Zebra"` sorts
+  before `"apple"`.
+- Sorting takes O(n log n) comparisons. NaN sorts after every other float.
 
 Callbacks:
 

@@ -21,6 +21,7 @@ pub mod runtime_ops;
 use aura_runtime::native_runtime;
 mod package;
 pub mod parser;
+pub(crate) use aura_runtime::list_sort;
 use aura_runtime::randomness;
 pub(crate) use aura_runtime::runtime_config;
 pub use aura_runtime::runtime_value;
