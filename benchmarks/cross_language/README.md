@@ -83,10 +83,7 @@ every sample with the commit.
 - Each program prints one line, `<name> key=value ...`, and the versions must
   match it exactly. Floating-point results are printed with fixed digits.
 - Where Aura lacks a feature, the Aura version works around it and a comment
-  says why. For example, `str` has no ordering, so `sort_records` sorts names
-  with a merge sort over their bytes.
-- The bench size of `sort_records` is 20,000 records, because Aura's built-in
-  sort is quadratic today. At 100,000 records it takes minutes.
+  says why.
 
 ## Recorded results
 
@@ -96,7 +93,10 @@ and Rust 1.95.0. Each time is the median of three whole-process runs at the
 bench size, so it includes process startup and, for Aura, the runtime's task
 scheduler. Lower ratios are better for Aura. `file_io` syncs a file to disk
 in all three versions, so its Python and Rust times vary from run to run with
-the disk; a rerun gave Python 647 ms and Rust 1,243 ms.
+the disk; a rerun gave Python 647 ms and Rust 1,243 ms. `sort_records` was
+measured again the same day at 100,000 records, after `list.sort` became a
+merge sort and `str` gained an ordering. Before, it ran at 20,000 records
+and took 15,222 ms in Aura, 77 times Python.
 
 | Program | Size | Python ms | Rust ms | Aura ms | Aura / Python | Aura / Rust |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -123,7 +123,7 @@ the disk; a rerun gave Python 647 ms and Rust 1,243 ms.
 | `pubsub_broker` | 50000 | 4,655 | 2,297 | 7,686 | 1.65x | 3x |
 | `raytracer` | 500 | 3,161 | 28 | 14,394 | 4.55x | 516x |
 | `regex_match` | 5000 | 1,910 | 106 | 13,327 | 6.98x | 125x |
-| `sort_records` | 20000 | 197 | 18 | 15,222 | 77.42x | 848x |
+| `sort_records` | 100000 | 1,159 | 98 | 2,127 | 1.84x | 22x |
 | `spreadsheet` | 1200 | 971 | 47 | 3,397 | 3.50x | 72x |
 | `sql_engine` | 10000 | 720 | 59 | 10,761 | 14.94x | 181x |
 | `task_pool` | 100000 | 888 | 300 | 1,508 | 1.70x | 5x |
@@ -139,7 +139,6 @@ runtime costs that many programs share:
   list, a field, or a `match` copies it into a new box. Dijkstra's heap in
   `graph_paths`, the vectors in `raytracer`, the syntax tree in `interpreter`,
   and the trees in `binary_trees` spend most of their time there.
-- `list.sort` is an insertion sort, so it is quadratic (`sort_records`).
 - A list slice `xs[a:b]` walks the first `a` elements, so scanning a buffer
   with slices is quadratic (`mini_browser`).
 - `dict.remove` shifts every later entry to keep insertion order

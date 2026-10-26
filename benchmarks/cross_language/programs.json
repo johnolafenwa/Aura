@@ -116,7 +116,7 @@
   },
   "sort_records": {
     "check": ["1000"],
-    "bench": ["20000"],
+    "bench": ["100000"],
     "expected": "sort_records n=1000 salary_check=798673168 key_check=630733553 distinct=897 name_check=654570230 quick_ok=true merge_check=550978239 search_sum=491459"
   },
   "spreadsheet": {

@@ -829,6 +829,21 @@ pub const INDEX_OPTION_MEMBER: &str = "__index_option";
 /// The private consuming read a `for` loop over an owned collection lowers
 /// to.
 pub const TAKE_INDEX_OPTION_MEMBER: &str = "__take_index_option";
+/// The private natural sort `list.sort()` lowers to when its elements have
+/// a built-in order.
+pub const SORT_MEMBER: &str = "__sort";
+/// The private key sort `list.sort(key=...)` lowers to when its keys have a
+/// built-in order.
+pub const SORT_BY_KEYS_MEMBER: &str = "__sort_by_keys";
+/// The private reorder that ends a sort through a user `Ord`
+/// implementation.
+pub const PERMUTE_MEMBER: &str = "__permute";
+
+/// Whether `field` is one of the private sort members, which reorder the
+/// list they are called on.
+pub(crate) fn is_list_sort_member(field: &str) -> bool {
+    matches!(field, SORT_MEMBER | SORT_BY_KEYS_MEMBER | PERMUTE_MEMBER)
+}
 
 /// How a list stores an element without a box. Lowering picks a scalar
 /// specialization, such as `ListOp::PushScalar`, from the list's element
@@ -914,6 +929,12 @@ const SLICE_PARAMS: &[CallableParam<'static>] = &[
     CallableParam::required("column"),
 ];
 const INDEX_OPTION_PARAMS: &[CallableParam<'static>] = &[CallableParam::required("index")];
+const SORT_PARAMS: &[CallableParam<'static>] = &[CallableParam::required("reverse")];
+const SORT_BY_KEYS_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("keys"),
+    CallableParam::required("reverse"),
+];
+const PERMUTE_PARAMS: &[CallableParam<'static>] = &[CallableParam::required("order")];
 
 /// A call to `function` with no immediate or span words.
 const fn helper(function: RuntimeFn) -> RuntimeCall {
@@ -991,6 +1012,13 @@ pub enum ListOp {
     IndexOption,
     /// `__take_index_option(index)`: a consuming iteration read.
     TakeIndexOption,
+    /// `__sort(reverse)`: a stable sort of elements with a built-in order.
+    Sort,
+    /// `__sort_by_keys(keys, reverse)`: a stable sort by keys with a
+    /// built-in order, one key per element.
+    SortByKeys,
+    /// `__permute(order)`: moves the element at `order[k]` to position `k`.
+    Permute,
 }
 
 impl ListOp {
@@ -1026,6 +1054,9 @@ impl ListOp {
         ListOp::Slice,
         ListOp::IndexOption,
         ListOp::TakeIndexOption,
+        ListOp::Sort,
+        ListOp::SortByKeys,
+        ListOp::Permute,
     ];
 
     const fn builtin_member(self) -> Option<BuiltinMember> {
@@ -1054,7 +1085,10 @@ impl ListOp {
             | ListOp::SetIndex
             | ListOp::Slice
             | ListOp::IndexOption
-            | ListOp::TakeIndexOption => return None,
+            | ListOp::TakeIndexOption
+            | ListOp::Sort
+            | ListOp::SortByKeys
+            | ListOp::Permute => return None,
         })
     }
 
@@ -1091,6 +1125,9 @@ impl ListOp {
             ListOp::Slice => SLICE_MEMBER,
             ListOp::IndexOption => INDEX_OPTION_MEMBER,
             ListOp::TakeIndexOption => TAKE_INDEX_OPTION_MEMBER,
+            ListOp::Sort => SORT_MEMBER,
+            ListOp::SortByKeys => SORT_BY_KEYS_MEMBER,
+            ListOp::Permute => PERMUTE_MEMBER,
             _ => return None,
         })
     }
@@ -1102,6 +1139,9 @@ impl ListOp {
             SLICE_MEMBER => ListOp::Slice,
             INDEX_OPTION_MEMBER => ListOp::IndexOption,
             TAKE_INDEX_OPTION_MEMBER => ListOp::TakeIndexOption,
+            SORT_MEMBER => ListOp::Sort,
+            SORT_BY_KEYS_MEMBER => ListOp::SortByKeys,
+            PERMUTE_MEMBER => ListOp::Permute,
             _ => return None,
         })
     }
@@ -1115,6 +1155,9 @@ impl ListOp {
             ListOp::SetIndex => SET_INDEX_PARAMS,
             ListOp::Slice => SLICE_PARAMS,
             ListOp::IndexOption | ListOp::TakeIndexOption => INDEX_OPTION_PARAMS,
+            ListOp::Sort => SORT_PARAMS,
+            ListOp::SortByKeys => SORT_BY_KEYS_PARAMS,
+            ListOp::Permute => PERMUTE_PARAMS,
             _ => return None,
         })
     }
@@ -1194,6 +1237,9 @@ impl ListOp {
             ListOp::Slice => helper(RuntimeFn::VecSlice),
             ListOp::IndexOption => helper(RuntimeFn::VecIndexOption),
             ListOp::TakeIndexOption => helper(RuntimeFn::VecTakeIndexInPlace),
+            ListOp::Sort => helper(RuntimeFn::VecSortInPlace),
+            ListOp::SortByKeys => helper(RuntimeFn::VecSortByKeysInPlace),
+            ListOp::Permute => helper(RuntimeFn::VecPermuteInPlace),
         }
     }
 
@@ -1212,7 +1258,10 @@ impl ListOp {
             | ListOp::Clear
             | ListOp::Reverse
             | ListOp::Reserve
-            | ListOp::SetIndex => Type::Unit,
+            | ListOp::SetIndex
+            | ListOp::Sort
+            | ListOp::SortByKeys
+            | ListOp::Permute => Type::Unit,
             ListOp::Pop
             | ListOp::Set
             | ListOp::Index
@@ -2788,7 +2837,10 @@ impl RuntimeOp {
                 | ListOp::IndexScalarUnchecked(_)
                 | ListOp::Slice
                 | ListOp::IndexOption
-                | ListOp::TakeIndexOption,
+                | ListOp::TakeIndexOption
+                | ListOp::Sort
+                | ListOp::SortByKeys
+                | ListOp::Permute,
             ) => private(&[]),
             RuntimeOp::List(_) => member(),
             RuntimeOp::Dict(DictOp::SetIndex) => private(&[0, 1]),

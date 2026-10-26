@@ -1,0 +1,92 @@
+import math
+
+
+def name_len(name: str) -> int64:
+    return name.len()
+
+
+def initial(name: str) -> str:
+    if name.len() == 0:
+        return ""
+    return name[0:1]
+
+
+def label(id: int64) -> str:
+    return "dbca"[id // 10 - 1:id // 10]
+
+
+def main():
+    mut words = ["pear", "Peach", "apple", "é", "", "apples", "banana", "apple"]
+    words.sort()
+    print(words)
+    words.sort(reverse=true)
+    print(words)
+    # Equal keys keep their order in both directions.
+    words.sort(key=name_len)
+    print(words)
+    words.sort(key=initial, reverse=true)
+    print(words)
+
+    mut ints = [5, -3, 9, 0, -3, 12, 7]
+    ints.sort()
+    print(ints)
+    ints.sort(reverse=true)
+    print(ints)
+    mut narrow: list[int32] = [5, -3, 9, 0]
+    narrow.sort()
+    print(narrow)
+    mut octets: list[uint8] = [200, 3, 77, 3]
+    octets.sort(reverse=true)
+    print(octets)
+    mut waits = [3s, 1ms, 2s]
+    waits.sort()
+    print(waits)
+
+    # NaN sorts after every other float; -0.0 and 0.0 are equal, so they
+    # keep their order.
+    mut floats = [3.0, math.nan, 1.0, -0.0, 0.0, 2.0, math.nan, -1.0]
+    floats.sort()
+    print(floats)
+    floats.sort(reverse=true)
+    print(floats)
+    floats.sort(key=lambda value: -value)
+    print(floats)
+
+    mut ids = [10, 20, 30, 40]
+    ids.sort(key=label)
+    print(ids)
+
+    mut part = [9, 8, 7, 6, 5, 4]
+    view mut middle = part[1:5]
+    middle.sort()
+    print(part)
+    mut texts = ["d", "c", "b", "a"]
+    view mut tail = texts[1:]
+    tail.sort(reverse=true)
+    print(texts)
+
+    mut empty: list[str] = []
+    empty.sort()
+    mut one = ["only"]
+    one.sort(key=name_len, reverse=true)
+    print(f"{empty} {one}")
+
+    # A copy shares storage until the sort writes it.
+    original = [3, 1, 2]
+    mut copied = original.copy()
+    copied.sort()
+    print(f"{original} {copied}")
+
+    mut state = 41
+    mut big: list[int64] = []
+    for _ in range(2000):
+        state = state * 48271 % 2147483647
+        big.append(state % 1000)
+    mut by_key = big.copy()
+    by_key.sort(key=lambda value: value % 7)
+    big.sort()
+    mut ordered = true
+    for i in range(1, big.len()):
+        if big[i - 1] > big[i] or by_key[i - 1] % 7 > by_key[i] % 7:
+            ordered = false
+    print(ordered)
