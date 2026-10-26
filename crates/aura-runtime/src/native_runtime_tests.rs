@@ -5402,6 +5402,31 @@ fn direct_print_u64_renders_the_full_unsigned_range() {
 }
 
 #[test]
+fn direct_integer_boxing_keeps_each_narrow_kind() {
+    use super::DirectScalarKind;
+    for (value, kind, name) in [
+        (-128, DirectScalarKind::Int8, "int8"),
+        (-32768, DirectScalarKind::Int16, "int16"),
+        (-5, DirectScalarKind::Int32, "int32"),
+        (255, DirectScalarKind::Uint8, "uint8"),
+        (65535, DirectScalarKind::Uint16, "uint16"),
+        (4_294_967_295, DirectScalarKind::Uint32, "uint32"),
+    ] {
+        let boxed = super::aura_direct_box_integer(value, kind as i64);
+        match unsafe { value_ref(boxed) } {
+            Value::Int(actual) => {
+                assert_eq!(actual.as_i128(), Some(i128::from(value)), "{name}");
+                assert_eq!(actual.runtime_type_name(), Some(name));
+            }
+            other => panic!("expected a boxed {name}, found {other:?}"),
+        }
+        unsafe {
+            release_value(boxed);
+        }
+    }
+}
+
+#[test]
 fn direct_uint64_boxing_helpers_preserve_the_full_range() {
     for value in [0, (i64::MAX as u64) + 1, u64::MAX] {
         let boxed = super::aura_direct_box_u64(value);
@@ -13996,6 +14021,24 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "fail-int32-overflow-no-span" => {
                 super::aura_direct_fail_int32_overflow(123, 0, 0);
             }
+            "fail-narrow-overflow-signed" => {
+                super::aura_direct_fail_narrow_overflow(
+                    -129,
+                    0,
+                    super::DirectScalarKind::Int8 as i64,
+                    0,
+                    0,
+                );
+            }
+            "fail-narrow-overflow-unsigned" => {
+                super::aura_direct_fail_narrow_overflow(
+                    -1,
+                    1,
+                    super::DirectScalarKind::Uint32 as i64,
+                    0,
+                    0,
+                );
+            }
             "vec-index-oob-no-span" => {
                 super::aura_direct_vec_index(int_vec(&[1]), 5, 0, 0);
             }
@@ -15033,6 +15076,14 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         (
             "fail-int32-overflow-no-span",
             "integer value `123` does not fit in `int32`",
+        ),
+        (
+            "fail-narrow-overflow-signed",
+            "integer value `-129` does not fit in `int8`",
+        ),
+        (
+            "fail-narrow-overflow-unsigned",
+            "integer value `18446744073709551615` does not fit in `uint32`",
         ),
         (
             "vec-index-oob-no-span",

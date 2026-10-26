@@ -113,6 +113,7 @@ use package::PackageGraph;
 #[doc(hidden)]
 pub mod native_runtime_coverage {
     pub use super::native_runtime::aura_direct_tag_value_type;
+    pub use super::native_runtime::DirectScalarKind;
     pub use super::native_runtime::DIRECT_FFI_SPEC_VERSION;
     pub use super::native_runtime::DIRECT_VALUE_LIVE_COUNT;
     pub use super::native_runtime::{
