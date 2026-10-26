@@ -178,6 +178,7 @@ runtime_functions! {
     VecSpan => ("aura_direct_vec_span", [I64, I64, I64, I64, I64, I64, I64, I64, I64, I64, I64], Some(I64)),
     VecTakeIndexInPlace => ("aura_direct_vec_take_index_in_place", [I64, I64], Some(I64)),
     VecSetIndexInPlace => ("aura_direct_vec_set_index_in_place", [I64, I64, I64, I64, I64], Some(I64)),
+    VecSetIndexScalar => ("aura_direct_vec_set_index_scalar", [I64, I64, I64, I64, I64, I64], None),
     ElementPathLoad => ("aura_direct_element_path_load", [I64, I64, I64, I64, I64, I64, I64], Some(I64)),
     ElementPathStore => ("aura_direct_element_path_store", [I64, I64, I64, I64, I64, I64, I64, I64], Some(I64)),
     ElementPathTake => ("aura_direct_element_path_take", [I64, I64, I64, I64, I64, I64, I64], Some(I64)),

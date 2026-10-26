@@ -7,6 +7,13 @@ in this file.
 
 ## Unreleased
 
+- Native code stores `xs[i] = v` and `xs[i] op= v` on a `list[int64]`,
+  `list[float64]`, or `list[bool]` straight into the list's unboxed
+  storage, without a runtime call or a box. A `float64` element update in
+  a loop costs 26 instructions instead of 1,318. Writes and appends
+  through a `mut` list parameter no longer store the list back after each
+  one.
+
 ## VS Code extension 0.7.1 — 2026-10-25
 
 - Bundles language server 0.7.1. The semantic interface version stays 20.

@@ -1,0 +1,108 @@
+class Grid:
+    cells: list[float64]
+    marks: list[bool]
+
+    def bump(mut self, at: int64, by: float64):
+        self.cells[at] += by
+        self.marks[at] = true
+
+
+def scale(values: mut list[float64], factor: float64):
+    mut i = 0
+    while i < values.len():
+        values[i] *= factor
+        i += 1
+
+
+def histogram(samples: list[int64], buckets: int64) -> list[int64]:
+    mut counts: list[int64] = []
+    mut b = 0
+    while b < buckets:
+        counts.append(0)
+        b += 1
+    for sample in samples:
+        counts[sample % buckets] += 1
+    return counts
+
+
+def sieve(limit: int64) -> int64:
+    mut composite: list[bool] = []
+    mut n = 0
+    while n <= limit:
+        composite.append(false)
+        n += 1
+    mut found = 0
+    mut p = 2
+    while p <= limit:
+        if not composite[p]:
+            found += 1
+            mut multiple = p * p
+            while multiple <= limit:
+                composite[multiple] = true
+                multiple += p
+        p += 1
+    return found
+
+
+def total(values: list[float64]) -> float64:
+    mut sum = 0.0
+    for value in values:
+        sum += value
+    return sum
+
+
+def main():
+    # A literal list has no room until its first write.
+    mut floats = [1.0, 2.0, 3.0, 4.0]
+    floats[0] = 0.5
+    scale(floats, 2.0)
+    floats[-1] -= 0.25
+    floats[1] /= 4.0
+    print(floats[0])
+    print(floats[1])
+    print(floats[3])
+    print(total(floats))
+
+    # A copy shares storage until either list writes.
+    mut copy = floats[:]
+    copy[0] = 100.0
+    floats[2] = -1.0
+    print(copy[0])
+    print(copy[2])
+    print(floats[0])
+    print(floats[2])
+
+    # A runtime read takes the room back, and the next write restores it.
+    mut ints: list[int64] = [5, 6, 7]
+    for value in ints:
+        print(value)
+    ints[1] = 60
+    ints[-1] += 700
+    ints[0] *= -2
+    print(ints[0])
+    print(ints[1])
+    print(ints[2])
+
+    counts = histogram([1, 4, 9, 16, 25, 36, 49, 64, 81, 100], 7)
+    print(counts[0])
+    print(counts[1])
+    print(counts[2])
+    print(counts[4])
+    print(sieve(1000))
+
+    mut grid = Grid(cells=[0.0, 0.0, 0.0], marks=[false, false, false])
+    grid.bump(1, 2.5)
+    grid.bump(1, 0.25)
+    grid.bump(-1, 1.0)
+    print(grid.cells[1])
+    print(grid.cells[2])
+    print(grid.marks[0])
+    print(grid.marks[1])
+
+    mut flags = [true, false]
+    second = flags[1]
+    flags[0] = second
+    first = flags[0]
+    flags[1] = not first
+    print(flags[0])
+    print(flags[1])

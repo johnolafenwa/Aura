@@ -14766,3 +14766,34 @@ def main():
         "{referenced:?}"
     );
 }
+
+#[test]
+fn scalar_element_writes_keep_the_runtime_write_for_shared_storage() {
+    let source = r#"
+def main():
+    mut values: list[int64] = [1, 2, 3]
+    mut floats: list[float64] = [0.5, 1.5]
+    mut flags: list[bool] = [false]
+    values[1] = 7
+    values[-1] += 4
+    floats[0] *= 3.0
+    flags[0] = true
+    print(values[1] + values[2])
+    print(floats[0])
+    print(flags[0])
+"#;
+    let mir = lower_source_to_mir(source).expect("the element writes should lower");
+    let object = emit_host_object(&mir).expect("the element writes should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    // Generated code stores an element in place when the list keeps its
+    // scalars in unshared storage. Any other list, or an index out of
+    // range, takes the runtime write, which stores the bits with no box.
+    assert!(
+        referenced.contains("aura_direct_vec_set_index_scalar"),
+        "{referenced:?}"
+    );
+    assert!(
+        !referenced.contains("aura_direct_vec_set_index_in_place"),
+        "{referenced:?}"
+    );
+}

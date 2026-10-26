@@ -376,6 +376,9 @@ pub(crate) fn specialized_member_op(op: RuntimeOp, receiver: &Type, args: &[MirA
     match (op, scalar) {
         (RuntimeOp::List(ListOp::Push), Some(kind)) => RuntimeOp::List(ListOp::PushScalar(kind)),
         (RuntimeOp::List(ListOp::Index), Some(kind)) => RuntimeOp::List(ListOp::IndexScalar(kind)),
+        (RuntimeOp::List(ListOp::SetIndex), Some(kind)) => {
+            RuntimeOp::List(ListOp::SetIndexScalar(kind))
+        }
         (RuntimeOp::Set(SetOp::Contains), Some(ScalarElement::Int64)) => {
             RuntimeOp::Set(SetOp::ContainsInt64)
         }

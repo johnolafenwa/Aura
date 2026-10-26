@@ -288,6 +288,33 @@ call.
   variant, or a scalar take `access_unlisted`, which skips the check. A
   list handed to one of them only reaches its type error.
 
+### In-Place Element Writes
+
+`xs[i] = v` and `xs[i] op= v` on a `list[int64]`, `list[float64]`, or
+`list[bool]` store the element without a runtime call or a box.
+
+- **The op.** Lowering picks `ListOp::SetIndexScalar(kind)` for a write to
+  a list of one of these element types, as it picks `IndexScalar` for a
+  read. The value passes as its bits.
+- **Generated code.** The write checks the form, normalizes a negative
+  index and checks it against the view's length, then checks that the
+  position is below the room. Room covers every element of storage no
+  other list shares, so a list with shared storage has none and the store
+  cannot reach another list. It then stores the bits in place. Any other
+  list, a list without room, or an index out of range calls
+  `aura_direct_vec_set_index_scalar`, which copies shared storage,
+  converts the form, or reports the same diagnostic as
+  `aura_direct_vec_set_index_in_place`. That call refreshes the view, so
+  the next write is in place.
+- **The receiver.** The write changes the value the receiver's handle
+  holds, so the emitter skips storing the receiver back into a plain local
+  or parameter (`store_receiver_back_in_place`), as `append` does. A
+  mutable parameter still publishes the value to its caller's write-through
+  sink when the caller registered one. The runtime fixes a call's sinks
+  when the call starts, so the emitter asks for each sink once per call, at
+  its first use, and caches it in a variable. A write on a call without a
+  sink then costs one compare.
+
 ### Lent Lookups
 
 A lookup slot whose found value is only read borrows the stored value
