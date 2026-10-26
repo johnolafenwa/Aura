@@ -47,7 +47,7 @@ values typed layouts. The design for all of Phase 2 is in
   checks the loan against the concrete type.
 - Tests that exercise erased generic calls build their module with
   `mir::lower_unspecialized`, or call the erased original on purpose.
-- Every run-pass fixture still emits: 94 of 672 objects change (programs
+- Every run-pass fixture still emits: 96 of the 672 existing objects change (programs
   that call generic user or prelude functions), none fails.
 - Backend parity (every runtime fixture on both backends) passes.
 - `aura-compiler` lib tests pass except
@@ -68,5 +68,8 @@ Linux container, release builds of the 2a branch (before) and this change
   within 0.1%. None of the 30 defines a generic function. The three
   threaded servers (`http_api`, `kv_server`, `pubsub_broker`) moved by up
   to 15% in one run, but their generated code is identical before and
-  after (only addresses differ), and repeated runs vary by as much.
+  after (only addresses differ). Three more runs of each overlap:
+  `http_api` 31.4M to 32.4M before and 31.1M to 32.5M after, `kv_server`
+  83.9M to 85.6M and 82.4M to 84.5M, `pubsub_broker` 147.7M to 151.2M and
+  148.9M to 150.7M.
 
