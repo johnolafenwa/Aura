@@ -7382,6 +7382,55 @@ pub extern "C-unwind" fn aura_direct_vec_reverse_in_place(
     })
 }
 
+/// `list.sort(reverse)` for elements with a built-in order.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_sort_in_place(vec: *mut OpaqueValue, reverse: i64) -> i64 {
+    task_runtime_boundary(|| {
+        with_vector_mut(vec, |vector| {
+            crate::list_sort::sort_elements(&mut vector.elements, reverse != 0)
+        })
+        .unwrap_or_else(|diagnostic| runtime_diagnostic_error(diagnostic));
+        1
+    })
+}
+
+/// `list.sort(key=..., reverse)` for keys with a built-in order: `keys`
+/// holds one key per element, and the call only reads it.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_sort_by_keys_in_place(
+    vec: *mut OpaqueValue,
+    keys: *mut OpaqueValue,
+    reverse: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        // The keys are a list of their own, so reading them under the
+        // list's write access cannot deadlock.
+        let keys = with_vector(keys, |keys| keys.elements.clone());
+        with_vector_mut(vec, |vector| {
+            crate::list_sort::sort_elements_by_keys(&mut vector.elements, &keys, reverse != 0)
+        })
+        .unwrap_or_else(|diagnostic| runtime_diagnostic_error(diagnostic));
+        1
+    })
+}
+
+/// Ends a sort through a user `Ord` implementation: moves the element at
+/// `order[k]` to position `k`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_permute_in_place(
+    vec: *mut OpaqueValue,
+    order: *mut OpaqueValue,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let order = with_vector(order, |order| order.elements.clone());
+        with_vector_mut(vec, |vector| {
+            crate::list_sort::permute_elements(&mut vector.elements, &order)
+        })
+        .unwrap_or_else(|diagnostic| runtime_diagnostic_error(diagnostic));
+        1
+    })
+}
+
 /// Shared direct-runtime implementation for canonical collection operations
 /// whose result shape is naturally represented as an owned Aura value.
 /// `arg` is an opaque value for value-search operations, while `scalar` is

@@ -11531,6 +11531,21 @@ impl<'a> FunctionCompiler<'a> {
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
+            ListOp::Sort | ListOp::SortByKeys | ListOp::Permute => {
+                // The keys and the order are lists the call only reads.
+                let mut words = vec![list];
+                if op != ListOp::Sort {
+                    let loaded = self.load_operand(&args[0].value)?;
+                    words.push(self.ensure_opaque(loaded)?.values[0]);
+                }
+                if op != ListOp::Permute {
+                    let reverse = args.last().expect("a sort passes `reverse`");
+                    words.push(self.load_word(reverse, ScalarKind::Bool, false)?);
+                }
+                self.builder.call(function, &words);
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut *self.builder))
+            }
             ListOp::Reserve => {
                 self.compile_collection_reserve(call, &object, receiver_place, args[0])
             }

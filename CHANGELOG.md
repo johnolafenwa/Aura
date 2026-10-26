@@ -7,8 +7,23 @@ in this file.
 
 ## Unreleased
 
+### Added
+
+- `str` values compare with `<`, `<=`, `>`, and `>=` by their UTF-8 bytes,
+  which is the order of their Unicode scalar values. `list[str].sort()`,
+  `sort(reverse = true)`, and `str` sort keys use the same order.
+
 ### Changed
 
+- Sorting `float64` values puts NaN after every other value, and NaNs keep
+  their input order. `-0.0` and `0.0` sort as equal, so they also keep
+  their input order.
+- Sorting a type through its own `Ord` implementation sorts the element
+  positions first and moves the elements once, so a trapping `lt` leaves
+  the list unchanged. It also works in generic code bounded by `T: Ord[T]`,
+  which used to fail to compile.
+- A user `impl Ord[str] for str` no longer changes what `<` means on `str`,
+  in the same way as the other built-in operators.
 - The compiler and the native runtime share one rule for laying out each
   type in native memory: scalars at their width, classes and tuples as
   structs, enums and unions as a tag followed by the payload, runtime
@@ -16,6 +31,21 @@ in this file.
   Generated code does not use the layouts yet, so programs build and run
   exactly as before. The design is in
   `architecture_docs/24-typed-layouts-design-note.md`.
+
+### Performance
+
+- A `for` loop over a `range(...)` call counts on plain integers instead of
+  stepping a `Range` value. Each step used to allocate and free a boxed
+  value and call the runtime three times, about 690 instructions in a native
+  build; it now costs one or two. Loops over a `Range` held in a variable
+  are unchanged.
+- `list.sort()` and `list.sort(key = ...)` are a stable merge sort in the
+  runtime, so sorting takes O(n log n) comparisons on `aura run` and in
+  native builds. They used to be an insertion sort, which took O(n²) and
+  made 100,000 elements impractical to sort.
+- On `aura run`, reading an element of a list of class instances, enums, or
+  other values that could hold an `Array` copies that element instead of
+  the whole list, so a loop that indexes such a list is no longer quadratic.
 
 ## VS Code extension 0.7.1 — 2026-10-25
 

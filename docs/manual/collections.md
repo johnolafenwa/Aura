@@ -280,7 +280,32 @@ def main():
 ```
 
 Natural sorting requires `T: Ord`. Key sorting requires an orderable key type.
-Equal elements or keys keep their input order in both directions.
+Equal elements or keys keep their input order in both directions, and
+`reverse=true` sorts by the mirrored order rather than reversing the result.
+
+Integers, `float32`, `float64`, `Duration`, and `str` have a built-in order:
+
+- Numbers and `Duration` sort by `<`.
+- NaN, which `<` cannot place, sorts after every other float, and all NaNs
+  are equal. `-0.0` and `0.0` are equal, so they keep their input order.
+- `str` sorts by its UTF-8 bytes, which is the order of its Unicode scalar
+  values.
+
+```aura
+def main():
+    mut names = ["pear", "Apple", "fig", "apple"]
+    names.sort()
+    print(names)
+```
+
+This program prints `[Apple, apple, fig, pear]`: uppercase letters come
+before lowercase ones in byte order.
+
+A list or key type with a built-in order sorts in the runtime. Any other type
+orders through its `Ord` implementation's `lt`, so a nominal type or a type
+parameter bounded by `Ord[T]` sorts too. Both kinds are stable merge sorts
+that take O(n log n) comparisons. A sort through `lt` computes the new order
+before it moves any element, so an `lt` that traps leaves the list unchanged.
 
 The key function runs exactly once per element, from first to last. All keys
 are stored before the list changes. If an argument, key, ordering, or

@@ -13422,6 +13422,23 @@ fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
         .expect("float >= ordering should work"),
         Value::Bool(true)
     );
+    for (op, expected) in [
+        (crate::ast::BinaryOp::Less, true),
+        (crate::ast::BinaryOp::LessEq, true),
+        (crate::ast::BinaryOp::Greater, false),
+        (crate::ast::BinaryOp::GreaterEq, false),
+    ] {
+        assert_eq!(
+            eval_ordering(
+                op,
+                Value::String("Zebra".to_string()),
+                Value::String("apple".to_string()),
+            )
+            .expect("str ordering compares UTF-8 bytes"),
+            Value::Bool(expected),
+            "{op:?}"
+        );
+    }
     let ordering_error = eval_ordering(
         crate::ast::BinaryOp::Less,
         Value::Bool(true),
@@ -13430,7 +13447,7 @@ fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
     .expect_err("non-numeric ordering should fail");
     assert!(ordering_error
         .message
-        .contains("matching numeric or Duration operands"));
+        .contains("matching numeric, Duration, or str operands"));
 }
 
 #[test]
@@ -23271,5 +23288,118 @@ fn step8d_interpreter_rejects_a_runtime_op_without_a_receiver() {
     assert_eq!(
         error.message,
         "MIR runtime operation `Rng.NextInt` has no receiver"
+    );
+}
+
+#[test]
+fn mir_runtime_private_sort_members_sort_in_place_and_check_their_arguments() {
+    use crate::runtime_ops::{PERMUTE_MEMBER, SORT_BY_KEYS_MEMBER, SORT_MEMBER};
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let list = |element: &str, values: Vec<Value>| {
+        Value::Vec(VecValue {
+            element_type: Type::named(element),
+            elements: values.into(),
+            str_view: Default::default(),
+        })
+    };
+    let list_ty = |element: &str| Type::Named("list".to_string(), vec![Type::named(element)]);
+    let text = |value: &str| Value::String(value.to_string());
+    let int = |value: i64| Value::Int(IntegerValue::from_i64(value));
+    env.define_typed(
+        "words",
+        list_ty("str"),
+        list("str", vec![text("b"), text("a"), text("c")]),
+    );
+    env.define_typed(
+        "keys",
+        list_ty("int64"),
+        list("int64", vec![int(2), int(0), int(1)]),
+    );
+    env.define_typed(
+        "order",
+        list_ty("int64"),
+        list("int64", vec![int(2), int(1), int(0)]),
+    );
+    env.define_typed(
+        "repeated",
+        list_ty("int64"),
+        list("int64", vec![int(0), int(0), int(1)]),
+    );
+    env.define_typed(
+        "flags",
+        list_ty("bool"),
+        list(
+            "bool",
+            vec![Value::Bool(true), Value::Bool(false), Value::Bool(true)],
+        ),
+    );
+    let mut call = |field: &str, receiver_place: Option<&str>, args: Vec<Operand>| {
+        runtime.evaluate_call(
+            &CallTarget::Member {
+                object: Operand::Place("words".to_string()),
+                field: field.to_string(),
+                receiver_place: receiver_place.map(str::to_string),
+                dispatch: None,
+            },
+            &args
+                .into_iter()
+                .map(|value| mir_arg(None, value))
+                .collect::<Vec<_>>(),
+            &mut env,
+        )
+    };
+    let words = Some("words");
+
+    call(SORT_MEMBER, words, vec![Operand::Bool(true)]).expect("sort in reverse");
+    // [c, b, a] by keys [2, 0, 1] is [b, a, c].
+    call(
+        SORT_BY_KEYS_MEMBER,
+        words,
+        vec![Operand::Place("keys".to_string()), Operand::Bool(false)],
+    )
+    .expect("sort by keys");
+    call(
+        PERMUTE_MEMBER,
+        words,
+        vec![Operand::Place("order".to_string())],
+    )
+    .expect("permute");
+    let sort_error =
+        call(SORT_MEMBER, words, vec![Operand::Int(1)]).expect_err("reverse must be a bool");
+    assert!(sort_error.message.contains("expects `bool`"));
+    let keys_error = call(
+        SORT_BY_KEYS_MEMBER,
+        words,
+        vec![Operand::Int(1), Operand::Bool(false)],
+    )
+    .expect_err("keys must be a list");
+    assert!(keys_error.message.contains("requires a list argument"));
+    let order_error = call(
+        PERMUTE_MEMBER,
+        words,
+        vec![Operand::Place("repeated".to_string())],
+    )
+    .expect_err("a repeated position is not a permutation");
+    assert!(order_error.message.contains("not a permutation"));
+    let flags_error = call(
+        SORT_BY_KEYS_MEMBER,
+        words,
+        vec![Operand::Place("flags".to_string()), Operand::Bool(false)],
+    )
+    .expect_err("bool keys have no order");
+    assert!(flags_error.message.contains("cannot order `bool` keys"));
+    let place_error = call(SORT_MEMBER, None, vec![Operand::Bool(false)])
+        .expect_err("a sort writes its receiver back");
+    assert!(place_error
+        .message
+        .contains("requires a mutable list place"));
+
+    let Value::Vec(sorted) = env.read_place("words").expect("words stay defined") else {
+        panic!("words should stay a list");
+    };
+    assert_eq!(
+        sorted.elements.to_vec(),
+        vec![text("c"), text("a"), text("b")]
     );
 }

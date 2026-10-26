@@ -5048,6 +5048,84 @@ def main():
 }
 
 #[test]
+fn for_over_a_range_call_counts_on_int64_locals_without_a_range_value() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    mut total: int64 = 0
+    for i in range(2, 5):
+        total += i
+    for j in ((range(3))):
+        total += j
+    print(total)
+"#,
+    )
+    .expect("range loops should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    assert!(main
+        .blocks
+        .iter()
+        .all(|block| !matches!(block.terminator, Terminator::ForRange { .. })));
+    let range_calls = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::Call { callee, .. },
+                ..
+            } => {
+                matches!(callee, CallTarget::Name(name) if name == "range")
+                    || matches!(
+                        callee,
+                        CallTarget::Runtime {
+                            op: crate::runtime_ops::RuntimeOp::Function(
+                                crate::runtime_ops::FunctionOp::Range
+                            ),
+                            ..
+                        }
+                    )
+            }
+            _ => false,
+        })
+        .count();
+    assert_eq!(range_calls, 0);
+    let steps = main
+        .blocks
+        .iter()
+        .filter(|block| block.label.contains("_for_range_next_"))
+        .collect::<Vec<_>>();
+    assert_eq!(steps.len(), 2);
+    for step in steps {
+        let [Instruction::Assign {
+            target: binding,
+            value: Rvalue::Use(Operand::Place(cursor)),
+        }, Instruction::Assign {
+            target: stepped,
+            value:
+                Rvalue::Binary {
+                    op: BinaryOp::Add,
+                    left: Operand::Place(left),
+                    right: Operand::Int(1),
+                    trap: ArithmeticTrap::Overflow,
+                    ..
+                },
+        }] = step.instructions.as_slice()
+        else {
+            panic!("unexpected counted step: {:?}", step.instructions);
+        };
+        assert_eq!(stepped, cursor);
+        assert_eq!(left, cursor);
+        assert_ne!(binding, cursor);
+        assert!(matches!(step.terminator, Terminator::Goto(_)));
+    }
+}
+
+#[test]
 fn every_ordinary_for_form_uses_a_fresh_scoped_target_slot() {
     let module = crate::lower_source_to_mir(
         r#"
@@ -5065,6 +5143,9 @@ def main():
     for item in numbers:
         print(item)
     for item in range(1):
+        print(item)
+    counter = range(1)
+    for item in counter:
         print(item)
 "#,
     )
@@ -5113,8 +5194,19 @@ def main():
                 _ => None,
             }),
     );
+    // A loop over a `range(...)` call binds its cursor at the top of the
+    // counted step block.
+    targets.extend(
+        main.blocks
+            .iter()
+            .filter(|block| block.label.contains("_for_range_next_"))
+            .filter_map(|block| match block.instructions.first() {
+                Some(Instruction::Assign { target, .. }) => Some(target.as_str()),
+                _ => None,
+            }),
+    );
 
-    assert_eq!(targets.len(), 4);
+    assert_eq!(targets.len(), 5);
     assert!(targets.iter().all(|target| target.starts_with("%t")));
     assert_eq!(
         targets.iter().copied().collect::<BTreeSet<_>>().len(),
@@ -5134,7 +5226,10 @@ def main():
         .map(|ty| ty.to_string())
         .collect::<Vec<_>>();
     rendered_target_types.sort();
-    assert_eq!(rendered_target_types, vec!["int64", "int64", "str", "str"]);
+    assert_eq!(
+        rendered_target_types,
+        vec!["int64", "int64", "int64", "str", "str"]
+    );
 }
 
 fn safepoint_blocks(function: &MirFunction) -> Vec<&BasicBlock> {
@@ -11455,7 +11550,7 @@ def main():
                 .then_some(index)
         })
         .collect::<Vec<_>>();
-    let first_source_swap = main
+    let first_source_sort = main
         .blocks
         .iter()
         .enumerate()
@@ -11472,7 +11567,7 @@ def main():
                         } if matches!(
                             callee.member_parts(),
                             Some(MemberCallParts {
-                                field: "swap",
+                                field: crate::runtime_ops::SORT_BY_KEYS_MEMBER,
                                 receiver_place: Some("values"),
                                 ..
                             })
@@ -11485,7 +11580,7 @@ def main():
     assert!(
         callback_blocks
             .first()
-            .is_some_and(|callback| *callback < first_source_swap),
+            .is_some_and(|callback| *callback < first_source_sort),
         "sort key extraction must precede the first source mutation"
     );
 }
@@ -11663,10 +11758,19 @@ def main() -> int32:
             ..
         } if name == "constant_key" && args.len() == 1
     )));
-    assert!(main.blocks.iter().any(|block| {
-        block.label.contains("vec_sort_inner_compare")
-            && matches!(block.terminator, Terminator::Branch { .. })
-    }));
+    // An `int64` key has a built-in order, so the runtime sorts by the
+    // collected keys in one call.
+    let (sort_receiver, sort_args) = member_call(crate::runtime_ops::SORT_BY_KEYS_MEMBER);
+    assert_eq!(sort_receiver, Some("values"));
+    assert_eq!(sort_args.len(), 2);
+    let Operand::Place(keys) = &sort_args[0].value else {
+        panic!("the key sort should read the collected keys from a place");
+    };
+    assert_eq!(
+        local_type(keys),
+        &Type::Named("list".to_string(), vec![Type::named("int64")])
+    );
+    assert_eq!(sort_args[1].value, Operand::Bool(true));
 
     let output = crate::run_mir(&module).expect("canonical list MIR should execute");
     assert_eq!(output.stdout, "3|0|1|[2, 3]\n");
@@ -14496,7 +14600,8 @@ def main():
     print(abs(value))
     print(fs.exists("/tmp/aura-step8d2-missing"))
     print(json.is_valid("{}"))
-    for index in range(3):
+    indices = range(3)
+    for index in indices:
         print(f"item {index} of {ratio}")
     print(Duration.ms(5))
 "#,
@@ -15422,4 +15527,178 @@ fn an_omitted_argument_outside_a_runtime_call_has_no_value() {
         direct,
         "direct backend received an omitted argument outside a runtime operation"
     );
+}
+
+/// The calls in `function`, as their member field names, in block order.
+fn member_call_fields(function: &MirFunction) -> Vec<(String, Option<String>)> {
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::Call { callee, .. },
+                ..
+            } => callee.member_parts().map(|parts| {
+                (
+                    parts.field.to_string(),
+                    parts.receiver_place.map(str::to_string),
+                )
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn sorts_by_built_in_orders_lower_to_one_runtime_call() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def initial(name: str) -> str:
+    return name.clone()
+
+def main():
+    mut names = ["b", "a"]
+    names.sort()
+    names.sort(key=initial, reverse=true)
+    mut sizes = [2.0, 1.0]
+    sizes.sort(reverse=true)
+    print(f"{names} {sizes} {"a" < "b"}")
+"#,
+    )
+    .expect("built-in sorts should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let sorts = member_call_fields(main)
+        .into_iter()
+        .filter(|(field, _)| crate::runtime_ops::is_list_sort_member(field))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sorts,
+        vec![
+            (
+                crate::runtime_ops::SORT_MEMBER.to_string(),
+                Some("names".to_string())
+            ),
+            (
+                crate::runtime_ops::SORT_BY_KEYS_MEMBER.to_string(),
+                Some("names".to_string())
+            ),
+            (
+                crate::runtime_ops::SORT_MEMBER.to_string(),
+                Some("sizes".to_string())
+            ),
+        ]
+    );
+    // `str < str` is a built-in operator, not an `Ord` dispatch.
+    assert!(main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .any(|instruction| matches!(
+            instruction,
+            Instruction::Assign {
+                value: Rvalue::Binary {
+                    op: BinaryOp::Less,
+                    left: Operand::String(_),
+                    ..
+                },
+                ..
+            }
+        )));
+    let output = crate::run_mir(&module).expect("built-in sorts should run");
+    assert_eq!(output.stdout, "[b, a] [2.0, 1.0] true\n");
+}
+
+#[test]
+fn sorts_through_user_ord_merge_positions_before_one_permute() {
+    let module = crate::lower_source_to_mir(
+        r#"
+trait Ord[Rhs]:
+    def lt(self, rhs: Rhs) -> bool
+    def le(self, rhs: Rhs) -> bool
+    def gt(self, rhs: Rhs) -> bool
+    def ge(self, rhs: Rhs) -> bool
+
+class Score:
+    value: int64
+
+impl Ord[Score] for Score:
+    def lt(self, rhs: Score) -> bool:
+        return self.value < rhs.value
+
+    def le(self, rhs: Score) -> bool:
+        return self.value <= rhs.value
+
+    def gt(self, rhs: Score) -> bool:
+        return self.value > rhs.value
+
+    def ge(self, rhs: Score) -> bool:
+        return self.value >= rhs.value
+
+def main():
+    mut values = [Score(value=3), Score(value=1), Score(value=2)]
+    values.sort(reverse=true)
+    print(f"{values[0].value}{values[1].value}{values[2].value}")
+"#,
+    )
+    .expect("a user Ord sort should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let instructions = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .collect::<Vec<_>>();
+    let comparisons = instructions
+        .iter()
+        .filter(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Call {
+                        callee: CallTarget::TraitMember { trait_name, field, .. },
+                        ..
+                    },
+                    ..
+                } if trait_name == "Ord" && field == "lt"
+            )
+        })
+        .count();
+    assert_eq!(comparisons, 2, "one `lt` per direction");
+    // Each comparison reads both elements from the list's place, so
+    // `aura run` copies the elements and not the list.
+    let element_reads = member_call_fields(main)
+        .into_iter()
+        .filter(|(field, receiver)| {
+            field == crate::runtime_ops::INDEX_MEMBER && receiver.as_deref() == Some("values")
+        })
+        .count();
+    assert!(element_reads >= 2, "found {element_reads} element reads");
+    // The list changes once, after every comparison has run.
+    let mutations = member_call_fields(main)
+        .into_iter()
+        .filter(|(field, receiver)| {
+            receiver.as_deref() == Some("values")
+                && field != crate::runtime_ops::INDEX_MEMBER
+                && field != "len"
+        })
+        .map(|(field, _)| field)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        mutations,
+        vec![crate::runtime_ops::PERMUTE_MEMBER.to_string()]
+    );
+    assert!(main
+        .blocks
+        .iter()
+        .any(|block| block.label.contains("vec_sort_compare_reverse")));
+    let output = crate::run_mir(&module).expect("a user Ord sort should run");
+    assert_eq!(output.stdout, "321\n");
 }

@@ -101,8 +101,8 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 - `for value in mut set:` is not supported.
 - Callable-powered list algorithms are eager. `map` and `filter` return owned lists, and `filter` requires clone-safe elements.
-- Built-in natural sorting covers all integer types, `float32`, `float64`, and `Duration`. `str` has no built-in `Ord[str]`.
-- To order text records, preserve insertion order, use `sort(key=callback)` with an orderable key or index, or define a nominal type with an application-specific `Ord` implementation.
+- Built-in natural sorting covers all integer types, `float32`, `float64`, `Duration`, and `str`. `str` orders by its UTF-8 bytes, with no locale, case folding, or normalization.
+- Tuples have no order, so a multi-part sort key needs a nominal type with an `Ord` implementation, or an integer or `str` key that encodes the parts.
 - Keyed `sort`, `map`, and `filter` accept only their exact bare or shared callback parameter capabilities. The callback may be a named function, a repeatable closure, or a packed Shared callable value.
 - There is no comparator-form sort, lazy map or filter, parallel traversal, mutable standard-library algorithm callback contract, or algorithm callback with mutable or owned element access.
 

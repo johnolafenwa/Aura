@@ -130,6 +130,8 @@ A bare `value: str` parameter grants shared access. Bare parameters grant shared
 
 `list[uint8]` is Aura's bytes representation.
 
+`<`, `<=`, `>`, and `>=` order two `str` values by their UTF-8 bytes, which is the order of their Unicode scalar values. `list[str]` sorts by the same order.
+
 Aura has no distinct character type, no integer str indexing, and no `chars()`, `ord()`, or `chr()`. String slicing accepts `int64` scalar endpoints and runs in O(n) over the source. It returns a fresh owned str. It is not a view or a byte-indexing operation.
 
 ## Copy And Move Categories
