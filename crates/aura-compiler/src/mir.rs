@@ -15529,6 +15529,8 @@ impl<'a> Lowerer<'a> {
             && scrutinee_ty
                 .as_ref()
                 .is_some_and(|ty| !type_is_copy_in_program(ty, self.program));
+        let contextual_before = self.contextual_element_loans.clone();
+        let mut lends_element = false;
         let scrutinee = if consumes_scrutinee {
             let source =
                 self.lower_expr_for_owned_value(&match_stmt.scrutinee, scrutinee_ty.as_ref());
@@ -15547,6 +15549,7 @@ impl<'a> Lowerer<'a> {
         ) {
             // `match items[i]:` and `match mut items[i]:` inspect the element
             // in place through a loan that lasts for the match.
+            lends_element = true;
             loan
         } else if match_stmt
             .arms
@@ -15559,6 +15562,12 @@ impl<'a> Lowerer<'a> {
         } else {
             self.lower_expr(&match_stmt.scrutinee)
         };
+        // `match parse(rows[i]):` matches a call's result. Unless the call
+        // returns a view, the result holds nothing its arguments lent, so
+        // their element loans end before the arms, which may write `rows[i]`.
+        if !lends_element && !self.operand_is_view(&scrutinee) {
+            self.end_contextual_element_loans_since(&contextual_before);
+        }
         let writeback_root = if match_stmt.capability == ReceiverKind::BorrowMut {
             match &scrutinee {
                 Operand::Place(place) if self.contextual_element_loans.contains(place) => {
@@ -18914,7 +18923,15 @@ impl<'a> Lowerer<'a> {
                 }
             }
             _ => {
+                let contextual_before = self.contextual_element_loans.clone();
                 let condition = self.lower_expr(condition);
+                // `if ready(rows[i]):` lends `rows[i]` to the call. The
+                // `bool` holds no view of it, so the loan ends here rather
+                // than with the statement, and the branch may write the
+                // element.
+                if !self.operand_is_view(&condition) {
+                    self.end_contextual_element_loans_since(&contextual_before);
+                }
                 self.terminate(Terminator::Branch {
                     condition,
                     then_label,
@@ -24812,6 +24829,34 @@ impl<'a> Lowerer<'a> {
                 .any(|source| source.split('.').next() == Some(root.as_str()))
     }
 
+    /// Whether `value` reads through a loan or view, such as a call's
+    /// returned view, rather than holding a value of its own.
+    fn operand_is_view(&self, value: &Operand) -> bool {
+        match value {
+            Operand::Place(place) | Operand::MovePlace(place) => self
+                .view_sources
+                .contains_key(place.split('.').next().unwrap_or(place)),
+            _ => false,
+        }
+    }
+
+    /// Ends the hidden element loans taken since `before`. A caller uses it
+    /// once a call's arguments are no longer needed: its result is a value
+    /// that holds no view of the elements they lent.
+    fn end_contextual_element_loans_since(&mut self, before: &BTreeSet<String>) {
+        let mut loans = self
+            .contextual_element_loans
+            .difference(before)
+            .cloned()
+            .collect::<Vec<_>>();
+        // Temporaries are numbered in creation order, and a reborrow ends
+        // before the loan it borrows from.
+        loans.sort_by_key(|loan| (loan.len(), loan.clone()));
+        for loan in loans.into_iter().rev() {
+            self.end_contextual_element_loan(loan);
+        }
+    }
+
     /// Ends a hidden element loan at once instead of with its statement.
     fn end_contextual_element_loan(&mut self, loan: String) {
         self.view_sources.remove(&loan);
@@ -26530,6 +26575,12 @@ impl<'a> Lowerer<'a> {
             )),
             ("TaskGroup", "start_soon") | ("TaskGroup", "start_soon_with_stack") => {
                 Some(Type::Unit)
+            }
+            // `to_bytes` lowers to the named host built-in `str.to_bytes`,
+            // so it has no resolved operation either. Without its type a
+            // `for` over the result would lower as a `Range` loop.
+            ("str", "to_bytes") => {
+                Some(Type::Named("list".to_string(), vec![Type::named("uint8")]))
             }
             _ => None,
         }
