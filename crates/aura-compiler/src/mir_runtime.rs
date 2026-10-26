@@ -1225,7 +1225,7 @@ impl Env {
                 Value::Map(map) if segment.starts_with('[') => {
                     let key = parse_entry_key_segment(segment, place)?;
                     entry_key_position(&map.entries, &key)
-                        .map(|position| &map.entries[position].1)
+                        .map(|slot| &map.entries.at_slot(slot).1)
                         .ok_or_else(|| {
                             Diagnostic::new(format!(
                                 "dict MIR place `{place}` has no entry for the loaned key"
@@ -1688,14 +1688,12 @@ enum EntryKeySelector {
     Encoded(String),
 }
 
-/// The position of the entry `key` selects. A key selector uses the hash
+/// The slot of the entry `key` selects. A key selector uses the hash
 /// index; an encoded selector compares each key's encoding.
 fn entry_key_position(entries: &DictEntries, key: &EntryKeySelector) -> Option<usize> {
     match key {
         EntryKeySelector::Key(key) => entries.position(key),
-        EntryKeySelector::Encoded(_) => entries
-            .iter()
-            .position(|(candidate, _)| key.matches(candidate)),
+        EntryKeySelector::Encoded(_) => entries.slot_where(|(candidate, _)| key.matches(candidate)),
     }
 }
 
@@ -7431,7 +7429,7 @@ impl MirRuntime {
                 let mut updated = map;
                 let removed = updated
                     .entries
-                    .shift_remove(&bound[0].value)
+                    .remove(&bound[0].value)
                     .map(|(_, value)| value);
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new("`remove` requires a mutable dict place"));
@@ -7848,8 +7846,7 @@ impl MirRuntime {
                 let bound = bind_builtin_args(&["index"], values)?;
                 let index = self.mir_index_from_value(bound[0].value.clone())?;
                 let mut updated = set;
-                let value = (index < updated.elements.len())
-                    .then(|| updated.elements.shift_remove_at(index));
+                let value = updated.elements.shift_remove_index(index);
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new(
                         "owned set iteration requires its private source place",

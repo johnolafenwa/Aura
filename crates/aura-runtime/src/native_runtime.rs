@@ -8807,9 +8807,7 @@ pub extern "C-unwind" fn aura_direct_map_remove_in_place(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let previous = with_map_mut(map, |map| unsafe {
-            with_value(key, |key| {
-                map.entries.shift_remove(key).map(|(_, value)| value)
-            })
+            with_value(key, |key| map.entries.remove(key).map(|(_, value)| value))
         });
         boxed_value(previous.map(lookup_found).unwrap_or_else(lookup_missing))
     })
@@ -9578,9 +9576,7 @@ pub extern "C-unwind" fn aura_direct_set_take_index_in_place(
         // Every supported Aura release target is 64-bit, so a validated
         // non-negative int64 index always fits usize.
         let index = index as usize;
-        let value = with_set_mut(set, |set| {
-            (index < set.elements.len()).then(|| set.elements.shift_remove_at(index))
-        });
+        let value = with_set_mut(set, |set| set.elements.shift_remove_index(index));
         boxed_value(value.map(lookup_found).unwrap_or_else(lookup_missing))
     })
 }

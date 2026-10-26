@@ -8345,7 +8345,7 @@ fn dynamic_json_host_builtins_parse_dump_and_expose_exact_typed_accessors() {
         panic!("json.into_object should return a present `dict[str, json.Value] | None`");
     };
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].0, Value::String("k".to_string()));
+    assert_eq!(entries.first().unwrap().0, Value::String("k".to_string()));
     assert_eq!(entries.as_ptr(), object_payload_ptr);
     for (name, expected_variant) in [
         ("json::into_string", JsonValue::Null),

@@ -51,6 +51,13 @@ in this file.
   byte positions with one fast scan instead of decoding every character up
   to the end, and copies only the result. `text[5000:5010]` of a
   10,000-character ASCII string takes 2,647 instructions instead of 13,336.
+- `dict.remove` takes expected constant time instead of time proportional to
+  the dictionary's size, and still keeps the order of the remaining entries.
+  A removed entry leaves a gap that iteration skips, and the dictionary
+  closes its gaps once they make up more than half of its slots, as
+  CPython's `dict` does. Both `aura run` and native builds use it. The
+  `lru_cache` benchmark spent 46% of its instructions removing dict entries
+  and now spends 0.2%, and runs 46% fewer instructions in all.
 
 ### Fixed
 

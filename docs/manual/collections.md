@@ -404,10 +404,11 @@ A span is a view, so it cannot be stored or moved:
 ## dict[K, V]
 
 Dictionaries keep insertion order for iteration and snapshots. A hash index
-over the keys makes indexing, assignment, `get`, and membership take expected
-constant time. `remove` keeps the order of the remaining entries, so it takes
-time proportional to the dictionary's size. Indexing, assignment, and
-membership are the main ways to look up and store entries:
+over the keys makes indexing, assignment, `get`, membership, and `remove` take
+expected constant time. `remove` keeps the order of the remaining entries: it
+leaves a gap where the entry was, and the dictionary closes its gaps once they
+make up more than half of its slots. Indexing, assignment, and membership are
+the main ways to look up and store entries:
 
     value = table[key]
     table[key] = value
