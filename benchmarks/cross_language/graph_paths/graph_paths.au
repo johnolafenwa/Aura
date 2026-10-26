@@ -1,0 +1,175 @@
+# Graph algorithms: BFS, Dijkstra with a binary heap, and union-find.
+#
+# Builds a random weighted directed graph with N nodes and 4N extra edges on top
+# of a ring, then runs breadth-first search and Dijkstra's shortest paths from
+# node 0, and counts connected components of the undirected random edges. The
+# binary heap is written out, because Aura has no heap in its standard library.
+import sys
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+copy class Edge:
+    source: int64
+    target: int64
+    weight: int64
+
+copy class Arc:
+    target: int64
+    weight: int64
+
+copy class Entry:
+    dist: int64
+    node: int64
+
+
+def before(a: Entry, b: Entry) -> bool:
+    return a.dist < b.dist or (a.dist == b.dist and a.node < b.node)
+
+
+def heap_push(heap: mut list[Entry], dist: int64, node: int64):
+    heap.append(Entry(dist=dist, node=node))
+    mut i = heap.len() - 1
+    while i > 0:
+        parent = (i - 1) // 2
+        if not before(heap[i], heap[parent]):
+            break
+        heap.swap(parent, i)
+        i = parent
+
+
+def heap_pop(heap: mut list[Entry]) -> Entry:
+    top = heap[0]
+    last = heap.pop()
+    if heap.len() > 0:
+        heap[0] = last
+        size = heap.len()
+        mut i = 0
+        while true:
+            left = 2 * i + 1
+            right = left + 1
+            mut smallest = i
+            if left < size and before(heap[left], heap[smallest]):
+                smallest = left
+            if right < size and before(heap[right], heap[smallest]):
+                smallest = right
+            if smallest == i:
+                break
+            heap.swap(smallest, i)
+            i = smallest
+    return top
+
+
+def find(parent: mut list[int64], start: int64) -> int64:
+    mut x = start
+    while parent[x] != x:
+        grandparent = parent[parent[x]]
+        parent[x] = grandparent
+        x = grandparent
+    return x
+
+
+def main():
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            run(n)
+        case Result.Err(_):
+            print("usage: graph_paths <nodes>")
+
+
+def run(n: int64):
+    mut rng = Rng(state=23)
+    mut edges: list[Edge] = []
+    for i in range(n):
+        edges.append(Edge(source=i, target=(i + 1) % n, weight=50))
+    for _ in range(4 * n):
+        u = rng.next() % n
+        v = rng.next() % n
+        w = 1 + rng.next() % 100
+        edges.append(Edge(source=u, target=v, weight=w))
+    mut adjacency: list[list[Arc]] = []
+    for _ in range(n):
+        adjacency.append(list[Arc]())
+    for edge in edges:
+        adjacency[edge.source].append(Arc(target=edge.target, weight=edge.weight))
+
+    mut hops: list[int64] = []
+    for _ in range(n):
+        hops.append(-1)
+    hops[0] = 0
+    mut queue: list[int64] = [0]
+    mut head = 0
+    while head < queue.len():
+        u = queue[head]
+        head += 1
+        for arc in adjacency[u]:
+            if hops[arc.target] < 0:
+                next_hop = hops[u] + 1
+                hops[arc.target] = next_hop
+                queue.append(arc.target)
+    reachable = queue.len()
+    mut hop_sum = 0
+    for h in hops:
+        if h > 0:
+            hop_sum += h
+    max_hops = max(hops)
+
+    mut dist: list[int64] = []
+    for _ in range(n):
+        dist.append(-1)
+    dist[0] = 0
+    mut heap: list[Entry] = []
+    heap_push(heap, 0, 0)
+    mut pushes = 1
+    mut settled = 0
+    while heap.len() > 0:
+        entry = heap_pop(heap)
+        d = entry.dist
+        u = entry.node
+        if d > dist[u]:
+            continue
+        settled += 1
+        for arc in adjacency[u]:
+            candidate = d + arc.weight
+            if dist[arc.target] < 0 or candidate < dist[arc.target]:
+                dist[arc.target] = candidate
+                heap_push(heap, candidate, arc.target)
+                pushes += 1
+    mut dist_sum = 0
+    for d in dist:
+        if d > 0:
+            dist_sum += d
+    max_dist = max(dist)
+
+    mut parent: list[int64] = []
+    mut size: list[int64] = []
+    for x in range(n):
+        parent.append(x)
+        size.append(1)
+    mut components = n
+    for k in range(n, edges.len()):
+        edge = edges[k]
+        mut a = find(parent, edge.source)
+        mut b = find(parent, edge.target)
+        if a != b:
+            if size[a] < size[b]:
+                swap = a
+                a = b
+                b = swap
+            parent[b] = a
+            merged = size[b]
+            size[a] += merged
+            components -= 1
+    mut largest = 0
+    for x in range(n):
+        root = find(parent, x)
+        largest = max(largest, size[root])
+    print(
+        f"graph_paths nodes={n} edges={edges.len()} reachable={reachable} hops={hop_sum} max_hops={max_hops} settled={settled} pushes={pushes} dist_sum={dist_sum} max_dist={max_dist} components={components} largest={largest}"
+    )

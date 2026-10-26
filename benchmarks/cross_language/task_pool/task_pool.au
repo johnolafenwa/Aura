@@ -1,0 +1,112 @@
+# Concurrency: a worker pool, a three-stage pipeline, and a fan-out of tasks.
+#
+# The pool runs N small jobs through four workers fed by a bounded queue. The
+# pipeline moves N text records through parse and transform stages, each a task
+# joined to the next by a bounded queue. The fan-out starts N / 50 tasks and
+# joins every result. The work per message is small, so this measures task
+# switching and queue hand-off more than raw computation. Python runs it on one
+# asyncio event loop; Aura and Rust (tokio) use their multi-threaded schedulers.
+import sys
+
+WORKERS = 4
+CAPACITY: int32 = 64
+
+
+def mix(value: int64) -> int64:
+    mut x = value
+    for _ in range(16):
+        x = (x * 31 + 7) % 1000003
+    return x
+
+
+def produce(jobs: Queue[int64], n: int64):
+    for i in range(n):
+        jobs.put(i)
+    jobs.close()
+
+
+def worker(jobs: Queue[int64], results: Queue[int64]):
+    for job in jobs:
+        results.put(mix(job))
+
+
+def source(out: Queue[str], n: int64):
+    for i in range(n):
+        out.put(f"order-{i}:{i * 7919 % 10007}")
+    out.close()
+
+
+def parse(lines: Queue[str], out: Queue[int64]):
+    for line in lines:
+        fields = line.split(":")
+        match parse_int64(fields[1]):
+            case Result.Ok(value):
+                out.put(value + fields[0].len())
+            case Result.Err(_):
+                pass
+    out.close()
+
+
+def transform(values: Queue[int64], out: Queue[int64]):
+    for value in values:
+        out.put(mix(value))
+    out.close()
+
+
+def compute(seed: int64) -> int64:
+    return mix(seed * 13)
+
+
+def main():
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            run(n)
+        case Result.Err(_):
+            print("usage: task_pool <jobs>")
+
+
+def run(n: int64):
+    mut pool_sum = 0
+    mut pool_max = 0
+    with TaskGroup() as group:
+        jobs = Queue[int64](capacity=CAPACITY)
+        results = Queue[int64](capacity=CAPACITY)
+        group.start_soon(produce, jobs, n)
+        for _ in range(WORKERS):
+            group.start_soon(worker, jobs, results)
+        for _ in range(n):
+            match results.get():
+                case QueueReceive.Item(value):
+                    pool_sum += value
+                    pool_max = max(pool_max, value)
+                case _:
+                    pass
+
+    mut items = 0
+    mut pipeline_sum = 0
+    with TaskGroup() as group:
+        lines = Queue[str](capacity=CAPACITY)
+        values = Queue[int64](capacity=CAPACITY)
+        mixed = Queue[int64](capacity=CAPACITY)
+        group.start_soon(source, lines, n)
+        group.start_soon(parse, lines, values)
+        group.start_soon(transform, values, mixed)
+        for value in mixed:
+            items += 1
+            pipeline_sum += value
+
+    fan_out = n // 50
+    mut task_sum = 0
+    with TaskGroup() as group:
+        mut handles: list[Task[int64]] = []
+        for i in range(fan_out):
+            handles.append(group.start(compute, i))
+        for handle in handles:
+            match handle.result():
+                case TaskResult.Ready(value):
+                    task_sum += value
+                case _:
+                    pass
+    print(
+        f"task_pool jobs={n} pool_sum={pool_sum} pool_max={pool_max} items={items} pipeline_sum={pipeline_sum} tasks={fan_out} task_sum={task_sum}"
+    )

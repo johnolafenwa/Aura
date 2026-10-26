@@ -1,0 +1,262 @@
+# Documentation tools: render Markdown to HTML.
+#
+# Generates a Markdown document of N blocks (headings, paragraphs, bulleted and
+# numbered lists, fenced code, and quotes) whose text uses **bold**, *italic*,
+# `code`, and [links](url), then renders it to HTML in one pass over the lines.
+# Inline markup is scanned byte by byte, text is HTML-escaped, and the output is
+# built in a byte buffer. Reports the input and output sizes, the elements
+# written, and a checksum of the HTML.
+import sys
+
+NONE = 0
+PARAGRAPH = 1
+BULLETS = 2
+NUMBERS = 3
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+def inline_text(rng: mut Rng, count: int64) -> str:
+    words = [
+        "aura",
+        "fast",
+        "safe",
+        "compiler",
+        "runtime",
+        "task",
+        "queue",
+        "list",
+        "native",
+        "build",
+        "docs",
+        "test",
+    ]
+    mut parts: list[str] = []
+    for _ in range(count):
+        r = rng.next()
+        view word = words[r % 12]
+        style = (r // 12) % 10
+        if style == 0:
+            parts.append(f"**{word}**")
+        elif style == 1:
+            parts.append(f"*{word}*")
+        elif style == 2:
+            parts.append(f"`{word}<T>`")
+        elif style == 3:
+            parts.append(f"[{word}](https://example.com/{word}?a=1&b=2)")
+        elif style == 4:
+            parts.append(f"{word} & co")
+        else:
+            parts.append(word.clone())
+    return " ".join(parts)
+
+
+def generate(rng: mut Rng, blocks: int64) -> str:
+    mut lines: list[str] = []
+    for _ in range(blocks):
+        r = rng.next()
+        kind = r % 6
+        if kind == 0:
+            lines.append(
+                f"{"#".repeat(1 + (r // 6) % 3)} {inline_text(rng, 3 + (r // 18) % 4)}"
+            )
+        elif kind == 1:
+            for _line in range(1 + (r // 6) % 3):
+                lines.append(inline_text(rng, 6 + (r // 18) % 6))
+        elif kind == 2:
+            for _item in range(2 + (r // 6) % 4):
+                lines.append(f"- {inline_text(rng, 4)}")
+        elif kind == 3:
+            for i in range(2 + (r // 6) % 4):
+                lines.append(f"{i + 1}. {inline_text(rng, 4)}")
+        elif kind == 4:
+            lines.append("```")
+            for i in range(1 + (r // 6) % 4):
+                lines.append(f"if a < b && c > {i}: return \"x\"")
+            lines.append("```")
+        else:
+            lines.append(f"> {inline_text(rng, 5)}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def add_text(out: mut list[uint8], text: str):
+    out.extend(text.to_bytes())
+
+
+def escape_into(out: mut list[uint8], data: list[uint8], start: int64, end: int64):
+    for i in range(start, end):
+        c = data[i]
+        if c == 38:
+            add_text(out, "&amp;")
+        elif c == 60:
+            add_text(out, "&lt;")
+        elif c == 62:
+            add_text(out, "&gt;")
+        elif c == 34:
+            add_text(out, "&quot;")
+        else:
+            out.append(c)
+
+
+def find(data: list[uint8], start: int64, end: int64, c: uint8) -> int64:
+    for i in range(start, end):
+        if data[i] == c:
+            return i
+    return -1
+
+
+def render_inline(out: mut list[uint8], data: list[uint8], start: int64, end: int64):
+    mut i = start
+    while i < end:
+        c = data[i]
+        if c == 42 and i + 1 < end and data[i + 1] == 42:
+            close = find(data, i + 2, end, 42)
+            if close >= 0 and close + 1 < end and data[close + 1] == 42:
+                add_text(out, "<strong>")
+                escape_into(out, data, i + 2, close)
+                add_text(out, "</strong>")
+                i = close + 2
+                continue
+        elif c == 42:
+            close = find(data, i + 1, end, 42)
+            if close >= 0:
+                add_text(out, "<em>")
+                escape_into(out, data, i + 1, close)
+                add_text(out, "</em>")
+                i = close + 1
+                continue
+        elif c == 96:
+            close = find(data, i + 1, end, 96)
+            if close >= 0:
+                add_text(out, "<code>")
+                escape_into(out, data, i + 1, close)
+                add_text(out, "</code>")
+                i = close + 1
+                continue
+        elif c == 91:
+            label_end = find(data, i + 1, end, 93)
+            if label_end >= 0 and label_end + 1 < end and data[label_end + 1] == 40:
+                url_end = find(data, label_end + 2, end, 41)
+                if url_end >= 0:
+                    add_text(out, "<a href=\"")
+                    escape_into(out, data, label_end + 2, url_end)
+                    add_text(out, "\">")
+                    escape_into(out, data, i + 1, label_end)
+                    add_text(out, "</a>")
+                    i = url_end + 1
+                    continue
+        escape_into(out, data, i, i + 1)
+        i += 1
+
+
+def close_block(out: mut list[uint8], state: int64) -> int64:
+    if state == PARAGRAPH:
+        add_text(out, "</p>\n")
+    elif state == BULLETS:
+        add_text(out, "</ul>\n")
+    elif state == NUMBERS:
+        add_text(out, "</ol>\n")
+    return NONE
+
+
+def render(text: str, counts: mut list[int64]) -> list[uint8]:
+    mut out: list[uint8] = []
+    mut state = NONE
+    mut in_code = false
+    for line in text.split("\n"):
+        data = line.to_bytes()
+        n = data.len()
+        if n >= 3 and data[0] == 96 and data[1] == 96 and data[2] == 96:
+            if in_code:
+                add_text(out, "</code></pre>\n")
+                in_code = false
+            else:
+                state = close_block(out, state)
+                add_text(out, "<pre><code>")
+                in_code = true
+                counts[4] += 1
+            continue
+        if in_code:
+            escape_into(out, data, 0, n)
+            out.append(10)
+            continue
+        if n == 0:
+            state = close_block(out, state)
+            continue
+        if data[0] == 35:
+            state = close_block(out, state)
+            mut level = 0
+            while level < n and data[level] == 35:
+                level += 1
+            add_text(out, "<h")
+            out.append((48 + level) as uint8)
+            out.append(62)
+            render_inline(out, data, level + 1, n)
+            add_text(out, "</h")
+            out.append((48 + level) as uint8)
+            add_text(out, ">\n")
+            counts[0] += 1
+        elif n >= 2 and data[0] == 45 and data[1] == 32:
+            if state != BULLETS:
+                state = close_block(out, state)
+                add_text(out, "<ul>\n")
+                state = BULLETS
+            add_text(out, "<li>")
+            render_inline(out, data, 2, n)
+            add_text(out, "</li>\n")
+            counts[2] += 1
+        elif data[0] >= 48 and data[0] <= 57:
+            dot = find(data, 0, n, 46)
+            if state != NUMBERS:
+                state = close_block(out, state)
+                add_text(out, "<ol>\n")
+                state = NUMBERS
+            add_text(out, "<li>")
+            render_inline(out, data, dot + 2, n)
+            add_text(out, "</li>\n")
+            counts[3] += 1
+        elif data[0] == 62:
+            state = close_block(out, state)
+            add_text(out, "<blockquote>")
+            render_inline(out, data, 2, n)
+            add_text(out, "</blockquote>\n")
+            counts[5] += 1
+        else:
+            if state != PARAGRAPH:
+                state = close_block(out, state)
+                add_text(out, "<p>")
+                state = PARAGRAPH
+                counts[1] += 1
+            else:
+                out.append(10)
+            render_inline(out, data, 0, n)
+    close_block(out, state)
+    return out
+
+
+def main():
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            run(n)
+        case Result.Err(_):
+            print("usage: markdown_render <blocks>")
+
+
+def run(n: int64):
+    mut rng = Rng(state=83)
+    text = generate(rng, n)
+    mut counts = [0, 0, 0, 0, 0, 0]
+    html = render(text, counts)
+    mut checksum = 0
+    for c in html:
+        checksum = (checksum * 31 + (c as int64)) % 1000000007
+    print(
+        f"markdown_render blocks={n} markdown_bytes={text.byte_len()} html_bytes={html.len()} headings={counts[0]} paragraphs={counts[1]} items={counts[2] + counts[3]} code={counts[4]} quotes={counts[5]} checksum={checksum}"
+    )

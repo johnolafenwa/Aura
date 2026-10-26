@@ -1,0 +1,159 @@
+# Compression: LZW with 12-bit codes and run-length coding, both round-tripped.
+#
+# Generates N bytes of word-like text, compresses it with LZW (dictionary reset
+# at 4,096 entries), decompresses it, and checks the result. It also run-length
+# encodes a sparse byte stream and decodes it again.
+import sys
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+def syllables() -> list[str]:
+    return ["the", "and", "data", "core", "sys", "net", "run", "io", "map", "set"]
+
+
+def generate(rng: mut Rng, n: int64) -> list[uint8]:
+    pool = syllables()
+    mut parts: list[str] = []
+    mut size = 0
+    while size < n:
+        r = rng.next()
+        mut word = pool[r % 10] + pool[(r // 10) % 10]
+        if r % 9 == 0:
+            word = word + "\n"
+        else:
+            word = word + " "
+        size += word.byte_len()
+        parts.append(word)
+    return "".join(parts).to_bytes()[0:n]
+
+
+def compress(data: list[uint8]) -> list[int64]:
+    max_codes = 4096
+    mut table: dict[int64, int64] = {}
+    mut next_code = 256
+    mut codes: list[int64] = []
+    mut prefix = data[0] as int64
+    for i in range(1, data.len()):
+        byte = data[i] as int64
+        key = prefix * 256 + byte
+        match table.get(key):
+            case Lookup.Found(code):
+                prefix = code
+            case Lookup.Missing:
+                codes.append(prefix)
+                if next_code < max_codes:
+                    table[key] = next_code
+                    next_code += 1
+                else:
+                    table.clear()
+                    next_code = 256
+                prefix = byte
+    codes.append(prefix)
+    return codes
+
+
+def expand(prefixes: list[int64], suffixes: list[uint8], start: int64) -> list[uint8]:
+    mut bytes: list[uint8] = []
+    mut code = start
+    while code >= 256:
+        bytes.append(suffixes[code - 256])
+        code = prefixes[code - 256]
+    bytes.append(code as uint8)
+    bytes.reverse()
+    return bytes
+
+
+def decompress(codes: list[int64]) -> list[uint8]:
+    max_codes = 4096
+    mut prefixes: list[int64] = []
+    mut suffixes: list[uint8] = []
+    mut out: list[uint8] = []
+    mut previous = -1
+    for code in codes:
+        mut entry: list[uint8] = []
+        if code < 256:
+            entry.append(code as uint8)
+        elif code - 256 < prefixes.len():
+            entry = expand(prefixes, suffixes, code)
+        else:
+            entry = expand(prefixes, suffixes, previous)
+            first = entry[0]
+            entry.append(first)
+        first_byte = entry[0]
+        out.extend(entry)
+        if previous >= 0:
+            if prefixes.len() + 256 < max_codes:
+                prefixes.append(previous)
+                suffixes.append(first_byte)
+            else:
+                prefixes.clear()
+                suffixes.clear()
+        previous = code
+    return out
+
+
+def sparse_stream(rng: mut Rng, n: int64) -> list[uint8]:
+    mut data: list[uint8] = []
+    while data.len() < n:
+        r = rng.next()
+        run = 1 + r % 300
+        mut value: uint8 = 0
+        if r % 3 == 0:
+            value = ((r // 3) % 256) as uint8
+        for _ in range(min(run, n - data.len())):
+            data.append(value)
+    return data
+
+
+def rle_encode(data: list[uint8]) -> list[int64]:
+    mut out: list[int64] = []
+    mut i = 0
+    while i < data.len():
+        value = data[i]
+        mut run = 1
+        while i + run < data.len() and run < 255 and data[i + run] == value:
+            run += 1
+        out.append(run)
+        out.append(value as int64)
+        i += run
+    return out
+
+
+def rle_decode(pairs: list[int64]) -> list[uint8]:
+    mut out: list[uint8] = []
+    mut i = 0
+    while i < pairs.len():
+        value = pairs[i + 1] as uint8
+        for _ in range(pairs[i]):
+            out.append(value)
+        i += 2
+    return out
+
+
+def main():
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            mut rng = Rng(state=29)
+            data = generate(rng, n)
+            codes = compress(data)
+            restored = decompress(codes)
+            mut checksum = 0
+            mut i = 0
+            for code in codes:
+                checksum = (checksum * 31 + code * (i % 7 + 1)) % 1000000007
+                i += 1
+            sparse = sparse_stream(rng, n)
+            pairs = rle_encode(sparse)
+            rle_ok = rle_decode(pairs) == sparse
+            print(
+                f"lzw_compress bytes={data.len()} codes={codes.len()} restored={restored == data} checksum={checksum} rle_pairs={pairs.len() // 2} rle_restored={rle_ok}"
+            )
+        case Result.Err(_):
+            print("usage: lzw_compress <bytes>")

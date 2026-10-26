@@ -1,0 +1,203 @@
+# Messaging: a publish/subscribe broker with mailboxes over loopback TCP.
+#
+# One server task owns the broker and serves client sessions one after another,
+# like the key-value server. Clients send SUB and UNSUB to manage topic
+# subscriptions, PUB to fan a message out to the mailbox of every subscriber, and
+# POLL to drain up to K waiting messages, which arrive as MSG lines followed by
+# END. Each session sends 250 commands from 40 clients over 16 topics and waits
+# for every reply. Reports the messages fanned out and received, and a checksum.
+import io
+import net
+import sys
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+class Broker:
+    topics: dict[str, list[int64]]
+    mailboxes: list[list[str]]
+    heads: list[int64]
+    delivered: int64
+
+    def execute(mut self, line: str) -> str:
+        parts = line.split(" ")
+        verb = parts[0].clone()
+        topic = parts[parts.len() - 1].clone()
+        if verb == "PUB":
+            name = parts[1].clone()
+            match self.topics.get(name):
+                case Lookup.Found(subscribers):
+                    message = "MSG " + name + " " + topic
+                    for client in subscribers:
+                        self.mailboxes[client].append(message.clone())
+                    self.delivered += subscribers.len()
+                    return f"SENT {subscribers.len()}"
+                case Lookup.Missing:
+                    return "SENT 0"
+        mut client = 0
+        match str.from_bytes(parts[1].to_bytes()[1:]):
+            case Result.Ok(digits):
+                match parse_int64(digits):
+                    case Result.Ok(number):
+                        client = number
+                    case Result.Err(_):
+                        return "ERR client"
+            case Result.Err(_):
+                return "ERR client"
+        if verb == "SUB":
+            if not (topic in self.topics):
+                self.topics[topic.clone()] = []
+            if not (client in self.topics[topic]):
+                self.topics[topic].append(client)
+            return "OK"
+        if verb == "UNSUB":
+            if topic in self.topics and client in self.topics[topic]:
+                self.topics[topic].remove(client)
+                return "OK"
+            return "NONE"
+        mut limit = 0
+        match parse_int64(topic):
+            case Result.Ok(number):
+                limit = number
+            case Result.Err(_):
+                return "ERR limit"
+        head = self.heads[client]
+        end = min(self.mailboxes[client].len(), head + limit)
+        mut lines: list[str] = []
+        for index in range(head, end):
+            lines.append(self.mailboxes[client][index].clone())
+        lines.append("END")
+        self.heads[client] = end
+        return "\n".join(lines)
+
+
+def new_broker(clients: int64) -> Broker:
+    mut mailboxes: list[list[str]] = []
+    mut heads: list[int64] = []
+    for _ in range(clients):
+        mailboxes.append(list[str]())
+        heads.append(0)
+    return Broker(topics={}, mailboxes=mailboxes, heads=heads, delivered=0)
+
+
+def serve(addresses: Queue[str], sessions: int64) -> Result[(int64, int64), io.Error]:
+    mut broker = new_broker(40)
+    mut commands = 0
+    with listener = try net.listen("127.0.0.1:0"):
+        addresses.put(try listener.local_addr())
+        for _ in range(sessions):
+            with conn = try listener.accept():
+                while true:
+                    match own try conn.read_line():
+                        case str as line:
+                            if line == "QUIT":
+                                try conn.write_all("BYE\n")
+                                break
+                            try conn.write_all(broker.execute(line) + "\n")
+                            commands += 1
+                        case None:
+                            break
+    return Result.Ok((commands, broker.delivered))
+
+
+def receive_address(addresses: Queue[str]) -> Result[str, io.Error]:
+    match own addresses.get(timeout=5s):
+        case QueueReceive.Item(address):
+            return Result.Ok(address)
+        case _:
+            return Result.Err(io.Error.TimedOut)
+
+
+def run(n: int64) -> Result[str, io.Error]:
+    commands_per_session = 250
+    clients = 40
+    topics = 16
+    sessions = n // commands_per_session
+    mut rng = Rng(state=97)
+    mut published = 0
+    mut received = 0
+    mut checksum = 0
+    mut sequence = 0
+    with TaskGroup() as group:
+        addresses = Queue[str](capacity=1)
+        server = group.start(serve, addresses, sessions)
+        address = try receive_address(addresses)
+        for _ in range(sessions):
+            with conn = try net.connect(address):
+                for _command in range(commands_per_session):
+                    r = rng.next()
+                    op = r % 100
+                    client = (r // 100) % clients
+                    topic = (r // 10000) % topics
+                    mut request = ""
+                    if op < 12:
+                        request = f"SUB c{client} t{topic}\n"
+                    elif op < 15:
+                        request = f"UNSUB c{client} t{topic}\n"
+                    elif op < 70:
+                        sequence += 1
+                        request = f"PUB t{topic} m{sequence}-{r % 1000}\n"
+                    else:
+                        request = f"POLL c{client} {1 + r % 20}\n"
+                    try conn.write_all(request)
+                    if op >= 70:
+                        while true:
+                            match own try conn.read_line():
+                                case str as reply:
+                                    if reply == "END":
+                                        break
+                                    received += 1
+                                    checksum = (
+                                        checksum * 31 + reply.byte_len()
+                                    ) % 1000000007
+                                case None:
+                                    return Result.Err(io.Error.UnexpectedEof)
+                    else:
+                        match own try conn.read_line():
+                            case str as reply:
+                                match reply.strip_prefix("SENT "):
+                                    case str as digits:
+                                        match parse_int64(digits):
+                                            case Result.Ok(count):
+                                                published += count
+                                            case Result.Err(_):
+                                                pass
+                                    case None:
+                                        pass
+                            case None:
+                                return Result.Err(io.Error.UnexpectedEof)
+                try conn.write_all("QUIT\n")
+                match own try conn.read_line():
+                    case str as bye:
+                        if bye != "BYE":
+                            return Result.Err(io.Error.InvalidData)
+                    case None:
+                        return Result.Err(io.Error.UnexpectedEof)
+        match own server.result():
+            case TaskResult.Ready(result):
+                commands, delivered = try result
+                return Result.Ok(
+                    f"pubsub_broker sessions={sessions} commands={commands} published={published} delivered={delivered} received={received} checksum={checksum}"
+                )
+            case _:
+                return Result.Err(io.Error.Other(message="server task failed"))
+
+
+def main() -> int32:
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            match run(n):
+                case Result.Ok(line):
+                    print(line)
+                    return 0
+                case Result.Err(error):
+                    print(error)
+                    return 1
+        case Result.Err(_):
+            return 2

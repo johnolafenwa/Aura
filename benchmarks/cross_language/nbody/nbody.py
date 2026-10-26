@@ -1,0 +1,92 @@
+"""Physics: the n-body simulation of the Jovian planets (Benchmarks Game).
+
+Integrates the Sun, Jupiter, Saturn, Uranus, and Neptune for N steps of 0.01
+days with a simple symplectic integrator, keeping positions, velocities, and
+masses in parallel float lists. Prints the system's energy before and after,
+to nine decimals. Every language does the same float operations in the same
+order, so the printed digits match exactly.
+"""
+import math
+import sys
+
+PI = 3.141592653589793
+SOLAR_MASS = 4 * PI * PI
+DAYS_PER_YEAR = 365.24
+
+
+def system():
+    xs = [0.0, 4.84143144246472090e+00, 8.34336671824457987e+00, 1.28943695621391310e+01, 1.53796971148509165e+01]
+    ys = [0.0, -1.16032004402742839e+00, 4.12479856412430479e+00, -1.51111514016986312e+01, -2.59193146099879641e+01]
+    zs = [0.0, -1.03622044471123109e-01, -4.03523417114321381e-01, -2.23307578892655734e-01, 1.79258772950371181e-01]
+    vxs = [0.0, 1.66007664274403694e-03, -2.76742510726862411e-03, 2.96460137564761618e-03, 2.68067772490389322e-03]
+    vys = [0.0, 7.69901118419740425e-03, 4.99852801234917238e-03, 2.37847173959480950e-03, 1.62824170038242295e-03]
+    vzs = [0.0, -6.90460016972063023e-05, 2.30417297573763929e-05, -2.96589568540237556e-05, -9.51592254519715870e-05]
+    masses = [1.0, 9.54791938424326609e-04, 2.85885980666130812e-04, 4.36624404335156298e-05, 5.15138902046611451e-05]
+    for i in range(5):
+        vxs[i] = vxs[i] * DAYS_PER_YEAR
+        vys[i] = vys[i] * DAYS_PER_YEAR
+        vzs[i] = vzs[i] * DAYS_PER_YEAR
+        masses[i] = masses[i] * SOLAR_MASS
+    return xs, ys, zs, vxs, vys, vzs, masses
+
+
+def offset_momentum(vxs, vys, vzs, masses):
+    px = 0.0
+    py = 0.0
+    pz = 0.0
+    for i in range(5):
+        px += vxs[i] * masses[i]
+        py += vys[i] * masses[i]
+        pz += vzs[i] * masses[i]
+    vxs[0] = -px / SOLAR_MASS
+    vys[0] = -py / SOLAR_MASS
+    vzs[0] = -pz / SOLAR_MASS
+
+
+def energy(xs, ys, zs, vxs, vys, vzs, masses):
+    e = 0.0
+    for i in range(5):
+        e += 0.5 * masses[i] * (vxs[i] * vxs[i] + vys[i] * vys[i] + vzs[i] * vzs[i])
+        for j in range(i + 1, 5):
+            dx = xs[i] - xs[j]
+            dy = ys[i] - ys[j]
+            dz = zs[i] - zs[j]
+            e -= masses[i] * masses[j] / math.sqrt(dx * dx + dy * dy + dz * dz)
+    return e
+
+
+def advance(xs, ys, zs, vxs, vys, vzs, masses, dt):
+    for i in range(5):
+        for j in range(i + 1, 5):
+            dx = xs[i] - xs[j]
+            dy = ys[i] - ys[j]
+            dz = zs[i] - zs[j]
+            d2 = dx * dx + dy * dy + dz * dz
+            mag = dt / (d2 * math.sqrt(d2))
+            mj = masses[j] * mag
+            vxs[i] -= dx * mj
+            vys[i] -= dy * mj
+            vzs[i] -= dz * mj
+            mi = masses[i] * mag
+            vxs[j] += dx * mi
+            vys[j] += dy * mi
+            vzs[j] += dz * mi
+    for i in range(5):
+        xs[i] += dt * vxs[i]
+        ys[i] += dt * vys[i]
+        zs[i] += dt * vzs[i]
+
+
+def main():
+    n = int(sys.argv[1])
+    xs, ys, zs, vxs, vys, vzs, masses = system()
+    offset_momentum(vxs, vys, vzs, masses)
+    before = energy(xs, ys, zs, vxs, vys, vzs, masses)
+    for _ in range(n):
+        advance(xs, ys, zs, vxs, vys, vzs, masses, 0.01)
+    after = energy(xs, ys, zs, vxs, vys, vzs, masses)
+    print(f"nbody steps={n} before={before:.9f} after={after:.9f}")
+
+
+if __name__ == "__main__":
+    main()

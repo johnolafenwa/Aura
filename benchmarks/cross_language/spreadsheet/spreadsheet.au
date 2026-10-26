@@ -1,0 +1,303 @@
+# Office software: a spreadsheet with formulas, a dependency graph, and recalculation.
+#
+# Builds a sheet of N rows by 8 columns where about half the cells hold numbers
+# and the rest hold formulas such as =B12+C9*3, =SUM(D4:D13), or
+# =MAX(A2:A8)-MIN(A2:A8) that refer to earlier rows. It tokenizes and parses every
+# formula into a syntax tree, links each referenced cell to its dependents, orders
+# the cells topologically (Kahn's algorithm), evaluates them, then applies N / 4
+# edits to number cells, recomputing only the cells downstream of each edit.
+# Values wrap at 1,000,003 so they stay integers.
+import sys
+
+COLS = 8
+MOD = 1000003
+NUMBER = 0
+CELL = 1
+FUNCTION = 2
+SYMBOL = 3
+END = 4
+SUM = 0
+MAX = 1
+MIN = 2
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+enum Expr:
+    Num(value: int64)
+    Ref(cell: int64)
+    Func(kind: int64, first: int64, last: int64)
+    Neg(operand: indirect Expr)
+    Bin(op: int64, left: indirect Expr, right: indirect Expr)
+
+
+def wrap(value: int64) -> int64:
+    return (value % MOD + MOD) % MOD
+
+
+def is_digit(c: uint8) -> bool:
+    return c >= 48 and c <= 57
+
+
+def is_upper(c: uint8) -> bool:
+    return c >= 65 and c <= 90
+
+
+class Parser:
+    kinds: list[int64]
+    values: list[int64]
+    pos: int64
+    refs: list[int64]
+
+    def symbol_is(self, code: int64) -> bool:
+        return self.kinds[self.pos] == SYMBOL and self.values[self.pos] == code
+
+    def expr(mut self) -> Expr:
+        mut left = self.term()
+        while self.symbol_is(43) or self.symbol_is(45):
+            op = self.values[self.pos]
+            self.pos += 1
+            right = self.term()
+            left = Expr.Bin(op=op, left=left, right=right)
+        return left
+
+    def term(mut self) -> Expr:
+        mut left = self.factor()
+        while self.symbol_is(42):
+            self.pos += 1
+            right = self.factor()
+            left = Expr.Bin(op=42, left=left, right=right)
+        return left
+
+    def factor(mut self) -> Expr:
+        kind = self.kinds[self.pos]
+        value = self.values[self.pos]
+        self.pos += 1
+        if kind == NUMBER:
+            return Expr.Num(value=value)
+        if kind == CELL:
+            self.refs.append(value)
+            return Expr.Ref(cell=value)
+        if kind == FUNCTION:
+            self.pos += 1
+            first = self.values[self.pos]
+            self.pos += 2
+            last = self.values[self.pos]
+            self.pos += 2
+            mut cell = first
+            while cell <= last:
+                self.refs.append(cell)
+                cell += COLS
+            return Expr.Func(kind=value, first=first, last=last)
+        if value == 45:
+            return Expr.Neg(operand=self.factor())
+        inner = self.expr()
+        self.pos += 1
+        return inner
+
+
+def tokenize(text: str) -> Parser:
+    data = text.to_bytes()
+    mut parser = Parser(kinds=[], values=[], pos=0, refs=[])
+    mut i = 0
+    while i < data.len():
+        c = data[i]
+        if is_digit(c):
+            mut value = 0
+            while i < data.len() and is_digit(data[i]):
+                value = value * 10 + (data[i] as int64) - 48
+                i += 1
+            parser.kinds.append(NUMBER)
+            parser.values.append(value)
+        elif is_upper(c):
+            start = i
+            while i < data.len() and is_upper(data[i]):
+                i += 1
+            if i < data.len() and is_digit(data[i]):
+                mut row = 0
+                while i < data.len() and is_digit(data[i]):
+                    row = row * 10 + (data[i] as int64) - 48
+                    i += 1
+                parser.kinds.append(CELL)
+                parser.values.append((row - 1) * COLS + (data[start] as int64) - 65)
+            else:
+                parser.kinds.append(FUNCTION)
+                if data[start] == 83:
+                    parser.values.append(SUM)
+                elif data[start + 1] == 65:
+                    parser.values.append(MAX)
+                else:
+                    parser.values.append(MIN)
+        else:
+            if c != 32:
+                parser.kinds.append(SYMBOL)
+                parser.values.append(c as int64)
+            i += 1
+    parser.kinds.append(END)
+    parser.values.append(0)
+    return parser
+
+
+def evaluate(node: Expr, values: list[int64]) -> int64:
+    match node:
+        case Expr.Num(value):
+            return value
+        case Expr.Ref(cell):
+            return values[cell]
+        case Expr.Func(kind, first, last):
+            mut result = 0
+            if kind != SUM:
+                result = values[first]
+            mut cell = first
+            while cell <= last:
+                if kind == SUM:
+                    result = wrap(result + values[cell])
+                elif kind == MAX:
+                    result = max(result, values[cell])
+                else:
+                    result = min(result, values[cell])
+                cell += COLS
+            return result
+        case Expr.Neg(operand):
+            return wrap(-evaluate(operand, values))
+        case Expr.Bin(op, left, right):
+            a = evaluate(left, values)
+            b = evaluate(right, values)
+            if op == 43:
+                return wrap(a + b)
+            if op == 45:
+                return wrap(a - b)
+            return wrap(a * b)
+
+
+def letter(column: int64) -> str:
+    letters = ["A", "B", "C", "D", "E", "F", "G", "H"]
+    return letters[column].clone()
+
+
+def cell_name(cell: int64) -> str:
+    return f"{letter(cell % COLS)}{cell // COLS + 1}"
+
+
+def pick(low: int64, row: int64, salt: int64) -> int64:
+    return (low + salt % (row - low)) * COLS + (salt // 7) % COLS
+
+
+def make_formula(rng: mut Rng, row: int64) -> str:
+    r = rng.next()
+    low = max(0, row - 12)
+    kind = r % 4
+    if kind == 0:
+        return f"={cell_name(pick(low, row, r // 4))}+{cell_name(pick(low, row, r // 97))}*{r % 9 + 1}"
+    first_row = low + (r // 4) % (row - low)
+    last_row = min(row - 1, first_row + 9)
+    column = letter((r // 13) % COLS)
+    span = f"{column}{first_row + 1}:{column}{last_row + 1}"
+    if kind == 1:
+        return f"=SUM({span})"
+    if kind == 2:
+        return f"=MAX({span})-MIN({span})"
+    return f"=({cell_name(pick(low, row, r // 5))}-{cell_name(pick(low, row, r // 211))})*{r % 5 + 2}+7"
+
+
+def main():
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            run(n)
+        case Result.Err(_):
+            print("usage: spreadsheet <rows>")
+
+
+def run(n: int64):
+    cells = n * COLS
+    mut rng = Rng(state=79)
+    mut values: list[int64] = []
+    mut is_formula: list[bool] = []
+    mut formulas: list[Expr] = []
+    mut dependents: list[list[int64]] = []
+    mut indegree: list[int64] = []
+    for _ in range(cells):
+        values.append(0)
+        is_formula.append(false)
+        formulas.append(Expr.Num(value=0))
+        dependents.append(list[int64]())
+        indegree.append(0)
+    mut formula_count = 0
+    mut formula_bytes = 0
+    for row in range(n):
+        for col in range(COLS):
+            cell = row * COLS + col
+            r = rng.next()
+            if row == 0 or r % 2 == 0:
+                values[cell] = r % 1000
+                continue
+            text = make_formula(rng, row)
+            formula_bytes += text.byte_len()
+            match text.strip_prefix("="):
+                case str as body:
+                    mut parser = tokenize(body)
+                    formulas[cell] = parser.expr()
+                    is_formula[cell] = true
+                    formula_count += 1
+                    for reference in parser.refs:
+                        dependents[reference].append(cell)
+                        indegree[cell] += 1
+                case None:
+                    pass
+    mut order: list[int64] = []
+    for cell in range(cells):
+        if indegree[cell] == 0:
+            order.append(cell)
+    mut head = 0
+    while head < order.len():
+        cell = order[head]
+        head += 1
+        for dependent in dependents[cell]:
+            indegree[dependent] -= 1
+            if indegree[dependent] == 0:
+                order.append(dependent)
+    for cell in order:
+        if is_formula[cell]:
+            result = evaluate(formulas[cell], values)
+            values[cell] = result
+    mut first_total = 0
+    for value in values:
+        first_total = (first_total + value) % MOD
+
+    mut dirty: list[int64] = []
+    for _ in range(cells):
+        dirty.append(-1)
+    mut recomputed = 0
+    edits = n // 4
+    for edit in range(edits):
+        mut target = rng.next() % cells
+        while is_formula[target]:
+            target = (target + 1) % cells
+        values[target] = rng.next() % 1000
+        mut stack: list[int64] = [target]
+        dirty[target] = edit
+        while stack.len() > 0:
+            cell = stack.pop()
+            for dependent in dependents[cell]:
+                if dirty[dependent] != edit:
+                    dirty[dependent] = edit
+                    stack.append(dependent)
+        for cell in order:
+            if dirty[cell] == edit and is_formula[cell]:
+                result = evaluate(formulas[cell], values)
+                values[cell] = result
+                recomputed += 1
+    mut total = 0
+    mut checksum = 0
+    for value in values:
+        total = (total + value) % MOD
+        checksum = (checksum * 31 + value) % 1000000007
+    print(
+        f"spreadsheet cells={cells} formulas={formula_count} formula_bytes={formula_bytes} ordered={order.len()} first_total={first_total} edits={edits} recomputed={recomputed} total={total} checksum={checksum}"
+    )

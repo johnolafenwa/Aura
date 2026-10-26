@@ -1,0 +1,125 @@
+# Caching: a least-recently-used cache with string keys.
+#
+# Runs N cache-aside lookups against an LRU cache of 2,000 entries. The cache is a
+# dictionary from key to slot plus a doubly linked list kept in parallel lists,
+# so a hit moves its slot to the front and a full cache evicts from the back.
+# Keys come from a skewed mix: a small hot set and a long tail. Reports hits,
+# misses, evictions, a checksum of the values read, and the most recent keys.
+import sys
+
+CAPACITY = 2000
+HEAD = 0
+TAIL = 1
+MOD = 1000000007
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+class LruCache:
+    capacity: int64
+    index: dict[str, int64]
+    keys: list[str]
+    values: list[int64]
+    prev: list[int64]
+    next: list[int64]
+    evictions: int64
+
+    def unlink(mut self, slot: int64):
+        before = self.prev[slot]
+        after = self.next[slot]
+        self.next[before] = after
+        self.prev[after] = before
+
+    def push_front(mut self, slot: int64):
+        first = self.next[HEAD]
+        self.prev[slot] = HEAD
+        self.next[slot] = first
+        self.prev[first] = slot
+        self.next[HEAD] = slot
+
+    def get(mut self, key: str) -> int64:
+        match self.index.get(key):
+            case Lookup.Found(slot):
+                self.unlink(slot)
+                self.push_front(slot)
+                return self.values[slot]
+            case Lookup.Missing:
+                return -1
+
+    def put(mut self, key: str, value: int64):
+        match self.index.get(key):
+            case Lookup.Found(slot):
+                self.values[slot] = value
+                self.unlink(slot)
+                self.push_front(slot)
+                return
+            case Lookup.Missing:
+                pass
+        mut slot = 0
+        if self.index.len() == self.capacity:
+            slot = self.prev[TAIL]
+            self.unlink(slot)
+            self.index.remove(self.keys[slot])
+            self.evictions += 1
+            self.keys[slot] = key.clone()
+            self.values[slot] = value
+        else:
+            slot = self.keys.len()
+            self.keys.append(key.clone())
+            self.values.append(value)
+            self.prev.append(HEAD)
+            self.next.append(TAIL)
+        self.index[key.clone()] = slot
+        self.push_front(slot)
+
+
+def main():
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            run(n)
+        case Result.Err(_):
+            print("usage: lru_cache <operations>")
+
+
+def run(n: int64):
+    mut rng = Rng(state=53)
+    mut cache = LruCache(
+        capacity=CAPACITY,
+        index={},
+        keys=["", ""],
+        values=[0, 0],
+        prev=[HEAD, HEAD],
+        next=[TAIL, TAIL],
+        evictions=0,
+    )
+    mut hits = 0
+    mut misses = 0
+    mut checksum = 0
+    for _ in range(n):
+        r = rng.next()
+        mut k = (r // 4) % 1500
+        if r % 4 == 0:
+            k = (r // 4) % 20000
+        key = f"user:{k}"
+        mut value = cache.get(key)
+        if value < 0:
+            misses += 1
+            value = k * 7 + key.byte_len()
+            cache.put(key, value)
+        else:
+            hits += 1
+        checksum = (checksum * 31 + value) % MOD
+    mut recent: list[str] = []
+    mut slot = cache.next[HEAD]
+    while slot != TAIL and recent.len() < 5:
+        recent.append(cache.keys[slot].clone())
+        slot = cache.next[slot]
+    print(
+        f"lru_cache ops={n} hits={hits} misses={misses} evictions={cache.evictions} size={cache.index.len()} checksum={checksum} recent={",".join(recent)}"
+    )

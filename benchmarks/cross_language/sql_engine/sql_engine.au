@@ -1,0 +1,463 @@
+# Databases: a small SQL engine with a tokenizer, parser, planner, and executor.
+#
+# Runs N INSERT statements into a users table, then N more statements mixing
+# point SELECTs, UPDATEs and DELETEs by id (planned onto a hash index), new
+# INSERTs, filtered range scans, and GROUP BY aggregates. Every statement arrives
+# as SQL text, so each one is tokenized, parsed into a statement value, and
+# executed against row storage with an id index. Reports the rows affected and
+# a checksum of everything the SELECTs returned.
+import sys
+
+WORD = 0
+NUMBER = 1
+TEXT = 2
+SYMBOL = 3
+END = 4
+EQ = 0
+NE = 1
+LT = 2
+LE = 3
+GT = 4
+COLUMN = 0
+COUNT = 1
+SUM = 2
+MAX = 3
+MOD = 1000000007
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+enum Value:
+    Int(value: int64)
+    Text(value: str)
+
+
+copy class Item:
+    kind: int64
+    column: int64
+
+
+class Condition:
+    column: int64
+    op: int64
+    value: Value
+
+
+enum Statement:
+    Insert(values: list[Value])
+    Select(items: list[Item], conditions: list[Condition], group: int64)
+    Update(target: int64, source: int64, delta: Value, conditions: list[Condition])
+    Delete(conditions: list[Condition])
+
+
+def is_digit(c: uint8) -> bool:
+    return c >= 48 and c <= 57
+
+
+def is_word_byte(c: uint8) -> bool:
+    return (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95
+
+
+def text_of(data: list[uint8], start: int64, end: int64) -> str:
+    match own str.from_bytes(data[start:end]):
+        case Result.Ok(text):
+            return text
+        case Result.Err(_):
+            return ""
+
+
+def op_code(text: str) -> int64:
+    if text == "=":
+        return 0
+    if text == "!=":
+        return 1
+    if text == "<":
+        return 2
+    if text == "<=":
+        return 3
+    if text == ">":
+        return 4
+    return 5
+
+
+class Parser:
+    kinds: list[int64]
+    texts: list[str]
+    numbers: list[int64]
+    pos: int64
+
+    def word(mut self) -> str:
+        self.pos += 1
+        return self.texts[self.pos - 1].clone()
+
+    def is_word(self, text: str) -> bool:
+        return self.kinds[self.pos] == WORD and self.texts[self.pos] == text
+
+    def column(mut self, columns: dict[str, int64]) -> int64:
+        name = self.word()
+        return columns[name]
+
+    def literal(mut self) -> Value:
+        self.pos += 1
+        if self.kinds[self.pos - 1] == NUMBER:
+            return Value.Int(value=self.numbers[self.pos - 1])
+        return Value.Text(value=self.texts[self.pos - 1].clone())
+
+    def conditions(mut self, columns: dict[str, int64]) -> list[Condition]:
+        mut result: list[Condition] = []
+        if self.is_word("WHERE"):
+            self.pos += 1
+            while true:
+                column = self.column(columns)
+                op = op_code(self.word())
+                value = self.literal()
+                result.append(Condition(column=column, op=op, value=value))
+                if self.is_word("AND"):
+                    self.pos += 1
+                else:
+                    break
+        return result
+
+    def statement(mut self, columns: dict[str, int64]) -> Statement:
+        verb = self.word()
+        if verb == "INSERT":
+            self.pos += 4
+            mut values: list[Value] = [self.literal()]
+            while self.texts[self.pos] == ",":
+                self.pos += 1
+                values.append(self.literal())
+            return Statement.Insert(values=values)
+        if verb == "SELECT":
+            mut items: list[Item] = []
+            while true:
+                name = self.word()
+                if name == "COUNT":
+                    self.pos += 3
+                    items.append(Item(kind=COUNT, column=0))
+                elif name == "SUM" or name == "MAX":
+                    self.pos += 1
+                    column = self.column(columns)
+                    self.pos += 1
+                    mut kind = MAX
+                    if name == "SUM":
+                        kind = SUM
+                    items.append(Item(kind=kind, column=column))
+                else:
+                    items.append(Item(kind=COLUMN, column=columns[name]))
+                if self.texts[self.pos] == ",":
+                    self.pos += 1
+                else:
+                    break
+            self.pos += 2
+            conditions = self.conditions(columns)
+            mut group = -1
+            if self.is_word("GROUP"):
+                self.pos += 2
+                group = self.column(columns)
+            return Statement.Select(items=items, conditions=conditions, group=group)
+        if verb == "UPDATE":
+            self.pos += 2
+            target = self.column(columns)
+            self.pos += 1
+            mut source = -1
+            if self.kinds[self.pos] == WORD:
+                source = self.column(columns)
+                self.pos += 1
+            delta = self.literal()
+            conditions = self.conditions(columns)
+            return Statement.Update(
+                target=target,
+                source=source,
+                delta=delta,
+                conditions=conditions,
+            )
+        self.pos += 2
+        return Statement.Delete(conditions=self.conditions(columns))
+
+
+def tokenize(sql: str) -> Parser:
+    data = sql.to_bytes()
+    mut parser = Parser(kinds=[], texts=[], numbers=[], pos=0)
+    n = data.len()
+    mut i = 0
+    while i < n:
+        c = data[i]
+        if c == 32:
+            i += 1
+        elif is_digit(c):
+            mut value = 0
+            while i < n and is_digit(data[i]):
+                value = value * 10 + (data[i] as int64) - 48
+                i += 1
+            parser.kinds.append(NUMBER)
+            parser.texts.append("")
+            parser.numbers.append(value)
+        elif c == 39:
+            start = i + 1
+            i = start
+            while data[i] != 39:
+                i += 1
+            parser.kinds.append(TEXT)
+            parser.texts.append(text_of(data, start, i))
+            parser.numbers.append(0)
+            i += 1
+        elif is_word_byte(c):
+            start = i
+            while i < n and is_word_byte(data[i]):
+                i += 1
+            parser.kinds.append(WORD)
+            parser.texts.append(text_of(data, start, i))
+            parser.numbers.append(0)
+        else:
+            parser.kinds.append(SYMBOL)
+            if (c == 60 or c == 62 or c == 33) and i + 1 < n and data[i + 1] == 61:
+                parser.texts.append(text_of(data, i, i + 2))
+                i += 2
+            else:
+                parser.texts.append(text_of(data, i, i + 1))
+                i += 1
+            parser.numbers.append(0)
+    parser.kinds.append(END)
+    parser.texts.append("")
+    parser.numbers.append(0)
+    return parser
+
+
+def compare(cell: Value, op: int64, value: Value) -> bool:
+    match cell:
+        case Value.Int(a):
+            match value:
+                case Value.Int(b):
+                    if op == EQ:
+                        return a == b
+                    if op == NE:
+                        return a != b
+                    if op == LT:
+                        return a < b
+                    if op == LE:
+                        return a <= b
+                    if op == GT:
+                        return a > b
+                    return a >= b
+                case Value.Text(_):
+                    return false
+        case Value.Text(a):
+            match value:
+                case Value.Text(b):
+                    if op == EQ:
+                        return a == b
+                    if op == NE:
+                        return a != b
+                    return false
+                case Value.Int(_):
+                    return false
+
+
+def matches(row: list[Value], conditions: list[Condition]) -> bool:
+    for condition in conditions:
+        if not compare(row[condition.column], condition.op, condition.value):
+            return false
+    return true
+
+
+def value_hash(value: Value) -> int64:
+    match value:
+        case Value.Int(v):
+            return v
+        case Value.Text(s):
+            return s.byte_len() * 131 + (s.to_bytes()[0] as int64)
+
+
+def int_of(value: Value) -> int64:
+    match value:
+        case Value.Int(v):
+            return v
+        case Value.Text(_):
+            return 0
+
+
+class Engine:
+    columns: dict[str, int64]
+    rows: list[list[Value]]
+    live: list[bool]
+    index: dict[int64, int64]
+    inserted: int64
+    selected: int64
+    groups: int64
+    updated: int64
+    deleted: int64
+    scans: int64
+    checksum: int64
+
+    # The planner: an equality on id uses the index, anything else scans.
+    def candidates(mut self, conditions: list[Condition]) -> list[int64]:
+        for condition in conditions:
+            if condition.column == 0 and condition.op == EQ:
+                match self.index.get(int_of(condition.value)):
+                    case Lookup.Found(slot):
+                        return [slot]
+                    case Lookup.Missing:
+                        return []
+        self.scans += 1
+        mut slots: list[int64] = []
+        for slot in range(self.rows.len()):
+            if self.live[slot]:
+                slots.append(slot)
+        return slots
+
+    def execute(mut self, sql: str):
+        mut parser = tokenize(sql)
+        match own parser.statement(self.columns):
+            case Statement.Insert(values):
+                self.index[int_of(values[0])] = self.rows.len()
+                self.rows.append(values)
+                self.live.append(true)
+                self.inserted += 1
+            case Statement.Select(items, conditions, group):
+                if group < 0:
+                    for slot in self.candidates(conditions):
+                        view row = self.rows[slot]
+                        if matches(row, conditions):
+                            self.selected += 1
+                            for item in items:
+                                self.checksum = (
+                                    self.checksum * 31 + value_hash(row[item.column])
+                                ) % MOD
+                    return
+                mut keys: list[str] = []
+                mut totals: list[list[int64]] = []
+                mut positions: dict[str, int64] = {}
+                for slot in self.candidates(conditions):
+                    view row = self.rows[slot]
+                    if not matches(row, conditions):
+                        continue
+                    mut name = ""
+                    match row[group]:
+                        case Value.Text(s):
+                            name = s.clone()
+                        case Value.Int(v):
+                            name = f"{v}"
+                    mut position = 0
+                    match positions.get(name):
+                        case Lookup.Found(found):
+                            position = found
+                        case Lookup.Missing:
+                            position = totals.len()
+                            positions[name.clone()] = position
+                            keys.append(name.clone())
+                            mut state: list[int64] = []
+                            for _ in range(items.len()):
+                                state.append(0)
+                            totals.append(state)
+                    for i in range(items.len()):
+                        item = items[i]
+                        if item.kind == COUNT:
+                            totals[position][i] += 1
+                        elif item.kind == SUM:
+                            totals[position][i] += int_of(row[item.column])
+                        elif item.kind == MAX:
+                            best = max(totals[position][i], int_of(row[item.column]))
+                            totals[position][i] = best
+                for k in range(keys.len()):
+                    self.groups += 1
+                    key_hash = value_hash(Value.Text(value=keys[k].clone()))
+                    for value in totals[k]:
+                        self.checksum = (self.checksum + key_hash * value) % MOD
+            case Statement.Update(target, source, delta, conditions):
+                for slot in self.candidates(conditions):
+                    # Tested before the `if`: a shared read in the condition
+                    # stays loaned through the body, and the write below then
+                    # fails MIR loan validation although `aura check` passes.
+                    found = matches(self.rows[slot], conditions)
+                    if found:
+                        if source >= 0:
+                            updated = int_of(self.rows[slot][source]) + int_of(delta)
+                            self.rows[slot][target] = Value.Int(value=updated)
+                        else:
+                            match delta:
+                                case Value.Int(v):
+                                    self.rows[slot][target] = Value.Int(value=v)
+                                case Value.Text(s):
+                                    self.rows[slot][target] = Value.Text(
+                                        value=s.clone()
+                                    )
+                        self.updated += 1
+            case Statement.Delete(conditions):
+                for slot in self.candidates(conditions):
+                    if matches(self.rows[slot], conditions):
+                        self.live[slot] = false
+                        id = int_of(self.rows[slot][0])
+                        self.index.remove(id)
+                        self.deleted += 1
+
+
+def insert_sql(rng: mut Rng, row_id: int64) -> str:
+    syllables = ["ka", "lo", "mi", "ra", "to", "ne", "su", "vi"]
+    cities = ["paris", "lagos", "tokyo", "lima", "oslo", "cairo", "quito", "perth"]
+    r = rng.next()
+    view first = syllables[r % 8]
+    view second = syllables[(r // 8) % 8]
+    view third = syllables[(r // 64) % 8]
+    view city = cities[(r // 30720) % 8]
+    return f"INSERT INTO users VALUES ({row_id}, '{first}{second}{third}', {18 + (r // 512) % 60}, '{city}')"
+
+
+def main():
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            run(n)
+        case Result.Err(_):
+            print("usage: sql_engine <rows>")
+
+
+def run(n: int64):
+    cities = ["paris", "lagos", "tokyo", "lima", "oslo", "cairo", "quito", "perth"]
+    mut rng = Rng(state=89)
+    mut engine = Engine(
+        columns={"id": 0, "name": 1, "age": 2, "city": 3},
+        rows=[],
+        live=[],
+        index={},
+        inserted=0,
+        selected=0,
+        groups=0,
+        updated=0,
+        deleted=0,
+        scans=0,
+        checksum=0,
+    )
+    for row_id in range(n):
+        engine.execute(insert_sql(rng, row_id))
+    mut next_id = n
+    for _ in range(n):
+        r = rng.next()
+        kind = r % 1000
+        target = (r // 1000) % next_id
+        if kind < 500:
+            engine.execute(f"SELECT name, age, city FROM users WHERE id = {target}")
+        elif kind < 700:
+            engine.execute(f"UPDATE users SET age = age + 1 WHERE id = {target}")
+        elif kind < 800:
+            engine.execute(f"DELETE FROM users WHERE id = {target}")
+        elif kind < 993:
+            engine.execute(insert_sql(rng, next_id))
+            next_id += 1
+        elif kind < 998:
+            low = 18 + (r // 1000) % 60
+            view city = cities[(r // 7) % 8]
+            engine.execute(
+                f"SELECT id, name FROM users WHERE age >= {low} AND age < {low + 3} AND city = '{city}'"
+            )
+        else:
+            engine.execute(
+                "SELECT city, COUNT(*), SUM(age), MAX(age) FROM users WHERE age > 20 GROUP BY city"
+            )
+    print(
+        f"sql_engine statements={2 * n} inserted={engine.inserted} selected={engine.selected} groups={engine.groups} updated={engine.updated} deleted={engine.deleted} scans={engine.scans} live={engine.index.len()} checksum={engine.checksum}"
+    )

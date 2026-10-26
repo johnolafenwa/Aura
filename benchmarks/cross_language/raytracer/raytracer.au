@@ -1,0 +1,157 @@
+# Graphics: a small ray tracer with shadows and reflections.
+#
+# Renders an N x N image of four spheres (one large one as the ground) lit by a
+# point light, with Lambert shading, hard shadows, and up to two reflection
+# bounces. Vectors are a small value class. Each pixel becomes three bytes, as in
+# a PPM file, and the program reports the rays cast, the hits, and a checksum of
+# the bytes. The float operations run in the same order in every language, so
+# the bytes match exactly.
+import sys
+
+EPSILON = 0.0001
+AMBIENT = 0.1
+
+copy class Vec3:
+    x: float64
+    y: float64
+    z: float64
+
+    def add(self, other: Vec3) -> Vec3:
+        return Vec3(x=self.x + other.x, y=self.y + other.y, z=self.z + other.z)
+
+    def sub(self, other: Vec3) -> Vec3:
+        return Vec3(x=self.x - other.x, y=self.y - other.y, z=self.z - other.z)
+
+    def scale(self, k: float64) -> Vec3:
+        return Vec3(x=self.x * k, y=self.y * k, z=self.z * k)
+
+    def dot(self, other: Vec3) -> float64:
+        return self.x * other.x + self.y * other.y + self.z * other.z
+
+    def normalized(self) -> Vec3:
+        return self.scale(1.0 / sqrt(self.dot(self)))
+
+copy class Sphere:
+    center: Vec3
+    radius: float64
+    color: Vec3
+    reflect: float64
+
+
+class Tracer:
+    spheres: list[Sphere]
+    light: Vec3
+    rays: int64
+    hits: int64
+
+    def intersect(self, origin: Vec3, direction: Vec3, sphere: Sphere) -> float64:
+        oc = origin.sub(sphere.center)
+        b = oc.dot(direction)
+        c = oc.dot(oc) - sphere.radius * sphere.radius
+        disc = b * b - c
+        if disc <= 0.0:
+            return -1.0
+        s = sqrt(disc)
+        mut t = -b - s
+        if t < EPSILON:
+            t = -b + s
+        if t < EPSILON:
+            return -1.0
+        return t
+
+    def trace(mut self, origin: Vec3, direction: Vec3, depth: int64) -> Vec3:
+        self.rays += 1
+        mut nearest = -1.0
+        mut hit = -1
+        for i in range(self.spheres.len()):
+            t = self.intersect(origin, direction, self.spheres[i])
+            if t > 0.0 and (hit < 0 or t < nearest):
+                nearest = t
+                hit = i
+        if hit < 0:
+            return Vec3(x=0.6, y=0.8, z=1.0).scale(0.5 + 0.5 * direction.y)
+        self.hits += 1
+        sphere = self.spheres[hit]
+        point = origin.add(direction.scale(nearest))
+        normal = point.sub(sphere.center).normalized()
+        to_light = self.light.sub(point)
+        distance = sqrt(to_light.dot(to_light))
+        light_dir = to_light.scale(1.0 / distance)
+        start = point.add(normal.scale(EPSILON))
+        mut shadowed = false
+        for other in self.spheres:
+            t = self.intersect(start, light_dir, other)
+            if t > 0.0 and t < distance:
+                shadowed = true
+                break
+        mut brightness = AMBIENT
+        if not shadowed:
+            brightness += max(0.0, normal.dot(light_dir))
+        mut color = sphere.color.scale(brightness)
+        if depth < 2 and sphere.reflect > 0.0:
+            reflected = direction.sub(normal.scale(2.0 * direction.dot(normal)))
+            bounce = self.trace(start, reflected, depth + 1)
+            color = color.scale(1.0 - sphere.reflect).add(bounce.scale(sphere.reflect))
+        return color
+
+
+def to_byte(value: float64) -> int64:
+    return (min(1.0, max(0.0, value)) * 255.0) as int64
+
+
+def main():
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            run(n)
+        case Result.Err(_):
+            print("usage: raytracer <size>")
+
+
+def run(n: int64):
+    mut tracer = Tracer(
+        spheres=[
+            Sphere(
+                center=Vec3(x=0.0, y=-1.0, z=-3.0),
+                radius=1.0,
+                color=Vec3(x=1.0, y=0.2, z=0.2),
+                reflect=0.3,
+            ),
+            Sphere(
+                center=Vec3(x=2.0, y=0.0, z=-4.0),
+                radius=1.0,
+                color=Vec3(x=0.2, y=0.2, z=1.0),
+                reflect=0.5,
+            ),
+            Sphere(
+                center=Vec3(x=-2.0, y=0.0, z=-4.0),
+                radius=1.0,
+                color=Vec3(x=0.2, y=1.0, z=0.2),
+                reflect=0.1,
+            ),
+            Sphere(
+                center=Vec3(x=0.0, y=-5001.0, z=0.0),
+                radius=5000.0,
+                color=Vec3(x=1.0, y=1.0, z=0.8),
+                reflect=0.2,
+            ),
+        ],
+        light=Vec3(x=5.0, y=5.0, z=0.0),
+        rays=0,
+        hits=0,
+    )
+    origin = Vec3(x=0.0, y=0.5, z=1.0)
+    size = n as float64
+    mut checksum = 0
+    mut total = 0
+    for y in range(n):
+        for x in range(n):
+            px = 2.0 * ((x as float64) + 0.5) / size - 1.0
+            py = 1.0 - 2.0 * ((y as float64) + 0.5) / size
+            direction = Vec3(x=px, y=py, z=-1.5).normalized()
+            color = tracer.trace(origin, direction, 0)
+            for value in [to_byte(color.x), to_byte(color.y), to_byte(color.z)]:
+                checksum = (checksum * 131 + value) % 1000000007
+                total += value
+    print(
+        f"raytracer size={n} rays={tracer.rays} hits={tracer.hits} mean={total // (n * n * 3)} checksum={checksum}"
+    )

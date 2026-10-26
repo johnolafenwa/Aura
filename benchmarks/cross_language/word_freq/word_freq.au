@@ -1,0 +1,99 @@
+# Text processing: tokenize a generated corpus and count words and bigrams.
+#
+# Builds a corpus of N words with mixed case and punctuation, then splits it
+# into lines and tokens, normalizes each token, counts words and adjacent word
+# pairs, and ranks the ten most frequent words.
+import sys
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+def syllables() -> list[str]:
+    return ["ka", "lo", "mi", "ra", "zu", "te", "no", "bi", "sa", "de", "gu", "pe"]
+
+
+def build_corpus(rng: mut Rng, n: int64) -> str:
+    pool = syllables()
+    vocabulary_size = 2000
+    mut vocabulary: list[str] = []
+    for _ in range(vocabulary_size):
+        r = rng.next()
+        mut parts: list[str] = []
+        for k in range(1 + r % 4):
+            parts.append(pool[(r // (k * 12 + 4)) % 12].clone())
+        vocabulary.append("".join(parts))
+    mut lines: list[str] = []
+    mut line: list[str] = []
+    for i in range(n):
+        a = rng.next() % vocabulary_size
+        b = rng.next() % vocabulary_size
+        r = rng.next()
+        mut word = vocabulary[a * b // vocabulary_size].clone()
+        if r % 7 == 0:
+            word = word.to_upper()
+        if r % 11 == 0:
+            word = word + ","
+        elif r % 13 == 0:
+            word = word + "."
+        line.append(word)
+        if i % 12 == 11:
+            lines.append(" ".join(line))
+            line.clear()
+    if line.len() > 0:
+        lines.append(" ".join(line))
+    return "\n".join(lines) + "\n"
+
+
+def bump(counts: mut dict[str, int64], key: own str):
+    match mut counts.lookup(key):
+        case Lookup.Found(count):
+            count += 1
+        case Lookup.Missing:
+            counts[key] = 1
+
+
+def negative_count(entry: (str, int64)) -> int64:
+    return -entry[1]
+
+
+def main():
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            mut rng = Rng(state=3)
+            corpus = build_corpus(rng, n)
+            mut counts: dict[str, int64] = {}
+            mut bigrams: dict[str, int64] = {}
+            mut tokens = 0
+            for line in corpus.lines():
+                mut previous: str | None = None
+                for token in line.split_whitespace():
+                    mut word = token.to_lower()
+                    if word.ends_with(",") or word.ends_with("."):
+                        word = word[:-1]
+                    tokens += 1
+                    bump(counts, word.clone())
+                    match previous:
+                        case str as before:
+                            bump(bigrams, before + " " + word)
+                        case None:
+                            pass
+                    previous = word
+            mut ranked = counts.items()
+            ranked.sort(key=negative_count)
+            mut top: list[str] = []
+            for word, count in ranked[0:10]:
+                top.append(f"{word}:{count}")
+            mut weight = 0
+            for word, count in counts.items():
+                weight += count * word.len()
+            print(
+                f"word_freq tokens={tokens} bytes={corpus.byte_len()} distinct={counts.len()} bigrams={bigrams.len()} weight={weight} top={" ".join(top)}"
+            )
+        case Result.Err(_):
+            print("usage: word_freq <words>")

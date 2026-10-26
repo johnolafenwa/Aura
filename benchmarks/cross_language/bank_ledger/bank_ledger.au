@@ -1,0 +1,175 @@
+# Business logic: a bank ledger with typed errors and a double-entry journal.
+#
+# Applies N operations (transfers, deposits, withdrawals) to 1,000 named
+# accounts. Each operation can fail: an unknown account, a frozen account,
+# insufficient funds, or an amount over the limit. Python raises exceptions, Rust
+# and Aura return typed errors. Every successful posting goes to a journal, and
+# interest is credited to every account every 10,000 operations. Reports the
+# outcome counts, the money supply, and a journal checksum.
+import sys
+
+ACCOUNTS = 1000
+LIMIT = 5000
+MOD = 1000000007
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+enum LedgerError:
+    UnknownAccount(name: str)
+    AccountFrozen(name: str)
+    InsufficientFunds(needed: int64)
+    LimitExceeded(amount: int64)
+
+
+class Bank:
+    index: dict[str, int64]
+    balances: list[int64]
+    frozen: list[bool]
+    journal_accounts: list[int64]
+    journal_deltas: list[int64]
+
+    def account(self, name: str) -> Result[int64, LedgerError]:
+        match self.index.get(name):
+            case Lookup.Found(slot):
+                if self.frozen[slot]:
+                    return Result.Err(LedgerError.AccountFrozen(name=name.clone()))
+                return Result.Ok(slot)
+            case Lookup.Missing:
+                return Result.Err(LedgerError.UnknownAccount(name=name.clone()))
+
+    def post(mut self, slot: int64, delta: int64):
+        self.balances[slot] += delta
+        self.journal_accounts.append(slot)
+        self.journal_deltas.append(delta)
+
+    def transfer(
+        mut self,
+        source: str,
+        target: str,
+        amount: int64,
+    ) -> Result[None, LedgerError]:
+        if amount > LIMIT:
+            return Result.Err(LedgerError.LimitExceeded(amount=amount))
+        s = try self.account(source)
+        t = try self.account(target)
+        if self.balances[s] < amount:
+            return Result.Err(
+                LedgerError.InsufficientFunds(needed=amount - self.balances[s])
+            )
+        self.post(s, -amount)
+        self.post(t, amount)
+        return Result.Ok(None)
+
+    def deposit(mut self, target: str, amount: int64) -> Result[None, LedgerError]:
+        if amount > LIMIT:
+            return Result.Err(LedgerError.LimitExceeded(amount=amount))
+        t = try self.account(target)
+        self.post(t, amount)
+        return Result.Ok(None)
+
+    def withdraw(mut self, source: str, amount: int64) -> Result[None, LedgerError]:
+        if amount > LIMIT:
+            return Result.Err(LedgerError.LimitExceeded(amount=amount))
+        s = try self.account(source)
+        if self.balances[s] < amount:
+            return Result.Err(
+                LedgerError.InsufficientFunds(needed=amount - self.balances[s])
+            )
+        self.post(s, -amount)
+        return Result.Ok(None)
+
+    def apply_interest(mut self) -> int64:
+        mut credited = 0
+        for slot in range(ACCOUNTS):
+            if not self.frozen[slot] and self.balances[slot] > 0:
+                interest = self.balances[slot] * 5 // 10000
+                if interest > 0:
+                    self.post(slot, interest)
+                    credited += interest
+        return credited
+
+
+def new_bank() -> Bank:
+    mut bank = Bank(
+        index={},
+        balances=[],
+        frozen=[],
+        journal_accounts=[],
+        journal_deltas=[],
+    )
+    for i in range(ACCOUNTS):
+        bank.index[f"ACC-{i}"] = i
+        bank.balances.append(1000 + i % 500)
+        bank.frozen.append(i % 97 == 0)
+    return bank
+
+
+def main():
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            run(n)
+        case Result.Err(_):
+            print("usage: bank_ledger <operations>")
+
+
+def run(n: int64):
+    mut rng = Rng(state=59)
+    mut bank = new_bank()
+    opening = sum(bank.balances)
+    mut ok = 0
+    mut unknown = 0
+    mut frozen = 0
+    mut insufficient = 0
+    mut over_limit = 0
+    mut shortfall = 0
+    mut deposited = 0
+    mut withdrawn = 0
+    mut interest = 0
+    for step in range(n):
+        r = rng.next()
+        kind = r % 10
+        source = f"ACC-{(r // 10) % 1100}"
+        target = f"ACC-{(r // 11000) % ACCOUNTS}"
+        amount = 1 + (r // 7) % 6000
+        mut outcome: Result[None, LedgerError] = Result.Ok(None)
+        if kind < 6:
+            outcome = bank.transfer(source, target, amount)
+        elif kind < 8:
+            outcome = bank.deposit(source, amount)
+        else:
+            outcome = bank.withdraw(source, amount)
+        match outcome:
+            case Result.Ok(_):
+                ok += 1
+                if kind >= 8:
+                    withdrawn += amount
+                elif kind >= 6:
+                    deposited += amount
+            case Result.Err(LedgerError.UnknownAccount(_)):
+                unknown += 1
+            case Result.Err(LedgerError.AccountFrozen(_)):
+                frozen += 1
+            case Result.Err(LedgerError.InsufficientFunds(needed)):
+                insufficient += 1
+                shortfall += needed
+            case Result.Err(LedgerError.LimitExceeded(_)):
+                over_limit += 1
+        if step % 10000 == 9999:
+            interest += bank.apply_interest()
+    supply = sum(bank.balances)
+    balanced = supply == opening + deposited - withdrawn + interest
+    mut checksum = 0
+    for i in range(bank.journal_deltas.len()):
+        checksum = (
+            checksum * 31 + bank.journal_accounts[i] * 7 + bank.journal_deltas[i]
+        ) % MOD
+    print(
+        f"bank_ledger ops={n} ok={ok} unknown={unknown} frozen={frozen} insufficient={insufficient} over_limit={over_limit} shortfall={shortfall} supply={supply} balanced={balanced} entries={bank.journal_deltas.len()} checksum={checksum}"
+    )

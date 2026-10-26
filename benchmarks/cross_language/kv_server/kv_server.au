@@ -1,0 +1,160 @@
+# Key-value server: a line protocol over loopback TCP.
+#
+# One server task owns the store and serves client sessions one after another.
+# The client opens a session per 500 commands and sends SET, GET, DEL, and INCR
+# requests, waiting for each reply before sending the next request.
+import io
+import net
+import sys
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+def execute(store: mut dict[str, str], line: str) -> str:
+    parts = line.split(" ")
+    if parts.len() < 2:
+        return "ERR unknown command"
+    command = parts[0].clone()
+    key = parts[1].clone()
+    if command == "SET" and parts.len() == 3:
+        store[key] = parts[2].clone()
+        return "OK"
+    if command == "GET" and parts.len() == 2:
+        match store.lookup(key):
+            case Lookup.Found(value):
+                return "VALUE " + value
+            case Lookup.Missing:
+                return "NIL"
+    if command == "DEL" and parts.len() == 2:
+        match store.remove(key):
+            case Lookup.Found(_):
+                return "DELETED 1"
+            case Lookup.Missing:
+                return "DELETED 0"
+    if command == "INCR" and parts.len() == 2:
+        mut current = 0
+        match store.lookup(key):
+            case Lookup.Found(value):
+                match parse_int64(value):
+                    case Result.Ok(number):
+                        current = number
+                    case Result.Err(_):
+                        return "ERR not an integer"
+            case Lookup.Missing:
+                pass
+        next = current + 1
+        store[key] = f"{next}"
+        return f"INT {next}"
+    return "ERR unknown command"
+
+
+def serve(addresses: Queue[str], sessions: int64) -> Result[int64, io.Error]:
+    mut store: dict[str, str] = {}
+    mut served = 0
+    with listener = try net.listen("127.0.0.1:0"):
+        addresses.put(try listener.local_addr())
+        for _ in range(sessions):
+            with conn = try listener.accept():
+                while true:
+                    match own try conn.read_line():
+                        case str as line:
+                            if line == "QUIT":
+                                try conn.write_all("BYE\n")
+                                break
+                            try conn.write_all(execute(store, line) + "\n")
+                            served += 1
+                        case None:
+                            break
+    return Result.Ok(served)
+
+
+def receive_address(addresses: Queue[str]) -> Result[str, io.Error]:
+    match own addresses.get(timeout=5s):
+        case QueueReceive.Item(address):
+            return Result.Ok(address)
+        case _:
+            return Result.Err(io.Error.TimedOut)
+
+
+def run(n: int64) -> Result[str, io.Error]:
+    commands_per_session = 500
+    sessions = n // commands_per_session
+    mut rng = Rng(state=7)
+    mut hits = 0
+    mut nils = 0
+    mut ints = 0
+    mut checksum = 0
+    with TaskGroup() as group:
+        addresses = Queue[str](capacity=1)
+        server = group.start(serve, addresses, sessions)
+        address = try receive_address(addresses)
+        for _ in range(sessions):
+            with conn = try net.connect(address):
+                for _command in range(commands_per_session):
+                    r = rng.next()
+                    op = r % 10
+                    key = (r // 10) % 1000
+                    mut request = ""
+                    if op < 4:
+                        request = f"GET key-{key}\n"
+                    elif op < 7:
+                        request = f"SET key-{key} v{r // 10000}\n"
+                    elif op == 7:
+                        request = f"DEL key-{key}\n"
+                    else:
+                        request = f"INCR counter-{key % 50}\n"
+                    try conn.write_all(request)
+                    match own try conn.read_line():
+                        case str as reply:
+                            checksum += reply.byte_len()
+                            if reply.starts_with("VALUE "):
+                                hits += 1
+                            elif reply == "NIL":
+                                nils += 1
+                            else:
+                                match reply.strip_prefix("INT "):
+                                    case str as digits:
+                                        match parse_int64(digits):
+                                            case Result.Ok(value):
+                                                ints += value
+                                            case Result.Err(_):
+                                                pass
+                                    case None:
+                                        pass
+                        case None:
+                            return Result.Err(io.Error.UnexpectedEof)
+                try conn.write_all("QUIT\n")
+                match own try conn.read_line():
+                    case str as bye:
+                        if bye != "BYE":
+                            return Result.Err(io.Error.InvalidData)
+                    case None:
+                        return Result.Err(io.Error.UnexpectedEof)
+        match own server.result():
+            case TaskResult.Ready(result):
+                served = try result
+                return Result.Ok(
+                    f"kv_server sessions={sessions} commands={served} hits={hits} nils={nils} ints={ints} checksum={checksum}"
+                )
+            case _:
+                return Result.Err(io.Error.Other(message="server task failed"))
+
+
+def main() -> int32:
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            match run(n):
+                case Result.Ok(line):
+                    print(line)
+                    return 0
+                case Result.Err(error):
+                    print(error)
+                    return 1
+        case Result.Err(_):
+            return 2

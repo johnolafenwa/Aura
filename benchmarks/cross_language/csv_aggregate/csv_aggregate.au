@@ -1,0 +1,108 @@
+# CSV analytics: parse a sales export and aggregate it by region, product, and month.
+#
+# Generates N rows of CSV text, then parses every line, computes discounted
+# revenue, groups it three ways, and ranks the five best-selling products.
+import sys
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+def regions() -> list[str]:
+    return ["north", "south", "east", "west", "central", "coastal"]
+
+
+def two_digits(value: int64) -> str:
+    if value < 10:
+        return f"0{value}"
+    return f"{value}"
+
+
+def generate(rng: mut Rng, n: int64) -> str:
+    names = regions()
+    mut lines: list[str] = [
+        "date,region,product,quantity,unit_price_cents,discount_pct"
+    ]
+    for _ in range(n):
+        r = rng.next()
+        s = rng.next()
+        month = two_digits(1 + r % 12)
+        day = two_digits(1 + (r // 12) % 28)
+        view region = names[(r // 336) % 6]
+        quantity = 1 + (s // 500) % 50
+        price = 100 + (s // 25000) % 99900
+        discount = (r // 2016) % 31
+        lines.append(
+            f"2026-{month}-{day},{region},SKU-{s % 500},{quantity},{price},{discount}"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def add_to(totals: mut dict[str, int64], key: str, amount: int64):
+    match mut totals.lookup(key):
+        case Lookup.Found(total):
+            total += amount
+        case Lookup.Missing:
+            totals[key.clone()] = amount
+
+
+def to_int(text: str) -> int64:
+    match parse_int64(text):
+        case Result.Ok(value):
+            return value
+        case Result.Err(_):
+            return -1
+
+
+def negative_quantity(entry: (str, int64)) -> int64:
+    return -entry[1]
+
+
+def main():
+    n = to_int(sys.args()[0])
+    mut rng = Rng(state=17)
+    text = generate(rng, n)
+    mut revenue_by_region: dict[str, int64] = {}
+    mut quantity_by_product: dict[str, int64] = {}
+    mut orders_by_month: dict[str, int64] = {}
+    mut rows = 0
+    mut total_revenue = 0
+    mut header = true
+    for line in text.lines():
+        if header:
+            header = false
+            continue
+        fields = line.split(",")
+        date = fields[0].split("-")
+        quantity = to_int(fields[3])
+        price = to_int(fields[4])
+        discount = to_int(fields[5])
+        revenue = quantity * price * (100 - discount) // 100
+        rows += 1
+        total_revenue += revenue
+        add_to(revenue_by_region, fields[1], revenue)
+        add_to(quantity_by_product, fields[2], quantity)
+        add_to(orders_by_month, date[1], 1)
+    mut ranked = quantity_by_product.items()
+    ranked.sort(key=negative_quantity)
+    mut top: list[str] = []
+    for product, quantity in ranked[0:5]:
+        top.append(f"{product}:{quantity}")
+    mut region_totals: list[str] = []
+    for region in regions():
+        mut revenue = 0
+        match revenue_by_region.get(region):
+            case Lookup.Found(value):
+                revenue = value
+            case Lookup.Missing:
+                pass
+        region_totals.append(f"{region}:{revenue}")
+    busiest = max(orders_by_month.values())
+    print(
+        f"csv_aggregate rows={rows} bytes={text.byte_len()} revenue={total_revenue} products={quantity_by_product.len()} busiest_month={busiest} regions={" ".join(region_totals)} top={" ".join(top)}"
+    )

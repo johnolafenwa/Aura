@@ -1,0 +1,274 @@
+# Document database: schemaless JSON records with a primary and a secondary index.
+#
+# Inserts N documents, runs point reads, an indexed filter query, in-place
+# updates, deletes, a per-city aggregate, then saves every live document as
+# JSON lines and loads the file back into a fresh database.
+import fs
+import io
+import json
+import path
+import sys
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+def cities() -> list[str]:
+    return ["Lagos", "Abuja", "Accra", "Nairobi", "Cairo", "Dakar", "Kigali", "Tunis"]
+
+
+def field_int(doc: json.Value, name: str) -> int64:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    match json.as_int(value):
+                        case int64 as number:
+                            return number
+                        case None:
+                            return 0
+                case Lookup.Missing:
+                    return 0
+        case _:
+            return 0
+
+
+def field_bool(doc: json.Value, name: str) -> bool:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    match json.as_bool(value):
+                        case bool as flag:
+                            return flag
+                        case None:
+                            return false
+                case Lookup.Missing:
+                    return false
+        case _:
+            return false
+
+
+def field_str(doc: json.Value, name: str) -> str:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    match value:
+                        case json.Value.String(text):
+                            return text.clone()
+                        case _:
+                            return ""
+                case Lookup.Missing:
+                    return ""
+        case _:
+            return ""
+
+
+def field_len(doc: json.Value, name: str) -> int64:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    match value:
+                        case json.Value.Array(items):
+                            return items.len()
+                        case _:
+                            return 0
+                case Lookup.Missing:
+                    return 0
+        case _:
+            return 0
+
+
+class Database:
+    docs: dict[int64, json.Value] = {}
+    by_city: dict[str, list[int64]] = {}
+
+    def insert(mut self, doc: own json.Value):
+        id = field_int(doc, "id")
+        city = field_str(doc, "city")
+        match mut self.by_city.lookup(city):
+            case Lookup.Found(ids):
+                ids.append(id)
+            case Lookup.Missing:
+                self.by_city[city] = [id]
+        self.docs[id] = doc
+
+    def delete(mut self, id: int64) -> bool:
+        match self.docs.remove(id):
+            case Lookup.Found(_):
+                return true
+            case Lookup.Missing:
+                return false
+
+    def count_where(self, city: str, min_age: int64) -> int64:
+        mut matched = 0
+        match self.by_city.lookup(city):
+            case Lookup.Found(ids):
+                for id in ids:
+                    match self.docs.lookup(id):
+                        case Lookup.Found(doc):
+                            if field_bool(doc, "active") and field_int(
+                                doc,
+                                "age",
+                            ) >= min_age:
+                                matched += 1
+                        case Lookup.Missing:
+                            pass
+            case Lookup.Missing:
+                pass
+        return matched
+
+
+def make_doc(i: int64, r: int64, names: list[str]) -> json.Value:
+    tags = [json.Value.String(f"t{r % 7}"), json.Value.String(f"t{r % 5}")]
+    return json.Value.Object(
+        {
+            "id": json.Value.Int(i),
+            "name": json.Value.String(f"user-{i}"),
+            "age": json.Value.Int(18 + r % 60),
+            "city": json.Value.String(names[(r // 60) % 8].clone()),
+            "score": json.Value.Int((r // 480) % 1000),
+            "active": json.Value.Bool(i % 3 != 0),
+            "tags": json.Value.Array(tags),
+        }
+    )
+
+
+def add_to(totals: mut dict[str, int64], key: own str, amount: int64):
+    match mut totals.lookup(key):
+        case Lookup.Found(total):
+            total += amount
+        case Lookup.Missing:
+            totals[key] = amount
+
+
+def run(n: int64, workdir: str) -> Result[str, io.Error]:
+    names = cities()
+    mut rng = Rng(state=42)
+    mut db = Database()
+    for i in range(n):
+        db.insert(make_doc(i, rng.next(), names))
+
+    mut hits = 0
+    mut misses = 0
+    mut score_total = 0
+    for _ in range(n * 2):
+        match db.docs.lookup(rng.next() % (n + n // 10)):
+            case Lookup.Found(doc):
+                hits += 1
+                score_total += field_int(doc, "score")
+            case Lookup.Missing:
+                misses += 1
+
+    mut matched = 0
+    for city in names:
+        matched += db.count_where(city, 40)
+
+    mut id = 0
+    while id < n:
+        score = field_int(db.docs[id], "score")
+        match mut db.docs.lookup(id):
+            case Lookup.Found(doc):
+                # Updated in place. A helper taking `mut json.Value` would be
+                # cleaner, but `match mut` on a mut enum parameter fails MIR
+                # validation in Aura 0.7.1.
+                match mut doc:
+                    case json.Value.Object(fields):
+                        fields["score"] = json.Value.Int(score + 7)
+                        match mut fields.lookup("tags"):
+                            case Lookup.Found(tags):
+                                match mut tags:
+                                    case json.Value.Array(items):
+                                        items.append(json.Value.String("updated"))
+                                    case _:
+                                        pass
+                            case Lookup.Missing:
+                                pass
+                    case _:
+                        pass
+            case Lookup.Missing:
+                pass
+        id += 10
+
+    mut deleted = 0
+    id = 1
+    while id < n:
+        if db.delete(id):
+            deleted += 1
+        id += 20
+
+    mut city_scores: dict[str, int64] = {}
+    mut city_counts: dict[str, int64] = {}
+    for key in db.docs.keys():
+        match db.docs.lookup(key):
+            case Lookup.Found(doc):
+                add_to(city_scores, field_str(doc, "city"), field_int(doc, "score"))
+                add_to(city_counts, field_str(doc, "city"), 1)
+            case Lookup.Missing:
+                pass
+    mut average_total = 0
+    for city in names:
+        match city_counts.get(city):
+            case Lookup.Found(count):
+                if count > 0:
+                    average_total += city_scores[city] * 100 // count
+            case Lookup.Missing:
+                pass
+
+    file = path.join(workdir, "docdb.jsonl")
+    mut lines: list[str] = []
+    for key in db.docs.keys():
+        match db.docs.lookup(key):
+            case Lookup.Found(doc):
+                lines.append(json.dumps(doc))
+            case Lookup.Missing:
+                pass
+    text = "\n".join(lines) + "\n"
+    try fs.write_string(file, text)
+    saved_bytes = text.byte_len()
+
+    loaded = try fs.read_to_string(file)
+    mut reloaded = Database()
+    for line in loaded.lines():
+        match own json.parse(line):
+            case Result.Ok(doc):
+                reloaded.insert(doc)
+            case Result.Err(_):
+                return Result.Err(io.Error.InvalidData)
+    try fs.remove_file(file)
+
+    mut checksum = 0
+    for key in reloaded.docs.keys():
+        match reloaded.docs.lookup(key):
+            case Lookup.Found(doc):
+                checksum += field_int(doc, "score") + field_int(doc, "age") + field_len(
+                    doc,
+                    "tags",
+                )
+            case Lookup.Missing:
+                pass
+    return Result.Ok(
+        f"docdb docs={n} live={reloaded.docs.len()} hits={hits} misses={misses} score={score_total} matched={matched} deleted={deleted} averages={average_total} bytes={saved_bytes} checksum={checksum}"
+    )
+
+
+def main() -> int32:
+    args = sys.args()
+    match parse_int64(args[0]):
+        case Result.Ok(n):
+            match run(n, args[1]):
+                case Result.Ok(line):
+                    print(line)
+                    return 0
+                case Result.Err(error):
+                    print(error)
+                    return 1
+        case Result.Err(_):
+            return 2

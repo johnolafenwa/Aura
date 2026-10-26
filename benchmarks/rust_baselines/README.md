@@ -15,6 +15,7 @@ Release settings are `opt-level=3`, `lto="fat"`, and `codegen-units=1`.
 | `float64_add` | One million elements; fresh `Vec<f64>` each of 512 additions, checksum 2048.0; same warmup and protocol. |
 | `float64_sum` | One million elements, 1024 sequential left-to-right sums, checksum 4096000000.0; same warmup and protocol. |
 | `dict_build_get`, `set_insert_contains`, `int_list_sum`, `string_list_scan`, `record_field_reads` | The [runtime value programs](../runtime_values/README.md) with std `HashMap`, `HashSet`, `Vec`, and `String`, checked arithmetic, and the same printed result. `record_field_reads` stores a local three-variant value enum. No handshake. |
+| The 30 [cross-language programs](../cross_language/README.md) | Bins behind the `cross-language` feature, built with the `cross-language` profile, which is the release profile with overflow checks. A plain `--bins` build skips them, so the references above build as before. |
 
 ## Equivalence rules
 
