@@ -373,6 +373,87 @@ fn scalar_lists_keep_their_form_through_whole_element_edits() {
 }
 
 #[test]
+fn float32_lists_keep_four_byte_elements() {
+    let single = |value: f32| Value::Float(f64::from(value));
+    let mut list = ListElements::from(vec![Value::Float(1.5), Value::Float(0.1)]);
+    assert_eq!(list.form(), ListForm::Float64);
+    list.narrow_to_float32();
+    assert_eq!(list.form(), ListForm::Float32);
+    assert_eq!(exact_list(&list), exact(&[Value::Float(1.5), single(0.1)]));
+    list.narrow_to_float32();
+    assert_eq!(list.form(), ListForm::Float32);
+
+    // Every float stored in the form is rounded, as a `float32` variable
+    // rounds it.
+    list.push(Value::Float(0.2));
+    list.insert(0, Value::Float(0.3));
+    list.replace(1, Value::Float(-0.4));
+    list.append(ListElements::from(vec![
+        Value::Float(0.5),
+        Value::Float(0.6),
+    ]));
+    assert_eq!(list.form(), ListForm::Float32);
+    assert_eq!(
+        exact_list(&list),
+        exact(&[
+            single(0.3),
+            single(-0.4),
+            single(0.1),
+            single(0.2),
+            single(0.5),
+            single(0.6),
+        ])
+    );
+    // Only a float that is exactly a `float32` is found.
+    assert!(list.contains(&single(0.1)));
+    assert!(!list.contains(&Value::Float(0.1)));
+    assert_eq!(list, ListElements::from(list.to_vec()));
+    assert_eq!(
+        exact_list(&list.take_range(4, 6)),
+        exact(&[single(0.5), single(0.6)])
+    );
+    assert_eq!(list.form(), ListForm::Float32);
+    // Another float list takes the widened elements.
+    let mut other = ListElements::from(vec![Value::Float(2.0)]);
+    other.append(list.clone());
+    assert_eq!(other.form(), ListForm::Float64);
+    assert_eq!(
+        exact_list(&other),
+        exact(&[
+            Value::Float(2.0),
+            single(0.3),
+            single(-0.4),
+            single(0.1),
+            single(0.2)
+        ])
+    );
+
+    // A non-float value moves the list to the value form.
+    list.push(Value::String("text".into()));
+    assert_eq!(list.form(), ListForm::Values);
+
+    // A list of floats or an empty list narrows. Any other list keeps its
+    // form.
+    let mut floats = ListElements::from(vec![Value::Float(0.1)]);
+    floats.values_mut();
+    floats.narrow_to_float32();
+    assert_eq!(floats.form(), ListForm::Float32);
+    assert_eq!(exact_list(&floats), exact(&[single(0.1)]));
+    let mut empty = ListElements::new();
+    empty.narrow_to_float32();
+    assert_eq!(empty.form(), ListForm::Float32);
+    empty.append(ListElements::from(vec![Value::Float(0.7)]));
+    assert_eq!(empty.form(), ListForm::Float32);
+    assert_eq!(exact_list(&empty), exact(&[single(0.7)]));
+    let mut mixed = ListElements::from(vec![Value::Float(0.1), int(1)]);
+    mixed.narrow_to_float32();
+    assert_eq!(mixed.form(), ListForm::Values);
+    let mut integers = ListElements::from(vec![int(1)]);
+    integers.narrow_to_float32();
+    assert_eq!(integers.form(), ListForm::Int64);
+}
+
+#[test]
 fn an_empty_list_takes_the_form_of_its_first_element() {
     let mut list = ListElements::new();
     list.push(Value::Float(1.5));

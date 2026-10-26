@@ -26186,6 +26186,7 @@ fn list_forms_share_the_access_codes_of_their_layouts() {
         (ListForm::Uint16, DirectListAccess::Uint16),
         (ListForm::Uint32, DirectListAccess::Uint32),
         (ListForm::Uint64, DirectListAccess::Uint64),
+        (ListForm::Float32, DirectListAccess::Float32),
     ] {
         assert_eq!(form.access(), access as u32, "{form:?}");
     }
@@ -26503,6 +26504,65 @@ fn scalar_writes_go_in_place_only_into_unshared_storage() {
     assert!(!float(floats, 0, 0.0));
     assert_eq!(super::aura_direct_vec_index_scalar(floats, 0, 1), 0);
     for value in [list, copy, floats, flags, wide] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
+fn float32_lists_narrow_when_tagged_or_written_as_float32() {
+    use super::{DirectListAccess, DirectScalarKind};
+    let float32 = DirectScalarKind::Float32 as i64;
+    let bits = |value: f32| f64::from(value).to_bits() as i64;
+    let layout = super::direct_list_layout();
+    let element_at = |list: *mut OpaqueValue, index: usize| unsafe {
+        let elements = *((list as *const u8).add(layout.elements_offset as usize) as *const usize);
+        *(elements as *const f32).add(index)
+    };
+
+    // Tagging a list `list[float32]` narrows it, and a scalar push keeps the
+    // form.
+    let tagged = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_in_place(tagged, boxed_value(Value::Float(0.1)));
+    assert_eq!(list_view_access(tagged), DirectListAccess::Float64 as u32);
+    super::aura_direct_tag_value_type(tagged, b"list[float32]".as_ptr(), 13);
+    assert_eq!(list_view_access(tagged), DirectListAccess::Float32 as u32);
+    super::aura_direct_vec_push_scalar(tagged, bits(-2.25), float32);
+    assert_eq!(list_view_access(tagged), DirectListAccess::Float32 as u32);
+    assert_eq!(element_at(tagged, 0), 0.1);
+    assert_eq!(element_at(tagged, 1), -2.25);
+    assert_eq!(
+        super::aura_direct_vec_index_scalar(tagged, 0, float32),
+        bits(0.1)
+    );
+    assert_eq!(unsafe { value_ref(tagged) }.render(), "[0.1, -2.25]");
+
+    // A scalar write of a `float32` narrows a list in another form first.
+    let values = boxed_value(Value::Vec(VecValue::new(
+        Type::named("float32"),
+        vec![Value::Float(1.5), Value::Float(2.5)].into(),
+    )));
+    unsafe {
+        value_mut(values, |value| match value {
+            Value::Vec(vector) => {
+                vector.elements.values_mut();
+            }
+            other => panic!("expected a list, found {other:?}"),
+        })
+    };
+    assert_eq!(list_view_access(values), DirectListAccess::Values as u32);
+    super::aura_direct_vec_set_index_scalar(values, 1, bits(0.3), 0, 0, float32);
+    assert_eq!(list_view_access(values), DirectListAccess::Float32 as u32);
+    assert_eq!(element_at(values, 1), 0.3);
+    let empty = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_scalar(empty, bits(0.7), float32);
+    assert_eq!(list_view_access(empty), DirectListAccess::Float32 as u32);
+    assert_eq!(unsafe { value_ref(empty) }.render(), "[0.7]");
+    // A `float64` push takes the other form.
+    let doubles = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_scalar(doubles, 0.7f64.to_bits() as i64, 1);
+    assert_eq!(list_view_access(doubles), DirectListAccess::Float64 as u32);
+    assert_eq!(unsafe { value_ref(doubles) }.render(), "[0.7]");
+    for value in [tagged, values, empty, doubles] {
         unsafe { release_value(value) };
     }
 }

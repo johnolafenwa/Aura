@@ -66,6 +66,7 @@ fn scalar_element_type(kind: ScalarElement) -> Type {
         ScalarElement::Uint16 => "uint16",
         ScalarElement::Uint32 => "uint32",
         ScalarElement::Uint64 => "uint64",
+        ScalarElement::Float32 => "float32",
     })
 }
 
@@ -551,7 +552,7 @@ fn collection_ops_specialize_by_element_type_and_literal_key() {
     assert_eq!(ScalarElement::of(&Type::named("int128")), None);
     assert_eq!(
         ScalarElement::of(&Type::named("float32")),
-        Some(ScalarElement::Float64)
+        Some(ScalarElement::Float32)
     );
     assert_eq!(ScalarElement::of(&Type::Unit), None);
 

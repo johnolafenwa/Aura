@@ -553,9 +553,9 @@ runs before and five after. Times include building the inputs, about 45 ms.
 A list whose elements all have one fixed-width scalar type stores the
 scalars themselves. The types are `int8`, `int16`, `int32`, `int64`,
 `uint8`, `uint16`, `uint32`, `uint64`, `float32`, `float64`, and `bool`.
-Each integer element takes its own width, from 1 to 8 bytes. Each float
-element takes 8 bytes, since a `float32` is kept as the `float64` it widens
-to exactly. Each `bool` takes 1 byte. A boxed element takes 112 bytes. Any
+Each integer element takes its own width, from 1 to 8 bytes. Each
+`float32` element takes 4 bytes, each `float64` 8, and each `bool` 1. A
+boxed element takes 112 bytes. Any
 other list stores boxed values, and so does a list that mixes two integer
 types, such as `int32` and `int64` values in an `int32 | int64` list.
 
@@ -563,7 +563,9 @@ The storage follows the elements. Adding a value of another type, such as
 a `str` to an `int64 | str` list, moves the list to boxed storage. An empty
 list takes the form of its first element. A program cannot tell which form
 a list uses: printing, equality, hashing, copies, and errors behave the
-same.
+same. A `list[float32]` prints its elements with `float32` digits, as
+`print` prints a `float32` value, so `[0.1]` rather than
+`[0.10000000149011612]`.
 
 Native code reads the length and the elements of an unboxed list in place,
 and appends, writes, and pops elements in place. `pop()` with no index

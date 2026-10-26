@@ -104,6 +104,16 @@ fn integer_key_positions<T: Ord + Copy>(keys: &[T], reverse: bool) -> Vec<usize>
     pairs.into_iter().map(|(_, position)| position).collect()
 }
 
+/// The positions of float `keys` in the stable order of their built-in
+/// order. A tie on the key falls back to the position, as for integers.
+fn float_positions(keys: impl Iterator<Item = f64>, reverse: bool) -> Vec<usize> {
+    let mut pairs = keys.zip(0..).collect::<Vec<(f64, usize)>>();
+    pairs.sort_unstable_by(|(left, left_at), (right, right_at)| {
+        directed(float_sort_order(*left, *right), reverse).then(left_at.cmp(right_at))
+    });
+    pairs.into_iter().map(|(_, position)| position).collect()
+}
+
 /// Sorts `elements` stably by the built-in order of the elements.
 pub fn sort_elements(elements: &mut ListElements, reverse: bool) -> Result<()> {
     if elements.len() < 2 {
@@ -121,6 +131,12 @@ pub fn sort_elements(elements: &mut ListElements, reverse: bool) -> Result<()> {
         ListElements::Float64(values) => {
             values.sort_by(|left, right| directed(float_sort_order(*left, *right), reverse))
         }
+        ListElements::Float32(values) => values.sort_by(|left, right| {
+            directed(
+                float_sort_order(f64::from(*left), f64::from(*right)),
+                reverse,
+            )
+        }),
         ListElements::Values(values) => sort_values(values, reverse)?,
         ListElements::Bool(_) => {
             return Err(Diagnostic::new("list sort cannot order `bool` values"));
@@ -143,12 +159,9 @@ fn sorted_positions(keys: &ListElements, reverse: bool) -> Result<Vec<usize>> {
         ListElements::Uint16(keys) => integer_key_positions(keys, reverse),
         ListElements::Uint32(keys) => integer_key_positions(keys, reverse),
         ListElements::Uint64(keys) => integer_key_positions(keys, reverse),
-        ListElements::Float64(keys) => {
-            let mut pairs = keys.iter().copied().zip(positions).collect::<Vec<_>>();
-            pairs.sort_unstable_by(|(left, left_at), (right, right_at)| {
-                directed(float_sort_order(*left, *right), reverse).then(left_at.cmp(right_at))
-            });
-            pairs.into_iter().map(|(_, position)| position).collect()
+        ListElements::Float64(keys) => float_positions(keys.iter().copied(), reverse),
+        ListElements::Float32(keys) => {
+            float_positions(keys.iter().map(|key| f64::from(*key)), reverse)
         }
         ListElements::Values(keys) => {
             check_orderable(keys)?;

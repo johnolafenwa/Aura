@@ -939,6 +939,13 @@ impl VecValue {
             str_view: Default::default(),
         }
     }
+
+    /// Whether the elements are `float32`s, which render with `float32`
+    /// digits.
+    pub fn holds_float32(&self) -> bool {
+        matches!(self.elements, ListElements::Float32(_))
+            || matches!(&self.element_type, Type::Named(name, args) if args.is_empty() && name == "float32")
+    }
 }
 
 impl fmt::Debug for VecValue {
@@ -8066,8 +8073,8 @@ impl Value {
                             // Scalars render the same with or without a hook.
                             // A record a typed list keeps in place renders
                             // as its value does.
-                            let float32 = is_float32_type(&values.element_type);
                             rendered.push('[');
+                            let float32 = values.holds_float32();
                             for (index, value) in values.elements.iter().enumerate() {
                                 if index > 0 {
                                     rendered.push_str(", ");

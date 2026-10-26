@@ -2526,6 +2526,9 @@ fn retag_value(value: &mut Value, tag: &RuntimeTypeTag) {
             if let Type::Named(name, args) = parsed {
                 if name == "list" && args.len() == 1 {
                     assign_type(&mut vector.element_type, &args[0]);
+                    if is_float32_element(&args[0]) {
+                        vector.elements.narrow_to_float32();
+                    }
                 }
             }
         }
@@ -2710,20 +2713,22 @@ pub enum DirectListAccess {
     Uint32 = 11,
     /// A list of `uint64` elements, 8 bytes each.
     Uint64 = 12,
+    /// A list of `float32` elements, 4 bytes each.
+    Float32 = 13,
     /// A rank-1 `Array[int32]`.
-    ArrayInt32 = 13,
+    ArrayInt32 = 15,
     /// A rank-1 `Array[int64]`.
-    ArrayInt64 = 14,
+    ArrayInt64 = 16,
     /// A rank-1 `Array[float32]`.
-    ArrayFloat32 = 15,
+    ArrayFloat32 = 17,
     /// A rank-1 `Array[float64]`.
-    ArrayFloat64 = 16,
+    ArrayFloat64 = 18,
 }
 
 impl DirectListAccess {
     /// The codes of the list forms, which all keep their length in the
     /// view. They are consecutive from [`DirectListAccess::Values`].
-    pub const LIST_FORMS: u32 = 12;
+    pub const LIST_FORMS: u32 = 13;
 }
 
 /// The scalar types generated code names to the runtime in one word: the
@@ -7258,6 +7263,18 @@ fn scalar_list_value(bits: i64, kind: i64) -> Value {
     DirectScalarKind::of_code(kind).value(bits)
 }
 
+fn is_float32_element(ty: &Type) -> bool {
+    matches!(ty, Type::Named(name, args) if args.is_empty() && name == "float32")
+}
+
+/// Moves a `list[float32]` that a scalar write of `kind` is about to change
+/// to the `Float32` form first, so the element is stored in 4 bytes.
+fn narrow_for_scalar_write(vector: &mut VecValue, kind: i64) {
+    if kind == DirectScalarKind::Float32 as i64 {
+        vector.elements.narrow_to_float32();
+    }
+}
+
 /// Appends a scalar given as its bits, with no box. `kind` names its
 /// [`DirectScalarKind`].
 #[cfg_attr(not(coverage), no_mangle)]
@@ -7271,6 +7288,7 @@ pub extern "C-unwind" fn aura_direct_vec_push_scalar(vec: *mut OpaqueValue, bits
                     vector.element_type = inferred;
                 }
             }
+            narrow_for_scalar_write(vector, kind);
             vector.elements.push(value);
         });
     })
@@ -8281,6 +8299,9 @@ pub extern "C-unwind" fn aura_direct_vec_set_index_scalar(
 ) {
     task_runtime_boundary(|| {
         let value = scalar_list_value(bits, kind);
+        if kind == DirectScalarKind::Float32 as i64 {
+            with_vector_mut(vec, |vector| narrow_for_scalar_write(vector, kind));
+        }
         set_vec_element(vec, index, value, line, column);
     })
 }

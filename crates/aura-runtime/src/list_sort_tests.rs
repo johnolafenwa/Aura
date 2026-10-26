@@ -66,6 +66,26 @@ fn float_lists_put_nan_last_and_keep_signed_zeros_in_input_order() {
 }
 
 #[test]
+fn float32_lists_sort_and_order_by_float32_keys() {
+    let floats = |values: &[f64]| {
+        let mut elements = list(values.iter().map(|value| Value::Float(*value)).collect());
+        elements.narrow_to_float32();
+        assert!(matches!(elements, ListElements::Float32(_)));
+        elements
+    };
+    let mut values = floats(&[2.0, f64::NAN, -1.5, 0.5]);
+    sort_elements(&mut values, false).unwrap();
+    assert_eq!(rendered(&values), ["-1.5", "0.5", "2.0", "NaN"]);
+    sort_elements(&mut values, true).unwrap();
+    assert_eq!(rendered(&values), ["NaN", "2.0", "0.5", "-1.5"]);
+    assert!(matches!(values, ListElements::Float32(_)));
+
+    let mut names = list(vec![text("a"), text("b"), text("c")]);
+    sort_elements_by_keys(&mut names, &floats(&[1.0, -1.0, 1.0]), false).unwrap();
+    assert_eq!(rendered(&names), ["b", "a", "c"]);
+}
+
+#[test]
 fn float_sort_order_is_total() {
     assert_eq!(float_sort_order(1.0, 2.0), Ordering::Less);
     assert_eq!(float_sort_order(f64::NAN, 2.0), Ordering::Greater);

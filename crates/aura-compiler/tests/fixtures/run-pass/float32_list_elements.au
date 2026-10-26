@@ -1,0 +1,41 @@
+# A `list[float32]` keeps 4-byte elements and prints them with `float32`
+# digits. A float literal appended to it is rounded to `float32` by `aura run`
+# as by native code.
+def total_of(values: list[float32]) -> float32:
+    mut total: float32 = 0.0
+    for value in values:
+        total += value
+    return total
+
+def main():
+    mut singles: list[float32] = [1.5, -2.25]
+    singles.append(0.1)
+    print(singles)
+    print(f"{singles[2]}")
+    x: float32 = 0.1
+    mut other: list[float32] = []
+    other.append(x)
+    print(other)
+    print(x in other)
+
+    singles[0] = -0.2
+    singles.append(-0.3)
+    print(singles)
+    print(total_of(singles))
+    singles.sort()
+    print(singles)
+    print(singles[1:3])
+    print(singles.pop())
+    print(singles)
+    print(len(singles))
+
+    doubled: list[float32] = [value * 2.0 for value in singles]
+    print(doubled)
+    nested: list[list[float32]] = [[0.1, 0.2], [0.3]]
+    print(nested)
+    mut doubles: list[float64] = [0.1, 0.2]
+    doubles.append(0.3)
+    print(doubles)
+    mut copied = singles.copy()
+    copied.append(0.7)
+    print(f"{copied} {singles}")

@@ -276,6 +276,10 @@ fn type_contains_unknown(ty: &Type) -> bool {
     }
 }
 
+fn is_float32_type(ty: &Type) -> bool {
+    matches!(ty, Type::Named(name, args) if args.is_empty() && name == "float32")
+}
+
 fn contextual_float_literal_operand(
     value: u128,
     negative: bool,
@@ -20588,11 +20592,19 @@ impl<'a> Lowerer<'a> {
                 }
                 self.lower_expr(expr)
             }
+            // A float literal in a `float32` context is rounded where it is
+            // written, so `aura run` stores the value native code stores.
+            ExprKind::Float(value) if expected.is_some_and(is_float32_type) => {
+                Operand::Float(f64::from(*value as f32))
+            }
             ExprKind::Unary {
                 op: UnaryOp::Neg,
                 expr: inner,
             } => match &inner.kind {
-                ExprKind::Float(value) if expected.is_some_and(|ty| matches!(ty, Type::Named(name, args) if args.is_empty() && matches!(name.as_str(), "float32" | "float64"))) => {
+                ExprKind::Float(value) if expected.is_some_and(is_float32_type) => {
+                    Operand::Float(f64::from(-*value as f32))
+                }
+                ExprKind::Float(value) if expected.is_some_and(|ty| matches!(ty, Type::Named(name, args) if args.is_empty() && name == "float64")) => {
                     Operand::Float(-value)
                 }
                 ExprKind::Int(value) => {

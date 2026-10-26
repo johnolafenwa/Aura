@@ -216,8 +216,7 @@ impl ScalarKind {
         self.direct_kind().map_or(-1, |kind| kind as i64)
     }
 
-    /// The kind a list keeps unboxed as `element`. A `float32` list keeps
-    /// the `float64` each element widens to.
+    /// The kind a list keeps unboxed as `element`.
     fn of_element(element: ScalarElement) -> Self {
         match element {
             ScalarElement::Int64 => ScalarKind::Int64,
@@ -230,6 +229,7 @@ impl ScalarKind {
             ScalarElement::Uint16 => ScalarKind::Uint16,
             ScalarElement::Uint32 => ScalarKind::Uint32,
             ScalarElement::Uint64 => ScalarKind::Uint64,
+            ScalarElement::Float32 => ScalarKind::Float32,
         }
     }
 }
@@ -9540,8 +9540,8 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     /// The bits of the unboxed `kind` element at `element`: an integer
-    /// extended to its exact 64-bit value, a `bool` as 0 or 1, or a
-    /// `float64`'s bits.
+    /// extended to its exact 64-bit value, a `bool` as 0 or 1, or the bits
+    /// of a float widened to `float64`.
     fn load_scalar_list_element(&mut self, kind: ScalarElement, element: Val) -> Val {
         let flags = MemFlags::trusted();
         match kind {
@@ -9555,6 +9555,11 @@ impl<'a> FunctionCompiler<'a> {
             ScalarElement::Uint32 => self.builder.uload32(flags, element, 0),
             ScalarElement::Int64 | ScalarElement::Uint64 | ScalarElement::Float64 => {
                 self.builder.load(types::I64, flags, element, 0)
+            }
+            ScalarElement::Float32 => {
+                let narrow = self.builder.load(types::F32, flags, element, 0);
+                let wide = self.builder.fpromote(types::F64, narrow);
+                self.builder.bitcast(types::I64, wide)
             }
         }
     }
@@ -9570,6 +9575,11 @@ impl<'a> FunctionCompiler<'a> {
             ScalarElement::Int16 | ScalarElement::Uint16 => self.builder.ireduce(types::I16, bits),
             ScalarElement::Int32 | ScalarElement::Uint32 => self.builder.ireduce(types::I32, bits),
             ScalarElement::Int64 | ScalarElement::Uint64 | ScalarElement::Float64 => bits,
+            // The value is already a `float32`, so narrowing it is exact.
+            ScalarElement::Float32 => {
+                let wide = self.builder.bitcast(types::F64, bits);
+                self.builder.fdemote(types::F32, wide)
+            }
         };
         self.builder.store(flags, stored, element, 0);
     }
@@ -12102,7 +12112,7 @@ impl<'a> FunctionCompiler<'a> {
                     element_direct_ty.scalar_kind(),
                 )?;
                 let value = self.coerce_value(loaded, &element_direct_ty)?.values[0];
-                let bits = if kind == ScalarElement::Float64 {
+                let bits = if kind.is_float() {
                     self.builder.bitcast(types::I64, value)
                 } else {
                     value
@@ -12183,7 +12193,7 @@ impl<'a> FunctionCompiler<'a> {
                     // A scalar element comes back as raw bits, with no box.
                     let bits =
                         self.emit_scalar_list_read(list, index, kind, proven, line, column)?;
-                    let value = if kind == ScalarElement::Float64 {
+                    let value = if kind.is_float() {
                         self.builder.bitcast(types::F64, bits)
                     } else {
                         bits
@@ -12246,7 +12256,7 @@ impl<'a> FunctionCompiler<'a> {
                     element_direct_ty.scalar_kind(),
                 )?;
                 let value = self.coerce_value(loaded, &element_direct_ty)?.values[0];
-                let bits = if kind == ScalarElement::Float64 {
+                let bits = if kind.is_float() {
                     self.builder.bitcast(types::I64, value)
                 } else {
                     value
@@ -14890,6 +14900,7 @@ fn scalar_list_slot(kind: ScalarElement) -> (aura_runtime::native_runtime::Direc
         ScalarElement::Uint16 => (DirectListAccess::Uint16, 2),
         ScalarElement::Uint32 => (DirectListAccess::Uint32, 4),
         ScalarElement::Uint64 => (DirectListAccess::Uint64, 8),
+        ScalarElement::Float32 => (DirectListAccess::Float32, 4),
     }
 }
 

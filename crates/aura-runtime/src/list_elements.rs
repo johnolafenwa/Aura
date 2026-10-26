@@ -38,6 +38,11 @@ pub enum ListElements {
     Uint16(SharedVec<u16>),
     Uint32(SharedVec<u32>),
     Uint64(SharedVec<u64>),
+    /// The elements of a `list[float32]`, 4 bytes each. Only a list whose
+    /// element type is `float32` takes this form (see
+    /// [`ListElements::narrow_to_float32`]), and storing a float in it rounds
+    /// the float to `float32`, as storing it in a `float32` variable does.
+    Float32(SharedVec<f32>),
     /// Boxed, so the typed form keeps every list one pointer and a tag.
     Typed(Box<TypedElements>),
 }
@@ -60,6 +65,7 @@ pub enum ListForm {
     Uint16 = 10,
     Uint32 = 11,
     Uint64 = 12,
+    Float32 = 13,
     Typed(u32),
 }
 
@@ -298,6 +304,28 @@ impl Element for f64 {
     }
 }
 
+impl Element for f32 {
+    fn value(self) -> Value {
+        Value::Float(f64::from(self))
+    }
+
+    /// Any float, rounded: the form only holds `float32` elements.
+    fn of(value: &Value) -> Option<Self> {
+        match value {
+            Value::Float(float) => Some(*float as f32),
+            _ => None,
+        }
+    }
+
+    /// Only a float that is exactly a `float32` equals an element.
+    fn equal_to(value: &Value) -> Option<Self> {
+        match value {
+            Value::Float(float) if f64::from(*float as f32) == *float => Some(*float as f32),
+            _ => None,
+        }
+    }
+}
+
 impl Element for bool {
     fn value(self) -> Value {
         Value::Bool(self)
@@ -395,6 +423,7 @@ macro_rules! each_form {
             ListElements::Uint16($values) => $body,
             ListElements::Uint32($values) => $body,
             ListElements::Uint64($values) => $body,
+            ListElements::Float32($values) => $body,
             ListElements::Typed($typed) => $typed_body,
         }
     };
@@ -416,6 +445,7 @@ macro_rules! each_scalar_form {
             ListElements::Uint16($values) => $body,
             ListElements::Uint32($values) => $body,
             ListElements::Uint64($values) => $body,
+            ListElements::Float32($values) => $body,
             $($other => $fallback,)+
         }
     };
@@ -441,6 +471,7 @@ macro_rules! same_scalar_forms {
             (ListElements::Uint16($left), ListElements::Uint16($right)) => $body,
             (ListElements::Uint32($left), ListElements::Uint32($right)) => $body,
             (ListElements::Uint64($left), ListElements::Uint64($right)) => $body,
+            (ListElements::Float32($left), ListElements::Float32($right)) => $body,
             $($other $(if $guard)? => $fallback,)+
         }
     };
@@ -515,6 +546,7 @@ fn keeps(form: ListForm, value: &Value) -> bool {
         ListForm::Uint16 => u16::of(value).is_some(),
         ListForm::Uint32 => u32::of(value).is_some(),
         ListForm::Uint64 => u64::of(value).is_some(),
+        ListForm::Float32 => f32::equal_to(value).is_some(),
         ListForm::Typed(_) => false,
     }
 }
@@ -564,8 +596,33 @@ impl ListElements {
             ListForm::Uint16 => Self::Uint16(collect_form(values)?),
             ListForm::Uint32 => Self::Uint32(collect_form(values)?),
             ListForm::Uint64 => Self::Uint64(collect_form(values)?),
+            ListForm::Float32 => Self::Float32(collect_form(values)?),
             ListForm::Typed(_) => return None,
         })
+    }
+
+    /// Moves a list whose element type is `float32` to the `Float32` form,
+    /// rounding each element, when every element is a float. Any other list
+    /// keeps its form.
+    pub fn narrow_to_float32(&mut self) {
+        let narrowed = match self {
+            Self::Float32(_) => return,
+            Self::Float64(values) => values.iter().map(|value| *value as f32).collect(),
+            Self::Values(values) => match values
+                .iter()
+                .map(|value| match value {
+                    Value::Float(float) => Some(*float as f32),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()
+            {
+                Some(floats) => floats,
+                None => return,
+            },
+            _ if self.is_empty() => Vec::new(),
+            _ => return,
+        };
+        *self = Self::Float32(narrowed.into());
     }
 
     #[inline]
@@ -582,6 +639,7 @@ impl ListElements {
             Self::Uint16(_) => ListForm::Uint16,
             Self::Uint32(_) => ListForm::Uint32,
             Self::Uint64(_) => ListForm::Uint64,
+            Self::Float32(_) => ListForm::Float32,
             Self::Typed(typed) => ListForm::Typed(typed.layout.access()),
         }
     }
@@ -624,6 +682,7 @@ impl ListElements {
             Self::Uint16(values) => scalar(ListForm::Uint16, values),
             Self::Uint32(values) => scalar(ListForm::Uint32, values),
             Self::Uint64(values) => scalar(ListForm::Uint64, values),
+            Self::Float32(values) => scalar(ListForm::Float32, values),
             Self::Typed(typed) => typed.view(),
         }
     }
@@ -710,6 +769,7 @@ impl ListElements {
             Self::Uint16(values) => Iter::Uint16(values.iter()),
             Self::Uint32(values) => Iter::Uint32(values.iter()),
             Self::Uint64(values) => Iter::Uint64(values.iter()),
+            Self::Float32(values) => Iter::Float32(values.iter()),
             Self::Typed(typed) => Iter::Typed {
                 layout: typed.layout,
                 words: &typed.words,
@@ -994,7 +1054,9 @@ impl ListElements {
 
     /// Appends every element of `other`.
     pub fn append(&mut self, other: ListElements) {
-        if self.is_empty() {
+        // An empty `list[float32]` keeps its form, so the floats it takes in
+        // are rounded below.
+        if self.is_empty() && !matches!(self, Self::Float32(_)) {
             *self = other;
             return;
         }
@@ -1035,6 +1097,7 @@ impl ListElements {
             Self::Uint16(values) => Self::Uint16(values.drain(start..end).collect()),
             Self::Uint32(values) => Self::Uint32(values.drain(start..end).collect()),
             Self::Uint64(values) => Self::Uint64(values.drain(start..end).collect()),
+            Self::Float32(values) => Self::Float32(values.drain(start..end).collect()),
             Self::Typed(typed) => {
                 let stride = typed.stride();
                 Self::Typed(Box::new(TypedElements {
@@ -1222,6 +1285,7 @@ pub enum Iter<'a> {
     Uint16(std::slice::Iter<'a, u16>),
     Uint32(std::slice::Iter<'a, u32>),
     Uint64(std::slice::Iter<'a, u64>),
+    Float32(std::slice::Iter<'a, f32>),
     /// The words of the elements left, whole elements only.
     Typed {
         layout: &'static PlainLayout,
@@ -1253,6 +1317,7 @@ macro_rules! each_scalar_iter {
             Iter::Uint16($values) => $body,
             Iter::Uint32($values) => $body,
             Iter::Uint64($values) => $body,
+            Iter::Float32($values) => $body,
             $($other => $fallback,)+
         }
     };
