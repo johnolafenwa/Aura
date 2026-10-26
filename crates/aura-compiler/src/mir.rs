@@ -149,6 +149,33 @@ fn is_builtin_binary_operator(op: BinaryOp, left_ty: &Type, right_ty: &Type) -> 
     }
 }
 
+/// The arguments of a `for` loop's `range(stop)` or `range(start, stop)`
+/// iterable when the loop can count on int64 locals instead of stepping a
+/// Range value. Only a positional call qualifies; anything else keeps
+/// `ForRange`. `range` cannot be redefined, so a Range-typed call to it is
+/// the builtin.
+fn counted_range_args<'a>(
+    for_stmt: &'a crate::ast::ForStmt,
+    iterable_ty: Option<&Type>,
+) -> Option<&'a [crate::ast::Argument]> {
+    if !matches!(iterable_ty, Some(Type::Named(name, args)) if name == "Range" && args.is_empty()) {
+        return None;
+    }
+    if for_stmt.borrow_mode == Some(ReceiverKind::BorrowMut) {
+        return None;
+    }
+    let mut iterable = &for_stmt.iterable;
+    while let ExprKind::Group(inner) = &iterable.kind {
+        iterable = inner;
+    }
+    let ExprKind::Call { callee, args } = &iterable.kind else {
+        return None;
+    };
+    let named_range = matches!(&callee.kind, ExprKind::Name(name) if name == "range");
+    (named_range && matches!(args.len(), 1 | 2) && args.iter().all(|arg| arg.name.is_none()))
+        .then_some(args.as_slice())
+}
+
 fn is_float_type(ty: &Type) -> bool {
     matches!(ty, Type::Named(name, args) if args.is_empty() && (name == "float32" || name == "float64"))
 }
@@ -17460,9 +17487,15 @@ impl<'a> Lowerer<'a> {
             );
         let lent_list_iteration =
             self.lendable_list_iteration(for_stmt, checked_binding, iterable_ty.as_ref());
+        let mut counted_range = None;
         let iterable = if mutable_list_iteration || lent_list_iteration {
             // Each iteration lends the element in place; see
             // `lower_list_iteration_by_loan`.
+            Operand::Unit
+        } else if let Some(range_args) = counted_range_args(for_stmt, iterable_ty.as_ref()) {
+            // A loop over a `range(...)` call counts on int64 locals; no Range
+            // value is ever built.
+            counted_range = Some(self.lower_counted_range_endpoints(range_args));
             Operand::Unit
         } else if for_stmt.borrow_mode == Some(ReceiverKind::Value) {
             let source = self.lower_expr_for_owned_value(&for_stmt.iterable, iterable_ty.as_ref());
@@ -17516,6 +17549,23 @@ impl<'a> Lowerer<'a> {
         let after_block = self.new_block("for_end");
 
         match iterable_ty {
+            Some(Type::Named(name, _)) if name == "Range" && counted_range.is_some() => {
+                let binding = simple_binding
+                    .clone()
+                    .expect("tuple targets are rejected for Range iteration by sema");
+                let (cursor, stop) = counted_range
+                    .take()
+                    .expect("the guard checked the counted range");
+                self.lower_counted_range_step(
+                    binding,
+                    cursor,
+                    stop,
+                    for_stmt.span,
+                    dispatch_block,
+                    body_block,
+                    after_block,
+                );
+            }
             Some(Type::Named(name, _)) if name == "Range" => {
                 let binding = simple_binding
                     .clone()
@@ -18054,6 +18104,84 @@ impl<'a> Lowerer<'a> {
     /// `for x in mut items`, and a shared loop that only reads `x` in place:
     /// each iteration lends element `i` to the binding through an element
     /// loan, so writes land in the list and reads copy nothing.
+    /// Evaluates a counted range's endpoints once, in source order, as the
+    /// `range` call would, and returns the cursor and stop locals.
+    fn lower_counted_range_endpoints(&mut self, args: &[crate::ast::Argument]) -> (String, String) {
+        let int64 = Type::named("int64");
+        let (start, stop) = match args {
+            [stop] => (Operand::Int(0), self.lower_index_domain_expr(&stop.value)),
+            [start, stop] => {
+                let start = self.lower_index_domain_expr(&start.value);
+                (start, self.lower_index_domain_expr(&stop.value))
+            }
+            _ => unreachable!("counted_range_args admits one or two arguments"),
+        };
+        let cursor = self.new_typed_temp(int64.clone());
+        self.emit(Instruction::Assign {
+            target: cursor.clone(),
+            value: Rvalue::Use(start),
+        });
+        let end = self.new_typed_temp(int64);
+        self.emit(Instruction::Assign {
+            target: end.clone(),
+            value: Rvalue::Use(stop),
+        });
+        (cursor, end)
+    }
+
+    /// Branches to the body while `cursor < stop`, binding the cursor and
+    /// stepping it first, as `ForRange` does. The step cannot overflow: the
+    /// cursor stays below `stop`, which is at most `int64` max.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_counted_range_step(
+        &mut self,
+        binding: String,
+        cursor: String,
+        stop: String,
+        span: crate::diag::Span,
+        dispatch_block: usize,
+        body_block: usize,
+        after_block: usize,
+    ) {
+        let next_block = self.new_block("for_range_next");
+        self.terminate(Terminator::Goto(self.label(dispatch_block)));
+        self.switch_to(dispatch_block);
+        let more = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: more.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Less,
+                left: Operand::Place(cursor.clone()),
+                right: Operand::Place(stop),
+                span,
+                trap: ArithmeticTrap::None,
+            },
+        });
+        self.terminate(Terminator::Branch {
+            condition: Operand::Place(more),
+            then_label: self.label(next_block),
+            else_label: self.label(after_block),
+        });
+        self.switch_to(next_block);
+        self.emit(Instruction::Assign {
+            target: binding,
+            value: Rvalue::Use(Operand::Place(cursor.clone())),
+        });
+        // The cursor is below `stop`, so the advance never traps; the
+        // backend drops the check it names.
+        self.emit(Instruction::Assign {
+            target: cursor.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Add,
+                left: Operand::Place(cursor),
+                right: Operand::Int(1),
+                span,
+                trap: ArithmeticTrap::Overflow,
+            },
+        });
+        self.terminate(Terminator::Goto(self.label(body_block)));
+    }
+
     fn lower_list_iteration_by_loan(
         &mut self,
         for_stmt: &crate::ast::ForStmt,

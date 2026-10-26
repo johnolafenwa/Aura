@@ -175,7 +175,10 @@ Aura's real MIR goes well beyond the toy example. It includes:
 - builtin call lowering for `wait_any(...)` and `wait_all(...)`
   scheduler-backed task waiting through ordinary MIR call paths
 - `ForRange`
-  a specialized loop terminator for range iteration
+  a specialized loop terminator for iterating a `Range` value held in a
+  place. A `for` over a `range(...)` call never builds one: lowering reads
+  the endpoints once into `int64` locals and counts with `Less`, `Add`
+  and `Branch`, so native code keeps the cursor in a register
 - cleanup instructions
   explicit `PushCleanup` and `PopCleanup`
 

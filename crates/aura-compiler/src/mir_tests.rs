@@ -5048,6 +5048,84 @@ def main():
 }
 
 #[test]
+fn for_over_a_range_call_counts_on_int64_locals_without_a_range_value() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    mut total: int64 = 0
+    for i in range(2, 5):
+        total += i
+    for j in ((range(3))):
+        total += j
+    print(total)
+"#,
+    )
+    .expect("range loops should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    assert!(main
+        .blocks
+        .iter()
+        .all(|block| !matches!(block.terminator, Terminator::ForRange { .. })));
+    let range_calls = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::Call { callee, .. },
+                ..
+            } => {
+                matches!(callee, CallTarget::Name(name) if name == "range")
+                    || matches!(
+                        callee,
+                        CallTarget::Runtime {
+                            op: crate::runtime_ops::RuntimeOp::Function(
+                                crate::runtime_ops::FunctionOp::Range
+                            ),
+                            ..
+                        }
+                    )
+            }
+            _ => false,
+        })
+        .count();
+    assert_eq!(range_calls, 0);
+    let steps = main
+        .blocks
+        .iter()
+        .filter(|block| block.label.contains("_for_range_next_"))
+        .collect::<Vec<_>>();
+    assert_eq!(steps.len(), 2);
+    for step in steps {
+        let [Instruction::Assign {
+            target: binding,
+            value: Rvalue::Use(Operand::Place(cursor)),
+        }, Instruction::Assign {
+            target: stepped,
+            value:
+                Rvalue::Binary {
+                    op: BinaryOp::Add,
+                    left: Operand::Place(left),
+                    right: Operand::Int(1),
+                    trap: ArithmeticTrap::Overflow,
+                    ..
+                },
+        }] = step.instructions.as_slice()
+        else {
+            panic!("unexpected counted step: {:?}", step.instructions);
+        };
+        assert_eq!(stepped, cursor);
+        assert_eq!(left, cursor);
+        assert_ne!(binding, cursor);
+        assert!(matches!(step.terminator, Terminator::Goto(_)));
+    }
+}
+
+#[test]
 fn every_ordinary_for_form_uses_a_fresh_scoped_target_slot() {
     let module = crate::lower_source_to_mir(
         r#"
@@ -5065,6 +5143,9 @@ def main():
     for item in numbers:
         print(item)
     for item in range(1):
+        print(item)
+    counter = range(1)
+    for item in counter:
         print(item)
 "#,
     )
@@ -5113,8 +5194,19 @@ def main():
                 _ => None,
             }),
     );
+    // A loop over a `range(...)` call binds its cursor at the top of the
+    // counted step block.
+    targets.extend(
+        main.blocks
+            .iter()
+            .filter(|block| block.label.contains("_for_range_next_"))
+            .filter_map(|block| match block.instructions.first() {
+                Some(Instruction::Assign { target, .. }) => Some(target.as_str()),
+                _ => None,
+            }),
+    );
 
-    assert_eq!(targets.len(), 4);
+    assert_eq!(targets.len(), 5);
     assert!(targets.iter().all(|target| target.starts_with("%t")));
     assert_eq!(
         targets.iter().copied().collect::<BTreeSet<_>>().len(),
@@ -5134,7 +5226,10 @@ def main():
         .map(|ty| ty.to_string())
         .collect::<Vec<_>>();
     rendered_target_types.sort();
-    assert_eq!(rendered_target_types, vec!["int64", "int64", "str", "str"]);
+    assert_eq!(
+        rendered_target_types,
+        vec!["int64", "int64", "int64", "str", "str"]
+    );
 }
 
 fn safepoint_blocks(function: &MirFunction) -> Vec<&BasicBlock> {
@@ -14496,7 +14591,8 @@ def main():
     print(abs(value))
     print(fs.exists("/tmp/aura-step8d2-missing"))
     print(json.is_valid("{}"))
-    for index in range(3):
+    indices = range(3)
+    for index in indices:
         print(f"item {index} of {ratio}")
     print(Duration.ms(5))
 "#,

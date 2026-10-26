@@ -10,7 +10,8 @@ def main():
     print(values.pop())
     print(values.pop(index=0))
     events = Queue[int64]()
-    for index in range(2):
+    indices = range(2)
+    for index in indices:
         events.put(index)
     with supervisor = process.supervisor():
         match supervisor.start(name="worker", command=["/bin/true"], group=false):
