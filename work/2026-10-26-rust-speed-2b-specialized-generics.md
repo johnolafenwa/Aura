@@ -50,6 +50,12 @@ values typed layouts. The design for all of Phase 2 is in
 - Every run-pass fixture still emits: 96 of the 672 existing objects change (programs
   that call generic user or prelude functions), none fails.
 - Backend parity (every runtime fixture on both backends) passes.
+- A `mut self` trait method that a generic function calls on a union
+  argument (`check-pass/union_member_bound_mutable_dispatch.au`) used to
+  stop natively with `AU4001`; the copy for `Dog | Cat` now runs it as
+  `aura run` does. The CLI test that expected the refusal checks that both
+  backends agree, and Current Limits names the calls that still keep the
+  generic function.
 - `aura-compiler` lib tests pass except
   `package_io_helpers_cover_local_error_paths`, which fails only when the
   tests run as root.
@@ -72,4 +78,3 @@ Linux container, release builds of the 2a branch (before) and this change
   `http_api` 31.4M to 32.4M before and 31.1M to 32.5M after, `kv_server`
   83.9M to 85.6M and 82.4M to 84.5M, `pubsub_broker` 147.7M to 151.2M and
   148.9M to 150.7M.
-
