@@ -3,8 +3,8 @@
 use super::{
     check_callable_positions, function_type_mismatch_message, is_array_dtype, is_builtin_type,
     preserves_qualified_builtin_type_name, resolve_param_passing, BTreeMap, BTreeSet, CallableType,
-    ClosureCallKind, ClosureCapture, Diagnostic, FunctionParamContract, HashMap, ReceiverKind,
-    Result, TraitImplInfo, TypeRef,
+    ClosureCallKind, Diagnostic, FunctionParamContract, HashMap, ReceiverKind, Result,
+    TraitImplInfo, TypeRef,
 };
 use aura_core::types::{ReturnedViewType, TraitBound, Type, UnionType};
 
