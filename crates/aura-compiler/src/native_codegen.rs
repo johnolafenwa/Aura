@@ -1437,6 +1437,24 @@ impl<'a> NativeCodegen<'a> {
                 )
             },
         );
+        let lent_element_reads = elements::lent_element_reads(function, |place| {
+            explicit_locals.tracked.contains(place)
+                && matches!(
+                    variable_types.get(place),
+                    Some(DirectType::Opaque(ty)) if !matches!(ty, Type::Named(name, _) if name == "str")
+                )
+        });
+        let mut lent_elements = HashMap::new();
+        let mut lent_names = lent_element_reads.lists.keys().cloned().collect::<Vec<_>>();
+        lent_names.sort();
+        for name in lent_names {
+            let variable = Var(variable_index as u32);
+            variable_index += 1;
+            builder.declare_var(variable, types::I64);
+            let zero = builder.iconst(types::I64, 0);
+            builder.def_var(variable, zero);
+            lent_elements.insert(name, variable);
+        }
         let mut compiler = FunctionCompiler {
             builder,
             blocks,
@@ -1466,6 +1484,10 @@ impl<'a> NativeCodegen<'a> {
             lookup_slots,
             lent_places,
             lend_lookup: false,
+            lent_elements,
+            element_promotions: lent_element_reads.promotions,
+            lend_element: false,
+            lent_element_flag: None,
             lookup_payload: None,
             emptied_store_root: None,
             lent_temps: HashMap::new(),
@@ -2673,6 +2695,18 @@ struct FunctionCompiler<'a> {
     lent_places: HashSet<String>,
     /// Set while a `get` for a lent slot compiles.
     lend_lookup: bool,
+    /// The locals that may hold a list element's own box, lent, each with
+    /// the variable that is 1 while the box is lent and 0 while the local
+    /// owns its box. See `elements::lent_element_reads`.
+    lent_elements: HashMap<String, Var>,
+    /// The lent locals that take their own reference before the
+    /// instruction at each block label and index.
+    element_promotions: HashMap<(String, usize), Vec<String>>,
+    /// Set while the element read for a lent local compiles.
+    lend_element: bool,
+    /// The lent flag of the element read that just compiled, when it could
+    /// lend.
+    lent_element_flag: Option<Val>,
     /// Set while a `get` for one of `lookup_slots` compiles: `Some(false)`
     /// asks for the payload form, and the helper that emits it sets
     /// `Some(true)`.
@@ -3136,8 +3170,70 @@ impl<'a> FunctionCompiler<'a> {
                 let owned = self.owned_lent_word(words[0]);
                 self.release_opaque_handle(owned);
             }
+            _ if self.lent_elements.contains_key(name) => {
+                let flag = self.builder.use_var(self.lent_elements[name]);
+                let lent = self.builder.icmp_imm(IntCC::NotEqual, flag, 0);
+                let null = self.builder.iconst(types::I64, 0);
+                let owned = self.builder.select(lent, null, words[0]);
+                self.release_opaque_handle(owned);
+            }
             _ => self.release_opaque_handle(words[0]),
         }
+        Ok(())
+    }
+
+    /// Makes lent local `name` own its box: a box the list lends takes a
+    /// new reference, so the list copies the element before it changes or
+    /// drops it.
+    fn own_lent_element(&mut self, name: &str) -> std::result::Result<(), String> {
+        let flag_var = self.lent_elements[name];
+        let flag = self.builder.use_var(flag_var);
+        let lent = self.builder.icmp_imm(IntCC::NotEqual, flag, 0);
+        let own_block = self.builder.create_block();
+        let done_block = self.builder.create_block();
+        self.builder.brif(lent, own_block, &[], done_block, &[]);
+        self.builder.switch_to_block(own_block);
+        self.builder.seal_block(own_block);
+        let word = self.builder.use_var(self.local_vars(name)?[0]);
+        self.builder
+            .call(self.runtime[RuntimeFn::RetainValue], &[word]);
+        let zero = self.builder.iconst(types::I64, 0);
+        self.builder.def_var(flag_var, zero);
+        self.builder.jump(done_block, &[]);
+        self.builder.switch_to_block(done_block);
+        self.builder.seal_block(done_block);
+        Ok(())
+    }
+
+    /// Assigns an element read to lent local `target`: the element's own
+    /// box when the list lends it, or the copy the read made.
+    fn compile_lent_element_assign(
+        &mut self,
+        target: &str,
+        value: &Rvalue,
+    ) -> std::result::Result<(), String> {
+        let target_ty = self.type_of_place(target)?;
+        self.lend_element = true;
+        let compiled = self.compile_rvalue_for_target(value, &target_ty);
+        self.lend_element = false;
+        let flag = self.lent_element_flag.take();
+        let compiled = compiled?;
+        let flag_var = self.lent_elements[target];
+        let Some(flag) = flag else {
+            let coerced = self.coerce_value(compiled, &target_ty)?;
+            self.store_place(target, coerced)?;
+            let zero = self.builder.iconst(types::I64, 0);
+            self.builder.def_var(flag_var, zero);
+            return Ok(());
+        };
+        if self.emptied_store_root.as_deref() == Some(target) {
+            self.emptied_store_root = None;
+        } else {
+            self.release_root_words(target)?;
+        }
+        let vars = self.local_vars(target)?;
+        self.builder.def_var(vars[0], compiled.values[0]);
+        self.builder.def_var(flag_var, flag);
         Ok(())
     }
 
@@ -3210,6 +3306,10 @@ impl<'a> FunctionCompiler<'a> {
     /// leaves the root empty, with all-zero words.
     fn release_root(&mut self, name: &str) -> std::result::Result<(), String> {
         self.release_root_words(name)?;
+        if let Some(flag_var) = self.lent_elements.get(name).copied() {
+            let zero = self.builder.iconst(types::I64, 0);
+            self.builder.def_var(flag_var, zero);
+        }
         let ty = self.local_type(name)?;
         if !layout_owns_handles(&ty) {
             return Ok(());
@@ -3446,6 +3546,17 @@ impl<'a> FunctionCompiler<'a> {
             self.layout_scratch.is_empty(),
             "layout temporaries outlived the instruction before {instruction:?}"
         );
+        if !self.element_promotions.is_empty() {
+            if let Some(temps) = self
+                .element_promotions
+                .get(&(block_label.to_string(), instruction_index))
+                .cloned()
+            {
+                for temp in temps {
+                    self.own_lent_element(&temp)?;
+                }
+            }
+        }
         if let Instruction::Retain { place } = instruction {
             if self.lent_places.contains(place.as_str()) {
                 let word = self.load_place(place)?.values[0];
@@ -3636,6 +3747,36 @@ impl<'a> FunctionCompiler<'a> {
             // generic receiver, adds none.
             Instruction::IndexInRange { .. } | Instruction::Retain { .. } => {}
             Instruction::Release { place } => self.release_root(place)?,
+            // A part of a lent element is copied, since the element's box
+            // belongs to its list, and the copy is released at the end.
+            Instruction::Lend { place, temp, .. }
+                if self
+                    .lent_elements
+                    .contains_key(place.split('.').next().unwrap_or(place)) =>
+            {
+                self.lent_temps.insert(temp.clone(), false);
+                let value = self.load_place(place)?;
+                let value = if self.temporary_owns_opaque(&value) {
+                    value
+                } else {
+                    let retained = self.retain_opaque_handle(value.values[0]);
+                    let retained = ValueRef {
+                        values: vec![retained],
+                        ty: value.ty,
+                    };
+                    self.mark_temporary_opaque_owned(&retained);
+                    retained
+                };
+                self.mark_emptied_store_root(temp);
+                self.store_root(temp, value)?;
+            }
+            Instruction::EndLend { place, temp, .. }
+                if self
+                    .lent_elements
+                    .contains_key(place.split('.').next().unwrap_or(place)) =>
+            {
+                self.release_root(temp)?;
+            }
             Instruction::Lend {
                 place,
                 temp,
@@ -4006,6 +4147,8 @@ impl<'a> FunctionCompiler<'a> {
                     self.compile_lent_assign(target, value)?;
                 } else if self.lookup_slots.contains(target.as_str()) {
                     self.compile_lookup_slot_assign(target, value)?;
+                } else if self.lent_elements.contains_key(target.as_str()) {
+                    self.compile_lent_element_assign(target, value)?;
                 } else if let Some(scalar) = self.compile_scalar_variant_payload(target, value)? {
                     self.store_place(target, scalar)?;
                 } else {
@@ -9365,6 +9508,72 @@ impl<'a> FunctionCompiler<'a> {
         Ok(self.builder.block_params(join_block)[0])
     }
 
+    /// Lends element `index` of `list`, a list of handles: the element's
+    /// box and a flag that is 1 when the list keeps the box and 0 when the
+    /// read made a copy the caller owns. A confined list that keeps its
+    /// elements in boxes is read in place. Any other list calls the
+    /// runtime, which may move the elements into boxes, and an index out of
+    /// range traps there.
+    fn emit_list_lend(
+        &mut self,
+        list: Val,
+        index: Val,
+        proven: bool,
+        line: Val,
+        column: Val,
+    ) -> std::result::Result<(Val, Val), String> {
+        use aura_runtime::native_runtime::DirectListAccess;
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let slow_block = self.builder.create_block();
+        let fast_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        self.builder.append_block_param(join_block, types::I64);
+        self.emit_list_access_check(
+            list,
+            DirectListAccess::Boxes,
+            &layout,
+            slow_block,
+            fast_block,
+        );
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let flags = MemFlags::trusted();
+        let elements = self
+            .builder
+            .load(types::I64, flags, list, layout.elements_offset);
+        let position = if proven {
+            index
+        } else {
+            self.emit_list_view_bounds_check(list, index, &layout, slow_block)
+        };
+        let element = self.scalar_list_element(elements, position, 8);
+        let lent_box = self.builder.load(types::I64, flags, element, 0);
+        let lent = self.builder.iconst(types::I64, 1);
+        self.builder.jump(join_block, &[lent_box, lent]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let index = if proven {
+            index
+        } else {
+            self.emit_vec_index_failure_guard(list, index, line, column)?
+        };
+        let word = self.builder.call(
+            self.runtime[RuntimeFn::VecLend],
+            &[list, index, line, column],
+        );
+        let word = word.results[0];
+        let flag = self.builder.band_imm(word, 1);
+        let element_box = self.builder.band_imm(word, !1);
+        self.builder.jump(join_block, &[element_box, flag]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        let params = self.builder.block_params(join_block);
+        Ok((params[0], params[1]))
+    }
+
     /// Appends a scalar's `bits` to `list`. A confined list that keeps the
     /// scalars unboxed and has room stores the element past the end and
     /// raises the view's length, and the runtime takes the element in at
@@ -12213,6 +12422,17 @@ impl<'a> FunctionCompiler<'a> {
                         column,
                         &element_direct_ty,
                     ));
+                }
+                if self.lend_element
+                    && matches!(element_direct_ty, DirectType::Opaque(_))
+                    && !self.temporary_owns_opaque(&object)
+                {
+                    let (word, flag) = self.emit_list_lend(list, index, proven, line, column)?;
+                    self.lent_element_flag = Some(flag);
+                    return Ok(ValueRef {
+                        values: vec![word],
+                        ty: element_direct_ty,
+                    });
                 }
                 let index = if proven {
                     index
@@ -15491,6 +15711,8 @@ mod reachability;
 #[path = "native_codegen_callables.rs"]
 mod callables;
 
+#[path = "native_codegen_elements.rs"]
+mod elements;
 #[path = "native_codegen_lookups.rs"]
 mod lookups;
 

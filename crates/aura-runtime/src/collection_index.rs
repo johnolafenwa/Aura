@@ -101,8 +101,8 @@ fn hash_nodes(root: &Value, hasher: &mut impl Hasher, budget: &mut usize) {
             }
             Value::Vec(vector) => {
                 vector.elements.len().hash(hasher);
-                match vector.elements.as_values() {
-                    Some(values) => pending.extend(values.iter().rev()),
+                match vector.elements.value_refs() {
+                    Some(values) => pending.extend(values.rev()),
                     None => {
                         // The elements would be the next nodes visited, so
                         // hashing each here in order, scalars in one write

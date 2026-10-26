@@ -208,6 +208,7 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::SetNextIndirectMutableSinks,
             RuntimeFn::VecPopInPlace,
             RuntimeFn::VecRemoveInPlace,
+            RuntimeFn::VecLend,
             RuntimeFn::VecPopScalar,
             RuntimeFn::VecCheckIndex,
             RuntimeFn::VecReadPlain,

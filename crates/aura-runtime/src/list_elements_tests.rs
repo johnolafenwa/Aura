@@ -256,7 +256,7 @@ fn every_edit_matches_a_plain_vector_of_values() {
         let mut list = ListElements::from(model.clone());
         for _ in 0..80 {
             let len = model.len();
-            match steps.next(13) {
+            match steps.next(16) {
                 0 | 1 => {
                     let value = sample_value(&mut steps, family);
                     model.push(value.clone());
@@ -320,6 +320,35 @@ fn every_edit_matches_a_plain_vector_of_values() {
                     model.clear();
                     list.clear();
                 }
+                // A lend moves a list of `Value`s to boxes, which every
+                // later edit then works on.
+                13 if len > 0 => {
+                    let index = steps.next(len);
+                    let lent = list.lend(index).map(|element| element.value().clone());
+                    if let Some(lent) = lent {
+                        assert_eq!(exact(&[lent]), exact(&model[index..=index]));
+                        assert!(matches!(list, ListElements::Boxes(_)));
+                    }
+                }
+                14 if len > 0 => {
+                    let index = steps.next(len);
+                    let value = sample_value(&mut steps, family);
+                    model[index] = value.clone();
+                    *list.get_mut(index).unwrap() = value;
+                }
+                // A copy shares the storage until either list changes.
+                15 if len > 0 => {
+                    let snapshot = list.clone();
+                    let index = steps.next(len);
+                    let value = sample_value(&mut steps, family);
+                    let previous = std::mem::replace(&mut model[index], value.clone());
+                    *list.last_mut().unwrap() = list.at(len - 1).into_owned();
+                    *list.get_mut(index).unwrap() = value;
+                    assert_eq!(
+                        exact(&[snapshot.at(index).into_owned()]),
+                        exact(&[previous])
+                    );
+                }
                 _ => {}
             }
             assert_eq!(exact_list(&list), exact(&model), "seed {seed}");
@@ -332,8 +361,85 @@ fn every_edit_matches_a_plain_vector_of_values() {
                 );
             }
             assert!(list.get(model.len()).is_none());
+            if let Some(values) = list.value_refs() {
+                assert_eq!(values.len(), model.len());
+                assert_eq!(
+                    exact(&values.rev().cloned().collect::<Vec<_>>()),
+                    exact(&model.iter().rev().cloned().collect::<Vec<_>>())
+                );
+                assert_eq!(
+                    exact(&list.value_at(0).into_iter().cloned().collect::<Vec<_>>()),
+                    exact(&model[..model.len().min(1)])
+                );
+            } else {
+                assert!(list.value_at(0).is_none());
+            }
         }
     }
+}
+
+fn text(value: &str) -> Value {
+    Value::String(value.into())
+}
+
+#[test]
+fn lent_lists_keep_each_element_in_a_box_of_its_own() {
+    let mut list = ListElements::from(vec![text("a"), text("b"), text("c")]);
+    assert!(ListElements::from(vec![int(1)]).lend(0).is_none());
+    let first = list.lend(1).unwrap().as_ptr();
+    assert!(matches!(list, ListElements::Boxes(_)));
+    // The box stays where it is while the list keeps it.
+    assert_eq!(list.lend(1).unwrap().as_ptr(), first);
+    assert!(list.lend(3).is_none());
+    assert_eq!(
+        list.view().0.access(),
+        crate::native_runtime::DirectListAccess::Boxes as u32
+    );
+    assert_eq!(list.view().3, 0);
+    assert_eq!(
+        format!("{list:?}"),
+        format!("{:?}", SharedVec::from(vec![text("a"), text("b"), text("c")]))
+    );
+
+    // A copy shares the boxes until either list changes; a change copies
+    // the storage, so the other list keeps its boxes.
+    let copy = list.clone();
+    list.push(text("d"));
+    assert_eq!(copy.len(), 3);
+    assert_eq!(list.len(), 4);
+    let ListElements::Boxes(boxes) = &copy else {
+        panic!("the copy keeps the boxes");
+    };
+    assert_eq!(boxes[1].as_ptr(), first);
+    assert_ne!(list.lend(1).unwrap().as_ptr(), first);
+
+    // A list of `Value`s another list shares copies its elements into boxes,
+    // and the other list keeps its `Value`s.
+    let mut shared = ListElements::from(vec![text("x"), text("y")]);
+    let other = shared.clone();
+    assert_eq!(shared.lend(0).unwrap().value(), &text("x"));
+    assert!(matches!(other, ListElements::Values(_)));
+    assert_eq!(shared, other);
+
+    // Lent lists sort, report their position order, and convert back.
+    let mut words = ListElements::from(vec![text("c"), text("a"), text("b")]);
+    words.lend(0);
+    crate::list_sort::sort_elements(&mut words, false).unwrap();
+    assert_eq!(
+        exact_list(&words),
+        exact(&[text("a"), text("b"), text("c")])
+    );
+    let mut keyed = ListElements::from(vec![int(1), int(2), int(3)]);
+    crate::list_sort::sort_elements_by_keys(&mut keyed, &words, true).unwrap();
+    assert_eq!(exact_list(&keyed), exact(&[int(3), int(2), int(1)]));
+    let mut mixed = ListElements::from(vec![text("a"), int(1)]);
+    mixed.lend(0);
+    assert!(crate::list_sort::sort_elements(&mut mixed, false).is_err());
+    assert!(crate::list_sort::sort_elements_by_keys(&mut keyed.clone(), &mixed, false).is_err());
+    assert_eq!(
+        exact(&words.into_vec()),
+        exact(&[text("a"), text("b"), text("c")])
+    );
 }
 
 #[test]

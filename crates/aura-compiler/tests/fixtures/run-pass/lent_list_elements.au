@@ -1,0 +1,150 @@
+import json
+
+# Reads of list elements that native code lends instead of copying, and the
+# list changes around them that must not change what was read.
+
+class Item:
+    name: str
+    tags: list[str]
+    weight: int64
+
+enum Shape:
+    Circle(float64)
+    Poly(list[float64])
+
+def make_items(count: int64) -> list[Item]:
+    mut items: list[Item] = []
+    mut i = 0
+    while i < count:
+        items.append(Item(name = f"item{i}", tags = ["t", f"n{i}"], weight = i))
+        i += 1
+    return items
+
+def total(items: list[Item]) -> int64:
+    mut sum = 0
+    for item in items:
+        sum += item.weight + len(item.tags) + len(item.name)
+    return sum
+
+# The list is released while its element is still being read.
+def first_name_length(items: list[Item]) -> int64:
+    return len(items[0].name)
+
+def tag_count(items: list[Item]) -> int64:
+    mut count = 0
+    mut i = 0
+    while i < len(items):
+        count += len(items[i].tags) + len(items[i].tags[1])
+        i += 1
+    return count
+
+def grow(items: mut list[Item]) -> int64:
+    before = items[0].weight + len(items[0].tags)
+    items.append(Item(name = "grown", tags = [], weight = 50))
+    items[0] = Item(name = "replaced", tags = ["q"], weight = 100)
+    return before + items[0].weight + len(items[0].tags)
+
+def nested(rows: list[list[Item]]) -> int64:
+    mut sum = 0
+    for row in rows:
+        for item in row:
+            sum += item.weight
+        sum += len(row)
+    return sum
+
+def area(shapes: list[Shape]) -> float64:
+    mut acc = 0.0
+    for shape in shapes:
+        match shape:
+            case Shape.Circle(r):
+                acc += r
+            case Shape.Poly(points):
+                acc += points[0] + points[len(points) - 1]
+    return acc
+
+def lengths(rows: list[list[int64]]) -> int64:
+    mut sum = 0
+    for row in rows:
+        for value in row:
+            sum += value
+    return sum
+
+def json_sum(values: list[json.Value]) -> int64:
+    mut sum = 0
+    for value in values:
+        match value:
+            case json.Value.Int(n):
+                sum += n
+            case json.Value.Array(inner):
+                sum += len(inner)
+            case _:
+                pass
+    return sum
+
+def worker(items: list[Item]) -> int64:
+    return total(items)
+
+def main():
+    mut items = make_items(4)
+    mut round = 0
+    while round < 12:
+        print(total(items))
+        round += 1
+    print(first_name_length(make_items(3)))
+    print(first_name_length(items))
+    print(tag_count(items))
+    print(grow(items))
+    print(f"{items[0].name} {items[4].name} {len(items)} {total(items)}")
+
+    # Changes to the list after its elements were lent.
+    items.insert(1, Item(name = "inserted", tags = ["i"], weight = 7))
+    print(total(items))
+    popped = items.pop()
+    print(f"{popped.name} {total(items)}")
+    items.reverse()
+    print(f"{items[0].name} {items[len(items) - 1].name} {total(items)}")
+    items.sort(key = lambda item: item.weight)
+    print(f"{items[0].name} {items[len(items) - 1].name} {total(items)}")
+    mut copied = items.copy()
+    items[0] = Item(name = "changed", tags = [], weight = 1000)
+    print(f"{items[0].name} {copied[0].name} {total(items)} {total(copied)}")
+    copied.clear()
+    print(f"{len(copied)} {total(items)}")
+
+    # A large list is read in place only once its reads pay for it.
+    mut big = make_items(200)
+    print(first_name_length(big))
+    print(total(big))
+    print(total(big))
+    big.append(Item(name = "last", tags = ["l"], weight = 1))
+    print(total(big))
+
+    rows = [make_items(2), make_items(3), []]
+    print(nested(rows))
+    print(nested(rows))
+
+    shapes: list[Shape] = [Shape.Circle(1.5), Shape.Poly([2.0, 3.0]), Shape.Circle(0.5)]
+    mut s = 0
+    while s < 10:
+        print(area(shapes))
+        s += 1
+
+    numbers = [[1, 2], [3], [], [4, 5, 6]]
+    print(lengths(numbers))
+    print(lengths(numbers))
+
+    values = [json.Value.Int(3), json.Value.Array([json.Value.Null, json.Value.Bool(true)]), json.Value.String("s"), json.Value.Int(4)]
+    mut j = 0
+    while j < 6:
+        print(json_sum(values))
+        j += 1
+    print(json.dumps(json.Value.Array(values)))
+
+    # A copy a task reads shares the storage of a list read in place here.
+    shared = make_items(3)
+    print(total(shared))
+    with TaskGroup() as group:
+        task = group.start(worker, shared.copy())
+        print(total(shared))
+        print(task.result_or(0, timeout = 5s))
+    print(total(shared))

@@ -2,14 +2,16 @@
 //!
 //! A list whose elements are all of one fixed-width scalar type keeps the
 //! scalars themselves: each `int8`..`int64` or `uint8`..`uint64` element
-//! in its own width, each `float32` or `float64` element in 8 bytes, and
-//! each `bool` in 1 byte, instead of a whole `Value`. A list whose elements
-//! are all values of a class or tuple type that generated code registered a
-//! plain layout for keeps each value's bytes in that layout, one after
-//! another (see [`PlainLayout`]). Any other list keeps `Value`s. The storage
-//! follows the elements alone, and moving between the forms loses nothing,
-//! so a program cannot observe which one a list uses. Generated code reads
-//! and writes the scalar and typed forms in place.
+//! in its own width, each `float64` element in 8 bytes, and each `bool` in
+//! 1 byte, instead of a whole `Value`. A `list[float32]` keeps 4-byte
+//! elements. A list whose elements are all values of a class or tuple type
+//! that generated code registered a plain layout for keeps each value's
+//! bytes in that layout, one after another (see [`PlainLayout`]). Any other
+//! list keeps `Value`s, or each one in a box of its own once generated code
+//! lends one (see [`ElementBox`]). The storage follows the elements alone,
+//! and moving between the forms loses nothing, so a program cannot observe
+//! which one a list uses. Generated code reads and writes the scalar and
+//! typed forms in place, and lends the boxes of the boxed form.
 //!
 //! Every form sits in a [`SharedVec`], so a clone shares the storage and the
 //! first write through a shared handle copies it.
@@ -20,7 +22,7 @@ use std::fmt;
 
 use crate::collection_index::SharedVec;
 use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
-use crate::native_runtime::{plain_layout_for_value, PlainLayout};
+use crate::native_runtime::{plain_layout_for_value, ElementBox, ElementMut, PlainLayout};
 use crate::randomness::DeterministicRng;
 use crate::runtime_value::Value;
 
@@ -43,6 +45,11 @@ pub enum ListElements {
     /// [`ListElements::narrow_to_float32`]), and storing a float in it rounds
     /// the float to `float32`, as storing it in a `float32` variable does.
     Float32(SharedVec<f32>),
+    /// Each element in a box of its own, which generated code lends instead
+    /// of copying the element. A list of `Value`s takes this form when
+    /// generated code first lends one of its elements (see
+    /// [`ListElements::lend`]), and keeps it through edits.
+    Boxes(SharedVec<ElementBox>),
     /// Boxed, so the typed form keeps every list one pointer and a tag.
     Typed(Box<TypedElements>),
 }
@@ -66,6 +73,7 @@ pub enum ListForm {
     Uint32 = 11,
     Uint64 = 12,
     Float32 = 13,
+    Boxes = 14,
     Typed(u32),
 }
 
@@ -424,14 +432,15 @@ macro_rules! each_form {
             ListElements::Uint32($values) => $body,
             ListElements::Uint64($values) => $body,
             ListElements::Float32($values) => $body,
+            ListElements::Boxes($values) => $body,
             ListElements::Typed($typed) => $typed_body,
         }
     };
 }
 
 /// Matches `$list` against the scalar forms, binding the storage to
-/// `$values` for `$body`, and runs the arms after it for the `Value` and
-/// typed forms.
+/// `$values` for `$body`, and runs the arms after it for the `Value`,
+/// boxed, and typed forms.
 macro_rules! each_scalar_form {
     ($list:expr, $values:ident => $body:expr, $($other:pat => $fallback:expr),+ $(,)?) => {
         match $list {
@@ -547,6 +556,7 @@ fn keeps(form: ListForm, value: &Value) -> bool {
         ListForm::Uint32 => u32::of(value).is_some(),
         ListForm::Uint64 => u64::of(value).is_some(),
         ListForm::Float32 => f32::equal_to(value).is_some(),
+        ListForm::Boxes => true,
         ListForm::Typed(_) => false,
     }
 }
@@ -597,6 +607,7 @@ impl ListElements {
             ListForm::Uint32 => Self::Uint32(collect_form(values)?),
             ListForm::Uint64 => Self::Uint64(collect_form(values)?),
             ListForm::Float32 => Self::Float32(collect_form(values)?),
+            ListForm::Boxes => Self::Boxes(values.iter().cloned().map(ElementBox::new).collect()),
             ListForm::Typed(_) => return None,
         })
     }
@@ -640,6 +651,7 @@ impl ListElements {
             Self::Uint32(_) => ListForm::Uint32,
             Self::Uint64(_) => ListForm::Uint64,
             Self::Float32(_) => ListForm::Float32,
+            Self::Boxes(_) => ListForm::Boxes,
             Self::Typed(typed) => ListForm::Typed(typed.layout.access()),
         }
     }
@@ -683,6 +695,8 @@ impl ListElements {
             Self::Uint32(values) => scalar(ListForm::Uint32, values),
             Self::Uint64(values) => scalar(ListForm::Uint64, values),
             Self::Float32(values) => scalar(ListForm::Float32, values),
+            // Generated code only reads the boxes, so the form has no room.
+            Self::Boxes(boxes) => (ListForm::Boxes, boxes.as_ptr() as usize, boxes.len(), 0),
             Self::Typed(typed) => typed.view(),
         }
     }
@@ -701,7 +715,7 @@ impl ListElements {
         each_scalar_form!(
             self,
             values => unsafe { adopt_appended(values, len) },
-            Self::Values(_) => {},
+            Self::Values(_) | Self::Boxes(_) => {},
             Self::Typed(typed) => unsafe { typed.adopt_appended(len) }
         )
     }
@@ -728,6 +742,7 @@ impl ListElements {
             self,
             values => values.get(index).map(|element| Cow::Owned(element.value())),
             Self::Values(values) => values.get(index).map(Cow::Borrowed),
+            Self::Boxes(boxes) => boxes.get(index).map(|element| Cow::Borrowed(element.value())),
             Self::Typed(typed) => typed.get(index),
         )
     }
@@ -770,6 +785,7 @@ impl ListElements {
             Self::Uint32(values) => Iter::Uint32(values.iter()),
             Self::Uint64(values) => Iter::Uint64(values.iter()),
             Self::Float32(values) => Iter::Float32(values.iter()),
+            Self::Boxes(boxes) => Iter::Boxes(boxes.iter()),
             Self::Typed(typed) => Iter::Typed {
                 layout: typed.layout,
                 words: &typed.words,
@@ -786,13 +802,37 @@ impl ListElements {
         }
     }
 
-    /// The elements as a `Vec` of `Value`s to edit in place. A scalar list
-    /// moves to the `Value` form first and keeps it, so this suits edits
-    /// that reach inside an element. Edits of whole elements have their own
-    /// methods, which keep a scalar form.
+    /// The `Value`s the list keeps, borrowed in order, when it keeps them
+    /// whole (the `Value` and `Boxes` forms). The scalar and typed forms
+    /// hold no handle, class instance, or `Array`, so a walk that looks
+    /// for those can skip a list when this is `None`.
+    #[inline]
+    pub fn value_refs(&self) -> Option<ValueRefs<'_>> {
+        match self {
+            Self::Values(values) => Some(ValueRefs::Values(values.iter())),
+            Self::Boxes(boxes) => Some(ValueRefs::Boxes(boxes.iter())),
+            _ => None,
+        }
+    }
+
+    /// Element `index`, borrowed, when the list keeps its elements whole
+    /// (see [`Self::value_refs`]).
+    #[inline]
+    pub fn value_at(&self, index: usize) -> Option<&Value> {
+        match self {
+            Self::Values(values) => values.get(index),
+            Self::Boxes(boxes) => boxes.get(index).map(ElementBox::value),
+            _ => None,
+        }
+    }
+
+    /// The elements as a `Vec` of `Value`s to edit in place. A list in
+    /// another form moves to the `Value` form first and keeps it. Edits of
+    /// whole elements have their own methods, which keep the form, and so
+    /// do [`Self::get_mut`] and [`Self::last_mut`].
     pub fn values_mut(&mut self) -> &mut Vec<Value> {
         if !matches!(self, Self::Values(_)) {
-            *self = Self::Values(self.to_vec().into());
+            *self = Self::Values(std::mem::take(self).into_vec().into());
         }
         match self {
             Self::Values(values) => values,
@@ -800,18 +840,21 @@ impl ListElements {
         }
     }
 
-    pub fn get_mut(&mut self, index: usize) -> Option<&mut Value> {
+    /// Element `index`, to edit inside it. A scalar or typed list moves to
+    /// the `Value` form first, and a boxed list keeps its form.
+    pub fn get_mut(&mut self, index: usize) -> Option<ElementRefMut<'_>> {
         if index >= self.len() {
             return None;
         }
-        self.values_mut().get_mut(index)
+        if let Self::Boxes(boxes) = self {
+            return Some(ElementRefMut::Boxed(boxes[index].value_mut()));
+        }
+        self.values_mut().get_mut(index).map(ElementRefMut::Value)
     }
 
-    pub fn last_mut(&mut self) -> Option<&mut Value> {
-        if self.is_empty() {
-            return None;
-        }
-        self.values_mut().last_mut()
+    pub fn last_mut(&mut self) -> Option<ElementRefMut<'_>> {
+        let last = self.len().checked_sub(1)?;
+        self.get_mut(last)
     }
 
     /// Runs `edit` on the elements as `Value`s, then picks the form again.
@@ -830,12 +873,39 @@ impl ListElements {
     pub fn into_vec(self) -> Vec<Value> {
         match self {
             Self::Values(values) => values.into_vec(),
+            Self::Boxes(boxes) => boxes.into_iter().map(ElementBox::into_value).collect(),
             other => other.to_vec(),
+        }
+    }
+
+    /// Lends element `index`: the box that holds it, which stays where it
+    /// is until the list changes. A list of `Value`s moves its elements
+    /// into boxes first, copying them when another list shares the storage.
+    /// Storage of boxes another list shares stays shared, since a change to
+    /// either list copies it first. Any other form returns `None`.
+    pub fn lend(&mut self, index: usize) -> Option<&ElementBox> {
+        if let Self::Values(values) = self {
+            let boxes = match values.unshared_mut() {
+                Some(values) => std::mem::take(values)
+                    .into_iter()
+                    .map(ElementBox::new)
+                    .collect(),
+                None => values.iter().cloned().map(ElementBox::new).collect(),
+            };
+            *self = Self::Boxes(boxes);
+        }
+        match self {
+            Self::Boxes(boxes) => boxes.get(index),
+            _ => None,
         }
     }
 
     #[inline]
     pub fn push(&mut self, value: Value) {
+        if let Self::Boxes(boxes) = self {
+            boxes.push(ElementBox::new(value));
+            return;
+        }
         let pushed = each_scalar_form!(
             &mut *self,
             values => match Element::of(&value) {
@@ -845,7 +915,7 @@ impl ListElements {
                 }
                 None => false,
             },
-            Self::Values(_) => false,
+            Self::Values(_) | Self::Boxes(_) => false,
             Self::Typed(typed) => {
                 let fits = typed.layout.fits(&value);
                 if fits {
@@ -928,6 +998,7 @@ impl ListElements {
             self,
             values => values.pop().map(Element::value),
             Self::Values(values) => values.pop(),
+            Self::Boxes(boxes) => boxes.pop().map(ElementBox::into_value),
             Self::Typed(typed) => typed.pop(),
         )
     }
@@ -948,6 +1019,9 @@ impl ListElements {
             values => Element::of(&value)
                 .map(|element| std::mem::replace(&mut values[index], element).value()),
             Self::Values(_) => None,
+            Self::Boxes(boxes) => {
+                return std::mem::replace(&mut boxes[index], ElementBox::new(value)).into_value()
+            },
             Self::Typed(typed) => typed
                 .layout
                 .fits(&value)
@@ -980,6 +1054,10 @@ impl ListElements {
                 None => false,
             },
             Self::Values(_) => false,
+            Self::Boxes(boxes) => {
+                boxes.insert(index, ElementBox::new(value));
+                return;
+            },
             Self::Typed(typed) => {
                 let fits = typed.layout.fits(&value);
                 if fits {
@@ -1013,6 +1091,7 @@ impl ListElements {
             self,
             values => values.remove(index).value(),
             Self::Values(values) => values.remove(index),
+            Self::Boxes(boxes) => boxes.remove(index).into_value(),
             Self::Typed(typed) => typed.remove(index),
         )
     }
@@ -1063,6 +1142,7 @@ impl ListElements {
         same_scalar_forms!(
             (&mut *self, other),
             (values, more) => values.extend_from_slice(&more),
+            (Self::Boxes(boxes), Self::Boxes(more)) => boxes.extend(more),
             (Self::Typed(typed), Self::Typed(more)) if std::ptr::eq(typed.layout, more.layout) => {
                 typed.words.extend_from_slice(&more.words)
             },
@@ -1098,6 +1178,7 @@ impl ListElements {
             Self::Uint32(values) => Self::Uint32(values.drain(start..end).collect()),
             Self::Uint64(values) => Self::Uint64(values.drain(start..end).collect()),
             Self::Float32(values) => Self::Float32(values.drain(start..end).collect()),
+            Self::Boxes(boxes) => Self::Boxes(boxes.drain(start..end).collect()),
             Self::Typed(typed) => {
                 let stride = typed.stride();
                 Self::Typed(Box::new(TypedElements {
@@ -1130,6 +1211,9 @@ impl ListElements {
             (&mut *self, other),
             (values, more) => {
                 values.splice(index..index, more.iter().copied());
+            },
+            (Self::Boxes(boxes), Self::Boxes(more)) => {
+                boxes.splice(index..index, more);
             },
             (Self::Typed(typed), Self::Typed(more)) if std::ptr::eq(typed.layout, more.layout) => {
                 let at = index * typed.stride();
@@ -1180,9 +1264,36 @@ impl ListElements {
         let found = each_scalar_form!(
             self,
             values => Element::equal_to(needle).map(|element| values.contains(&element)),
-            Self::Values(_) | Self::Typed(_) => None,
+            Self::Values(_) | Self::Boxes(_) | Self::Typed(_) => None,
         );
         found.unwrap_or_else(|| self.iter().any(|element| *element == *needle))
+    }
+}
+
+/// An element to edit inside: a `Value` in the list's storage, or one in a
+/// box of its own, whose list view follows the edit when this drops.
+pub enum ElementRefMut<'a> {
+    Value(&'a mut Value),
+    Boxed(ElementMut<'a>),
+}
+
+impl std::ops::Deref for ElementRefMut<'_> {
+    type Target = Value;
+
+    fn deref(&self) -> &Value {
+        match self {
+            Self::Value(value) => value,
+            Self::Boxed(element) => element,
+        }
+    }
+}
+
+impl std::ops::DerefMut for ElementRefMut<'_> {
+    fn deref_mut(&mut self) -> &mut Value {
+        match self {
+            Self::Value(value) => value,
+            Self::Boxed(element) => element,
+        }
     }
 }
 
@@ -1286,6 +1397,7 @@ pub enum Iter<'a> {
     Uint32(std::slice::Iter<'a, u32>),
     Uint64(std::slice::Iter<'a, u64>),
     Float32(std::slice::Iter<'a, f32>),
+    Boxes(std::slice::Iter<'a, ElementBox>),
     /// The words of the elements left, whole elements only.
     Typed {
         layout: &'static PlainLayout,
@@ -1332,6 +1444,7 @@ impl<'a> Iterator for Iter<'a> {
             self,
             values => values.next().map(|element| Cow::Owned(element.value())),
             Self::Values(values) => values.next().map(Cow::Borrowed),
+            Self::Boxes(boxes) => boxes.next().map(|element| Cow::Borrowed(element.value())),
             Self::Typed { layout, words } => {
                 if words.is_empty() {
                     return None;
@@ -1351,6 +1464,7 @@ impl<'a> Iterator for Iter<'a> {
             self,
             values => values.nth(n).map(|element| Cow::Owned(element.value())),
             Self::Values(values) => values.nth(n).map(Cow::Borrowed),
+            Self::Boxes(boxes) => boxes.nth(n).map(|element| Cow::Borrowed(element.value())),
             Self::Typed { layout, words } => {
                 let skipped = n.saturating_mul(layout.stride_words()).min(words.len());
                 *words = &words[skipped..];
@@ -1373,6 +1487,9 @@ impl DoubleEndedIterator for Iter<'_> {
             self,
             values => values.next_back().map(|element| Cow::Owned(element.value())),
             Self::Values(values) => values.next_back().map(Cow::Borrowed),
+            Self::Boxes(boxes) => boxes
+                .next_back()
+                .map(|element| Cow::Borrowed(element.value())),
             Self::Typed { layout, words } => {
                 if words.is_empty() {
                     return None;
@@ -1405,8 +1522,62 @@ impl ExactSizeIterator for Iter<'_> {
             self,
             values => values.len(),
             Self::Values(values) => values.len(),
+            Self::Boxes(boxes) => boxes.len(),
             Self::Typed { layout, words } => words.len() / layout.stride(),
         )
+    }
+}
+
+/// The `Value`s a list keeps whole, borrowed in order (see
+/// [`ListElements::value_refs`]).
+#[derive(Clone)]
+pub enum ValueRefs<'a> {
+    Values(std::slice::Iter<'a, Value>),
+    Boxes(std::slice::Iter<'a, ElementBox>),
+}
+
+impl Default for ValueRefs<'_> {
+    /// No values, for a list that keeps none whole.
+    fn default() -> Self {
+        Self::Values([].iter())
+    }
+}
+
+impl<'a> Iterator for ValueRefs<'a> {
+    type Item = &'a Value;
+
+    #[inline]
+    fn next(&mut self) -> Option<&'a Value> {
+        match self {
+            Self::Values(values) => values.next(),
+            Self::Boxes(boxes) => boxes.next().map(ElementBox::value),
+        }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+impl DoubleEndedIterator for ValueRefs<'_> {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Values(values) => values.next_back(),
+            Self::Boxes(boxes) => boxes.next_back().map(ElementBox::value),
+        }
+    }
+}
+
+impl ExactSizeIterator for ValueRefs<'_> {
+    #[inline]
+    fn len(&self) -> usize {
+        match self {
+            Self::Values(values) => values.len(),
+            Self::Boxes(boxes) => boxes.len(),
+        }
     }
 }
 
@@ -1444,11 +1615,14 @@ pub struct StrViewEntry {
 }
 
 /// A list's `str` view: one entry per element, and the element reads that
-/// missed it since it was last built.
+/// missed it since it was last built. It also counts the reads that copied
+/// an element of a list of other handles, which decide when the list moves
+/// its elements into boxes it can lend.
 #[derive(Debug, Default)]
 pub struct StrView {
     pub entries: Vec<StrViewEntry>,
     pub misses: usize,
+    pub copied_reads: usize,
 }
 
 /// The `str` view a list keeps once the native runtime builds it. It

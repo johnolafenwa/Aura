@@ -139,6 +139,8 @@ pub struct DirectFfiCallSpec {
 
 #[path = "native_box_cache.rs"]
 mod box_cache;
+#[path = "native_element_boxes.rs"]
+mod element_boxes;
 #[path = "native_frame_stack.rs"]
 mod frame_stack;
 #[path = "native_owned_values.rs"]
@@ -157,6 +159,7 @@ pub use typed_layout::{
     UNREGISTERED_PLAIN_ACCESS,
 };
 
+pub use element_boxes::{ElementBox, ElementMut};
 pub use frame_stack::{direct_frame_stack_layout, DirectFrameStack, DirectFrameStackLayout};
 use frame_stack::{
     DIRECT_FRAME_FLAG_PENDING_SINKS, DIRECT_FRAME_FLAG_RETURNED_VIEWS, DIRECT_MAX_CALL_DEPTH,
@@ -2715,6 +2718,11 @@ pub enum DirectListAccess {
     Uint64 = 12,
     /// A list of `float32` elements, 4 bytes each.
     Float32 = 13,
+    /// A list that keeps each element in a box of its own. The view's
+    /// elements are the boxes' addresses, 8 bytes each, which generated
+    /// code lends instead of copying the elements (see
+    /// [`aura_direct_vec_lend`]).
+    Boxes = 14,
     /// A rank-1 `Array[int32]`.
     ArrayInt32 = 15,
     /// A rank-1 `Array[int64]`.
@@ -2728,7 +2736,7 @@ pub enum DirectListAccess {
 impl DirectListAccess {
     /// The codes of the list forms, which all keep their length in the
     /// view. They are consecutive from [`DirectListAccess::Values`].
-    pub const LIST_FORMS: u32 = 13;
+    pub const LIST_FORMS: u32 = 14;
 }
 
 /// The scalar types generated code names to the runtime in one word: the
@@ -2910,6 +2918,7 @@ impl DirectListLayout {
             DirectListAccess::ArrayFloat64 as i64,
             DirectListAccess::Str as i64,
             DirectListAccess::Uint64 as i64,
+            DirectListAccess::Boxes as i64,
             i64::from(DirectListAccess::LIST_FORMS),
             DirectScalarKind::Float32 as i64,
             i64::from(DIRECT_STR_VIEW_ENTRY_BYTES),
@@ -7815,6 +7824,64 @@ pub extern "C-unwind" fn aura_direct_vec_pop_scalar(vec: *mut OpaqueValue, kind:
     })
 }
 
+/// The copying reads of a confined list of `Value`s, per element, after
+/// which [`aura_direct_vec_lend`] moves the elements into boxes it can
+/// lend. Moving them costs about one copy each, so the copies before it pay
+/// for it, and a list read only a few times stays as it is.
+const LEND_COPIES_PER_ELEMENT: usize = 8;
+
+/// Lends element `index` of `vec`, a list of handles, to generated code,
+/// which reads it in place and copies nothing. The word is the box that
+/// holds the element, with its low bit set, when the list keeps its
+/// elements in boxes; generated code reads that box itself while the list
+/// is confined, and calls here otherwise. A confined list of `Value`s moves
+/// its elements into boxes once its copying reads reach an eighth of its
+/// length. Until then, and for a list another thread may read, the word is
+/// a new box with a copy of the element, which the caller owns, as
+/// [`aura_direct_vec_index`] returns. The caller checked the index.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_lend(
+    vec: *mut OpaqueValue,
+    index: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let header = unsafe { vec.as_ref() }.unwrap_or_else(|| {
+            runtime_error("direct runtime received a null opaque value pointer")
+        });
+        if header.shared_lock().is_none() {
+            // SAFETY: the caller passes a live box.
+            if let Some(element) = unsafe { value_mut(vec, |value| lend_vec_element(value, index)) }
+            {
+                return element.wrapping_byte_add(1);
+            }
+        }
+        aura_direct_vec_index(vec, index, line, column)
+    })
+}
+
+/// The box of element `index` of the confined list `value`, once the list
+/// keeps its elements in boxes (see [`aura_direct_vec_lend`]).
+fn lend_vec_element(value: &mut Value, index: i64) -> Option<*mut OpaqueValue> {
+    let Value::Vec(vector) = value else {
+        return None;
+    };
+    let len = vector.elements.len();
+    let position = normalize_vec_index(index, len).filter(|position| *position < len)?;
+    if matches!(vector.elements, ListElements::Values(_)) {
+        // SAFETY: the list is confined to this thread, and nothing else
+        // holds its view.
+        let view = unsafe { vector.str_view.get_or_create() };
+        view.copied_reads += 1;
+        if view.copied_reads.saturating_mul(LEND_COPIES_PER_ELEMENT) < len {
+            return None;
+        }
+        view.copied_reads = 0;
+    }
+    vector.elements.lend(position).map(ElementBox::as_ptr)
+}
+
 /// Reads a scalar list element without boxing it. The caller has already
 /// normalized and bounds-checked `index`. `kind` names the element's
 /// [`DirectScalarKind`], and the element comes back as generated code
@@ -7859,9 +7926,9 @@ fn with_vec_element<T>(
         else {
             direct_vec_index_error(index, len, line, column)
         };
-        match &vector.elements {
-            ListElements::Values(values) => read(&values[position]),
-            scalars => read(&scalars.at(position)),
+        match vector.elements.value_at(position) {
+            Some(value) => read(value),
+            None => read(&vector.elements.at(position)),
         }
     })
 }
@@ -8978,7 +9045,7 @@ fn lent_vec_element_map_lookup(
             else {
                 direct_vec_index_error(index, len, line, column)
             };
-            let ListElements::Values(values) = &vector.elements else {
+            let Some(element) = vector.elements.value_at(position) else {
                 // A list of unboxed scalars holds no `dict`.
                 let element = vector.elements.at(position);
                 runtime_error(format!(
@@ -8986,7 +9053,7 @@ fn lent_vec_element_map_lookup(
                     value_type_name(&*element)
                 ))
             };
-            match &values[position] {
+            match element {
                 Value::Map(map) => lent_map_payload(find(map), confined),
                 other => runtime_error(format!(
                     "expected `dict`, found `{}`",
@@ -9647,11 +9714,19 @@ fn direct_element_step<'a>(
     }
 }
 
-fn direct_element_step_mut<'a>(
-    value: &'a mut Value,
-    step: &DirectElementPathStep<'_>,
+/// Runs `edit` on the value `steps` reach inside `value`. Each list element
+/// on the way stays borrowed until `edit` returns, so an element a list
+/// keeps in a box of its own brings the box's list view up to date after
+/// the edit.
+fn direct_element_walk_mut<R>(
+    value: &mut Value,
+    steps: &[DirectElementPathStep<'_>],
     selectors: &mut DirectElementSelectors<'_>,
-) -> std::result::Result<&'a mut Value, DirectElementPathError> {
+    edit: impl FnOnce(&mut Value, &mut DirectElementSelectors<'_>) -> R,
+) -> std::result::Result<R, DirectElementPathError> {
+    let Some((step, rest)) = steps.split_first() else {
+        return Ok(edit(value, selectors));
+    };
     match step {
         DirectElementPathStep::Index => {
             let index = selectors.next()?;
@@ -9663,9 +9738,10 @@ fn direct_element_step_mut<'a>(
                 )));
             };
             let len = vector.elements.len();
-            normalize_vec_index(index, len)
+            let mut element = normalize_vec_index(index, len)
                 .and_then(|normalized| vector.elements.get_mut(normalized))
-                .ok_or(DirectElementPathError::OutOfBounds { index, len })
+                .ok_or(DirectElementPathError::OutOfBounds { index, len })?;
+            direct_element_walk_mut(&mut element, rest, selectors, edit)
         }
         DirectElementPathStep::Key => {
             let Value::Map(map) = value else {
@@ -9677,13 +9753,19 @@ fn direct_element_step_mut<'a>(
             };
             let key = unsafe { take_value(selectors.next()? as *mut OpaqueValue) };
             match map.entries.position(&key) {
-                Some(position) => Ok(map.entries.value_at_mut(position)),
+                Some(position) => direct_element_walk_mut(
+                    map.entries.value_at_mut(position),
+                    rest,
+                    selectors,
+                    edit,
+                ),
                 None => Err(DirectElementPathError::MissingKey(Box::new(key))),
             }
         }
         DirectElementPathStep::Projection(projection) => {
-            direct_value_at_path_mut(value, &[projection], selectors.path)
-                .map_err(DirectElementPathError::Path)
+            let nested = direct_value_at_path_mut(value, &[projection], selectors.path)
+                .map_err(DirectElementPathError::Path)?;
+            direct_element_walk_mut(nested, rest, selectors, edit)
         }
     }
 }
@@ -9795,12 +9877,10 @@ pub extern "C-unwind" fn aura_direct_element_path_take(
         };
         let result = unsafe {
             value_mut(collection, |value| {
-                let mut current = value;
-                for step in &steps {
-                    current = direct_element_step_mut(current, step, &mut selectors)?;
-                }
-                selectors.finish()?;
-                Ok(std::mem::replace(current, Value::Unit))
+                direct_element_walk_mut(value, &steps, &mut selectors, |current, selectors| {
+                    selectors.finish()?;
+                    Ok(std::mem::replace(current, Value::Unit))
+                })?
             })
         };
         match result {
@@ -9837,13 +9917,11 @@ pub extern "C-unwind" fn aura_direct_element_path_store(
         let stored = unsafe { consume_owned_value(value) };
         let result = unsafe {
             value_mut(collection, |value| {
-                let mut current = value;
-                for step in &steps {
-                    current = direct_element_step_mut(current, step, &mut selectors)?;
-                }
-                selectors.finish()?;
-                *current = stored;
-                Ok(())
+                direct_element_walk_mut(value, &steps, &mut selectors, |current, selectors| {
+                    selectors.finish()?;
+                    *current = stored;
+                    Ok(())
+                })?
             })
         };
         match result {
