@@ -1,0 +1,57 @@
+class Job:
+    name: str
+    divisor: int64
+
+# Each element is lent to the loop. A zero divisor traps while the loop
+# still reads its element.
+def score(jobs: list[Job]) -> int64:
+    mut total = 0
+    for job in jobs:
+        total += 100 // job.divisor + len(job.name)
+    return total
+
+# The list is released before the element is read, so the element takes
+# its own reference first. The division then traps while it holds it.
+def last_share(jobs: list[Job]) -> int64:
+    return 100 // jobs[1].divisor
+
+def outcome(task: Task[int64]) -> str:
+    match task.result(timeout = 5s):
+        case TaskResult.Ready(value):
+            return f"ready {value}"
+        case TaskResult.Error(message):
+            return f"error {message}"
+        case TaskResult.TimedOut:
+            return "timed out"
+        case TaskResult.Cancelled:
+            return "cancelled"
+
+# Every divisor is 1 or 2, except a zero at `zero_at`.
+def make_jobs(count: int64, zero_at: int64) -> list[Job]:
+    mut jobs: list[Job] = []
+    for index in range(count):
+        mut divisor = 1 + index % 2
+        if index == zero_at:
+            divisor = 0
+        jobs.append(Job(name = f"job{index}", divisor = divisor))
+    return jobs
+
+def run_score(jobs: own list[Job]) -> str:
+    with TaskGroup() as group:
+        task = group.start(score, jobs)
+        return outcome(task)
+
+def run_last_share(jobs: own list[Job]) -> str:
+    with TaskGroup() as group:
+        task = group.start(last_share, jobs)
+        return outcome(task)
+
+def main():
+    print(score([Job(name = "a", divisor = 5)]))
+    print(run_score(make_jobs(2, 1)))
+    print(run_last_share(make_jobs(2, 1)))
+    # The list moves its elements into boxes after a few reads, so the trap
+    # comes while a box it lends is being read.
+    print(run_score(make_jobs(200, 150)))
+    print(run_score(make_jobs(200, -1)))
+    print(run_last_share(make_jobs(2, -1)))

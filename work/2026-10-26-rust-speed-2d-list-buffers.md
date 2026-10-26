@@ -94,7 +94,9 @@ and 30% of `sql_engine`.
   `run-pass/lent_list_elements.au` (loops, a temporary list, a `mut`
   parameter, insert, pop, reverse, sort, copy, clear, a 200-element list
   past the conversion threshold, nested lists, enums, `json.Value` lists,
-  and a task).
+  and a task), and `run-pass/lent_list_elements_task_failure.au` (tasks
+  that trap while a loop reads a lent element, after the list moved to
+  boxes, and while a promoted element holds its own reference).
 - Backend parity (every runtime fixture on both backends) passes.
 
 ## Measurements
