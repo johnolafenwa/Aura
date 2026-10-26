@@ -645,6 +645,42 @@ suite at the check size:
 Reading a `float64` field of a record from a `list` costs about 23
 instructions instead of about 4,900.
 
+### Lent List Elements
+
+Reading an element of a list of class instances, enums, lists, dicts, or
+other values that need a box used to copy the element into a new box.
+Native code now lends the element instead when the local that receives it
+is only read: the program reads its fields, calls methods that only read
+it, or matches it. Each element of a `for` loop that reads its fields is
+such a read, and so is `len(items[i].name)`. A read whose value is kept,
+changed, or passed to a function still copies.
+
+The list keeps each element it lends in a box of its own. A list moves to
+that form once native code has copied out as many elements as an eighth of
+its length, so a list that is read only a few times is never converted.
+`str` elements keep the copying read, which their list view already makes
+cheap.
+
+A lent element keeps the value it had when it was read. Before the program
+changes or frees the list while it still reads the element, the element
+takes its own reference, and the list copies an element before it changes
+one that another reference holds. A list that a closure, a task, or a
+mutable borrow can reach is never lent from, and a list that another task
+can reach is read through the runtime as before.
+
+Callgrind instruction counts on the shared Linux container, cross-language
+suite at the check size:
+
+| Program | Before | After |
+| --- | ---: | ---: |
+| `interpreter` | 368.8M | 236.9M |
+| `mini_browser` | 1,392.1M | 1,150.0M |
+| `sort_records` | 75.2M | 66.9M |
+| `sql_engine` | 2,809.7M | 2,596.4M |
+
+The other programs change by less than 3%. The largest increase is
+`graph_paths`, at 0.6%.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and
