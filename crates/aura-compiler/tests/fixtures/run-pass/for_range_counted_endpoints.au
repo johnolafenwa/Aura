@@ -1,0 +1,69 @@
+# A `for` over a `range(...)` call reads its endpoints once, in order, and
+# counts on int64 locals. These cases pin the behavior that a Range value had.
+
+
+def bump(counter: mut int64) -> int64:
+    counter += 10
+    return counter
+
+
+def small() -> int32:
+    return 3
+
+
+def main():
+    # The stop is read once: shrinking `n` in the body does not end the loop.
+    mut n: int64 = 4
+    mut seen = 0
+    for i in range(n):
+        n -= 1
+        seen += 1
+    print(f"{seen} {n}")
+
+    # Start is evaluated before stop, so stop sees the bumped counter.
+    mut c: int64 = 1
+    mut visited = list[int64]()
+    for i in range(bump(c), c + 20):
+        visited.append(i)
+    print(f"{visited.len()} {visited[0]} {visited[visited.len() - 1]} {c}")
+
+    # An empty or reversed range runs no iterations.
+    mut empty = 0
+    for i in range(5, 5):
+        empty += 1
+    for i in range(3, -2):
+        empty += 1
+    print(empty)
+
+    # Negative endpoints and narrower integer endpoints.
+    mut total: int64 = 0
+    for i in range(-3, small()):
+        total += i
+    print(total)
+
+    # The last step at the top of int64 does not overflow.
+    top: int64 = 9223372036854775807
+    mut last: int64 = 0
+    for i in range(top - 2, top):
+        last = i
+    print(last)
+
+    # break and continue, nested, with the outer cursor untouched.
+    mut pairs = 0
+    for i in range(4):
+        if i == 1:
+            continue
+        for j in range(i, 10):
+            if j > i + 1:
+                break
+            pairs += 1
+    print(pairs)
+
+    # A parenthesized call and a Range held in a local still work.
+    mut grouped = 0
+    for i in (range(3)):
+        grouped += i
+    held = range(2, 4)
+    for i in held:
+        grouped += i
+    print(grouped)

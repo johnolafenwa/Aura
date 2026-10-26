@@ -7,6 +7,14 @@ in this file.
 
 ## Unreleased
 
+### Performance
+
+- A `for` loop over a `range(...)` call counts on plain integers instead of
+  stepping a `Range` value. Each step used to allocate and free a boxed
+  value and call the runtime three times, about 690 instructions in a native
+  build; it now costs one or two. Loops over a `Range` held in a variable
+  are unchanged.
+
 ## VS Code extension 0.7.1 — 2026-10-25
 
 - Bundles language server 0.7.1. The semantic interface version stays 20.
