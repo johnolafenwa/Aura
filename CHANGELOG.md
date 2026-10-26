@@ -40,6 +40,17 @@ in this file.
   other values that could hold an `Array` copies that element instead of
   the whole list, so a loop that indexes such a list is no longer quadratic.
 
+### Fixed
+
+- A `for` loop over `text.to_bytes()`, directly or through an unannotated
+  local, iterates the bytes. It passed `aura check` and then failed at run
+  time with AU4001 "MIR `for` requires a `Range`" on both backends.
+- A call in an `if`, `elif`, or `while` condition, or in a `match`
+  scrutinee, that borrows a list element, as in `if ready(rows[i]):`, ends
+  that loan once the call returns. A body that then wrote the element,
+  such as `rows[i][j] = v`, passed `aura check` but failed `aura run` and
+  `aura build` with "invalid MIR loan ... overlaps active shared loan".
+
 ## VS Code extension 0.7.1 — 2026-10-25
 
 - Bundles language server 0.7.1. The semantic interface version stays 20.
