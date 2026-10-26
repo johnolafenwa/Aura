@@ -78,18 +78,42 @@ fn sort_values(values: &mut [Value], reverse: bool) -> Result<()> {
     Ok(())
 }
 
+/// Sorts one unboxed integer form. Equal integers cannot be told apart, so
+/// an unstable sort gives the stable result.
+fn sort_integers<T: Ord>(values: &mut [T], reverse: bool) {
+    if reverse {
+        values.sort_unstable_by(|left, right| right.cmp(left));
+    } else {
+        values.sort_unstable();
+    }
+}
+
+/// The stable order of one unboxed integer form of keys, as
+/// [`sorted_positions`] gives it. A tie on the key falls back to the
+/// position, which is what a stable sort does, so the faster unstable sort
+/// can run.
+fn integer_key_positions<T: Ord + Copy>(keys: &[T], reverse: bool) -> Vec<usize> {
+    let mut pairs = keys.iter().copied().zip(0..keys.len()).collect::<Vec<_>>();
+    pairs.sort_unstable_by(|(left, left_at), (right, right_at)| {
+        directed(left.cmp(right), reverse).then(left_at.cmp(right_at))
+    });
+    pairs.into_iter().map(|(_, position)| position).collect()
+}
+
 /// Sorts `elements` stably by the built-in order of the elements.
 pub fn sort_elements(elements: &mut ListElements, reverse: bool) -> Result<()> {
     if elements.len() < 2 {
         return Ok(());
     }
     match elements {
-        // Equal integers cannot be told apart, so an unstable sort gives
-        // the stable result.
-        ListElements::Int64(values) if reverse => {
-            values.sort_unstable_by(|left, right| right.cmp(left))
-        }
-        ListElements::Int64(values) => values.sort_unstable(),
+        ListElements::Int64(values) => sort_integers(values, reverse),
+        ListElements::Int8(values) => sort_integers(values, reverse),
+        ListElements::Int16(values) => sort_integers(values, reverse),
+        ListElements::Int32(values) => sort_integers(values, reverse),
+        ListElements::Uint8(values) => sort_integers(values, reverse),
+        ListElements::Uint16(values) => sort_integers(values, reverse),
+        ListElements::Uint32(values) => sort_integers(values, reverse),
+        ListElements::Uint64(values) => sort_integers(values, reverse),
         ListElements::Float64(values) => {
             values.sort_by(|left, right| directed(float_sort_order(*left, *right), reverse))
         }
@@ -106,15 +130,14 @@ pub fn sort_elements(elements: &mut ListElements, reverse: bool) -> Result<()> {
 fn sorted_positions(keys: &ListElements, reverse: bool) -> Result<Vec<usize>> {
     let positions = 0..keys.len();
     Ok(match keys {
-        // A tie on the key falls back to the position, which is what a
-        // stable sort does, so the faster unstable sort can run.
-        ListElements::Int64(keys) => {
-            let mut pairs = keys.iter().copied().zip(positions).collect::<Vec<_>>();
-            pairs.sort_unstable_by(|(left, left_at), (right, right_at)| {
-                directed(left.cmp(right), reverse).then(left_at.cmp(right_at))
-            });
-            pairs.into_iter().map(|(_, position)| position).collect()
-        }
+        ListElements::Int64(keys) => integer_key_positions(keys, reverse),
+        ListElements::Int8(keys) => integer_key_positions(keys, reverse),
+        ListElements::Int16(keys) => integer_key_positions(keys, reverse),
+        ListElements::Int32(keys) => integer_key_positions(keys, reverse),
+        ListElements::Uint8(keys) => integer_key_positions(keys, reverse),
+        ListElements::Uint16(keys) => integer_key_positions(keys, reverse),
+        ListElements::Uint32(keys) => integer_key_positions(keys, reverse),
+        ListElements::Uint64(keys) => integer_key_positions(keys, reverse),
         ListElements::Float64(keys) => {
             let mut pairs = keys.iter().copied().zip(positions).collect::<Vec<_>>();
             pairs.sort_unstable_by(|(left, left_at), (right, right_at)| {
