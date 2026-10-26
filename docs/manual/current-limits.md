@@ -92,7 +92,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Generator expressions are not available. They report `AU2005` and point to an eager comprehension or an explicit loop.
 - List and str slices accept one contiguous half-open range. A value slice returns a fresh owned copy. `view part = values[a:b]` lends a list range as a `Span[T]`.
 - Written slice endpoints use `int64`. Negative endpoints normalize once. Invalid or reversed ranges trap with `AU4003`. Endpoints are not clamped.
-- str slice endpoints count Unicode scalar values, and str slicing is O(n).
+- str slice endpoints count Unicode scalar values, and str slicing is O(n): it scans the text up to the end endpoint, or the whole text for a negative or omitted end.
 - Slice steps and slice assignment are reserved `AU2005` forms.
 - Arbitrary sliceable types, str integer indexing, grapheme slicing, and Python-style endpoint clamping are not available.
 - List slicing requires clone-safe, repeatably observable elements.

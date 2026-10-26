@@ -6359,7 +6359,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Generator expressions are not available. They report `AU2005` and point to an eager comprehension or an explicit loop.
 - List and str slices accept one contiguous half-open range. A value slice returns a fresh owned copy. `view part = values[a:b]` lends a list range as a `Span[T]`.
 - Written slice endpoints use `int64`. Negative endpoints normalize once. Invalid or reversed ranges trap with `AU4003`. Endpoints are not clamped.
-- str slice endpoints count Unicode scalar values, and str slicing is O(n).
+- str slice endpoints count Unicode scalar values, and str slicing is O(n): it scans the text up to the end endpoint, or the whole text for a negative or omitted end.
 - Slice steps and slice assignment are reserved `AU2005` forms.
 - Arbitrary sliceable types, str integer indexing, grapheme slicing, and Python-style endpoint clamping are not available.
 - List slicing requires clone-safe, repeatably observable elements.
@@ -9853,7 +9853,9 @@ str, or Array slice is a place or a view.
 ### List Slices
 
 A list slice copies Copy elements and clones non-Copy elements into a fresh
-owned list, so the element type must be clone-safe.
+owned list, so the element type must be clone-safe. It copies only the
+selected elements, so its cost follows the slice length, not where the slice
+starts.
 
 - A type that contains `random.Rng`, an opaque FFI handle, or a capturing
   closure environment is rejected with `AU3007`.
@@ -9867,7 +9869,9 @@ stays usable.
 
 String endpoints count Unicode scalar values, matching `str.len()`. They do
 not count UTF-8 bytes or grapheme clusters. Finding scalar boundaries scans
-the source, so str slicing is O(n). The result is a newly allocated, valid
+the source, so str slicing is O(n). When the text before the end is ASCII,
+each scalar is one byte, so the scan only checks those bytes and decodes no
+character. Other text is decoded once. The result is a newly allocated, valid
 UTF-8 str. Integer `string[index]` is unavailable.
 
 ### Array Slices

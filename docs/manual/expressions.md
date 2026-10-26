@@ -801,7 +801,9 @@ str, or Array slice is a place or a view.
 ### List Slices
 
 A list slice copies Copy elements and clones non-Copy elements into a fresh
-owned list, so the element type must be clone-safe.
+owned list, so the element type must be clone-safe. It copies only the
+selected elements, so its cost follows the slice length, not where the slice
+starts.
 
 - A type that contains `random.Rng`, an opaque FFI handle, or a capturing
   closure environment is rejected with `AU3007`.
@@ -815,7 +817,9 @@ stays usable.
 
 String endpoints count Unicode scalar values, matching `str.len()`. They do
 not count UTF-8 bytes or grapheme clusters. Finding scalar boundaries scans
-the source, so str slicing is O(n). The result is a newly allocated, valid
+the source, so str slicing is O(n). When the text before the end is ASCII,
+each scalar is one byte, so the scan only checks those bytes and decodes no
+character. Other text is decoded once. The result is a newly allocated, valid
 UTF-8 str. Integer `string[index]` is unavailable.
 
 ### Array Slices

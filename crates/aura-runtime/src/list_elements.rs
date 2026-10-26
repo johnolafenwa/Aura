@@ -696,20 +696,35 @@ impl<'a> Iterator for Iter<'a> {
         let len = self.len();
         (len, Some(len))
     }
+
+    /// Steps over `n` elements without building them, so `skip` costs the
+    /// same however far it skips.
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        match self {
+            Self::Values(values) => values.nth(n).map(Cow::Borrowed),
+            Self::Int64(values) => values.nth(n).map(|bits| Cow::Owned(int64_value(*bits))),
+            Self::Float64(values) => values.nth(n).map(|float| Cow::Owned(Value::Float(*float))),
+            Self::Bool(values) => values.nth(n).map(|flag| Cow::Owned(Value::Bool(*flag))),
+        }
+    }
 }
 
 impl DoubleEndedIterator for Iter<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
+        self.nth_back(0)
+    }
+
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
         match self {
-            Self::Values(values) => values.next_back().map(Cow::Borrowed),
+            Self::Values(values) => values.nth_back(n).map(Cow::Borrowed),
             Self::Int64(values) => values
-                .next_back()
+                .nth_back(n)
                 .map(|bits| Cow::Owned(int64_value(*bits))),
             Self::Float64(values) => values
-                .next_back()
+                .nth_back(n)
                 .map(|float| Cow::Owned(Value::Float(*float))),
             Self::Bool(values) => values
-                .next_back()
+                .nth_back(n)
                 .map(|flag| Cow::Owned(Value::Bool(*flag))),
         }
     }

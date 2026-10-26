@@ -365,6 +365,28 @@ fn reads_iterate_in_both_directions_and_report_their_length() {
         );
         assert!(list.contains(&values[1]));
         assert!(!list.contains(&Value::String("x".into())));
+
+        let mut iter = list.iter();
+        assert_eq!(
+            exact(&[iter.nth(1).unwrap().into_owned()]),
+            exact(&values[1..2])
+        );
+        assert!(iter.clone().nth(1).is_none());
+        assert_eq!(
+            exact(&[iter.nth_back(0).unwrap().into_owned()]),
+            exact(&values[2..])
+        );
+        assert!(iter.nth_back(0).is_none());
+        let mut iter = list.iter();
+        assert_eq!(
+            exact(&[iter.nth_back(2).unwrap().into_owned()]),
+            exact(&values[..1])
+        );
+        assert!(iter.nth(0).is_none());
+        assert_eq!(
+            exact(&list.iter().skip(2).map(Cow::into_owned).collect::<Vec<_>>()),
+            exact(&values[2..])
+        );
     }
     assert!(ListElements::new().last().is_none());
     let ints = ListElements::from(vec![int(4)]);
