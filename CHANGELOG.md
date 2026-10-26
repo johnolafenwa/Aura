@@ -39,7 +39,9 @@ in this file.
   chains name the function a copy was made from, on both backends: `pick`
   rather than `pick[int64]`. This also applies to the functions that
   `T.method()` calls already specialized, which used to show their type
-  arguments.
+  arguments. A `mut self` trait method that a generic function calls on a
+  union argument, such as `poke(pet)` with `pet: Dog | Cat`, now runs in
+  native builds too, where it used to stop with `AU4001`.
 
 ### Performance
 
