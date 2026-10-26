@@ -7,6 +7,13 @@ in this file.
 
 ## Unreleased
 
+### Performance
+
+- A `for` loop over a `range(...)` call counts on plain integers instead of
+  stepping a `Range` value. Each step used to allocate and free a boxed
+  value and call the runtime three times, about 690 instructions in a native
+  build; it now costs one or two. Loops over a `Range` held in a variable
+  are unchanged.
 - Native code stores `xs[i] = v` and `xs[i] op= v` on a `list[int64]`,
   `list[float64]`, or `list[bool]` straight into the list's unboxed
   storage, without a runtime call or a box. A `float64` element update in

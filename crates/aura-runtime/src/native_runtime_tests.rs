@@ -3598,7 +3598,9 @@ fn direct_json_parse_materialization_allocation_failure_is_au4005_and_preserves_
 
 #[test]
 fn direct_json_parse_reserves_capacity_before_borrowing_and_copying_the_source() {
-    let source = boxed_value(Value::String("null".to_string()));
+    // Nested past `JSON_INLINE_PARSE_MAX_DEPTH`, so the parse takes the codec
+    // path instead of parsing on the calling task.
+    let source = boxed_value(Value::String("[[[[[[[[[null]]]]]]]]]".to_string()));
     // The source crosses to the parse task the way a task argument does.
     unsafe { super::share_direct_value(source) };
     let source_address = source as usize;
@@ -3622,11 +3624,24 @@ fn direct_json_parse_reserves_capacity_before_borrowing_and_copying_the_source()
         crate::runtime_value::yield_now_with_runtime_scheduler();
 
         let source = unsafe { &*(source_address as *mut OpaqueValue) };
-        let source_guard = source
+        let lock = source
             .shared_lock()
-            .expect("the codec source is shared with the parsing task")
-            .try_write()
-            .expect("codec saturation must park before the direct adapter borrows its source");
+            .expect("the codec source is shared with the parsing task");
+        // The parse task reads the source once to rule out an inline parse.
+        // It cannot copy the source while both reservations are held, so
+        // once that read ends the write below comes first.
+        let deadline = Instant::now() + StdDuration::from_secs(5);
+        let source_guard = loop {
+            match lock.try_write() {
+                Ok(guard) => break guard,
+                Err(_) if Instant::now() < deadline => thread::yield_now(),
+                Err(_) => {
+                    panic!(
+                        "codec saturation must park before the direct adapter borrows its source"
+                    )
+                }
+            }
+        };
         // SAFETY: the shared write guard excludes every other access.
         match unsafe { &mut *source.value.get() } {
             Value::String(source) => *source = "true".to_string(),

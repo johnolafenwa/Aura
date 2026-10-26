@@ -42,7 +42,8 @@ def push(items: mut list[int64]):
 
 def repeat(n: int64, flag: bool) -> int64:
     s = f"s{n}"
-    for i in range(n):
+    steps = range(n)
+    for i in steps:
         if flag:
             print(s)
     return n
@@ -378,11 +379,7 @@ fn a_release_names_a_root_whose_value_needs_drop() {
 #[test]
 fn returns_leave_every_root_empty_but_mut_parameters() {
     let encoded = lowered();
-    let release_range = |instruction: &Value| {
-        instruction["Release"]["place"]
-            .as_str()
-            .is_some_and(|place| place.starts_with("%t"))
-    };
+    let release_range = |instruction: &Value| instruction["Release"]["place"] == "steps";
     assert_rejected(
         replaced(encoded.clone(), "repeat", release_range, Vec::new()),
         "still holds a value",
