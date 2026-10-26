@@ -1,0 +1,40 @@
+# List slices copy only the selected range of whichever storage the list
+# keeps, and str slices find ASCII endpoints as byte positions.
+def main():
+    mut ints: list[int64] = []
+    mut floats: list[float64] = []
+    mut flags: list[bool] = []
+    mut words: list[str] = []
+    mut i = 0
+    while i < 1000:
+        ints.append(i * 3)
+        floats.append(i as float64 / 4.0)
+        flags.append(i % 3 == 0)
+        words.append(f"w{i}")
+        i += 1
+    print(ints[995:])
+    print(floats[-3:-1])
+    print(flags[600:604])
+    print(words[997:1000])
+    print(ints[500:500].len())
+    tail = ints[998:]
+    ints[999] = -1
+    print(tail)
+    print(ints[-2:])
+
+    mut text = ""
+    mut j = 0
+    while j < 100:
+        text = text + "abcdefghij"
+        j += 1
+    print(text[500:510])
+    print(text[:3])
+    print(text[-4:])
+    print(text[995:1000])
+    mixed = text + "héllo wörld"
+    print(mixed[1000:1011])
+    print(mixed[1001:1004])
+    print(mixed[-5:])
+    print(mixed[998:1002])
+    print(mixed[3:6])
+    print("ünïcode"[1:4])
