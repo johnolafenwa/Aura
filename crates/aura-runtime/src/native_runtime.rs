@@ -11662,6 +11662,31 @@ pub extern "C-unwind" fn aura_direct_union_inject(
     })
 }
 
+/// Gives the result of an erased generic call the type its call site
+/// expects, through a cell as in `aura_direct_tag_value_type_cell`. The
+/// erased body built a union over its type parameters (`T | int64`), and a
+/// type argument can collapse it (`int64`) or merge its members, so the
+/// box unwraps to the active payload or takes the merged union's layout.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_union_boundary_cell(
+    value: *mut OpaqueValue,
+    cell: *const AtomicPtr<c_void>,
+    type_ptr: *const u8,
+    type_len: usize,
+) {
+    task_runtime_boundary(|| unsafe {
+        let Some(cell) = cell.as_ref() else {
+            runtime_error("direct runtime received a null type tag cell");
+        };
+        let tag = celled_runtime_type_tag(cell, slice::from_raw_parts(type_ptr, type_len));
+        value_mut(value, |value| {
+            let held = mem::replace(value, Value::Unit);
+            *value = crate::union_runtime::coerce_union_boundary(held, &tag.parsed);
+        });
+        set_explicit_runtime_type_tag(value, tag);
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_enum_variant(
     enum_ptr: *const u8,

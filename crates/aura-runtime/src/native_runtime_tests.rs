@@ -27872,6 +27872,74 @@ fn direct_tag_cells_keep_the_decoded_tag() {
 }
 
 #[test]
+fn direct_union_boundaries_unwrap_collapsed_and_merge_erased_unions() {
+    let param = || Type::TypeParam("T".to_string());
+    let erased = |members: Vec<Type>| {
+        Type::normalize_union(members, "", &BTreeMap::new()).expect("distinct members form a union")
+    };
+    let member_index = |ty: &Type, member: &Type| match ty {
+        Type::Union(union) => union.members.iter().position(|it| it == member).unwrap(),
+        other => panic!("expected a union, found {other}"),
+    };
+
+    // `T | int64` with `T = int64` collapses to `int64`.
+    let collapsed = erased(vec![param(), Type::named("int64")]);
+    let index = member_index(&collapsed, &param());
+    let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    let value = boxed_value(crate::runtime_value::union_value(
+        collapsed,
+        index,
+        Value::Int(IntegerValue::from_i64(5)),
+    ));
+    super::aura_direct_union_boundary_cell(value, &cell, b"int64".as_ptr(), 5);
+    assert_eq!(
+        unsafe { value_ref(value) },
+        Value::Int(IntegerValue::from_i64(5))
+    );
+    assert_eq!(
+        unsafe { super::explicit_runtime_type_name(value) }.as_deref(),
+        Some("int64")
+    );
+
+    // `T | int64 | str` with `T = str` merges into `int64 | str`.
+    let merged = erased(vec![param(), Type::named("int64"), Type::named("str")]);
+    let index = member_index(&merged, &param());
+    let target = erased(vec![Type::named("int64"), Type::named("str")]);
+    let encoded = super::canonical_runtime_type_name(&target);
+    let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    let text = boxed_value(crate::runtime_value::union_value(
+        merged,
+        index,
+        Value::String("x".into()),
+    ));
+    super::aura_direct_union_boundary_cell(text, &cell, encoded.as_ptr(), encoded.len());
+    match unsafe { value_ref(text) } {
+        Value::Union(union) => {
+            assert_eq!(union.union_type, target);
+            assert_eq!(
+                union.member_index,
+                member_index(&target, &Type::named("str"))
+            );
+            assert_eq!(union.payload, Value::String("x".into()));
+        }
+        other => panic!("expected a union, found {other:?}"),
+    }
+
+    let message = capture_direct_boundary_error_message(|| {
+        super::aura_direct_union_boundary_cell(
+            int_value(1),
+            std::ptr::null(),
+            b"int64".as_ptr(),
+            5,
+        );
+    });
+    assert_eq!(message, "direct runtime received a null type tag cell");
+    for value in [value, text] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
 fn direct_empty_tagged_lists_start_in_their_element_form() {
     use crate::list_elements::ListForm;
     let list_of = |element: Type| Type::Named("list".to_string(), vec![element]);

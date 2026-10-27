@@ -91,6 +91,7 @@ runtime_functions! {
     RegisterFloat32Slots => ("aura_direct_register_float32_slots", [I64, I64], None),
     CloseValue => ("aura_direct_close_value", [I64, I64], Some(I64)),
     TagValueType => ("aura_direct_tag_value_type_cell", [I64, I64, I64, I64], None),
+    UnionBoundary => ("aura_direct_union_boundary_cell", [I64, I64, I64, I64], None),
     BoxI32 => ("aura_direct_box_i32", [I64], Some(I64)),
     BoxInteger => ("aura_direct_box_integer", [I64, I64], Some(I64)),
     BoxI64 => ("aura_direct_box_i64", [I64], Some(I64)),
