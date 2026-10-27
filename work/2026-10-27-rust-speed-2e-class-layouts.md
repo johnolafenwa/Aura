@@ -71,6 +71,15 @@ of `bank_ledger`.
 - Field reads through a `view` local (`view book = books[i]`) took the
   in-place path although the local is a loan, not an instance box, and
   `mini_browser` crashed. The class paths now skip `view` locals.
+- The native binary size check failed: hello world grew from 1,017,064 to
+  1,135,024 bytes on Linux, over the 10% budget. Printing, copying, and
+  dropping any instance reached the typed field converters directly, and
+  through them type-name parsing. A class layout now reaches the
+  converters through a table only registration names, as a plain layout
+  does, so a program that registers no class links none of them. Hello
+  world is 1,029,856 bytes. A program that registers a class layout, such
+  as `examples/json/dynamic_values.au` through `json.DecodeError`, links
+  the converters: 1,529,616 to 1,647,752 bytes, inside the budget.
 
 ## Verification
 

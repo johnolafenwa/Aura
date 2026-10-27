@@ -57,7 +57,31 @@ pub struct ClassLayout {
     /// The offsets of every field box the layout holds outside an enum or
     /// union payload, nested classes included.
     boxes: Vec<usize>,
+    /// How values move in and out of the block. Only registration names
+    /// these, so a program that registers no class layout links none of
+    /// the converters, however many instances it prints, copies, or drops.
+    ops: &'static ClassOps,
 }
+
+struct ClassOps {
+    fits: fn(&LayoutTable, LayoutId, &Value) -> bool,
+    field_box: fn(Value, &Type) -> ElementBox,
+    write: unsafe fn(&LayoutTable, LayoutId, Value, *mut u8),
+    read: unsafe fn(&LayoutTable, LayoutId, *const u8) -> Value,
+    take: unsafe fn(&LayoutTable, LayoutId, *mut u8) -> Value,
+    drop: unsafe fn(&LayoutTable, LayoutId, *mut u8),
+    clone: unsafe fn(&LayoutTable, LayoutId, *const u8, *mut u8),
+}
+
+static CLASS_OPS: ClassOps = ClassOps {
+    fits: typed_layout::fits,
+    field_box: typed_layout::field_box_for,
+    write: typed_layout::write_unchecked,
+    read: typed_layout::read_at,
+    take: typed_layout::take_at,
+    drop: typed_layout::drop_at,
+    clone: typed_layout::clone_at,
+};
 
 struct ClassField {
     name: String,
@@ -186,6 +210,7 @@ impl ClassLayout {
             fields,
             by_name,
             boxes,
+            ops: &CLASS_OPS,
         })
     }
 }
@@ -368,7 +393,7 @@ impl TypedFields {
             && layout.fields.iter().all(|field| {
                 fields
                     .get(&field.name)
-                    .is_some_and(|value| typed_layout::fits(layout.table(), field.layout, value))
+                    .is_some_and(|value| (layout.ops.fits)(layout.table(), field.layout, value))
             });
         if !fits {
             return Err(fields);
@@ -433,12 +458,12 @@ impl TypedFields {
         let address = self.address(place);
         let table = self.layout.table();
         if self.is_box(place) {
-            let boxed = typed_layout::field_box_for(value, self.layout.type_of(place.layout));
+            let boxed = (self.layout.ops.field_box)(value, self.layout.type_of(place.layout));
             // SAFETY: the slot's pointer is dead.
             unsafe { std::ptr::write(address.cast::<Option<ElementBox>>(), Some(boxed)) };
         } else {
             // SAFETY: the caller's contract.
-            unsafe { typed_layout::write_unchecked(table, place.layout, value, address) };
+            unsafe { (self.layout.ops.write)(table, place.layout, value, address) };
         }
     }
 
@@ -452,12 +477,12 @@ impl TypedFields {
         }
         // SAFETY: the place holds a value of its layout.
         Some(Cow::Owned(unsafe {
-            typed_layout::read_at(self.layout.table(), place.layout, address)
+            (self.layout.ops.read)(self.layout.table(), place.layout, address)
         }))
     }
 
     fn fits(&self, place: Place, value: &Value) -> Result<(), String> {
-        if self.is_box(place) || typed_layout::fits(self.layout.table(), place.layout, value) {
+        if self.is_box(place) || (self.layout.ops.fits)(self.layout.table(), place.layout, value) {
             return Ok(());
         }
         Err(format!(
@@ -486,7 +511,7 @@ impl TypedFields {
         // SAFETY: the place holds a value of its layout, dead once dropped,
         // and the new value fits.
         unsafe {
-            typed_layout::drop_at(self.layout.table(), place.layout, address);
+            (self.layout.ops.drop)(self.layout.table(), place.layout, address);
             self.write_dead(place, value);
         }
         Ok(())
@@ -506,7 +531,7 @@ impl TypedFields {
         // SAFETY: the place holds a value of its layout, and its bytes are
         // zeroed once it is taken.
         unsafe {
-            let value = typed_layout::take_at(table, place.layout, address);
+            let value = (self.layout.ops.take)(table, place.layout, address);
             std::ptr::write_bytes(address, 0, table.get(place.layout).size as usize);
             Some(value)
         }
@@ -676,7 +701,7 @@ impl Clone for TypedFields {
         // SAFETY: the block holds a value of the layout, the copy's bytes
         // are dead, and the two blocks are distinct.
         unsafe {
-            typed_layout::clone_at(
+            (self.layout.ops.clone)(
                 self.layout.table(),
                 self.layout.layout.root(),
                 self.data.as_ptr(),
@@ -692,7 +717,7 @@ impl Drop for TypedFields {
         // SAFETY: the block holds a value of the layout, with null boxes
         // where fields are moved out, and nothing reads it again.
         unsafe {
-            typed_layout::drop_at(
+            (self.layout.ops.drop)(
                 self.layout.table(),
                 self.layout.layout.root(),
                 self.data.as_ptr(),
