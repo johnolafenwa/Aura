@@ -102,14 +102,36 @@ pub(crate) fn validate_ownership_within(
     state_cells: usize,
     steps: Option<usize>,
 ) -> Result<(), String> {
+    // An implicit module's backends decide ownership themselves and keep no
+    // argument with the caller, whatever it records.
     if module.ownership == MirOwnership::Implicit {
         return Ok(());
+    }
+    if !module.borrowing.is_empty() {
+        let eligible = super::ownership::borrowing_functions(module);
+        if let Some(name) = module
+            .borrowing
+            .iter()
+            .find(|name| !eligible.contains(*name) && defines(module, name))
+        {
+            return Err(format!(
+                "invalid MIR: `{name}` keeps its callers' shared arguments, but a call can reach it \
+                 another way or it takes none"
+            ));
+        }
     }
     let context = MirLoanValidationContext::new(module)?;
     for function in module.functions.iter().chain(module.top_level.iter()) {
         check_function(function, &context, state_cells, steps)?;
     }
     Ok(())
+}
+
+fn defines(module: &MirModule, name: &str) -> bool {
+    module
+        .functions
+        .iter()
+        .any(|function| function.name == name)
 }
 
 fn states_ownership(function: &MirFunction) -> bool {
@@ -408,6 +430,9 @@ impl<'f> Checker<'f, '_> {
                 format!("releases `{place}`, which is not a root whose value needs drop")
             });
         };
+        if self.facts.borrowed.contains(root) {
+            return self.fail(|| format!("releases `{place}`, which its caller keeps"));
+        }
         match state.holds[root] {
             Hold::Owned | Hold::Maybe => {}
             Hold::Unset => self.fail(|| format!("releases `{place}` before it holds a value")),
@@ -495,11 +520,12 @@ impl<'f> Checker<'f, '_> {
     }
 
     fn try_releases(&mut self, state: &State<'f>, listed: &[String]) {
+        let kept = self.facts.kept();
         let expected = state
             .holds
             .iter()
             .enumerate()
-            .filter(|(root, hold)| !hold.is_empty() && !self.facts.mutable.contains(*root))
+            .filter(|(root, hold)| !hold.is_empty() && !kept.contains(*root))
             .map(|(root, _)| self.facts.roots[root])
             .collect::<Vec<_>>();
         if listed
@@ -517,8 +543,9 @@ impl<'f> Checker<'f, '_> {
         }
     }
 
-    /// A return hands `mut` parameters back and releases the root it
-    /// returns from. Every other root must be empty.
+    /// A return hands `mut` parameters back, leaves the shared parameters
+    /// its caller keeps, and releases the root it returns from. Every
+    /// other root must be empty.
     fn exit(&mut self, state: &State<'f>, value: &Operand) {
         let returned = match value {
             Operand::Place(place) | Operand::MovePlace(place) => self.facts.tracked(root_of(place)),
@@ -530,6 +557,10 @@ impl<'f> Checker<'f, '_> {
             if self.facts.mutable.contains(root) {
                 if hold != Hold::Owned {
                     self.fail(|| format!("returns without the value of `mut` parameter `{name}`"));
+                }
+            } else if self.facts.borrowed.contains(root) {
+                if hold != Hold::Owned {
+                    self.fail(|| format!("returns without `{name}`, which its caller keeps"));
                 }
             } else if Some(root) != returned {
                 match hold {

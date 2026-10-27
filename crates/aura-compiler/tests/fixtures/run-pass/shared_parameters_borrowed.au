@@ -1,0 +1,110 @@
+enum Shape:
+    Circle(int64)
+    Group(list[Shape])
+
+class Bag:
+    items: list[int64]
+    label: str
+
+    def total(self) -> int64:
+        mut sum = 0
+        for item in self.items:
+            sum += item
+        return sum
+
+    def tagged(self, suffix: str) -> str:
+        return f"{self.label}{suffix}"
+
+    def both(self, other: Bag) -> int64:
+        return self.total() + other.total()
+
+class Holder:
+    bag: Bag
+    names: list[str]
+
+def both(left: list[int64], right: list[int64]) -> int64:
+    mut copy = left.copy()
+    copy.append(100)
+    return copy.len() + right.len()
+
+def store(bag: Bag, name: str) -> Holder:
+    kept = Bag(items=bag.items.copy(), label=bag.label.clone())
+    return Holder(bag=kept, names=[name.clone(), name.clone()])
+
+def area(shape: Shape) -> int64:
+    match shape:
+        case Shape.Circle(r):
+            return r * r
+        case Shape.Group(parts):
+            mut sum = 0
+            for part in parts:
+                sum += area(part)
+            return sum
+
+def longest(words: list[str], best: str) -> str:
+    mut result = best.clone()
+    for word in words:
+        if word.len() > result.len():
+            result = word.clone()
+    return result
+
+def maybe(name: str | None) -> str:
+    match name:
+        case str as text:
+            return text.clone()
+        case None:
+            return "none"
+
+def twice(values: list[int64]) -> int64:
+    return both(values, values)
+
+def twice_values(left: list[int64], right: list[int64]) -> int64:
+    return left.len() * right.len()
+
+def depth(queue: Queue[str], wait: Duration) -> int64:
+    return 1
+
+class Pair:
+    left: str
+    right: str
+
+def first_of(pair: Pair) -> view str from pair:
+    return view pair.left
+
+def main():
+    xs: list[int64] = [1, 2, 3]
+    print(both(xs, xs))
+    print(xs.len())
+    print(twice(xs))
+
+    bag = Bag(items=[4, 5, 6], label="b")
+    print(bag.total() + bag.both(bag))
+    print(bag.tagged("!"))
+
+    holder = store(bag, "first")
+    print(holder.bag.label)
+    print(holder.names.len())
+    print(store(Bag(items=[], label="temp"), "second").names[1])
+    print(bag.total())
+
+    shapes = Shape.Group([Shape.Circle(2), Shape.Group([Shape.Circle(3)]), Shape.Circle(1)])
+    print(area(shapes))
+    print(area(shapes))
+
+    words = ["a", "abc", "ab"]
+    print(longest(words, "x"))
+    print(longest(words, "abcdef"))
+
+    print(maybe("text"))
+    print(maybe(None))
+
+    pair = twice_values
+    print(pair(xs, xs))
+    print(twice_values(xs, xs))
+
+    queue = Queue[str](capacity=1)
+    wait = 5ms
+    print(depth(queue, wait) + depth(queue, wait))
+    names = Pair(left="ada", right="linus")
+    view head = first_of(names)
+    print(head)

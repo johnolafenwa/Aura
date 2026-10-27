@@ -15,12 +15,12 @@
 //! value exactly once. `mir_ownership_check.rs` checks the result.
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use super::{
-    mir_successors, substitute_type, BasicBlock, CallTarget, Instruction, MirArg, MirFormatPart,
-    MirFunction, MirLoanValidationContext, MirLocalType, MirModule, MirOwnership, MirReceiverKind,
-    Operand, Rvalue, Terminator,
+    mir_successors, substitute_type, BasicBlock, CallTarget, CleanupCallee, Instruction,
+    MethodDispatch, MirArg, MirFormatPart, MirFunction, MirLoanValidationContext, MirLocalType,
+    MirModule, MirOwnership, MirReceiverKind, Operand, Rvalue, Terminator,
 };
 use crate::runtime_ops::RuntimeOp;
 use crate::sema::Type;
@@ -82,21 +82,282 @@ pub fn borrowed_receiver(
     }
 }
 
-/// [`operand_roles`] with `erased`, the receiver [`borrowed_receiver`]
-/// found, borrowed.
+/// [`operand_roles`] with each operand of `borrowed` borrowed: the
+/// receiver [`borrowed_receiver`] finds, and the arguments
+/// [`callee_borrowed_operands`] finds.
 pub fn operand_roles_with<'a>(
     instruction: &'a Instruction,
-    erased: Option<&Operand>,
+    borrowed: &[&Operand],
 ) -> Vec<(&'a Operand, OperandRole)> {
     let mut roles = operand_roles(instruction);
-    if let Some(erased) = erased {
-        for (operand, role) in &mut roles {
-            if std::ptr::eq(*operand, erased) {
-                *role = OperandRole::Borrow;
-            }
+    for (operand, role) in &mut roles {
+        if borrowed
+            .iter()
+            .any(|borrowed| std::ptr::eq(*operand, *borrowed))
+        {
+            *role = OperandRole::Borrow;
         }
     }
     roles
+}
+
+/// The arguments, and the receiver, of `instruction`'s call that its
+/// callee borrows where they lie. `borrowing` names a function whose shared
+/// parameters and shared receiver the caller keeps (see
+/// [`recorded_borrowing`]): the caller passes its own reference, and the
+/// callee neither owns nor releases it.
+pub fn callee_borrowed_operands<'a, 'm>(
+    instruction: &'a Instruction,
+    borrowing: impl Fn(&str) -> Option<&'m BorrowingCallee>,
+) -> Vec<&'a Operand> {
+    let (Instruction::Assign {
+        value: Rvalue::Call { callee, args, .. },
+        ..
+    }
+    | Instruction::WriteLoan {
+        value: Rvalue::Call { callee, args, .. },
+        ..
+    }) = instruction
+    else {
+        return Vec::new();
+    };
+    let (function, receiver) = match callee {
+        CallTarget::Name(name) => (borrowing(name), None),
+        CallTarget::Member {
+            object,
+            dispatch: Some(MethodDispatch::Static { function }),
+            ..
+        }
+        | CallTarget::TraitMember {
+            object,
+            dispatch: Some(MethodDispatch::Static { function }),
+            ..
+        } => (borrowing(function), Some(object)),
+        _ => return Vec::new(),
+    };
+    let Some(function) = function else {
+        return Vec::new();
+    };
+    if function.params.len() != args.len() || function.receiver.is_some() != receiver.is_some() {
+        return Vec::new();
+    }
+    let mut borrowed = Vec::new();
+    if function.receiver == Some(MirReceiverKind::Borrow) {
+        borrowed.extend(receiver);
+    }
+    for (passing, arg) in function.params.iter().zip(args) {
+        if *passing == MirReceiverKind::Borrow && arg.writeback_place.is_none() {
+            borrowed.push(&arg.value);
+        }
+    }
+    borrowed
+}
+
+/// How a borrowing function (see [`recorded_borrowing`]) takes its
+/// receiver and each parameter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BorrowingCallee {
+    pub receiver: Option<MirReceiverKind>,
+    pub params: Vec<MirReceiverKind>,
+}
+
+/// The functions a union arm or a runtime type picks for `dispatch`.
+fn dispatched_functions<'d>(dispatch: &'d MethodDispatch, into: &mut BTreeSet<&'d str>) {
+    match dispatch {
+        MethodDispatch::Union(arms) => {
+            for arm in arms {
+                if let MethodDispatch::Static { function } = arm {
+                    into.insert(function);
+                }
+                dispatched_functions(arm, into);
+            }
+        }
+        MethodDispatch::Candidates { candidates, .. } => {
+            into.extend(
+                candidates
+                    .iter()
+                    .map(|candidate| candidate.function.as_str()),
+            );
+        }
+        _ => {}
+    }
+}
+
+/// Every operand of `instruction` its call borrows: the receiver of a call
+/// on a boxed generic value, and the arguments a borrowing callee keeps
+/// with the caller.
+pub(super) fn borrowed_operands<'a>(
+    instruction: &'a Instruction,
+    context: &MirLoanValidationContext<'_>,
+    place_type: impl Fn(&str) -> Option<Type>,
+) -> Vec<&'a Operand> {
+    let mut borrowed =
+        callee_borrowed_operands(instruction, |name| context.borrowing_function(name));
+    borrowed.extend(borrowed_receiver(instruction, place_type));
+    borrowed
+}
+
+/// The functions whose shared parameters and shared receiver their callers
+/// keep (Rust-speed step 2h): every function only named calls and method
+/// calls MIR resolves to it reach. The language lets a shared parameter be
+/// neither rebound nor mutably borrowed while the call runs (AU3002,
+/// AU3003), so the callee can read the caller's value where it lies. Any
+/// other way into a function keeps the owning convention: a function value
+/// or task entry, a closure body, a cleanup or `From` callee, a method a
+/// union or a runtime type picks, a module constant's initializer, and the
+/// entry points. So does a function that returns a view into an argument.
+///
+/// Native emission drops the builtin wrappers a program never reaches, and
+/// a dropped wrapper may have been the only other way into a function. So
+/// the pass records the functions it chose in the module (see
+/// [`recorded_borrowing`]), and the checker only asks that each recorded
+/// function still be one of these.
+pub fn borrowing_functions(module: &MirModule) -> BTreeSet<String> {
+    let mut reached_otherwise = BTreeSet::<&str>::new();
+    for constant in &module.constants {
+        reached_otherwise.insert(&constant.initializer);
+    }
+    let functions = || module.functions.iter().chain(module.top_level.iter());
+    for function in functions() {
+        for block in &function.blocks {
+            for instruction in &block.instructions {
+                for (operand, _) in operand_roles(instruction) {
+                    if let Operand::Function { name, .. } = operand {
+                        reached_otherwise.insert(name);
+                    }
+                }
+                match instruction {
+                    Instruction::PushCleanup {
+                        callee: Some(CleanupCallee::Method { function }),
+                        ..
+                    } => {
+                        reached_otherwise.insert(function);
+                    }
+                    Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. } => {
+                        match value {
+                            Rvalue::Closure { function, .. } => {
+                                reached_otherwise.insert(function);
+                            }
+                            Rvalue::Try {
+                                from: Some(function),
+                                ..
+                            } => {
+                                reached_otherwise.insert(function);
+                            }
+                            Rvalue::Call {
+                                callee:
+                                    CallTarget::Member {
+                                        dispatch: Some(dispatch),
+                                        ..
+                                    }
+                                    | CallTarget::TraitMember {
+                                        dispatch: Some(dispatch),
+                                        ..
+                                    },
+                                ..
+                            } => dispatched_functions(dispatch, &mut reached_otherwise),
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            for (operand, _) in terminator_roles(&block.terminator) {
+                if let Operand::Function { name, .. } = operand {
+                    reached_otherwise.insert(name);
+                }
+            }
+        }
+    }
+    module
+        .functions
+        .iter()
+        .filter(|function| {
+            !matches!(function.name.as_str(), "main" | "__script")
+                && !function.name.contains("::__default_")
+                && !reached_otherwise.contains(function.name.as_str())
+                && borrows_anything(function)
+                && !returns_a_view(function)
+        })
+        .map(|function| function.name.clone())
+        .collect()
+}
+
+/// Whether `function` returns a view into one of its arguments, which the
+/// returned-loan rules tie to the owning convention.
+fn returns_a_view(function: &MirFunction) -> bool {
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .any(|instruction| matches!(instruction, Instruction::ReturnLoan { .. }))
+}
+
+fn borrows_anything(function: &MirFunction) -> bool {
+    function.receiver == Some(MirReceiverKind::Borrow)
+        || function
+            .params
+            .iter()
+            .any(|param| param.passing == MirReceiverKind::Borrow)
+}
+
+/// The functions `module` records as keeping their callers' shared
+/// parameters and shared receiver, with how each takes them. A recorded
+/// name the module no longer defines is left out.
+///
+/// Only a value the module retains and releases stays with the caller. A
+/// shared parameter whose type needs no drop, such as a `Queue` handle or
+/// a Copy record, is one the module copies freely and a backend may still
+/// box, so it keeps the owning convention and reads as `Value`.
+pub(super) fn recorded_borrowing(
+    module: &MirModule,
+    context: &MirLoanValidationContext<'_>,
+) -> BTreeMap<String, BorrowingCallee> {
+    if module.borrowing.is_empty() {
+        return BTreeMap::new();
+    }
+    let kept = |passing: MirReceiverKind, ty: Option<&Type>| match (passing, ty) {
+        (MirReceiverKind::Borrow, Some(ty)) if type_needs_drop(context, ty) => {
+            MirReceiverKind::Borrow
+        }
+        (MirReceiverKind::Borrow, _) => MirReceiverKind::Value,
+        (passing, _) => passing,
+    };
+    module
+        .functions
+        .iter()
+        .filter(|function| module.borrowing.contains(&function.name))
+        .map(|function| {
+            let receiver_type = function
+                .local_types
+                .iter()
+                .find(|local| local.name == "self")
+                .map(|local| &local.ty);
+            let callee = BorrowingCallee {
+                receiver: function
+                    .receiver
+                    .map(|passing| kept(passing, receiver_type)),
+                params: function
+                    .params
+                    .iter()
+                    .map(|param| kept(param.passing, Some(&param.ty)))
+                    .collect(),
+            };
+            (function.name.clone(), callee)
+        })
+        .collect()
+}
+
+/// [`recorded_borrowing`] for a backend: how each function that keeps its
+/// callers' shared arguments takes them, or nothing for a module without
+/// explicit ownership.
+pub(crate) fn kept_arguments(module: &MirModule) -> BTreeMap<String, BorrowingCallee> {
+    if module.ownership != MirOwnership::Explicit {
+        return BTreeMap::new();
+    }
+    MirLoanValidationContext::new(module)
+        .map(|context| context.borrowing)
+        .unwrap_or_default()
 }
 
 /// Every operand of `instruction` with its role, in evaluation order. A
@@ -517,16 +778,16 @@ fn push_rvalue_places<'a>(value: &'a Rvalue, accesses: &mut Vec<(&'a str, Access
 /// writebacks and the target. A loan instruction reads its source, so the
 /// source stays live while the loan is.
 pub(crate) fn instruction_accesses(instruction: &Instruction) -> Vec<(&str, Access)> {
-    instruction_accesses_with(instruction, None)
+    instruction_accesses_with(instruction, &[])
 }
 
-/// [`instruction_accesses`] with the erased receiver `erased` borrowed.
+/// [`instruction_accesses`] with each operand of `borrowed` borrowed.
 pub(super) fn instruction_accesses_with<'a>(
     instruction: &'a Instruction,
-    erased: Option<&Operand>,
+    borrowed: &[&Operand],
 ) -> Vec<(&'a str, Access)> {
     let mut accesses = Vec::new();
-    for (operand, role) in operand_roles_with(instruction, erased) {
+    for (operand, role) in operand_roles_with(instruction, borrowed) {
         push_operand(&mut accesses, operand, role);
     }
     // A moved payload or element leaves the rest of its enum or tuple.
@@ -649,12 +910,18 @@ pub(super) struct OwnershipFacts<'f> {
     /// `mut` parameters and a `mut` receiver, which the caller gets back
     /// instead of a release.
     pub(super) mutable: RootSet,
+    /// Shared parameters and a shared receiver of a borrowing function
+    /// (see [`borrowing_functions`]): the caller keeps the value, so the
+    /// function never moves or releases it.
+    pub(super) borrowed: RootSet,
     types: HashMap<&'f str, &'f Type>,
     needs_drop: HashMap<&'f str, bool>,
     /// The temporaries of the function's mutable lends.
     lent: HashSet<&'f str>,
-    /// The receivers of the function's calls on boxed generic values.
-    erased: HashSet<*const Operand>,
+    /// The operands the function's calls borrow: the receivers of calls on
+    /// boxed generic values, and the arguments a borrowing callee keeps
+    /// with the caller.
+    borrowed_operands: HashSet<*const Operand>,
 }
 
 impl<'f> OwnershipFacts<'f> {
@@ -693,19 +960,26 @@ impl<'f> OwnershipFacts<'f> {
             .collect::<HashMap<_, _>>();
         let mut entry = RootSet::new(roots.len());
         let mut mutable = RootSet::new(roots.len());
-        let mut holder = |name: &str, passing: MirReceiverKind| {
+        let mut borrowed = RootSet::new(roots.len());
+        let kept = context.borrowing_function(&function.name);
+        let mut holder = |name: &str, passing: MirReceiverKind, kept: Option<MirReceiverKind>| {
             if let Some(&root) = index.get(name) {
                 entry.insert(root);
-                if passing == MirReceiverKind::BorrowMut {
-                    mutable.insert(root);
+                match passing {
+                    MirReceiverKind::BorrowMut => mutable.insert(root),
+                    MirReceiverKind::Borrow if kept == Some(MirReceiverKind::Borrow) => {
+                        borrowed.insert(root)
+                    }
+                    _ => {}
                 }
             }
         };
         if let Some(passing) = function.receiver {
-            holder("self", passing);
+            holder("self", passing, kept.and_then(|callee| callee.receiver));
         }
-        for param in &function.params {
-            holder(&param.name, param.passing);
+        for (position, param) in function.params.iter().enumerate() {
+            let kind = kept.and_then(|callee| callee.params.get(position).copied());
+            holder(&param.name, param.passing, kind);
         }
         let mut facts = Self {
             function,
@@ -715,11 +989,12 @@ impl<'f> OwnershipFacts<'f> {
             loans,
             entry,
             mutable,
+            borrowed,
             types,
             needs_drop: HashMap::new(),
-            erased: instructions()
-                .filter_map(|instruction| {
-                    borrowed_receiver(instruction, |place| {
+            borrowed_operands: instructions()
+                .flat_map(|instruction| {
+                    borrowed_operands(instruction, context, |place| {
                         context.place_type(function, place).ok().flatten()
                     })
                 })
@@ -740,12 +1015,27 @@ impl<'f> OwnershipFacts<'f> {
         facts
     }
 
-    /// The receiver of `instruction`'s call on a boxed generic value.
-    pub(super) fn erased_in(&self, instruction: &'f Instruction) -> Option<&'f Operand> {
+    /// The operands of `instruction` that its call borrows.
+    pub(super) fn borrowed_in(&self, instruction: &'f Instruction) -> Vec<&'f Operand> {
+        if self.borrowed_operands.is_empty() {
+            return Vec::new();
+        }
         operand_roles(instruction)
             .into_iter()
             .map(|(operand, _)| operand)
-            .find(|operand| self.erased.contains(&(*operand as *const Operand)))
+            .filter(|operand| {
+                self.borrowed_operands
+                    .contains(&(*operand as *const Operand))
+            })
+            .collect()
+    }
+
+    /// The roots the caller keeps: `mut` parameters, which come back, and
+    /// the borrowed shared parameters of a borrowing function.
+    pub(super) fn kept(&self) -> RootSet {
+        let mut kept = self.mutable.clone();
+        kept.union_with(&self.borrowed);
+        kept
     }
 
     /// What `instruction` does to each place it touches. The call of a
@@ -753,7 +1043,7 @@ impl<'f> OwnershipFacts<'f> {
     /// writeback, so the temporary moves in instead of taking a retained
     /// reference: see `mir_lending.rs`.
     pub(super) fn accesses(&self, instruction: &'f Instruction) -> Vec<(&'f str, Access)> {
-        let mut accesses = instruction_accesses_with(instruction, self.erased_in(instruction));
+        let mut accesses = instruction_accesses_with(instruction, &self.borrowed_in(instruction));
         if self.lent.is_empty() {
             return accesses;
         }
@@ -1221,10 +1511,9 @@ fn insert_ownership_within(module: &mut MirModule, state_cells: usize) {
     if module.ownership == MirOwnership::Explicit {
         return;
     }
-    let rewrites = {
-        let Ok(context) = MirLoanValidationContext::new(module) else {
-            return;
-        };
+    module.borrowing = borrowing_functions(module);
+    let rewrites = (|| {
+        let context = MirLoanValidationContext::new(module).ok()?;
         let mut rewrites = Vec::new();
         for (index, function) in module
             .functions
@@ -1254,10 +1543,15 @@ fn insert_ownership_within(module: &mut MirModule, state_cells: usize) {
                         ));
                     }
                 }
-                Err(()) => return,
+                Err(()) => return None,
             }
         }
-        rewrites
+        Some(rewrites)
+    })();
+    let Some(rewrites) = rewrites else {
+        // The module stays implicit, and an implicit module keeps nothing.
+        module.borrowing.clear();
+        return;
     };
     let function_count = module.functions.len();
     for (index, rewrite) in rewrites {
@@ -1765,7 +2059,7 @@ fn function_ownership(
             Effect::of(&mut facts, context, terminator_accesses(&block.terminator));
         // A return hands `mut` parameters back to the caller.
         if matches!(block.terminator, Terminator::Return(_)) {
-            terminator.uses.extend(facts.mutable.iter());
+            terminator.uses.extend(facts.kept().iter());
         }
         flows.push(Some(BlockFlow {
             instructions,
@@ -2023,7 +2317,7 @@ fn function_ownership(
             }
             let mut emitted = instruction.clone();
             set_try_releases(&mut emitted, || {
-                may.difference(&facts.mutable)
+                may.difference(&facts.kept())
                     .iter()
                     .map(|root| facts.roots[root].to_string())
                     .collect()
@@ -2066,7 +2360,7 @@ fn function_ownership(
         let mut terminator = block.terminator.clone();
         if let Terminator::Return(value) = &terminator {
             let mut left = exits[index].clone().expect("reachable blocks have an exit");
-            left.subtract(&facts.mutable);
+            left.subtract(&facts.kept());
             if let Operand::Place(place) | Operand::MovePlace(place) = value {
                 if let Some(root) = facts.tracked(root_of(place)) {
                     left.remove(root);
@@ -2106,8 +2400,10 @@ fn step(effect: &Effect<'_>, live_after: &RootSet, held: &mut RootSet) {
 
 /// `Release` instructions for `roots`, in name order.
 fn releases(facts: &OwnershipFacts<'_>, roots: &RootSet) -> Vec<Instruction> {
+    // The caller keeps a borrowed parameter, so no path releases it.
     roots
         .iter()
+        .filter(|root| !facts.borrowed.contains(*root))
         .map(|root| Instruction::Release {
             place: facts.roots[root].to_string(),
         })
@@ -2288,6 +2584,7 @@ pub fn strip_ownership(module: &mut MirModule) {
         }
     }
     module.ownership = MirOwnership::Implicit;
+    module.borrowing.clear();
 }
 
 #[cfg(test)]

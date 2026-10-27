@@ -164,16 +164,27 @@ fn direct_backend_counts_retains_releases_and_clones() {
     );
 }
 
-const LAST_USE_MOVES: &str = "def keep(text: str) -> int64:\n    return len(text)\n\ndef main():\n    name = f\"ab{1}\"\n    print(keep(name))\n    print(keep(name))\n    last = f\"cd{2}\"\n    print(keep(last))\n";
+const LAST_USE_MOVES: &str = "def keep(text: str) -> int64:\n    return len(text)\n\ndef main():\n    name = f\"ab{1}\"\n    print(keep(name))\n    print(keep(name))\n    last = f\"cd{2}\"\n    print(keep(last))\n    _measure = keep\n";
 
 #[test]
 fn direct_backend_moves_a_value_at_its_last_use() {
+    // A function value reaches `keep`, so it owns its parameter. Only the
+    // first call retains `name`. Each last use moves its value into the
+    // call, and the callee releases it.
     let (_, direct) = assert_both_backends("repr-last-use", LAST_USE_MOVES, "3\n3\n3\n");
-    // Only the first call retains `name`. Each last use moves its value
-    // into the call, and the callee releases it.
     assert_eq!(
         (direct.opaque_boxes, direct.retains, direct.releases),
         (3, 1, 4),
+        "{direct:?}"
+    );
+    // Without the function value, only direct calls reach `keep`: each
+    // caller keeps its string, so nothing is retained, and the caller
+    // releases each string once.
+    let direct_only = LAST_USE_MOVES.replace("    _measure = keep\n", "");
+    let (_, direct) = assert_both_backends("repr-kept", &direct_only, "3\n3\n3\n");
+    assert_eq!(
+        (direct.opaque_boxes, direct.retains, direct.releases),
+        (3, 0, 3),
         "{direct:?}"
     );
 }

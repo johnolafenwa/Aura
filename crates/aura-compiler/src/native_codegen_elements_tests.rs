@@ -30,6 +30,9 @@ def main():
     print(total(items))
     print(first(items))
     print(count(items))
+    # A function value keeps `first` owning, and so releasing, its list.
+    pick = first
+    print(pick(items))
 "#;
 
 fn function(name: &str) -> MirFunction {

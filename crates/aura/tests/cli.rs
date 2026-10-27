@@ -1001,6 +1001,7 @@ fn adr0038_cfg_view_module(reverse_branch_storage: bool, include_dead_loan: bool
         constants: Vec::new(),
         top_level: None,
         ownership: Default::default(),
+        borrowing: Default::default(),
     }
 }
 
@@ -1214,6 +1215,7 @@ fn adr0038_closure_branch_module(flag: bool, reverse_branch_storage: bool) -> Mi
         constants: Vec::new(),
         top_level: None,
         ownership: Default::default(),
+        borrowing: Default::default(),
     }
 }
 
@@ -1431,6 +1433,7 @@ fn adr0038_selector_reuse_module() -> MirModule {
         constants: Vec::new(),
         top_level: None,
         ownership: Default::default(),
+        borrowing: Default::default(),
     }
 }
 

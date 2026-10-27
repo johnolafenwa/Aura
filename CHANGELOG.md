@@ -88,9 +88,19 @@ in this file.
   each call. Native code reads such a result into a `match own` by moving
   its payload out, where it used to copy the string twice. A `Result`
   that native code builds keeps its payloads in its enum layout, and
-  `try` reads them in place. At check size, pubsub_broker runs 36% fewer
-  instructions, kv_server 35%, bank_ledger 26%, docdb 17%, mini_browser
-  16%, and http_api 8%.
+  `try` reads them in place. At check size, kv_server runs 39% fewer
+  instructions, pubsub_broker 36%, bank_ledger 26%, http_api 19%, docdb
+  17%, and mini_browser 16%.
+- A function that only direct calls reach no longer takes a reference to
+  each shared argument and its shared `self`: the caller passes the value
+  it holds, and the callee neither retains nor releases it. The language
+  already keeps a shared parameter from being rebound or changed during
+  the call, so nothing observable changes. Function values, tasks,
+  closures, cleanups, `From` conversions, methods picked at run time, and
+  functions returning a view keep the old convention. Across the 30
+  benchmark programs, generated code retains values 34% less often; at
+  check size, sql_engine runs 17% fewer instructions, lru_cache 17%,
+  spreadsheet 11%, json_roundtrip 10%, and template_render 5%.
 
 ### Fixed
 
