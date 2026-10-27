@@ -104,9 +104,17 @@ Last updated: 2026-10-27
   place. Retains across the 30 programs: 326,693; `astar_pathfinding`
   -10% instructions, `graph_paths` -4%. Details are in
   `2026-10-27-rust-speed-2h-collection-writes.md`.
-- Next: 2h part 4, a variant payload that only binds a name is read
-  straight into the binding, then unit results, scalar math, and the
-  leak, failure, and cancellation tests.
+- Step 2h part 4: a variant payload that only binds a name is read
+  straight into the binding, a payload ignored with `_` is not read, and
+  native code lends a payload binding that is only read the box its
+  variant holds (`elements::lent_payload_reads`), taking a reference
+  only where the scrutinee may change or go away. Also fixes a stack
+  overflow in the unreachable-arm check on recursive enums. Retains
+  across the 30 programs: 87,876; `interpreter` -11% instructions,
+  `binary_trees` -9.5%. Details are in
+  `2026-10-27-rust-speed-2h-payload-bindings.md`.
+- Next: 2h part 5, unit results and scalar math without boxes, then the
+  leak, failure, and cancellation tests and the gate report.
 
 ## Aura 0.7.1 preview release (complete)
 
