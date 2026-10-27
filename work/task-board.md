@@ -2,7 +2,7 @@
 
 Last updated: 2026-10-27
 
-## Aura 0.8.0 preview release (in progress)
+## Aura 0.8.0 preview release (complete)
 
 - Target: release 0.8.0 after Phase 1 of the Rust-speed plan, as the plan
   John approved on 2026-10-26 says. Details are in
@@ -11,8 +11,11 @@ Last updated: 2026-10-27
   #157). The 30 cross-language programs take 147 s instead of 227 s, and
   the median is 16 times Rust instead of 35. `task_pool` is slower and
   waits on Phase 4.
-- Remaining: green hosted CI on the release pull request, merge, and the
-  `v0.8.0-preview` tag, which John approves.
+- Merged as PR #160 (`f3b19e0f`) after hosted CI passed on Linux and
+  macOS. The annotated `v0.8.0-preview` tag (`3fc233e1`) was pushed on
+  2026-10-27, and Release run `40478789841` published the three archives,
+  docs, VSIX, and `SHA256SUMS`, and extension 0.8.0 to the Marketplace and
+  Open VSX.
 - `VSCE_PAT` must be an org-scoped token before 2026-12-01.
 
 ## Rust speed Phase 2: typed native layouts (in progress)
