@@ -60,6 +60,13 @@ section "Plain Records".
 - The list iterator implements `nth`, so `iter().skip(n)` steps over
   elements without building them. Step 1e (PR #146) makes the same change;
   the rebase keeps one copy.
+- A plain layout reaches its converters (shape check, write, read)
+  through function pointers that only registration names, and the lookup
+  by value is installed by the first registration. Every list operation
+  has a typed arm, so calling the converters directly linked all of them,
+  with the type descriptor reader and type budget, into every program:
+  hello world grew from 995,024 to 1,108,672 bytes, past the size gate.
+  It is 999,616 bytes now, and instruction counts are unchanged.
 
 ## Verification
 

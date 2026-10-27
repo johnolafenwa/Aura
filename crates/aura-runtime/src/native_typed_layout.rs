@@ -13,7 +13,7 @@
 use std::alloc::{alloc, dealloc, handle_alloc_error, Layout as AllocLayout};
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 use std::sync::{OnceLock, RwLock};
 
 use aura_core::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
@@ -125,7 +125,23 @@ pub struct PlainLayout {
     /// The words one value takes in a list: its size, rounded up to whole
     /// 8-byte words. A plain layout is never empty, so it is never 0.
     stride_words: NonZeroUsize,
+    /// How values move in and out of the layout. Only registration names
+    /// these, so a program that registers no plain layout links none of
+    /// the converters, however many list operations it has.
+    ops: &'static PlainOps,
 }
+
+struct PlainOps {
+    check: fn(&LayoutTable, LayoutId, &Value) -> Result<(), String>,
+    write: unsafe fn(&LayoutTable, LayoutId, &Value, *mut u8),
+    read: unsafe fn(&LayoutTable, LayoutId, *const u8) -> Value,
+}
+
+static PLAIN_OPS: PlainOps = PlainOps {
+    check,
+    write: write_plain,
+    read,
+};
 
 /// The access code of the first plain layout registered. The codes below
 /// it are the fixed list forms of `DirectListAccess`.
@@ -158,7 +174,7 @@ impl PlainLayout {
 
     /// Whether `value` has this layout's shape, all the way down.
     pub fn fits(&self, value: &Value) -> bool {
-        check(&self.layout.table, self.layout.root, value).is_ok()
+        (self.ops.check)(&self.layout.table, self.layout.root, value).is_ok()
     }
 
     /// Writes `value` into one element's words, padding included.
@@ -170,7 +186,7 @@ impl PlainLayout {
     pub unsafe fn encode(&self, value: &Value, dst: *mut u64) {
         unsafe {
             std::ptr::write_bytes(dst, 0, self.stride_words.get());
-            write_plain(&self.layout.table, self.layout.root, value, dst.cast());
+            (self.ops.write)(&self.layout.table, self.layout.root, value, dst.cast());
         }
     }
 
@@ -180,7 +196,7 @@ impl PlainLayout {
     ///
     /// `src` holds a value [`Self::encode`] wrote.
     pub unsafe fn decode(&self, src: *const u64) -> Value {
-        unsafe { self.layout.read(src.cast()) }
+        unsafe { self.read(src.cast()) }
     }
 
     /// Writes `value` into the layout's bytes at `dst`, as generated code
@@ -191,8 +207,8 @@ impl PlainLayout {
     ///
     /// `dst` is valid for writes of the layout's size, at its alignment.
     pub unsafe fn write_checked(&self, value: &Value, dst: *mut u8) -> Result<(), String> {
-        check(&self.layout.table, self.layout.root, value)?;
-        unsafe { write_plain(&self.layout.table, self.layout.root, value, dst) };
+        (self.ops.check)(&self.layout.table, self.layout.root, value)?;
+        unsafe { (self.ops.write)(&self.layout.table, self.layout.root, value, dst) };
         Ok(())
     }
 
@@ -202,7 +218,7 @@ impl PlainLayout {
     ///
     /// `src` holds a value of this layout.
     pub unsafe fn read(&self, src: *const u8) -> Value {
-        unsafe { self.layout.read(src) }
+        unsafe { (self.ops.read)(&self.layout.table, self.layout.root, src) }
     }
 }
 
@@ -218,9 +234,10 @@ struct PlainRegistry {
     next: u32,
 }
 
-/// Whether any value can have a plain layout, so a lookup for a program
-/// that registered none skips the registry's lock.
-static PLAIN_KEYS_REGISTERED: AtomicBool = AtomicBool::new(false);
+/// The lookup behind [`plain_layout_for_value`], installed when a layout
+/// registers under a key. A program that registered none skips the
+/// registry's lock and links neither the registry nor the shape check.
+static PLAIN_LOOKUP: OnceLock<fn(&Value) -> Option<&'static PlainLayout>> = OnceLock::new();
 
 fn plain_registry() -> &'static RwLock<PlainRegistry> {
     static REGISTRY: OnceLock<RwLock<PlainRegistry>> = OnceLock::new();
@@ -323,11 +340,12 @@ pub fn register_plain_layout(
         access,
         layout,
         stride_words,
+        ops: &PLAIN_OPS,
     }));
     registry.by_descriptor.insert(descriptor.to_string(), plain);
     if let Some(key) = key {
         registry.by_key.entry(key).or_insert(plain);
-        PLAIN_KEYS_REGISTERED.store(true, Ordering::Release);
+        PLAIN_LOOKUP.get_or_init(|| registered_plain_layout_for_value);
     }
     Ok(plain)
 }
@@ -335,12 +353,13 @@ pub fn register_plain_layout(
 /// The registered plain layout `value` fits, when its class or tuple type
 /// registered one.
 pub fn plain_layout_for_value(value: &Value) -> Option<&'static PlainLayout> {
-    // A program with no plain records never takes the lock.
-    if !matches!(value, Value::Instance(_) | Value::Tuple(_))
-        || !PLAIN_KEYS_REGISTERED.load(Ordering::Acquire)
-    {
+    if !matches!(value, Value::Instance(_) | Value::Tuple(_)) {
         return None;
     }
+    PLAIN_LOOKUP.get()?(value)
+}
+
+fn registered_plain_layout_for_value(value: &Value) -> Option<&'static PlainLayout> {
     let registry = plain_registry()
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
