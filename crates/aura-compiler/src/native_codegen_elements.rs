@@ -193,7 +193,11 @@ fn read_receiver(instruction: &Instruction) -> Option<&str> {
         ),
         RuntimeOp::Set(op) => matches!(
             op,
-            SetOp::Len | SetOp::IsEmpty | SetOp::Contains | SetOp::ContainsInt64 | SetOp::IndexOption
+            SetOp::Len
+                | SetOp::IsEmpty
+                | SetOp::Contains
+                | SetOp::ContainsInt64
+                | SetOp::IndexOption
         ),
         _ => false,
     };

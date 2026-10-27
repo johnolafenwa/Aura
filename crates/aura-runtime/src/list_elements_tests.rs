@@ -398,7 +398,10 @@ fn lent_lists_keep_each_element_in_a_box_of_its_own() {
     assert_eq!(list.view().3, 0);
     assert_eq!(
         format!("{list:?}"),
-        format!("{:?}", SharedVec::from(vec![text("a"), text("b"), text("c")]))
+        format!(
+            "{:?}",
+            SharedVec::from(vec![text("a"), text("b"), text("c")])
+        )
     );
 
     // A copy shares the boxes until either list changes; a change copies
