@@ -109,7 +109,9 @@ and 30% of `sql_engine`.
   past the conversion threshold, nested lists, enums, `json.Value` lists,
   and a task), and `run-pass/lent_list_elements_task_failure.au` (tasks
   that trap while a loop reads a lent element, after the list moved to
-  boxes, and after a promoted element took its copy).
+  boxes, and after a promoted element took its copy), and
+  `run-pass/lent_list_elements_across_tasks.au` (lists lent from move into
+  tasks, share storage with copies, and change there).
 - Backend parity (every runtime fixture on both backends) passes.
 
 ## Measurements
