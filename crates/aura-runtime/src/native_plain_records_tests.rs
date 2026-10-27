@@ -224,7 +224,7 @@ fn registered_records_live_in_lists_and_cross_with_one_call() {
     let variant = boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "Slot".to_string().into(),
         variant_name: "Full".to_string().into(),
-        payloads: vec![record(name, 6, 1.0)],
+        payloads: vec![record(name, 6, 1.0)].into(),
     }));
     let projection = b"__variant_payload_Full_0";
     unsafe {
@@ -479,7 +479,7 @@ fn record_helpers_report_bad_cells_shapes_and_positions() {
                 let variant = boxed_value(Value::EnumVariant(EnumVariantValue {
                     enum_name: "Slot".to_string().into(),
                     variant_name: "Empty".to_string().into(),
-                    payloads: Vec::new(),
+                    payloads: Vec::new().into(),
                 }));
                 let projection = b"__variant_payload_Full_0";
                 aura_direct_instance_read_plain(
@@ -546,7 +546,7 @@ fn enums_of_scalars_lay_out_plain_and_cells_start_empty() {
         let value = Value::EnumVariant(EnumVariantValue {
             enum_name: "PlainTestSlot".to_string().into(),
             variant_name: variant.to_string().into(),
-            payloads,
+            payloads: payloads.into(),
         });
         assert_eq!(decoded(layout, &encoded(layout, &value)), value);
     }

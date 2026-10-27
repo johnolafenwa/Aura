@@ -59,6 +59,9 @@ pub(super) struct PlainRecords {
     /// The class layouts the module's code uses, by class name (see
     /// `native_codegen_classes.rs`).
     pub(super) classes: HashMap<String, Option<super::classes::ClassRecord>>,
+    /// The enum layouts the module's code uses, by the type's descriptor
+    /// (see `native_codegen_enums.rs`).
+    pub(super) enums: HashMap<String, Option<super::enums::EnumRecord>>,
     /// The plain records made so far, which number their access codes.
     plain_count: u32,
     /// Each cell with its type's descriptor and access code, in the order
@@ -72,6 +75,7 @@ impl PlainRecords {
             env: crate::mir::layout::layout_env(module),
             by_class: HashMap::new(),
             classes: HashMap::new(),
+            enums: HashMap::new(),
             plain_count: 0,
             cells: Vec::new(),
         }
@@ -96,6 +100,17 @@ impl PlainRecords {
             Ok(descriptor) => descriptor,
             Err(error) => return Err(error.0),
         };
+        self.declare_cell_for(descriptor, access, object)
+    }
+
+    /// Declares a cell for the layout `descriptor` describes, which the main
+    /// wrapper registers under `access`.
+    pub(super) fn declare_cell_for(
+        &mut self,
+        descriptor: String,
+        access: u64,
+        object: &mut dyn ModuleBackend,
+    ) -> std::result::Result<DataHandle, String> {
         let index = self.cells.len();
         let cell = try_or_string_error!(
             object.declare_data(&format!("aura_plain_layout_{index}"), Linkage::Local, true),
@@ -605,14 +620,15 @@ impl FunctionCompiler<'_> {
     }
 }
 
-/// Declares the table the main wrapper registers: one entry per cell, with
-/// the cell's address, its descriptor's address and length, and its access
-/// code, as `aura_runtime::native_runtime::DirectPlainLayoutEntry` lays
-/// them out.
+/// Declares a table the main wrapper registers, under the symbol `name`:
+/// one entry per cell, with the cell's address, its descriptor's address
+/// and length, and its access code, as
+/// `aura_runtime::native_runtime::DirectPlainLayoutEntry` lays them out.
 pub(super) fn declare_plain_layout_table(
     object: &mut dyn ModuleBackend,
     string_data: &mut HashMap<Vec<u8>, DataHandle>,
-    cells: &[(DataHandle, String, u64)],
+    name: &str,
+    cells: &[&(DataHandle, String, u64)],
 ) -> std::result::Result<DataHandle, String> {
     use aura_runtime::native_runtime::DirectPlainLayoutEntry as Entry;
     const ENTRY_BYTES: usize = std::mem::size_of::<Entry>();
@@ -622,8 +638,8 @@ pub(super) fn declare_plain_layout_table(
         entries.push((*cell, text, descriptor.len(), *access));
     }
     let table = try_or_string_error!(
-        object.declare_data("aura_plain_layouts", Linkage::Local, false),
-        "failed to declare the plain layout table: {}"
+        object.declare_data(name, Linkage::Local, false),
+        "failed to declare a layout table: {}"
     );
     let mut bytes = vec![0u8; ENTRY_BYTES * entries.len().max(1)];
     for (index, (_, _, len, access)) in entries.iter().enumerate() {
@@ -645,7 +661,7 @@ pub(super) fn declare_plain_layout_table(
     }
     try_or_string_error!(
         object.define_data(table, data),
-        "failed to define the plain layout table: {}"
+        "failed to define a layout table: {}"
     );
     Ok(table)
 }

@@ -13882,6 +13882,48 @@ def main():
 }
 
 #[test]
+fn native_programs_register_only_the_layout_kinds_they_use() {
+    let classes = r#"
+class Account:
+    name: str
+    balance: int64
+
+def main():
+    mut account = Account(name="a", balance=1)
+    account.balance += 2
+    print(account.balance)
+"#;
+    let enums = r#"
+enum Shape:
+    Point
+    Circle(radius: float64)
+
+def area(shape: Shape) -> float64:
+    match shape:
+        case Shape.Circle(radius):
+            return radius * radius
+        case Shape.Point:
+            return 0.0
+
+def main():
+    print(area(Shape.Circle(radius=2.0)))
+"#;
+    for (source, kind) in [(classes, "class"), (enums, "enum")] {
+        let mir = lower_source_to_mir(source).expect("the source should lower");
+        let object = emit_host_object(&mir).expect("the source should emit directly");
+        let referenced = object_referenced_symbols(&object);
+        for other in ["plain", "class", "enum"] {
+            let symbol = format!("aura_direct_register_{other}_layouts");
+            assert_eq!(
+                referenced.iter().any(|name| name.ends_with(&symbol)),
+                other == kind,
+                "a program with a {kind} layout and `{symbol}`, referenced: {referenced:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn native_executables_check_the_list_layout_they_read() {
     let source = r#"
 def pick(values: list[int64], flags: list[bool], weights: list[float64]) -> int64:

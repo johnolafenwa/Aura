@@ -10847,6 +10847,34 @@ pub fn display_wrapper_type_name(function_name: &str) -> Option<&str> {
     function_name.strip_prefix(DISPLAY_WRAPPER_PREFIX)
 }
 
+/// The `float32` fields and payloads `module` declares. A value keeps a
+/// `float32` widened to `float64`, so both backends render these with
+/// `float32` digits from this record. A field or payload typed by a type
+/// parameter is left out, since neither backend keeps the type argument.
+pub fn float32_slots(module: &MirModule) -> crate::runtime_value::Float32Slots {
+    let float32 =
+        |ty: &Type| matches!(ty, Type::Named(name, args) if name == "float32" && args.is_empty());
+    let mut slots = crate::runtime_value::Float32Slots::default();
+    for class in &module.classes {
+        for field in class.fields.iter().filter(|field| float32(&field.ty)) {
+            slots.add_field(&class.name, &field.name);
+        }
+    }
+    for enum_layout in &module.enums {
+        for variant in &enum_layout.variants {
+            for (index, _) in variant
+                .payloads
+                .iter()
+                .enumerate()
+                .filter(|(_, ty)| float32(ty))
+            {
+                slots.add_payload(&enum_layout.name, &variant.name, index);
+            }
+        }
+    }
+    slots
+}
+
 /// Synthesizes one ordinary function per `Display` implementation:
 /// `render <Type>(value: own Type) -> str` calls `value.display()`.
 /// The runtime renderer calls it whenever it reaches a value of that nominal

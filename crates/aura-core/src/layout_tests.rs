@@ -783,3 +783,97 @@ fn strongly_connected_components_split_a_graph() {
     components.sort();
     assert_eq!(components, vec![vec![0, 1, 2], vec![3], vec![4]]);
 }
+
+#[test]
+fn an_enum_in_a_box_keeps_scalars_inline_and_every_other_payload_in_a_box() {
+    let mut env = LayoutEnv::default();
+    env.enums.insert(
+        "Tree".to_string(),
+        enumeration(&[
+            ("Node", vec![named("Tree"), named("Tree")]),
+            ("Leaf", vec![named("int32"), named("str")]),
+            ("Empty", Vec::new()),
+        ]),
+    );
+    env.enums.insert(
+        "Maybe".to_string(),
+        EnumDefinition {
+            type_params: vec!["T".to_string()],
+            variants: vec![("Some".to_string(), vec![Type::TypeParam("T".to_string())])],
+        },
+    );
+    let inline = |ty: &Type| matches!(ty, Type::Named(name, _) if name == "int32");
+    let mut builder = LayoutBuilder::new(&env);
+    let id = builder
+        .boxed_enum_layout(&named("Tree"), inline)
+        .expect("a layout")
+        .expect("an enum");
+    // A later layout of the enum lays its recursive edges out as before.
+    let held = builder.layout(&named("Tree")).expect("a layout");
+    // Neither a class, an enum that names a type parameter, nor a type
+    // that is no enum is laid out in a box.
+    for ty in [
+        named("int64"),
+        named("Missing"),
+        generic("Maybe", vec![Type::TypeParam("T".to_string())]),
+        Type::Tuple(vec![named("int64")]),
+    ] {
+        assert_eq!(
+            builder.boxed_enum_layout(&ty, inline).unwrap(),
+            None,
+            "{ty}"
+        );
+    }
+    let concrete = builder
+        .boxed_enum_layout(&generic("Maybe", vec![named("int32")]), inline)
+        .expect("a layout")
+        .expect("an enum");
+    let table = builder.into_table();
+    table.validate().expect("a valid table");
+    assert!(!table.holds_block(id));
+    assert!(table.holds_block(held));
+    let LayoutKind::Tagged {
+        enum_name,
+        variants,
+        payload_offset,
+        ..
+    } = &table.get(id).kind
+    else {
+        panic!("expected a tagged layout");
+    };
+    assert_eq!(enum_name.as_deref(), Some("Tree"));
+    let kinds = |variant: usize| {
+        variants[variant]
+            .fields
+            .iter()
+            .map(|field| {
+                (
+                    field.offset - payload_offset,
+                    table.get(field.layout).kind.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        kinds(0),
+        vec![(0, LayoutKind::Handle), (8, LayoutKind::Handle)]
+    );
+    assert_eq!(
+        kinds(1),
+        vec![
+            (0, LayoutKind::Scalar(ScalarLayout::Int32)),
+            (8, LayoutKind::Handle)
+        ]
+    );
+    assert!(kinds(2).is_empty());
+    let LayoutKind::Tagged { variants, .. } = &table.get(concrete).kind else {
+        panic!("expected a tagged layout");
+    };
+    assert_eq!(
+        table.get(variants[0].fields[0].layout).kind,
+        LayoutKind::Scalar(ScalarLayout::Int32)
+    );
+    let descriptor = encode_layouts(&table, id);
+    let (decoded, root) = decode_descriptor(&descriptor).expect("a descriptor");
+    assert!(matches!(decoded.get(root).kind, LayoutKind::Tagged { .. }));
+}

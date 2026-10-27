@@ -1148,7 +1148,9 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
                     pending.extend(map.entries.iter().rev().map(|(_, value)| value));
                 }
                 Value::Instance(instance) => pending.extend(instance.fields.map().values().rev()),
-                Value::EnumVariant(variant) => pending.extend(variant.payloads.iter().rev()),
+                Value::EnumVariant(variant) => {
+                    pending.extend(variant.payloads.values().iter().rev())
+                }
                 Value::Union(union) => pending.push(&union.payload),
                 _ => {}
             }
@@ -1192,7 +1194,7 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Result".into(),
             variant_name: "Ok".into(),
-            payloads: vec![source_array(&[31, 37])],
+            payloads: vec![source_array(&[31, 37])].into(),
         }),
         Value::EnumVariant(EnumVariantValue {
             enum_name: "TaggedArray".into(),
@@ -1201,7 +1203,8 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
                 Value::String("before".to_string()),
                 source_array(&[41, 43]),
                 Value::Int(IntegerValue::from_i32(47)),
-            ],
+            ]
+            .into(),
         }),
     ];
 
@@ -1411,7 +1414,7 @@ fn adr0038_partial_capture_copies_release_every_projected_value_after_failure() 
                                 Value::EnumVariant(EnumVariantValue {
                                     enum_name: "CleanupPayload".into(),
                                     variant_name: "Queue".into(),
-                                    payloads: vec![channel_value(channel)],
+                                    payloads: vec![channel_value(channel)].into(),
                                 }),
                             )])
                             .into(),
@@ -1593,7 +1596,7 @@ fn deeply_recursive_reachable_array_copy_completes_on_a_512_kib_stack() {
                 Value::EnumVariant(EnumVariantValue {
                     enum_name: "Link".into(),
                     variant_name: "End".into(),
-                    payloads: Vec::new(),
+                    payloads: Vec::new().into(),
                 })
             };
             let mut source = link_end();
@@ -1601,7 +1604,7 @@ fn deeply_recursive_reachable_array_copy_completes_on_a_512_kib_stack() {
                 source = Value::EnumVariant(EnumVariantValue {
                     enum_name: "Link".into(),
                     variant_name: "Next".into(),
-                    payloads: vec![Value::Instance(InstanceValue {
+                    payloads: (vec![Value::Instance(InstanceValue {
                         class_name: "ArrayNode".to_string(),
                         fields: BTreeMap::from([
                             ("next".to_string(), source),
@@ -1617,7 +1620,8 @@ fn deeply_recursive_reachable_array_copy_completes_on_a_512_kib_stack() {
                             ),
                         ])
                         .into(),
-                    })],
+                    })])
+                    .into(),
                 });
             }
 
@@ -1807,7 +1811,7 @@ fn array_clone_failure_drops_a_completed_deep_sibling_on_a_small_stack() {
                     deep_sibling = Value::EnumVariant(EnumVariantValue {
                         enum_name: "CloneFailureProbe".into(),
                         variant_name: "Next".into(),
-                        payloads: vec![deep_sibling],
+                        payloads: vec![deep_sibling].into(),
                     });
                 }
                 let source = Value::EnumVariant(EnumVariantValue {
@@ -1822,7 +1826,8 @@ fn array_clone_failure_drops_a_completed_deep_sibling_on_a_small_stack() {
                             )
                             .unwrap(),
                         ),
-                    ],
+                    ]
+                    .into(),
                 });
 
                 let error = super::with_array_allocation_budget(DEPTH + 1, || {
@@ -3550,7 +3555,7 @@ fn bytes_data_errors_materialize_exact_typed_result_payloads() {
             (result.enum_name.as_str(), result.variant_name.as_str()),
             ("Result", "Err")
         );
-        let [Value::EnumVariant(error)] = result.payloads.as_slice() else {
+        let [Value::EnumVariant(error)] = result.payloads.values() else {
             panic!("Result.Err should contain bytes.Error");
         };
         assert_eq!(
@@ -3559,7 +3564,7 @@ fn bytes_data_errors_materialize_exact_typed_result_payloads() {
         );
         assert_eq!(error.payloads.len(), expected_payloads.len());
         for (payload, (expected_value, expected_kind)) in
-            error.payloads.iter().zip(expected_payloads)
+            error.payloads.values().iter().zip(expected_payloads)
         {
             assert!(matches!(
                 payload,
@@ -3639,7 +3644,10 @@ fn bytes_host_builtin_adapter_covers_codecs_hashes_and_strict_utf8() {
         panic!("str.from_bytes should return Result");
     };
     assert_eq!(decoded.variant_name, "Ok");
-    assert_eq!(decoded.payloads, vec![Value::String("abc".to_string())]);
+    assert_eq!(
+        decoded.payloads,
+        vec![Value::String("abc".to_string())].into()
+    );
     assert_eq!(text, Value::String("abc".to_string()));
 
     assert_eq!(
@@ -3667,7 +3675,7 @@ fn bytes_host_builtin_adapter_returns_typed_data_errors_and_au4005_resources() {
             panic!("{name} should return Result");
         };
         assert_eq!(result.variant_name, "Err");
-        let [Value::EnumVariant(error)] = result.payloads.as_slice() else {
+        let [Value::EnumVariant(error)] = result.payloads.values() else {
             panic!("{name} Result.Err should contain bytes.Error");
         };
         error.variant_name.to_string()
@@ -3729,7 +3737,7 @@ fn bytes_string_from_bytes_classifies_invalid_utf8_before_runtime_materializatio
         panic!("str.from_bytes should return Result");
     };
     assert_eq!(result.variant_name, "Err");
-    let [Value::EnumVariant(error)] = result.payloads.as_slice() else {
+    let [Value::EnumVariant(error)] = result.payloads.values() else {
         panic!("Result.Err should contain bytes.Error");
     };
     assert_eq!(
@@ -3737,7 +3745,7 @@ fn bytes_string_from_bytes_classifies_invalid_utf8_before_runtime_materializatio
         ("bytes.Error", "InvalidUtf8")
     );
     assert!(matches!(
-        error.payloads.as_slice(),
+        error.payloads.values(),
         [Value::Int(index)]
             if index.as_i128() == Some(1)
                 && index.runtime_kind() == Some(crate::integer::IntegerKind::Int32)
@@ -5527,6 +5535,67 @@ fn unix_fd_nonblocking_helper_toggles_socket_flags_and_reports_bad_fds() {
 }
 
 #[test]
+fn float32_slots_render_named_fields_and_payloads_with_float32_digits() {
+    let mut slots = super::Float32Slots::default();
+    assert!(slots.is_empty());
+    slots.add_field("Reading", "level");
+    slots.add_payload("Sample", "Pair", 0);
+    assert!(!slots.is_empty());
+    let encoded = slots.encode();
+    assert_eq!(encoded, "f\tReading\tlevel\np\tSample\tPair\t0");
+    assert_eq!(super::Float32Slots::decode(&encoded), Some(slots.clone()));
+    assert_eq!(
+        super::Float32Slots::decode(""),
+        Some(super::Float32Slots::default())
+    );
+    assert_eq!(super::Float32Slots::decode("f\tReading"), None);
+    assert_eq!(super::Float32Slots::decode("p\tSample\tPair\tfirst"), None);
+
+    let widened = f64::from(0.1f32);
+    let reading = Value::Instance(InstanceValue {
+        class_name: "Reading".to_string(),
+        fields: BTreeMap::from([
+            ("level".to_string(), Value::Float(widened)),
+            ("exact".to_string(), Value::Float(widened)),
+        ])
+        .into(),
+    });
+    let pair = Value::EnumVariant(EnumVariantValue {
+        enum_name: "Sample".into(),
+        variant_name: "Pair".into(),
+        payloads: vec![Value::Float(widened), Value::Float(widened)].into(),
+    });
+    let wide = "0.10000000149011612";
+    assert_eq!(
+        reading.render(),
+        format!("Reading(exact={wide}, level={wide})")
+    );
+    assert_eq!(
+        reading.render_with_slots(None, &slots).unwrap(),
+        format!("Reading(exact={wide}, level=0.1)")
+    );
+    assert_eq!(
+        pair.render_with_slots(None, &slots).unwrap(),
+        format!("Sample.Pair(0.1, {wide})")
+    );
+    // A hook still renders the nodes it knows, and the slots the rest.
+    let list = Value::Vec(VecValue::new(
+        Type::named("Reading"),
+        vec![reading.clone()].into(),
+    ));
+    let mut hook =
+        |type_name: &str, _: &Value| (type_name == "Sample").then(|| Ok("sample".to_string()));
+    assert_eq!(
+        list.render_with_slots(Some(&mut hook), &slots).unwrap(),
+        format!("[Reading(exact={wide}, level=0.1)]")
+    );
+    assert_eq!(
+        pair.render_with_slots(Some(&mut hook), &slots).unwrap(),
+        "sample"
+    );
+}
+
+#[test]
 fn render_float_formats_current_surface() {
     assert_eq!(render_float(42.0), "42.0");
     assert_eq!(render_float(3.5), "3.5");
@@ -5999,7 +6068,7 @@ fn async_and_process_result_helpers_render_expected_variants() {
         };
         assert_eq!(variant.enum_name, enum_name);
         assert_eq!(variant.variant_name, variant_name);
-        assert_eq!(variant.payloads, expected_payloads);
+        assert_eq!(variant.payloads, expected_payloads.into());
     }
 
     let payload = Value::Int(IntegerValue::from_signed(5));
@@ -6114,7 +6183,7 @@ fn async_and_process_result_helpers_render_expected_variants() {
         let Value::EnumVariant(variant) = outcome else {
             panic!("expected indexed concurrency outcome")
         };
-        let Some(Value::Int(index)) = variant.payloads.first() else {
+        let Some(Value::Int(index)) = variant.payloads.values().first() else {
             panic!("expected indexed concurrency outcome payload")
         };
         assert_eq!(index.runtime_type_name(), Some("int64"));
@@ -6183,7 +6252,7 @@ fn process_config_decoders_report_unknown_and_wrong_variants() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "process.Stdio".into(),
             variant_name: variant_name.to_string().into(),
-            payloads: Vec::new(),
+            payloads: Vec::new().into(),
         })
     };
     assert!(matches!(
@@ -6215,7 +6284,7 @@ fn process_config_decoders_report_unknown_and_wrong_variants() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "process.RestartPolicy".into(),
             variant_name: variant_name.to_string().into(),
-            payloads: Vec::new(),
+            payloads: Vec::new().into(),
         })
     };
     assert_eq!(
@@ -6451,7 +6520,7 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Status".into(),
             variant_name: "Ready".into(),
-            payloads: vec![],
+            payloads: vec![].into(),
         }),
         "Status",
     );
@@ -6627,7 +6696,7 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "process.ExitStatus".into(),
             variant_name: "Exited".into(),
-            payloads: vec![Value::Int(IntegerValue::from_signed(0))],
+            payloads: vec![Value::Int(IntegerValue::from_signed(0))].into(),
         }),
         vec![],
         vec![],
@@ -6643,7 +6712,7 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "process.ExitStatus".into(),
             variant_name: "Exited".into(),
-            payloads: vec![Value::Int(IntegerValue::from_signed(2))],
+            payloads: vec![Value::Int(IntegerValue::from_signed(2))].into(),
         }),
         vec![],
         vec![],
@@ -6948,7 +7017,7 @@ fn phase73_observable_runtime_json_clone_preserves_empty_containers_and_nested_b
         let Value::EnumVariant(variant) = value else {
             return;
         };
-        match variant.payloads.as_slice() {
+        match variant.payloads.values() {
             [Value::Vec(vector)] => {
                 if !vector.elements.is_empty() {
                     output.push(vector.elements.as_ptr() as usize);
@@ -7034,7 +7103,7 @@ fn dynamic_json_runtime_conversion_round_trips_every_variant_and_preserves_objec
     };
     assert_eq!(root.enum_name, "json.Value");
     assert_eq!(root.variant_name, "Object");
-    let [Value::Map(object)] = root.payloads.as_slice() else {
+    let [Value::Map(object)] = root.payloads.values() else {
         panic!("json.Value.Object should carry dict[str, json.Value]");
     };
     assert_eq!(object.key_type, Type::named("str"));
@@ -7063,7 +7132,7 @@ fn flat_tuples_clone_like_their_elements() {
             Value::EnumVariant(EnumVariantValue {
                 enum_name: "json.Value".into(),
                 variant_name: "String".into(),
-                payloads: vec![Value::String("Lagos".to_string())],
+                payloads: vec![Value::String("Lagos".to_string())].into(),
             }),
         ],
     });
@@ -7219,10 +7288,10 @@ fn dynamic_json_parse_materializes_a_structurally_dense_valid_input() {
         (result.enum_name.as_str(), result.variant_name.as_str()),
         ("Result", "Ok")
     );
-    let [Value::EnumVariant(array)] = result.payloads.as_slice() else {
+    let [Value::EnumVariant(array)] = result.payloads.values() else {
         panic!("Result.Ok should contain json.Value.Array");
     };
-    let [Value::Vec(values)] = array.payloads.as_slice() else {
+    let [Value::Vec(values)] = array.payloads.values() else {
         panic!("json.Value.Array should contain list[json.Value]");
     };
     assert_eq!(values.element_type, Type::named("json.Value"));
@@ -7475,7 +7544,7 @@ fn dynamic_json_runtime_conversion_rejects_noncanonical_payload_metadata() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "json.Value".into(),
             variant_name: variant_name.to_string().into(),
-            payloads: vec![payload],
+            payloads: vec![payload].into(),
         })
     }
 
@@ -7560,7 +7629,7 @@ fn dynamic_json_rejects_deserialized_int64_metadata_with_an_out_of_range_payload
     let malformed = Value::EnumVariant(EnumVariantValue {
         enum_name: "json.Value".into(),
         variant_name: "Int".into(),
-        payloads: vec![Value::Int(malformed_integer)],
+        payloads: vec![Value::Int(malformed_integer)].into(),
     });
     let error = super::runtime_value_to_json(&malformed)
         .expect_err("exact int64 metadata must not mask an out-of-range serialized payload");
@@ -7577,7 +7646,7 @@ fn dynamic_json_accessors_reject_noncanonical_payload_metadata() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "json.Value".into(),
             variant_name: variant_name.to_string().into(),
-            payloads: vec![payload],
+            payloads: vec![payload].into(),
         })
     }
 
@@ -7653,7 +7722,7 @@ fn dynamic_json_host_boundary_rejects_malformed_runtime_shapes() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: enum_name.to_string().into(),
             variant_name: variant_name.to_string().into(),
-            payloads,
+            payloads: payloads.into(),
         })
     }
 
@@ -7897,11 +7966,12 @@ fn dynamic_json_runtime_conversion_rejects_depth_before_building_an_unbounded_cl
         value = Value::EnumVariant(EnumVariantValue {
             enum_name: "json.Value".into(),
             variant_name: "Array".into(),
-            payloads: vec![Value::Vec(VecValue {
+            payloads: (vec![Value::Vec(VecValue {
                 element_type: Type::named("json.Value"),
                 elements: vec![value].into(),
                 str_view: Default::default(),
-            })],
+            })])
+            .into(),
         });
     }
 
@@ -7919,11 +7989,12 @@ fn dynamic_json_runtime_conversion_fits_a_forced_512_kib_task_stack_at_the_depth
             value = Value::EnumVariant(EnumVariantValue {
                 enum_name: "json.Value".into(),
                 variant_name: "Array".into(),
-                payloads: vec![Value::Vec(VecValue {
+                payloads: (vec![Value::Vec(VecValue {
                     element_type: Type::named("json.Value"),
                     elements: vec![value].into(),
                     str_view: Default::default(),
-                })],
+                })])
+                .into(),
             });
         }
         value
@@ -8261,7 +8332,7 @@ fn dynamic_json_host_builtins_parse_dump_and_expose_exact_typed_accessors() {
         (result.enum_name.as_str(), result.variant_name.as_str()),
         ("Result", "Ok")
     );
-    let [value] = result.payloads.as_slice() else {
+    let [value] = result.payloads.values() else {
         panic!("Result.Ok should carry one json.Value");
     };
     assert_eq!(
@@ -8311,21 +8382,21 @@ fn dynamic_json_host_builtins_parse_dump_and_expose_exact_typed_accessors() {
         JsonValue::Bool(false),
     )]));
     let string_payload_ptr = match &string {
-        Value::EnumVariant(variant) => match variant.payloads.as_slice() {
+        Value::EnumVariant(variant) => match variant.payloads.values() {
             [Value::String(value)] => value.as_ptr(),
             _ => panic!("json.Value.String should contain one str"),
         },
         _ => panic!("json.Value.String should be an enum variant"),
     };
     let array_payload_ptr = match &array {
-        Value::EnumVariant(variant) => match variant.payloads.as_slice() {
+        Value::EnumVariant(variant) => match variant.payloads.values() {
             [Value::Vec(value)] => value.elements.as_ptr(),
             _ => panic!("json.Value.Array should contain one Vec"),
         },
         _ => panic!("json.Value.Array should be an enum variant"),
     };
     let object_payload_ptr = match &object {
-        Value::EnumVariant(variant) => match variant.payloads.as_slice() {
+        Value::EnumVariant(variant) => match variant.payloads.values() {
             [Value::Map(value)] => value.entries.as_ptr(),
             _ => panic!("json.Value.Object should contain one Map"),
         },
@@ -8428,13 +8499,14 @@ fn dynamic_json_runtime_maps_typed_parse_errors_and_dump_trap_categories() {
             panic!("json.parse should return Result");
         };
         assert_eq!(result.variant_name, "Err");
-        let [Value::EnumVariant(error)] = result.payloads.as_slice() else {
+        let [Value::EnumVariant(error)] = result.payloads.values() else {
             panic!("Result.Err should contain json.Error");
         };
         assert_eq!(error.enum_name, "json.Error");
         assert_eq!(error.variant_name, expected_variant);
         let actual_ints = error
             .payloads
+            .values()
             .iter()
             .filter_map(|value| match value {
                 Value::Int(value) => value.as_i128(),
@@ -8442,10 +8514,15 @@ fn dynamic_json_runtime_maps_typed_parse_errors_and_dump_trap_categories() {
             })
             .collect::<Vec<_>>();
         assert_eq!(actual_ints, expected_ints);
-        for value in error.payloads.iter().filter_map(|value| match value {
-            Value::Int(value) => Some(value),
-            _ => None,
-        }) {
+        for value in error
+            .payloads
+            .values()
+            .iter()
+            .filter_map(|value| match value {
+                Value::Int(value) => Some(value),
+                _ => None,
+            })
+        {
             assert_eq!(
                 value.runtime_kind(),
                 Some(crate::integer::IntegerKind::Int32)
@@ -8463,7 +8540,7 @@ fn dynamic_json_runtime_maps_typed_parse_errors_and_dump_trap_categories() {
     };
     assert_eq!(oversized.variant_name, "InputTooLarge");
     assert!(matches!(
-        oversized.payloads.as_slice(),
+        oversized.payloads.values(),
         [Value::Int(actual), Value::Int(limit)]
             if actual.runtime_kind() == Some(crate::integer::IntegerKind::Int64)
                 && limit.runtime_kind() == Some(crate::integer::IntegerKind::Int64)
@@ -11609,7 +11686,7 @@ fn value_equality_and_render_cover_collection_shapes() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Status".into(),
             variant_name: "Done".into(),
-            payloads: vec![Value::Int(IntegerValue::from_signed(2))],
+            payloads: vec![Value::Int(IntegerValue::from_signed(2))].into(),
         })
         .render(),
         "Status.Done(2)"
@@ -11665,7 +11742,7 @@ fn nested_queue_producer_registration_walks_tuples_collections_instances_and_var
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Envelope".into(),
             variant_name: "Some".into(),
-            payloads: vec![Value::Channel(queue_in_variant.clone())],
+            payloads: vec![Value::Channel(queue_in_variant.clone())].into(),
         }),
     ];
 
@@ -12072,7 +12149,7 @@ fn io_error_maps_standard_error_kinds_to_stable_variants() {
     };
     assert_eq!(other.variant_name, "Other");
     assert!(matches!(
-        other.payloads.as_slice(),
+        other.payloads.values(),
         [Value::String(message)] if message == "other diagnostic payload"
     ));
 }
@@ -18485,7 +18562,7 @@ fn coverage_json(variant: &str, payloads: Vec<Value>) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "json.Value".into(),
         variant_name: variant.to_string().into(),
-        payloads,
+        payloads: payloads.into(),
     })
 }
 
@@ -19269,29 +19346,30 @@ fn array_aware_copy_keeps_enum_variants_with_leaf_and_nested_payloads() {
     let leaf = Value::EnumVariant(EnumVariantValue {
         enum_name: "json.Value".into(),
         variant_name: "Int".into(),
-        payloads: vec![Value::Int(crate::integer::IntegerValue::from_i64(42))],
+        payloads: vec![Value::Int(crate::integer::IntegerValue::from_i64(42))].into(),
     });
     let nested = Value::EnumVariant(EnumVariantValue {
         enum_name: "Pair".into(),
         variant_name: "Both".into(),
-        payloads: vec![
+        payloads: (vec![
             Value::String("left".to_string()),
             Value::Vec(VecValue {
                 element_type: Type::named("int64"),
                 elements: vec![Value::Int(crate::integer::IntegerValue::from_i64(1))].into(),
                 str_view: Default::default(),
             }),
-        ],
+        ])
+        .into(),
     });
     let empty = Value::EnumVariant(EnumVariantValue {
         enum_name: "Lookup".into(),
         variant_name: "Missing".into(),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     });
     let text = Value::EnumVariant(EnumVariantValue {
         enum_name: "json.Value".into(),
         variant_name: "String".into(),
-        payloads: vec![Value::String("Lagos".to_string())],
+        payloads: vec![Value::String("Lagos".to_string())].into(),
     });
     for source in [leaf, nested, empty, text] {
         let copy = super::try_clone_array_containing_value(&source)

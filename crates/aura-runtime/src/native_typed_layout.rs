@@ -11,6 +11,7 @@
 //! pointer owns one block of its target's size and alignment.
 
 use std::alloc::{alloc, dealloc, handle_alloc_error, Layout as AllocLayout};
+use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
@@ -240,6 +241,64 @@ struct PlainRegistry {
 /// registers under a key. A program that registered none skips the
 /// registry's lock and links neither the registry nor the shape check.
 static PLAIN_LOOKUP: OnceLock<fn(&Value) -> Option<&'static PlainLayout>> = OnceLock::new();
+
+/// The class or enum layouts registered so far, each with its descriptor
+/// and access code. Each kind keeps one, and both share this code. A
+/// program registers each of its layouts once, before its first call, so
+/// a scan finds them.
+#[derive(Default)]
+pub(super) struct LayoutRegistry {
+    layouts: Vec<(String, &'static (dyn Any + Send + Sync), u32)>,
+}
+
+/// The layout of `registry` that `descriptor` describes, which `build`
+/// makes on first use, under access code `access`. A code another layout
+/// holds, or a descriptor registered under another code, is refused.
+pub(super) fn register_layout(
+    registry: &RwLock<LayoutRegistry>,
+    descriptor: &str,
+    access: u32,
+    build: &dyn Fn() -> Result<&'static (dyn Any + Send + Sync), String>,
+) -> Result<&'static (dyn Any + Send + Sync), String> {
+    fn registered(
+        registry: &LayoutRegistry,
+        descriptor: &str,
+        access: u32,
+    ) -> Option<Result<&'static (dyn Any + Send + Sync), String>> {
+        let (_, layout, code) = registry
+            .layouts
+            .iter()
+            .find(|(registered, ..)| registered == descriptor)?;
+        Some(if *code == access {
+            Ok(*layout)
+        } else {
+            Err(format!(
+                "the layout is registered under access code {code}, not {access}"
+            ))
+        })
+    }
+    let read = registry
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(found) = registered(&read, descriptor, access) {
+        return found;
+    }
+    drop(read);
+    let mut registry = registry
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(found) = registered(&registry, descriptor, access) {
+        return found;
+    }
+    if registry.layouts.iter().any(|(.., code)| *code == access) {
+        return Err(format!("access code {access} names another layout"));
+    }
+    let layout = build()?;
+    registry
+        .layouts
+        .push((descriptor.to_string(), layout, access));
+    Ok(layout)
+}
 
 fn plain_registry() -> &'static RwLock<PlainRegistry> {
     static REGISTRY: OnceLock<RwLock<PlainRegistry>> = OnceLock::new();
@@ -521,8 +580,13 @@ unsafe fn write_plain(table: &LayoutTable, id: LayoutId, value: &Value, dst: *mu
                     .position(|laid| laid.name == *variant.variant_name)
                     .expect("checked to name a variant");
                 write_tag(dst, *tag_width, index);
-                for (field, payload) in variants[index].fields.iter().zip(&variant.payloads) {
-                    write_plain(table, field.layout, payload, dst.add(field.offset as usize));
+                for (field, payload) in variants[index].fields.iter().zip(variant.payloads.iter()) {
+                    write_plain(
+                        table,
+                        field.layout,
+                        &payload,
+                        dst.add(field.offset as usize),
+                    );
                 }
             }
             (
@@ -547,6 +611,30 @@ unsafe fn write_plain(table: &LayoutTable, id: LayoutId, value: &Value, dst: *mu
         }
     }
 }
+
+/// How values move in and out of the block of a class instance or an enum
+/// variant. Only registration names these, so a program that registers no
+/// class or enum layout links none of the converters, however many
+/// instances and variants it prints, copies, or drops.
+pub(super) struct FieldOps {
+    pub(super) fits: fn(&LayoutTable, LayoutId, &Value) -> bool,
+    pub(super) field_box: fn(Value, &Type) -> ElementBox,
+    pub(super) write: unsafe fn(&LayoutTable, LayoutId, Value, *mut u8),
+    pub(super) read: unsafe fn(&LayoutTable, LayoutId, *const u8) -> Value,
+    pub(super) take: unsafe fn(&LayoutTable, LayoutId, *mut u8) -> Value,
+    pub(super) drop: unsafe fn(&LayoutTable, LayoutId, *mut u8),
+    pub(super) clone: unsafe fn(&LayoutTable, LayoutId, *const u8, *mut u8),
+}
+
+pub(super) static FIELD_OPS: FieldOps = FieldOps {
+    fits,
+    field_box: field_box_for,
+    write: write_unchecked,
+    read: read_at,
+    take: take_at,
+    drop: drop_at,
+    clone: clone_at,
+};
 
 /// A new box for a handle, which no ledger links: the layout that stores
 /// it owns it. It carries the handle's type, as a box generated code makes
@@ -776,8 +864,8 @@ fn check(table: &LayoutTable, id: LayoutId, value: &Value) -> Result<(), String>
             if laid.fields.len() != variant.payloads.len() {
                 return mismatch();
             }
-            for (field, payload) in laid.fields.iter().zip(&variant.payloads) {
-                check(table, field.layout, payload)?;
+            for (field, payload) in laid.fields.iter().zip(variant.payloads.iter()) {
+                check(table, field.layout, &payload)?;
             }
             Ok(())
         }
@@ -901,7 +989,11 @@ unsafe fn write(table: &LayoutTable, id: LayoutId, value: Value, dst: *mut u8) {
                     .position(|laid| laid.name == *variant.variant_name)
                     .expect("checked to name a variant");
                 write_tag(dst, *tag_width, index);
-                for (field, payload) in variants[index].fields.iter().zip(variant.payloads) {
+                for (field, payload) in variants[index]
+                    .fields
+                    .iter()
+                    .zip(variant.payloads.into_vec())
+                {
                     write(table, field.layout, payload, dst.add(field.offset as usize));
                 }
             }
@@ -1068,7 +1160,7 @@ unsafe fn visit(table: &LayoutTable, id: LayoutId, src: *mut u8, mode: Visit) ->
                         let mut value = Value::EnumVariant(EnumVariantValue {
                             enum_name: name.as_str().into(),
                             variant_name: laid.name.as_str().into(),
-                            payloads,
+                            payloads: payloads.into(),
                         });
                         retag_generic(&mut value, &layout.ty);
                         value

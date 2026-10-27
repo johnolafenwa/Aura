@@ -1,0 +1,27 @@
+# A `float32` in a class field or an enum payload prints with `float32`
+# digits on both backends, inside a list, through `str`, and in an f-string.
+# A `float64` field keeps its `float64` digits.
+class Reading:
+    level: float32
+    exact: float64
+
+enum Sample:
+    Single(value: float32)
+    Pair(low: float32, high: float64)
+    Missing
+
+def main():
+    x: float32 = 0.1
+    reading = Reading(level=x, exact=0.123456789)
+    print(reading)
+    print(str(reading))
+    print(f"[{reading}]")
+    print([reading, Reading(level=0.3, exact=0.3)])
+    print(Sample.Single(value=x))
+    print(Sample.Pair(low=0.3, high=0.123456789))
+    print(Sample.Missing)
+    match Sample.Single(value=x):
+        case Sample.Single(value):
+            print(value)
+        case _:
+            pass

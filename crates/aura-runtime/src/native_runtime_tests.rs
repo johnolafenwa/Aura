@@ -2688,7 +2688,7 @@ fn process_restart_never_value() -> *mut OpaqueValue {
     boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "process.RestartPolicy".into(),
         variant_name: "Never".into(),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     }))
 }
 
@@ -3196,7 +3196,7 @@ fn direct_json_host_abi_rejects_malformed_values_with_precise_diagnostics() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "json.Value".into(),
             variant_name: variant_name.to_string().into(),
-            payloads,
+            payloads: payloads.into(),
         })
     }
 
@@ -3285,7 +3285,7 @@ fn direct_json_host_abi_rejects_malformed_values_with_precise_diagnostics() {
             vec![Some(Value::EnumVariant(EnumVariantValue {
                 enum_name: "Other".into(),
                 variant_name: "str".into(),
-                payloads: vec![Value::String("value".to_string())],
+                payloads: vec![Value::String("value".to_string())].into(),
             }))],
         ),
         "`json::into_string` expected enum `json.Value`, found `Other`",
@@ -3386,7 +3386,7 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
     ]));
     let dump_object_allocation = unsafe {
         super::with_value(dump_source, |value| match value {
-            Value::EnumVariant(variant) => match variant.payloads.as_slice() {
+            Value::EnumVariant(variant) => match variant.payloads.values() {
                 [Value::Map(value)] => value.entries.as_ptr(),
                 other => panic!("expected json.Value.Object payload, found {other:?}"),
             },
@@ -3401,7 +3401,7 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
     );
     unsafe {
         super::with_value(dump_source, |value| match value {
-            Value::EnumVariant(variant) => match variant.payloads.as_slice() {
+            Value::EnumVariant(variant) => match variant.payloads.values() {
                 [Value::Map(value)] => assert_eq!(value.entries.as_ptr(), dump_object_allocation),
                 other => panic!("borrowed dump payload changed to {other:?}"),
             },
@@ -3456,7 +3456,7 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
     let owned_string = direct_json_value(JsonValue::String("aura".to_string()));
     let string_allocation = unsafe {
         super::with_value(owned_string, |value| match value {
-            Value::EnumVariant(variant) => match variant.payloads.as_slice() {
+            Value::EnumVariant(variant) => match variant.payloads.values() {
                 [Value::String(value)] => value.as_ptr(),
                 other => panic!("expected json.Value.String payload, found {other:?}"),
             },
@@ -3486,7 +3486,7 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
     let owned_array = direct_json_value(JsonValue::Array(vec![JsonValue::Int(2)]));
     let array_allocation = unsafe {
         super::with_value(owned_array, |value| match value {
-            Value::EnumVariant(variant) => match variant.payloads.as_slice() {
+            Value::EnumVariant(variant) => match variant.payloads.values() {
                 [Value::Vec(value)] => value.elements.as_ptr(),
                 other => panic!("expected json.Value.Array payload, found {other:?}"),
             },
@@ -3518,7 +3518,7 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
     )]));
     let object_allocation = unsafe {
         super::with_value(owned_object, |value| match value {
-            Value::EnumVariant(variant) => match variant.payloads.as_slice() {
+            Value::EnumVariant(variant) => match variant.payloads.values() {
                 [Value::Map(value)] => value.entries.as_ptr(),
                 other => panic!("expected json.Value.Object payload, found {other:?}"),
             },
@@ -3664,11 +3664,11 @@ fn direct_json_parse_reserves_capacity_before_borrowing_and_copying_the_source()
                 if variant.enum_name == "Result"
                     && variant.variant_name == "Ok"
                     && matches!(
-                        variant.payloads.as_slice(),
+                        variant.payloads.values(),
                         [Value::EnumVariant(parsed)]
                             if parsed.enum_name == "json.Value"
                                 && parsed.variant_name == "Bool"
-                                && parsed.payloads == vec![Value::Bool(true)]
+                                && parsed.payloads == vec![Value::Bool(true)].into()
                     ) => {}
             other => panic!(
                 "the admitted parse must copy the source after capacity becomes available, found {other:?}"
@@ -4042,7 +4042,7 @@ fn expect_variant_value(value: Value, enum_name: &str, variant_name: &str) -> Ve
         Value::EnumVariant(variant)
             if variant.enum_name == enum_name && variant.variant_name == variant_name =>
         {
-            variant.payloads
+            variant.payloads.into_vec()
         }
         other => panic!("expected {}.{}, found {:?}", enum_name, variant_name, other),
     }
@@ -5193,7 +5193,7 @@ fn invalid_direct_host_timers_use_typed_io_and_process_errors() {
     let restart = boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "process.RestartPolicy".into(),
         variant_name: "Never".into(),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     }));
     let backoff = duration_value(-1);
     let max_restarts = int_value(-1);
@@ -5492,7 +5492,7 @@ fn direct_runtime_type_tags_are_interned_and_retagging_is_idempotent() {
     let variant = boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "Lookup".into(),
         variant_name: "Found".into(),
-        payloads: vec![Value::Int(IntegerValue::from_i32(7))],
+        payloads: vec![Value::Int(IntegerValue::from_i32(7))].into(),
     }));
     for _ in 0..3 {
         super::aura_direct_tag_value_type(variant, b"Lookup[int32]".as_ptr(), 13);
@@ -5586,7 +5586,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     let value = boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "Lookup".into(),
         variant_name: "Found".into(),
-        payloads: vec![Value::Int(IntegerValue::from_i32(7))],
+        payloads: vec![Value::Int(IntegerValue::from_i32(7))].into(),
     }));
     super::aura_direct_tag_value_type(value, b"Lookup[int32]".as_ptr(), "Lookup[int32]".len());
 
@@ -5635,14 +5635,15 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     let nested = boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "Lookup".into(),
         variant_name: "Found".into(),
-        payloads: vec![Value::Vec(VecValue {
+        payloads: (vec![Value::Vec(VecValue {
             element_type: Type::named("int64"),
             elements: vec![Value::Int(
                 IntegerValue::from_typed_signed(9, IntegerKind::Int64).expect("9 fits int64"),
             )]
             .into(),
             str_view: Default::default(),
-        })],
+        })])
+        .into(),
     }));
     super::aura_direct_tag_value_type(
         nested,
@@ -5899,7 +5900,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     let untagged = boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "Lookup".into(),
         variant_name: "Found".into(),
-        payloads: vec![Value::Int(IntegerValue::from_i32(11))],
+        payloads: vec![Value::Int(IntegerValue::from_i32(11))].into(),
     }));
     assert_eq!(
         super::aura_direct_value_type_matches(untagged, b"Lookup[?T]".as_ptr(), "Lookup[?T]".len(),),
@@ -7095,7 +7096,7 @@ fn native_runtime_direct_process_wrappers_cover_child_pipe_and_completed_paths()
         Value::EnumVariant(EnumVariantValue {
             enum_name: "process.ExitStatus".into(),
             variant_name: "Exited".into(),
-            payloads: vec![Value::Int(IntegerValue::from_signed(0))],
+            payloads: vec![Value::Int(IntegerValue::from_signed(0))].into(),
         }),
         b"stdout".to_vec(),
         b"stderr".to_vec(),
@@ -7194,7 +7195,7 @@ fn direct_completed_text_accessors_report_non_utf8_bytes_as_au4005() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "process.ExitStatus".into(),
             variant_name: "Exited".into(),
-            payloads: vec![Value::Int(IntegerValue::from_signed(0))],
+            payloads: vec![Value::Int(IntegerValue::from_signed(0))].into(),
         }),
         vec![0xff],
         vec![0xfe],
@@ -7443,7 +7444,7 @@ fn native_runtime_direct_process_wrappers_cover_timeout_and_error_results() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "process.ExitStatus".into(),
             variant_name: "Exited".into(),
-            payloads: vec![Value::Int(IntegerValue::from_signed(7))],
+            payloads: vec![Value::Int(IntegerValue::from_signed(7))].into(),
         }),
         Vec::new(),
         Vec::new(),
@@ -7680,7 +7681,7 @@ fn native_runtime_direct_process_wrappers_cover_timeout_and_error_results() {
         boxed_value(Value::EnumVariant(EnumVariantValue {
             enum_name: "process.RestartPolicy".into(),
             variant_name: "Never".into(),
-            payloads: Vec::new(),
+            payloads: Vec::new().into(),
         })),
         duration_value(0),
         int_value(-1),
@@ -7765,7 +7766,7 @@ fn native_runtime_direct_process_supervisor_wrappers_cover_start_wait_and_stop_p
         boxed_value(Value::EnumVariant(EnumVariantValue {
             enum_name: "process.RestartPolicy".into(),
             variant_name: "Never".into(),
-            payloads: Vec::new(),
+            payloads: Vec::new().into(),
         }))
     }
 
@@ -7825,7 +7826,7 @@ fn native_runtime_direct_process_supervisor_wrappers_cover_start_wait_and_stop_p
     };
     assert_eq!(event.enum_name, "SupervisorEvent");
     assert_eq!(event.variant_name, "Exited");
-    assert!(matches!(event.payloads.as_slice(), [Value::String(name), ..] if name == "worker"));
+    assert!(matches!(event.payloads.values(), [Value::String(name), ..] if name == "worker"));
     assert_eq!(
         super::aura_direct_process_supervisor_is_empty(supervisor_ptr),
         1
@@ -10874,7 +10875,7 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
         )
         .into(),
         variant_name: "Missing".into(),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     }));
     for (enum_name, variant_name, expected) in [
         ("Lookup", "Missing", 1),
@@ -11146,7 +11147,7 @@ fn direct_enum_owned_payload_buffer_moves_string_vec_and_map_allocations() {
                 let Value::EnumVariant(variant) = value else {
                     panic!("expected json.Value.{variant_name}, found {value:?}");
                 };
-                match (&variant.payloads[..], &allocation) {
+                match (variant.payloads.values(), &allocation) {
                     ([Value::String(value)], Allocation::String(expected)) => {
                         assert_eq!(value.as_ptr(), *expected)
                     }
@@ -11587,7 +11588,7 @@ fn direct_variant_take_payload_preserves_allocation_and_consumes_slot() {
     let packet = boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "Packet".into(),
         variant_name: "Text".into(),
-        payloads: vec![Value::String(text)],
+        payloads: vec![Value::String(text)].into(),
     }));
     let moved = super::aura_direct_variant_take_payload(packet, 0);
 
@@ -11597,7 +11598,7 @@ fn direct_variant_take_payload_preserves_allocation_and_consumes_slot() {
             other => panic!("expected moved str, found {other:?}"),
         });
         super::with_value(packet, |value| match value {
-            Value::EnumVariant(variant) => assert_eq!(variant.payloads, vec![Value::Unit]),
+            Value::EnumVariant(variant) => assert_eq!(variant.payloads, vec![Value::Unit].into()),
             other => panic!("expected Packet enum, found {other:?}"),
         });
         release_value(moved);
@@ -11635,7 +11636,7 @@ fn direct_owned_collection_and_queue_adapters_preserve_allocation_identity() {
             Value::EnumVariant(lookup)
                 if lookup.enum_name == "Lookup" && lookup.variant_name == "Found" =>
             {
-                match lookup.payloads.as_slice() {
+                match lookup.payloads.values() {
                     [Value::String(value)] => assert_eq!(value.as_ptr(), vector_storage),
                     other => panic!("expected taken vector str payload, found {other:?}"),
                 }
@@ -11682,7 +11683,7 @@ fn direct_owned_collection_and_queue_adapters_preserve_allocation_identity() {
             Value::EnumVariant(lookup)
                 if lookup.enum_name == "Lookup" && lookup.variant_name == "Found" =>
             {
-                match lookup.payloads.as_slice() {
+                match lookup.payloads.values() {
                     [Value::String(value)] => assert_eq!(value.as_ptr(), set_storage),
                     other => panic!("expected taken str payload, found {other:?}"),
                 }
@@ -11705,7 +11706,7 @@ fn direct_owned_collection_and_queue_adapters_preserve_allocation_identity() {
             Value::EnumVariant(poll)
                 if poll.enum_name == "Poll" && poll.variant_name == "Ready" =>
             {
-                match poll.payloads.as_slice() {
+                match poll.payloads.values() {
                     [Value::String(value)] => assert_eq!(value.as_ptr(), queued_storage),
                     other => panic!("expected queued str payload, found {other:?}"),
                 }
@@ -11785,11 +11786,12 @@ fn direct_task_producer_discovery_and_abandoned_args_do_not_clone_values() {
     let nested = boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "Envelope".into(),
         variant_name: "Ready".into(),
-        payloads: vec![Value::Vec(VecValue {
+        payloads: (vec![Value::Vec(VecValue {
             element_type: Type::named("Queue"),
             elements: vec![Value::Channel(queue)].into(),
             str_view: Default::default(),
-        })],
+        })])
+        .into(),
     }));
     let clone_count = super::direct_value_clone_count();
     unsafe {
@@ -11889,7 +11891,8 @@ fn direct_json_rejects_inexact_int_array_object_and_indent_metadata() {
         variant_name: "Int".into(),
         payloads: vec![Value::Int(
             IntegerValue::from_typed_signed(7, IntegerKind::Int32).expect("7 fits int32"),
-        )],
+        )]
+        .into(),
     }));
     assert!(malformed_json_call("json::as_int", vec![int])
         .contains("malformed runtime `json.Value.Int` payload"));
@@ -11897,11 +11900,12 @@ fn direct_json_rejects_inexact_int_array_object_and_indent_metadata() {
     let array = boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "json.Value".into(),
         variant_name: "Array".into(),
-        payloads: vec![Value::Vec(VecValue {
+        payloads: (vec![Value::Vec(VecValue {
             element_type: Type::named("Unknown"),
             elements: vec![].into(),
             str_view: Default::default(),
-        })],
+        })])
+        .into(),
     }));
     assert!(malformed_json_call("json::into_array", vec![array])
         .contains("malformed runtime `json.Value.Array` payload"));
@@ -11909,11 +11913,12 @@ fn direct_json_rejects_inexact_int_array_object_and_indent_metadata() {
     let object = boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "json.Value".into(),
         variant_name: "Object".into(),
-        payloads: vec![Value::Map(MapValue {
+        payloads: (vec![Value::Map(MapValue {
             key_type: Type::named("str"),
             value_type: Type::named("Unknown"),
             entries: vec![].into(),
-        })],
+        })])
+        .into(),
     }));
     assert!(malformed_json_call("json::into_object", vec![object])
         .contains("malformed runtime `json.Value.Object` payload"));
@@ -15361,7 +15366,7 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
         value_type_name(Value::EnumVariant(EnumVariantValue {
             enum_name: "Status".into(),
             variant_name: "Ready".into(),
-            payloads: Vec::new(),
+            payloads: Vec::new().into(),
         })),
         "Status"
     );
@@ -15873,7 +15878,7 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     let enum_value = super::boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "Status".into(),
         variant_name: "Ready".into(),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     }));
     let unit_value = super::boxed_value(Value::Unit);
 
@@ -16298,7 +16303,7 @@ fn native_runtime_resource_metadata_reports_maintained_type_names() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "process.ExitStatus".into(),
             variant_name: "Exited".into(),
-            payloads: vec![Value::Int(IntegerValue::from_signed(0))],
+            payloads: vec![Value::Int(IntegerValue::from_signed(0))].into(),
         }),
         Vec::new(),
         Vec::new(),
@@ -16494,7 +16499,7 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
         value_type_name(Value::EnumVariant(EnumVariantValue {
             enum_name: "Status".into(),
             variant_name: "Ready".into(),
-            payloads: Vec::new(),
+            payloads: Vec::new().into(),
         })),
         "Status"
     );
@@ -22717,7 +22722,7 @@ fn coverage_native_runtime_rejects_invalid_enum_payload_metadata_and_indices() {
     let negative_index_value = boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "Status".into(),
         variant_name: "Ready".into(),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     }));
     let negative_index_address = negative_index_value as usize;
     let negative_index = capture_direct_boundary_diagnostic(move || {
@@ -22730,7 +22735,7 @@ fn coverage_native_runtime_rejects_invalid_enum_payload_metadata_and_indices() {
     let missing_payload_value = boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "Status".into(),
         variant_name: "Ready".into(),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     }));
     let missing_payload_address = missing_payload_value as usize;
     let missing_payload = capture_direct_boundary_diagnostic(move || {
@@ -23376,7 +23381,7 @@ fn direct_instance_field_access_follows_enum_and_union_payload_projections() {
     let some = boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "Lookup".into(),
         variant_name: "Found".into(),
-        payloads: vec![coverage_int(41)],
+        payloads: vec![coverage_int(41)].into(),
     }));
     let projection = "__variant_payload_Found_0";
     assert_eq!(
@@ -23504,7 +23509,7 @@ fn direct_owned_field_assignment_writes_through_enum_and_union_payloads() {
     let some = boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "Lookup".into(),
         variant_name: "Found".into(),
-        payloads: vec![holder(coverage_int(1))],
+        payloads: vec![holder(coverage_int(1))].into(),
     }));
     assign(some, "__variant_payload_Found_0.value", coverage_int(2));
     let nested = expect_variant_ptr(super::aura_direct_clone_value(some), "Lookup", "Found");
@@ -24037,7 +24042,7 @@ fn native_runtime_operator_helpers_cover_duration_comparisons_float_power_and_sh
         inferred_collection_type(&Value::EnumVariant(EnumVariantValue {
             enum_name: "Shape".into(),
             variant_name: "Circle".into(),
-            payloads: Vec::new(),
+            payloads: Vec::new().into(),
         })),
         Type::named("Shape")
     );
@@ -25480,7 +25485,7 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
         elements: vec![Value::EnumVariant(EnumVariantValue {
             enum_name: "Shape".into(),
             variant_name: "Circle".into(),
-            payloads: vec![Value::Int(IntegerValue::from_i64(5))],
+            payloads: vec![Value::Int(IntegerValue::from_i64(5))].into(),
         })]
         .into(),
         str_view: Default::default(),
@@ -25871,13 +25876,13 @@ fn native_runtime_records_only_failing_manager_exits_for_the_trap() {
         let ok = boxed_value(Value::EnumVariant(EnumVariantValue {
             enum_name: "Result".into(),
             variant_name: "Ok".into(),
-            payloads: vec![Value::Unit],
+            payloads: vec![Value::Unit].into(),
         }));
         super::aura_direct_record_manager_exit_failure(ok, class.as_ptr(), class.len());
         let err = boxed_value(Value::EnumVariant(EnumVariantValue {
             enum_name: "Result".into(),
             variant_name: "Err".into(),
-            payloads: vec![Value::String("flush failed".to_string())],
+            payloads: vec![Value::String("flush failed".to_string())].into(),
         }));
         super::aura_direct_record_manager_exit_failure(err, class.as_ptr(), class.len());
         let unit = boxed_value(Value::Unit);
@@ -26115,7 +26120,7 @@ fn task_arguments_are_shared_before_the_child_starts() {
     });
     let seen = result.expect("root task should complete");
     assert!(
-        matches!(&seen, Value::EnumVariant(variant) if variant.payloads == vec![Value::Bool(true)]),
+        matches!(&seen, Value::EnumVariant(variant) if variant.payloads == vec![Value::Bool(true)].into()),
         "the child should see its argument shared, found {seen:?}"
     );
     assert!(unsafe { &*argument }.shared_lock().is_some());
@@ -26729,7 +26734,7 @@ fn json_value(variant: &str, payloads: Vec<Value>) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "json.Value".into(),
         variant_name: variant.into(),
-        payloads,
+        payloads: payloads.into(),
     })
 }
 
@@ -26930,7 +26935,7 @@ fn variant_tests_compare_short_names_by_words() {
         let value = boxed_value(Value::EnumVariant(EnumVariantValue {
             enum_name: "json.Value".into(),
             variant_name: variant.into(),
-            payloads: Vec::new(),
+            payloads: Vec::new().into(),
         }));
         let matches = |enum_name: &str, name: &str| {
             super::aura_direct_variant_matches(
@@ -26958,7 +26963,7 @@ fn variant_tests_compare_short_names_by_words() {
     let tagged = boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "json.Value\0descriptor-of-sixteen".into(),
         variant_name: "Int".into(),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     }));
     for (enum_name, expected) in [
         ("json.Value", 1),
@@ -27474,7 +27479,7 @@ fn direct_lookup_payload_rejects_values_that_are_not_lookups() {
             super::aura_direct_lookup_payload(boxed_value(Value::EnumVariant(EnumVariantValue {
                 enum_name: "Lookup".into(),
                 variant_name: "Found".into(),
-                payloads: Vec::new(),
+                payloads: Vec::new().into(),
             })));
         }),
         "direct runtime received a malformed `Lookup`"
@@ -27487,7 +27492,7 @@ fn direct_scalar_variant_payloads_read_in_place_with_the_boxed_messages() {
         boxed_value(Value::EnumVariant(EnumVariantValue {
             enum_name: "json.Value".into(),
             variant_name: "Int".into(),
-            payloads,
+            payloads: payloads.into(),
         }))
     };
     let int = variant(vec![Value::Int(IntegerValue::from_i32(41))]);
@@ -27516,14 +27521,14 @@ fn direct_scalar_variant_payloads_read_in_place_with_the_boxed_messages() {
         boxed_value(Value::EnumVariant(EnumVariantValue {
             enum_name: "json.Value".into(),
             variant_name: "String".into(),
-            payloads: vec![Value::String("x".to_string())],
+            payloads: vec![Value::String("x".to_string())].into(),
         }))
     }
     fn wide_variant() -> *mut OpaqueValue {
         boxed_value(Value::EnumVariant(EnumVariantValue {
             enum_name: "json.Value".into(),
             variant_name: "Int".into(),
-            payloads: vec![Value::Int(IntegerValue::from_u64(u64::MAX))],
+            payloads: vec![Value::Int(IntegerValue::from_u64(u64::MAX))].into(),
         }))
     }
     let cases: [(fn(), fn()); 7] = [
@@ -27688,7 +27693,7 @@ fn direct_variant_matches_compare_the_untagged_enum_name() {
     let variant = boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "Lookup".into(),
         variant_name: "Found".into(),
-        payloads: vec![Value::Int(IntegerValue::from_i32(7))],
+        payloads: vec![Value::Int(IntegerValue::from_i32(7))].into(),
     }));
     let matches = |value, enum_name: &str, variant_name: &str| {
         super::aura_direct_variant_matches(
@@ -27740,7 +27745,7 @@ fn direct_tags_share_one_tagged_name_across_fresh_variants() {
             let variant = boxed_value(Value::EnumVariant(EnumVariantValue {
                 enum_name: crate::runtime_value::RuntimeName::from_static("Result"),
                 variant_name: crate::runtime_value::RuntimeName::from_static("Ok"),
-                payloads: vec![Value::Bool(true)],
+                payloads: vec![Value::Bool(true)].into(),
             }));
             super::aura_direct_tag_value_type(variant, b"Result[bool, str]".as_ptr(), 17);
             variant
@@ -27759,7 +27764,7 @@ fn direct_tags_share_one_tagged_name_across_fresh_variants() {
     let other = boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: crate::runtime_value::RuntimeName::from_static("Outcome"),
         variant_name: crate::runtime_value::RuntimeName::from_static("Ok"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     }));
     super::aura_direct_tag_value_type(other, b"Result[bool, str]".as_ptr(), 17);
     match unsafe { value_ref(other) } {
@@ -27840,7 +27845,7 @@ fn direct_tag_cells_keep_the_decoded_tag() {
     let variant = boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "json.Value".into(),
         variant_name: "Int".into(),
-        payloads: vec![Value::Int(IntegerValue::from_i32(7))],
+        payloads: vec![Value::Int(IntegerValue::from_i32(7))].into(),
     }));
     let before = format!("{:?}", unsafe { value_ref(variant) });
     for _ in 0..2 {
@@ -27989,7 +27994,7 @@ fn direct_retags_skip_values_that_already_have_the_shape() {
     let variant = boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "Pair".into(),
         variant_name: "Both".into(),
-        payloads: vec![Value::Int(IntegerValue::from_i32(7))],
+        payloads: vec![Value::Int(IntegerValue::from_i32(7))].into(),
     }));
     let pair_type = named("Pair", vec![int64()]);
     let descriptor = super::canonical_runtime_type_name(&pair_type);
@@ -27999,7 +28004,7 @@ fn direct_retags_skip_values_that_already_have_the_shape() {
     let untagged = Value::EnumVariant(EnumVariantValue {
         enum_name: "Pair".into(),
         variant_name: "Both".into(),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     });
     assert!(changes(&untagged, &pair_type));
     unsafe { release_value(variant) };
@@ -28303,5 +28308,34 @@ fn literal_text_decodes_non_ascii_and_rejects_invalid_bytes() {
             );
         }),
         "aura direct runtime received invalid UTF-8 bytes"
+    );
+}
+
+#[test]
+fn registered_float32_slots_render_through_print_and_str() {
+    // The record is per process, so the test names a class no other test uses.
+    let record = "f\tFloat32SlotsProbe\tlevel";
+    unsafe { super::aura_direct_register_float32_slots(record.as_ptr(), record.len()) };
+    let probe = boxed_value(Value::Instance(crate::runtime_value::InstanceValue {
+        class_name: "Float32SlotsProbe".to_string(),
+        fields: std::collections::BTreeMap::from([(
+            "level".to_string(),
+            Value::Float(f64::from(0.1f32)),
+        )])
+        .into(),
+    }));
+    assert_eq!(
+        super::render_direct_value(probe),
+        "Float32SlotsProbe(level=0.1)"
+    );
+    unsafe { release_value(probe) };
+
+    let diagnostic = capture_direct_boundary_diagnostic(|| {
+        let malformed = "f\tFloat32SlotsProbe";
+        unsafe { super::aura_direct_register_float32_slots(malformed.as_ptr(), malformed.len()) };
+    });
+    assert_eq!(
+        diagnostic.message,
+        "direct runtime received a malformed float32 slot record"
     );
 }

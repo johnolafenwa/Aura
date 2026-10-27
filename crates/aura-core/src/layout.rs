@@ -621,6 +621,47 @@ impl<'env> LayoutBuilder<'env> {
         }
     }
 
+    /// The layout of a variant of the enum `ty` in the box that holds it:
+    /// a tag, then the variant's payloads, each payload `inline` accepts in
+    /// its own layout and every other payload, a recursive one included,
+    /// one handle. `None` when `ty` is not an instantiated enum of the
+    /// environment.
+    pub fn boxed_enum_layout(
+        &mut self,
+        ty: &Type,
+        inline: impl Fn(&Type) -> bool,
+    ) -> Result<Option<LayoutId>, LayoutError> {
+        let Type::Named(name, _) = ty else {
+            return Ok(None);
+        };
+        if !self.env.enums.contains_key(name) || !self.is_nominal(ty) || names_type_param(ty) {
+            return Ok(None);
+        }
+        let variants = self.enum_variants(ty).unwrap_or_default();
+        let mut laid = Vec::with_capacity(variants.len());
+        for (variant, payloads) in variants {
+            let mut fields = Vec::with_capacity(payloads.len());
+            for (index, payload) in payloads.iter().enumerate() {
+                let layout = if inline(payload) {
+                    self.layout(payload)?
+                } else {
+                    // Not the handle `layout` keeps for the type, which a
+                    // later layout of it would take for its own.
+                    self.push(Layout {
+                        ty: payload.clone(),
+                        size: POINTER_BYTES,
+                        align: POINTER_BYTES,
+                        kind: LayoutKind::Handle,
+                    })
+                };
+                fields.push((index.to_string(), layout));
+            }
+            laid.push((variant, fields));
+        }
+        let layout = self.tagged_layout(ty, Some(name.clone()), laid);
+        Ok(Some(self.push(layout)))
+    }
+
     fn indirect_to(&mut self, ty: &Type, target: LayoutId) -> LayoutId {
         if let Some(id) = self.indirect.get(&target) {
             return *id;

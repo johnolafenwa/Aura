@@ -76,8 +76,8 @@ use crate::runtime_value::{
     RecvValueResult, RngValue, RuntimeName, RuntimeSchedulerWakeReason, SendValueError,
     SetElements, SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus,
     TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpSocketValue,
-    UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
-    DIRECT_RUNTIME_TYPE_FIELD, DIRECT_RUNTIME_TYPE_SEPARATOR,
+    UnixListenerValue, UnixStreamValue, Value, VariantPayloads, VecValue, WebSocketListenerValue,
+    WebSocketValue, DIRECT_RUNTIME_TYPE_FIELD, DIRECT_RUNTIME_TYPE_SEPARATOR,
 };
 use crate::text_methods;
 use aura_core::ops::{BinaryOp, ReceiverKind, UnaryOp};
@@ -143,6 +143,8 @@ mod box_cache;
 mod class_layouts;
 #[path = "native_element_boxes.rs"]
 mod element_boxes;
+#[path = "native_enum_layouts.rs"]
+mod enum_layouts;
 #[path = "native_frame_stack.rs"]
 mod frame_stack;
 #[path = "native_owned_values.rs"]
@@ -166,6 +168,10 @@ pub use class_layouts::{
     register_class_layout, ClassLayout, ClassLayoutCell, TypedFields, FIRST_CLASS_ACCESS,
 };
 pub use element_boxes::{ElementBox, ElementMut};
+use enum_layouts::{celled_enum_layout, registered_enum_layout};
+pub use enum_layouts::{
+    register_enum_layout, EnumLayout, EnumLayoutCell, TypedPayloads, FIRST_ENUM_ACCESS,
+};
 pub use frame_stack::{direct_frame_stack_layout, DirectFrameStack, DirectFrameStackLayout};
 use frame_stack::{
     DIRECT_FRAME_FLAG_PENDING_SINKS, DIRECT_FRAME_FLAG_RETURNED_VIEWS, DIRECT_MAX_CALL_DEPTH,
@@ -1492,12 +1498,21 @@ impl OpaqueValue {
         self.list_capacity.store(capacity, Ordering::Relaxed);
         self.list_access.store(access, Ordering::Relaxed);
         // Generated code reads an instance's field boxes in place too, so
-        // they follow a change the runtime made through the instance.
+        // they follow a change the runtime made through the instance, and a
+        // variant's payload boxes, which generated code takes references to.
         if access >= FIRST_CLASS_ACCESS {
-            if let Value::Instance(instance) = value {
-                if let Some(typed) = instance.fields.typed() {
-                    typed.refresh_views();
+            match value {
+                Value::Instance(instance) => {
+                    if let Some(typed) = instance.fields.typed() {
+                        typed.refresh_views();
+                    }
                 }
+                Value::EnumVariant(variant) => {
+                    if let Some(typed) = variant.payloads.typed() {
+                        typed.refresh_views();
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -2767,6 +2782,13 @@ fn list_view_of(value: &Value) -> (u32, usize, usize, u32) {
             Some(typed) => (typed.layout().access(), typed.data() as usize, 0, 0),
             None => (DirectListAccess::None as u32, 0, 0, 0),
         },
+        // A variant kept in its enum's layout: generated code tests the
+        // variant's index and reads its payloads at their offsets in the
+        // block.
+        Value::EnumVariant(variant) => match variant.payloads.typed() {
+            Some(typed) => (typed.layout().access(), typed.data(), typed.variant(), 0),
+            None => (DirectListAccess::None as u32, 0, 0, 0),
+        },
         _ => (DirectListAccess::None as u32, 0, 0, 0),
     }
 }
@@ -3458,7 +3480,8 @@ fn direct_json_exact_payload<'a>(
     if variant.variant_name != expected_variant {
         return Ok(None);
     }
-    match variant.payloads.as_slice() {
+    // The runtime builds every `json.Value` with its payloads as values.
+    match variant.payloads.values() {
         [payload] => Ok(Some(payload)),
         _ => Err(Diagnostic::coded(
             "AU4001",
@@ -3496,7 +3519,7 @@ fn direct_json_into_exact_payload(
             format!("malformed runtime `json.Value.{expected_variant}` payload in `{call}`"),
         ));
     }
-    Ok(variant.payloads.pop())
+    Ok(variant.payloads.values_mut().pop())
 }
 
 fn direct_json_indent(value: &Value) -> std::result::Result<Option<i64>, Diagnostic> {
@@ -6295,17 +6318,57 @@ pub extern "C-unwind" fn aura_direct_register_display(
     })
 }
 
+/// The program's `float32` fields and payloads, which its main wrapper
+/// registers before the program runs.
+static DIRECT_FLOAT32_SLOTS: OnceLock<crate::runtime_value::Float32Slots> = OnceLock::new();
+
+/// Registers the program's `float32` fields and payloads, in the form
+/// `Float32Slots::encode` writes, so values render them with `float32`
+/// digits.
+///
+/// # Safety
+///
+/// `ptr` and `len` name the bytes of a string constant.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_register_float32_slots(ptr: *const u8, len: usize) {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller's contract.
+        let bytes = unsafe { slice::from_raw_parts(ptr, len) };
+        let Some(slots) = str::from_utf8(bytes)
+            .ok()
+            .and_then(crate::runtime_value::Float32Slots::decode)
+        else {
+            runtime_error("direct runtime received a malformed float32 slot record");
+        };
+        let _ = DIRECT_FLOAT32_SLOTS.set(slots);
+    })
+}
+
+/// Renders a value with no `Display` implementations to call.
+fn render_direct_plain(value: &Value) -> String {
+    match DIRECT_FLOAT32_SLOTS.get() {
+        Some(slots) => value
+            .render_with_slots(None, slots)
+            .unwrap_or_else(|error| runtime_diagnostic_error(error)),
+        None => value.render(),
+    }
+}
+
 /// Renders a value for `print`, `str`, and f-strings, dispatching every
 /// nominal value whose type implements `Display` to its native wrapper.
 fn render_direct_display(value: &Value) -> String {
     let thunks = direct_display_thunks();
     if thunks.is_empty() {
-        return value.render();
+        return render_direct_plain(value);
     }
-    let rendered = value.render_with_display(&mut |type_name, node| {
+    let mut hook = |type_name: &str, node: &Value| {
         let thunk = *thunks.get(type_name)?;
         Some(Ok(call_direct_display_thunk(thunk, node)))
-    });
+    };
+    let rendered = match DIRECT_FLOAT32_SLOTS.get() {
+        Some(slots) => value.render_with_slots(Some(&mut hook), slots),
+        None => value.render_with_display(&mut hook),
+    };
     rendered.unwrap_or_else(|error| runtime_diagnostic_error(error))
 }
 
@@ -6314,7 +6377,7 @@ fn render_direct_display(value: &Value) -> String {
 /// cloned first and its lock is not held while that code runs.
 fn render_direct_value(value: *mut OpaqueValue) -> String {
     if direct_display_thunks().is_empty() {
-        unsafe { with_value(value, Value::render) }
+        unsafe { with_value(value, render_direct_plain) }
     } else {
         render_direct_display(&unsafe { value_ref(value) })
     }
@@ -8164,13 +8227,99 @@ pub unsafe extern "C-unwind" fn aura_direct_register_plain_layouts(
     entries: *const DirectPlainLayoutEntry,
     count: i64,
 ) {
+    /// # Safety
+    ///
+    /// As for [`celled_plain_layout`].
+    unsafe fn register(
+        cell: *const PlainLayoutCell,
+        descriptor: &[u8],
+        access: u32,
+    ) -> Result<(), String> {
+        // SAFETY: the caller's contract.
+        unsafe { celled_plain_layout(cell, descriptor, access) }.map(drop)
+    }
+    // SAFETY: the caller's contract.
+    unsafe { register_layout_table(entries, count, "plain", register) }
+}
+
+/// Registers every class layout the program's generated code names, as
+/// [`aura_direct_register_plain_layouts`] registers plain layouts. Each
+/// entry's cell is a class layout cell, which is laid out as a plain
+/// layout's cell. A program that keeps no instance in place never calls
+/// it, so it links none of the class layout code.
+///
+/// # Safety
+///
+/// As for [`aura_direct_register_plain_layouts`].
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_register_class_layouts(
+    entries: *const DirectPlainLayoutEntry,
+    count: i64,
+) {
+    /// # Safety
+    ///
+    /// As for [`celled_class_layout`].
+    unsafe fn register(
+        cell: *const PlainLayoutCell,
+        descriptor: &[u8],
+        access: u32,
+    ) -> Result<(), String> {
+        // SAFETY: the caller's contract.
+        unsafe { celled_class_layout(cell.cast(), descriptor, access) }.map(drop)
+    }
+    // SAFETY: the caller's contract.
+    unsafe { register_layout_table(entries, count, "class", register) }
+}
+
+/// Registers every enum layout the program's generated code names, as
+/// [`aura_direct_register_class_layouts`] registers class layouts.
+///
+/// # Safety
+///
+/// As for [`aura_direct_register_plain_layouts`].
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_register_enum_layouts(
+    entries: *const DirectPlainLayoutEntry,
+    count: i64,
+) {
+    /// # Safety
+    ///
+    /// As for [`celled_enum_layout`].
+    unsafe fn register(
+        cell: *const PlainLayoutCell,
+        descriptor: &[u8],
+        access: u32,
+    ) -> Result<(), String> {
+        // SAFETY: the caller's contract.
+        unsafe { celled_enum_layout(cell.cast(), descriptor, access) }.map(drop)
+    }
+    // SAFETY: the caller's contract.
+    unsafe { register_layout_table(entries, count, "enum", register) }
+}
+
+/// Registers each entry of a layout table with `register`, which is given
+/// the entry's cell, descriptor, and access code. A failure traps, naming
+/// the table's `kind`.
+///
+/// # Safety
+///
+/// As for [`aura_direct_register_plain_layouts`].
+#[inline(never)]
+unsafe fn register_layout_table(
+    entries: *const DirectPlainLayoutEntry,
+    count: i64,
+    kind: &str,
+    register: unsafe fn(*const PlainLayoutCell, &[u8], u32) -> Result<(), String>,
+) {
     task_runtime_boundary(|| {
         let count = usize::try_from(count).unwrap_or_default();
         if count == 0 {
             return;
         }
         if entries.is_null() {
-            runtime_error("direct runtime received a null plain layout table");
+            runtime_error(format!(
+                "direct runtime received a null {kind} layout table"
+            ));
         }
         // SAFETY: the caller passes `count` readable entries.
         for entry in unsafe { slice::from_raw_parts(entries, count) } {
@@ -8180,17 +8329,9 @@ pub unsafe extern "C-unwind" fn aura_direct_register_plain_layouts(
             let access = u32::try_from(entry.access).unwrap_or(UNREGISTERED_PLAIN_ACCESS);
             // SAFETY: the entry's contract.
             let descriptor = unsafe { slice::from_raw_parts(entry.descriptor, entry.len) };
-            // A class code names a class layout cell, which is laid out as a
-            // plain layout's cell.
-            let registered = if (FIRST_CLASS_ACCESS..UNREGISTERED_PLAIN_ACCESS).contains(&access) {
-                // SAFETY: the entry's contract.
-                unsafe { celled_class_layout(entry.cell.cast(), descriptor, access) }.map(drop)
-            } else {
-                // SAFETY: the entry's contract.
-                unsafe { celled_plain_layout(entry.cell, descriptor, access) }.map(drop)
-            };
-            if let Err(error) = registered {
-                runtime_error(format!("invalid plain layout: {error}"));
+            // SAFETY: the entry's cell is one of `kind`'s, as `register` needs.
+            if let Err(error) = unsafe { register(entry.cell, descriptor, access) } {
+                runtime_error(format!("invalid {kind} layout: {error}"));
             }
         }
     })
@@ -9168,7 +9309,10 @@ fn lent_map_payload(found: Option<&Value>, confined: bool) -> *mut OpaqueValue {
 /// only those.
 fn copies_infallibly(value: &Value) -> bool {
     match value {
-        Value::EnumVariant(variant) => variant.payloads.iter().all(is_clone_leaf),
+        Value::EnumVariant(variant) => variant
+            .payloads
+            .iter()
+            .all(|payload| is_clone_leaf(&payload)),
         leaf => is_clone_leaf(leaf),
     }
 }
@@ -9406,7 +9550,7 @@ pub extern "C-unwind" fn aura_direct_lookup_payload(lookup: *mut OpaqueValue) ->
         {
             match (
                 variant.variant_name.as_str(),
-                variant.payloads.into_iter().next(),
+                variant.payloads.into_vec().into_iter().next(),
             ) {
                 ("Found", Some(payload)) => boxed_value(payload),
                 ("Missing", None) => std::ptr::null_mut(),
@@ -9660,7 +9804,12 @@ fn direct_value_at_path<'a>(
     let nested = match value {
         Value::EnumVariant(variant) => {
             let index = direct_enum_projection_index(variant, projection)?;
-            &variant.payloads[index]
+            // A payload a variant keeps inline is read out of its block.
+            return match variant.payloads.get(index).expect("a checked index") {
+                Cow::Borrowed(payload) => direct_value_at_path(payload, rest, full_path),
+                Cow::Owned(payload) => direct_value_at_path(&payload, rest, full_path)
+                    .map(|nested| Cow::Owned(nested.into_owned())),
+            };
         }
         Value::Union(union) => {
             if !direct_union_projection(union, projection) {
@@ -9720,7 +9869,7 @@ fn direct_value_at_path_mut<'a>(
         match value {
             Value::EnumVariant(variant) => {
                 let index = direct_enum_projection_index(variant, projection)?;
-                &mut variant.payloads[index]
+                &mut variant.payloads.values_mut()[index]
             }
             Value::Union(union) => {
                 if !direct_union_projection(union, projection) {
@@ -11529,9 +11678,9 @@ pub extern "C-unwind" fn aura_direct_enum_variant(
             enum_name: literal_runtime_name(enum_ptr, enum_len),
             variant_name: literal_runtime_name(variant_ptr, variant_len),
             payloads: if payload_count == 0 {
-                Vec::new()
+                Vec::new().into()
             } else {
-                unsafe { consume_owned_opaque_buffer(payloads_ptr, payload_count) }
+                unsafe { consume_owned_opaque_buffer(payloads_ptr, payload_count).into() }
             },
         }))
     })
@@ -11749,7 +11898,7 @@ pub extern "C-unwind" fn aura_direct_variant_payload(
 }
 
 fn direct_variant_payload_clone(value: &Value, index: i64) -> *mut OpaqueValue {
-    boxed_value(direct_variant_payload_ref(value, index).clone())
+    boxed_value(direct_variant_payload_ref(value, index).into_owned())
 }
 
 macro_rules! direct_variant_payload_scalar {
@@ -11758,7 +11907,7 @@ macro_rules! direct_variant_payload_scalar {
         #[cfg_attr(not(coverage), no_mangle)]
         pub extern "C-unwind" fn $name(value: *mut OpaqueValue, index: i64) -> $result {
             task_runtime_boundary(|| unsafe {
-                $reader(value, |value| $unbox(direct_variant_payload_ref(value, index)))
+                $reader(value, |value| $unbox(&direct_variant_payload_ref(value, index)))
             })
         }
     )+};
@@ -11788,7 +11937,7 @@ direct_variant_payload_scalar! {
     aura_direct_lent_variant_payload_bool => with_lent_value, unbox_bool_of -> i64,
 }
 
-fn direct_variant_payload_ref(value: &Value, index: i64) -> &Value {
+fn direct_variant_payload_ref(value: &Value, index: i64) -> Cow<'_, Value> {
     match value {
         Value::EnumVariant(variant) => match variant.payloads.get(index.max(0) as usize) {
             Some(payload) => payload,
@@ -11822,15 +11971,14 @@ pub extern "C-unwind" fn aura_direct_variant_take_payload(
                         value_type_name(value)
                     ));
                 };
-                let payload = variant.payloads.get_mut(index).unwrap_or_else(|| {
+                variant.payloads.take(index).unwrap_or_else(|| {
                     runtime_error(format!(
                         "enum variant `{}.{}` does not carry a payload at index {}",
                         nominal_runtime_base_name(&variant.enum_name),
                         variant.variant_name,
                         index
                     ))
-                });
-                std::mem::replace(payload, Value::Unit)
+                })
             })
         };
         boxed_value(payload)
@@ -11899,6 +12047,43 @@ pub unsafe extern "C-unwind" fn aura_direct_instance_new_typed(
     })
 }
 
+/// A new variant `variant` of the enum whose layout `cell` holds, with
+/// every payload moved out: scalars zero and every payload box null. The
+/// box carries the enum's type, so it needs no tag of its own. Generated
+/// code then stores each payload at its offset, or puts its box with
+/// [`aura_direct_instance_put_field`], before the variant is used.
+///
+/// # Safety
+///
+/// `cell` is one of the cells the program registered as an enum layout,
+/// and `variant` one of the enum's variants by its index.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_enum_new_typed(
+    cell: *const EnumLayoutCell,
+    variant: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller's contract.
+        let layout =
+            unsafe { registered_enum_layout(cell) }.unwrap_or_else(|error| runtime_error(error));
+        let Some(variant_name) = usize::try_from(variant)
+            .ok()
+            .and_then(|variant| layout.variant_name(variant))
+        else {
+            runtime_error("direct runtime received an invalid enum variant index");
+        };
+        let payloads = TypedPayloads::new(layout, variant as usize);
+        boxed_value_with_type(
+            Value::EnumVariant(EnumVariantValue {
+                enum_name: layout.enum_name().clone(),
+                variant_name: variant_name.clone(),
+                payloads: VariantPayloads::Typed(payloads),
+            }),
+            Some(Arc::clone(layout.runtime_type())),
+        )
+    })
+}
+
 /// Whether `boxed` holds an instance kept in its class's layout. Its view
 /// carries the class's access code while the box is confined.
 ///
@@ -11912,7 +12097,7 @@ unsafe fn holds_typed_instance(boxed: *mut OpaqueValue) -> bool {
     };
     // SAFETY: a box with a class's access code is confined to this thread,
     // and the running task owns a reference, so nothing changes it now.
-    header.list_access.load(Ordering::Relaxed) >= FIRST_CLASS_ACCESS
+    (FIRST_CLASS_ACCESS..FIRST_ENUM_ACCESS).contains(&header.list_access.load(Ordering::Relaxed))
         && matches!(
             unsafe { &*header.value.get() },
             Value::Instance(instance) if instance.fields.typed().is_some()
@@ -12085,7 +12270,8 @@ pub extern "C-unwind" fn aura_direct_instance_get_field(
                 if let Value::EnumVariant(variant) = value {
                     let index = direct_enum_projection_index(variant, &field)
                         .unwrap_or_else(|message| runtime_error(message));
-                    return try_clone_array_containing_value(&variant.payloads[index]);
+                    let payload = variant.payloads.get(index).expect("a checked index");
+                    return try_clone_array_containing_value(&payload);
                 }
                 if let Value::Union(union) = value {
                     if !direct_union_projection(union, &field) {
@@ -12146,7 +12332,8 @@ pub unsafe extern "C-unwind" fn aura_direct_instance_read_plain(
                     Value::EnumVariant(variant) => {
                         let index = direct_enum_projection_index(variant, field)
                             .unwrap_or_else(|message| runtime_error(message));
-                        &variant.payloads[index]
+                        let payload = variant.payloads.get(index).expect("a checked index");
+                        return layout.write_checked(&payload, dst);
                     }
                     Value::Union(union) => {
                         if !direct_union_projection(union, field) {
@@ -12310,16 +12497,12 @@ fn set_direct_instance_field_owned(
     match value {
         Value::EnumVariant(variant) => {
             let index = direct_enum_projection_index(variant, projection)?;
+            let payloads = variant.payloads.values_mut();
             if rest.is_empty() {
-                variant.payloads[index] = new_value;
+                payloads[index] = new_value;
                 Ok(())
             } else {
-                set_direct_instance_field_owned(
-                    &mut variant.payloads[index],
-                    rest,
-                    full_path,
-                    new_value,
-                )
+                set_direct_instance_field_owned(&mut payloads[index], rest, full_path, new_value)
             }
         }
         Value::Union(union) => {

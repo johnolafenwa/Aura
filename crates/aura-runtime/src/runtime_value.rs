@@ -896,7 +896,201 @@ impl InstanceFields {
 pub struct EnumVariantValue {
     pub enum_name: RuntimeName,
     pub variant_name: RuntimeName,
-    pub payloads: Vec<Value>,
+    pub payloads: VariantPayloads,
+}
+
+pub use crate::native_runtime::TypedPayloads;
+
+/// The payloads of an enum variant: values, or, for a variant generated
+/// code built, one block in its enum's layout (see
+/// `native_enum_layouts.rs`). Both read the same: [`Self::get`] borrows a
+/// payload kept as a value or a box and reads one kept inline, and
+/// [`Self::iter`] visits the payloads in order.
+#[derive(Clone)]
+pub enum VariantPayloads {
+    Values(Vec<Value>),
+    Typed(TypedPayloads),
+}
+
+impl Default for VariantPayloads {
+    fn default() -> Self {
+        Self::Values(Vec::new())
+    }
+}
+
+impl From<Vec<Value>> for VariantPayloads {
+    fn from(payloads: Vec<Value>) -> Self {
+        Self::Values(payloads)
+    }
+}
+
+impl<const N: usize> From<[Value; N]> for VariantPayloads {
+    fn from(payloads: [Value; N]) -> Self {
+        Self::Values(payloads.into())
+    }
+}
+
+impl FromIterator<Value> for VariantPayloads {
+    fn from_iter<I: IntoIterator<Item = Value>>(payloads: I) -> Self {
+        Self::Values(payloads.into_iter().collect())
+    }
+}
+
+impl fmt::Debug for VariantPayloads {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_list().entries(self.iter()).finish()
+    }
+}
+
+impl PartialEq for VariantPayloads {
+    fn eq(&self, other: &Self) -> bool {
+        self.len() == other.len()
+            && (0..self.len()).all(|index| self.get(index) == other.get(index))
+    }
+}
+
+impl VariantPayloads {
+    pub fn typed(&self) -> Option<&TypedPayloads> {
+        match self {
+            Self::Typed(typed) => Some(typed),
+            Self::Values(_) => None,
+        }
+    }
+
+    /// The payloads of a variant that keeps them as values. Only a variant
+    /// generated code built keeps its payloads in a layout, so `aura run`
+    /// reads its variants this way.
+    pub fn values(&self) -> &[Value] {
+        match self {
+            Self::Values(payloads) => payloads,
+            Self::Typed(typed) => panic!(
+                "variant `{}` keeps its payloads in its layout",
+                typed.variant_name()
+            ),
+        }
+    }
+
+    /// The payloads as values, made from the layout first if the variant
+    /// keeps them there. Generated code then reads the variant through the
+    /// runtime, so only paths that are rare take it.
+    pub fn values_mut(&mut self) -> &mut Vec<Value> {
+        if let Self::Typed(typed) = self {
+            let typed =
+                std::mem::replace(typed, TypedPayloads::new(typed.layout(), typed.variant()));
+            *self = Self::Values(typed.into_vec());
+        }
+        match self {
+            Self::Values(payloads) => payloads,
+            Self::Typed(_) => unreachable!("the layout was turned into values"),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Values(payloads) => payloads.len(),
+            Self::Typed(typed) => typed.len(),
+        }
+    }
+
+    /// Whether copying the payloads walks no tree: each is a value `leaf`
+    /// accepts, or is held in the layout's block, as a scalar or a plain
+    /// record, and copies as bytes.
+    pub fn copy_flat(&self, leaf: impl Fn(&Value) -> bool) -> bool {
+        match self {
+            Self::Values(payloads) => payloads.iter().all(leaf),
+            Self::Typed(typed) => typed.boxed_payloads_all(leaf),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn get(&self, index: usize) -> Option<Cow<'_, Value>> {
+        match self {
+            Self::Values(payloads) => payloads.get(index).map(Cow::Borrowed),
+            Self::Typed(typed) => typed.get(index),
+        }
+    }
+
+    pub fn iter(&self) -> VariantPayloadIter<'_> {
+        VariantPayloadIter {
+            payloads: self,
+            front: 0,
+            back: self.len(),
+        }
+    }
+
+    /// Moves payload `index` out, leaving the unit value in its place.
+    pub fn take(&mut self, index: usize) -> Option<Value> {
+        match self {
+            Self::Values(payloads) => payloads
+                .get_mut(index)
+                .map(|payload| std::mem::replace(payload, Value::Unit)),
+            Self::Typed(typed) => typed.take(index),
+        }
+    }
+
+    pub fn into_vec(self) -> Vec<Value> {
+        match self {
+            Self::Values(payloads) => payloads,
+            Self::Typed(typed) => typed.into_vec(),
+        }
+    }
+}
+
+/// Payload `index` of a variant that keeps its payloads as values, as
+/// [`VariantPayloads::values`] reads them.
+impl std::ops::Index<usize> for VariantPayloads {
+    type Output = Value;
+
+    fn index(&self, index: usize) -> &Value {
+        &self.values()[index]
+    }
+}
+
+/// Payload `index`, the payloads made values first, as
+/// [`VariantPayloads::values_mut`] makes them.
+impl std::ops::IndexMut<usize> for VariantPayloads {
+    fn index_mut(&mut self, index: usize) -> &mut Value {
+        &mut self.values_mut()[index]
+    }
+}
+
+/// The payloads of a variant, in order, read one at a time by index.
+pub struct VariantPayloadIter<'a> {
+    payloads: &'a VariantPayloads,
+    front: usize,
+    back: usize,
+}
+
+impl<'a> Iterator for VariantPayloadIter<'a> {
+    type Item = Cow<'a, Value>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.front == self.back {
+            return None;
+        }
+        self.front += 1;
+        self.payloads.get(self.front - 1)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.back - self.front;
+        (len, Some(len))
+    }
+}
+
+impl ExactSizeIterator for VariantPayloadIter<'_> {}
+
+impl DoubleEndedIterator for VariantPayloadIter<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.front == self.back {
+            return None;
+        }
+        self.back -= 1;
+        self.payloads.get(self.back)
+    }
 }
 
 /// An enum or variant name. A copy of a value shares its names' text
@@ -1058,16 +1252,21 @@ impl PartialEq<RuntimeName> for String {
 /// `Result.Err` while the frame was failing (checkpoint F5). Both runtimes
 /// render it identically so backend diagnostics stay byte-equal.
 pub fn manager_exit_failure_note(class_name: &str, failure: &EnumVariantValue) -> String {
-    let rendered = failure
-        .single_payload()
-        .map(Value::render)
-        .unwrap_or_default();
+    let rendered = match failure.payloads.len() {
+        1 => failure
+            .payloads
+            .get(0)
+            .map(|payload| payload.render())
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
     format!("`{class_name}.__exit__` also failed during cleanup: {rendered}")
 }
 
 impl EnumVariantValue {
+    /// The one payload of a variant that keeps its payloads as values.
     pub fn single_payload(&self) -> Option<&Value> {
-        match self.payloads.as_slice() {
+        match self.payloads.values() {
             [payload] => Some(payload),
             _ => None,
         }
@@ -2797,9 +2996,15 @@ fn drop_array_containing_value_iteratively(value: Value, frames: &mut Vec<ArrayC
                     fields: InstanceFields::Map(fields),
                     ..
                 }) => Some(ArrayCloneCleanupFrame::Fields(fields.into_values())),
-                Value::EnumVariant(EnumVariantValue { payloads, .. }) => {
-                    Some(ArrayCloneCleanupFrame::Values(payloads.into_iter()))
-                }
+                // A variant laid out in its enum's layout drops its payloads
+                // itself.
+                Value::EnumVariant(EnumVariantValue {
+                    payloads: VariantPayloads::Typed(_),
+                    ..
+                }) => None,
+                Value::EnumVariant(EnumVariantValue { payloads, .. }) => Some(
+                    ArrayCloneCleanupFrame::Values(payloads.into_vec().into_iter()),
+                ),
                 Value::Union(union) => {
                     let union = *union;
                     Some(ArrayCloneCleanupFrame::Values(
@@ -2875,6 +3080,33 @@ pub(crate) fn is_clone_leaf(value: &Value) -> bool {
     )
 }
 
+/// The value of the next payload box of `typed` from `next_index` on that
+/// is not moved out, with `next_index` moved past it.
+fn next_payload_box<'a>(typed: &'a TypedPayloads, next_index: &mut usize) -> Option<&'a Value> {
+    while *next_index < typed.len() {
+        let index = *next_index;
+        *next_index += 1;
+        if let Some(boxed) = typed.payload_box(index) {
+            return Some(boxed.value());
+        }
+    }
+    None
+}
+
+/// A copy of `variant`, kept in its layout as `typed` is, whose payload
+/// boxes hold `boxes`.
+fn copied_typed_variant(
+    variant: &EnumVariantValue,
+    typed: &TypedPayloads,
+    boxes: Vec<Value>,
+) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: variant.enum_name.clone(),
+        variant_name: variant.variant_name.clone(),
+        payloads: VariantPayloads::Typed(typed.copy_with_boxes(boxes.into_iter())),
+    })
+}
+
 pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
     // Leaves have no children to visit, so skip the frame machinery. An enum
     // variant whose payloads are all leaves, such as `json.Value.Int(3)`,
@@ -2882,7 +3114,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
     // `(str, json.Value)` pairs of `items()`.
     fn is_flat_clone(value: &Value) -> bool {
         match value {
-            Value::EnumVariant(variant) => variant.payloads.iter().all(is_clone_leaf),
+            Value::EnumVariant(variant) => variant.payloads.copy_flat(is_clone_leaf),
             value => is_clone_leaf(value),
         }
     }
@@ -2940,6 +3172,14 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
             next_index: usize,
             payloads: Vec<Value>,
         },
+        /// A variant kept in its enum's layout, whose payload boxes are
+        /// copied one at a time: `boxes` holds the copies so far.
+        TypedVariant {
+            variant: &'a EnumVariantValue,
+            typed: &'a TypedPayloads,
+            next_index: usize,
+            boxes: Vec<Value>,
+        },
         /// A union's single active payload (an optional link such as
         /// `next: indirect Node | None` nests through this frame).
         Union { union: &'a UnionValue },
@@ -2952,6 +3192,9 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
             | CloneFrame::Set { elements, .. }
             | CloneFrame::EnumVariant {
                 payloads: elements, ..
+            }
+            | CloneFrame::TypedVariant {
+                boxes: elements, ..
             } => {
                 for value in elements {
                     drop_array_containing_value_iteratively(value, cleanup_frames);
@@ -3167,6 +3410,29 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                         }))
                     }
                 }
+                // A variant kept in its layout copies its payloads held in
+                // place as bytes, and walks its payload boxes, so a deep
+                // recursive enum is copied without recursion.
+                Value::EnumVariant(variant) if variant.payloads.typed().is_some() => {
+                    representation_stats::note_cloned_elements(variant.payloads.len());
+                    let typed = variant.payloads.typed().expect("checked to be typed");
+                    let mut next_index = 0;
+                    if typed.boxed_payloads_all(is_clone_leaf) {
+                        // Payloads that are all leaves copy without a walk.
+                        Some(value.clone())
+                    } else {
+                        let payload = next_payload_box(typed, &mut next_index)
+                            .expect("a payload that is not a leaf is held in a box");
+                        state.push_frame(CloneFrame::TypedVariant {
+                            variant,
+                            typed,
+                            next_index,
+                            boxes: Vec::new(),
+                        })?;
+                        next = Some(payload);
+                        None
+                    }
+                }
                 Value::EnumVariant(variant) => {
                     let payloads = try_array_buffer(
                         variant.payloads.len(),
@@ -3176,7 +3442,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                         Some(Value::EnumVariant(EnumVariantValue {
                             enum_name: variant.enum_name.clone(),
                             variant_name: variant.variant_name.clone(),
-                            payloads,
+                            payloads: payloads.into(),
                         }))
                     } else {
                         state.push_frame(CloneFrame::EnumVariant {
@@ -3184,7 +3450,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                             next_index: 1,
                             payloads,
                         })?;
-                        next = Some(&variant.payloads[0]);
+                        next = Some(&variant.payloads.values()[0]);
                         None
                     }
                 }
@@ -3329,13 +3595,32 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                         }));
                     }
                 }
+                CloneFrame::TypedVariant {
+                    variant,
+                    typed,
+                    mut next_index,
+                    mut boxes,
+                } => {
+                    boxes.push(cloned);
+                    if let Some(payload) = next_payload_box(typed, &mut next_index) {
+                        state.push_frame(CloneFrame::TypedVariant {
+                            variant,
+                            typed,
+                            next_index,
+                            boxes,
+                        })?;
+                        next = Some(payload);
+                    } else {
+                        state.completed = Some(copied_typed_variant(variant, typed, boxes));
+                    }
+                }
                 CloneFrame::EnumVariant {
                     variant,
                     mut next_index,
                     mut payloads,
                 } => {
                     payloads.push(cloned);
-                    if let Some(payload) = variant.payloads.get(next_index) {
+                    if let Some(payload) = variant.payloads.values().get(next_index) {
                         next_index += 1;
                         state.push_frame(CloneFrame::EnumVariant {
                             variant,
@@ -3347,7 +3632,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                         state.completed = Some(Value::EnumVariant(EnumVariantValue {
                             enum_name: variant.enum_name.clone(),
                             variant_name: variant.variant_name.clone(),
-                            payloads,
+                            payloads: payloads.into(),
                         }));
                     }
                 }
@@ -7908,7 +8193,7 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
         Value::EnumVariant(EnumVariantValue {
             enum_name: variant.enum_name.clone(),
             variant_name: variant.variant_name.clone(),
-            payloads,
+            payloads: payloads.into(),
         })
     }
 
@@ -7923,7 +8208,7 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
             if nominal_runtime_base_name(&variant.enum_name) != "json.Value" {
                 return None;
             }
-            completed = match (variant.variant_name.as_str(), variant.payloads.as_slice()) {
+            completed = match (variant.variant_name.as_str(), variant.payloads.values()) {
                 ("Null", []) => Some(enum_value(variant, Vec::new())),
                 ("Bool", [Value::Bool(value)]) => {
                     Some(enum_value(variant, vec![Value::Bool(*value)]))
@@ -8065,7 +8350,7 @@ impl Clone for Value {
         // A variant whose payloads are all leaves, such as `Lookup.Found(3)`
         // or `json.Value.Int(3)`, has no tree to walk.
         if let Value::EnumVariant(variant) = self {
-            if variant.payloads.iter().all(is_clone_leaf) {
+            if variant.payloads.copy_flat(is_clone_leaf) {
                 return Value::EnumVariant(EnumVariantValue {
                     enum_name: variant.enum_name.clone(),
                     variant_name: variant.variant_name.clone(),
@@ -8196,7 +8481,7 @@ impl PartialEq for Value {
 
 impl Value {
     pub fn render(&self) -> String {
-        match self.render_inner(None) {
+        match self.render_inner(None, None) {
             Ok(rendered) => rendered,
             Err(_) => unreachable!("structural rendering without a display hook cannot fail"),
         }
@@ -8206,10 +8491,25 @@ impl Value {
     /// enum variant, including the value itself. A hook that returns text
     /// replaces that node's structural rendering; an error stops rendering.
     pub fn render_with_display(&self, hook: &mut DisplayHook<'_>) -> Result<String> {
-        self.render_inner(Some(hook))
+        self.render_inner(Some(hook), None)
     }
 
-    fn render_inner(&self, mut hook: Option<&mut DisplayHook<'_>>) -> Result<String> {
+    /// Renders the value as [`Self::render`] does, or with `hook` as
+    /// [`Self::render_with_display`] does, and spells each `float32` field
+    /// and payload `slots` names with its `float32` digits.
+    pub fn render_with_slots(
+        &self,
+        hook: Option<&mut DisplayHook<'_>>,
+        slots: &Float32Slots,
+    ) -> Result<String> {
+        self.render_inner(hook, Some(slots))
+    }
+
+    fn render_inner(
+        &self,
+        mut hook: Option<&mut DisplayHook<'_>>,
+        slots: Option<&Float32Slots>,
+    ) -> Result<String> {
         enum RenderAction<'a> {
             Value(&'a Value),
             /// A field an instance keeps inline in its layout, read out of
@@ -8232,6 +8532,19 @@ impl Value {
             }
         }
 
+        /// Renders a field or payload, `float32` says whether its type is
+        /// `float32`.
+        fn slot_action(value: Cow<'_, Value>, float32: bool) -> RenderAction<'_> {
+            match value {
+                Cow::Borrowed(Value::Float(number)) if float32 => {
+                    RenderAction::Float32(*number as f32)
+                }
+                Cow::Owned(Value::Float(number)) if float32 => RenderAction::Float32(number as f32),
+                Cow::Borrowed(value) => RenderAction::Value(value),
+                Cow::Owned(value) => RenderAction::Owned(value),
+            }
+        }
+
         let mut rendered = String::new();
         let mut actions = vec![RenderAction::Value(self)];
         while let Some(action) = actions.pop() {
@@ -8241,7 +8554,7 @@ impl Value {
                 }
                 RenderAction::Float32(number) => rendered.push_str(&render_float32(number)),
                 RenderAction::Owned(value) => {
-                    rendered.push_str(&value.render_inner(hook.as_deref_mut())?);
+                    rendered.push_str(&value.render_inner(hook.as_deref_mut(), slots)?);
                 }
                 RenderAction::Value(value) => {
                     if let Some(hook) = hook.as_mut() {
@@ -8295,7 +8608,7 @@ impl Value {
                                     value => {
                                         if !render_scalar(value, &mut rendered) {
                                             rendered.push_str(
-                                                &value.render_inner(hook.as_deref_mut())?,
+                                                &value.render_inner(hook.as_deref_mut(), slots)?,
                                             );
                                         }
                                     }
@@ -8391,7 +8704,8 @@ impl Value {
                         Value::TlsListener(_) => rendered.push_str("<tls-listener>"),
                         Value::TlsStream(_) => rendered.push_str("<tls-stream>"),
                         Value::Instance(instance) => {
-                            rendered.push_str(nominal_runtime_base_name(&instance.class_name));
+                            let class = nominal_runtime_base_name(&instance.class_name);
+                            rendered.push_str(class);
                             rendered.push('(');
                             actions.push(RenderAction::Static(")"));
                             let fields = instance
@@ -8401,12 +8715,9 @@ impl Value {
                                 .collect::<Vec<_>>();
                             for (index, (name, value)) in fields.into_iter().enumerate().rev() {
                                 // A field read out of a class's block renders
-                                // as its map form renders it, a `float32`
-                                // with `float64` digits as `aura run` does.
-                                actions.push(match value {
-                                    Cow::Borrowed(value) => RenderAction::Value(value),
-                                    Cow::Owned(value) => RenderAction::Owned(value),
-                                });
+                                // as its map form renders it.
+                                let float32 = slots.is_some_and(|slots| slots.field(class, name));
+                                actions.push(slot_action(value, float32));
                                 actions.push(RenderAction::Static("="));
                                 actions.push(RenderAction::Text(name));
                                 if index > 0 {
@@ -8422,14 +8733,20 @@ impl Value {
                             _ => RenderAction::Value(&union.payload),
                         }),
                         Value::EnumVariant(variant) => {
-                            rendered.push_str(nominal_runtime_base_name(&variant.enum_name));
+                            let enum_name = nominal_runtime_base_name(&variant.enum_name);
+                            rendered.push_str(enum_name);
                             rendered.push('.');
                             rendered.push_str(&variant.variant_name);
                             if !variant.payloads.is_empty() {
                                 rendered.push('(');
                                 actions.push(RenderAction::Static(")"));
                                 for (index, payload) in variant.payloads.iter().enumerate().rev() {
-                                    actions.push(RenderAction::Value(payload));
+                                    // A payload read out of a variant's block
+                                    // renders as its value form renders it.
+                                    let float32 = slots.is_some_and(|slots| {
+                                        slots.payload(enum_name, &variant.variant_name, index)
+                                    });
+                                    actions.push(slot_action(payload, float32));
                                     if index > 0 {
                                         actions.push(RenderAction::Static(", "));
                                     }
@@ -8441,6 +8758,86 @@ impl Value {
             }
         }
         Ok(rendered)
+    }
+}
+
+/// The `float32` fields and payloads a program declares, by class and enum
+/// name. A value keeps a `float32` widened to `float64`, and a class
+/// instance or enum variant keeps no types, so rendering one asks this
+/// record which of its numbers to spell with `float32` digits. Both
+/// backends build it from the same MIR (`mir::float32_slots`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Float32Slots {
+    /// Each `float32` field, as its class and field name, in order. A
+    /// program declares few, so a lookup scans them.
+    fields: Vec<(String, String)>,
+    /// Each `float32` payload, as its enum, variant, and position, in
+    /// order.
+    payloads: Vec<(String, String, usize)>,
+}
+
+impl Float32Slots {
+    /// Records that field `field` of class `class` is a `float32`.
+    pub fn add_field(&mut self, class: &str, field: &str) {
+        let slot = (class.to_string(), field.to_string());
+        if let Err(at) = self.fields.binary_search(&slot) {
+            self.fields.insert(at, slot);
+        }
+    }
+
+    /// Records that payload `index` of variant `variant` of `enum_name` is a
+    /// `float32`.
+    pub fn add_payload(&mut self, enum_name: &str, variant: &str, index: usize) {
+        let slot = (enum_name.to_string(), variant.to_string(), index);
+        if let Err(at) = self.payloads.binary_search(&slot) {
+            self.payloads.insert(at, slot);
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.fields.is_empty() && self.payloads.is_empty()
+    }
+
+    fn field(&self, class: &str, field: &str) -> bool {
+        self.fields
+            .iter()
+            .any(|(owner, name)| owner == class && name == field)
+    }
+
+    fn payload(&self, enum_name: &str, variant: &str, index: usize) -> bool {
+        self.payloads.iter().any(|(owner, name, position)| {
+            *position == index && owner == enum_name && name == variant
+        })
+    }
+
+    /// The record as text, one slot per line in sorted order: `f`, the
+    /// class, and the field, or `p`, the enum, the variant, and the payload
+    /// position, separated by tabs.
+    pub fn encode(&self) -> String {
+        let mut lines = Vec::new();
+        for (class, field) in &self.fields {
+            lines.push(format!("f\t{class}\t{field}"));
+        }
+        for (enum_name, variant, index) in &self.payloads {
+            lines.push(format!("p\t{enum_name}\t{variant}\t{index}"));
+        }
+        lines.sort();
+        lines.join("\n")
+    }
+
+    /// Reads back what [`Self::encode`] wrote, or `None` for any other text.
+    pub fn decode(text: &str) -> Option<Self> {
+        let mut slots = Self::default();
+        for line in text.lines() {
+            match line.split('\t').collect::<Vec<_>>().as_slice() {
+                ["f", class, field] => slots.add_field(class, field),
+                ["p", enum_name, variant, index] => {
+                    slots.add_payload(enum_name, variant, index.parse().ok()?)
+                }
+                _ => return None,
+            }
+        }
+        Some(slots)
     }
 }
 
@@ -9319,8 +9716,8 @@ pub fn collect_queue_values(value: &Value, queues: &mut Vec<ChannelValue>) {
             }
         }
         Value::EnumVariant(variant) => {
-            for payload in &variant.payloads {
-                collect_queue_values(payload, queues);
+            for payload in variant.payloads.iter() {
+                collect_queue_values(&payload, queues);
             }
         }
         _ => {}
@@ -12053,7 +12450,7 @@ impl ProcessCompletedValue {
                 payloads,
             }) if matches!(enum_name.as_str(), "ExitStatus" | "process.ExitStatus")
                 && variant_name == "Exited"
-                && matches!(payloads.as_slice(), [Value::Int(code)] if code.as_i128() == Some(0))
+                && matches!(payloads.values(), [Value::Int(code)] if code.as_i128() == Some(0))
         )
     }
 
@@ -15556,7 +15953,7 @@ pub fn lookup_found(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("Lookup"),
         variant_name: RuntimeName::from_static("Found"),
-        payloads: vec![value],
+        payloads: vec![value].into(),
     })
 }
 
@@ -15564,7 +15961,7 @@ pub fn lookup_missing() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("Lookup"),
         variant_name: RuntimeName::from_static("Missing"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     })
 }
 
@@ -15572,7 +15969,7 @@ pub fn poll_ready(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("Poll"),
         variant_name: RuntimeName::from_static("Ready"),
-        payloads: vec![value],
+        payloads: vec![value].into(),
     })
 }
 
@@ -15580,7 +15977,7 @@ pub fn poll_unavailable() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("Poll"),
         variant_name: RuntimeName::from_static("Unavailable"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     })
 }
 
@@ -15745,7 +16142,7 @@ pub fn result_ok(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("Result"),
         variant_name: RuntimeName::from_static("Ok"),
-        payloads: vec![value],
+        payloads: vec![value].into(),
     })
 }
 
@@ -15753,7 +16150,7 @@ pub fn result_err(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("Result"),
         variant_name: RuntimeName::from_static("Err"),
-        payloads: vec![value],
+        payloads: vec![value].into(),
     })
 }
 
@@ -16001,7 +16398,7 @@ fn bytes_runtime_enum_value(
     Ok(Value::EnumVariant(EnumVariantValue {
         enum_name: bytes_runtime_owned_string(enum_name)?.into(),
         variant_name: bytes_runtime_owned_string(variant_name)?.into(),
-        payloads,
+        payloads: payloads.into(),
     }))
 }
 
@@ -16547,7 +16944,7 @@ fn json_runtime_enum_value(
     Ok(Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static(enum_name),
         variant_name: RuntimeName::from_static(variant_name),
-        payloads,
+        payloads: payloads.into(),
     }))
 }
 
@@ -16838,7 +17235,7 @@ pub fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
                 )));
             }
 
-            completed = match (variant.variant_name.as_str(), variant.payloads.as_slice()) {
+            completed = match (variant.variant_name.as_str(), variant.payloads.values()) {
                 ("Null", []) => Some(JsonValue::Null),
                 ("Bool", [Value::Bool(value)]) => Some(JsonValue::Bool(*value)),
                 ("Int", [Value::Int(value)]) if json_int_metadata_is_exact(value) => {
@@ -17163,7 +17560,7 @@ fn host_json_exact_payload(
     if variant.variant_name != expected_variant {
         return Ok(None);
     }
-    match variant.payloads.as_slice() {
+    match variant.payloads.values() {
         [payload] => Ok(Some(payload.clone())),
         _ => Err(Diagnostic::coded(
             "AU4001",
@@ -17201,7 +17598,7 @@ fn host_json_into_exact_payload(
             format!("malformed runtime `json.Value.{expected_variant}` payload in `{call}`"),
         ));
     }
-    Ok(variant.payloads.pop())
+    Ok(variant.payloads.values_mut().pop())
 }
 
 fn host_json_indent_arg(value: &Value) -> Result<Option<i64>> {
@@ -17285,7 +17682,7 @@ pub fn send_error_closed(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("SendError"),
         variant_name: RuntimeName::from_static("Closed"),
-        payloads: vec![value],
+        payloads: vec![value].into(),
     })
 }
 
@@ -17293,7 +17690,7 @@ pub fn send_error_cancelled(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("SendError"),
         variant_name: RuntimeName::from_static("Cancelled"),
-        payloads: vec![value],
+        payloads: vec![value].into(),
     })
 }
 
@@ -17301,7 +17698,7 @@ pub fn send_error_timed_out(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("SendError"),
         variant_name: RuntimeName::from_static("TimedOut"),
-        payloads: vec![value],
+        payloads: vec![value].into(),
     })
 }
 
@@ -17309,7 +17706,7 @@ pub fn send_error_full(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("SendError"),
         variant_name: RuntimeName::from_static("Full"),
-        payloads: vec![value],
+        payloads: vec![value].into(),
     })
 }
 
@@ -17317,7 +17714,7 @@ pub fn queue_receive_item(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("QueueReceive"),
         variant_name: RuntimeName::from_static("Item"),
-        payloads: vec![value],
+        payloads: vec![value].into(),
     })
 }
 
@@ -17325,7 +17722,7 @@ pub fn queue_receive_closed() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("QueueReceive"),
         variant_name: RuntimeName::from_static("Closed"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     })
 }
 
@@ -17333,7 +17730,7 @@ pub fn queue_receive_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("QueueReceive"),
         variant_name: RuntimeName::from_static("TimedOut"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     })
 }
 
@@ -17341,7 +17738,7 @@ pub fn queue_receive_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("QueueReceive"),
         variant_name: RuntimeName::from_static("Cancelled"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     })
 }
 
@@ -17349,7 +17746,7 @@ pub fn task_result_ready(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("TaskResult"),
         variant_name: RuntimeName::from_static("Ready"),
-        payloads: vec![value],
+        payloads: vec![value].into(),
     })
 }
 
@@ -17357,7 +17754,7 @@ pub fn task_result_error(message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("TaskResult"),
         variant_name: RuntimeName::from_static("Error"),
-        payloads: vec![Value::String(message)],
+        payloads: vec![Value::String(message)].into(),
     })
 }
 
@@ -17365,7 +17762,7 @@ pub fn task_result_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("TaskResult"),
         variant_name: RuntimeName::from_static("TimedOut"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     })
 }
 
@@ -17373,7 +17770,7 @@ pub fn task_result_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("TaskResult"),
         variant_name: RuntimeName::from_static("Cancelled"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     })
 }
 
@@ -17381,7 +17778,7 @@ pub fn select_outcome_queue(index: i64, outcome: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("SelectOutcome"),
         variant_name: RuntimeName::from_static("Queue"),
-        payloads: vec![Value::Int(IntegerValue::from_i64(index)), outcome],
+        payloads: vec![Value::Int(IntegerValue::from_i64(index)), outcome].into(),
     })
 }
 
@@ -17389,7 +17786,7 @@ pub fn select_outcome_task(index: i64, outcome: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("SelectOutcome"),
         variant_name: RuntimeName::from_static("Task"),
-        payloads: vec![Value::Int(IntegerValue::from_i64(index)), outcome],
+        payloads: vec![Value::Int(IntegerValue::from_i64(index)), outcome].into(),
     })
 }
 
@@ -17397,7 +17794,7 @@ pub fn select_outcome_deadline(index: i64) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("SelectOutcome"),
         variant_name: RuntimeName::from_static("Deadline"),
-        payloads: vec![Value::Int(IntegerValue::from_i64(index))],
+        payloads: vec![Value::Int(IntegerValue::from_i64(index))].into(),
     })
 }
 
@@ -17405,7 +17802,7 @@ pub fn select_outcome_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("SelectOutcome"),
         variant_name: RuntimeName::from_static("Cancelled"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     })
 }
 
@@ -17413,7 +17810,7 @@ pub fn wait_any_ready(index: i64, value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("WaitAny"),
         variant_name: RuntimeName::from_static("Ready"),
-        payloads: vec![Value::Int(IntegerValue::from_i64(index)), value],
+        payloads: vec![Value::Int(IntegerValue::from_i64(index)), value].into(),
     })
 }
 
@@ -17424,7 +17821,8 @@ pub fn wait_any_error(index: i64, message: String) -> Value {
         payloads: vec![
             Value::Int(IntegerValue::from_i64(index)),
             Value::String(message),
-        ],
+        ]
+        .into(),
     })
 }
 
@@ -17432,7 +17830,7 @@ pub fn wait_any_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("WaitAny"),
         variant_name: RuntimeName::from_static("TimedOut"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     })
 }
 
@@ -17440,7 +17838,7 @@ pub fn wait_any_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("WaitAny"),
         variant_name: RuntimeName::from_static("Cancelled"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     })
 }
 
@@ -17448,11 +17846,12 @@ pub fn wait_all_ready(values: Vec<Value>) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("WaitAll"),
         variant_name: RuntimeName::from_static("Ready"),
-        payloads: vec![Value::Vec(VecValue {
+        payloads: (vec![Value::Vec(VecValue {
             element_type: Type::named("Unknown"),
             elements: values.into(),
             str_view: Default::default(),
-        })],
+        })])
+        .into(),
     })
 }
 
@@ -17463,7 +17862,8 @@ pub fn wait_all_error(index: i64, message: String) -> Value {
         payloads: vec![
             Value::Int(IntegerValue::from_i64(index)),
             Value::String(message),
-        ],
+        ]
+        .into(),
     })
 }
 
@@ -17471,7 +17871,7 @@ pub fn wait_all_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("WaitAll"),
         variant_name: RuntimeName::from_static("TimedOut"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     })
 }
 
@@ -17479,7 +17879,7 @@ pub fn wait_all_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("WaitAll"),
         variant_name: RuntimeName::from_static("Cancelled"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     })
 }
 
@@ -17487,7 +17887,7 @@ pub fn process_stdio_inherit() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("Stdio"),
         variant_name: RuntimeName::from_static("Inherit"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     })
 }
 
@@ -17495,7 +17895,7 @@ pub fn process_stdio_null() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("Stdio"),
         variant_name: RuntimeName::from_static("Null"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     })
 }
 
@@ -17503,7 +17903,7 @@ pub fn process_stdio_pipe() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("Stdio"),
         variant_name: RuntimeName::from_static("Pipe"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     })
 }
 
@@ -17515,7 +17915,7 @@ pub fn process_exit_status(status: StdExitStatus) -> Value {
             return Value::EnumVariant(EnumVariantValue {
                 enum_name: RuntimeName::from_static("ExitStatus"),
                 variant_name: RuntimeName::from_static("Signaled"),
-                payloads: vec![Value::Int(IntegerValue::from_signed(signal as i128))],
+                payloads: (vec![Value::Int(IntegerValue::from_signed(signal as i128))]).into(),
             });
         }
     }
@@ -17523,7 +17923,7 @@ pub fn process_exit_status(status: StdExitStatus) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("ExitStatus"),
         variant_name: RuntimeName::from_static("Exited"),
-        payloads: vec![Value::Int(IntegerValue::from_signed(code as i128))],
+        payloads: (vec![Value::Int(IntegerValue::from_signed(code as i128))]).into(),
     })
 }
 
@@ -17531,7 +17931,7 @@ pub fn process_wait_exited(status: StdExitStatus) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("Wait"),
         variant_name: RuntimeName::from_static("Exited"),
-        payloads: vec![process_exit_status(status)],
+        payloads: vec![process_exit_status(status)].into(),
     })
 }
 
@@ -17539,7 +17939,7 @@ pub fn process_wait_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("Wait"),
         variant_name: RuntimeName::from_static("TimedOut"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     })
 }
 
@@ -17547,7 +17947,7 @@ pub fn process_wait_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("Wait"),
         variant_name: RuntimeName::from_static("Cancelled"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     })
 }
 
@@ -17555,7 +17955,7 @@ pub fn process_wait_failed(error: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("Wait"),
         variant_name: RuntimeName::from_static("Failed"),
-        payloads: vec![error],
+        payloads: vec![error].into(),
     })
 }
 
@@ -17563,7 +17963,7 @@ pub fn process_supervisor_wait_event(event: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("SupervisorWait"),
         variant_name: RuntimeName::from_static("Event"),
-        payloads: vec![event],
+        payloads: vec![event].into(),
     })
 }
 
@@ -17571,7 +17971,7 @@ pub fn process_supervisor_wait_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("SupervisorWait"),
         variant_name: RuntimeName::from_static("TimedOut"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     })
 }
 
@@ -17579,7 +17979,7 @@ pub fn process_supervisor_wait_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("SupervisorWait"),
         variant_name: RuntimeName::from_static("Cancelled"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     })
 }
 
@@ -17595,7 +17995,8 @@ pub fn process_supervisor_event_exited(
             Value::String(name),
             process_exit_status(status),
             Value::Int(restart_count),
-        ],
+        ]
+        .into(),
     })
 }
 
@@ -17611,7 +18012,8 @@ pub fn process_supervisor_event_restarted(
             Value::String(name),
             process_exit_status(status),
             Value::Int(restart_count),
-        ],
+        ]
+        .into(),
     })
 }
 
@@ -17623,7 +18025,7 @@ pub fn process_supervisor_event_failed(
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("SupervisorEvent"),
         variant_name: RuntimeName::from_static("Failed"),
-        payloads: vec![Value::String(name), error, Value::Int(restart_count)],
+        payloads: vec![Value::String(name), error, Value::Int(restart_count)].into(),
     })
 }
 
@@ -17631,7 +18033,7 @@ pub fn process_error_no_command() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("Error"),
         variant_name: RuntimeName::from_static("NoCommand"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     })
 }
 
@@ -17639,7 +18041,7 @@ pub fn process_error_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("Error"),
         variant_name: RuntimeName::from_static("TimedOut"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     })
 }
 
@@ -17647,7 +18049,7 @@ pub fn process_error_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("Error"),
         variant_name: RuntimeName::from_static("Cancelled"),
-        payloads: Vec::new(),
+        payloads: Vec::new().into(),
     })
 }
 
@@ -17655,7 +18057,7 @@ pub fn process_error_io(error: io::Error) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("Error"),
         variant_name: RuntimeName::from_static("Io"),
-        payloads: vec![io_error(error)],
+        payloads: vec![io_error(error)].into(),
     })
 }
 
@@ -17663,7 +18065,7 @@ pub fn process_error_spawn(message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("Error"),
         variant_name: RuntimeName::from_static("Spawn"),
-        payloads: vec![Value::String(message)],
+        payloads: vec![Value::String(message)].into(),
     })
 }
 
@@ -17671,7 +18073,7 @@ pub fn process_error_other(message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("Error"),
         variant_name: RuntimeName::from_static("Other"),
-        payloads: vec![Value::String(message)],
+        payloads: vec![Value::String(message)].into(),
     })
 }
 
@@ -17753,7 +18155,7 @@ pub fn io_error(error: io::Error) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("io.Error"),
         variant_name: variant_name.to_string().into(),
-        payloads,
+        payloads: payloads.into(),
     })
 }
 

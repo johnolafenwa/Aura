@@ -89,7 +89,7 @@ fn adr0061_element_place_segments_round_trip_keys_and_refuse_invalid_encodings()
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Slot".into(),
             variant_name: name.to_string().into(),
-            payloads,
+            payloads: payloads.into(),
         })
     };
     let composite = [
@@ -4456,7 +4456,7 @@ fn enum_payloads(value: Value, enum_name: &str, variant_name: &str) -> Vec<Value
         Value::EnumVariant(variant) => {
             assert_eq!(variant.enum_name, enum_name);
             assert_eq!(variant.variant_name, variant_name);
-            variant.payloads
+            variant.payloads.into_vec()
         }
         other => panic!("expected {enum_name}.{variant_name}, found {other:?}"),
     }
@@ -4517,7 +4517,7 @@ fn json_value(variant_name: &str, payloads: Vec<Value>) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: "json.Value".into(),
         variant_name: variant_name.to_string().into(),
-        payloads,
+        payloads: payloads.into(),
     })
 }
 
@@ -4718,7 +4718,7 @@ fn mir_json_variant_construction_moves_owned_payload_allocations() {
         let super::RvalueOutcome::Value(Value::EnumVariant(variant)) = outcome else {
             panic!("expected json.Value.{variant_name}");
         };
-        match variant.payloads.as_slice() {
+        match variant.payloads.values() {
             [Value::String(value)] => assert_eq!(value.as_ptr(), text_ptr),
             [Value::Vec(value)] => assert_eq!(value.elements.as_ptr(), values_ptr as usize),
             [Value::Map(value)] => assert_eq!(value.entries.as_ptr(), entries_ptr),
@@ -4823,7 +4823,10 @@ fn mir_place_reads_clone_and_preserve_copy_enum_payload_sources() {
     let super::RvalueOutcome::Value(Value::EnumVariant(variant)) = outcome else {
         panic!("expected Lookup.Found(Duration)");
     };
-    assert_eq!(variant.payloads, vec![Value::Duration(2_000_000_000)]);
+    assert_eq!(
+        variant.payloads,
+        vec![Value::Duration(2_000_000_000)].into()
+    );
     assert_eq!(
         env.read_place("timeout")
             .expect("copy source should remain"),
@@ -4843,7 +4846,7 @@ fn mir_move_variant_payload_preserves_allocation_and_marks_slot_consumed() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Packet".into(),
             variant_name: "Text".into(),
-            payloads: vec![Value::String(text)],
+            payloads: vec![Value::String(text)].into(),
         }),
     );
 
@@ -4865,7 +4868,7 @@ fn mir_move_variant_payload_preserves_allocation_and_marks_slot_consumed() {
         .read_place("packet")
         .expect("private match owner remains")
     {
-        Value::EnumVariant(variant) => assert_eq!(variant.payloads, vec![Value::Unit]),
+        Value::EnumVariant(variant) => assert_eq!(variant.payloads, vec![Value::Unit].into()),
         other => panic!("expected Packet enum, found {other:?}"),
     }
 }
@@ -4954,7 +4957,7 @@ fn mir_json_borrowed_calls_leave_source_allocations_in_place_on_success_and_erro
     let retained = env.place_borrow("string_value").unwrap();
     assert_eq!(retained as *const Value, value_ptr);
     match retained {
-        Value::EnumVariant(variant) => match variant.payloads.as_slice() {
+        Value::EnumVariant(variant) => match variant.payloads.values() {
             [Value::String(value)] => assert_eq!(value.as_ptr(), payload_ptr),
             other => panic!("expected one str payload, found {other:?}"),
         },
@@ -5655,7 +5658,7 @@ fn mir_failed_owned_place_moves_preserve_unmoved_state() {
                             Value::EnumVariant(EnumVariantValue {
                                 enum_name: "Packet".into(),
                                 variant_name: "Text".into(),
-                                payloads: vec![Value::String("owned".repeat(32))],
+                                payloads: vec![Value::String("owned".repeat(32))].into(),
                             }),
                         )])
                         .into(),
@@ -5746,7 +5749,7 @@ fn mir_failed_owned_place_moves_preserve_unmoved_state() {
     };
     assert_eq!(
         remaining.payloads,
-        vec![Value::Unit],
+        vec![Value::Unit].into(),
         "the moved payload slot must be marked consumed"
     );
 }
@@ -7185,7 +7188,7 @@ fn mir_runtime_infers_resource_value_types_for_runtime_backed_surfaces() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "process.ExitStatus".into(),
             variant_name: "Exited".into(),
-            payloads: vec![Value::Int(IntegerValue::from_signed(0))],
+            payloads: vec![Value::Int(IntegerValue::from_signed(0))].into(),
         }),
         b"out".to_vec(),
         b"err".to_vec(),
@@ -7516,7 +7519,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "ExitStatus".into(),
             variant_name: "Exited".into(),
-            payloads: vec![Value::Int(IntegerValue::from_signed(0))],
+            payloads: vec![Value::Int(IntegerValue::from_signed(0))].into(),
         }),
         b"out".to_vec(),
         b"err".to_vec(),
@@ -10482,7 +10485,7 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
         Value::EnumVariant(EnumVariantValue {
             enum_name: "ExitStatus".into(),
             variant_name: "Exited".into(),
-            payloads: vec![Value::Int(IntegerValue::from_signed(7))],
+            payloads: vec![Value::Int(IntegerValue::from_signed(7))].into(),
         }),
         vec![0xff],
         vec![0xfe],
@@ -10734,7 +10737,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "process.Stdio".into(),
             variant_name: variant_name.to_string().into(),
-            payloads: Vec::new(),
+            payloads: Vec::new().into(),
         })
     };
     env.define_typed(
@@ -10771,7 +10774,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "process.RestartPolicy".into(),
             variant_name: "Never".into(),
-            payloads: Vec::new(),
+            payloads: Vec::new().into(),
         }),
     );
 
@@ -12269,7 +12272,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Status".into(),
             variant_name: "Done".into(),
-            payloads: Vec::new(),
+            payloads: Vec::new().into(),
         }),
     );
     env.define_typed("unit", Type::Unit, Value::Unit);
@@ -12761,7 +12764,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Status".into(),
             variant_name: "Ready".into(),
-            payloads: Vec::new(),
+            payloads: Vec::new().into(),
         }),
     );
 
@@ -13125,7 +13128,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Status".into(),
             variant_name: "Ready".into(),
-            payloads: Vec::new(),
+            payloads: Vec::new().into(),
         }),
     );
     env.define_typed("flag", Type::named("bool"), Value::Bool(true));
@@ -13758,7 +13761,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
         MirRuntime::infer_value_type(&Value::EnumVariant(EnumVariantValue {
             enum_name: "SendError".into(),
             variant_name: "Cancelled".into(),
-            payloads: vec![Value::String("payload".to_string())],
+            payloads: vec![Value::String("payload".to_string())].into(),
         })),
         Some(Type::Named(
             "SendError".to_string(),
@@ -13769,7 +13772,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
         MirRuntime::infer_value_type(&Value::EnumVariant(EnumVariantValue {
             enum_name: "Wait".into(),
             variant_name: "TimedOut".into(),
-            payloads: Vec::new(),
+            payloads: Vec::new().into(),
         })),
         Some(Type::Named("process.Wait".to_string(), Vec::new()))
     );
@@ -13777,7 +13780,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
         MirRuntime::infer_value_type(&Value::EnumVariant(EnumVariantValue {
             enum_name: "Error".into(),
             variant_name: "TimedOut".into(),
-            payloads: Vec::new(),
+            payloads: Vec::new().into(),
         })),
         Some(Type::Named("process.Error".to_string(), Vec::new()))
     );
@@ -13785,7 +13788,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
         MirRuntime::infer_value_type(&Value::EnumVariant(EnumVariantValue {
             enum_name: "Stdio".into(),
             variant_name: "Pipe".into(),
-            payloads: Vec::new(),
+            payloads: Vec::new().into(),
         })),
         Some(Type::Named("process.Stdio".to_string(), Vec::new()))
     );
@@ -14761,7 +14764,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "QueueReceive".into(),
             variant_name: "Item".into(),
-            payloads: vec![Value::Int(IntegerValue::from_signed(5))],
+            payloads: vec![Value::Int(IntegerValue::from_signed(5))].into(),
         })
     );
 
@@ -17897,7 +17900,7 @@ fn mir_runtime_terminator_and_cleanup_helpers_cover_branch_and_error_paths() {
         Value::EnumVariant(crate::runtime_value::EnumVariantValue {
             enum_name: "Status".into(),
             variant_name: "Ready".into(),
-            payloads: Vec::new(),
+            payloads: Vec::new().into(),
         }),
     );
     match runtime
@@ -18487,7 +18490,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
             Value::EnumVariant(EnumVariantValue {
                 enum_name: "process.ExitStatus".into(),
                 variant_name: "Exited".into(),
-                payloads: vec![Value::Int(IntegerValue::from_signed(0))],
+                payloads: vec![Value::Int(IntegerValue::from_signed(0))].into(),
             }),
             Vec::new(),
             Vec::new(),
@@ -18808,7 +18811,10 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         super::RvalueOutcome::Return(Value::EnumVariant(variant)) => {
             assert_eq!(variant.enum_name, "Result");
             assert_eq!(variant.variant_name, "Err");
-            assert_eq!(variant.payloads, vec![Value::String("boom".to_string())]);
+            assert_eq!(
+                variant.payloads,
+                vec![Value::String("boom".to_string())].into()
+            );
         }
         _ => panic!("expected try return outcome"),
     }
@@ -18823,7 +18829,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Result".into(),
             variant_name: "Ok".into(),
-            payloads: Vec::new(),
+            payloads: Vec::new().into(),
         }),
     );
     let invalid_payload = match runtime.evaluate_rvalue(
@@ -18860,7 +18866,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Status".into(),
             variant_name: "Ready".into(),
-            payloads: vec![Value::String("ok".to_string())],
+            payloads: vec![Value::String("ok".to_string())].into(),
         }),
     );
     match runtime
@@ -18884,7 +18890,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Status".into(),
             variant_name: "Ready".into(),
-            payloads: Vec::new(),
+            payloads: Vec::new().into(),
         }),
     );
     let no_payload = match runtime.evaluate_rvalue(
@@ -20922,7 +20928,7 @@ fn enum_payload_projections_reject_malformed_and_inactive_segments() {
     let variant = EnumVariantValue {
         enum_name: "Lookup".into(),
         variant_name: "Found".into(),
-        payloads: vec![Value::Unit],
+        payloads: vec![Value::Unit].into(),
     };
     assert_eq!(
         super::enum_projection_index(&variant, "__variant_payload_Found_0")
@@ -21007,7 +21013,7 @@ fn mir_try_rejects_unknown_result_variants() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Result".into(),
             variant_name: "Maybe".into(),
-            payloads: vec![Value::Unit],
+            payloads: vec![Value::Unit].into(),
         }),
     );
     let error = runtime
@@ -21959,7 +21965,14 @@ fn websocket_listener_and_socket_methods_cover_unsupported_members_and_closed_pe
         .expect("recv_bytes after the peer closed evaluates")
     {
         Value::EnumVariant(variant) if variant.variant_name == "Ok" => {
-            assert_absent(variant.payloads.into_iter().next().expect("payload"));
+            assert_absent(
+                variant
+                    .payloads
+                    .into_vec()
+                    .into_iter()
+                    .next()
+                    .expect("payload"),
+            );
         }
         Value::EnumVariant(variant) => assert_eq!(variant.variant_name, "Err"),
         other => panic!("unexpected recv_bytes result {other:?}"),
@@ -22106,9 +22119,12 @@ fn tcp_stream_methods_cover_eof_shutdowns_and_timed_writes_on_closed_streams() {
         .expect("tcp client should connect")
     };
     let ok = |value: Value, label: &str| match value {
-        Value::EnumVariant(variant) if variant.variant_name == "Ok" => {
-            variant.payloads.into_iter().next().expect("Ok payload")
-        }
+        Value::EnumVariant(variant) if variant.variant_name == "Ok" => variant
+            .payloads
+            .into_vec()
+            .into_iter()
+            .next()
+            .expect("Ok payload"),
         other => panic!("{label} should succeed, found {other:?}"),
     };
     let timeout = mir_arg(Some("timeout"), Operand::Duration(5_000_000_000));

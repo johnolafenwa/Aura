@@ -112,7 +112,15 @@ impl Clone for ElementBox {
     /// A copy of the element in a new box with the same type tag, so two
     /// holders never share a box.
     fn clone(&self) -> Self {
-        let copy = Self::new(self.value().clone());
+        self.copy_with(self.value().clone())
+    }
+}
+
+impl ElementBox {
+    /// A new box that holds `value`, a copy of this box's value, under this
+    /// box's type tag.
+    pub fn copy_with(&self, value: Value) -> Self {
+        let copy = Self::new(value);
         // SAFETY: the copy is new and confined to this thread, and the
         // holder's access covers this box's tag.
         unsafe {
