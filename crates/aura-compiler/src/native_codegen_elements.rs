@@ -16,6 +16,12 @@
 //! list's box is reached only while the list is unchanged (see
 //! `native_element_boxes.rs` in the runtime). A list that a closure, a
 //! task, or a mutable loan can reach is never lent from.
+//!
+//! A list read out of a field, such as `self.asks[level][head]`, is the
+//! temporary a `Lend` of the field fills, and its `EndLend` puts the same
+//! list back. When the temporary is only read, the element stays lent past
+//! the `EndLend`, and from then on the instructions that may change the
+//! field or free the root it lies in end the loan instead.
 
 use std::collections::{HashMap, HashSet};
 
@@ -222,6 +228,18 @@ fn reads_list(op: ListOp) -> bool {
     )
 }
 
+/// Whether `instruction` makes a closure or a task that captures `owner`,
+/// which may then reach it at any later point.
+fn captures(instruction: &Instruction, owner: &str) -> bool {
+    matches!(
+        instruction,
+        Instruction::Assign {
+            value: Rvalue::Closure { .. } | Rvalue::StartTask { .. },
+            ..
+        }
+    ) && mentioned_roots(instruction).contains(owner)
+}
+
 /// Whether `instruction` lets something other than the function's own
 /// instructions reach `list` later: a closure or a task that captures it,
 /// or a loan that can write it.
@@ -328,6 +346,73 @@ pub(super) fn lent_element_reads(
     }
     lists.retain(|temp, _| !rejected.contains(temp));
 
+    // The temporaries one `Lend` fills and that are only read until their
+    // `EndLend`, each with the place it lends, when no closure or task can
+    // reach that place's root. The element read of such a list outlives the
+    // `EndLend` (see `ends_element_loan`). Each loan maps to the place it
+    // borrows, so an instruction that uses a loan of the place ends it too.
+    let mut lends = HashMap::<&str, usize>::new();
+    let mut lent_places = HashMap::<&str, &str>::new();
+    let mut loans = HashMap::<&str, &str>::new();
+    for instruction in instructions() {
+        match instruction {
+            Instruction::Lend { place, temp, .. } => {
+                *lends.entry(temp).or_default() += 1;
+                lent_places.insert(temp, place);
+            }
+            Instruction::BeginLoan { loan, source, .. }
+            | Instruction::BeginElementLoan { loan, source, .. }
+            | Instruction::BeginReturnedLoan {
+                loan,
+                origin: source,
+                ..
+            }
+            | Instruction::Reborrow {
+                loan,
+                parent: source,
+                ..
+            }
+            | Instruction::ReborrowElement {
+                loan,
+                parent: source,
+                ..
+            } => {
+                loans.insert(loan, source);
+            }
+            _ => {}
+        }
+    }
+    // A loan of a loan borrows what its parent borrows.
+    let borrowed = |loan: &str| {
+        let mut place = loans[loan];
+        for _ in 0..loans.len() {
+            match loans.get(root(place)) {
+                Some(parent) => place = parent,
+                None => break,
+            }
+        }
+        place
+    };
+    let loans = loans
+        .keys()
+        .map(|&loan| (loan, borrowed(loan)))
+        .collect::<HashMap<_, _>>();
+    lent_places.retain(|&temp, place| {
+        lends[temp] == 1
+            && assigned.get(temp) == Some(&1)
+            && !loans.contains_key(root(place))
+            && instructions().all(|instruction| {
+                !captures(instruction, root(place))
+                    && (!mentioned_roots(instruction).contains(temp)
+                        || only_reads_list(instruction, temp)
+                        || matches!(
+                            instruction,
+                            Instruction::Lend { temp: lent, .. }
+                                | Instruction::EndLend { temp: lent, .. } if lent == temp
+                        ))
+            })
+    });
+
     let mut lent = LentElements::default();
     let blocks = function
         .blocks
@@ -337,15 +422,13 @@ pub(super) fn lent_element_reads(
     let mut temps = lists.iter().collect::<Vec<_>>();
     temps.sort();
     for (&temp, &list) in temps {
+        let lent_place = lent_places.get(list).copied();
         let live_in = live_blocks(function, &blocks, temp);
         for block in &function.blocks {
             let mut live = live_at_end(block, &live_in, temp);
             for (index, instruction) in block.instructions.iter().enumerate().rev() {
                 live = live_before(instruction, temp, live);
-                if live
-                    && mentioned_roots(instruction).contains(list)
-                    && !only_reads_list(instruction, list)
-                {
+                if live && ends_element_loan(instruction, list, lent_place, &loans) {
                     lent.promotions
                         .entry((block.label.clone(), index))
                         .or_default()
@@ -359,6 +442,82 @@ pub(super) fn lent_element_reads(
         temps.sort();
     }
     lent
+}
+
+/// Whether a local that lends an element of `list` must own the element
+/// before `instruction`: the instruction does more than read the list, so
+/// it may change or free it. A list that a lend of `lent_place` filled
+/// and that was only read goes back to that place unchanged at its
+/// `EndLend`, and the element stays in it until an instruction may change
+/// the place or free its root, or uses a loan of the place.
+fn ends_element_loan(
+    instruction: &Instruction,
+    list: &str,
+    lent_place: Option<&str>,
+    loans: &HashMap<&str, &str>,
+) -> bool {
+    let roots = mentioned_roots(instruction);
+    if let Some(place) = lent_place {
+        if matches!(
+            instruction,
+            Instruction::EndLend { place: end, temp, .. } if temp == list && end == place
+        ) {
+            return false;
+        }
+        if roots.contains(root(place)) && !keeps_place(instruction, place) {
+            return true;
+        }
+        if roots.iter().any(|mentioned| {
+            loans
+                .get(mentioned)
+                .is_some_and(|borrowed| !apart(borrowed, place))
+        }) {
+            return true;
+        }
+    }
+    roots.contains(list) && !only_reads_list(instruction, list)
+}
+
+/// Whether `instruction` leaves `place` as it is and its root alive: a
+/// lend of a part that cannot reach `place` mutably, or an assignment of
+/// another root or of a part apart from `place` that only reads the rest
+/// of the root, or takes a reference to a part apart from `place`.
+fn keeps_place(instruction: &Instruction, place: &str) -> bool {
+    let owner = root(place);
+    match instruction {
+        Instruction::Lend {
+            place: lent,
+            mutable,
+            ..
+        }
+        | Instruction::EndLend {
+            place: lent,
+            mutable,
+            ..
+        } => !mutable || apart(lent, place),
+        Instruction::Assign { target, value } => {
+            (root(target) != owner || apart(target, place))
+                && !matches!(value, Rvalue::Closure { .. } | Rvalue::StartTask { .. })
+                && instruction_accesses(instruction)
+                    .into_iter()
+                    .filter(|(part, _)| root(part) == owner && part != target)
+                    .all(|(part, access)| {
+                        access == Access::Read || (access == Access::Consume && apart(part, place))
+                    })
+        }
+        _ => false,
+    }
+}
+
+/// Whether places `a` and `b` share no part: neither is `b` nor inside the
+/// other.
+fn apart(a: &str, b: &str) -> bool {
+    let inside = |inner: &str, outer: &str| {
+        inner
+            .strip_prefix(outer)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+    };
+    !inside(a, b) && !inside(b, a)
 }
 
 /// Whether `temp` is still to be read before `instruction`, given whether

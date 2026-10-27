@@ -627,9 +627,7 @@ fn appended_typed_instances_keep_their_own_boxes() {
             elements: ListElements::new(),
             str_view: Default::default(),
         }));
-        let push = |element: *mut OpaqueValue| unsafe {
-            aura_direct_release_value(aura_direct_vec_push_in_place(list, element))
-        };
+        let push = |element: *mut OpaqueValue| aura_direct_vec_push_in_place(list, element);
         let boxes = || match unsafe { value_ref(list) } {
             Value::Vec(VecValue {
                 elements: ListElements::Boxes(boxes),
@@ -659,12 +657,7 @@ fn appended_typed_instances_keep_their_own_boxes() {
             )]),
             str_view: Default::default(),
         }));
-        unsafe {
-            aura_direct_release_value(aura_direct_vec_push_in_place(
-                values,
-                boxed_book(prefix, access),
-            ))
-        };
+        aura_direct_vec_push_in_place(values, boxed_book(prefix, access));
         let Value::Vec(kept) = (unsafe { value_ref(values) }) else {
             panic!("a list");
         };

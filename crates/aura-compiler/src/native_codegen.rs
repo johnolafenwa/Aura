@@ -4842,19 +4842,32 @@ impl<'a> FunctionCompiler<'a> {
         };
         let element_direct_ty =
             ensure_direct_type(&resolved_element_type, &self.classes, "Vec element")?;
-        let init = self.builder.call(self.runtime[RuntimeFn::VecEmpty], &[]);
-        let vector = self.owned_opaque_result(
-            init.results,
-            Type::Named("list".to_string(), vec![resolved_element_type]),
-        );
+        let list_type = Type::Named("list".to_string(), vec![resolved_element_type]);
+        let init = if runtime_type_is_wildcard(&list_type) {
+            self.builder.call(self.runtime[RuntimeFn::VecEmpty], &[])
+        } else {
+            // The list starts with its type, so the tag that follows an
+            // empty literal's assignment repeats nothing.
+            let encoded = crate::native_runtime::canonical_runtime_type_name(&list_type);
+            let (type_ptr, type_len) = self.string_constant(encoded.as_bytes())?;
+            let cell = self.tag_cell(&encoded)?;
+            let call = self.builder.call(
+                self.runtime[RuntimeFn::VecEmptyTagged],
+                &[cell, type_ptr, type_len],
+            );
+            if elements.is_empty() {
+                self.last_runtime_type_tag = Some((call.inst, call.results[0], encoded));
+            }
+            call
+        };
+        let vector = self.owned_opaque_result(init.results, list_type);
         for element in elements {
             let value = self.load_operand_as_opaque_direct(element, &element_direct_ty)?;
             let value = self.transfer_owned_opaque_value(&value);
-            let result = self.builder.call(
+            self.builder.call(
                 self.runtime[RuntimeFn::VecPushInPlace],
                 &[vector.values[0], value],
             );
-            self.release_opaque_handle(result.results[0]);
         }
         Ok(vector)
     }
@@ -12389,8 +12402,7 @@ impl<'a> FunctionCompiler<'a> {
                 let value =
                     self.load_operand_as_opaque_direct(&args[0].value, &element_direct_ty)?;
                 let value = self.transfer_owned_opaque_value(&value);
-                let results = self.runtime_call_results(function, &[list, value]);
-                self.release_opaque_handle(results[0]);
+                self.builder.call(function, &[list, value]);
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }

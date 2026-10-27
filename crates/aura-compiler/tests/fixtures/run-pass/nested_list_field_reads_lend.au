@@ -1,0 +1,60 @@
+# Element reads through a field's list, appends of lists, dicts and sets
+# into lists, and empty typed lists keep value semantics.
+class Book:
+    levels: list[list[int64]]
+    total: int64
+
+    def read(mut self, p: int64, i: int64) -> int64:
+        return self.levels[p][i]
+
+    def peek(self, p: int64, i: int64) -> int64:
+        return self.levels[p][i]
+
+    def row_len(self, p: int64) -> int64:
+        row = self.levels[p]
+        return row.len() + row[0]
+
+    def add(mut self, p: int64, x: int64):
+        self.levels[p].append(x)
+
+
+def empty_levels(n: int64) -> list[list[int64]]:
+    mut levels: list[list[int64]] = []
+    for _ in range(n):
+        levels.append(list[int64]())
+    return levels
+
+
+def main():
+    mut book = Book(levels=[[1, 2], [3]], total=0)
+    book.add(1, 4)
+    print(book.read(1, 1))
+    print(book.peek(0, 0))
+    print(book.row_len(0))
+    print(book.levels)
+    print(book.total)
+
+    mut levels = empty_levels(3)
+    levels[2].append(7)
+    print(levels)
+    inner = [5]
+    levels.append(inner.copy())
+    levels[3].append(6)
+    print(inner)
+    print(levels[3])
+
+    mut rows: list[dict[str, int64]] = []
+    rows.append({"a": 1})
+    rows[0]["b"] = 2
+    print(rows)
+    mut seen: list[set[int64]] = []
+    seen.append({1})
+    seen[0].add(2)
+    print(seen[0].len())
+
+    mut floats: list[float32] = []
+    floats.append(0.1)
+    print(floats)
+    mut flags = list[bool]()
+    flags.append(true)
+    print(flags)

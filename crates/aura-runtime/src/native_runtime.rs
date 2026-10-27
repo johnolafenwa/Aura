@@ -28,7 +28,7 @@ use std::sync::MutexGuard;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration as StdDuration, Instant};
 
-use crate::collection_index::short_bytes_eq;
+use crate::collection_index::{short_bytes_eq, SharedVec};
 use crate::diag::{Diagnostic, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span};
 use crate::ffi::{FfiError, FfiSignature, FfiType, FfiValue, OpaqueHandle};
 use crate::integer::{
@@ -2549,20 +2549,55 @@ unsafe fn set_explicit_runtime_type_tag(ptr: *mut OpaqueValue, tag: &RuntimeType
                 *stored = Some(Arc::clone(&tag.name));
             }
             // SAFETY: the access above still holds.
-            let keeps_name = matches!(
-                unsafe { &*value.value.get() },
-                Value::Channel(_) | Value::Task(_)
-            );
+            let held = unsafe { &*value.value.get() };
+            let keeps_name = matches!(held, Value::Channel(_) | Value::Task(_));
             if tag.shape_free && !keeps_name {
+                return;
+            }
+            // A value that already has the shape needs no edit, so a tag
+            // repeated on the same box costs one access.
+            if tag.name_only || !retag_changes(held, tag) {
                 return;
             }
         }
         None => runtime_error("direct runtime received a null opaque value pointer"),
     }
-    if tag.name_only {
-        return;
-    }
     unsafe { value_mut(ptr, |value| retag_value(value, tag)) }
+}
+
+/// Whether [`retag_value`] could change `value`. It answers exactly for
+/// the collections, tuples and enum variants generated code tags most, and
+/// `true` for everything else. It matches on the value first, so a value
+/// of another kind costs one compare.
+#[inline]
+fn retag_changes(value: &Value, tag: &RuntimeTypeTag) -> bool {
+    match (value, &tag.parsed) {
+        (Value::Vec(vector), Type::Named(name, args)) => match args.as_slice() {
+            [element] if name == "list" => {
+                vector.element_type != *element || is_float32_element(element)
+            }
+            _ => true,
+        },
+        (Value::Set(set), Type::Named(name, args)) => match args.as_slice() {
+            [element] if name == "set" => set.element_type != *element,
+            _ => true,
+        },
+        (Value::Map(map), Type::Named(name, args)) => match args.as_slice() {
+            [key_type, value_type] if name == "dict" => {
+                map.key_type != *key_type || map.value_type != *value_type
+            }
+            _ => true,
+        },
+        (Value::Tuple(tuple), Type::Tuple(element_types)) => {
+            element_types.len() == tuple.elements.len() && tuple.element_types != *element_types
+        }
+        // A variant already carrying the tag's interned enum name keeps it.
+        (Value::EnumVariant(variant), _) => !tag
+            .tagged_enum_name
+            .as_ref()
+            .is_some_and(|tagged| std::ptr::eq(tagged.as_str(), variant.enum_name.as_str())),
+        _ => true,
+    }
 }
 
 /// Gives `value` the shape a tag records: integer kinds, element types,
@@ -7270,6 +7305,37 @@ pub extern "C-unwind" fn aura_direct_vec_empty() -> *mut OpaqueValue {
     })
 }
 
+/// An empty list of the list type the tag in `cell` names, as
+/// `aura_direct_vec_empty` and then `aura_direct_tag_value_type_cell` with
+/// the same cell would make it, in one call and with one copy of the
+/// element type.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_empty_tagged(
+    cell: *const AtomicPtr<c_void>,
+    type_ptr: *const u8,
+    type_len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| unsafe {
+        let Some(cell) = cell.as_ref() else {
+            runtime_error("direct runtime received a null type tag cell");
+        };
+        let tag = celled_runtime_type_tag(cell, slice::from_raw_parts(type_ptr, type_len));
+        let element_type = match &tag.parsed {
+            Type::Named(name, args) if name == "list" && args.len() == 1 => args[0].clone(),
+            _ => runtime_error(format!("an empty list cannot take the type `{}`", tag.name)),
+        };
+        let elements = empty_elements_for(&element_type);
+        boxed_value_with_type(
+            Value::Vec(VecValue {
+                element_type,
+                elements,
+                str_view: Default::default(),
+            }),
+            Some(Arc::clone(&tag.name)),
+        )
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_len(vec: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| {
@@ -7317,13 +7383,14 @@ pub extern "C-unwind" fn aura_direct_vec_slice(
 pub extern "C-unwind" fn aura_direct_vec_push_in_place(
     vec: *mut OpaqueValue,
     value: *mut OpaqueValue,
-) -> *mut OpaqueValue {
+) {
     task_runtime_boundary(|| {
-        // An instance kept in its class's layout joins the list in its own
-        // box, which then needs no copy for generated code to lend it or
-        // change its fields in place (see `aura_direct_element_path_probe`).
+        // An instance kept in its class's layout, or a collection, joins
+        // the list in its own box, which then needs no copy for generated
+        // code to lend it or change it in place (see
+        // `aura_direct_element_path_probe`).
         // SAFETY: generated code passes a live box it owns.
-        if unsafe { holds_typed_instance(value) } {
+        if unsafe { holds_element_box_value(value) } {
             if let Some(element) = unsafe { adopt_only_box(value) } {
                 with_vector_mut(vec, |vector| {
                     if is_unknown_runtime_type(&vector.element_type) {
@@ -7334,7 +7401,7 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
                     }
                     vector.elements.push_box(element);
                 });
-                return boxed_value(Value::Unit);
+                return;
             }
         }
         let value = unsafe { consume_owned_value(value) };
@@ -7347,7 +7414,6 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
             }
             vector.elements.push(value);
         });
-        boxed_value(Value::Unit)
     })
 }
 
@@ -7355,6 +7421,32 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
 /// [`DirectScalarKind`] `kind` names.
 fn scalar_list_value(bits: i64, kind: i64) -> Value {
     DirectScalarKind::of_code(kind).value(bits)
+}
+
+/// An empty list in the form that keeps elements of `element_type`
+/// unboxed, so its first append changes no form. Any other element type
+/// starts with `Values`.
+fn empty_elements_for(element_type: &Type) -> ListElements {
+    let Type::Named(name, args) = element_type else {
+        return ListElements::new();
+    };
+    if !args.is_empty() {
+        return ListElements::new();
+    }
+    match name.as_str() {
+        "int64" => ListElements::Int64(SharedVec::new()),
+        "float64" => ListElements::Float64(SharedVec::new()),
+        "bool" => ListElements::Bool(SharedVec::new()),
+        "int8" => ListElements::Int8(SharedVec::new()),
+        "int16" => ListElements::Int16(SharedVec::new()),
+        "int32" => ListElements::Int32(SharedVec::new()),
+        "uint8" => ListElements::Uint8(SharedVec::new()),
+        "uint16" => ListElements::Uint16(SharedVec::new()),
+        "uint32" => ListElements::Uint32(SharedVec::new()),
+        "uint64" => ListElements::Uint64(SharedVec::new()),
+        "float32" => ListElements::Float32(SharedVec::new()),
+        _ => ListElements::new(),
+    }
 }
 
 fn is_float32_element(ty: &Type) -> bool {
@@ -11825,6 +11917,27 @@ unsafe fn holds_typed_instance(boxed: *mut OpaqueValue) -> bool {
             unsafe { &*header.value.get() },
             Value::Instance(instance) if instance.fields.typed().is_some()
         )
+}
+
+/// Whether `boxed` holds a value a list keeps in a box of its own when it
+/// is appended: an instance kept in its class's layout, or a list, dict or
+/// set, which generated code reads or changes in place through the box.
+///
+/// # Safety
+///
+/// `boxed` is null or a live box the running task owns a reference to.
+unsafe fn holds_element_box_value(boxed: *mut OpaqueValue) -> bool {
+    // SAFETY: the caller's contract.
+    unsafe {
+        holds_typed_instance(boxed)
+            || boxed.as_ref().is_some_and(|header| {
+                header.shared_lock().is_none()
+                    && matches!(
+                        &*header.value.get(),
+                        Value::Vec(_) | Value::Map(_) | Value::Set(_)
+                    )
+            })
+    }
 }
 
 /// Takes over `boxed` as a box a holder keeps, a field slot or a list
