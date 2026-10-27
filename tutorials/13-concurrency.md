@@ -453,7 +453,7 @@ This section describes the runtime underneath the API. You do not need it to wri
 
 ### Workers
 
-Aura 0.7 runs task bodies on cooperative pinned scheduler workers, on both backends.
+Aura 0.8 runs task bodies on cooperative pinned scheduler workers, on both backends.
 
 - The default worker count is the available parallelism the host reports.
 - The provisional `AURA_WORKERS=<positive integer>` environment variable sets an explicit count.
@@ -476,7 +476,7 @@ If a child task traps, its diagnostic keeps the typed Aura call frames. It also 
 
 Deep HTTP, TLS, and Unix WebSocket library steps run on a separate, bounded protocol service with deep native worker stacks. After each bounded, nonblocking step, protocol state returns to the lightweight task. This happens before cancellation or reactor waiting resumes.
 
-The protocol service starts the first time it is needed and lives until the process exits. Aura 0.7 has no operation to shut it down or join it.
+The protocol service starts the first time it is needed and lives until the process exits. Aura 0.8 has no operation to shut it down or join it.
 
 ### Blocking-I/O Pool
 

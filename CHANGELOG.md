@@ -7,13 +7,30 @@ in this file.
 
 ## Unreleased
 
-### Added
+## VS Code extension 0.8.0 — 2026-10-27
 
-- `str` values compare with `<`, `<=`, `>`, and `>=` by their UTF-8 bytes,
-  which is the order of their Unicode scalar values. `list[str].sort()`,
-  `sort(reverse = true)`, and `str` sort keys use the same order.
+- Bundles language server 0.8.0. The semantic interface version stays 20.
+  The extension and the language server have no other changes.
 
-### Changed
+## 0.8.0 — 2026-10-27 (technical preview)
+
+Aura 0.8.0 is the first release of the plan to bring Aura to Rust speed on
+the 30 [cross-language programs](benchmarks/cross_language/README.md). It
+removes the costs that made some of them quadratic or boxed every value:
+`range` loops count on plain integers, lists of every scalar type are
+stored and updated in place, `list.sort` is a merge sort, slices copy only
+their result, `dict.remove` takes constant time, and `fs.File` buffers its
+writes. On the Linux measurement host, the 30 Aura programs take 147
+seconds instead of 227, the median program is 16 times Rust's time instead
+of 35 times and 2.7 times Python's instead of 3.9 times, and Aura is faster
+than Python on nine programs instead of four. `str` values gain an
+ordering, and native builds compile a copy of each generic function for its
+concrete type arguments. One program, `task_pool`, got slower, from 1.5 to
+2.8 seconds: its workers now finish each tiny job so quickly that most of
+its time goes to handing messages between tasks. The semantic interface
+stays 20, and the native cache format stays `v10`.
+
+### Breaking changes
 
 - `fs.File` handles from `fs.create` and `fs.append` buffer up to 64 KiB
   of writes, as Python's files and Rust's `BufWriter` do. Writing a file
@@ -26,6 +43,17 @@ in this file.
   including after a trap. Another program reading the file sees the bytes
   only after a flush, and a failed write is reported by the call that
   flushes it.
+- A user `impl Ord[str] for str` no longer changes what `<` means on `str`,
+  in the same way as the other built-in operators.
+
+### Added
+
+- `str` values compare with `<`, `<=`, `>`, and `>=` by their UTF-8 bytes,
+  which is the order of their Unicode scalar values. `list[str].sort()`,
+  `sort(reverse = true)`, and `str` sort keys use the same order.
+
+### Changed
+
 - Sorting `float64` values puts NaN after every other value, and NaNs keep
   their input order. `-0.0` and `0.0` sort as equal, so they also keep
   their input order.
@@ -33,8 +61,6 @@ in this file.
   positions first and moves the elements once, so a trapping `lt` leaves
   the list unchanged. It also works in generic code bounded by `T: Ord[T]`,
   which used to fail to compile.
-- A user `impl Ord[str] for str` no longer changes what `<` means on `str`,
-  in the same way as the other built-in operators.
 - The compiler and the native runtime share one rule for laying out each
   type in native memory: scalars at their width, classes and tuples as
   structs, enums and unions as a tag followed by the payload, runtime

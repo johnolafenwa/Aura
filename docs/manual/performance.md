@@ -27,6 +27,7 @@ states next to its numbers.
 | Standalone integer loops against Rust | **Diagnostic-grade** |
 | Per-call profiling | **Diagnostic-grade** |
 | Collections and value reads | **Diagnostic-grade** |
+| Cross-language programs | **Diagnostic-grade** |
 
 The foundations host:
 
@@ -253,7 +254,7 @@ every time and does not read the native cache. `aura run` reuses a cached
 executable when the program is unchanged.
 
 These figures predate LLVM. [Phase 2 Release Check](#phase-2-release-check)
-has the Aura 0.7 build times.
+has the Aura 0.7.0 build times.
 
 ## Optimization Level
 
@@ -314,6 +315,8 @@ M2 Pro host feed later performance decisions.
 | `set_insert_contains` | 1.89 times Rust in instructions on Linux in 0.7.0 |
 | `int_list_sum` | 1.21 times Rust in instructions on Linux in 0.7.0 |
 | AuraDB `update` by id | about 3 times Python 3.13 |
+| 30 cross-language programs | median 16 times Rust and 2.7 times Python 3.13 by wall time on Linux in 0.8.0 |
+| `task_pool` cross-language program | 11 times Rust; 2.8 s in 0.8.0 against 1.5 s in 0.7.1 |
 
 These gaps are specific to these workloads. Scheduling, runtime
 implementation, allocation, and optimizer-barrier choices affect how to read
@@ -379,6 +382,33 @@ that LLVM optimizes and writes on parallel threads. Hello world stays one
 unit. The
 [step 11d note](https://github.com/johnolafenwa/Aura/blob/main/work/2026-10-24-batch-7-step-11d-parallel-codegen.md)
 has the method and the raw counts.
+
+### Cross-Language Programs
+
+Aura 0.8.0 is the first release of the plan to bring Aura to Rust speed on
+the 30
+[cross-language programs](https://github.com/johnolafenwa/Aura/blob/main/benchmarks/cross_language/README.md),
+complete programs written in Aura, Python, and Rust that do the same work.
+Its first phase removed the costs that made some of them quadratic or boxed
+every value. On a shared Linux x86-64 container with 4 vCPUs, at `abd8fef`:
+
+| Measure | Aura 0.7.1 | Aura 0.8.0 |
+| --- | ---: | ---: |
+| All 30 programs, wall time | 227 s | 147 s |
+| Median Aura / Rust, wall time | 35x | 16x |
+| Median Aura / Python 3.13, wall time | 3.9x | 2.7x |
+| Programs faster than Python | 4 | 9 |
+| All 30 programs, instructions at the check size | 14,793M | 9,323M |
+
+Twenty-nine programs got faster. `task_pool` went from 1.5 to 2.8 seconds
+while it runs 39% fewer instructions: its workers finish each job so
+quickly that they find their queue empty three times as often, and each
+wait sleeps and wakes a thread. The largest remaining cost is copying a
+class instance or an enum payload into a new box when a program reads it
+from a list, a field, or a `match`. The benchmark README has the table for
+each program, and the
+[operation probes](https://github.com/johnolafenwa/Aura/blob/main/benchmarks/operation_probes/README.md)
+give the cost of single operations next to Rust.
 
 ### Per-Call Attribution
 

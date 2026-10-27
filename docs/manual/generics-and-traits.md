@@ -128,7 +128,7 @@ Obligations travel with the callable:
 - Imported functions and methods keep the resulting contract.
 - The same rules apply to ordinary, inherent, associated, task-target, trait, operator, and `From` calls.
 
-There is no source annotation for this obligation in Aura 0.7.
+There is no source annotation for this obligation in Aura 0.8.
 
 When a type is concrete, a substitution containing `random.Rng` is rejected with `AU3007`. A concrete type whose clone safety cannot be proved is also rejected, conservatively. Moving, removing, receiving, or rearranging one owned value does not produce a clone and adds no obligation.
 
@@ -346,7 +346,7 @@ The qualified name and a `from shapes import Make` name the same trait. A module
 
 An implementation with no body, such as `impl json.Codec for Point`, asks the compiler to derive the methods. Only `json.Codec` can be derived, and the checker rejects any other bodyless implementation with `AU2046`. See [Derived Codecs](/manual/json#derived-codecs).
 
-Aura 0.7 imposes no separate orphan rule. An implementation must still refer to known, visible types and traits. It takes part only where it is present in the loaded module or package context.
+Aura 0.8 imposes no separate orphan rule. An implementation must still refer to known, visible types and traits. It takes part only where it is present in the loaded module or package context.
 
 ### Trait Methods On Unions
 
@@ -387,7 +387,7 @@ The checker rejects the following before any body runs:
 - signature mismatches
 - default ordinary arguments added by an implementation method
 
-An explicit implementation MUST NOT strengthen its trait method's clone-safety contract. Its body can rely on obligations that the trait method already inferred. It cannot add a requirement that bound-based callers cannot see. Aura 0.7 has no explicit clone-safety annotation, so generic clone-producing behavior belongs in a trait default body. An implementation that adds such a requirement is rejected with `AU3007`.
+An explicit implementation MUST NOT strengthen its trait method's clone-safety contract. Its body can rely on obligations that the trait method already inferred. It cannot add a requirement that bound-based callers cannot see. Aura 0.8 has no explicit clone-safety annotation, so generic clone-producing behavior belongs in a trait default body. An implementation that adds such a requirement is rejected with `AU3007`.
 
 An `impl` targeting any builtin type MUST NOT explicitly define or inherit a trait method whose name is a builtin member of that target. This covers:
 
@@ -512,7 +512,7 @@ trait Ord[Rhs]:
 Some operators never use traits:
 
 - `and` and `or` do not dispatch through traits.
-- Builtin `==` and `!=` do not use an equality trait in Aura 0.7. This includes recursive structural tuple equality, which a trait implementation cannot override.
+- Builtin `==` and `!=` do not use an equality trait in Aura 0.8. This includes recursive structural tuple equality, which a trait implementation cannot override.
 - Builtin operations take precedence wherever their concrete value rule applies.
 
 An operator that selects a trait method also enforces that method's substituted clone-safety obligations.
@@ -687,7 +687,7 @@ The checker gives lowering, analysis, and the language server one resolved speci
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.7 has none of the following:
+Aura 0.8 has none of the following:
 
 - trait objects or dynamic dispatch
 - associated types or constants
