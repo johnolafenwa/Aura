@@ -256,7 +256,7 @@ fn every_edit_matches_a_plain_vector_of_values() {
         let mut list = ListElements::from(model.clone());
         for _ in 0..80 {
             let len = model.len();
-            match steps.next(13) {
+            match steps.next(16) {
                 0 | 1 => {
                     let value = sample_value(&mut steps, family);
                     model.push(value.clone());
@@ -320,6 +320,35 @@ fn every_edit_matches_a_plain_vector_of_values() {
                     model.clear();
                     list.clear();
                 }
+                // A lend moves a list of `Value`s to boxes, which every
+                // later edit then works on.
+                13 if len > 0 => {
+                    let index = steps.next(len);
+                    let lent = list.lend(index).map(|element| element.value().clone());
+                    if let Some(lent) = lent {
+                        assert_eq!(exact(&[lent]), exact(&model[index..=index]));
+                        assert!(matches!(list, ListElements::Boxes(_)));
+                    }
+                }
+                14 if len > 0 => {
+                    let index = steps.next(len);
+                    let value = sample_value(&mut steps, family);
+                    model[index] = value.clone();
+                    *list.get_mut(index).unwrap() = value;
+                }
+                // A copy shares the storage until either list changes.
+                15 if len > 0 => {
+                    let snapshot = list.clone();
+                    let index = steps.next(len);
+                    let value = sample_value(&mut steps, family);
+                    let previous = std::mem::replace(&mut model[index], value.clone());
+                    *list.last_mut().unwrap() = list.at(len - 1).into_owned();
+                    *list.get_mut(index).unwrap() = value;
+                    assert_eq!(
+                        exact(&[snapshot.at(index).into_owned()]),
+                        exact(&[previous])
+                    );
+                }
                 _ => {}
             }
             assert_eq!(exact_list(&list), exact(&model), "seed {seed}");
@@ -332,8 +361,145 @@ fn every_edit_matches_a_plain_vector_of_values() {
                 );
             }
             assert!(list.get(model.len()).is_none());
+            if let Some(values) = list.value_refs() {
+                assert_eq!(values.len(), model.len());
+                assert_eq!(
+                    exact(&values.rev().cloned().collect::<Vec<_>>()),
+                    exact(&model.iter().rev().cloned().collect::<Vec<_>>())
+                );
+                assert_eq!(
+                    exact(&list.value_at(0).into_iter().cloned().collect::<Vec<_>>()),
+                    exact(&model[..model.len().min(1)])
+                );
+            } else {
+                assert!(list.value_at(0).is_none());
+            }
         }
     }
+}
+
+fn text(value: &str) -> Value {
+    Value::String(value.into())
+}
+
+#[test]
+fn lent_lists_keep_each_element_in_a_box_of_its_own() {
+    let mut list = ListElements::from(vec![text("a"), text("b"), text("c")]);
+    assert!(ListElements::from(vec![int(1)]).lend(0).is_none());
+    let first = list.lend(1).unwrap().as_ptr();
+    assert!(matches!(list, ListElements::Boxes(_)));
+    // The box stays where it is while the list keeps it.
+    assert_eq!(list.lend(1).unwrap().as_ptr(), first);
+    assert!(list.lend(3).is_none());
+    assert_eq!(
+        list.view().0.access(),
+        crate::native_runtime::DirectListAccess::Boxes as u32
+    );
+    assert_eq!(list.view().3, 0);
+    assert_eq!(
+        format!("{list:?}"),
+        format!(
+            "{:?}",
+            SharedVec::from(vec![text("a"), text("b"), text("c")])
+        )
+    );
+
+    // A copy shares the boxes until either list changes; a change copies
+    // the storage, so the other list keeps its boxes.
+    let copy = list.clone();
+    list.push(text("d"));
+    assert_eq!(copy.len(), 3);
+    assert_eq!(list.len(), 4);
+    let ListElements::Boxes(boxes) = &copy else {
+        panic!("the copy keeps the boxes");
+    };
+    assert_eq!(boxes[1].as_ptr(), first);
+    assert_ne!(list.lend(1).unwrap().as_ptr(), first);
+
+    // Generated code reads only boxes no other list shares. Shared boxes
+    // show as values, and a list lends from them only after taking boxes
+    // of its own.
+    let mut copy = copy;
+    let other = copy.clone();
+    assert_eq!(
+        copy.view().0.access(),
+        crate::native_runtime::DirectListAccess::Values as u32
+    );
+    let own = copy.lend(1).unwrap().as_ptr();
+    assert_ne!(own, first);
+    assert_eq!(
+        copy.view().0.access(),
+        crate::native_runtime::DirectListAccess::Boxes as u32
+    );
+    let ListElements::Boxes(boxes) = &other else {
+        panic!("the other list keeps the boxes");
+    };
+    assert_eq!(boxes[1].as_ptr(), first);
+    assert_eq!(copy, other);
+
+    // A list of `Value`s another list shares copies its elements into boxes,
+    // and the other list keeps its `Value`s.
+    let mut shared = ListElements::from(vec![text("x"), text("y")]);
+    let other = shared.clone();
+    assert_eq!(shared.lend(0).unwrap().value(), &text("x"));
+    assert!(matches!(other, ListElements::Values(_)));
+    assert_eq!(shared, other);
+
+    // Lent lists sort, report their position order, and convert back.
+    let mut words = ListElements::from(vec![text("c"), text("a"), text("b")]);
+    words.lend(0);
+    crate::list_sort::sort_elements(&mut words, false).unwrap();
+    assert_eq!(
+        exact_list(&words),
+        exact(&[text("a"), text("b"), text("c")])
+    );
+    let mut keyed = ListElements::from(vec![int(1), int(2), int(3)]);
+    crate::list_sort::sort_elements_by_keys(&mut keyed, &words, true).unwrap();
+    assert_eq!(exact_list(&keyed), exact(&[int(3), int(2), int(1)]));
+    let mut mixed = ListElements::from(vec![text("a"), int(1)]);
+    mixed.lend(0);
+    assert!(crate::list_sort::sort_elements(&mut mixed, false).is_err());
+    assert!(crate::list_sort::sort_elements_by_keys(&mut keyed.clone(), &mixed, false).is_err());
+    assert_eq!(
+        exact(&words.into_vec()),
+        exact(&[text("a"), text("b"), text("c")])
+    );
+}
+
+#[test]
+fn lent_lists_keep_their_boxes_through_edits_and_reads() {
+    let boxed = |values: Vec<Value>| {
+        let mut list = ListElements::from(values);
+        list.lend(0);
+        list
+    };
+    let mut list = boxed(vec![text("a"), text("d")]);
+    list.append(boxed(vec![text("e")]));
+    list.insert_all(1, boxed(vec![text("b"), text("c")]));
+    assert_eq!(list.form(), ListForm::Boxes);
+    // Generated code appends nothing in place to boxes.
+    unsafe { list.adopt_appended(list.len()) };
+    assert_eq!(
+        exact(&list.value_refs().unwrap().cloned().collect::<Vec<_>>()),
+        exact(&[text("a"), text("b"), text("c"), text("d"), text("e")])
+    );
+    assert!(ListElements::from(vec![int(1)]).value_refs().is_none());
+    // An element edited in its box reads back through the edit.
+    let element = list.get_mut(2).unwrap();
+    assert_eq!(*element, text("c"));
+    drop(element);
+    let mut values = ListElements::from(vec![text("x")]);
+    assert_eq!(*values.get_mut(0).unwrap(), text("x"));
+
+    // Only the scalar forms a first element picks build a list directly,
+    // but every form says which values it keeps.
+    assert!(keeps(ListForm::Float32, &Value::Float(0.5)));
+    assert!(!keeps(ListForm::Float32, &Value::Float(0.1)));
+    assert!(keeps(ListForm::Boxes, &text("a")));
+    let floats = ListElements::collect(ListForm::Float32, &[Value::Float(0.5)]).unwrap();
+    assert_eq!(floats.form(), ListForm::Float32);
+    let boxes = ListElements::collect(ListForm::Boxes, &[text("a")]).unwrap();
+    assert_eq!(boxes.form(), ListForm::Boxes);
 }
 
 #[test]
@@ -370,6 +536,87 @@ fn scalar_lists_keep_their_form_through_whole_element_edits() {
         exact_list(&flags),
         exact(&[Value::Bool(false), Value::Bool(true), Value::Bool(false)])
     );
+}
+
+#[test]
+fn float32_lists_keep_four_byte_elements() {
+    let single = |value: f32| Value::Float(f64::from(value));
+    let mut list = ListElements::from(vec![Value::Float(1.5), Value::Float(0.1)]);
+    assert_eq!(list.form(), ListForm::Float64);
+    list.narrow_to_float32();
+    assert_eq!(list.form(), ListForm::Float32);
+    assert_eq!(exact_list(&list), exact(&[Value::Float(1.5), single(0.1)]));
+    list.narrow_to_float32();
+    assert_eq!(list.form(), ListForm::Float32);
+
+    // Every float stored in the form is rounded, as a `float32` variable
+    // rounds it.
+    list.push(Value::Float(0.2));
+    list.insert(0, Value::Float(0.3));
+    list.replace(1, Value::Float(-0.4));
+    list.append(ListElements::from(vec![
+        Value::Float(0.5),
+        Value::Float(0.6),
+    ]));
+    assert_eq!(list.form(), ListForm::Float32);
+    assert_eq!(
+        exact_list(&list),
+        exact(&[
+            single(0.3),
+            single(-0.4),
+            single(0.1),
+            single(0.2),
+            single(0.5),
+            single(0.6),
+        ])
+    );
+    // Only a float that is exactly a `float32` is found.
+    assert!(list.contains(&single(0.1)));
+    assert!(!list.contains(&Value::Float(0.1)));
+    assert_eq!(list, ListElements::from(list.to_vec()));
+    assert_eq!(
+        exact_list(&list.take_range(4, 6)),
+        exact(&[single(0.5), single(0.6)])
+    );
+    assert_eq!(list.form(), ListForm::Float32);
+    // Another float list takes the widened elements.
+    let mut other = ListElements::from(vec![Value::Float(2.0)]);
+    other.append(list.clone());
+    assert_eq!(other.form(), ListForm::Float64);
+    assert_eq!(
+        exact_list(&other),
+        exact(&[
+            Value::Float(2.0),
+            single(0.3),
+            single(-0.4),
+            single(0.1),
+            single(0.2)
+        ])
+    );
+
+    // A non-float value moves the list to the value form.
+    list.push(Value::String("text".into()));
+    assert_eq!(list.form(), ListForm::Values);
+
+    // A list of floats or an empty list narrows. Any other list keeps its
+    // form.
+    let mut floats = ListElements::from(vec![Value::Float(0.1)]);
+    floats.values_mut();
+    floats.narrow_to_float32();
+    assert_eq!(floats.form(), ListForm::Float32);
+    assert_eq!(exact_list(&floats), exact(&[single(0.1)]));
+    let mut empty = ListElements::new();
+    empty.narrow_to_float32();
+    assert_eq!(empty.form(), ListForm::Float32);
+    empty.append(ListElements::from(vec![Value::Float(0.7)]));
+    assert_eq!(empty.form(), ListForm::Float32);
+    assert_eq!(exact_list(&empty), exact(&[single(0.7)]));
+    let mut mixed = ListElements::from(vec![Value::Float(0.1), int(1)]);
+    mixed.narrow_to_float32();
+    assert_eq!(mixed.form(), ListForm::Values);
+    let mut integers = ListElements::from(vec![int(1)]);
+    integers.narrow_to_float32();
+    assert_eq!(integers.form(), ListForm::Int64);
 }
 
 #[test]
@@ -483,8 +730,14 @@ fn reads_iterate_in_both_directions_and_report_their_length() {
             typed(2, IntegerKind::Uint8),
             typed(3, IntegerKind::Uint8),
         ],
+        vec![text("a"), text("b"), text("c")],
     ] {
-        let list = ListElements::from(values.clone());
+        let mut list = ListElements::from(values.clone());
+        // Strings read from their boxes once a list lends one.
+        if matches!(values[0], Value::String(_)) {
+            list.lend(0);
+            assert_eq!(list.form(), ListForm::Boxes);
+        }
         // `skip` steps over elements without building them.
         assert_eq!(
             exact(&list.iter().skip(1).map(Cow::into_owned).collect::<Vec<_>>()),

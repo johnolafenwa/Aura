@@ -1,0 +1,55 @@
+# Lists that native code lends from move into tasks, share their storage
+# with copies, and change there. Each task reads the elements as their own
+# list holds them.
+class Job:
+    name: str
+    weight: int64
+
+def total(jobs: list[Job]) -> int64:
+    mut sum = 0
+    for job in jobs:
+        sum += job.weight + len(job.name)
+    return sum
+
+def nested(rows: list[list[Job]]) -> int64:
+    mut sum = 0
+    for row in rows:
+        for job in row:
+            sum += job.weight
+    return sum
+
+def work(jobs: own list[Job]) -> int64:
+    mut mine = jobs
+    mut sum = total(mine)
+    mine.append(Job(name = "late", weight = 1))
+    mine[0] = Job(name = "first", weight = 2)
+    sum += total(mine)
+    return sum
+
+def work_rows(rows: own list[list[Job]]) -> int64:
+    return nested(rows) + nested(rows)
+
+def make(count: int64) -> list[Job]:
+    mut jobs: list[Job] = []
+    for index in range(count):
+        jobs.append(Job(name = f"j{index}", weight = index))
+    return jobs
+
+def main():
+    jobs = make(300)
+    print(total(jobs))
+    copied = jobs.copy()
+    print(total(copied))
+    mut rows: list[list[Job]] = []
+    for _ in range(40):
+        rows.append(make(40))
+    print(nested(rows))
+    rows_copy = rows.copy()
+    with TaskGroup() as group:
+        first = group.start(work, jobs)
+        second = group.start(work, copied)
+        third = group.start(work_rows, rows)
+        print(first.result_or(0, timeout = 5s))
+        print(second.result_or(0, timeout = 5s))
+        print(third.result_or(0, timeout = 5s))
+    print(nested(rows_copy))

@@ -553,9 +553,9 @@ runs before and five after. Times include building the inputs, about 45 ms.
 A list whose elements all have one fixed-width scalar type stores the
 scalars themselves. The types are `int8`, `int16`, `int32`, `int64`,
 `uint8`, `uint16`, `uint32`, `uint64`, `float32`, `float64`, and `bool`.
-Each integer element takes its own width, from 1 to 8 bytes. Each float
-element takes 8 bytes, since a `float32` is kept as the `float64` it widens
-to exactly. Each `bool` takes 1 byte. A boxed element takes 112 bytes. Any
+Each integer element takes its own width, from 1 to 8 bytes. Each
+`float32` element takes 4 bytes, each `float64` 8, and each `bool` 1. A
+boxed element takes 112 bytes. Any
 other list stores boxed values, and so does a list that mixes two integer
 types, such as `int32` and `int64` values in an `int32 | int64` list.
 
@@ -563,7 +563,9 @@ The storage follows the elements. Adding a value of another type, such as
 a `str` to an `int64 | str` list, moves the list to boxed storage. An empty
 list takes the form of its first element. A program cannot tell which form
 a list uses: printing, equality, hashing, copies, and errors behave the
-same.
+same. A `list[float32]` prints its elements with `float32` digits, as
+`print` prints a `float32` value, so `[0.1]` rather than
+`[0.10000000149011612]`.
 
 Native code reads the length and the elements of an unboxed list in place,
 and appends, writes, and pops elements in place. `pop()` with no index
@@ -642,6 +644,42 @@ suite at the check size:
 
 Reading a `float64` field of a record from a `list` costs about 23
 instructions instead of about 4,900.
+
+### Lent List Elements
+
+Reading an element of a list of class instances, enums, lists, dicts, or
+other values that need a box used to copy the element into a new box.
+Native code now lends the element instead when the local that receives it
+is only read: the program reads its fields, calls methods that only read
+it, or matches it. Each element of a `for` loop that reads its fields is
+such a read, and so is `len(items[i].name)`. A read whose value is kept,
+changed, or passed to a function still copies.
+
+The list keeps each element it lends in a box of its own. A list moves to
+that form once native code has copied out as many elements as an eighth of
+its length, so a list that is read only a few times is never converted.
+`str` elements keep the copying read, which their list view already makes
+cheap.
+
+A lent element keeps the value it had when it was read. Before the program
+changes, frees, or passes on the list while it still reads the element,
+the element is copied, as every read used to be. A list that a closure, a
+task, or a mutable borrow can reach is never lent from, and a list that
+another task can reach, or that shares its storage with a copy, is read
+through the runtime first.
+
+Callgrind instruction counts on the shared Linux container, cross-language
+suite at the check size:
+
+| Program | Before | After |
+| --- | ---: | ---: |
+| `interpreter` | 368.8M | 238.3M |
+| `mini_browser` | 1,392.1M | 1,153.8M |
+| `sort_records` | 75.2M | 67.1M |
+| `sql_engine` | 2,809.7M | 2,616.8M |
+
+The other programs change by less than 2%. The largest increase is
+`order_book`, at 1.1%.
 
 ## Performance Direction
 

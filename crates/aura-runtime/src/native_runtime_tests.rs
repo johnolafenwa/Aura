@@ -26186,6 +26186,7 @@ fn list_forms_share_the_access_codes_of_their_layouts() {
         (ListForm::Uint16, DirectListAccess::Uint16),
         (ListForm::Uint32, DirectListAccess::Uint32),
         (ListForm::Uint64, DirectListAccess::Uint64),
+        (ListForm::Float32, DirectListAccess::Float32),
     ] {
         assert_eq!(form.access(), access as u32, "{form:?}");
     }
@@ -26259,6 +26260,47 @@ fn shared_lists_are_never_read_in_place() {
     assert_eq!(super::aura_direct_vec_index_scalar(list, 1, 0), 5);
     assert_eq!(super::aura_direct_vec_len(list), 2);
     unsafe { release_value(list) };
+}
+
+#[test]
+fn lists_lend_elements_once_their_copies_pay_for_moving_them_into_boxes() {
+    let list = super::aura_direct_vec_empty();
+    for value in 0..16 {
+        super::aura_direct_vec_push_in_place(list, int_vec(&[value]));
+    }
+    let lend = |index: i64| super::aura_direct_vec_lend(list, index, 1, 1);
+    // Until its copying reads reach an eighth of its length, a list of
+    // values gives each reader a copy of its own.
+    let copy = lend(3);
+    assert_eq!(copy as usize & 1, 0);
+    assert_eq!(expect_vec_ints(copy), vec![3]);
+    // Then it moves its elements into boxes and lends them.
+    let last = lend(-1);
+    assert_eq!(last as usize & 1, 1);
+    let last = last.wrapping_byte_sub(1);
+    assert_eq!(
+        expect_vec_ints(super::aura_direct_clone_value(last)),
+        vec![15]
+    );
+    assert_eq!(lend(-1).wrapping_byte_sub(1), last);
+    // A copy of the list shares the boxes, so the list counts copies again
+    // before it takes boxes of its own.
+    let other = super::aura_direct_clone_value(list);
+    assert_eq!(expect_vec_ints(lend(0)), vec![0]);
+    let own = lend(-1);
+    assert_eq!(own as usize & 1, 1);
+    assert_ne!(own.wrapping_byte_sub(1), last);
+    // A list of scalars, and a list another thread may read, copy.
+    let bytes = int_vec(&[7]);
+    assert_eq!(expect_int(super::aura_direct_vec_lend(bytes, 0, 1, 1)), 7);
+    unsafe { super::share_direct_value(other) };
+    assert_eq!(
+        expect_vec_ints(super::aura_direct_vec_lend(other, 15, 1, 1)),
+        vec![15]
+    );
+    for value in [list, other, bytes] {
+        unsafe { release_value(value) };
+    }
 }
 
 fn list_view_capacity(list: *mut OpaqueValue) -> usize {
@@ -26503,6 +26545,65 @@ fn scalar_writes_go_in_place_only_into_unshared_storage() {
     assert!(!float(floats, 0, 0.0));
     assert_eq!(super::aura_direct_vec_index_scalar(floats, 0, 1), 0);
     for value in [list, copy, floats, flags, wide] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
+fn float32_lists_narrow_when_tagged_or_written_as_float32() {
+    use super::{DirectListAccess, DirectScalarKind};
+    let float32 = DirectScalarKind::Float32 as i64;
+    let bits = |value: f32| f64::from(value).to_bits() as i64;
+    let layout = super::direct_list_layout();
+    let element_at = |list: *mut OpaqueValue, index: usize| unsafe {
+        let elements = *((list as *const u8).add(layout.elements_offset as usize) as *const usize);
+        *(elements as *const f32).add(index)
+    };
+
+    // Tagging a list `list[float32]` narrows it, and a scalar push keeps the
+    // form.
+    let tagged = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_in_place(tagged, boxed_value(Value::Float(0.1)));
+    assert_eq!(list_view_access(tagged), DirectListAccess::Float64 as u32);
+    super::aura_direct_tag_value_type(tagged, b"list[float32]".as_ptr(), 13);
+    assert_eq!(list_view_access(tagged), DirectListAccess::Float32 as u32);
+    super::aura_direct_vec_push_scalar(tagged, bits(-2.25), float32);
+    assert_eq!(list_view_access(tagged), DirectListAccess::Float32 as u32);
+    assert_eq!(element_at(tagged, 0), 0.1);
+    assert_eq!(element_at(tagged, 1), -2.25);
+    assert_eq!(
+        super::aura_direct_vec_index_scalar(tagged, 0, float32),
+        bits(0.1)
+    );
+    assert_eq!(unsafe { value_ref(tagged) }.render(), "[0.1, -2.25]");
+
+    // A scalar write of a `float32` narrows a list in another form first.
+    let values = boxed_value(Value::Vec(VecValue::new(
+        Type::named("float32"),
+        vec![Value::Float(1.5), Value::Float(2.5)].into(),
+    )));
+    unsafe {
+        value_mut(values, |value| match value {
+            Value::Vec(vector) => {
+                vector.elements.values_mut();
+            }
+            other => panic!("expected a list, found {other:?}"),
+        })
+    };
+    assert_eq!(list_view_access(values), DirectListAccess::Values as u32);
+    super::aura_direct_vec_set_index_scalar(values, 1, bits(0.3), 0, 0, float32);
+    assert_eq!(list_view_access(values), DirectListAccess::Float32 as u32);
+    assert_eq!(element_at(values, 1), 0.3);
+    let empty = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_scalar(empty, bits(0.7), float32);
+    assert_eq!(list_view_access(empty), DirectListAccess::Float32 as u32);
+    assert_eq!(unsafe { value_ref(empty) }.render(), "[0.7]");
+    // A `float64` push takes the other form.
+    let doubles = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_scalar(doubles, 0.7f64.to_bits() as i64, 1);
+    assert_eq!(list_view_access(doubles), DirectListAccess::Float64 as u32);
+    assert_eq!(unsafe { value_ref(doubles) }.render(), "[0.7]");
+    for value in [tagged, values, empty, doubles] {
         unsafe { release_value(value) };
     }
 }

@@ -458,7 +458,7 @@ pub(super) fn type_needs_drop(context: &MirLoanValidationContext<'_>, ty: &Type)
 
 /// How an instruction or a terminator touches one place.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(super) enum Access {
+pub(crate) enum Access {
     /// Reads the value and leaves it in place.
     Read,
     /// A consuming `Place` operand: it takes one retained reference.
@@ -516,7 +516,7 @@ fn push_rvalue_places<'a>(value: &'a Rvalue, accesses: &mut Vec<(&'a str, Access
 /// operands first, then the places an operation reads by name, then the
 /// writebacks and the target. A loan instruction reads its source, so the
 /// source stays live while the loan is.
-pub(super) fn instruction_accesses(instruction: &Instruction) -> Vec<(&str, Access)> {
+pub(crate) fn instruction_accesses(instruction: &Instruction) -> Vec<(&str, Access)> {
     instruction_accesses_with(instruction, None)
 }
 

@@ -939,6 +939,13 @@ impl VecValue {
             str_view: Default::default(),
         }
     }
+
+    /// Whether the elements are `float32`s, which render with `float32`
+    /// digits.
+    pub fn holds_float32(&self) -> bool {
+        matches!(self.elements, ListElements::Float32(_))
+            || matches!(&self.element_type, Type::Named(name, args) if args.is_empty() && name == "float32")
+    }
 }
 
 impl fmt::Debug for VecValue {
@@ -2320,8 +2327,16 @@ pub fn slice_vec_owned(
             }
             ListElements::from(elements)
         }
+        ListElements::Boxes(boxes) => {
+            let mut elements = try_array_buffer(end - start, "Array-containing Vec slice")?;
+            for element in &boxes[start..end] {
+                elements.push(try_clone_array_containing_value(element.value())?);
+            }
+            ListElements::from(elements)
+        }
         ListElements::Int64(values) => ListElements::Int64(copy_scalars(&values[start..end])?),
         ListElements::Float64(values) => ListElements::Float64(copy_scalars(&values[start..end])?),
+        ListElements::Float32(values) => ListElements::Float32(copy_scalars(&values[start..end])?),
         ListElements::Bool(values) => ListElements::Bool(copy_scalars(&values[start..end])?),
         ListElements::Typed(typed) => ListElements::Typed(Box::new(typed.slice(start, end))),
         ListElements::Int8(values) => ListElements::Int8(copy_scalars(&values[start..end])?),
@@ -2872,7 +2887,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                 }
                 // Scalar elements hold no `Array`, so the copy can share
                 // their storage.
-                Value::Vec(vector) if vector.elements.as_values().is_none() => {
+                Value::Vec(vector) if vector.elements.value_refs().is_none() => {
                     representation_stats::note_cloned_elements(vector.elements.len());
                     Some(Value::Vec(vector.clone()))
                 }
@@ -2892,7 +2907,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                             next_index: 1,
                             elements,
                         })?;
-                        next = vector.elements.as_values().and_then(<[Value]>::first);
+                        next = vector.elements.value_at(0);
                         None
                     }
                 }
@@ -3023,8 +3038,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     mut elements,
                 } => {
                     elements.push(cloned);
-                    let values = vector.elements.as_values().unwrap_or_default();
-                    if let Some(element) = values.get(next_index) {
+                    if let Some(element) = vector.elements.value_at(next_index) {
                         next_index += 1;
                         state.push_frame(CloneFrame::Vec {
                             vector,
@@ -7727,7 +7741,7 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
                 }
                 ("Array", [Value::Vec(vector)]) => {
                     // A `json.Value` array holds variants, never scalars.
-                    let values = vector.elements.as_values()?;
+                    let first = vector.elements.value_refs()?.next();
                     representation_stats::note_cloned_elements(vector.elements.len());
                     let elements = Vec::with_capacity(vector.elements.len());
                     if vector.elements.is_empty() {
@@ -7746,7 +7760,7 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
                             next_index: 1,
                             elements,
                         });
-                        next = values.first();
+                        next = first;
                         None
                     }
                 }
@@ -7790,7 +7804,7 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
                     mut elements,
                 } => {
                     elements.push(completed.take()?);
-                    if let Some(value) = vector.elements.as_values()?.get(next_index) {
+                    if let Some(value) = vector.elements.value_at(next_index) {
                         next_index += 1;
                         frames.push(CloneFrame::Array {
                             variant,
@@ -8062,12 +8076,12 @@ impl Value {
                                 }
                             }
                         }
-                        Value::Vec(values) if values.elements.as_values().is_none() => {
+                        Value::Vec(values) if values.elements.value_refs().is_none() => {
                             // Scalars render the same with or without a hook.
                             // A record a typed list keeps in place renders
                             // as its value does.
-                            let float32 = is_float32_type(&values.element_type);
                             rendered.push('[');
+                            let float32 = values.holds_float32();
                             for (index, value) in values.elements.iter().enumerate() {
                                 if index > 0 {
                                     rendered.push_str(", ");
@@ -8090,8 +8104,8 @@ impl Value {
                         Value::Vec(values) => {
                             rendered.push('[');
                             actions.push(RenderAction::Static("]"));
-                            let elements = values.elements.as_values().unwrap_or_default();
-                            for (index, value) in elements.iter().enumerate().rev() {
+                            let elements = values.elements.value_refs().unwrap_or_default();
+                            for (index, value) in elements.enumerate().rev() {
                                 actions.push(typed(value, &values.element_type));
                                 if index > 0 {
                                     actions.push(RenderAction::Static(", "));
@@ -9076,7 +9090,7 @@ pub fn collect_queue_values(value: &Value, queues: &mut Vec<ChannelValue>) {
             }
         }
         Value::Vec(vector) => {
-            for element in vector.elements.as_values().unwrap_or_default() {
+            for element in vector.elements.value_refs().unwrap_or_default() {
                 collect_queue_values(element, queues);
             }
         }
@@ -16561,7 +16575,7 @@ pub fn json_parse_to_runtime(source: &str) -> Result<Value> {
 pub fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
     enum ConversionFrame<'a> {
         Array {
-            values: &'a [Value],
+            values: &'a ListElements,
             next_index: usize,
             converted: Vec<JsonValue>,
             child_depth: usize,
@@ -16646,14 +16660,14 @@ pub fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
                             .try_reserve(1)
                             .map_err(json_runtime_allocation_error)?;
                         // `json.Value` elements are variants, never scalars.
-                        let elements = values.elements.as_values().unwrap_or_default();
+                        let elements = &values.elements;
                         frames.push(ConversionFrame::Array {
                             values: elements,
                             next_index: 1,
                             converted,
                             child_depth,
                         });
-                        next = elements.first().map(|element| (element, child_depth));
+                        next = elements.value_at(0).map(|element| (element, child_depth));
                         None
                     }
                 }
@@ -16718,7 +16732,7 @@ pub fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
                             .take()
                             .expect("a completed JSON array child has a value"),
                     );
-                    if let Some(value) = values.get(next_index) {
+                    if let Some(value) = values.value_at(next_index) {
                         next_index += 1;
                         frames
                             .try_reserve(1)

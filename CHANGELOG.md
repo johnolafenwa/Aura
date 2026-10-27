@@ -7,6 +7,35 @@ in this file.
 
 ## Unreleased
 
+### Changed
+
+- A `list[float32]` prints its elements with `float32` digits, as `print`
+  prints a `float32` value: `[0.1]` rather than `[0.10000000149011612]`.
+  `aura run` now rounds a float literal written where a `float32` is
+  expected, such as `singles.append(0.1)`, as native builds do, so both
+  store and print the same list.
+
+### Performance
+
+- Native builds keep a list of plain records, classes whose fields are
+  all `int32`, `int64`, `uint64`, `float32`, `float64`, `bool`, or other
+  such classes, as the records' fields side by side in the list's storage.
+  Indexing, appending, and assigning an element read and write the fields
+  there, instead of copying each element into a box of its own. Moving
+  such a record into or out of a box, or reading one from a field of a
+  class instance, now takes one runtime call instead of one per field.
+  Programs print and compare these lists exactly as before. `pop()` on a
+  list of scalars also runs in native code, without a runtime call or a
+  box, so `bytecode_vm` runs 86% fewer instructions at the check size.
+- A `list[float32]` stores each element in 4 bytes instead of 8, and
+  native code reads, writes, and appends them in place.
+- Native code reads an element of a list of class instances, enums,
+  lists, dicts, or other boxed values without copying it when the program
+  only reads the element, as each element of a `for` loop that reads its
+  fields is. The list keeps each such element in a box of its own, and the
+  read borrows that box. At check size, interpreter runs 35% fewer
+  instructions, mini_browser 17%, sort_records 11%, and sql_engine 7%.
+
 ## VS Code extension 0.8.0 — 2026-10-27
 
 - Bundles language server 0.8.0. The semantic interface version stays 20.
@@ -127,16 +156,6 @@ stays 20, and the native cache format stays `v10`.
   CPython's `dict` does. Both `aura run` and native builds use it. The
   `lru_cache` benchmark spent 46% of its instructions removing dict entries
   and now spends 0.2%, and runs 46% fewer instructions in all.
-- Native builds keep a list of plain records, classes whose fields are
-  all `int32`, `int64`, `uint64`, `float32`, `float64`, `bool`, or other
-  such classes, as the records' fields side by side in the list's storage.
-  Indexing, appending, and assigning an element read and write the fields
-  there, instead of copying each element into a box of its own. Moving
-  such a record into or out of a box, or reading one from a field of a
-  class instance, now takes one runtime call instead of one per field.
-  Programs print and compare these lists exactly as before. `pop()` on a
-  list of scalars also runs in native code, without a runtime call or a
-  box, so `bytecode_vm` runs 86% fewer instructions at the check size.
 
 ### Fixed
 

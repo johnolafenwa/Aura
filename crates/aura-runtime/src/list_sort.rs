@@ -20,6 +20,7 @@ use std::cmp::Ordering;
 
 use crate::diag::{Diagnostic, Result};
 use crate::list_elements::ListElements;
+use crate::native_runtime::ElementBox;
 use crate::runtime_value::Value;
 
 /// The order a sort uses for two floats: `<`, with NaN after every other
@@ -43,17 +44,20 @@ fn value_sort_order(left: &Value, right: &Value) -> Option<Ordering> {
 
 /// Checks that every value orders against the first, so the comparator a
 /// sort runs never meets a pair without an order.
-fn check_orderable(values: &[Value]) -> Result<()> {
-    let Some(first) = values.first() else {
+fn check_orderable<'a>(mut values: impl Iterator<Item = &'a Value>) -> Result<()> {
+    let Some(first) = values.next() else {
         return Ok(());
     };
-    if values
-        .iter()
-        .all(|value| value_sort_order(first, value).is_some())
+    if value_sort_order(first, first).is_some()
+        && values.all(|value| value_sort_order(first, value).is_some())
     {
         return Ok(());
     }
     Err(unorderable())
+}
+
+fn itself(value: &Value) -> &Value {
+    value
 }
 
 /// The error for values without one built-in order. Class instances kept
@@ -70,16 +74,34 @@ fn directed(ordering: Ordering, reverse: bool) -> Ordering {
     }
 }
 
-/// Sorts `values` stably by their built-in order.
-fn sort_values(values: &mut [Value], reverse: bool) -> Result<()> {
-    check_orderable(values)?;
-    values.sort_by(|left, right| {
+/// Sorts `items` stably by the built-in order of the value each holds.
+fn sort_values<T>(items: &mut [T], value: impl Fn(&T) -> &Value, reverse: bool) -> Result<()> {
+    check_orderable(items.iter().map(&value))?;
+    items.sort_by(|left, right| {
         directed(
-            value_sort_order(left, right).unwrap_or(Ordering::Equal),
+            value_sort_order(value(left), value(right)).unwrap_or(Ordering::Equal),
             reverse,
         )
     });
     Ok(())
+}
+
+/// The positions of `keys` in the stable order of the built-in order of the
+/// value each holds.
+fn value_positions<T>(
+    keys: &[T],
+    value: impl Fn(&T) -> &Value,
+    reverse: bool,
+) -> Result<Vec<usize>> {
+    check_orderable(keys.iter().map(&value))?;
+    let mut order = (0..keys.len()).collect::<Vec<_>>();
+    order.sort_by(|left, right| {
+        directed(
+            value_sort_order(value(&keys[*left]), value(&keys[*right])).unwrap_or(Ordering::Equal),
+            reverse,
+        )
+    });
+    Ok(order)
 }
 
 /// Sorts one unboxed integer form. Equal integers cannot be told apart, so
@@ -104,6 +126,16 @@ fn integer_key_positions<T: Ord + Copy>(keys: &[T], reverse: bool) -> Vec<usize>
     pairs.into_iter().map(|(_, position)| position).collect()
 }
 
+/// The positions of float `keys` in the stable order of their built-in
+/// order. A tie on the key falls back to the position, as for integers.
+fn float_positions(keys: impl Iterator<Item = f64>, reverse: bool) -> Vec<usize> {
+    let mut pairs = keys.zip(0..).collect::<Vec<(f64, usize)>>();
+    pairs.sort_unstable_by(|(left, left_at), (right, right_at)| {
+        directed(float_sort_order(*left, *right), reverse).then(left_at.cmp(right_at))
+    });
+    pairs.into_iter().map(|(_, position)| position).collect()
+}
+
 /// Sorts `elements` stably by the built-in order of the elements.
 pub fn sort_elements(elements: &mut ListElements, reverse: bool) -> Result<()> {
     if elements.len() < 2 {
@@ -121,7 +153,14 @@ pub fn sort_elements(elements: &mut ListElements, reverse: bool) -> Result<()> {
         ListElements::Float64(values) => {
             values.sort_by(|left, right| directed(float_sort_order(*left, *right), reverse))
         }
-        ListElements::Values(values) => sort_values(values, reverse)?,
+        ListElements::Float32(values) => values.sort_by(|left, right| {
+            directed(
+                float_sort_order(f64::from(*left), f64::from(*right)),
+                reverse,
+            )
+        }),
+        ListElements::Values(values) => sort_values(values, itself, reverse)?,
+        ListElements::Boxes(boxes) => sort_values(boxes, ElementBox::value, reverse)?,
         ListElements::Bool(_) => {
             return Err(Diagnostic::new("list sort cannot order `bool` values"));
         }
@@ -133,7 +172,6 @@ pub fn sort_elements(elements: &mut ListElements, reverse: bool) -> Result<()> {
 /// The positions of `keys` in the stable order of their built-in order:
 /// entry `k` is the position of the key that sorts `k`th.
 fn sorted_positions(keys: &ListElements, reverse: bool) -> Result<Vec<usize>> {
-    let positions = 0..keys.len();
     Ok(match keys {
         ListElements::Int64(keys) => integer_key_positions(keys, reverse),
         ListElements::Int8(keys) => integer_key_positions(keys, reverse),
@@ -143,24 +181,12 @@ fn sorted_positions(keys: &ListElements, reverse: bool) -> Result<Vec<usize>> {
         ListElements::Uint16(keys) => integer_key_positions(keys, reverse),
         ListElements::Uint32(keys) => integer_key_positions(keys, reverse),
         ListElements::Uint64(keys) => integer_key_positions(keys, reverse),
-        ListElements::Float64(keys) => {
-            let mut pairs = keys.iter().copied().zip(positions).collect::<Vec<_>>();
-            pairs.sort_unstable_by(|(left, left_at), (right, right_at)| {
-                directed(float_sort_order(*left, *right), reverse).then(left_at.cmp(right_at))
-            });
-            pairs.into_iter().map(|(_, position)| position).collect()
+        ListElements::Float64(keys) => float_positions(keys.iter().copied(), reverse),
+        ListElements::Float32(keys) => {
+            float_positions(keys.iter().map(|key| f64::from(*key)), reverse)
         }
-        ListElements::Values(keys) => {
-            check_orderable(keys)?;
-            let mut order = positions.collect::<Vec<_>>();
-            order.sort_by(|left, right| {
-                directed(
-                    value_sort_order(&keys[*left], &keys[*right]).unwrap_or(Ordering::Equal),
-                    reverse,
-                )
-            });
-            order
-        }
+        ListElements::Values(keys) => value_positions(keys, itself, reverse)?,
+        ListElements::Boxes(keys) => value_positions(keys, ElementBox::value, reverse)?,
         ListElements::Bool(_) => {
             return Err(Diagnostic::new("list sort cannot order `bool` keys"));
         }

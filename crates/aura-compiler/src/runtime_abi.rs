@@ -163,6 +163,7 @@ runtime_functions! {
     VecReverseInPlace => ("aura_direct_vec_reverse_in_place", [I64], Some(I64)),
     CollectionOperation => ("aura_direct_collection_operation", [I64, I64, I64, I64], Some(I64)),
     VecIndex => ("aura_direct_vec_index", [I64, I64, I64, I64], Some(I64)),
+    VecLend => ("aura_direct_vec_lend", [I64, I64, I64, I64], Some(I64)),
     VecSlice => ("aura_direct_vec_slice", [I64, I64, I64, I64, I64, I64, I64], Some(I64)),
     VecIndexOption => ("aura_direct_vec_index_option", [I64, I64], Some(I64)),
     VecIndexScalar => ("aura_direct_vec_index_scalar", [I64, I64, I64], Some(I64)),

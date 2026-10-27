@@ -851,8 +851,6 @@ pub(crate) fn is_list_sort_member(field: &str) -> bool {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum ScalarElement {
     Int64,
-    /// A `float64` element, or a `float32` one, which a list keeps as the
-    /// `float64` it widens to exactly.
     Float64,
     Bool,
     Int8,
@@ -862,6 +860,9 @@ pub enum ScalarElement {
     Uint16,
     Uint32,
     Uint64,
+    /// A `float32` element, which a list keeps in 4 bytes. Generated code
+    /// passes it widened to a `float64`, as it holds every `float32`.
+    Float32,
 }
 
 impl ScalarElement {
@@ -876,6 +877,7 @@ impl ScalarElement {
         ScalarElement::Uint16,
         ScalarElement::Uint32,
         ScalarElement::Uint64,
+        ScalarElement::Float32,
     ];
 
     /// The kind a list of `element` stores unboxed, if any.
@@ -888,7 +890,7 @@ impl ScalarElement {
         }
         match name.as_str() {
             "int64" => Some(ScalarElement::Int64),
-            "float64" | "float32" => Some(ScalarElement::Float64),
+            "float64" => Some(ScalarElement::Float64),
             "bool" => Some(ScalarElement::Bool),
             "int8" => Some(ScalarElement::Int8),
             "int16" => Some(ScalarElement::Int16),
@@ -897,8 +899,14 @@ impl ScalarElement {
             "uint16" => Some(ScalarElement::Uint16),
             "uint32" => Some(ScalarElement::Uint32),
             "uint64" => Some(ScalarElement::Uint64),
+            "float32" => Some(ScalarElement::Float32),
             _ => None,
         }
+    }
+
+    /// Whether generated code holds the element as a float.
+    pub fn is_float(self) -> bool {
+        matches!(self, ScalarElement::Float64 | ScalarElement::Float32)
     }
 
     /// The runtime's kind word: the element's `DirectScalarKind`.
@@ -915,6 +923,7 @@ impl ScalarElement {
             ScalarElement::Uint16 => &[K::Uint16 as i64],
             ScalarElement::Uint32 => &[K::Uint32 as i64],
             ScalarElement::Uint64 => &[K::Uint64 as i64],
+            ScalarElement::Float32 => &[K::Float32 as i64],
         }
     }
 }
@@ -1067,6 +1076,7 @@ impl ListOp {
         ListOp::PushScalar(ScalarElement::Uint16),
         ListOp::PushScalar(ScalarElement::Uint32),
         ListOp::PushScalar(ScalarElement::Uint64),
+        ListOp::PushScalar(ScalarElement::Float32),
         ListOp::Pop,
         ListOp::Get,
         ListOp::Set,
@@ -1091,6 +1101,7 @@ impl ListOp {
         ListOp::IndexScalar(ScalarElement::Uint16),
         ListOp::IndexScalar(ScalarElement::Uint32),
         ListOp::IndexScalar(ScalarElement::Uint64),
+        ListOp::IndexScalar(ScalarElement::Float32),
         ListOp::IndexUnchecked,
         ListOp::IndexScalarUnchecked(ScalarElement::Int64),
         ListOp::IndexScalarUnchecked(ScalarElement::Float64),
@@ -1102,6 +1113,7 @@ impl ListOp {
         ListOp::IndexScalarUnchecked(ScalarElement::Uint16),
         ListOp::IndexScalarUnchecked(ScalarElement::Uint32),
         ListOp::IndexScalarUnchecked(ScalarElement::Uint64),
+        ListOp::IndexScalarUnchecked(ScalarElement::Float32),
         ListOp::SetIndex,
         ListOp::SetIndexScalar(ScalarElement::Int64),
         ListOp::SetIndexScalar(ScalarElement::Float64),
@@ -1113,6 +1125,7 @@ impl ListOp {
         ListOp::SetIndexScalar(ScalarElement::Uint16),
         ListOp::SetIndexScalar(ScalarElement::Uint32),
         ListOp::SetIndexScalar(ScalarElement::Uint64),
+        ListOp::SetIndexScalar(ScalarElement::Float32),
         ListOp::Slice,
         ListOp::IndexOption,
         ListOp::TakeIndexOption,

@@ -1887,7 +1887,7 @@ fn write_nested_place(
         }
         Value::Vec(vector) if segment.starts_with('[') => {
             let index = parse_element_index_segment(segment, full_place)?;
-            let slot = vector.elements.get_mut(index).ok_or_else(|| {
+            let mut slot = vector.elements.get_mut(index).ok_or_else(|| {
                 Diagnostic::new(format!(
                     "list MIR place `{full_place}` has no element at index {index}"
                 ))
@@ -1896,7 +1896,7 @@ fn write_nested_place(
                 *slot = value;
                 Ok(())
             } else {
-                write_nested_place(slot, rest, value, full_place)
+                write_nested_place(&mut slot, rest, value, full_place)
             }
         }
         Value::Map(map) if segment.starts_with('[') => {
@@ -2532,7 +2532,7 @@ fn collect_queue_handles(value: &Value, queues: &mut Vec<ChannelValue>) {
             }
         }
         Value::Vec(vector) => {
-            for element in vector.elements.as_values().unwrap_or_default() {
+            for element in vector.elements.value_refs().unwrap_or_default() {
                 collect_queue_handles(element, queues);
             }
         }

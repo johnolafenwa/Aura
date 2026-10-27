@@ -35,7 +35,14 @@ Last updated: 2026-10-27
   boxing, unboxing, and record field reads take one runtime call. `pop()`
   on a list of scalars runs in native code. Details are in
   `2026-10-26-rust-speed-2c-plain-records.md`.
-- Next: 2d, typed `list[T]` buffers with lent element reads.
+- Step 2d: a `list[float32]` stores 4-byte elements and prints `float32`
+  digits, and native code lends list elements to reads that only read
+  them instead of copying them (`ListElements::Boxes`,
+  `aura_direct_vec_lend`, `native_codegen_elements.rs`). Details are in
+  `2026-10-26-rust-speed-2d-list-buffers.md`.
+- Next: 2e, classes as structs with fields in their layouts, then 2d part
+  3 (element loans, `view`, and `match` on `items[i]`), whose paths mostly
+  end at fields.
 
 ## Aura 0.7.1 preview release (complete)
 
