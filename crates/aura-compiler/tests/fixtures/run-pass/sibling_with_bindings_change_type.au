@@ -1,0 +1,94 @@
+# A `with` body is a block: its `as` name and the names it binds go out of
+# scope after it, so a sibling `with` may bind them again with other types.
+copy class Point:
+    x: int64
+    y: int64
+
+
+class Order:
+    id: int64
+    tags: list[str]
+    points: list[Point]
+
+
+class Meter:
+    count: int64
+
+    def __enter__(mut self):
+        print("enter meter")
+
+    def __exit__(mut self):
+        print(f"exit meter {self.count}")
+
+
+class Label:
+    text: str
+
+    def __enter__(mut self):
+        print("enter label")
+
+    def __exit__(mut self):
+        print(f"exit label {self.text}")
+
+
+def points_worker(input: Queue[Point], output: Queue[int64]):
+    for p in input:
+        output.put(p.x + p.y)
+    output.close()
+
+
+def orders_worker(input: Queue[Order], output: Queue[int64]):
+    for order in input:
+        mut total = order.id + order.tags.len()
+        for p in order.points:
+            total += p.x * p.y
+        output.put(total)
+    output.close()
+
+
+def drain(q: Queue[int64]) -> int64:
+    mut total = 0
+    for v in q:
+        total += v
+    return total
+
+
+def main():
+    with Meter(count=3) as scope:
+        scope.count += 1
+        note = scope.count
+        print(note)
+    with Label(text="abc") as scope:
+        note = scope.text + "!"
+        print(note)
+
+    mut grand = 0
+    with TaskGroup() as group:
+        input = Queue[Point](capacity=4)
+        output = Queue[int64](capacity=4)
+        group.start_soon(points_worker, input, output)
+        consumer = group.start(drain, output)
+        for i in range(20):
+            input.put(Point(x=i, y=2 * i))
+        input.close()
+        match consumer.result():
+            case TaskResult.Ready(v):
+                grand += v
+            case _:
+                pass
+    with TaskGroup() as group:
+        input = Queue[Order](capacity=4)
+        output = Queue[int64](capacity=4)
+        group.start_soon(orders_worker, input, output)
+        consumer = group.start(drain, output)
+        for i in range(20):
+            input.put(
+                Order(id=i, tags=["a", "b"], points=[Point(x=i, y=1), Point(x=2, y=i)])
+            )
+        input.close()
+        match consumer.result():
+            case TaskResult.Ready(v):
+                grand += v
+            case _:
+                pass
+    print(grand)

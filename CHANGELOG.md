@@ -146,6 +146,16 @@ in this file.
   right)` followed by `case Expr.Binary(_, right)`. The unreachable-arm
   check split a wildcard of the enum into its variants without end; it
   now stops at a column no earlier arm tells apart.
+- A name bound in one block and bound again with another type in a
+  sibling block, such as `item = 1` in one `if` and `item = "two"` in the
+  next, or `input = Queue[Point](...)` and `input = Queue[Order](...)` in
+  two `with` bodies, shared one local of the first type. `aura run` and
+  `aura build` failed with "assigns untyped local", native builds failed
+  with AU2999 on class fields, or a native program trapped with AU4001
+  "a `Order` value does not fit the layout of `Point`". The same happened
+  in `elif`/`else` branches, `match` arms, `for` and `while` bodies, tuple
+  unpacking, `with ... as` names, and code after the block. Each such
+  binding now gets a local of its own type.
 
 ## VS Code extension 0.8.0 — 2026-10-27
 
