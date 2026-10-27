@@ -15,14 +15,14 @@ use crate::integer::{IntegerKind, IntegerValue};
 use crate::list_elements::ListElements;
 use crate::native_runtime::{
     aura_direct_element_path_load, aura_direct_element_path_store, aura_direct_instance_copy_field,
-    aura_direct_instance_get_field,
-    aura_direct_instance_new_typed, aura_direct_instance_put_field,
+    aura_direct_instance_get_field, aura_direct_instance_new_typed, aura_direct_instance_put_field,
     aura_direct_instance_read_plain, aura_direct_instance_restore_field,
     aura_direct_instance_set_field, aura_direct_instance_set_field_owned,
     aura_direct_instance_take_field, aura_direct_register_plain_layouts, aura_direct_release_value,
-    aura_direct_retain_value, boxed_value, list_view_of, register_plain_layout, share_direct_value,
-    value_mut, value_ref, with_direct_task_runtime_scope, with_task_runtime_error_capture,
-    DirectPlainLayoutEntry, ElementBox, OpaqueValue, UNREGISTERED_PLAIN_ACCESS,
+    aura_direct_retain_value, aura_direct_vec_push_in_place, boxed_value, list_view_of,
+    register_plain_layout, share_direct_value, value_mut, value_ref,
+    with_direct_task_runtime_scope, with_task_runtime_error_capture, DirectPlainLayoutEntry,
+    ElementBox, OpaqueValue, UNREGISTERED_PLAIN_ACCESS,
 };
 use crate::runtime_value::{
     run_lightweight_root_task, InstanceFields, InstanceValue, TupleValue, Value, VecValue,
@@ -615,6 +615,66 @@ fn field_of(boxed: *mut OpaqueValue, name: &str) -> Value {
         panic!("an instance");
     };
     book.fields.get(name).map(Cow::into_owned).expect("present")
+}
+
+#[test]
+fn appended_typed_instances_keep_their_own_boxes() {
+    in_task(|| {
+        let prefix = "Appended";
+        let access = FIRST_TEST_ACCESS + 70;
+        let list = boxed_value(Value::Vec(VecValue {
+            element_type: Type::named(&format!("{prefix}Book")),
+            elements: ListElements::new(),
+            str_view: Default::default(),
+        }));
+        let push = |element: *mut OpaqueValue| unsafe {
+            aura_direct_release_value(aura_direct_vec_push_in_place(list, element))
+        };
+        let boxes = || match unsafe { value_ref(list) } {
+            Value::Vec(VecValue {
+                elements: ListElements::Boxes(boxes),
+                ..
+            }) => boxes.iter().map(ElementBox::as_ptr).collect::<Vec<_>>(),
+            other => panic!("the list keeps boxes, found {other:?}"),
+        };
+        // An instance with one reference joins the list in its own box.
+        let first = boxed_book(prefix, access);
+        push(first);
+        assert_eq!(boxes(), vec![first]);
+        // One another reference holds is copied into a box of the list's.
+        let second = boxed_book(prefix, access);
+        unsafe { aura_direct_retain_value(second) };
+        push(second);
+        let held = boxes();
+        assert_eq!(held.len(), 2);
+        assert_ne!(held[1], second);
+        assert_eq!(unsafe { value_ref(second) }, unsafe { value_ref(held[1]) });
+        unsafe { aura_direct_release_value(second) };
+        // A list that keeps `Value`s takes the instance out of its box.
+        let values = boxed_value(Value::Vec(VecValue {
+            element_type: Type::named(&format!("{prefix}Book")),
+            elements: ListElements::from(vec![instance(
+                &format!("{prefix}Book"),
+                InstanceFields::Typed(typed_book(prefix, access)),
+            )]),
+            str_view: Default::default(),
+        }));
+        unsafe {
+            aura_direct_release_value(aura_direct_vec_push_in_place(
+                values,
+                boxed_book(prefix, access),
+            ))
+        };
+        let Value::Vec(kept) = (unsafe { value_ref(values) }) else {
+            panic!("a list");
+        };
+        assert!(matches!(kept.elements, ListElements::Values(_)));
+        assert_eq!(kept.elements.len(), 2);
+        unsafe {
+            aura_direct_release_value(values);
+            aura_direct_release_value(list);
+        }
+    });
 }
 
 #[test]

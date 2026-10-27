@@ -35,7 +35,7 @@ use crate::integer::{
     IntegerKind, IntegerPowerError, IntegerRepresentation, IntegerShiftError, IntegerValue,
 };
 use crate::json_codec;
-use crate::list_elements::ListElements;
+use crate::list_elements::{ElementRefMut, ListElements};
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
     append_string_checked, cancel_current_lightweight_task_boundary, cast_numeric_value,
@@ -1402,8 +1402,11 @@ pub struct OpaqueValue {
     /// whose storage no other value shares. Generated code that appends
     /// while `list_len` is below it stores the element past the end and
     /// raises `list_len`. The next access adopts that length and sets this
-    /// back to 0, so runtime code always sees every element.
-    list_capacity: std::cell::Cell<u32>,
+    /// back to 0, so runtime code always sees every element. A read of a
+    /// held box (see [`Self::held_value`]) sets it to 0 too, since a copy
+    /// it makes shares the storage. That read may run on several threads at
+    /// once under a shared holder's lock, so the word is atomic.
+    list_capacity: AtomicU32,
     prev: std::cell::Cell<*mut OpaqueValue>,
     next: std::cell::Cell<*mut OpaqueValue>,
     runtime_type_name: UnsafeCell<Option<Arc<str>>>,
@@ -1459,7 +1462,7 @@ impl OpaqueValue {
             list_len: std::cell::Cell::new(len),
             ref_count: AtomicU32::new(1),
             list_access: AtomicU32::new(access),
-            list_capacity: std::cell::Cell::new(0),
+            list_capacity: AtomicU32::new(0),
             shared_lock: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
             owner: std::cell::Cell::new(std::ptr::null_mut()),
             owned: std::cell::Cell::new(0),
@@ -1486,7 +1489,7 @@ impl OpaqueValue {
         let (access, elements, len, capacity) = list_view_of(value);
         self.list_elements.set(elements);
         self.list_len.set(len);
-        self.list_capacity.set(capacity);
+        self.list_capacity.store(capacity, Ordering::Relaxed);
         self.list_access.store(access, Ordering::Relaxed);
         // Generated code reads an instance's field boxes in place too, so
         // they follow a change the runtime made through the instance.
@@ -1503,8 +1506,15 @@ impl OpaqueValue {
     /// element's box or an instance field's box. The holder's access covers
     /// it, so it takes no access of its own, and generated code never runs
     /// its list view ahead of it (see `native_class_layouts.rs`), so there
-    /// is nothing to take in.
+    /// is nothing to take in. The caller may copy the value, and the copy
+    /// shares its storage, so the box gives up its room as an access
+    /// would: generated code then calls the runtime to change the list,
+    /// which copies the storage first, until the next write through the box
+    /// or its holder finds the storage unshared again.
     fn held_value(&self) -> &Value {
+        if self.list_capacity.load(Ordering::Relaxed) != 0 {
+            self.list_capacity.store(0, Ordering::Relaxed);
+        }
         // SAFETY: the holder's access covers the box, and a write takes the
         // holder mutably, so no `&mut Value` exists while this borrow lives.
         unsafe { &*self.value.get() }
@@ -1519,7 +1529,7 @@ impl OpaqueValue {
     #[cold]
     #[inline(never)]
     fn adopt_appended_elements(&self) {
-        self.list_capacity.set(0);
+        self.list_capacity.store(0, Ordering::Relaxed);
         // SAFETY: room is only set by a write that has ended, and every
         // access takes it back before it reads, so no reference into the
         // value is live. The room also means the value is confined and its
@@ -1586,7 +1596,7 @@ impl OpaqueValue {
 
     #[inline]
     fn access(&self, write: bool) -> DirectValueAccess<'_> {
-        if self.list_capacity.get() != 0 {
+        if self.list_capacity.load(Ordering::Relaxed) != 0 {
             self.adopt_appended_elements();
         }
         self.access_unlisted(write)
@@ -1636,7 +1646,7 @@ unsafe fn share_direct_value(ptr: *mut OpaqueValue) {
                 // The value is still confined, so the elements generated
                 // code appended join its storage before another thread
                 // can read it.
-                if value.list_capacity.get() != 0 {
+                if value.list_capacity.load(Ordering::Relaxed) != 0 {
                     value.adopt_appended_elements();
                 }
                 // Other threads may read the header once the value is
@@ -7309,6 +7319,24 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        // An instance kept in its class's layout joins the list in its own
+        // box, which then needs no copy for generated code to lend it or
+        // change its fields in place (see `aura_direct_element_path_probe`).
+        // SAFETY: generated code passes a live box it owns.
+        if unsafe { holds_typed_instance(value) } {
+            if let Some(element) = unsafe { adopt_only_box(value) } {
+                with_vector_mut(vec, |vector| {
+                    if is_unknown_runtime_type(&vector.element_type) {
+                        let inferred = inferred_collection_type(element.value());
+                        if !is_unknown_runtime_type(&inferred) {
+                            vector.element_type = inferred;
+                        }
+                    }
+                    vector.elements.push_box(element);
+                });
+                return boxed_value(Value::Unit);
+            }
+        }
         let value = unsafe { consume_owned_value(value) };
         with_vector_mut(vec, |vector| {
             if is_unknown_runtime_type(&vector.element_type) {
@@ -9904,6 +9932,124 @@ pub extern "C-unwind" fn aura_direct_element_path_load(
     })
 }
 
+/// Counts a loan generated code could not follow (see
+/// `native_codegen_element_loans.rs` in the compiler) on each list its path
+/// selects from. A confined list of `Value`s, or one whose boxes another
+/// list shares, moves its elements into boxes of its own once the misses
+/// reach an eighth of its length, as [`aura_direct_vec_lend`] does, so
+/// later loans stay in generated code. The walk follows the path into each
+/// list that keeps its elements in boxes, and into the fields of an
+/// instance kept in place; any other step ends it, and so does a list of
+/// strings, which keeps its elements unboxed.
+fn promote_element_path(value: &mut Value, steps: &[DirectElementPathStep<'_>], selectors: &[i64]) {
+    let Some((step, rest)) = steps.split_first() else {
+        return;
+    };
+    match step {
+        DirectElementPathStep::Index => {
+            let (Some((&index, selectors)), Value::Vec(vector)) = (selectors.split_first(), value)
+            else {
+                return;
+            };
+            let len = vector.elements.len();
+            let Some(position) = normalize_vec_index(index, len).filter(|position| *position < len)
+            else {
+                return;
+            };
+            let converts = match &vector.elements {
+                ListElements::Values(values) => {
+                    matches!(values[position], Value::Vec(_) | Value::Instance(_))
+                }
+                ListElements::Boxes(_) => vector.elements.is_shared(),
+                _ => return,
+            };
+            if converts {
+                // SAFETY: the caller holds the list mutably, and the list is
+                // confined to this thread.
+                let view = unsafe { vector.str_view.get_or_create() };
+                view.copied_reads += 1;
+                if view.copied_reads.saturating_mul(LEND_COPIES_PER_ELEMENT) < len {
+                    return;
+                }
+                view.copied_reads = 0;
+                vector.elements.lend(position);
+            }
+            // Only boxes the list keeps to itself are changed in place, so
+            // the walk copies no storage on its way.
+            if rest.is_empty() || !matches!(vector.elements, ListElements::Boxes(_)) {
+                return;
+            }
+            if let Some(ElementRefMut::Boxed(mut element)) = vector.elements.get_mut(position) {
+                promote_element_path(&mut element, rest, selectors);
+            }
+        }
+        // Only a field that holds a list the path selects from, which is a
+        // field box, so the edit changes it in place.
+        DirectElementPathStep::Projection(projection)
+            if matches!(rest.first(), Some(DirectElementPathStep::Index)) =>
+        {
+            if let Value::Instance(InstanceValue {
+                fields: InstanceFields::Typed(typed),
+                ..
+            }) = value
+            {
+                let _ = typed.with_field_mut(projection, |field| {
+                    promote_element_path(field, rest, selectors)
+                });
+            }
+        }
+        DirectElementPathStep::Projection(_) | DirectElementPathStep::Key => {}
+    }
+}
+
+/// Whether [`promote_element_path`] would count a miss on a list the path
+/// selects from: the probe edits the collection only then, so a loan that
+/// misses for another reason, such as one of a list of strings, costs no
+/// edit.
+fn path_promotes(value: &Value, steps: &[DirectElementPathStep<'_>], selectors: &[i64]) -> bool {
+    let Some((step, rest)) = steps.split_first() else {
+        return false;
+    };
+    match step {
+        DirectElementPathStep::Index => {
+            let (Some((&index, selectors)), Value::Vec(vector)) = (selectors.split_first(), value)
+            else {
+                return false;
+            };
+            let len = vector.elements.len();
+            let Some(position) = normalize_vec_index(index, len).filter(|position| *position < len)
+            else {
+                return false;
+            };
+            match &vector.elements {
+                ListElements::Values(values) => {
+                    matches!(values[position], Value::Vec(_) | Value::Instance(_))
+                }
+                ListElements::Boxes(boxes) => {
+                    vector.elements.is_shared()
+                        || (!rest.is_empty()
+                            && path_promotes(boxes[position].value(), rest, selectors))
+                }
+                _ => false,
+            }
+        }
+        DirectElementPathStep::Projection(projection)
+            if matches!(rest.first(), Some(DirectElementPathStep::Index)) =>
+        {
+            match value {
+                Value::Instance(InstanceValue {
+                    fields: InstanceFields::Typed(typed),
+                    ..
+                }) => typed
+                    .get(projection)
+                    .is_some_and(|field| path_promotes(&field, rest, selectors)),
+                _ => false,
+            }
+        }
+        DirectElementPathStep::Projection(_) | DirectElementPathStep::Key => false,
+    }
+}
+
 /// Checks that an element path reaches a value inside `collection` without
 /// copying it: the bounds or presence probe that begins an element or entry
 /// loan. A missing position or key traps at the index expression.
@@ -9919,24 +10065,70 @@ pub extern "C-unwind" fn aura_direct_element_path_probe(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let path = decode_bytes(path_ptr, path_len);
-        let steps =
-            direct_element_path_steps(&path).unwrap_or_else(|message| runtime_error(message));
-        let mut selectors = DirectElementSelectors {
-            words: direct_element_selector_words(selectors_ptr, selector_count),
-            cursor: 0,
-            path: &path,
-        };
-        let result = unsafe {
-            with_value(collection, |value| {
-                direct_element_walk(value, &steps, &mut selectors)?;
-                selectors.finish()
+        let selectors = (selectors_ptr, selector_count);
+        probe_element_path(collection, &path, selectors, (line, column), false)
+    })
+}
+
+/// [`aura_direct_element_path_probe`] for a loan generated code follows to
+/// its place (see `native_codegen_element_loans.rs` in the compiler), when
+/// it missed. A confined collection also counts the miss on each list the
+/// path selects from, so the list moves its elements into boxes of its own
+/// once misses pay for it (see [`promote_element_path`]).
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_element_path_promote(
+    collection: *mut OpaqueValue,
+    path_ptr: *const u8,
+    path_len: usize,
+    selectors_ptr: *const i64,
+    selector_count: usize,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let path = decode_bytes(path_ptr, path_len);
+        let selectors = (selectors_ptr, selector_count);
+        probe_element_path(collection, &path, selectors, (line, column), true)
+    })
+}
+
+fn probe_element_path(
+    collection: *mut OpaqueValue,
+    path: &str,
+    (selectors_ptr, selector_count): (*const i64, usize),
+    (line, column): (i64, i64),
+    promote: bool,
+) -> *mut OpaqueValue {
+    let steps = direct_element_path_steps(path).unwrap_or_else(|message| runtime_error(message));
+    let words = direct_element_selector_words(selectors_ptr, selector_count);
+    let mut selectors = DirectElementSelectors {
+        words,
+        cursor: 0,
+        path,
+    };
+    let confined =
+        unsafe { collection.as_ref() }.is_some_and(|header| header.shared_lock().is_none());
+    let (result, promotes) = unsafe {
+        with_value(collection, |value| {
+            let result =
+                direct_element_walk(value, &steps, &mut selectors).and_then(|_| selectors.finish());
+            let promotes =
+                promote && result.is_ok() && confined && path_promotes(value, &steps, words);
+            (result, promotes)
+        })
+    };
+    if let Err(error) = result {
+        direct_element_path_failure(error, line, column);
+    }
+    if promotes {
+        // SAFETY: the caller passes a live box, confined to this thread.
+        unsafe {
+            value_mut(collection, |value| {
+                promote_element_path(value, &steps, words)
             })
         };
-        match result {
-            Ok(()) => boxed_value(Value::Unit),
-            Err(error) => direct_element_path_failure(error, line, column),
-        }
-    })
+    }
+    boxed_value(Value::Unit)
 }
 
 /// Moves the value an element path reaches out of `collection`, leaving
@@ -11615,6 +11807,56 @@ pub unsafe extern "C-unwind" fn aura_direct_instance_new_typed(
     })
 }
 
+/// Whether `boxed` holds an instance kept in its class's layout. Its view
+/// carries the class's access code while the box is confined.
+///
+/// # Safety
+///
+/// `boxed` is null or a live box the running task owns a reference to.
+unsafe fn holds_typed_instance(boxed: *mut OpaqueValue) -> bool {
+    // SAFETY: the caller's contract.
+    let Some(header) = (unsafe { boxed.as_ref() }) else {
+        return false;
+    };
+    // SAFETY: a box with a class's access code is confined to this thread,
+    // and the running task owns a reference, so nothing changes it now.
+    header.list_access.load(Ordering::Relaxed) >= FIRST_CLASS_ACCESS
+        && matches!(
+            unsafe { &*header.value.get() },
+            Value::Instance(instance) if instance.fields.typed().is_some()
+        )
+}
+
+/// Takes over `boxed` as a box a holder keeps, a field slot or a list
+/// element, when the reference the caller hands over is its only one and
+/// the box is confined: no ledger links it from now on, and it records no
+/// thread. Otherwise `None`, and the caller still owns its reference.
+///
+/// # Safety
+///
+/// `boxed` is a live box, and the caller owns a reference the running task
+/// owns.
+unsafe fn adopt_only_box(boxed: *mut OpaqueValue) -> Option<ElementBox> {
+    // SAFETY: the caller passes a live box.
+    let header = unsafe { &*boxed };
+    if header.ref_count.load(Ordering::Acquire) != 1 || header.shared_lock().is_some() {
+        return None;
+    }
+    // A held box never runs its list view ahead of the list, so the
+    // elements generated code appended are taken in now.
+    if header.list_capacity.load(Ordering::Relaxed) != 0 {
+        header.adopt_appended_elements();
+    }
+    unregister_direct_owned_value(boxed);
+    #[cfg(all(debug_assertions, not(test)))]
+    // SAFETY: the reference is the only one, and the box is confined.
+    unsafe {
+        (*boxed).owner_thread = LIST_ELEMENT_THREAD;
+    }
+    // SAFETY: the caller hands over the only reference.
+    Some(unsafe { ElementBox::from_raw(boxed) })
+}
+
 /// Turns a box generated code owns into the box a field slot keeps: the
 /// box itself when that reference is its only one, now linked by no ledger
 /// and recording no thread, or else a copy, and the reference is released.
@@ -11624,22 +11866,9 @@ pub unsafe extern "C-unwind" fn aura_direct_instance_new_typed(
 /// `boxed` is a live box, and the caller hands over a reference the running
 /// task owns.
 unsafe fn adopt_field_box(boxed: *mut OpaqueValue) -> ElementBox {
-    // SAFETY: the caller passes a live box.
-    let header = unsafe { &*boxed };
-    if header.ref_count.load(Ordering::Acquire) == 1 && header.shared_lock().is_none() {
-        // A field box never runs its list view ahead of the list, so the
-        // elements generated code appended are taken in now.
-        if header.list_capacity.get() != 0 {
-            header.adopt_appended_elements();
-        }
-        unregister_direct_owned_value(boxed);
-        #[cfg(all(debug_assertions, not(test)))]
-        // SAFETY: the reference is the only one, and the box is confined.
-        unsafe {
-            (*boxed).owner_thread = LIST_ELEMENT_THREAD;
-        }
-        // SAFETY: the caller hands over the only reference.
-        return unsafe { ElementBox::from_raw(boxed) };
+    // SAFETY: the caller's contract.
+    if let Some(adopted) = unsafe { adopt_only_box(boxed) } {
+        return adopted;
     }
     // SAFETY: the box is live, and the caller owns a reference.
     let copy = unsafe {

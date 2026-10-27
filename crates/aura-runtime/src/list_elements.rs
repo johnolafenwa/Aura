@@ -695,17 +695,20 @@ impl ListElements {
             Self::Uint32(values) => scalar(ListForm::Uint32, values),
             Self::Uint64(values) => scalar(ListForm::Uint64, values),
             Self::Float32(values) => scalar(ListForm::Float32, values),
-            // Generated code only reads the boxes, so the form has no room.
-            // It reads only boxes no other list shares, so storage another
-            // list shares shows as values, which generated code reads
-            // through the runtime.
+            // Generated code reads only boxes no other list shares, so
+            // storage another list shares shows as values, which generated
+            // code reads through the runtime. Generated code never appends
+            // a box, so the room only tells code that changes an element in
+            // place that the storage is still unshared: a copy of the list
+            // made since takes an access, which takes the room back.
             Self::Boxes(boxes) => {
                 let form = if boxes.is_shared() {
                     ListForm::Values
                 } else {
                     ListForm::Boxes
                 };
-                (form, boxes.as_ptr() as usize, boxes.len(), 0)
+                let room = unshared_capacity(boxes);
+                (form, boxes.as_ptr() as usize, boxes.len(), room)
             }
             Self::Typed(typed) => typed.view(),
         }
@@ -914,6 +917,17 @@ impl ListElements {
         match self {
             Self::Boxes(boxes) => boxes.get(index),
             _ => None,
+        }
+    }
+
+    /// Appends an element that is already in a box of its own, which the
+    /// list takes over. An empty list, or one that keeps its elements in
+    /// boxes, keeps the box; any other form takes the value out of it.
+    pub fn push_box(&mut self, element: ElementBox) {
+        match self {
+            Self::Boxes(boxes) => boxes.push(element),
+            _ if self.is_empty() => *self = Self::Boxes(SharedVec::from(vec![element])),
+            _ => self.push(element.into_value()),
         }
     }
 

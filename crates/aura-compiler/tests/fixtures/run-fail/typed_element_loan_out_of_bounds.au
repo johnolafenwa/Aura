@@ -1,0 +1,14 @@
+# Generated code that changes a field of a list element in place checks the
+# position first, so a write past the end traps at the index as the runtime
+# walk does.
+class Counter:
+    name: str
+    count: int64
+
+def main():
+    mut counters = list[Counter]()
+    for i in range(4):
+        counters.append(Counter(name="c", count=i))
+    for i in range(counters.len() + 1):
+        counters[i].count += 1
+    print(counters[0].count)

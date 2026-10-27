@@ -527,7 +527,7 @@ impl TypedFields {
                 )
             })?;
             let mut value = boxed.value_mut();
-            return Ok(edit(&mut *value));
+            return Ok(edit(&mut value));
         }
         let mut value = self
             .take(place)

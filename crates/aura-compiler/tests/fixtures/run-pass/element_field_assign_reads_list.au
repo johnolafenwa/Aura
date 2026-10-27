@@ -1,0 +1,21 @@
+# The right side of an assignment to a field of a list element may read the
+# same list, the element itself included: it is evaluated before the
+# element is lent for the write.
+class Cell:
+    value: int64
+    seen: bool
+
+class Grid:
+    cells: list[Cell]
+
+def main():
+    mut cells = [Cell(value=1, seen=false), Cell(value=2, seen=true)]
+    cells[0].value = cells[0].value + cells[1].value
+    cells[1].seen = not cells[1].seen
+    cells[0].value = cells.len() * 10 + cells[0].value
+    cells[1].value += cells[0].value
+    print(f"{cells[0].value} {cells[0].seen} {cells[1].value} {cells[1].seen}")
+
+    mut grid = Grid(cells=[Cell(value=5, seen=false)])
+    grid.cells[0].value = grid.cells[0].value * 3 + grid.cells.len()
+    print(grid.cells[0].value)

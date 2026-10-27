@@ -10120,6 +10120,18 @@ fn operand_place_mention<'a>(operand: &'a Operand, mentions: &mut Vec<&'a str>) 
 
 /// Every place an instruction reads, lends, or names, except an `Assign`
 /// target.
+/// The name an element assignment target such as `xs[i].count` or
+/// `self.items[i].pos.x` starts from.
+fn element_target_root(target: &Expr) -> Option<&str> {
+    match &target.kind {
+        ExprKind::Name(name) => Some(name),
+        ExprKind::Member { object, .. } | ExprKind::Index { object, .. } => {
+            element_target_root(object)
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn instruction_place_mentions<'a>(
     instruction: &'a Instruction,
     mentions: &mut Vec<&'a str>,
@@ -14265,32 +14277,73 @@ impl<'a> Lowerer<'a> {
             Some(ty) => lowerer.new_typed_temp(ty),
             None => lowerer.new_temp(),
         };
-        let loan = typed_temp(self);
-        let root = collection
-            .split('.')
-            .next()
-            .unwrap_or(collection.as_str())
-            .to_string();
-        if self.view_sources.contains_key(&root) {
-            self.emit(Instruction::ReborrowElement {
-                loan: loan.clone(),
-                parent: root,
-                selector,
-                projection,
-                mutable: true,
-                span,
+        // A right side that reads the list the loan selects from runs before
+        // the loan begins, since the loan locks the list, as Python runs the
+        // right side first. A compound assignment reads the place through a
+        // loan of its own first, so it still reads the place, then the right
+        // side, then writes.
+        let reads_list = element_target_root(target_expr)
+            .is_some_and(|name| crate::sema::expr_references_name(&assign.value, name));
+        if reads_list {
+            let current = assign.op.map(|op| {
+                let current = typed_temp(self);
+                let read = typed_temp(self);
+                self.begin_element_place_loan(
+                    &read,
+                    &collection,
+                    &selector,
+                    &projection,
+                    span,
+                    false,
+                );
+                self.emit(Instruction::ReadLoan {
+                    target: current.clone(),
+                    loan: read.clone(),
+                });
+                self.emit(Instruction::EndLoan { loan: read });
+                (op, current)
             });
-        } else {
-            self.emit(Instruction::BeginElementLoan {
-                loan: loan.clone(),
-                source: collection,
-                selector,
-                projection,
-                mutable: true,
-                span,
-                checked: true,
+            let value_ty = self.infer_expr_type(&assign.value);
+            let right = match value_ty.clone() {
+                Some(ty) => self.new_typed_temp(ty),
+                None => self.new_temp(),
+            };
+            let lowered = self.lower_expr_for_owned_value(&assign.value, value_ty.as_ref());
+            self.emit(Instruction::Assign {
+                target: right.clone(),
+                value: Rvalue::Use(lowered),
             });
+            let value = match current {
+                Some((op, current)) => {
+                    let compound = Expr {
+                        kind: ExprKind::Binary {
+                            op,
+                            left: Box::new(Expr {
+                                kind: ExprKind::Name(current),
+                                span: assign.span,
+                            }),
+                            right: Box::new(Expr {
+                                kind: ExprKind::Name(right),
+                                span: assign.value.span,
+                            }),
+                        },
+                        span: assign.span,
+                    };
+                    self.lower_expr_for_owned_value(&compound, ty.as_ref())
+                }
+                None => Operand::MovePlace(right),
+            };
+            let loan = typed_temp(self);
+            self.begin_element_place_loan(&loan, &collection, &selector, &projection, span, true);
+            self.emit(Instruction::WriteLoan {
+                loan: loan.clone(),
+                value: Rvalue::Use(value),
+            });
+            self.emit(Instruction::EndLoan { loan });
+            return;
         }
+        let loan = typed_temp(self);
+        self.begin_element_place_loan(&loan, &collection, &selector, &projection, span, true);
         let value = if let Some(op) = assign.op {
             let current = typed_temp(self);
             self.emit(Instruction::ReadLoan {
@@ -14317,6 +14370,41 @@ impl<'a> Lowerer<'a> {
             value: Rvalue::Use(value),
         });
         self.emit(Instruction::EndLoan { loan });
+    }
+
+    /// Begins the element loan `loan` of `projection` inside the element
+    /// `selector` selects from `collection`, or reborrows it from the view
+    /// that `collection` names.
+    fn begin_element_place_loan(
+        &mut self,
+        loan: &str,
+        collection: &str,
+        selector: &Operand,
+        projection: &str,
+        span: Span,
+        mutable: bool,
+    ) {
+        let root = collection.split('.').next().unwrap_or(collection);
+        if self.view_sources.contains_key(root) {
+            self.emit(Instruction::ReborrowElement {
+                loan: loan.to_string(),
+                parent: root.to_string(),
+                selector: selector.clone(),
+                projection: projection.to_string(),
+                mutable,
+                span,
+            });
+        } else {
+            self.emit(Instruction::BeginElementLoan {
+                loan: loan.to_string(),
+                source: collection.to_string(),
+                selector: selector.clone(),
+                projection: projection.to_string(),
+                mutable,
+                span,
+                checked: true,
+            });
+        }
     }
 
     fn lower_destructure(&mut self, destructure: &DestructureStmt) {

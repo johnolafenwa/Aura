@@ -1444,6 +1444,7 @@ impl<'a> NativeCodegen<'a> {
                     Some(DirectType::Opaque(ty)) if !matches!(ty, Type::Named(name, _) if name == "str")
                 )
         });
+        let (native_loan_uses, element_lend_temps) = element_loans::native_element_loans(function);
         let mut lent_elements = HashMap::new();
         let mut lent_names = lent_element_reads.lists.keys().cloned().collect::<Vec<_>>();
         lent_names.sort();
@@ -1494,6 +1495,9 @@ impl<'a> NativeCodegen<'a> {
             field_lend_temps: classes::field_lend_temps(function),
             field_lends: HashMap::new(),
             field_box_receiver: false,
+            native_loan_uses,
+            element_lend_temps,
+            native_loans: HashMap::new(),
             retain_calls: HashMap::new(),
             retain_releases: HashMap::new(),
             consumed_retains: HashSet::new(),
@@ -2730,6 +2734,13 @@ struct FunctionCompiler<'a> {
     /// Whether the runtime operation being compiled has such a lent box as
     /// its receiver.
     field_box_receiver: bool,
+    /// The element loans generated code may follow to their place, and the
+    /// temporaries their lends lend to one runtime operation. See
+    /// `element_loans::native_element_loans`.
+    native_loan_uses: HashMap<String, element_loans::LoanUse>,
+    element_lend_temps: HashSet<String>,
+    /// The element loans generated code followed when they began.
+    native_loans: HashMap<String, element_loans::NativeLoan>,
     /// Each retained handle with the retain that made it and the handle it
     /// retained. A consumer that copies the value into its slot turns the
     /// retain into the copy.
@@ -3797,7 +3808,9 @@ impl<'a> FunctionCompiler<'a> {
                 temp,
                 mutable,
             } => {
-                if !self.lend_class_field(place, temp, *mutable)? {
+                if !self.lend_class_field(place, temp, *mutable)?
+                    && !self.lend_native_element(place, temp, *mutable)?
+                {
                     self.lent_temps.insert(temp.clone(), *mutable);
                     let value = self.take_lent_place(place)?;
                     self.mark_emptied_store_root(temp);
@@ -4008,16 +4021,20 @@ impl<'a> FunctionCompiler<'a> {
             }
             Instruction::ReadLoan { target, loan } => {
                 self.mark_emptied_store_root(target);
-                let loaded = self.load_place(loan)?;
-                let target_ty = self.type_of_place(target)?;
-                let loaded = self.coerce_value(loaded, &target_ty)?;
-                self.store_place(target, loaded)?;
+                if !self.read_native_loan(target, loan)? {
+                    let loaded = self.load_place(loan)?;
+                    let target_ty = self.type_of_place(target)?;
+                    let loaded = self.coerce_value(loaded, &target_ty)?;
+                    self.store_place(target, loaded)?;
+                }
             }
             Instruction::WriteLoan { loan, value } => {
-                let target_ty = self.type_of_place(loan)?;
-                let compiled = self.compile_rvalue_for_target(value, &target_ty)?;
-                let coerced = self.coerce_value(compiled, &target_ty)?;
-                self.store_place(loan, coerced)?;
+                if !self.write_native_loan(loan, value)? {
+                    let target_ty = self.type_of_place(loan)?;
+                    let compiled = self.compile_rvalue_for_target(value, &target_ty)?;
+                    let coerced = self.coerce_value(compiled, &target_ty)?;
+                    self.store_place(loan, coerced)?;
+                }
             }
             Instruction::EndLoan { loan } => {
                 self.view_places.remove(loan);
@@ -8082,6 +8099,9 @@ impl<'a> FunctionCompiler<'a> {
             alternative.elements.push(selector.clone());
         }
         self.view_places.insert(loan.to_string(), resolved);
+        if self.begin_native_element_loan(loan)? {
+            return Ok(());
+        }
         // Bounds or presence are checked once at creation. A single
         // unconditional selection is probed in place; otherwise probe the
         // selected slot through the loan and drop the copy.
@@ -8100,22 +8120,7 @@ impl<'a> FunctionCompiler<'a> {
         let resolved = self.resolve_view_place(loan)?;
         if let [alternative] = resolved.alternatives.as_slice() {
             if alternative.conditions.is_empty() && !alternative.elements.is_empty() {
-                let (collection, projection) = self.load_element_path_root(&alternative.place)?;
-                let path = self.element_path_operands(&projection, &alternative.elements)?;
-                let inst = self.builder.call(
-                    self.runtime[RuntimeFn::ElementPathProbe],
-                    &[
-                        collection.values[0],
-                        path.path_ptr,
-                        path.path_len,
-                        path.selectors_ptr,
-                        path.count,
-                        path.line,
-                        path.column,
-                    ],
-                );
-                self.release_opaque_handle(inst.results[0]);
-                return Ok(());
+                return self.emit_element_path_probe(loan, false);
             }
         }
         let baseline = self.layout_scratch.clone();
@@ -15754,6 +15759,8 @@ mod callables;
 #[path = "native_codegen_classes.rs"]
 mod classes;
 
+#[path = "native_codegen_element_loans.rs"]
+mod element_loans;
 #[path = "native_codegen_elements.rs"]
 mod elements;
 #[path = "native_codegen_lookups.rs"]

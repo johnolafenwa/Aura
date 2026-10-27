@@ -159,6 +159,11 @@ stays 20, and the native cache format stays `v10`.
 
 ### Fixed
 
+- An assignment to a field of a list element whose right side reads the
+  same list, such as `cells[0].value = cells[0].value + cells[1].value`
+  or `cells[1].seen = not cells[1].seen`, failed `aura run` and
+  `aura build` with AU4001 "invalid MIR loan flow". The right side is now
+  evaluated before the element is lent for the write.
 - A `for` loop over a queue whose registered producer tasks were finishing
   no longer ends early. When a producer sent its last item and finished
   between the loop's receive and its check for running producers, the loop

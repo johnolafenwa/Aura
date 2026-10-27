@@ -25165,6 +25165,108 @@ fn direct_element_path_take_and_probe_lend_entries_without_cloning() {
 }
 
 #[test]
+fn element_path_probes_move_loaned_lists_into_boxes_of_their_own() {
+    use super::DirectListAccess;
+    use crate::list_elements::ListElements;
+    fn list_of(elements: Vec<Value>, element_type: Type) -> *mut OpaqueValue {
+        boxed_value(Value::Vec(VecValue {
+            element_type,
+            elements: elements.into(),
+            str_view: Default::default(),
+        }))
+    }
+    fn ints(items: &[i64]) -> Value {
+        Value::Vec(VecValue {
+            element_type: Type::named("int64"),
+            elements: items
+                .iter()
+                .map(|item| Value::Int(IntegerValue::from_i64(*item)))
+                .collect(),
+            str_view: Default::default(),
+        })
+    }
+    let probe = |list: *mut OpaqueValue, position: i64| {
+        expect_unit(super::aura_direct_element_path_promote(
+            list,
+            "[i]".as_ptr(),
+            3,
+            [position].as_ptr(),
+            1,
+            3,
+            9,
+        ))
+    };
+    let header = |list: *mut OpaqueValue| unsafe { &*list };
+    let access = |list: *mut OpaqueValue| header(list).list_access.load(Ordering::Relaxed);
+    let room = |list: *mut OpaqueValue| header(list).list_capacity.load(Ordering::Relaxed);
+    let is_boxes = |list: *mut OpaqueValue| {
+        matches!(
+            unsafe { value_ref(list) },
+            Value::Vec(VecValue {
+                elements: ListElements::Boxes(_),
+                ..
+            })
+        )
+    };
+
+    // A list of lists moves into boxes once misses reach an eighth of its
+    // length, here at the first, and then has room, which code that changes
+    // an element in place checks. The plain probe, for loans generated code
+    // does not follow, leaves the list as it is.
+    let rows = list_of(
+        (0..8).map(|row| ints(&[row])).collect(),
+        Type::Named("list".to_string(), vec![Type::named("int64")]),
+    );
+    expect_unit(super::aura_direct_element_path_probe(
+        rows,
+        "[i]".as_ptr(),
+        3,
+        [0i64].as_ptr(),
+        1,
+        3,
+        9,
+    ));
+    assert_eq!(access(rows), DirectListAccess::Values as u32);
+    probe(rows, -1);
+    assert_eq!(access(rows), DirectListAccess::Boxes as u32);
+    assert!(room(rows) > 0);
+    // Reading the list, as any runtime access does, takes the room back.
+    assert!(is_boxes(rows));
+    assert_eq!(room(rows), 0);
+
+    // A copy shares the boxes. The next miss gives the list boxes of its
+    // own and its room back, and the copy keeps the old boxes.
+    let copy = boxed_value(unsafe { value_ref(rows) });
+    probe(rows, 0);
+    assert!(room(rows) > 0);
+    assert!(is_boxes(copy));
+    assert_eq!(unsafe { value_ref(copy) }, unsafe { value_ref(rows) });
+
+    // A list of strings keeps its form: the probe leaves it alone.
+    let names = list_of(
+        vec![
+            Value::String("a".to_string()),
+            Value::String("b".to_string()),
+        ],
+        Type::named("str"),
+    );
+    probe(names, 1);
+    assert!(!is_boxes(names));
+    // So does a list too long for one miss to pay for the move.
+    let long = list_of(
+        (0..16).map(|row| ints(&[row])).collect(),
+        Type::Named("list".to_string(), vec![Type::named("int64")]),
+    );
+    probe(long, 3);
+    assert!(!is_boxes(long));
+    probe(long, 4);
+    assert!(is_boxes(long));
+    for list in [rows, copy, names, long] {
+        unsafe { super::aura_direct_release_value(list) };
+    }
+}
+
+#[test]
 fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
     fn profile(name: &str, visits: i64) -> Value {
         Value::Instance(InstanceValue {

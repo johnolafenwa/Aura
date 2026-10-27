@@ -46,9 +46,15 @@ Last updated: 2026-10-27
   fields in the block, lends a field's box to one runtime operation, and
   builds an instance with one call (`native_codegen_classes.rs`). Details
   are in `2026-10-27-rust-speed-2e-class-layouts.md`.
-- Next: 2e part 2, classes kept in place in lists and enum payloads, then
-  2d part 3 (element loans, `view`, and `match` on `items[i]`), then 2e
-  part 3 (lent reads of handle fields).
+- Step 2e part 2: generated code follows an element loan such as
+  `counters[i].count += 1` or `self.levels[p].append(v)` to its place in
+  the element's box or the list's storage, and only while the list's
+  storage is its own; appended class instances keep their boxes in the
+  list (`native_codegen_element_loans.rs`). Details are in
+  `2026-10-27-rust-speed-2e-element-loans.md`.
+- Next: 2e part 3 (lent reads of handle fields, such as
+  `self.asks[level][head]`), then cheaper new lists (their type tags take
+  5% to 12% of `order_book`, `bank_ledger`, and `regex_match`), then 2f.
 
 ## Aura 0.7.1 preview release (complete)
 

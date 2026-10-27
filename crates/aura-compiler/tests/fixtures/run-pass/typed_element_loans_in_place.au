@@ -1,0 +1,141 @@
+# A loan of one element of a list, or of a field of a class element, is
+# followed in generated code to where the element lies once the list keeps
+# its elements in boxes, and the runtime walk serves it until then. Every
+# shape here must give the same result either way: element fields of every
+# scalar kind, fields of classes held inline, scalar elements, lists shared
+# with another variable, negative positions, lists held in fields, and
+# elements lent to runtime operations.
+class Point:
+    x: int64
+    y: int64
+
+class Counter:
+    name: str
+    count: int64
+    ratio: float64
+    small: int32
+    tiny: uint8
+    flag: bool
+    narrow: float32
+    pos: Point
+    tags: list[str]
+
+class Book:
+    counters: list[Counter]
+    levels: list[list[int64]]
+    totals: list[int64]
+
+    def bump_all(mut self):
+        for index in range(self.counters.len()):
+            self.counters[index].count += 1
+            self.counters[index].pos.y -= 1
+
+    def file(mut self, level: int64, value: int64):
+        self.levels[level].append(value)
+        self.totals[level] += value
+
+    def put(mut self, index: int64, value: int64):
+        self.totals[index] = value
+
+def counter(name: own str, count: int64) -> Counter:
+    return Counter(
+        name=name,
+        count=count,
+        ratio=0.5,
+        small=1,
+        tiny=7,
+        flag=false,
+        narrow=1.5,
+        pos=Point(x=count, y=0),
+        tags=[],
+    )
+
+def bump_param(items: mut list[Counter], by: int64):
+    for index in range(items.len()):
+        items[index].count += by
+
+def summary(items: list[Counter]) -> str:
+    mut parts: list[str] = []
+    for item in items:
+        parts.append(
+            f"{item.name}:{item.count}/{item.ratio}/{item.small}/{item.tiny}/{item.flag}/{item.narrow}/{item.pos.x},{item.pos.y}/{item.tags}"
+        )
+    return ", ".join(parts)
+
+def main():
+    mut counters = list[Counter]()
+    for i in range(12):
+        counters.append(counter(f"c{i}", i))
+    # Enough loans to move the elements into boxes partway through.
+    for round in range(3):
+        for i in range(counters.len()):
+            counters[i].count += 1
+            counters[i].ratio *= 2.0
+            counters[i].small += 2
+            counters[i].tiny -= 1
+            counters[i].flag = not counters[i].flag
+            counters[i].narrow += 0.25
+            counters[i].pos.x += 10
+    print(summary(counters))
+
+    # A copy shares the elements until either list changes.
+    snapshot = counters.copy()
+    counters[0].count += 100
+    counters[-1].count += 1000
+    print(f"{counters[0].count} {counters[11].count} {snapshot[0].count} {snapshot[11].count}")
+
+    # Lending an element's field box to a runtime operation.
+    for i in range(counters.len()):
+        counters[i].tags.append(f"t{i % 3}")
+    counters[2].tags.append("extra")
+    print(f"{counters[2].tags} {snapshot[2].tags}")
+
+    bump_param(counters, 5)
+    print(f"{counters[3].count} {counters[3].pos.x}")
+
+    # Lists of lists, lent to an append.
+    mut grid: list[list[int64]] = []
+    for _ in range(10):
+        grid.append(list[int64]())
+    for step in range(40):
+        grid[step % 10].append(step)
+    copy_of_grid = grid.copy()
+    grid[1].append(99)
+    grid[-1].append(-1)
+    print(f"{grid[1]} {copy_of_grid[1]} {grid[9]}")
+
+    # Scalar elements of a list of scalars.
+    mut values = [1, 2, 3, 4]
+    values_copy = values.copy()
+    for i in range(values.len()):
+        values[i] += 10
+    print(f"{values} {values_copy}")
+
+    # Lists held in the fields of a class.
+    mut book = Book(counters=counters.copy(), levels=[], totals=[])
+    for _ in range(5):
+        book.levels.append(list[int64]())
+        book.totals.append(0)
+    for step in range(30):
+        book.file(step % 5, step)
+    book.bump_all()
+    print(f"{book.levels[2]} {book.totals} {book.counters[4].count} {book.counters[4].pos.y}")
+    print(f"{counters[4].count} {counters[4].pos.y}")
+
+    # A copy of a list of instances shares each field's list with the
+    # original until either changes, whichever changes first.
+    mut books: list[Book] = []
+    for _ in range(3):
+        mut entry = Book(counters=[], levels=[], totals=[0, 0, 0, 0])
+        entry.put(0, 1)
+        books.append(entry)
+    mut shelf = books.copy()
+    books[0].put(1, 5)
+    shelf[1].put(2, 7)
+    print(f"{books[0].totals} {shelf[0].totals} {books[1].totals} {shelf[1].totals}")
+
+    # Lists of lists copied the same way.
+    mut rows = grid.copy()
+    rows[0].append(5)
+    grid[0].append(6)
+    print(f"{rows[0]} {grid[0]}")

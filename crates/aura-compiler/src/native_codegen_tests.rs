@@ -13693,6 +13693,92 @@ def main():
 }
 
 #[test]
+fn native_element_loans_follow_loans_used_only_through_their_place() {
+    let source = r#"
+class Counter:
+    name: str
+    count: int64
+    tags: list[str]
+
+class Shelf:
+    totals: list[int64]
+    rows: list[list[int64]]
+
+def bump(items: mut list[Counter], grid: mut list[list[int64]], values: mut list[int64], names: list[str], shelf: mut Shelf, table: mut dict[str, Counter]) -> int64:
+    items[0].count += 1
+    items[1].tags.append("t")
+    grid[0].append(1)
+    values[1] += 2
+    shelf.totals[0] += 3
+    shelf.rows[1].append(4)
+    grid[0][1] += 5
+    table["k"].count += 6
+    return names[0].len() + items[0].tags.len()
+
+def main():
+    mut items = [Counter(name="a", count=1, tags=[]), Counter(name="b", count=2, tags=[])]
+    mut grid = [[1, 2], [3]]
+    mut values = [1, 2]
+    mut shelf = Shelf(totals=[0], rows=[[], []])
+    mut table = {"k": Counter(name="c", count=3, tags=[])}
+    print(bump(items, grid, values, ["x"], shelf, table))
+    print(f"{items[0].count} {items[1].tags} {grid} {values} {shelf.totals} {shelf.rows} {table['k'].count}")
+"#;
+    let mir = lower_source_to_mir(source).expect("element loan source should lower");
+    let bump = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "bump")
+        .expect("bump should lower");
+    let (uses, lend_temps) = super::element_loans::native_element_loans(bump);
+    // Each loan named by the list it selects from (a nested selection
+    // begins on another loan) and the place inside the element.
+    let mut followed = BTreeSet::new();
+    let mut refused = BTreeSet::new();
+    for instruction in bump.blocks.iter().flat_map(|block| &block.instructions) {
+        if let Instruction::BeginElementLoan {
+            loan,
+            source,
+            projection,
+            ..
+        } = instruction
+        {
+            let list = if source.starts_with('%') {
+                "loan"
+            } else {
+                source.as_str()
+            };
+            let shape = format!("{list}[].{projection}");
+            if uses.contains_key(loan) {
+                followed.insert(shape);
+            } else {
+                refused.insert(shape);
+            }
+        }
+    }
+    // The analysis follows each loan that one runtime operation uses through
+    // its place; the emitter later skips the `dict` entry, which it cannot
+    // reach in place. A lend whose result feeds more than its operation
+    // (`items[0].tags.len()` in a sum) and a nested selection, which begins
+    // on another loan, keep the runtime walk.
+    let expected = |shapes: &[&str]| shapes.iter().map(|shape| shape.to_string()).collect();
+    assert_eq!(
+        followed,
+        expected(&[
+            "grid[].",
+            "items[].count",
+            "items[].tags",
+            "shelf.rows[].",
+            "table[].count"
+        ])
+    );
+    assert_eq!(refused, expected(&["items[].tags", "names[]."]));
+    assert_eq!(lend_temps.len(), 5);
+    // Generated code follows those it can when the program is emitted.
+    emit_host_object(&mir).expect("element loan source should emit directly");
+}
+
+#[test]
 fn native_record_lists_read_and_write_records_in_place() {
     let source = r#"
 copy class Point:

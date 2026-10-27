@@ -197,6 +197,7 @@ runtime_functions! {
     ElementPathStore => ("aura_direct_element_path_store", [I64, I64, I64, I64, I64, I64, I64, I64], Some(I64)),
     ElementPathTake => ("aura_direct_element_path_take", [I64, I64, I64, I64, I64, I64, I64], Some(I64)),
     ElementPathProbe => ("aura_direct_element_path_probe", [I64, I64, I64, I64, I64, I64, I64], Some(I64)),
+    ElementPathPromote => ("aura_direct_element_path_promote", [I64, I64, I64, I64, I64, I64, I64], Some(I64)),
     ArrayZeros => ("aura_direct_array_zeros", [I64, I64, I64, I64], Some(I64)),
     ArrayFull => ("aura_direct_array_full", [I64, I64, I64, I64, I64], Some(I64)),
     ArrayFromVec => ("aura_direct_array_from_vec", [I64, I64, I64, I64, I64], Some(I64)),

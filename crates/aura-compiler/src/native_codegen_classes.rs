@@ -43,13 +43,13 @@ pub(super) struct ClassRecord {
 /// lies.
 #[derive(Clone, Debug)]
 pub(super) struct ClassSlot {
-    access: i64,
-    offset: i32,
-    kind: SlotKind,
+    pub(super) access: i64,
+    pub(super) offset: i32,
+    pub(super) kind: SlotKind,
 }
 
 #[derive(Clone, Debug)]
-enum SlotKind {
+pub(super) enum SlotKind {
     /// Scalars, one per word of the place's direct type.
     Leaves(Vec<PlainLeaf>),
     /// One box, null while the field is moved out.
@@ -60,8 +60,8 @@ enum SlotKind {
 /// holds the field's own box, and the one that holds the slot's address.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct FieldLend {
-    lent: Var,
-    slot: Var,
+    pub(super) lent: Var,
+    pub(super) slot: Var,
 }
 
 impl PlainRecords {
@@ -199,7 +199,7 @@ fn names_root(place: &str, temp: &str, root: &str) -> bool {
 /// Whether `instruction` is a runtime operation on the lent temporary
 /// `temp` as its receiver, which only reads the temporary or changes it in
 /// place, and which names neither it elsewhere nor the instance `root`.
-fn receives_lent_field(instruction: &Instruction, temp: &str, root: &str) -> bool {
+pub(super) fn receives_lent_field(instruction: &Instruction, temp: &str, root: &str) -> bool {
     let Instruction::Assign {
         target,
         value:
@@ -240,7 +240,7 @@ fn receives_lent_field(instruction: &Instruction, temp: &str, root: &str) -> boo
 impl FunctionCompiler<'_> {
     /// The slot of field path `segments` of a `root_ty` instance, when the
     /// class is kept in place and generated code reaches the place there.
-    fn class_slot(
+    pub(super) fn class_slot(
         &mut self,
         root_ty: &DirectType,
         segments: &[&str],
@@ -263,7 +263,7 @@ impl FunctionCompiler<'_> {
 
     /// The root, path, and slot of a static field place of a root that
     /// holds a class kept in place.
-    fn class_place(
+    pub(super) fn class_place(
         &mut self,
         place: &str,
     ) -> std::result::Result<Option<(String, ClassSlot, DirectType)>, String> {
@@ -296,7 +296,13 @@ impl FunctionCompiler<'_> {
     /// Branches to `fast_block` when the instance box `object` keeps its
     /// fields in the layout `access` names, which also means it is confined
     /// to this thread, and to `slow_block` otherwise.
-    fn emit_class_check(&mut self, object: Val, access: i64, slow_block: Blk, fast_block: Blk) {
+    pub(super) fn emit_class_check(
+        &mut self,
+        object: Val,
+        access: i64,
+        slow_block: Blk,
+        fast_block: Blk,
+    ) {
         let layout = aura_runtime::native_runtime::direct_list_layout();
         let actual = self.emit_list_access(object, &layout);
         let matches = self.builder.icmp_imm(IntCC::Equal, actual, access);
@@ -304,7 +310,7 @@ impl FunctionCompiler<'_> {
     }
 
     /// The address of the block of a checked instance box.
-    fn class_block(&mut self, object: Val) -> Val {
+    pub(super) fn class_block(&mut self, object: Val) -> Val {
         let layout = aura_runtime::native_runtime::direct_list_layout();
         self.builder.load(
             types::I64,
@@ -699,7 +705,7 @@ impl FunctionCompiler<'_> {
     }
 
     /// A new `i64` variable.
-    fn declare_word_var(&mut self) -> Var {
+    pub(super) fn declare_word_var(&mut self) -> Var {
         let variable = Var(self.next_variable_index as u32);
         self.next_variable_index += 1;
         self.builder.declare_var(variable, types::I64);
