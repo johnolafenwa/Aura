@@ -49,6 +49,13 @@ fn call_type_args<'a>(
         .collect()
 }
 
+/// `GENERIC_CALLS` lowered with its generic calls left erased, as calls
+/// the specialization pass makes no copy for stay.
+fn lower_erased() -> MirModule {
+    let program = crate::check_source(GENERIC_CALLS).expect("source should check");
+    crate::mir::lower_unspecialized(&program)
+}
+
 fn assert_boundaries_reject(module: &MirModule, expected: &str) {
     let runtime = crate::run_mir(module).expect_err("the interpreter must reject the call");
     assert!(runtime.message.contains(expected), "{}", runtime.message);
@@ -59,7 +66,7 @@ fn assert_boundaries_reject(module: &MirModule, expected: &str) {
 
 #[test]
 fn lowering_records_the_type_each_generic_call_binds() {
-    let mut module = crate::lower_source_to_mir(GENERIC_CALLS).expect("source should lower");
+    let mut module = lower_erased();
     let identity = call_type_args(&mut module, "identity");
     assert_eq!(identity.len(), 2);
     assert_eq!(
@@ -96,7 +103,7 @@ fn lowering_records_the_type_each_generic_call_binds() {
 
 #[test]
 fn boundaries_reject_calls_with_the_wrong_type_arguments() {
-    let lowered = crate::lower_source_to_mir(GENERIC_CALLS).expect("source should lower");
+    let lowered = lower_erased();
 
     let mut missing = lowered.clone();
     call_type_args(&mut missing, "identity")[0].clear();

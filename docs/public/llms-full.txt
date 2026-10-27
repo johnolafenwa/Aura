@@ -6301,7 +6301,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - An initializer cannot move a field out of `self`, cannot return a `Result`, and has one signature per class. Use a named factory for fallible or alternate construction.
 - An ordinary `-> T` return value is always owned. A Copy result is an ordinary copy. A non-Copy result must be constructed, cloned when clone-safe, moved from owned input, or produced by an owner operation.
 - A function may instead declare one `-> view [mut] T from origin` result tied to a receiver or parameter place.
-- A union value passed through a generic bound dispatches its shared and consuming trait methods on the active member on both backends. A `mut self` trait method reached this way runs on the interpreter. The direct backend reports `AU4001` at that call because it has no write-back path to the active payload behind an erased place. Narrow the union to its member before a mutable call.
+- A union value passed through a generic bound dispatches its trait methods on the active member on both backends, `mut self` methods included, because native code compiles a copy of the generic function for the union type. A call keeps the generic function instead when the module already has 4,096 copies, when a type argument nests deeper than a layout can, or when the copy would merge union members, as `T | int64` does with `T = int64`. Such a call still runs a `mut self` method on the interpreter only. There the direct backend reports `AU4001` because it has no write-back path to the active payload behind an erased place. Narrow the union to its member before such a call.
 - The MIR interpreter allocates a box for each union payload and closure environment. MIR is Aura's mid-level intermediate representation. The direct backend stores unions and callables inline, as [Performance](/manual/performance#representation) describes. Aura makes no foreign-function or application binary interface (ABI) stability claim for these layouts.
 
 ### Strings And Bytes
@@ -11605,6 +11605,12 @@ ok = Result[int32, str].Ok(7)
 ```
 
 Explicit arguments must have the exact arity and satisfy every substituted bound. Specialization and indexing share bracket syntax. [Grammar](/manual/grammar#explicit-specialization) gives the parser rules that tell them apart.
+
+### Compiled Copies
+
+A native build compiles a generic function once for each set of concrete type arguments its calls use. `identity(3)` and `identity("Aura")` run separate machine code for `int64` and for `str`, and each works on its own type's values directly. A call whose type arguments are not all known when the program is built, such as a call inside another generic function that the build could not copy, runs one shared version of the function that holds its values boxed. Both give the same results. `aura run` interprets one version of each function.
+
+An error's call chain names the function as it is written, such as `identity`, never a copy.
 
 ### Type Parameters As Union Members
 

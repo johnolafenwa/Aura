@@ -1525,7 +1525,19 @@ def main():
     print(describe(Envelope[(str, int32)](payload=("eight", 8))))
 "#;
 
-    let mir = lower_source_to_mir(source).expect("tuple-specialized dispatch should lower");
+    // Copies of `describe` dispatch statically; the erased body matches
+    // the receiver's type at run time.
+    let copied = lower_source_to_mir(source).expect("tuple-specialized dispatch should lower");
+    let output =
+        crate::run_mir(&copied).expect("tuple-specialized dispatch should run through MIR");
+    assert_eq!(output.stdout, "integer then string\nstring then integer\n");
+    let bytes = emit_host_object(&copied).expect("copied dispatch should emit direct object code");
+    assert!(!object_referenced_symbols(&bytes)
+        .iter()
+        .any(|symbol| symbol.contains("aura_direct_value_type_matches")));
+
+    let program = crate::check_source(source).expect("tuple-specialized dispatch should check");
+    let mir = crate::mir::lower_unspecialized(&program);
     let output = crate::run_mir(&mir).expect("tuple-specialized dispatch should run through MIR");
     assert_eq!(output.stdout, "integer then string\nstring then integer\n");
 

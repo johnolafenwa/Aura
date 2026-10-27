@@ -1,0 +1,8 @@
+def check[T](value: own T, index: int64) -> T:
+    items: list[int64] = [1, 2]
+    print(items[index])
+    return value
+
+def main():
+    print(check("x", 1))
+    print(check("y", 5))

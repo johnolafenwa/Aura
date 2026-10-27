@@ -180,7 +180,7 @@ fn call_type_args<'a>(
 
 /// The type a backend lays a place out as. A returned view has no layout of
 /// its own.
-fn place_layout_type(
+pub(super) fn place_layout_type(
     context: &MirLoanValidationContext<'_>,
     function: &MirFunction,
     place: &str,
@@ -191,7 +191,7 @@ fn place_layout_type(
 
 /// The type a backend loads `operand` as. An integer literal that fits in
 /// 64 bits loads as an `int64`; a wider one is boxed with no static type.
-fn operand_layout_type(
+pub(super) fn operand_layout_type(
     context: &MirLoanValidationContext<'_>,
     function: &MirFunction,
     operand: &Operand,
@@ -223,7 +223,11 @@ fn names_returned_view(ty: &Type) -> bool {
 /// Binds each type parameter `pattern` names to the matching part of
 /// `actual`, keeping a binding already made. A part that does not match
 /// binds nothing, and a union binds nothing.
-fn bind_type_params(pattern: &Type, actual: &Type, bindings: &mut HashMap<String, Type>) {
+pub(super) fn bind_type_params(
+    pattern: &Type,
+    actual: &Type,
+    bindings: &mut HashMap<String, Type>,
+) {
     match (pattern, actual) {
         (Type::TypeParam(name), _) => {
             bindings

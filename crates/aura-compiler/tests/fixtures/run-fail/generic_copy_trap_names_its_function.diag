@@ -1,0 +1,6 @@
+error[AU4003]: list index `5` is out of bounds for length `2`
+ --> crates/aura-compiler/tests/fixtures/run-fail/generic_copy_trap_names_its_function.au:3:17
+  |
+3 |     print(items[index])
+  |                 ^
+  = note: Aura call chain (innermost first): check at 1:1 -> main at 6:1

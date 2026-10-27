@@ -31,6 +31,17 @@ in this file.
   Generated code does not use the layouts yet, so programs build and run
   exactly as before. The design is in
   `architecture_docs/24-typed-layouts-design-note.md`.
+- Native builds compile a generic function once for each set of concrete
+  type arguments its calls use, such as `identity[int64]` and
+  `identity[str]`, so the copy works on values of those types instead of
+  boxed values of any type. A call whose types are not all known keeps
+  calling the generic function. `aura mir` shows the copies. Error call
+  chains name the function a copy was made from, on both backends: `pick`
+  rather than `pick[int64]`. This also applies to the functions that
+  `T.method()` calls already specialized, which used to show their type
+  arguments. A `mut self` trait method that a generic function calls on a
+  union argument, such as `poke(pet)` with `pet: Dog | Cat`, now runs in
+  native builds too, where it used to stop with `AU4001`.
 
 ### Performance
 

@@ -3412,7 +3412,9 @@ impl MirRuntime {
                     "AU4005",
                     format!(
                         "task stack exhausted while calling `{}`: {} bytes remain but the interpreter keeps {} in reserve; start the task with `start_with_stack` and a larger size",
-                        function.name, headroom, TASK_STACK_HEADROOM_RESERVE
+                        public_runtime_function_name(&function.name),
+                        headroom,
+                        TASK_STACK_HEADROOM_RESERVE
                     ),
                 ));
             }
@@ -3422,7 +3424,8 @@ impl MirRuntime {
                 function.span,
                 format!(
                     "maximum call depth of {} exceeded while calling `{}`",
-                    MAX_CALL_DEPTH, function.name
+                    MAX_CALL_DEPTH,
+                    public_runtime_function_name(&function.name)
                 ),
             ));
         }
@@ -11646,8 +11649,7 @@ fn collect_function_signature_substitutions(
 }
 
 fn public_runtime_function_name(name: &str) -> String {
-    name.split_once("::__default_")
-        .map_or_else(|| name.to_string(), |(public, _)| public.to_string())
+    crate::mir::public_function_name(name)
 }
 
 fn collect_type_params_from_type(ty: &Type, collected: &mut std::collections::BTreeSet<String>) {

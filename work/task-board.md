@@ -12,7 +12,11 @@ Last updated: 2026-10-26
   layout plan (`mir_layout.rs`), layout descriptors, and the runtime
   converters (`native_typed_layout.rs`). No generated code changes.
   Details are in `2026-10-26-rust-speed-2a-layout-plan.md`.
-- Next: 2b, specialized generic user functions.
+- Step 2b: native builds copy each generic user function for the concrete
+  type arguments its calls use (`mir_specialize.rs`), and member calls and
+  `with` exits resolve to the copies. Details are in
+  `2026-10-26-rust-speed-2b-specialized-generics.md`.
+- Next: 2c, `copy class` values and tuples inline.
 
 ## Aura 0.7.1 preview release (complete)
 

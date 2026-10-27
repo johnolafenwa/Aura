@@ -533,6 +533,57 @@ or a default that is not its parameter's. It refuses `Operand::Default` in
 any other call. The interpreter reads the bound form. It leaves out each
 `Default(Omitted)` argument and applies its own default.
 
+### Specialized Generic Functions
+
+`mir::specialize::specialize_generic_functions` copies a generic user
+function once for each list of concrete type arguments its calls use, as
+Rust compiles generics. `lower` runs it after `type_param_calls` and
+before runtime ops are resolved, so every later pass sees a copy's
+concrete types: `items.append(item)` in the copy for `float64` resolves to
+the `float64` op, and `value is not None` on a `str | None` becomes a tag
+test. `lower_implicit` skips the pass, since the interpreter reads values,
+not layouts.
+
+A copy is named after its function and its type arguments, in type
+parameter name order. The lambdas and default argument helpers a function
+owns are copied with it:
+
+```text
+def pair[A, B](first: own A, second: own B) -> str   pair[int64, str]
+Box[str].get()                                        Box.get[str]
+a lambda inside describe[float64]                     describe[float64]::__lambda_35_27
+```
+
+The pass starts from every function and follows calls until no new copy
+appears:
+
+- A `Name` call to a generic function calls the copy for the types its
+  arguments and destination bind. Values bind first, then integer
+  literals as `int64`. Keyword arguments bind by name. A parameter such as
+  `T | None` binds `T` to the member of the argument's union that `None`
+  leaves.
+- A member call, or a `with` exit, that runs a generic method makes the
+  copy for its receiver's type and its arguments. The call keeps its
+  member form. `resolve_methods` binds the same types and names the copy
+  in `Static`, or in each `Static` arm of a union dispatch, and
+  `validate_methods` binds them again to check it.
+
+The generic original stays in the module, and a call keeps calling it
+when:
+
+- a type argument names a type parameter or a type lowering left unknown;
+- an argument's type is not exactly its parameter's under the type
+  arguments;
+- a type argument nests more than 32 deep, the layout limit, as when
+  `nest[T]` calls `nest[list[T]]`;
+- a union in the copy would merge members, as `T | int64` does for
+  `T = int64`, since its tags would change meaning;
+- the module already has 4,096 copies.
+
+A trap inside a copy names the function it was copied from:
+`public_function_name` drops each bracketed type argument list, so the
+call chain reads `check at 1:1` on both backends.
+
 ### Generic Call Type Arguments
 
 A generic function that no pass specializes has one body, and each
@@ -573,7 +624,8 @@ A `Member` or `TraitMember` call names what it runs in `dispatch`, a
 
 - `Static { function }` calls one function with the receiver first. A
   class's own method wins, then the most specific trait method for the
-  receiver's type. A `TraitMember` call looks only at its trait.
+  receiver's type. A `TraitMember` call looks only at its trait. A
+  generic method names its specialized copy when there is one.
 - `Runtime(op)` is a runtime op on one member of a union receiver. Any
   other call that resolves to an op is already a `Runtime` call.
 - `Nothing` runs nothing: `close` on `net.HttpExchange`,
