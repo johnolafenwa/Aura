@@ -1,5 +1,5 @@
 use crate::lower_source_to_mir;
-use crate::mir::{CallTarget, Instruction, MirArg, MirFunction, Operand, Rvalue};
+use crate::mir::{CallTarget, Instruction, MirArg, MirFunction, Operand, Rvalue, Terminator};
 use crate::runtime_ops::{ListOp, RuntimeOp, SetOp, StrOp};
 
 use super::{lent_element_reads, LentElements};
@@ -20,7 +20,8 @@ def first(items: list[Item]) -> int64:
 
 def count(items: list[Item]) -> int64:
     mut sum = 0
-    for i in range(len(items)):
+    indices = range(len(items))
+    for i in indices:
         sum += len(items[i].name)
     return sum
 
@@ -76,7 +77,12 @@ fn a_loop_lends_each_element_and_never_takes_a_reference() {
 
 #[test]
 fn a_range_loop_lends_each_element_too() {
-    let found = lent(&function("count"));
+    let count = function("count");
+    assert!(count
+        .blocks
+        .iter()
+        .any(|block| matches!(block.terminator, Terminator::ForRange { .. })));
+    let found = lent(&count);
     let [(_, list)] = found.lists.iter().collect::<Vec<_>>()[..] else {
         panic!("one element read should be lent: {found:?}");
     };
