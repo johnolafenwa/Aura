@@ -1444,6 +1444,7 @@ impl<'a> NativeCodegen<'a> {
                     Some(DirectType::Opaque(ty)) if !matches!(ty, Type::Named(name, _) if name == "str")
                 )
         });
+        let (native_loan_uses, element_lend_temps) = element_loans::native_element_loans(function);
         let mut lent_elements = HashMap::new();
         let mut lent_names = lent_element_reads.lists.keys().cloned().collect::<Vec<_>>();
         lent_names.sort();
@@ -1491,6 +1492,12 @@ impl<'a> NativeCodegen<'a> {
             lookup_payload: None,
             emptied_store_root: None,
             lent_temps: HashMap::new(),
+            field_lend_temps: classes::field_lend_temps(function),
+            field_lends: HashMap::new(),
+            field_box_receiver: false,
+            native_loan_uses,
+            element_lend_temps,
+            native_loans: HashMap::new(),
             retain_calls: HashMap::new(),
             retain_releases: HashMap::new(),
             consumed_retains: HashSet::new(),
@@ -2719,6 +2726,21 @@ struct FunctionCompiler<'a> {
     /// as MIR states by giving it no retain. A builtin operation changes a
     /// lent receiver in place, so it stores nothing back.
     lent_temps: HashMap<String, bool>,
+    /// The temporaries of lends of a field to one runtime operation, which
+    /// may lend the field's box as it is. See `classes::field_lend_temps`.
+    field_lend_temps: HashSet<String>,
+    /// The field lends in progress that lent a box as it is, by temporary.
+    field_lends: HashMap<String, classes::FieldLend>,
+    /// Whether the runtime operation being compiled has such a lent box as
+    /// its receiver.
+    field_box_receiver: bool,
+    /// The element loans generated code may follow to their place, and the
+    /// temporaries their lends lend to one runtime operation. See
+    /// `element_loans::native_element_loans`.
+    native_loan_uses: HashMap<String, element_loans::LoanUse>,
+    element_lend_temps: HashSet<String>,
+    /// The element loans generated code followed when they began.
+    native_loans: HashMap<String, element_loans::NativeLoan>,
     /// Each retained handle with the retain that made it and the handle it
     /// retained. A consumer that copies the value into its slot turns the
     /// retain into the copy.
@@ -3786,14 +3808,20 @@ impl<'a> FunctionCompiler<'a> {
                 temp,
                 mutable,
             } => {
-                self.lent_temps.insert(temp.clone(), *mutable);
-                let value = self.take_lent_place(place)?;
-                self.mark_emptied_store_root(temp);
-                self.store_root(temp, value)?;
+                if !self.lend_class_field(place, temp, *mutable)?
+                    && !self.lend_native_element(place, temp, *mutable)?
+                {
+                    self.lent_temps.insert(temp.clone(), *mutable);
+                    let value = self.take_lent_place(place)?;
+                    self.mark_emptied_store_root(temp);
+                    self.store_root(temp, value)?;
+                }
             }
             Instruction::EndLend { place, temp, .. } => {
-                let value = self.take_place(temp)?;
-                self.store_place(place, value)?;
+                if !self.end_class_field_lend(place, temp)? {
+                    let value = self.take_place(temp)?;
+                    self.store_place(place, value)?;
+                }
             }
             Instruction::Safepoint => {
                 let Some(fuel_variable) = self.safepoint_fuel else {
@@ -3993,16 +4021,20 @@ impl<'a> FunctionCompiler<'a> {
             }
             Instruction::ReadLoan { target, loan } => {
                 self.mark_emptied_store_root(target);
-                let loaded = self.load_place(loan)?;
-                let target_ty = self.type_of_place(target)?;
-                let loaded = self.coerce_value(loaded, &target_ty)?;
-                self.store_place(target, loaded)?;
+                if !self.read_native_loan(target, loan)? {
+                    let loaded = self.load_place(loan)?;
+                    let target_ty = self.type_of_place(target)?;
+                    let loaded = self.coerce_value(loaded, &target_ty)?;
+                    self.store_place(target, loaded)?;
+                }
             }
             Instruction::WriteLoan { loan, value } => {
-                let target_ty = self.type_of_place(loan)?;
-                let compiled = self.compile_rvalue_for_target(value, &target_ty)?;
-                let coerced = self.coerce_value(compiled, &target_ty)?;
-                self.store_place(loan, coerced)?;
+                if !self.write_native_loan(loan, value)? {
+                    let target_ty = self.type_of_place(loan)?;
+                    let compiled = self.compile_rvalue_for_target(value, &target_ty)?;
+                    let coerced = self.coerce_value(compiled, &target_ty)?;
+                    self.store_place(loan, coerced)?;
+                }
             }
             Instruction::EndLoan { loan } => {
                 self.view_places.remove(loan);
@@ -4810,19 +4842,32 @@ impl<'a> FunctionCompiler<'a> {
         };
         let element_direct_ty =
             ensure_direct_type(&resolved_element_type, &self.classes, "Vec element")?;
-        let init = self.builder.call(self.runtime[RuntimeFn::VecEmpty], &[]);
-        let vector = self.owned_opaque_result(
-            init.results,
-            Type::Named("list".to_string(), vec![resolved_element_type]),
-        );
+        let list_type = Type::Named("list".to_string(), vec![resolved_element_type]);
+        let init = if runtime_type_is_wildcard(&list_type) {
+            self.builder.call(self.runtime[RuntimeFn::VecEmpty], &[])
+        } else {
+            // The list starts with its type, so the tag that follows an
+            // empty literal's assignment repeats nothing.
+            let encoded = crate::native_runtime::canonical_runtime_type_name(&list_type);
+            let (type_ptr, type_len) = self.string_constant(encoded.as_bytes())?;
+            let cell = self.tag_cell(&encoded)?;
+            let call = self.builder.call(
+                self.runtime[RuntimeFn::VecEmptyTagged],
+                &[cell, type_ptr, type_len],
+            );
+            if elements.is_empty() {
+                self.last_runtime_type_tag = Some((call.inst, call.results[0], encoded));
+            }
+            call
+        };
+        let vector = self.owned_opaque_result(init.results, list_type);
         for element in elements {
             let value = self.load_operand_as_opaque_direct(element, &element_direct_ty)?;
             let value = self.transfer_owned_opaque_value(&value);
-            let result = self.builder.call(
+            self.builder.call(
                 self.runtime[RuntimeFn::VecPushInPlace],
                 &[vector.values[0], value],
             );
-            self.release_opaque_handle(result.results[0]);
         }
         Ok(vector)
     }
@@ -7428,6 +7473,8 @@ impl<'a> FunctionCompiler<'a> {
         if let Some(result) = self.compile_borrowed_element_member_call(object, callee, args)? {
             return Ok(result);
         }
+        let field_box_receiver = matches!(callee, MemberCallee::Runtime(_))
+            && matches!(object, Operand::Place(place) if self.field_lends.contains_key(place));
         let object = match (object, callee) {
             (Operand::Place(place), MemberCallee::Method { .. })
                 if self.moves_lent_temp(place, receiver_place) =>
@@ -7439,7 +7486,10 @@ impl<'a> FunctionCompiler<'a> {
         let receiver_place = receiver_place.filter(|place| {
             !(matches!(callee, MemberCallee::Runtime(_)) && self.lent_temps.contains_key(*place))
         });
-        self.compile_member_callee_on_receiver(object, callee, receiver_place, args)
+        let outer = std::mem::replace(&mut self.field_box_receiver, field_box_receiver);
+        let result = self.compile_member_callee_on_receiver(object, callee, receiver_place, args);
+        self.field_box_receiver = outer;
+        result
     }
 
     /// Whether a call operand reading `place` with `writeback` moves the
@@ -8062,6 +8112,9 @@ impl<'a> FunctionCompiler<'a> {
             alternative.elements.push(selector.clone());
         }
         self.view_places.insert(loan.to_string(), resolved);
+        if self.begin_native_element_loan(loan)? {
+            return Ok(());
+        }
         // Bounds or presence are checked once at creation. A single
         // unconditional selection is probed in place; otherwise probe the
         // selected slot through the loan and drop the copy.
@@ -8080,22 +8133,7 @@ impl<'a> FunctionCompiler<'a> {
         let resolved = self.resolve_view_place(loan)?;
         if let [alternative] = resolved.alternatives.as_slice() {
             if alternative.conditions.is_empty() && !alternative.elements.is_empty() {
-                let (collection, projection) = self.load_element_path_root(&alternative.place)?;
-                let path = self.element_path_operands(&projection, &alternative.elements)?;
-                let inst = self.builder.call(
-                    self.runtime[RuntimeFn::ElementPathProbe],
-                    &[
-                        collection.values[0],
-                        path.path_ptr,
-                        path.path_len,
-                        path.selectors_ptr,
-                        path.count,
-                        path.line,
-                        path.column,
-                    ],
-                );
-                self.release_opaque_handle(inst.results[0]);
-                return Ok(());
+                return self.emit_element_path_probe(loan, false);
             }
         }
         let baseline = self.layout_scratch.clone();
@@ -8253,6 +8291,15 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn load_static_place(&mut self, place: &str) -> std::result::Result<ValueRef, String> {
+        if let Some(value) = self.load_class_place(place)? {
+            return Ok(value);
+        }
+        self.load_static_place_slowly(place)
+    }
+
+    /// Reads a static place field by field, a field of a boxed instance
+    /// through the runtime.
+    fn load_static_place_slowly(&mut self, place: &str) -> std::result::Result<ValueRef, String> {
         let mut segments = place.split('.');
         let root = segments
             .next()
@@ -9928,17 +9975,16 @@ impl<'a> FunctionCompiler<'a> {
         let result = if segments.is_empty() {
             self.store_root(root, value)
         } else if matches!(self.variable_types.get(root), Some(DirectType::Opaque(_))) {
-            let current = self.load_root(root)?;
-            let current = self.ensure_opaque(current)?;
-            let updated_value = self.ensure_opaque(value)?;
-            let updated_value = self.transfer_owned_opaque_value(&updated_value);
-            let field_path = segments.join(".");
-            let (field_ptr, field_len) = self.string_constant(field_path.as_bytes())?;
-            self.builder.call(
-                self.runtime[RuntimeFn::InstanceSetFieldOwned],
-                &[current.values[0], field_ptr, field_len, updated_value],
-            );
-            Ok(())
+            match self.store_class_place(place, value)? {
+                None => Ok(()),
+                Some(value) => {
+                    let current = self.load_root(root)?;
+                    let current = self.ensure_opaque(current)?;
+                    let updated_value = self.ensure_opaque(value)?;
+                    let updated_value = self.transfer_owned_opaque_value(&updated_value);
+                    self.emit_set_field_owned(current.values[0], &segments.join("."), updated_value)
+                }
+            }
         } else {
             let root_value = self.load_root(root)?;
             let updated = self.replace_nested_field(root_value, &segments, value)?;
@@ -12332,11 +12378,17 @@ impl<'a> FunctionCompiler<'a> {
                 };
                 let mut words = vec![list, bits];
                 self.push_runtime_call_words(call, &mut words);
-                self.emit_scalar_list_push(list, bits, kind, function, &words);
+                if self.holds_field_box() {
+                    self.builder.call(function, &words);
+                } else {
+                    self.emit_scalar_list_push(list, bits, kind, function, &words);
+                }
                 self.store_receiver_back_in_place(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
-            ListOp::Push if self.plain_record(&element_direct_ty)?.is_some() => {
+            ListOp::Push
+                if self.plain_record(&element_direct_ty)?.is_some() && !self.holds_field_box() =>
+            {
                 let record = self
                     .plain_record(&element_direct_ty)?
                     .expect("checked above");
@@ -12350,15 +12402,14 @@ impl<'a> FunctionCompiler<'a> {
                 let value =
                     self.load_operand_as_opaque_direct(&args[0].value, &element_direct_ty)?;
                 let value = self.transfer_owned_opaque_value(&value);
-                let results = self.runtime_call_results(function, &[list, value]);
-                self.release_opaque_handle(results[0]);
+                self.builder.call(function, &[list, value]);
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
             ListOp::Pop => {
                 let index = self.load_word(args[0], int64, true)?;
                 if let Some(kind) = ScalarElement::of(&element_ty)
-                    .filter(|_| self.integer_constant(index) == Some(-1))
+                    .filter(|_| self.integer_constant(index) == Some(-1) && !self.holds_field_box())
                 {
                     // `pop()` of a scalar comes back as raw bits, with no box.
                     let bits = self.emit_scalar_list_pop(list, kind);
@@ -13267,6 +13318,9 @@ impl<'a> FunctionCompiler<'a> {
             "direct backend does not know class `{}`",
             class_name
         ))?;
+        if let Some(built) = self.construct_class_in_place(class_name, fields, target_ty, &class)? {
+            return Ok(built);
+        }
         let (class_ptr, class_len) = self.string_constant(class_name.as_bytes())?;
         let init = self.builder.call(
             self.runtime[RuntimeFn::InstanceEmpty],
@@ -15714,7 +15768,11 @@ mod reachability;
 
 #[path = "native_codegen_callables.rs"]
 mod callables;
+#[path = "native_codegen_classes.rs"]
+mod classes;
 
+#[path = "native_codegen_element_loans.rs"]
+mod element_loans;
 #[path = "native_codegen_elements.rs"]
 mod elements;
 #[path = "native_codegen_lookups.rs"]

@@ -1,0 +1,11 @@
+465
+ready 55
+ready 960
+ready 960
+error list index `9` is out of bounds for length `3`
+error list index `9` is out of bounds for length `1`
+error list index `40` is out of bounds for length `1`
+error list pop index `-1` is out of bounds for length `0`
+4
+3
+kept:3:3:0

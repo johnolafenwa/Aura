@@ -336,3 +336,205 @@ def sum_x(points: list[Point]) -> int64:
     let lends = b"aura_direct_vec_lend";
     assert!(object.windows(lends.len()).any(|window| window == lends));
 }
+
+const FIELD_SOURCE: &str = r#"
+class Book:
+    levels: list[list[int64]]
+    count: int64
+
+    def top(mut self, p: int64) -> int64:
+        return self.levels[p][0]
+
+def main():
+    mut book = Book(levels = [[1]], count = 0)
+    print(book.top(0))
+"#;
+
+/// `Book.top` and the lent element read in it, with the list temporary
+/// the immutable lend of `self.levels` fills.
+fn field_read() -> (MirFunction, String, String) {
+    let top = lower_source_to_mir(FIELD_SOURCE)
+        .expect("the source should lower")
+        .functions
+        .into_iter()
+        .find(|function| function.name == "Book.top")
+        .expect("the method should exist");
+    let found = lent(&top);
+    let [(temp, list)] = found.lists.iter().collect::<Vec<_>>()[..] else {
+        panic!("one element read should be lent: {found:?}");
+    };
+    assert!(found.promotions.is_empty(), "{found:?}");
+    (top, temp.clone(), list.clone())
+}
+
+/// The promotions of `Book.top` once `extra` runs right after the lend of
+/// `self.levels` ends.
+fn field_read_promotions_after(extra: Instruction) -> Vec<(String, usize)> {
+    let (mut top, _, list) = field_read();
+    let (block, position) = top
+        .blocks
+        .iter()
+        .enumerate()
+        .find_map(|(block, instructions)| {
+            instructions
+                .instructions
+                .iter()
+                .position(|instruction| {
+                    matches!(instruction, Instruction::EndLend { temp, .. } if *temp == list)
+                })
+                .map(|position| (block, position))
+        })
+        .expect("the lend should end");
+    top.blocks[block].instructions.insert(position + 1, extra);
+    let mut promotions = lent(&top).promotions.into_keys().collect::<Vec<_>>();
+    promotions.sort();
+    promotions
+}
+
+#[test]
+fn an_element_of_a_lent_field_stays_lent_after_the_field_goes_back() {
+    let (top, _, list) = field_read();
+    assert!(top
+        .blocks
+        .iter()
+        .any(|block| block.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Lend { place, temp, .. } if place == "self.levels" && *temp == list
+            )
+        })));
+    // Reading the root, lending a part apart from the list, and writing
+    // another field change nothing the element depends on.
+    for kept in [
+        Instruction::Lend {
+            place: "self.levels".to_string(),
+            temp: "%t_levels".to_string(),
+            mutable: false,
+        },
+        Instruction::Lend {
+            place: "self.count".to_string(),
+            temp: "%t_count".to_string(),
+            mutable: true,
+        },
+        Instruction::Assign {
+            target: "%t_read".to_string(),
+            value: Rvalue::Use(Operand::Place("self.count".to_string())),
+        },
+        Instruction::Assign {
+            target: "self.count".to_string(),
+            value: Rvalue::Use(Operand::Place("self.count".to_string())),
+        },
+    ] {
+        let shown = format!("{kept:?}");
+        let promotions = field_read_promotions_after(kept);
+        assert!(promotions.is_empty(), "{shown}: {promotions:?}");
+    }
+    // Anything that can change or free the list first copies the element.
+    for change in [
+        Instruction::Assign {
+            target: "self".to_string(),
+            value: Rvalue::Use(Operand::Place("%t2".to_string())),
+        },
+        Instruction::Assign {
+            target: "self.levels".to_string(),
+            value: Rvalue::Use(Operand::Place("%t2".to_string())),
+        },
+        Instruction::Assign {
+            target: "%t_task".to_string(),
+            value: Rvalue::Use(Operand::MovePlace("self.count".to_string())),
+        },
+        Instruction::Release {
+            place: "self".to_string(),
+        },
+        Instruction::Lend {
+            place: "self.levels".to_string(),
+            temp: "%t_levels".to_string(),
+            mutable: true,
+        },
+        Instruction::Assign {
+            target: "%t_moved".to_string(),
+            value: Rvalue::Use(Operand::MovePlace("self.levels".to_string())),
+        },
+    ] {
+        assert_eq!(field_read_promotions_after(change).len(), 1);
+    }
+}
+
+/// The position of the `EndLend` of `list` in `function`.
+fn end_of_lend(function: &MirFunction, list: &str) -> (String, usize) {
+    function
+        .blocks
+        .iter()
+        .find_map(|block| {
+            block
+                .instructions
+                .iter()
+                .position(|instruction| {
+                    matches!(instruction, Instruction::EndLend { temp, .. } if temp == list)
+                })
+                .map(|index| (block.label.clone(), index))
+        })
+        .expect("the lend should end")
+}
+
+#[test]
+fn a_loan_of_the_lent_field_ends_the_element_loan_where_it_is_used() {
+    let (mut top, _, list) = field_read();
+    // A loan of another field changes nothing; one of the list's field
+    // ends the loan where it is used, not where it begins.
+    for (source, ends) in [("self.count", false), ("self.levels", true)] {
+        let mut changed = top.clone();
+        changed.blocks[0].instructions.insert(
+            0,
+            Instruction::BeginLoan {
+                loan: "%t_loan".to_string(),
+                source: source.to_string(),
+                mutable: true,
+            },
+        );
+        let (label, end) = end_of_lend(&changed, &list);
+        changed.blocks[0].instructions.insert(
+            end + 1,
+            Instruction::EndLoan {
+                loan: "%t_loan".to_string(),
+            },
+        );
+        let found = lent(&changed);
+        assert_eq!(
+            found.promotions.keys().cloned().collect::<Vec<_>>(),
+            if ends {
+                vec![(label, end + 1)]
+            } else {
+                Vec::new()
+            },
+            "{source}"
+        );
+    }
+    // A task that captures the root may reach the field at any time, so the
+    // element is the list's only until the list goes back.
+    let end = end_of_lend(&top, &list);
+    top.blocks[0].instructions.insert(
+        0,
+        Instruction::Assign {
+            target: "%t_closure".to_string(),
+            value: Rvalue::StartTask {
+                returns_handle: true,
+                result_is_copy: true,
+                stack_size: None,
+                task_group: Operand::Int(0),
+                function: Operand::Place("%t_function".to_string()),
+                args: vec![MirArg {
+                    name: None,
+                    value: Operand::Place("self".to_string()),
+                    writeback_place: None,
+                }],
+                span: crate::diag::Span::new(1, 1),
+            },
+        },
+    );
+    let found = lent(&top);
+    assert!(
+        found.promotions.contains_key(&(end.0, end.1 + 1)),
+        "{found:?}"
+    );
+}

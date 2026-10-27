@@ -19,8 +19,8 @@ use aura_core::layout::{
     encode_descriptor, LayoutBuilder, LayoutEnv, LayoutId, LayoutKind, LayoutTable, ScalarLayout,
 };
 use aura_runtime::native_runtime::{
-    FIRST_PLAIN_ACCESS, PLAIN_LAYOUT_CELL_ACCESS_OFFSET, PLAIN_LAYOUT_CELL_BYTES,
-    UNREGISTERED_PLAIN_ACCESS,
+    FIRST_CLASS_ACCESS, FIRST_PLAIN_ACCESS, PLAIN_LAYOUT_CELL_ACCESS_OFFSET,
+    PLAIN_LAYOUT_CELL_BYTES, UNREGISTERED_PLAIN_ACCESS,
 };
 
 use super::*;
@@ -28,9 +28,9 @@ use super::*;
 /// One scalar of a record: its byte offset in the layout and its kind, in
 /// the order of the record's words.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct PlainLeaf {
-    offset: i32,
-    kind: ScalarKind,
+pub(super) struct PlainLeaf {
+    pub(super) offset: i32,
+    pub(super) kind: ScalarKind,
 }
 
 /// The typed layout of a plain class whose fields are all scalars or
@@ -54,10 +54,16 @@ pub(super) struct PlainRecord {
 
 /// The records a module's code uses, by class name, and their cells.
 pub(super) struct PlainRecords {
-    env: LayoutEnv,
+    pub(super) env: LayoutEnv,
     by_class: HashMap<String, Option<PlainRecord>>,
-    /// Each cell with its type's descriptor, in the order they were made.
-    cells: Vec<(DataHandle, String)>,
+    /// The class layouts the module's code uses, by class name (see
+    /// `native_codegen_classes.rs`).
+    pub(super) classes: HashMap<String, Option<super::classes::ClassRecord>>,
+    /// The plain records made so far, which number their access codes.
+    plain_count: u32,
+    /// Each cell with its type's descriptor and access code, in the order
+    /// they were made.
+    cells: Vec<(DataHandle, String, u64)>,
 }
 
 impl PlainRecords {
@@ -65,13 +71,47 @@ impl PlainRecords {
         Self {
             env: crate::mir::layout::layout_env(module),
             by_class: HashMap::new(),
+            classes: HashMap::new(),
+            plain_count: 0,
             cells: Vec::new(),
         }
     }
 
-    /// The cells the main wrapper registers, with their descriptors.
-    pub(super) fn cells(&self) -> &[(DataHandle, String)] {
+    /// The cells the main wrapper registers, with their descriptors and
+    /// access codes.
+    pub(super) fn cells(&self) -> &[(DataHandle, String, u64)] {
         &self.cells
+    }
+
+    /// Declares a cell for the layout of `ty`, which the main wrapper
+    /// registers under `access`. The access code reads as unregistered
+    /// until the runtime fills the cell.
+    pub(super) fn declare_cell(
+        &mut self,
+        ty: &Type,
+        access: u64,
+        object: &mut dyn ModuleBackend,
+    ) -> std::result::Result<DataHandle, String> {
+        let descriptor = match encode_descriptor(ty, &self.env) {
+            Ok(descriptor) => descriptor,
+            Err(error) => return Err(error.0),
+        };
+        let index = self.cells.len();
+        let cell = try_or_string_error!(
+            object.declare_data(&format!("aura_plain_layout_{index}"), Linkage::Local, true),
+            "failed to declare a plain layout cell: {}"
+        );
+        let mut bytes = vec![0u8; PLAIN_LAYOUT_CELL_BYTES];
+        let at = PLAIN_LAYOUT_CELL_ACCESS_OFFSET as usize;
+        bytes[at..at + 4].copy_from_slice(&UNREGISTERED_PLAIN_ACCESS.to_le_bytes());
+        let mut data = DataDescription::new(bytes);
+        data.align = Some(8);
+        try_or_string_error!(
+            object.define_data(cell, data),
+            "failed to define a plain layout cell: {}"
+        );
+        self.cells.push((cell, descriptor, access));
+        Ok(cell)
     }
 
     /// The record of `class`, made on first use. A class with a union
@@ -123,28 +163,12 @@ impl PlainRecords {
         size: u32,
         object: &mut dyn ModuleBackend,
     ) -> std::result::Result<PlainRecord, String> {
-        let index = self.cells.len();
-        let access = i64::from(FIRST_PLAIN_ACCESS) + index as i64;
-        if access >= i64::from(UNREGISTERED_PLAIN_ACCESS) {
+        let access = i64::from(FIRST_PLAIN_ACCESS) + i64::from(self.plain_count);
+        if access >= i64::from(FIRST_CLASS_ACCESS) {
             return Err("direct backend made too many plain layouts".to_string());
         }
-        let cell = try_or_string_error!(
-            object.declare_data(&format!("aura_plain_layout_{index}"), Linkage::Local, true),
-            "failed to declare a plain layout cell: {}"
-        );
-        // The access code reads as unregistered until the runtime fills
-        // the cell.
-        let mut bytes = vec![0u8; PLAIN_LAYOUT_CELL_BYTES];
-        let at = PLAIN_LAYOUT_CELL_ACCESS_OFFSET as usize;
-        bytes[at..at + 4].copy_from_slice(&UNREGISTERED_PLAIN_ACCESS.to_le_bytes());
-        let mut data = DataDescription::new(bytes);
-        data.align = Some(8);
-        try_or_string_error!(
-            object.define_data(cell, data),
-            "failed to define a plain layout cell: {}"
-        );
-        let descriptor = encode_descriptor(&Type::named(&class.class_name), &self.env);
-        self.cells.push((cell, descriptor));
+        self.plain_count += 1;
+        let cell = self.declare_cell(&Type::named(&class.class_name), access as u64, object)?;
         let stride = u64::from(size).div_ceil(8) * 8;
         let partial_words = (0..stride)
             .step_by(8)
@@ -168,7 +192,7 @@ impl PlainRecords {
 
 /// Collects the leaves of `direct`, laid out as `id` at `base`, or returns
 /// false when the two do not match leaf for leaf.
-fn collect_leaves(
+pub(super) fn collect_leaves(
     table: &LayoutTable,
     id: LayoutId,
     direct: &DirectType,
@@ -269,34 +293,57 @@ impl FunctionCompiler<'_> {
         address: Val,
         ty: &DirectType,
     ) -> ValueRef {
-        let flags = MemFlags::trusted();
         let values = record
             .leaves
             .iter()
-            .map(|leaf| match leaf.kind {
-                // Integers narrower than a word widen by their signedness.
-                ScalarKind::Int8 => self.builder.sload8(flags, address, leaf.offset),
-                ScalarKind::Int16 => self.builder.sload16(flags, address, leaf.offset),
-                ScalarKind::Int32 => self.builder.sload32(flags, address, leaf.offset),
-                ScalarKind::Uint8 => self.builder.uload8(types::I64, flags, address, leaf.offset),
-                ScalarKind::Uint16 => self.builder.uload16(flags, address, leaf.offset),
-                ScalarKind::Uint32 => self.builder.uload32(flags, address, leaf.offset),
-                ScalarKind::Int64 | ScalarKind::Uint64 => {
-                    self.builder.load(types::I64, flags, address, leaf.offset)
-                }
-                ScalarKind::Float64 => self.builder.load(types::F64, flags, address, leaf.offset),
-                ScalarKind::Float32 => {
-                    let narrow = self.builder.load(types::F32, flags, address, leaf.offset);
-                    self.builder.fpromote(types::F64, narrow)
-                }
-                ScalarKind::Bool => self.builder.uload8(types::I64, flags, address, leaf.offset),
-                ScalarKind::Unit => self.builder.iconst(types::I64, 0),
-            })
+            .map(|leaf| self.load_leaf(*leaf, address))
             .collect();
         ValueRef {
             values,
             ty: ty.clone(),
         }
+    }
+
+    /// The word of the scalar `leaf` names, read from its bytes at
+    /// `address` plus its offset.
+    pub(super) fn load_leaf(&mut self, leaf: PlainLeaf, address: Val) -> Val {
+        let flags = MemFlags::trusted();
+        match leaf.kind {
+            // Integers narrower than a word widen by their signedness.
+            ScalarKind::Int8 => self.builder.sload8(flags, address, leaf.offset),
+            ScalarKind::Int16 => self.builder.sload16(flags, address, leaf.offset),
+            ScalarKind::Int32 => self.builder.sload32(flags, address, leaf.offset),
+            ScalarKind::Uint8 => self.builder.uload8(types::I64, flags, address, leaf.offset),
+            ScalarKind::Uint16 => self.builder.uload16(flags, address, leaf.offset),
+            ScalarKind::Uint32 => self.builder.uload32(flags, address, leaf.offset),
+            ScalarKind::Int64 | ScalarKind::Uint64 => {
+                self.builder.load(types::I64, flags, address, leaf.offset)
+            }
+            ScalarKind::Float64 => self.builder.load(types::F64, flags, address, leaf.offset),
+            ScalarKind::Float32 => {
+                let narrow = self.builder.load(types::F32, flags, address, leaf.offset);
+                self.builder.fpromote(types::F64, narrow)
+            }
+            ScalarKind::Bool => self.builder.uload8(types::I64, flags, address, leaf.offset),
+            ScalarKind::Unit => self.builder.iconst(types::I64, 0),
+        }
+    }
+
+    /// Stores `word` as the scalar bytes `leaf` names at `address` plus its
+    /// offset.
+    pub(super) fn store_leaf(&mut self, leaf: PlainLeaf, word: Val, address: Val) {
+        let stored = match leaf.kind {
+            ScalarKind::Int8 | ScalarKind::Uint8 => self.builder.ireduce(types::I8, word),
+            ScalarKind::Int16 | ScalarKind::Uint16 => self.builder.ireduce(types::I16, word),
+            ScalarKind::Int32 | ScalarKind::Uint32 => self.builder.ireduce(types::I32, word),
+            ScalarKind::Int64 | ScalarKind::Uint64 | ScalarKind::Float64 => word,
+            ScalarKind::Float32 => self.builder.fdemote(types::F32, word),
+            // A `bool` is one byte that holds 0 or 1.
+            ScalarKind::Bool => self.builder.icmp_imm(IntCC::NotEqual, word, 0),
+            ScalarKind::Unit => return,
+        };
+        self.builder
+            .store(MemFlags::trusted(), stored, address, leaf.offset);
     }
 
     /// Stores the words of a record value as its layout bytes at `address`.
@@ -318,17 +365,7 @@ impl FunctionCompiler<'_> {
             }
         }
         for (leaf, word) in record.leaves.iter().zip(words) {
-            let stored = match leaf.kind {
-                ScalarKind::Int8 | ScalarKind::Uint8 => self.builder.ireduce(types::I8, *word),
-                ScalarKind::Int16 | ScalarKind::Uint16 => self.builder.ireduce(types::I16, *word),
-                ScalarKind::Int32 | ScalarKind::Uint32 => self.builder.ireduce(types::I32, *word),
-                ScalarKind::Int64 | ScalarKind::Uint64 | ScalarKind::Float64 => *word,
-                ScalarKind::Float32 => self.builder.fdemote(types::F32, *word),
-                // A `bool` is one byte that holds 0 or 1.
-                ScalarKind::Bool => self.builder.icmp_imm(IntCC::NotEqual, *word, 0),
-                ScalarKind::Unit => continue,
-            };
-            self.builder.store(flags, stored, address, leaf.offset);
+            self.store_leaf(*leaf, *word, address);
         }
     }
 
@@ -575,23 +612,22 @@ impl FunctionCompiler<'_> {
 pub(super) fn declare_plain_layout_table(
     object: &mut dyn ModuleBackend,
     string_data: &mut HashMap<Vec<u8>, DataHandle>,
-    cells: &[(DataHandle, String)],
+    cells: &[(DataHandle, String, u64)],
 ) -> std::result::Result<DataHandle, String> {
     use aura_runtime::native_runtime::DirectPlainLayoutEntry as Entry;
     const ENTRY_BYTES: usize = std::mem::size_of::<Entry>();
     let mut entries = Vec::new();
-    for (cell, descriptor) in cells {
+    for (cell, descriptor, access) in cells {
         let text = string_data_id(object, string_data, descriptor.as_bytes())?;
-        entries.push((*cell, text, descriptor.len()));
+        entries.push((*cell, text, descriptor.len(), *access));
     }
     let table = try_or_string_error!(
         object.declare_data("aura_plain_layouts", Linkage::Local, false),
         "failed to declare the plain layout table: {}"
     );
     let mut bytes = vec![0u8; ENTRY_BYTES * entries.len().max(1)];
-    for (index, (_, _, len)) in entries.iter().enumerate() {
+    for (index, (_, _, len, access)) in entries.iter().enumerate() {
         let entry = ENTRY_BYTES * index;
-        let access = u64::from(FIRST_PLAIN_ACCESS) + index as u64;
         let at = entry + std::mem::offset_of!(Entry, len);
         bytes[at..at + 8].copy_from_slice(&(*len as u64).to_le_bytes());
         let at = entry + std::mem::offset_of!(Entry, access);
@@ -599,7 +635,7 @@ pub(super) fn declare_plain_layout_table(
     }
     let mut data = DataDescription::new(bytes);
     data.align = Some(8);
-    for (index, (cell, text, _)) in entries.iter().enumerate() {
+    for (index, (cell, text, _, _)) in entries.iter().enumerate() {
         let entry = ENTRY_BYTES * index;
         data.write_data_addr((entry + std::mem::offset_of!(Entry, cell)) as u32, *cell);
         data.write_data_addr(

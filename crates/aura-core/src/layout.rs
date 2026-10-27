@@ -43,12 +43,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use crate::type_descriptor::{self, Reader};
 use crate::types::{substitute_type_in_context, Type};
 
-/// The version of the layout rules. A descriptor names it, and it changes
-/// whenever a rule does.
+/// The version of the layout rules. It changes whenever a rule does.
 pub const LAYOUT_VERSION: u32 = 1;
 
-/// The prefix of every layout descriptor.
-pub const LAYOUT_DESCRIPTOR_PREFIX: &str = "aura-layout-v1:";
+/// The prefix of every layout descriptor, which names its format.
+pub const LAYOUT_DESCRIPTOR_PREFIX: &str = "aura-layout-v2:";
 
 /// The instantiated classes and enums a class or enum may reach before it
 /// stays a handle.
@@ -300,6 +299,23 @@ impl LayoutTable {
         }
     }
 
+    /// Whether a value of `id` holds a heap block anywhere: an
+    /// [`LayoutKind::Indirect`] that no handle stands in front of. Every
+    /// cycle goes through one, so the walk ends.
+    pub fn holds_block(&self, id: LayoutId) -> bool {
+        match &self.get(id).kind {
+            LayoutKind::Unit | LayoutKind::Scalar(_) | LayoutKind::Handle => false,
+            LayoutKind::Indirect(_) => true,
+            LayoutKind::Struct { fields, .. } => {
+                fields.iter().any(|field| self.holds_block(field.layout))
+            }
+            LayoutKind::Tagged { variants, .. } => variants
+                .iter()
+                .flat_map(|variant| &variant.fields)
+                .any(|field| self.holds_block(field.layout)),
+        }
+    }
+
     /// Checks the rules every layout keeps: sizes are multiples of their
     /// alignment, alignments are powers of two, every field fits inside its
     /// value at an offset its alignment allows, a struct's fields do not
@@ -380,6 +396,9 @@ impl LayoutTable {
                 } => {
                     if !matches!(tag_width, 1 | 2 | 4) {
                         return fail("has a tag that is not 1, 2, or 4 bytes");
+                    }
+                    if u64::from(*tag_width) > layout.size.min(layout.align) {
+                        return fail("has no aligned room for its tag");
                     }
                     if *payload_offset < u64::from(*tag_width) {
                         return fail("overlaps its tag with its payload");
@@ -1109,99 +1128,121 @@ fn strongly_connected_components(edges: &[Vec<usize>]) -> Vec<Vec<usize>> {
     components
 }
 
-/// The descriptor of `ty`'s layout: the type and every class and enum
-/// definition the layout can reach, so the runtime computes the same
-/// layout with this module.
-pub fn encode_descriptor(ty: &Type, env: &LayoutEnv) -> String {
-    let mut names = BTreeSet::new();
-    let mut pending = Vec::new();
-    collect_named(ty, &mut pending);
-    while let Some(name) = pending.pop() {
-        if !names.insert(name.clone()) {
-            continue;
-        }
-        if let Some(class) = env.classes.get(&name) {
-            for (_, field_ty) in &class.fields {
-                collect_named(field_ty, &mut pending);
-            }
-        }
-        if let Some(enumeration) = env.enums.get(&name) {
-            for (_, payloads) in &enumeration.variants {
-                for payload in payloads {
-                    collect_named(payload, &mut pending);
-                }
-            }
-        }
+/// The descriptor of `ty`'s layout: every layout a value of `ty` reaches,
+/// as this module computes them, so the runtime reads the offsets
+/// generated code uses instead of computing them again.
+pub fn encode_descriptor(ty: &Type, env: &LayoutEnv) -> Result<String, LayoutError> {
+    let mut builder = LayoutBuilder::new(env);
+    let root = builder.layout(ty)?;
+    Ok(encode_layouts(builder.table(), root))
+}
+
+/// The descriptor of `root` in `table`: the layouts `root` reaches,
+/// numbered from 0, each after every layout it holds in place. Only a heap
+/// pointer may name a layout that comes later.
+pub fn encode_layouts(table: &LayoutTable, root: LayoutId) -> String {
+    let mut order = Vec::new();
+    let mut numbers = HashMap::new();
+    let mut pending = vec![root];
+    while let Some(id) = pending.pop() {
+        number_layouts(table, id, &mut order, &mut numbers, &mut pending);
     }
     let mut out = String::from(LAYOUT_DESCRIPTOR_PREFIX);
-    type_descriptor::push_type(&mut out, ty);
-    let classes = names
-        .iter()
-        .filter_map(|name| env.classes.get(name).map(|class| (name, class)))
-        .collect::<Vec<_>>();
-    type_descriptor::push_count(&mut out, classes.len());
-    for (name, class) in classes {
-        type_descriptor::push_string(&mut out, name);
-        push_strings(&mut out, &class.type_params);
-        type_descriptor::push_count(&mut out, class.fields.len());
-        for (field, field_ty) in &class.fields {
-            type_descriptor::push_string(&mut out, field);
-            type_descriptor::push_type(&mut out, field_ty);
+    type_descriptor::push_count(&mut out, order.len());
+    type_descriptor::push_count(&mut out, numbers[&root]);
+    let push_fields = |out: &mut String, fields: &[FieldLayout]| {
+        type_descriptor::push_count(out, fields.len());
+        for field in fields {
+            type_descriptor::push_string(out, &field.name);
+            type_descriptor::push_count(out, field.offset as usize);
+            type_descriptor::push_count(out, numbers[&field.layout]);
         }
-    }
-    let enums = names
-        .iter()
-        .filter_map(|name| env.enums.get(name).map(|enumeration| (name, enumeration)))
-        .collect::<Vec<_>>();
-    type_descriptor::push_count(&mut out, enums.len());
-    for (name, enumeration) in enums {
-        type_descriptor::push_string(&mut out, name);
-        push_strings(&mut out, &enumeration.type_params);
-        type_descriptor::push_count(&mut out, enumeration.variants.len());
-        for (variant, payloads) in &enumeration.variants {
-            type_descriptor::push_string(&mut out, variant);
-            type_descriptor::push_count(&mut out, payloads.len());
-            for payload in payloads {
-                type_descriptor::push_type(&mut out, payload);
+    };
+    let push_name = |out: &mut String, name: &Option<String>| match name {
+        Some(name) => {
+            out.push('1');
+            type_descriptor::push_string(out, name);
+        }
+        None => out.push('0'),
+    };
+    for id in &order {
+        let layout = table.get(*id);
+        type_descriptor::push_type(&mut out, &layout.ty);
+        type_descriptor::push_count(&mut out, layout.size as usize);
+        type_descriptor::push_count(&mut out, layout.align as usize);
+        match &layout.kind {
+            LayoutKind::Unit => out.push('u'),
+            LayoutKind::Scalar(scalar) => {
+                out.push('s');
+                type_descriptor::push_string(&mut out, scalar.name());
+            }
+            LayoutKind::Handle => out.push('h'),
+            LayoutKind::Indirect(target) => {
+                out.push('i');
+                type_descriptor::push_count(&mut out, numbers[target]);
+            }
+            LayoutKind::Struct { class, fields } => {
+                out.push('c');
+                push_name(&mut out, class);
+                push_fields(&mut out, fields);
+            }
+            LayoutKind::Tagged {
+                enum_name,
+                tag_width,
+                payload_offset,
+                variants,
+            } => {
+                out.push('t');
+                push_name(&mut out, enum_name);
+                type_descriptor::push_count(&mut out, usize::from(*tag_width));
+                type_descriptor::push_count(&mut out, *payload_offset as usize);
+                type_descriptor::push_count(&mut out, variants.len());
+                for variant in variants {
+                    type_descriptor::push_string(&mut out, &variant.name);
+                    push_fields(&mut out, &variant.fields);
+                }
             }
         }
     }
     out
 }
 
-fn push_strings(out: &mut String, strings: &[String]) {
-    type_descriptor::push_count(out, strings.len());
-    for string in strings {
-        type_descriptor::push_string(out, string);
+/// Numbers `id` after the layouts it holds in place, and queues the target
+/// of each heap pointer it reaches.
+fn number_layouts(
+    table: &LayoutTable,
+    id: LayoutId,
+    order: &mut Vec<LayoutId>,
+    numbers: &mut HashMap<LayoutId, usize>,
+    pending: &mut Vec<LayoutId>,
+) {
+    if numbers.contains_key(&id) {
+        return;
     }
+    match &table.get(id).kind {
+        LayoutKind::Unit | LayoutKind::Scalar(_) | LayoutKind::Handle => {}
+        LayoutKind::Indirect(target) => pending.push(*target),
+        LayoutKind::Struct { fields, .. } => {
+            for field in fields {
+                number_layouts(table, field.layout, order, numbers, pending);
+            }
+        }
+        LayoutKind::Tagged { variants, .. } => {
+            for field in variants.iter().flat_map(|variant| &variant.fields) {
+                number_layouts(table, field.layout, order, numbers, pending);
+            }
+        }
+    }
+    numbers.insert(id, order.len());
+    order.push(id);
 }
 
-/// Every name a type spells, including type arguments.
-fn collect_named(ty: &Type, out: &mut Vec<String>) {
-    match ty {
-        Type::Named(name, args) => {
-            out.push(name.clone());
-            for arg in args {
-                collect_named(arg, out);
-            }
-        }
-        Type::Tuple(elements) => {
-            for element in elements {
-                collect_named(element, out);
-            }
-        }
-        Type::Union(union) => {
-            for member in &union.members {
-                collect_named(member, out);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Reads a descriptor [`encode_descriptor`] wrote: the type and the
-/// definitions to lay it out with.
-pub fn decode_descriptor(descriptor: &str) -> Result<(Type, LayoutEnv), String> {
+/// Reads a descriptor [`encode_layouts`] wrote: the layouts and the one it
+/// was written for. The layouts must keep every rule
+/// [`LayoutTable::validate`] checks, and each one must come after every
+/// layout it holds in place, so no value holds itself without a heap
+/// pointer between.
+pub fn decode_descriptor(descriptor: &str) -> Result<(LayoutTable, LayoutId), String> {
     let body = descriptor
         .strip_prefix(LAYOUT_DESCRIPTOR_PREFIX)
         .ok_or_else(|| "layout descriptor has an unknown version".to_string())?;
@@ -1209,69 +1250,100 @@ pub fn decode_descriptor(descriptor: &str) -> Result<(Type, LayoutEnv), String> 
         bytes: body.as_bytes(),
         position: 0,
     };
-    let ty = reader.read_type(0)?;
-    let mut env = LayoutEnv::default();
-    for _ in 0..reader.count()? {
-        let name = reader.string()?;
-        let type_params = read_strings(&mut reader)?;
-        let mut fields = Vec::new();
-        for _ in 0..reader.count()? {
-            let field = reader.string()?;
-            fields.push((field, reader.read_type(0)?));
-        }
-        if env
-            .classes
-            .insert(
-                name.clone(),
-                ClassDefinition {
-                    type_params,
-                    fields,
-                },
-            )
-            .is_some()
-        {
-            return Err(format!("layout descriptor defines class `{name}` twice"));
-        }
+    // Each layout takes several bytes, so the count, and every id below it,
+    // fits a `LayoutId`.
+    let count = reader.count()?;
+    let root = reader.number()?;
+    if root >= count {
+        return Err("layout descriptor names a missing layout".to_string());
     }
-    for _ in 0..reader.count()? {
-        let name = reader.string()?;
-        let type_params = read_strings(&mut reader)?;
-        let mut variants = Vec::new();
-        for _ in 0..reader.count()? {
-            let variant = reader.string()?;
-            let mut payloads = Vec::new();
-            for _ in 0..reader.count()? {
-                payloads.push(reader.read_type(0)?);
+    let mut layouts = Vec::with_capacity(count);
+    for position in 0..count {
+        let ty = reader.read_type(0)?;
+        let size = reader.number()? as u64;
+        let align = reader.number()? as u64;
+        let kind = match reader.byte()? {
+            b'u' => LayoutKind::Unit,
+            b's' => LayoutKind::Scalar(
+                ScalarLayout::of_name(&reader.string()?)
+                    .ok_or_else(|| "layout descriptor names an unknown scalar".to_string())?,
+            ),
+            b'h' => LayoutKind::Handle,
+            b'i' => LayoutKind::Indirect(read_layout_id(&mut reader, count)?),
+            b'c' => LayoutKind::Struct {
+                class: read_layout_name(&mut reader)?,
+                fields: read_field_layouts(&mut reader, position)?,
+            },
+            b't' => {
+                let enum_name = read_layout_name(&mut reader)?;
+                let tag_width = u8::try_from(reader.number()?)
+                    .map_err(|_| "layout descriptor has a malformed tag".to_string())?;
+                let payload_offset = reader.number()? as u64;
+                let mut variants = Vec::new();
+                for _ in 0..reader.count()? {
+                    let name = reader.string()?;
+                    let fields = read_field_layouts(&mut reader, position)?;
+                    variants.push(VariantLayout { name, fields });
+                }
+                LayoutKind::Tagged {
+                    enum_name,
+                    tag_width,
+                    payload_offset,
+                    variants,
+                }
             }
-            variants.push((variant, payloads));
-        }
-        if env.classes.contains_key(&name)
-            || env
-                .enums
-                .insert(
-                    name.clone(),
-                    EnumDefinition {
-                        type_params,
-                        variants,
-                    },
-                )
-                .is_some()
-        {
-            return Err(format!("layout descriptor defines `{name}` twice"));
-        }
+            _ => return Err("layout descriptor has an unknown layout kind".to_string()),
+        };
+        layouts.push(Layout {
+            ty,
+            size,
+            align,
+            kind,
+        });
     }
     if reader.position != reader.bytes.len() {
         return Err("layout descriptor has trailing bytes".to_string());
     }
-    Ok((ty, env))
+    let table = LayoutTable { layouts };
+    table.validate().map_err(|error| error.0)?;
+    Ok((table, LayoutId(root as u32)))
 }
 
-fn read_strings(reader: &mut Reader<'_>) -> Result<Vec<String>, String> {
-    let mut strings = Vec::new();
-    for _ in 0..reader.count()? {
-        strings.push(reader.string()?);
+fn read_layout_id(reader: &mut Reader<'_>, count: usize) -> Result<LayoutId, String> {
+    let id = reader.number()?;
+    if id >= count {
+        return Err("layout descriptor names a missing layout".to_string());
     }
-    Ok(strings)
+    Ok(LayoutId(id as u32))
+}
+
+fn read_layout_name(reader: &mut Reader<'_>) -> Result<Option<String>, String> {
+    match reader.byte()? {
+        b'0' => Ok(None),
+        b'1' => Ok(Some(reader.string()?)),
+        _ => Err("layout descriptor has a malformed name".to_string()),
+    }
+}
+
+/// The fields of the layout numbered `position`, each of which it holds in
+/// place, so each names an earlier layout.
+fn read_field_layouts(
+    reader: &mut Reader<'_>,
+    position: usize,
+) -> Result<Vec<FieldLayout>, String> {
+    let mut fields = Vec::new();
+    for _ in 0..reader.count()? {
+        let name = reader.string()?;
+        let offset = reader.number()? as u64;
+        let layout = read_layout_id(reader, position)
+            .map_err(|_| "layout descriptor holds a later layout in place".to_string())?;
+        fields.push(FieldLayout {
+            name,
+            offset,
+            layout,
+        });
+    }
+    Ok(fields)
 }
 
 #[cfg(test)]

@@ -164,6 +164,7 @@ fn classes_and_tuples_lay_fields_out_in_order() {
         LayoutKind::Struct { class: Some(name), .. } if name == "Mixed"
     ));
     assert!(table.needs_drop(id));
+    assert!(!table.holds_block(id));
 
     let (table, id) = layout_of(&env, &Type::Tuple(vec![named("int32"), named("bool")]));
     assert_eq!((table.get(id).size, table.get(id).align), (8, 4));
@@ -341,6 +342,11 @@ fn a_linked_class_stores_its_optional_next_node_behind_a_pointer() {
     assert!(variants
         .iter()
         .any(|variant| variant.fields[0].layout == node));
+    // A node holds a block, through its optional next node; the int alone
+    // holds none.
+    assert!(table.holds_block(node));
+    assert!(table.holds_block(plain_next));
+    assert!(!table.holds_block(node_fields[0].layout));
 }
 
 #[test]
@@ -659,10 +665,29 @@ fn validate_refuses_broken_tables() {
     assert!(broken(&tagged(3, 8, 1), &enum_table).contains("1, 2, or 4"));
     assert!(broken(&tagged(4, 2, 1), &enum_table).contains("overlaps its tag"));
     assert!(broken(&tagged(2, 8, 1), &enum_table).contains("too narrow or wide"));
+    assert!(broken(
+        &|table| {
+            table.layouts[shape_index].size = 0;
+            table.layouts[shape_index].align = 1;
+            if let LayoutKind::Tagged {
+                tag_width,
+                payload_offset,
+                variants,
+                ..
+            } = &mut table.layouts[shape_index].kind
+            {
+                *tag_width = 1;
+                *payload_offset = 1;
+                variants.clear();
+            }
+        },
+        &enum_table
+    )
+    .contains("aligned room"));
 }
 
 #[test]
-fn descriptors_carry_the_definitions_a_layout_reaches() {
+fn descriptors_carry_the_layouts_a_value_reaches() {
     let mut env = LayoutEnv::default();
     env.classes.insert(
         "Pair".to_string(),
@@ -684,57 +709,70 @@ fn descriptors_carry_the_definitions_a_layout_reaches() {
     env.classes
         .insert("Unused".to_string(), class(&[("x", named("int64"))]));
     let ty = Type::Tuple(vec![named("Tree"), named("int32")]);
-    let descriptor = encode_descriptor(&ty, &env);
+    let descriptor = encode_descriptor(&ty, &env).expect("a layout");
     assert!(descriptor.starts_with(LAYOUT_DESCRIPTOR_PREFIX));
-    let (decoded, decoded_env) = decode_descriptor(&descriptor).expect("a descriptor");
-    assert_eq!(decoded, ty);
-    assert!(decoded_env.classes.contains_key("Pair"));
-    assert!(decoded_env.enums.contains_key("Tree"));
-    assert!(!decoded_env.classes.contains_key("Unused"));
+    let (decoded, root) = decode_descriptor(&descriptor).expect("a descriptor");
+    assert_eq!(decoded.get(root).ty, ty);
     let (original, original_id) = layout_of(&env, &ty);
-    let (rebuilt, rebuilt_id) = layout_of(&decoded_env, &decoded);
-    assert_eq!(original.render(original_id), rebuilt.render(rebuilt_id));
+    assert_eq!(decoded.render(root), original.render(original_id));
+    // Only the layouts the value reaches, each after the ones it holds.
+    assert!(decoded.ids().all(|id| {
+        !matches!(&decoded.get(id).kind, LayoutKind::Struct { class: Some(name), .. } if name == "Unused")
+    }));
+    assert!(decoded
+        .ids()
+        .any(|id| matches!(decoded.get(id).kind, LayoutKind::Indirect(_))));
+    for id in decoded.ids() {
+        let inline = match &decoded.get(id).kind {
+            LayoutKind::Struct { fields, .. } => fields.clone(),
+            LayoutKind::Tagged { variants, .. } => variants
+                .iter()
+                .flat_map(|variant| variant.fields.clone())
+                .collect(),
+            _ => Vec::new(),
+        };
+        assert!(inline.iter().all(|field| field.layout < id));
+    }
+    // A type without a layout has no descriptor.
+    let view = Type::ReturnedView(Box::new(crate::types::ReturnedViewType {
+        mutable: false,
+        pointee: named("int64"),
+        origin: 0,
+    }));
+    assert!(encode_descriptor(&view, &env).is_err());
 }
 
 #[test]
 fn decoding_refuses_malformed_descriptors() {
     let env = LayoutEnv::default();
-    let good = encode_descriptor(&named("int64"), &env);
+    let good = encode_descriptor(&named("int64"), &env).expect("a layout");
+    // One layout of type `int64`: size, alignment, and then `rest`.
+    let one = |rest: &str| {
+        let mut out = format!("{LAYOUT_DESCRIPTOR_PREFIX}1;0;");
+        type_descriptor::push_type(&mut out, &named("int64"));
+        out.push_str(rest);
+        out
+    };
+    assert!(decode_descriptor(&one("8;8;s5:int64")).is_ok());
     for (descriptor, message) in [
-        ("aura-layout-v0:u0;0;".to_string(), "unknown version"),
+        ("aura-layout-v1:u0;0;".to_string(), "unknown version"),
         (format!("{good}x"), "trailing bytes"),
+        (good[..good.len() - 2].to_string(), "ends early"),
         (
-            format!("{LAYOUT_DESCRIPTOR_PREFIX}u2;1:A0;0;1:A0;0;0;"),
-            "defines class `A` twice",
+            format!("{LAYOUT_DESCRIPTOR_PREFIX}1;1;"),
+            "names a missing layout",
         ),
-        (
-            format!("{LAYOUT_DESCRIPTOR_PREFIX}u1;1:A0;0;1;1:A0;0;"),
-            "defines `A` twice",
-        ),
-        (
-            format!("{LAYOUT_DESCRIPTOR_PREFIX}u0;2;1:E0;0;1:E0;0;"),
-            "defines `E` twice",
-        ),
-        (format!("{LAYOUT_DESCRIPTOR_PREFIX}u1;5:AB"), "ends early"),
+        (one("8;8;x"), "unknown layout kind"),
+        (one("8;8;s4:int9"), "unknown scalar"),
+        (one("4;4;s5:int64"), "wrong scalar size"),
+        (one("8;8;i1;"), "names a missing layout"),
+        (one("8;8;c2"), "malformed name"),
+        (one("8;8;c01;1:x0;0;"), "holds a later layout in place"),
+        (one("8;8;t0300;0;0;"), "malformed tag"),
     ] {
         let error = decode_descriptor(&descriptor).unwrap_err();
         assert!(error.contains(message), "{descriptor}: {error}");
     }
-    let mut env = LayoutEnv::default();
-    env.classes.insert(
-        "Box".to_string(),
-        ClassDefinition {
-            type_params: vec!["T".to_string()],
-            fields: vec![("value".to_string(), Type::TypeParam("T".to_string()))],
-        },
-    );
-    env.enums.insert(
-        "Shape".to_string(),
-        enumeration(&[("Dot", vec![named("int64")]), ("None", Vec::new())]),
-    );
-    let ty = Type::Tuple(vec![generic("Box", vec![named("Shape")]), named("Shape")]);
-    let descriptor = encode_descriptor(&ty, &env);
-    assert_eq!(decode_descriptor(&descriptor).expect("a descriptor").1, env);
 }
 
 #[test]

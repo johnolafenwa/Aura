@@ -181,7 +181,8 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
     // has an op. The shared collection operation pops and removes, an
     // element path checks its index, and a lent element's `len` and `get`
     // are read in place. A plain record element is read, appended, and
-    // replaced in place. A `get` whose `Lookup` is kept as its found value
+    // replaced in place. An empty list literal of a known type is built and
+    // tagged in one call. A `get` whose `Lookup` is kept as its found value
     // calls the `_payload` form of the op's helper, and one whose found
     // value is only read calls the `_lent` form.
     let uncovered = RuntimeFn::ALL
@@ -206,6 +207,7 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::SetReturnedViewProjection,
             RuntimeFn::SetNextMutableSinks,
             RuntimeFn::SetNextIndirectMutableSinks,
+            RuntimeFn::VecEmptyTagged,
             RuntimeFn::VecPopInPlace,
             RuntimeFn::VecRemoveInPlace,
             RuntimeFn::VecLend,

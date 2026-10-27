@@ -123,12 +123,29 @@ fn hash_nodes(root: &Value, hasher: &mut impl Hasher, budget: &mut usize) {
             }
             Value::Instance(instance) => {
                 nominal_runtime_base_name(&instance.class_name).hash(hasher);
-                for (name, field) in instance.fields.iter().rev() {
+                if instance.fields.typed().is_some() {
+                    // The fields would be the next nodes visited, so hashing
+                    // each here, in order, after the names, matches hashing
+                    // the same instance with its fields in a map. A field
+                    // read out of the layout has nothing to borrow from.
+                    for (name, _) in instance.fields.iter() {
+                        name.hash(hasher);
+                    }
+                    for (_, field) in instance.fields.iter() {
+                        if *budget == 0 {
+                            break;
+                        }
+                        hash_nodes(&field, hasher, budget);
+                    }
+                    continue;
+                }
+                let fields = instance.fields.map();
+                for (name, field) in fields.iter().rev() {
                     if name.as_str() != DIRECT_RUNTIME_TYPE_FIELD {
                         pending.push(field);
                     }
                 }
-                for name in instance.fields.keys() {
+                for name in fields.keys() {
                     if name.as_str() != DIRECT_RUNTIME_TYPE_FIELD {
                         name.hash(hasher);
                     }

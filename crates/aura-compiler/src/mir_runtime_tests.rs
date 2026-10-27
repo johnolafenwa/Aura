@@ -1320,7 +1320,8 @@ fn adr0038_mir_loan_environment_covers_alias_resolution_and_nested_place_errors(
                     element_types: vec![Type::named("int64")],
                     elements: vec![Value::Int(IntegerValue::from_signed(1))],
                 }),
-            )]),
+            )])
+            .into(),
         })
     };
     let mut env = Env::default();
@@ -1420,7 +1421,8 @@ fn adr0038_mir_loan_environment_covers_alias_resolution_and_nested_place_errors(
             fields: BTreeMap::from([(
                 "value".to_string(),
                 Value::Int(IntegerValue::from_signed(1)),
-            )]),
+            )])
+            .into(),
         })],
     });
     super::write_nested_place(
@@ -1469,7 +1471,8 @@ fn adr0038_mir_loan_environment_covers_alias_resolution_and_nested_place_errors(
             fields: BTreeMap::from([(
                 "value".to_string(),
                 Value::Int(IntegerValue::from_signed(6)),
-            )]),
+            )])
+            .into(),
         })],
     });
     assert_eq!(
@@ -4391,7 +4394,7 @@ def main():
             Type::named(class_name),
             Value::Instance(InstanceValue {
                 class_name: class_name.to_string(),
-                fields: BTreeMap::from([("value".to_string(), Value::String(text))]),
+                fields: BTreeMap::from([("value".to_string(), Value::String(text))]).into(),
             }),
         );
 
@@ -4768,7 +4771,8 @@ fn mir_json_owned_accessor_moves_a_nested_place_without_cloning_its_payload() {
             fields: BTreeMap::from([(
                 "value".to_string(),
                 json_value("String", vec![Value::String(text)]),
-            )]),
+            )])
+            .into(),
         }),
     );
 
@@ -5653,11 +5657,13 @@ fn mir_failed_owned_place_moves_preserve_unmoved_state() {
                                 variant_name: "Text".into(),
                                 payloads: vec![Value::String("owned".repeat(32))],
                             }),
-                        )]),
+                        )])
+                        .into(),
                     }),
                 ),
                 ("sibling".to_string(), Value::Bool(true)),
-            ]),
+            ])
+            .into(),
         }),
     );
 
@@ -6459,7 +6465,8 @@ fn env_place_helpers_cover_nested_reads_and_writes() {
             fields: BTreeMap::from([(
                 "value".to_string(),
                 Value::Int(IntegerValue::from_signed(1)),
-            )]),
+            )])
+            .into(),
         }),
     );
 
@@ -6491,9 +6498,11 @@ fn env_place_helpers_cover_nested_reads_and_writes() {
                     fields: BTreeMap::from([(
                         "value".to_string(),
                         Value::Int(IntegerValue::from_signed(8)),
-                    )]),
+                    )])
+                    .into(),
                 }),
-            )]),
+            )])
+            .into(),
         }),
     );
     assert_eq!(
@@ -12251,7 +12260,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
         Type::named("Widget"),
         Value::Instance(InstanceValue {
             class_name: "Widget".to_string(),
-            fields: BTreeMap::new(),
+            fields: Default::default(),
         }),
     );
     env.define_typed(
@@ -12727,7 +12736,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
         Type::named("Ghost"),
         Value::Instance(InstanceValue {
             class_name: "Ghost".to_string(),
-            fields: BTreeMap::new(),
+            fields: Default::default(),
         }),
     );
     env.define_typed(
@@ -12735,7 +12744,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
         Type::named("Empty"),
         Value::Instance(InstanceValue {
             class_name: "Empty".to_string(),
-            fields: BTreeMap::new(),
+            fields: Default::default(),
         }),
     );
     env.define_typed(
@@ -12743,7 +12752,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
         Type::named("Broken"),
         Value::Instance(InstanceValue {
             class_name: "Broken".to_string(),
-            fields: BTreeMap::new(),
+            fields: Default::default(),
         }),
     );
     env.define_typed(
@@ -13101,7 +13110,8 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
             fields: BTreeMap::from([(
                 "value".to_string(),
                 Value::Int(IntegerValue::from_signed(1)),
-            )]),
+            )])
+            .into(),
         }),
     );
     env.define_typed(
@@ -13841,7 +13851,8 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
             fields: BTreeMap::from([(
                 "value".to_string(),
                 Value::Int(IntegerValue::from_signed(9)),
-            )]),
+            )])
+            .into(),
         }),
         Some(Type::Named("Box".to_string(), vec![Type::named("int64")]))
     );
@@ -17997,7 +18008,8 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
             fields: BTreeMap::from([(
                 "left".to_string(),
                 Value::Int(IntegerValue::from_signed(9)),
-            )]),
+            )])
+            .into(),
         }),
         Some(Type::Named(
             "Pair".to_string(),
@@ -18007,7 +18019,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
     assert_eq!(
         runtime.infer_instance_type(&InstanceValue {
             class_name: "Pair".to_string(),
-            fields: BTreeMap::new(),
+            fields: Default::default(),
         }),
         None
     );
@@ -18049,7 +18061,8 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
             fields: BTreeMap::from([(
                 "left".to_string(),
                 Value::Int(IntegerValue::from_signed(1)),
-            )]),
+            )])
+            .into(),
         }),
     );
     env.define_typed(
@@ -18071,7 +18084,8 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
                 fields: BTreeMap::from([(
                     "left".to_string(),
                     Value::Int(IntegerValue::from_signed(3)),
-                )]),
+                )])
+                .into(),
             })],
         }),
     );
@@ -18188,7 +18202,8 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
                 fields: BTreeMap::from([(
                     "left".to_string(),
                     Value::Int(IntegerValue::from_signed(8)),
-                )]),
+                )])
+                .into(),
             })),
             vec![EvaluatedMirArg {
                 ty: None,
@@ -18205,7 +18220,8 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
             fields: BTreeMap::from([(
                 "left".to_string(),
                 Value::Int(IntegerValue::from_signed(8)),
-            )]),
+            )])
+            .into(),
         }))
     );
     assert_eq!(
@@ -18336,7 +18352,7 @@ fn mir_runtime_env_helpers_cover_place_edges() {
         Type::named("Pair"),
         Value::Instance(InstanceValue {
             class_name: "Pair".to_string(),
-            fields: BTreeMap::new(),
+            fields: Default::default(),
         }),
     );
     let missing_field = env
@@ -18524,7 +18540,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         Type::named("Ghost"),
         Value::Instance(InstanceValue {
             class_name: "Ghost".to_string(),
-            fields: BTreeMap::new(),
+            fields: Default::default(),
         }),
     );
     let unknown_class = runtime
@@ -18542,7 +18558,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         Type::named("Worker"),
         Value::Instance(InstanceValue {
             class_name: "Worker".to_string(),
-            fields: BTreeMap::new(),
+            fields: Default::default(),
         }),
     );
     let missing_close = runtime
@@ -18577,7 +18593,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         Type::named("Broken"),
         Value::Instance(InstanceValue {
             class_name: "Broken".to_string(),
-            fields: BTreeMap::new(),
+            fields: Default::default(),
         }),
     );
     let missing_body = runtime
@@ -18600,7 +18616,8 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
             fields: BTreeMap::from([(
                 "value".to_string(),
                 Value::Int(IntegerValue::from_signed(3)),
-            )]),
+            )])
+            .into(),
         }),
     );
     runtime
@@ -18617,7 +18634,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         Type::named("BorrowManaged"),
         Value::Instance(InstanceValue {
             class_name: "BorrowManaged".to_string(),
-            fields: BTreeMap::new(),
+            fields: Default::default(),
         }),
     );
     runtime
@@ -18902,7 +18919,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         Type::named("Managed"),
         Value::Instance(InstanceValue {
             class_name: "Managed".to_string(),
-            fields: BTreeMap::new(),
+            fields: Default::default(),
         }),
     );
     let missing_field = match runtime.evaluate_rvalue(
@@ -18929,7 +18946,8 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
             fields: BTreeMap::from([(
                 "value".to_string(),
                 Value::Int(IntegerValue::from_signed(4)),
-            )]),
+            )])
+            .into(),
         }),
     );
     assert_eq!(

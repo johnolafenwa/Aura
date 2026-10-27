@@ -194,7 +194,8 @@ fn adr0038_direct_nested_place_assignment_helper_covers_tuple_and_class_paths() 
                 element_types: vec![Type::named("int64")],
                 elements: vec![Value::Int(IntegerValue::from_signed(1))],
             }),
-        )]),
+        )])
+        .into(),
     });
     super::set_direct_instance_field_owned(
         &mut nested,
@@ -211,7 +212,8 @@ fn adr0038_direct_nested_place_assignment_helper_covers_tuple_and_class_paths() 
             fields: BTreeMap::from([(
                 "value".to_string(),
                 Value::Int(IntegerValue::from_signed(1)),
-            )]),
+            )])
+            .into(),
         })],
     });
     super::set_direct_instance_field_owned(
@@ -271,9 +273,11 @@ fn adr0038_direct_mutable_sink_updates_projected_cleanup_snapshot_before_return(
                     fields: BTreeMap::from([(
                         "value".to_string(),
                         Value::Int(IntegerValue::from_signed(1)),
-                    )]),
+                    )])
+                    .into(),
                 }),
-            )]),
+            )])
+            .into(),
         });
         let cleanup_args = super::aura_direct_arg_buffer_new(1);
         super::aura_direct_arg_buffer_store_owned(
@@ -1532,7 +1536,7 @@ fn direct_nested_array_collection_reads_and_clones_use_fallible_copy() {
 
     let instance = boxed_value(Value::Instance(InstanceValue {
         class_name: "Holder".to_string(),
-        fields: BTreeMap::from([("array".to_string(), array_value(23))]),
+        fields: BTreeMap::from([("array".to_string(), array_value(23))]).into(),
     }));
     let instance_address = instance as usize;
     let diagnostic = allocation_diagnostic(move || {
@@ -2675,10 +2679,7 @@ fn int_vec(values: &[i64]) -> *mut OpaqueValue {
 fn task_vec(tasks: &[TaskValue]) -> *mut OpaqueValue {
     let vec = super::aura_direct_vec_empty();
     for task in tasks {
-        expect_unit(super::aura_direct_vec_push_in_place(
-            vec,
-            boxed_value(Value::Task(task.clone())),
-        ));
+        super::aura_direct_vec_push_in_place(vec, boxed_value(Value::Task(task.clone())));
     }
     vec
 }
@@ -5747,7 +5748,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
 
     let instance = boxed_value(Value::Instance(InstanceValue {
         class_name: "Marker".to_string(),
-        fields: BTreeMap::new(),
+        fields: Default::default(),
     }));
     super::aura_direct_tag_value_type(instance, b"Marker[int64]".as_ptr(), "Marker[int64]".len());
     assert_eq!(
@@ -9128,9 +9129,9 @@ fn direct_runtime_vec_helpers_cover_collection_surface() {
     assert_eq!(super::aura_direct_vec_len(vec), 0);
     assert_eq!(super::aura_direct_vec_is_empty(vec), 1);
 
-    expect_unit(super::aura_direct_vec_push_in_place(vec, int_value(1)));
-    expect_unit(super::aura_direct_vec_push_in_place(vec, int_value(2)));
-    expect_unit(super::aura_direct_vec_push_in_place(vec, int_value(3)));
+    super::aura_direct_vec_push_in_place(vec, int_value(1));
+    super::aura_direct_vec_push_in_place(vec, int_value(2));
+    super::aura_direct_vec_push_in_place(vec, int_value(3));
     assert_eq!(super::aura_direct_vec_len(vec), 3);
     assert_eq!(
         expect_lookup_found_int(super::aura_direct_vec_pop_in_place(vec)),
@@ -11175,9 +11176,10 @@ fn direct_instance_take_field_moves_nested_value_and_preserves_container() {
             "inner".to_string(),
             Value::Instance(InstanceValue {
                 class_name: "Inner".to_string(),
-                fields: BTreeMap::from([("value".to_string(), Value::String(text))]),
+                fields: BTreeMap::from([("value".to_string(), Value::String(text))]).into(),
             }),
-        )]),
+        )])
+        .into(),
     }));
 
     let moved = super::aura_direct_instance_take_field(
@@ -11191,7 +11193,7 @@ fn direct_instance_take_field_moves_nested_value_and_preserves_container() {
             other => panic!("expected moved str, found {other:?}"),
         });
         super::with_value(holder, |value| match value {
-            Value::Instance(holder) => match holder.fields.get("inner") {
+            Value::Instance(holder) => match holder.fields.map().get("inner") {
                 Some(Value::Instance(inner)) => {
                     assert!(!inner.fields.contains_key("value"));
                 }
@@ -11209,7 +11211,7 @@ fn direct_projected_instance_helpers_report_paths_precisely_without_mutating_on_
     fn instance(class_name: &str, fields: BTreeMap<String, Value>) -> Value {
         Value::Instance(InstanceValue {
             class_name: class_name.to_string(),
-            fields,
+            fields: fields.into(),
         })
     }
 
@@ -11335,11 +11337,11 @@ fn direct_projected_instance_helpers_report_paths_precisely_without_mutating_on_
     let Value::Instance(holder) = &nested_assignment else {
         panic!("expected Holder instance");
     };
-    let Some(Value::Instance(inner)) = holder.fields.get("inner") else {
+    let Some(Value::Instance(inner)) = holder.fields.map().get("inner") else {
         panic!("expected Inner instance");
     };
-    assert_eq!(inner.fields.get("sibling"), Some(&Value::Bool(true)));
-    match inner.fields.get("value") {
+    assert_eq!(inner.fields.map().get("sibling"), Some(&Value::Bool(true)));
+    match inner.fields.map().get("value") {
         Some(Value::String(value)) => assert_eq!(value.as_ptr(), assigned_storage),
         other => panic!("expected nested owned str, found {other:?}"),
     }
@@ -11350,7 +11352,7 @@ fn direct_projected_instance_wrappers_preserve_targets_and_obey_owned_consumptio
     fn instance(class_name: &str, fields: BTreeMap<String, Value>) -> Value {
         Value::Instance(InstanceValue {
             class_name: class_name.to_string(),
-            fields,
+            fields: fields.into(),
         })
     }
     fn assert_au4001(diagnostic: Diagnostic, message: &str) {
@@ -11568,7 +11570,7 @@ fn direct_instance_owned_field_set_preserves_payload_allocation_identity() {
 
     unsafe {
         super::with_value(instance, |value| match value {
-            Value::Instance(instance) => match instance.fields.get("value") {
+            Value::Instance(instance) => match instance.fields.map().get("value") {
                 Some(Value::String(value)) => assert_eq!(value.as_ptr(), text_ptr),
                 other => panic!("expected owned str field, found {other:?}"),
             },
@@ -11617,7 +11619,7 @@ fn direct_owned_collection_and_queue_adapters_preserve_allocation_identity() {
     let vector = super::aura_direct_vec_empty();
     let vector_item = string_value(&"vector item".repeat(32));
     let vector_storage = string_storage(vector_item);
-    expect_unit(super::aura_direct_vec_push_in_place(vector, vector_item));
+    super::aura_direct_vec_push_in_place(vector, vector_item);
     unsafe {
         super::with_value(vector, |value| match value {
             Value::Vec(vector) => match vector.elements.as_values().unwrap() {
@@ -11728,10 +11730,7 @@ fn direct_owned_index_and_fallback_adapters_preserve_allocation_identity() {
     }
 
     let vector = super::aura_direct_vec_empty();
-    expect_unit(super::aura_direct_vec_push_in_place(
-        vector,
-        string_value("old"),
-    ));
+    super::aura_direct_vec_push_in_place(vector, string_value("old"));
     let replacement = string_value(&"replacement".repeat(32));
     let replacement_storage = string_storage(replacement);
     expect_unit(super::aura_direct_vec_set_index_in_place(
@@ -16434,7 +16433,7 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
     assert_eq!(expect_int(boxed), 8);
 
     let vec = super::aura_direct_vec_empty();
-    expect_unit(super::aura_direct_vec_push_in_place(vec, string_value("x")));
+    super::aura_direct_vec_push_in_place(vec, string_value("x"));
     assert_eq!(super::with_vector(vec, |vector| vector.elements.len()), 1);
     super::with_vector_mut(vec, |vector| {
         vector.elements.push(Value::String("y".to_string()));
@@ -16487,7 +16486,7 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
     assert_eq!(
         value_type_name(Value::Instance(InstanceValue {
             class_name: "Counter".to_string(),
-            fields: BTreeMap::new(),
+            fields: Default::default(),
         })),
         "Counter"
     );
@@ -20391,7 +20390,7 @@ fn native_runtime_boxing_range_and_condition_helpers_cover_remaining_valid_paths
 
     let vec = super::aura_direct_vec_empty();
     assert_eq!(super::aura_direct_vec_is_empty(vec), 1);
-    expect_unit(super::aura_direct_vec_push_in_place(vec, int_value(1)));
+    super::aura_direct_vec_push_in_place(vec, int_value(1));
     assert_eq!(super::aura_direct_vec_len(vec), 1);
     assert_eq!(super::aura_direct_vec_is_empty(vec), 0);
 
@@ -22528,7 +22527,8 @@ fn coverage_native_runtime_decodes_closure_patterns_and_uses_type_fallbacks() {
         fields: BTreeMap::from([(
             super::DIRECT_RUNTIME_TYPE_FIELD.to_string(),
             Value::String(embedded_type.to_string()),
-        )]),
+        )])
+        .into(),
     }));
     assert_eq!(
         super::aura_direct_value_has_runtime_type(tagged_instance),
@@ -22548,7 +22548,8 @@ fn coverage_native_runtime_decodes_closure_patterns_and_uses_type_fallbacks() {
         fields: BTreeMap::from([(
             super::DIRECT_RUNTIME_TYPE_FIELD.to_string(),
             Value::Bool(true),
-        )]),
+        )])
+        .into(),
     }));
     assert_eq!(super::aura_direct_value_has_runtime_type(malformed_tag), 0);
 
@@ -23486,7 +23487,7 @@ fn direct_owned_field_assignment_writes_through_enum_and_union_payloads() {
     fn holder(value: Value) -> Value {
         Value::Instance(InstanceValue {
             class_name: "Holder".to_string(),
-            fields: BTreeMap::from([("value".to_string(), value)]),
+            fields: BTreeMap::from([("value".to_string(), value)]).into(),
         })
     }
     fn assign(target: *mut OpaqueValue, path: &str, new_value: Value) {
@@ -23495,7 +23496,7 @@ fn direct_owned_field_assignment_writes_through_enum_and_union_payloads() {
     }
     fn holder_value(value: &Value) -> Value {
         match value {
-            Value::Instance(instance) => instance.fields["value"].clone(),
+            Value::Instance(instance) => instance.fields.map()["value"].clone(),
             other => panic!("expected a Holder instance, found {other:?}"),
         }
     }
@@ -25158,6 +25159,108 @@ fn direct_element_path_take_and_probe_lend_entries_without_cloning() {
 }
 
 #[test]
+fn element_path_probes_move_loaned_lists_into_boxes_of_their_own() {
+    use super::DirectListAccess;
+    use crate::list_elements::ListElements;
+    fn list_of(elements: Vec<Value>, element_type: Type) -> *mut OpaqueValue {
+        boxed_value(Value::Vec(VecValue {
+            element_type,
+            elements: elements.into(),
+            str_view: Default::default(),
+        }))
+    }
+    fn ints(items: &[i64]) -> Value {
+        Value::Vec(VecValue {
+            element_type: Type::named("int64"),
+            elements: items
+                .iter()
+                .map(|item| Value::Int(IntegerValue::from_i64(*item)))
+                .collect(),
+            str_view: Default::default(),
+        })
+    }
+    let probe = |list: *mut OpaqueValue, position: i64| {
+        expect_unit(super::aura_direct_element_path_promote(
+            list,
+            "[i]".as_ptr(),
+            3,
+            [position].as_ptr(),
+            1,
+            3,
+            9,
+        ))
+    };
+    let header = |list: *mut OpaqueValue| unsafe { &*list };
+    let access = |list: *mut OpaqueValue| header(list).list_access.load(Ordering::Relaxed);
+    let room = |list: *mut OpaqueValue| header(list).list_capacity.load(Ordering::Relaxed);
+    let is_boxes = |list: *mut OpaqueValue| {
+        matches!(
+            unsafe { value_ref(list) },
+            Value::Vec(VecValue {
+                elements: ListElements::Boxes(_),
+                ..
+            })
+        )
+    };
+
+    // A list of lists moves into boxes once misses reach an eighth of its
+    // length, here at the first, and then has room, which code that changes
+    // an element in place checks. The plain probe, for loans generated code
+    // does not follow, leaves the list as it is.
+    let rows = list_of(
+        (0..8).map(|row| ints(&[row])).collect(),
+        Type::Named("list".to_string(), vec![Type::named("int64")]),
+    );
+    expect_unit(super::aura_direct_element_path_probe(
+        rows,
+        "[i]".as_ptr(),
+        3,
+        [0i64].as_ptr(),
+        1,
+        3,
+        9,
+    ));
+    assert_eq!(access(rows), DirectListAccess::Values as u32);
+    probe(rows, -1);
+    assert_eq!(access(rows), DirectListAccess::Boxes as u32);
+    assert!(room(rows) > 0);
+    // Reading the list, as any runtime access does, takes the room back.
+    assert!(is_boxes(rows));
+    assert_eq!(room(rows), 0);
+
+    // A copy shares the boxes. The next miss gives the list boxes of its
+    // own and its room back, and the copy keeps the old boxes.
+    let copy = boxed_value(unsafe { value_ref(rows) });
+    probe(rows, 0);
+    assert!(room(rows) > 0);
+    assert!(is_boxes(copy));
+    assert_eq!(unsafe { value_ref(copy) }, unsafe { value_ref(rows) });
+
+    // A list of strings keeps its form: the probe leaves it alone.
+    let names = list_of(
+        vec![
+            Value::String("a".to_string()),
+            Value::String("b".to_string()),
+        ],
+        Type::named("str"),
+    );
+    probe(names, 1);
+    assert!(!is_boxes(names));
+    // So does a list too long for one miss to pay for the move.
+    let long = list_of(
+        (0..16).map(|row| ints(&[row])).collect(),
+        Type::Named("list".to_string(), vec![Type::named("int64")]),
+    );
+    probe(long, 3);
+    assert!(!is_boxes(long));
+    probe(long, 4);
+    assert!(is_boxes(long));
+    for list in [rows, copy, names, long] {
+        unsafe { super::aura_direct_release_value(list) };
+    }
+}
+
+#[test]
 fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
     fn profile(name: &str, visits: i64) -> Value {
         Value::Instance(InstanceValue {
@@ -25168,12 +25271,13 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
                     "visits".to_string(),
                     Value::Int(IntegerValue::from_i64(visits)),
                 ),
-            ]),
+            ])
+            .into(),
         })
     }
     fn field_visits(value: &Value) -> String {
         match value {
-            Value::Instance(instance) => instance.fields["visits"].render(),
+            Value::Instance(instance) => instance.fields.map()["visits"].render(),
             other => panic!("expected an instance, found {other:?}"),
         }
     }
@@ -25510,7 +25614,8 @@ fn adr0061_direct_element_paths_keep_collection_field_and_tuple_storage() {
                     }),
                 ],
             }),
-        )]),
+        )])
+        .into(),
     })) as usize;
     assert_eq!(element_path_load(root, "pairs.1.[i]", &[0]).render(), "7");
     element_path_store(
@@ -25525,7 +25630,7 @@ fn adr0061_direct_element_paths_keep_collection_field_and_tuple_storage() {
             let Value::Instance(instance) = value else {
                 panic!("expected the original collection owner");
             };
-            assert_eq!(instance.fields["pairs"].render(), "([5], [17])");
+            assert_eq!(instance.fields.map()["pairs"].render(), "([5], [17])");
         });
         release_value(root as *mut OpaqueValue);
     }
@@ -26264,29 +26369,27 @@ fn shared_lists_are_never_read_in_place() {
 
 #[test]
 fn lists_lend_elements_once_their_copies_pay_for_moving_them_into_boxes() {
+    // A list keeps the strings appended to it as values.
     let list = super::aura_direct_vec_empty();
     for value in 0..16 {
-        super::aura_direct_vec_push_in_place(list, int_vec(&[value]));
+        super::aura_direct_vec_push_in_place(list, string_value(&value.to_string()));
     }
     let lend = |index: i64| super::aura_direct_vec_lend(list, index, 1, 1);
     // Until its copying reads reach an eighth of its length, a list of
     // values gives each reader a copy of its own.
     let copy = lend(3);
     assert_eq!(copy as usize & 1, 0);
-    assert_eq!(expect_vec_ints(copy), vec![3]);
+    assert_eq!(expect_string(copy), "3");
     // Then it moves its elements into boxes and lends them.
     let last = lend(-1);
     assert_eq!(last as usize & 1, 1);
     let last = last.wrapping_byte_sub(1);
-    assert_eq!(
-        expect_vec_ints(super::aura_direct_clone_value(last)),
-        vec![15]
-    );
+    assert_eq!(expect_string(super::aura_direct_clone_value(last)), "15");
     assert_eq!(lend(-1).wrapping_byte_sub(1), last);
     // A copy of the list shares the boxes, so the list counts copies again
     // before it takes boxes of its own.
     let other = super::aura_direct_clone_value(list);
-    assert_eq!(expect_vec_ints(lend(0)), vec![0]);
+    assert_eq!(expect_string(lend(0)), "0");
     let own = lend(-1);
     assert_eq!(own as usize & 1, 1);
     assert_ne!(own.wrapping_byte_sub(1), last);
@@ -26295,8 +26398,8 @@ fn lists_lend_elements_once_their_copies_pay_for_moving_them_into_boxes() {
     assert_eq!(expect_int(super::aura_direct_vec_lend(bytes, 0, 1, 1)), 7);
     unsafe { super::share_direct_value(other) };
     assert_eq!(
-        expect_vec_ints(super::aura_direct_vec_lend(other, 15, 1, 1)),
-        vec![15]
+        expect_string(super::aura_direct_vec_lend(other, 15, 1, 1)),
+        "15"
     );
     for value in [list, other, bytes] {
         unsafe { release_value(value) };
@@ -27147,7 +27250,7 @@ fn consuming_a_shared_box_copies_its_value_and_keeps_the_other_reference() {
     let text = string_value("shared");
     unsafe {
         retain_value(text);
-        expect_unit(super::aura_direct_vec_push_in_place(vec, text));
+        super::aura_direct_vec_push_in_place(vec, text);
     }
     // The push took one reference. The other still reads the string.
     assert_eq!(
@@ -27168,7 +27271,7 @@ fn consuming_a_shared_box_copies_its_value_and_keeps_the_other_reference() {
 fn consuming_a_unique_box_moves_its_value() {
     let vec = super::aura_direct_vec_empty();
     let text = string_value("unique");
-    expect_unit(super::aura_direct_vec_push_in_place(vec, text));
+    super::aura_direct_vec_push_in_place(vec, text);
     let Value::Vec(stored) = (unsafe { take_value(vec) }) else {
         panic!("the list should stay a list");
     };
@@ -27761,6 +27864,188 @@ fn direct_tag_cells_keep_the_decoded_tag() {
     for value in [first, second, variant] {
         unsafe { release_value(value) };
     }
+}
+
+#[test]
+fn direct_empty_tagged_lists_start_in_their_element_form() {
+    use crate::list_elements::ListForm;
+    let list_of = |element: Type| Type::Named("list".to_string(), vec![element]);
+    for (element, form) in [
+        ("int64", ListForm::Int64),
+        ("float64", ListForm::Float64),
+        ("bool", ListForm::Bool),
+        ("int8", ListForm::Int8),
+        ("int16", ListForm::Int16),
+        ("int32", ListForm::Int32),
+        ("uint8", ListForm::Uint8),
+        ("uint16", ListForm::Uint16),
+        ("uint32", ListForm::Uint32),
+        ("uint64", ListForm::Uint64),
+        ("float32", ListForm::Float32),
+        ("str", ListForm::Values),
+    ] {
+        let elements = super::empty_elements_for(&Type::named(element));
+        assert!(elements.is_empty());
+        assert_eq!(elements.form(), form, "{element}");
+    }
+    for element in [
+        list_of(Type::named("int64")),
+        Type::Tuple(vec![Type::named("int64"), Type::named("str")]),
+    ] {
+        assert_eq!(super::empty_elements_for(&element).form(), ListForm::Values);
+    }
+
+    let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    let list_type = list_of(Type::named("int64"));
+    let descriptor = super::canonical_runtime_type_name(&list_type);
+    let descriptor = descriptor.as_bytes();
+    let list = super::aura_direct_vec_empty_tagged(&cell, descriptor.as_ptr(), descriptor.len());
+    assert!(!cell.load(Ordering::Acquire).is_null());
+    match unsafe { value_ref(list) } {
+        Value::Vec(vector) => {
+            assert_eq!(vector.element_type, Type::named("int64"));
+            assert_eq!(vector.elements.form(), ListForm::Int64);
+        }
+        other => panic!("expected a list, found {other:?}"),
+    }
+    assert_eq!(
+        unsafe { super::explicit_runtime_type_name(list) }.as_deref(),
+        Some(super::canonical_runtime_type_name(&list_type).as_str())
+    );
+    // A repeated tag of the same list type finds nothing to change.
+    super::aura_direct_tag_value_type_cell(list, &cell, descriptor.as_ptr(), descriptor.len());
+    match unsafe { value_ref(list) } {
+        Value::Vec(vector) => assert_eq!(vector.elements.form(), ListForm::Int64),
+        other => panic!("expected a list, found {other:?}"),
+    }
+    unsafe { release_value(list) };
+
+    let message = capture_direct_boundary_error_message(|| {
+        let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+        super::aura_direct_vec_empty_tagged(&cell, b"int64".as_ptr(), 5);
+    });
+    assert_eq!(message, "an empty list cannot take the type `int64`");
+    let message = capture_direct_boundary_error_message(|| {
+        super::aura_direct_vec_empty_tagged(std::ptr::null(), b"int64".as_ptr(), 5);
+    });
+    assert_eq!(message, "direct runtime received a null type tag cell");
+}
+
+#[test]
+fn direct_retags_skip_values_that_already_have_the_shape() {
+    use crate::collection_index::{DictEntries, SetElements};
+    use crate::list_elements::ListElements;
+    let named = |name: &str, args: Vec<Type>| Type::Named(name.to_string(), args);
+    let int64 = || Type::named("int64");
+    let tag = |ty: &Type| {
+        super::interned_runtime_type_tag(super::canonical_runtime_type_name(ty).as_bytes())
+    };
+    let changes = |value: &Value, ty: &Type| super::retag_changes(value, &tag(ty));
+    let list = |element: &str| {
+        Value::Vec(VecValue {
+            element_type: Type::named(element),
+            elements: ListElements::new(),
+            str_view: Default::default(),
+        })
+    };
+    assert!(!changes(&list("int64"), &named("list", vec![int64()])));
+    assert!(changes(&list("int32"), &named("list", vec![int64()])));
+    // A float32 list may still need its elements narrowed.
+    assert!(changes(
+        &list("float32"),
+        &named("list", vec![Type::named("float32")])
+    ));
+    assert!(changes(&list("int64"), &named("set", vec![int64()])));
+    let set = Value::Set(SetValue {
+        element_type: Type::named("str"),
+        elements: SetElements::new(),
+    });
+    assert!(!changes(&set, &named("set", vec![Type::named("str")])));
+    assert!(changes(&set, &named("set", vec![int64()])));
+    let map = Value::Map(MapValue {
+        key_type: Type::named("str"),
+        value_type: int64(),
+        entries: DictEntries::new(),
+    });
+    assert!(!changes(
+        &map,
+        &named("dict", vec![Type::named("str"), int64()])
+    ));
+    assert!(changes(
+        &map,
+        &named("dict", vec![Type::named("str"), Type::named("bool")])
+    ));
+    assert!(changes(&map, &named("list", vec![int64()])));
+    let tuple = Value::Tuple(TupleValue {
+        elements: vec![Value::Bool(true), Value::Bool(false)],
+        element_types: vec![Type::named("bool"), Type::named("bool")],
+    });
+    let pair = |ty: Type| Type::Tuple(vec![ty.clone(), ty]);
+    assert!(!changes(&tuple, &pair(Type::named("bool"))));
+    assert!(changes(&tuple, &pair(int64())));
+    assert!(changes(&Value::Bool(true), &Type::named("bool")));
+
+    // A variant keeps a tag whose interned enum name it already carries.
+    let variant = boxed_value(Value::EnumVariant(EnumVariantValue {
+        enum_name: "Pair".into(),
+        variant_name: "Both".into(),
+        payloads: vec![Value::Int(IntegerValue::from_i32(7))],
+    }));
+    let pair_type = named("Pair", vec![int64()]);
+    let descriptor = super::canonical_runtime_type_name(&pair_type);
+    let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    super::aura_direct_tag_value_type_cell(variant, &cell, descriptor.as_ptr(), descriptor.len());
+    assert!(!changes(&unsafe { value_ref(variant) }, &pair_type));
+    let untagged = Value::EnumVariant(EnumVariantValue {
+        enum_name: "Pair".into(),
+        variant_name: "Both".into(),
+        payloads: Vec::new(),
+    });
+    assert!(changes(&untagged, &pair_type));
+    unsafe { release_value(variant) };
+}
+
+#[test]
+fn direct_appended_collections_keep_their_own_box() {
+    use crate::list_elements::ListElements;
+    let boxes = |list: *mut OpaqueValue| match unsafe { value_ref(list) } {
+        Value::Vec(VecValue {
+            elements: ListElements::Boxes(boxes),
+            ..
+        }) => boxes
+            .iter()
+            .map(|element| element.as_ptr())
+            .collect::<Vec<_>>(),
+        other => panic!("the list keeps boxes, found {other:?}"),
+    };
+    // A list with one reference joins an empty list in its own box.
+    let outer = super::aura_direct_vec_empty();
+    let inner = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_in_place(inner, int_value(1));
+    super::aura_direct_vec_push_in_place(outer, inner);
+    assert_eq!(boxes(outer), vec![inner]);
+    // So does a dict or a set; one another reference holds is copied.
+    let dict = super::aura_direct_map_empty();
+    super::aura_direct_vec_push_in_place(outer, dict);
+    let shared = super::aura_direct_vec_empty();
+    unsafe { super::aura_direct_retain_value(shared) };
+    super::aura_direct_vec_push_in_place(outer, shared);
+    let held = boxes(outer);
+    assert_eq!(held[..2], [inner, dict]);
+    assert_ne!(held[2], shared);
+    unsafe { release_value(shared) };
+    unsafe { release_value(outer) };
+    // A string joins as a value.
+    let strings = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_in_place(strings, string_value("a"));
+    assert!(matches!(
+        unsafe { value_ref(strings) },
+        Value::Vec(VecValue {
+            elements: ListElements::Values(_),
+            ..
+        })
+    ));
+    unsafe { release_value(strings) };
 }
 
 #[test]

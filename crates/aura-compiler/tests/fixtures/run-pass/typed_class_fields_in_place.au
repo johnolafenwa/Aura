@@ -1,0 +1,168 @@
+# A class instance generated code builds keeps its fields in one block in
+# the class's layout. Every shape of field path reads and writes there:
+# scalars, classes held inline, boxes for strings and collections, and
+# fields lent to runtime operations and to user functions.
+class Meta:
+    name: str
+    count: int64
+    tags: list[str]
+
+class Point:
+    x: int64
+    y: int64
+
+enum Shape:
+    Circle(int64)
+    Square(int64, int64)
+
+class Book:
+    title: str
+    meta: Meta
+    pos: Point
+    items: list[int64]
+    counts: dict[str, int64]
+    seen: set[int64]
+    shape: Shape
+    total: int64
+    flag: bool
+    small: int32
+    tiny: uint8
+    maybe: int64 | None
+    label: str | None
+
+    def add(mut self, value: int64):
+        self.items.append(value)
+        self.total += value
+        self.meta.count += 1
+        self.seen.add(value % 3)
+
+    def bump(mut self):
+        self.pos.x += 1
+        self.pos = Point(x=self.pos.x, y=self.pos.y + 2)
+
+    def drop_last(mut self) -> int64:
+        return self.items.pop()
+
+    def describe(self) -> str:
+        return f"{self.title}/{self.meta.name}/{self.items.len()}/{self.meta.tags}"
+
+def bump(value: mut int64):
+    value += 1
+
+def rename(meta: mut Meta):
+    meta = Meta(name="renamed", count=meta.count + 10, tags=["r"])
+
+def grow(xs: mut list[int64]):
+    xs.append(100)
+    xs = [7, 8, 9]
+    xs.append(10)
+
+def size(xs: list[int64]) -> int64:
+    return xs.len()
+
+def keep(text: own str) -> str:
+    return text
+
+def area(shape: Shape) -> int64:
+    match shape:
+        case Shape.Square(width, height):
+            return width * height
+        case Shape.Circle(radius):
+            return 3 * radius * radius
+
+# A view of an element reads its fields where the element lies.
+def views(books: list[Book], shelves: dict[str, Book]) -> int64:
+    mut total = 0
+    for index in range(books.len()):
+        view book = books[index]
+        for item in book.items:
+            total += item
+        total += book.items.len() + book.meta.count + book.pos.x
+        if book.title != "":
+            total += len(book.title)
+    view shelf = shelves["s"]
+    for tag in shelf.meta.tags:
+        total += len(tag)
+    return total + shelf.seen.len()
+
+def main():
+    mut b = Book(
+        title="t",
+        meta=Meta(name="m", count=0, tags=[]),
+        pos=Point(x=1, y=2),
+        items=[],
+        counts={},
+        seen={},
+        shape=Shape.Circle(3),
+        total=0,
+        flag=true,
+        small=7,
+        tiny=200,
+        maybe=None,
+        label=None,
+    )
+    for i in range(6):
+        b.add(i)
+    b.bump()
+    print(b.drop_last())
+    print(f"{b.total} {b.items} {b.meta.count} {b.pos.x} {b.pos.y} {b.seen.len()}")
+    b.meta.tags.append("x")
+    b.counts["a"] = 1
+    b.counts["a"] += 2
+    b.items[0] = 99
+    b.title = b.title + "!"
+    b.meta.name = "meta"
+    b.maybe = 3
+    b.label = "l"
+    print(area(b.shape))
+    b.shape = Shape.Square(2, 4)
+    print(area(b.shape))
+    b.flag = not b.flag
+    b.small -= 2
+    b.tiny += 1
+    print(f"{b.flag} {b.small} {b.tiny} {b.maybe} {b.label} {b.counts}")
+    bump(b.total)
+    bump(b.meta.count)
+    bump(b.pos.y)
+    bump(b.items[1])
+    print(f"{b.total} {b.meta.count} {b.pos.y} {b.items}")
+    grow(b.items)
+    print(size(b.items))
+    rename(b.meta)
+    print(b.describe())
+    moved = keep(b.title)
+    print(moved)
+    b.title = "back"
+    b.maybe = None
+    print(b)
+    print(b.meta)
+    print(b.pos)
+    mut books = [b]
+    # A method that appends to a field of a list element, read back through
+    # the list.
+    books[0].add(7)
+    books[0].add(8)
+    books[0].add(9)
+    print(f"{books[0].items} {books[0].total} {books[0].meta.count}")
+    books[0].items.append(5)
+    books[0].total += 1
+    print(books[0].items)
+    print(books[0].total)
+    print(books[0].describe())
+    mut shelves: dict[str, Book] = {}
+    shelves["s"] = Book(
+        title="s",
+        meta=Meta(name="n", count=2, tags=["ab", "c"]),
+        pos=Point(x=3, y=4),
+        items=[5, 6],
+        counts={},
+        seen={1, 2},
+        shape=Shape.Circle(1),
+        total=0,
+        flag=false,
+        small=1,
+        tiny=1,
+        maybe=None,
+        label=None,
+    )
+    print(views(books, shelves))

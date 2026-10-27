@@ -209,7 +209,7 @@ unsafe fn int64_vec(values: &[i64]) -> *mut OpaqueValue {
     let vector = aura_direct_vec_empty();
     for value in values {
         unsafe {
-            release(aura_direct_vec_push_in_place(vector, int_value(*value)));
+            aura_direct_vec_push_in_place(vector, int_value(*value));
         }
     }
     vector
@@ -219,7 +219,7 @@ unsafe fn int32_vec(values: &[i32]) -> *mut OpaqueValue {
     let vector = aura_direct_vec_empty();
     for value in values {
         unsafe {
-            release(aura_direct_vec_push_in_place(vector, int32_value(*value)));
+            aura_direct_vec_push_in_place(vector, int32_value(*value));
         }
     }
     vector
@@ -256,10 +256,7 @@ unsafe fn float_array(
     let vector = aura_direct_vec_empty();
     for value in values {
         unsafe {
-            release(aura_direct_vec_push_in_place(
-                vector,
-                float_value(*value, runtime_type),
-            ));
+            aura_direct_vec_push_in_place(vector, float_value(*value, runtime_type));
         }
     }
     let vector_type = format!("list[{runtime_type}]");
@@ -415,7 +412,7 @@ unsafe fn string_vec(values: &[&str]) -> *mut OpaqueValue {
     let vec = aura_direct_vec_empty();
     for value in values {
         let item = unsafe { string_value(value) };
-        release(aura_direct_vec_push_in_place(vec, item));
+        aura_direct_vec_push_in_place(vec, item);
     }
     vec
 }
@@ -426,7 +423,7 @@ unsafe fn byte_vec(values: &[u8]) -> *mut OpaqueValue {
         let item = unsafe { int_value(i64::from(*value)) };
         let runtime_type = "uint8";
         aura_direct_tag_value_type(item, runtime_type.as_ptr(), runtime_type.len());
-        release(aura_direct_vec_push_in_place(vec, item));
+        aura_direct_vec_push_in_place(vec, item);
     }
     vec
 }
@@ -842,8 +839,8 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
 
         let vec = aura_direct_vec_empty();
         assert_eq!(aura_direct_vec_is_empty(vec), 1);
-        release(aura_direct_vec_push_in_place(vec, int_value(1)));
-        release(aura_direct_vec_push_in_place(vec, int_value(3)));
+        aura_direct_vec_push_in_place(vec, int_value(1));
+        aura_direct_vec_push_in_place(vec, int_value(3));
         assert_eq!(aura_direct_vec_len(vec), 2);
         assert_eq!(
             aura_direct_vec_contains(vec, ScopedValue::new(int_value(1)).as_ptr()),
@@ -871,7 +868,7 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         release(aura_direct_vec_remove_in_place(vec, 1));
         release(aura_direct_vec_pop_in_place(vec));
         let other_vec = aura_direct_vec_empty();
-        release(aura_direct_vec_push_in_place(other_vec, int_value(9)));
+        aura_direct_vec_push_in_place(other_vec, int_value(9));
         release(aura_direct_vec_extend_in_place(vec, other_vec));
         release(aura_direct_vec_clear_in_place(vec));
         assert_eq!(aura_direct_vec_is_empty(vec), 1);
@@ -960,15 +957,9 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         release(set);
 
         let command = aura_direct_vec_empty();
-        release(aura_direct_vec_push_in_place(
-            command,
-            string_value("/bin/sh"),
-        ));
-        release(aura_direct_vec_push_in_place(command, string_value("-c")));
-        release(aura_direct_vec_push_in_place(
-            command,
-            string_value("printf out; printf err >&2"),
-        ));
+        aura_direct_vec_push_in_place(command, string_value("/bin/sh"));
+        aura_direct_vec_push_in_place(command, string_value("-c"));
+        aura_direct_vec_push_in_place(command, string_value("printf out; printf err >&2"));
         let cwd = unit_value();
         let env = aura_direct_map_empty();
         let stdin = aura_direct_process_null();

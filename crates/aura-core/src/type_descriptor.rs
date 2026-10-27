@@ -224,6 +224,11 @@ impl Reader<'_> {
         }
     }
 
+    /// A number, such as a size or an offset, that sizes no allocation.
+    pub(crate) fn number(&mut self) -> Result<usize, String> {
+        self.digits_until(b';')
+    }
+
     pub(crate) fn count(&mut self) -> Result<usize, String> {
         let count = self.digits_until(b';')?;
         // Every counted item takes at least one byte, so a count larger than

@@ -24,8 +24,20 @@ fn element_boxes_compare_print_and_copy_their_values() {
             .elements
             .push(Value::Int(crate::integer::IntegerValue::from_i64(4)));
     }
-    // The guard brought the box's list view up to date.
+    // The guard brought the box's list view up to date, and the list has
+    // room while no other value shares its storage.
+    let room = |list: &ElementBox| unsafe {
+        (*list.as_ptr())
+            .list_capacity
+            .load(std::sync::atomic::Ordering::Relaxed)
+    };
     assert_eq!(unsafe { (*list.as_ptr()).list_len.get() }, 1);
+    assert!(room(&list) > 0);
+    // A read of the box may copy its value, which shares the storage, so
+    // the box gives the room back.
+    let shared = list.value().clone();
+    assert_eq!(room(&list), 0);
+    drop(shared);
     assert_eq!(copy.into_value(), text("a"));
 }
 

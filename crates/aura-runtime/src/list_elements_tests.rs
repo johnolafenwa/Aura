@@ -60,7 +60,7 @@ fn test_record_layout() -> &'static PlainLayout {
             .into(),
             enums: Default::default(),
         };
-        let descriptor = encode_descriptor(&Type::named("ListTestRecord"), &env);
+        let descriptor = encode_descriptor(&Type::named("ListTestRecord"), &env).expect("a layout");
         plain_layout_for_descriptor(&descriptor).expect("the record has a plain layout")
     })
 }
@@ -383,6 +383,27 @@ fn text(value: &str) -> Value {
 }
 
 #[test]
+fn boxed_elements_join_a_list_in_their_own_boxes() {
+    use crate::native_runtime::ElementBox;
+    // An empty list, or one that keeps boxes, keeps the box it is given.
+    let mut list = ListElements::new();
+    let first = ElementBox::new(text("a"));
+    let first_ptr = first.as_ptr();
+    list.push_box(first);
+    list.push_box(ElementBox::new(text("b")));
+    let ListElements::Boxes(boxes) = &list else {
+        panic!("the list keeps the boxes");
+    };
+    assert_eq!(boxes[0].as_ptr(), first_ptr);
+    assert_eq!(list.to_vec(), vec![text("a"), text("b")]);
+    // Any other form takes the value out of the box.
+    let mut values = ListElements::from(vec![text("x")]);
+    values.push_box(ElementBox::new(text("y")));
+    assert!(matches!(values, ListElements::Values(_)));
+    assert_eq!(values.to_vec(), vec![text("x"), text("y")]);
+}
+
+#[test]
 fn lent_lists_keep_each_element_in_a_box_of_its_own() {
     let mut list = ListElements::from(vec![text("a"), text("b"), text("c")]);
     assert!(ListElements::from(vec![int(1)]).lend(0).is_none());
@@ -395,7 +416,9 @@ fn lent_lists_keep_each_element_in_a_box_of_its_own() {
         list.view().0.access(),
         crate::native_runtime::DirectListAccess::Boxes as u32
     );
-    assert_eq!(list.view().3, 0);
+    // Unshared storage has room, which code that changes an element in
+    // place checks.
+    assert!(list.view().3 >= 3);
     assert_eq!(
         format!("{list:?}"),
         format!(
@@ -425,6 +448,7 @@ fn lent_lists_keep_each_element_in_a_box_of_its_own() {
         copy.view().0.access(),
         crate::native_runtime::DirectListAccess::Values as u32
     );
+    assert_eq!(copy.view().3, 0);
     let own = copy.lend(1).unwrap().as_ptr();
     assert_ne!(own, first);
     assert_eq!(

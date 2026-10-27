@@ -28,14 +28,14 @@ use std::sync::MutexGuard;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration as StdDuration, Instant};
 
-use crate::collection_index::short_bytes_eq;
+use crate::collection_index::{short_bytes_eq, SharedVec};
 use crate::diag::{Diagnostic, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span};
 use crate::ffi::{FfiError, FfiSignature, FfiType, FfiValue, OpaqueHandle};
 use crate::integer::{
     IntegerKind, IntegerPowerError, IntegerRepresentation, IntegerShiftError, IntegerValue,
 };
 use crate::json_codec;
-use crate::list_elements::ListElements;
+use crate::list_elements::{ElementRefMut, ListElements};
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
     append_string_checked, cancel_current_lightweight_task_boundary, cast_numeric_value,
@@ -70,7 +70,7 @@ use crate::runtime_value::{
     yield_now_with_runtime_scheduler, ArrayBinaryOp, ArrayDType, ArrayReduction, ArrayValue,
     CancellationContext, ChannelValue, CleanupTrapSignal, ClosureCaptureValue, ClosureEnvironment,
     DictEntries, EnumVariantValue, FfiHandleValue, FileValue, FloatPowerWidth, FunctionValue,
-    HttpListenerValue, HttpResponseValue, InstanceValue, IntegerArithmeticMode,
+    HttpListenerValue, HttpResponseValue, InstanceFields, InstanceValue, IntegerArithmeticMode,
     LightweightTaskFailureSignal, MapValue, ProcessChildValue, ProcessChildWaitStatus,
     ProcessCompletedValue, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
     RecvValueResult, RngValue, RuntimeName, RuntimeSchedulerWakeReason, SendValueError,
@@ -139,6 +139,8 @@ pub struct DirectFfiCallSpec {
 
 #[path = "native_box_cache.rs"]
 mod box_cache;
+#[path = "native_class_layouts.rs"]
+mod class_layouts;
 #[path = "native_element_boxes.rs"]
 mod element_boxes;
 #[path = "native_frame_stack.rs"]
@@ -159,6 +161,10 @@ pub use typed_layout::{
     UNREGISTERED_PLAIN_ACCESS,
 };
 
+use class_layouts::{celled_class_layout, registered_class_layout};
+pub use class_layouts::{
+    register_class_layout, ClassLayout, ClassLayoutCell, TypedFields, FIRST_CLASS_ACCESS,
+};
 pub use element_boxes::{ElementBox, ElementMut};
 pub use frame_stack::{direct_frame_stack_layout, DirectFrameStack, DirectFrameStackLayout};
 use frame_stack::{
@@ -1396,8 +1402,11 @@ pub struct OpaqueValue {
     /// whose storage no other value shares. Generated code that appends
     /// while `list_len` is below it stores the element past the end and
     /// raises `list_len`. The next access adopts that length and sets this
-    /// back to 0, so runtime code always sees every element.
-    list_capacity: std::cell::Cell<u32>,
+    /// back to 0, so runtime code always sees every element. A read of a
+    /// held box (see [`Self::held_value`]) sets it to 0 too, since a copy
+    /// it makes shares the storage. That read may run on several threads at
+    /// once under a shared holder's lock, so the word is atomic.
+    list_capacity: AtomicU32,
     prev: std::cell::Cell<*mut OpaqueValue>,
     next: std::cell::Cell<*mut OpaqueValue>,
     runtime_type_name: UnsafeCell<Option<Arc<str>>>,
@@ -1453,7 +1462,7 @@ impl OpaqueValue {
             list_len: std::cell::Cell::new(len),
             ref_count: AtomicU32::new(1),
             list_access: AtomicU32::new(access),
-            list_capacity: std::cell::Cell::new(0),
+            list_capacity: AtomicU32::new(0),
             shared_lock: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
             owner: std::cell::Cell::new(std::ptr::null_mut()),
             owned: std::cell::Cell::new(0),
@@ -1476,11 +1485,39 @@ impl OpaqueValue {
             return;
         }
         // SAFETY: the caller has exclusive access, so no `&mut Value` exists.
-        let (access, elements, len, capacity) = list_view_of(unsafe { &*self.value.get() });
+        let value = unsafe { &*self.value.get() };
+        let (access, elements, len, capacity) = list_view_of(value);
         self.list_elements.set(elements);
         self.list_len.set(len);
-        self.list_capacity.set(capacity);
+        self.list_capacity.store(capacity, Ordering::Relaxed);
         self.list_access.store(access, Ordering::Relaxed);
+        // Generated code reads an instance's field boxes in place too, so
+        // they follow a change the runtime made through the instance.
+        if access >= FIRST_CLASS_ACCESS {
+            if let Value::Instance(instance) = value {
+                if let Some(typed) = instance.fields.typed() {
+                    typed.refresh_views();
+                }
+            }
+        }
+    }
+
+    /// The value of a box its holder owns and reaches it through: a list
+    /// element's box or an instance field's box. The holder's access covers
+    /// it, so it takes no access of its own, and generated code never runs
+    /// its list view ahead of it (see `native_class_layouts.rs`), so there
+    /// is nothing to take in. The caller may copy the value, and the copy
+    /// shares its storage, so the box gives up its room as an access
+    /// would: generated code then calls the runtime to change the list,
+    /// which copies the storage first, until the next write through the box
+    /// or its holder finds the storage unshared again.
+    fn held_value(&self) -> &Value {
+        if self.list_capacity.load(Ordering::Relaxed) != 0 {
+            self.list_capacity.store(0, Ordering::Relaxed);
+        }
+        // SAFETY: the holder's access covers the box, and a write takes the
+        // holder mutably, so no `&mut Value` exists while this borrow lives.
+        unsafe { &*self.value.get() }
     }
 
     /// Takes in the elements generated code appended in place since the
@@ -1492,7 +1529,7 @@ impl OpaqueValue {
     #[cold]
     #[inline(never)]
     fn adopt_appended_elements(&self) {
-        self.list_capacity.set(0);
+        self.list_capacity.store(0, Ordering::Relaxed);
         // SAFETY: room is only set by a write that has ended, and every
         // access takes it back before it reads, so no reference into the
         // value is live. The room also means the value is confined and its
@@ -1559,7 +1596,7 @@ impl OpaqueValue {
 
     #[inline]
     fn access(&self, write: bool) -> DirectValueAccess<'_> {
-        if self.list_capacity.get() != 0 {
+        if self.list_capacity.load(Ordering::Relaxed) != 0 {
             self.adopt_appended_elements();
         }
         self.access_unlisted(write)
@@ -1609,7 +1646,7 @@ unsafe fn share_direct_value(ptr: *mut OpaqueValue) {
                 // The value is still confined, so the elements generated
                 // code appended join its storage before another thread
                 // can read it.
-                if value.list_capacity.get() != 0 {
+                if value.list_capacity.load(Ordering::Relaxed) != 0 {
                     value.adopt_appended_elements();
                 }
                 // Other threads may read the header once the value is
@@ -2021,7 +2058,7 @@ fn embedded_runtime_type_name(value: &Value) -> Option<String> {
             instance
                 .fields
                 .get(DIRECT_RUNTIME_TYPE_FIELD)
-                .and_then(|value| match value {
+                .and_then(|value| match &*value {
                     Value::String(runtime_type_name) => Some(runtime_type_name.clone()),
                     _ => None,
                 })
@@ -2512,20 +2549,55 @@ unsafe fn set_explicit_runtime_type_tag(ptr: *mut OpaqueValue, tag: &RuntimeType
                 *stored = Some(Arc::clone(&tag.name));
             }
             // SAFETY: the access above still holds.
-            let keeps_name = matches!(
-                unsafe { &*value.value.get() },
-                Value::Channel(_) | Value::Task(_)
-            );
+            let held = unsafe { &*value.value.get() };
+            let keeps_name = matches!(held, Value::Channel(_) | Value::Task(_));
             if tag.shape_free && !keeps_name {
+                return;
+            }
+            // A value that already has the shape needs no edit, so a tag
+            // repeated on the same box costs one access.
+            if tag.name_only || !retag_changes(held, tag) {
                 return;
             }
         }
         None => runtime_error("direct runtime received a null opaque value pointer"),
     }
-    if tag.name_only {
-        return;
-    }
     unsafe { value_mut(ptr, |value| retag_value(value, tag)) }
+}
+
+/// Whether [`retag_value`] could change `value`. It answers exactly for
+/// the collections, tuples and enum variants generated code tags most, and
+/// `true` for everything else. It matches on the value first, so a value
+/// of another kind costs one compare.
+#[inline]
+fn retag_changes(value: &Value, tag: &RuntimeTypeTag) -> bool {
+    match (value, &tag.parsed) {
+        (Value::Vec(vector), Type::Named(name, args)) => match args.as_slice() {
+            [element] if name == "list" => {
+                vector.element_type != *element || is_float32_element(element)
+            }
+            _ => true,
+        },
+        (Value::Set(set), Type::Named(name, args)) => match args.as_slice() {
+            [element] if name == "set" => set.element_type != *element,
+            _ => true,
+        },
+        (Value::Map(map), Type::Named(name, args)) => match args.as_slice() {
+            [key_type, value_type] if name == "dict" => {
+                map.key_type != *key_type || map.value_type != *value_type
+            }
+            _ => true,
+        },
+        (Value::Tuple(tuple), Type::Tuple(element_types)) => {
+            element_types.len() == tuple.elements.len() && tuple.element_types != *element_types
+        }
+        // A variant already carrying the tag's interned enum name keeps it.
+        (Value::EnumVariant(variant), _) => !tag
+            .tagged_enum_name
+            .as_ref()
+            .is_some_and(|tagged| std::ptr::eq(tagged.as_str(), variant.enum_name.as_str())),
+        _ => true,
+    }
 }
 
 /// Gives `value` the shape a tag records: integer kinds, element types,
@@ -2584,11 +2656,12 @@ fn retag_value(value: &mut Value, tag: &RuntimeTypeTag) {
         }
         Value::Instance(instance) if matches!(parsed, Type::Named(_, args) if !args.is_empty()) => {
             let already_tagged = matches!(
-                instance.fields.get(DIRECT_RUNTIME_TYPE_FIELD),
+                instance.fields.get(DIRECT_RUNTIME_TYPE_FIELD).as_deref(),
                 Some(Value::String(existing)) if existing == runtime_type_name
             );
+            // A generic class keeps its fields in a map.
             if !already_tagged {
-                instance.fields.insert(
+                instance.fields.map_mut().insert(
                     DIRECT_RUNTIME_TYPE_FIELD.to_string(),
                     Value::String(runtime_type_name.to_string()),
                 );
@@ -2688,6 +2761,12 @@ fn list_view_of(value: &Value) -> (u32, usize, usize, u32) {
             };
             (access as u32, elements, array.shape[0], 0)
         }
+        // An instance kept in its class's layout: generated code reads and
+        // writes its fields at their offsets in the block.
+        Value::Instance(instance) => match instance.fields.typed() {
+            Some(typed) => (typed.layout().access(), typed.data() as usize, 0, 0),
+            None => (DirectListAccess::None as u32, 0, 0, 0),
+        },
         _ => (DirectListAccess::None as u32, 0, 0, 0),
     }
 }
@@ -7226,6 +7305,37 @@ pub extern "C-unwind" fn aura_direct_vec_empty() -> *mut OpaqueValue {
     })
 }
 
+/// An empty list of the list type the tag in `cell` names, as
+/// `aura_direct_vec_empty` and then `aura_direct_tag_value_type_cell` with
+/// the same cell would make it, in one call and with one copy of the
+/// element type.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_empty_tagged(
+    cell: *const AtomicPtr<c_void>,
+    type_ptr: *const u8,
+    type_len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| unsafe {
+        let Some(cell) = cell.as_ref() else {
+            runtime_error("direct runtime received a null type tag cell");
+        };
+        let tag = celled_runtime_type_tag(cell, slice::from_raw_parts(type_ptr, type_len));
+        let element_type = match &tag.parsed {
+            Type::Named(name, args) if name == "list" && args.len() == 1 => args[0].clone(),
+            _ => runtime_error(format!("an empty list cannot take the type `{}`", tag.name)),
+        };
+        let elements = empty_elements_for(&element_type);
+        boxed_value_with_type(
+            Value::Vec(VecValue {
+                element_type,
+                elements,
+                str_view: Default::default(),
+            }),
+            Some(Arc::clone(&tag.name)),
+        )
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_len(vec: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| {
@@ -7273,8 +7383,27 @@ pub extern "C-unwind" fn aura_direct_vec_slice(
 pub extern "C-unwind" fn aura_direct_vec_push_in_place(
     vec: *mut OpaqueValue,
     value: *mut OpaqueValue,
-) -> *mut OpaqueValue {
+) {
     task_runtime_boundary(|| {
+        // An instance kept in its class's layout, or a collection, joins
+        // the list in its own box, which then needs no copy for generated
+        // code to lend it or change it in place (see
+        // `aura_direct_element_path_probe`).
+        // SAFETY: generated code passes a live box it owns.
+        if unsafe { holds_element_box_value(value) } {
+            if let Some(element) = unsafe { adopt_only_box(value) } {
+                with_vector_mut(vec, |vector| {
+                    if is_unknown_runtime_type(&vector.element_type) {
+                        let inferred = inferred_collection_type(element.value());
+                        if !is_unknown_runtime_type(&inferred) {
+                            vector.element_type = inferred;
+                        }
+                    }
+                    vector.elements.push_box(element);
+                });
+                return;
+            }
+        }
         let value = unsafe { consume_owned_value(value) };
         with_vector_mut(vec, |vector| {
             if is_unknown_runtime_type(&vector.element_type) {
@@ -7285,7 +7414,6 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
             }
             vector.elements.push(value);
         });
-        boxed_value(Value::Unit)
     })
 }
 
@@ -7293,6 +7421,32 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
 /// [`DirectScalarKind`] `kind` names.
 fn scalar_list_value(bits: i64, kind: i64) -> Value {
     DirectScalarKind::of_code(kind).value(bits)
+}
+
+/// An empty list in the form that keeps elements of `element_type`
+/// unboxed, so its first append changes no form. Any other element type
+/// starts with `Values`.
+fn empty_elements_for(element_type: &Type) -> ListElements {
+    let Type::Named(name, args) = element_type else {
+        return ListElements::new();
+    };
+    if !args.is_empty() {
+        return ListElements::new();
+    }
+    match name.as_str() {
+        "int64" => ListElements::Int64(SharedVec::new()),
+        "float64" => ListElements::Float64(SharedVec::new()),
+        "bool" => ListElements::Bool(SharedVec::new()),
+        "int8" => ListElements::Int8(SharedVec::new()),
+        "int16" => ListElements::Int16(SharedVec::new()),
+        "int32" => ListElements::Int32(SharedVec::new()),
+        "uint8" => ListElements::Uint8(SharedVec::new()),
+        "uint16" => ListElements::Uint16(SharedVec::new()),
+        "uint32" => ListElements::Uint32(SharedVec::new()),
+        "uint64" => ListElements::Uint64(SharedVec::new()),
+        "float32" => ListElements::Float32(SharedVec::new()),
+        _ => ListElements::new(),
+    }
 }
 
 fn is_float32_element(ty: &Type) -> bool {
@@ -8025,12 +8179,15 @@ pub unsafe extern "C-unwind" fn aura_direct_register_plain_layouts(
             }
             let access = u32::try_from(entry.access).unwrap_or(UNREGISTERED_PLAIN_ACCESS);
             // SAFETY: the entry's contract.
-            let registered = unsafe {
-                celled_plain_layout(
-                    entry.cell,
-                    slice::from_raw_parts(entry.descriptor, entry.len),
-                    access,
-                )
+            let descriptor = unsafe { slice::from_raw_parts(entry.descriptor, entry.len) };
+            // A class code names a class layout cell, which is laid out as a
+            // plain layout's cell.
+            let registered = if (FIRST_CLASS_ACCESS..UNREGISTERED_PLAIN_ACCESS).contains(&access) {
+                // SAFETY: the entry's contract.
+                unsafe { celled_class_layout(entry.cell.cast(), descriptor, access) }.map(drop)
+            } else {
+                // SAFETY: the entry's contract.
+                unsafe { celled_plain_layout(entry.cell, descriptor, access) }.map(drop)
             };
             if let Err(error) = registered {
                 runtime_error(format!("invalid plain layout: {error}"));
@@ -9496,9 +9653,9 @@ fn direct_value_at_path<'a>(
     value: &'a Value,
     segments: &[&str],
     full_path: &str,
-) -> std::result::Result<&'a Value, String> {
+) -> std::result::Result<Cow<'a, Value>, String> {
     let Some((projection, rest)) = segments.split_first() else {
-        return Ok(value);
+        return Ok(Cow::Borrowed(value));
     };
     let nested = match value {
         Value::EnumVariant(variant) => {
@@ -9513,12 +9670,20 @@ fn direct_value_at_path<'a>(
             }
             &union.payload
         }
-        Value::Instance(instance) => instance.fields.get(*projection).ok_or_else(|| {
-            format!(
-                "class `{}` has no field `{}` in path `{full_path}`",
-                instance.class_name, projection
-            )
-        })?,
+        Value::Instance(instance) => {
+            // A field a class keeps in place is read out of its block.
+            let field = instance.fields.get(projection).ok_or_else(|| {
+                format!(
+                    "class `{}` has no field `{}` in path `{full_path}`",
+                    instance.class_name, projection
+                )
+            })?;
+            return match field {
+                Cow::Borrowed(field) => direct_value_at_path(field, rest, full_path),
+                Cow::Owned(field) => direct_value_at_path(&field, rest, full_path)
+                    .map(|nested| Cow::Owned(nested.into_owned())),
+            };
+        }
         Value::Tuple(tuple) => {
             let index = projection.parse::<usize>().map_err(|_| {
                 format!(
@@ -9551,45 +9716,46 @@ fn direct_value_at_path_mut<'a>(
     let Some((projection, rest)) = segments.split_first() else {
         return Ok(value);
     };
-    let nested = match value {
-        Value::EnumVariant(variant) => {
-            let index = direct_enum_projection_index(variant, projection)?;
-            &mut variant.payloads[index]
-        }
-        Value::Union(union) => {
-            if !direct_union_projection(union, projection) {
-                return Err(
-                    "union payload projection does not select the active member".to_string()
-                );
+    let nested =
+        match value {
+            Value::EnumVariant(variant) => {
+                let index = direct_enum_projection_index(variant, projection)?;
+                &mut variant.payloads[index]
             }
-            &mut union.payload
-        }
-        Value::Instance(instance) => {
-            let class_name = instance.class_name.clone();
-            instance.fields.get_mut(*projection).ok_or_else(|| {
+            Value::Union(union) => {
+                if !direct_union_projection(union, projection) {
+                    return Err(
+                        "union payload projection does not select the active member".to_string()
+                    );
+                }
+                &mut union.payload
+            }
+            Value::Instance(instance) => {
+                let class_name = instance.class_name.clone();
+                instance.fields.map_mut().get_mut(*projection).ok_or_else(|| {
                 format!("class `{class_name}` has no field `{projection}` in path `{full_path}`")
             })?
-        }
-        Value::Tuple(tuple) => {
-            let index = projection.parse::<usize>().map_err(|_| {
-                format!(
+            }
+            Value::Tuple(tuple) => {
+                let index = projection.parse::<usize>().map_err(|_| {
+                    format!(
                     "tuple projection `{projection}` is not a fixed position in path `{full_path}`"
                 )
-            })?;
-            let len = tuple.elements.len();
-            tuple.elements.get_mut(index).ok_or_else(|| {
-                format!(
+                })?;
+                let len = tuple.elements.len();
+                tuple.elements.get_mut(index).ok_or_else(|| {
+                    format!(
                     "tuple of length {len} has no element at index {index} in path `{full_path}`"
                 )
-            })?
-        }
-        other => {
-            return Err(format!(
-                "cannot access field `{full_path}` on non-instance `{}`",
-                value_type_name(other)
-            ))
-        }
-    };
+                })?
+            }
+            other => {
+                return Err(format!(
+                    "cannot access field `{full_path}` on non-instance `{}`",
+                    value_type_name(other)
+                ))
+            }
+        };
     direct_value_at_path_mut(nested, rest, full_path)
 }
 
@@ -9739,7 +9905,6 @@ fn direct_element_step<'a>(
         }
         DirectElementPathStep::Projection(projection) => {
             direct_value_at_path(value, &[projection], selectors.path)
-                .map(Cow::Borrowed)
                 .map_err(DirectElementPathError::Path)
         }
     }
@@ -9794,6 +9959,18 @@ fn direct_element_walk_mut<R>(
             }
         }
         DirectElementPathStep::Projection(projection) => {
+            // A field a class keeps in place is edited where it lies.
+            if let Value::Instance(InstanceValue {
+                fields: InstanceFields::Typed(typed),
+                ..
+            }) = value
+            {
+                return typed
+                    .with_field_mut(projection, |field| {
+                        direct_element_walk_mut(field, rest, selectors, edit)
+                    })
+                    .map_err(DirectElementPathError::Path)?;
+            }
             let nested = direct_value_at_path_mut(value, &[projection], selectors.path)
                 .map_err(DirectElementPathError::Path)?;
             direct_element_walk_mut(nested, rest, selectors, edit)
@@ -9847,6 +10024,124 @@ pub extern "C-unwind" fn aura_direct_element_path_load(
     })
 }
 
+/// Counts a loan generated code could not follow (see
+/// `native_codegen_element_loans.rs` in the compiler) on each list its path
+/// selects from. A confined list of `Value`s, or one whose boxes another
+/// list shares, moves its elements into boxes of its own once the misses
+/// reach an eighth of its length, as [`aura_direct_vec_lend`] does, so
+/// later loans stay in generated code. The walk follows the path into each
+/// list that keeps its elements in boxes, and into the fields of an
+/// instance kept in place; any other step ends it, and so does a list of
+/// strings, which keeps its elements unboxed.
+fn promote_element_path(value: &mut Value, steps: &[DirectElementPathStep<'_>], selectors: &[i64]) {
+    let Some((step, rest)) = steps.split_first() else {
+        return;
+    };
+    match step {
+        DirectElementPathStep::Index => {
+            let (Some((&index, selectors)), Value::Vec(vector)) = (selectors.split_first(), value)
+            else {
+                return;
+            };
+            let len = vector.elements.len();
+            let Some(position) = normalize_vec_index(index, len).filter(|position| *position < len)
+            else {
+                return;
+            };
+            let converts = match &vector.elements {
+                ListElements::Values(values) => {
+                    matches!(values[position], Value::Vec(_) | Value::Instance(_))
+                }
+                ListElements::Boxes(_) => vector.elements.is_shared(),
+                _ => return,
+            };
+            if converts {
+                // SAFETY: the caller holds the list mutably, and the list is
+                // confined to this thread.
+                let view = unsafe { vector.str_view.get_or_create() };
+                view.copied_reads += 1;
+                if view.copied_reads.saturating_mul(LEND_COPIES_PER_ELEMENT) < len {
+                    return;
+                }
+                view.copied_reads = 0;
+                vector.elements.lend(position);
+            }
+            // Only boxes the list keeps to itself are changed in place, so
+            // the walk copies no storage on its way.
+            if rest.is_empty() || !matches!(vector.elements, ListElements::Boxes(_)) {
+                return;
+            }
+            if let Some(ElementRefMut::Boxed(mut element)) = vector.elements.get_mut(position) {
+                promote_element_path(&mut element, rest, selectors);
+            }
+        }
+        // Only a field that holds a list the path selects from, which is a
+        // field box, so the edit changes it in place.
+        DirectElementPathStep::Projection(projection)
+            if matches!(rest.first(), Some(DirectElementPathStep::Index)) =>
+        {
+            if let Value::Instance(InstanceValue {
+                fields: InstanceFields::Typed(typed),
+                ..
+            }) = value
+            {
+                let _ = typed.with_field_mut(projection, |field| {
+                    promote_element_path(field, rest, selectors)
+                });
+            }
+        }
+        DirectElementPathStep::Projection(_) | DirectElementPathStep::Key => {}
+    }
+}
+
+/// Whether [`promote_element_path`] would count a miss on a list the path
+/// selects from: the probe edits the collection only then, so a loan that
+/// misses for another reason, such as one of a list of strings, costs no
+/// edit.
+fn path_promotes(value: &Value, steps: &[DirectElementPathStep<'_>], selectors: &[i64]) -> bool {
+    let Some((step, rest)) = steps.split_first() else {
+        return false;
+    };
+    match step {
+        DirectElementPathStep::Index => {
+            let (Some((&index, selectors)), Value::Vec(vector)) = (selectors.split_first(), value)
+            else {
+                return false;
+            };
+            let len = vector.elements.len();
+            let Some(position) = normalize_vec_index(index, len).filter(|position| *position < len)
+            else {
+                return false;
+            };
+            match &vector.elements {
+                ListElements::Values(values) => {
+                    matches!(values[position], Value::Vec(_) | Value::Instance(_))
+                }
+                ListElements::Boxes(boxes) => {
+                    vector.elements.is_shared()
+                        || (!rest.is_empty()
+                            && path_promotes(boxes[position].value(), rest, selectors))
+                }
+                _ => false,
+            }
+        }
+        DirectElementPathStep::Projection(projection)
+            if matches!(rest.first(), Some(DirectElementPathStep::Index)) =>
+        {
+            match value {
+                Value::Instance(InstanceValue {
+                    fields: InstanceFields::Typed(typed),
+                    ..
+                }) => typed
+                    .get(projection)
+                    .is_some_and(|field| path_promotes(&field, rest, selectors)),
+                _ => false,
+            }
+        }
+        DirectElementPathStep::Projection(_) | DirectElementPathStep::Key => false,
+    }
+}
+
 /// Checks that an element path reaches a value inside `collection` without
 /// copying it: the bounds or presence probe that begins an element or entry
 /// loan. A missing position or key traps at the index expression.
@@ -9862,24 +10157,70 @@ pub extern "C-unwind" fn aura_direct_element_path_probe(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let path = decode_bytes(path_ptr, path_len);
-        let steps =
-            direct_element_path_steps(&path).unwrap_or_else(|message| runtime_error(message));
-        let mut selectors = DirectElementSelectors {
-            words: direct_element_selector_words(selectors_ptr, selector_count),
-            cursor: 0,
-            path: &path,
-        };
-        let result = unsafe {
-            with_value(collection, |value| {
-                direct_element_walk(value, &steps, &mut selectors)?;
-                selectors.finish()
+        let selectors = (selectors_ptr, selector_count);
+        probe_element_path(collection, &path, selectors, (line, column), false)
+    })
+}
+
+/// [`aura_direct_element_path_probe`] for a loan generated code follows to
+/// its place (see `native_codegen_element_loans.rs` in the compiler), when
+/// it missed. A confined collection also counts the miss on each list the
+/// path selects from, so the list moves its elements into boxes of its own
+/// once misses pay for it (see [`promote_element_path`]).
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_element_path_promote(
+    collection: *mut OpaqueValue,
+    path_ptr: *const u8,
+    path_len: usize,
+    selectors_ptr: *const i64,
+    selector_count: usize,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let path = decode_bytes(path_ptr, path_len);
+        let selectors = (selectors_ptr, selector_count);
+        probe_element_path(collection, &path, selectors, (line, column), true)
+    })
+}
+
+fn probe_element_path(
+    collection: *mut OpaqueValue,
+    path: &str,
+    (selectors_ptr, selector_count): (*const i64, usize),
+    (line, column): (i64, i64),
+    promote: bool,
+) -> *mut OpaqueValue {
+    let steps = direct_element_path_steps(path).unwrap_or_else(|message| runtime_error(message));
+    let words = direct_element_selector_words(selectors_ptr, selector_count);
+    let mut selectors = DirectElementSelectors {
+        words,
+        cursor: 0,
+        path,
+    };
+    let confined =
+        unsafe { collection.as_ref() }.is_some_and(|header| header.shared_lock().is_none());
+    let (result, promotes) = unsafe {
+        with_value(collection, |value| {
+            let result =
+                direct_element_walk(value, &steps, &mut selectors).and_then(|_| selectors.finish());
+            let promotes =
+                promote && result.is_ok() && confined && path_promotes(value, &steps, words);
+            (result, promotes)
+        })
+    };
+    if let Err(error) = result {
+        direct_element_path_failure(error, line, column);
+    }
+    if promotes {
+        // SAFETY: the caller passes a live box, confined to this thread.
+        unsafe {
+            value_mut(collection, |value| {
+                promote_element_path(value, &steps, words)
             })
         };
-        match result {
-            Ok(()) => boxed_value(Value::Unit),
-            Err(error) => direct_element_path_failure(error, line, column),
-        }
-    })
+    }
+    boxed_value(Value::Unit)
 }
 
 /// Moves the value an element path reaches out of `collection`, leaving
@@ -11515,7 +11856,10 @@ pub extern "C-unwind" fn aura_direct_instance_new(
             let name = decode_bytes(names[index], lens[index]);
             fields.insert(name, unsafe { take_value(values[index]) });
         }
-        boxed_value(Value::Instance(InstanceValue { class_name, fields }))
+        boxed_value(Value::Instance(InstanceValue {
+            class_name,
+            fields: fields.into(),
+        }))
     })
 }
 
@@ -11527,8 +11871,204 @@ pub extern "C-unwind" fn aura_direct_instance_empty(
     task_runtime_boundary(|| {
         boxed_value(Value::Instance(InstanceValue {
             class_name: decode_bytes(class_ptr, class_len),
-            fields: BTreeMap::new(),
+            fields: InstanceFields::default(),
         }))
+    })
+}
+
+/// A new instance of the class whose layout `cell` holds, with every field
+/// moved out: scalars zero and every field box null. Generated code then
+/// stores each field at its offset, or puts its box with
+/// [`aura_direct_instance_put_field`], before the instance is used.
+///
+/// # Safety
+///
+/// `cell` is one of the cells the program registered as a class layout.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_instance_new_typed(
+    cell: *const ClassLayoutCell,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller's contract.
+        let layout =
+            unsafe { registered_class_layout(cell) }.unwrap_or_else(|error| runtime_error(error));
+        boxed_value(Value::Instance(InstanceValue {
+            class_name: layout.class_name().to_string(),
+            fields: InstanceFields::Typed(TypedFields::new(layout)),
+        }))
+    })
+}
+
+/// Whether `boxed` holds an instance kept in its class's layout. Its view
+/// carries the class's access code while the box is confined.
+///
+/// # Safety
+///
+/// `boxed` is null or a live box the running task owns a reference to.
+unsafe fn holds_typed_instance(boxed: *mut OpaqueValue) -> bool {
+    // SAFETY: the caller's contract.
+    let Some(header) = (unsafe { boxed.as_ref() }) else {
+        return false;
+    };
+    // SAFETY: a box with a class's access code is confined to this thread,
+    // and the running task owns a reference, so nothing changes it now.
+    header.list_access.load(Ordering::Relaxed) >= FIRST_CLASS_ACCESS
+        && matches!(
+            unsafe { &*header.value.get() },
+            Value::Instance(instance) if instance.fields.typed().is_some()
+        )
+}
+
+/// Whether `boxed` holds a value a list keeps in a box of its own when it
+/// is appended: an instance kept in its class's layout, or a list, dict or
+/// set, which generated code reads or changes in place through the box.
+///
+/// # Safety
+///
+/// `boxed` is null or a live box the running task owns a reference to.
+unsafe fn holds_element_box_value(boxed: *mut OpaqueValue) -> bool {
+    // SAFETY: the caller's contract.
+    unsafe {
+        holds_typed_instance(boxed)
+            || boxed.as_ref().is_some_and(|header| {
+                header.shared_lock().is_none()
+                    && matches!(
+                        &*header.value.get(),
+                        Value::Vec(_) | Value::Map(_) | Value::Set(_)
+                    )
+            })
+    }
+}
+
+/// Takes over `boxed` as a box a holder keeps, a field slot or a list
+/// element, when the reference the caller hands over is its only one and
+/// the box is confined: no ledger links it from now on, and it records no
+/// thread. Otherwise `None`, and the caller still owns its reference.
+///
+/// # Safety
+///
+/// `boxed` is a live box, and the caller owns a reference the running task
+/// owns.
+unsafe fn adopt_only_box(boxed: *mut OpaqueValue) -> Option<ElementBox> {
+    // SAFETY: the caller passes a live box.
+    let header = unsafe { &*boxed };
+    if header.ref_count.load(Ordering::Acquire) != 1 || header.shared_lock().is_some() {
+        return None;
+    }
+    // A held box never runs its list view ahead of the list, so the
+    // elements generated code appended are taken in now.
+    if header.list_capacity.load(Ordering::Relaxed) != 0 {
+        header.adopt_appended_elements();
+    }
+    unregister_direct_owned_value(boxed);
+    #[cfg(all(debug_assertions, not(test)))]
+    // SAFETY: the reference is the only one, and the box is confined.
+    unsafe {
+        (*boxed).owner_thread = LIST_ELEMENT_THREAD;
+    }
+    // SAFETY: the caller hands over the only reference.
+    Some(unsafe { ElementBox::from_raw(boxed) })
+}
+
+/// Turns a box generated code owns into the box a field slot keeps: the
+/// box itself when that reference is its only one, now linked by no ledger
+/// and recording no thread, or else a copy, and the reference is released.
+///
+/// # Safety
+///
+/// `boxed` is a live box, and the caller hands over a reference the running
+/// task owns.
+unsafe fn adopt_field_box(boxed: *mut OpaqueValue) -> ElementBox {
+    // SAFETY: the caller's contract.
+    if let Some(adopted) = unsafe { adopt_only_box(boxed) } {
+        return adopted;
+    }
+    // SAFETY: the box is live, and the caller owns a reference.
+    let copy = unsafe {
+        let tag = explicit_runtime_type_tag(boxed);
+        let copy = element_boxed_value(value_ref(boxed));
+        *(*copy).runtime_type_name.get() = tag;
+        release_direct_value(boxed);
+        copy
+    };
+    // SAFETY: the copy is new, and its one reference is the field's.
+    unsafe { ElementBox::from_raw(copy) }
+}
+
+/// Puts `field`, a box the caller owns, into the field box slot at `slot`,
+/// and drops the box the slot held, if any. Generated code computed the
+/// slot from the block of an instance whose view it checked, so the
+/// instance is confined to this thread.
+///
+/// # Safety
+///
+/// `slot` is a field box slot in the block of a live, confined typed
+/// instance, and `field` a live box the running task owns a reference to.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_instance_put_field(
+    slot: *mut Option<ElementBox>,
+    field: *mut OpaqueValue,
+) {
+    task_runtime_boundary(|| {
+        if field.is_null() {
+            runtime_error("direct runtime received a null field value");
+        }
+        // SAFETY: the caller's contract.
+        let adopted = unsafe { adopt_field_box(field) };
+        // SAFETY: the slot is a field box slot, and the old box drops after
+        // the slot holds the new one.
+        drop(unsafe { slot.replace(Some(adopted)) });
+    })
+}
+
+/// Ends a lend of a field box after the call it was lent to, when the box
+/// gained a reference or the temporary holds another box. A box another
+/// reference shares stays with that reference and the field takes a copy,
+/// so a later change of the field is not seen through it. A temporary that
+/// holds another box replaced the field's box and released it, so the
+/// field takes that box.
+///
+/// # Safety
+///
+/// As for [`aura_direct_instance_put_field`], with `temp` the temporary's
+/// box.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_instance_restore_field(
+    slot: *mut Option<ElementBox>,
+    temp: *mut OpaqueValue,
+) {
+    task_runtime_boundary(|| {
+        if temp.is_null() {
+            runtime_error("direct runtime received a null field value");
+        }
+        // SAFETY: the caller's contract.
+        unsafe {
+            let held = (*slot).as_ref().map(ElementBox::as_ptr);
+            if held != Some(temp) {
+                // The slot's reference went to whatever replaced the box.
+                std::ptr::write(slot, Some(adopt_field_box(temp)));
+                return;
+            }
+            if let Some(boxed) = (*slot).as_mut() {
+                // Copies the value into a box of the field's own when
+                // another reference shares the box.
+                drop(boxed.value_mut());
+            }
+        }
+    })
+}
+
+/// A new box holding a copy of the value in `field`, the box a field box
+/// slot of a typed instance holds, as reading a string or collection field
+/// gives the reader a value of its own.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_instance_copy_field(
+    field: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let runtime_type_name = unsafe { explicit_runtime_type_tag(field) };
+        let copied = unsafe { with_value(field, try_clone_array_containing_value) };
+        boxed_value_with_type(direct_array_result(copied, 0, 0), runtime_type_name)
     })
 }
 
@@ -11560,10 +12100,14 @@ pub extern "C-unwind" fn aura_direct_instance_get_field(
                         value_type_name(value)
                     ));
                 };
+                // A field read out of a class's block is a copy already.
                 instance
                     .fields
                     .get(&field)
-                    .map(try_clone_array_containing_value)
+                    .map(|field| match field {
+                        Cow::Borrowed(field) => try_clone_array_containing_value(field),
+                        Cow::Owned(field) => Ok(field),
+                    })
                     .unwrap_or_else(|| {
                         runtime_error(format!(
                             "class `{}` has no field `{}`",
@@ -11612,12 +12156,15 @@ pub unsafe extern "C-unwind" fn aura_direct_instance_read_plain(
                         }
                         &union.payload
                     }
-                    Value::Instance(instance) => instance.fields.get(field).unwrap_or_else(|| {
-                        runtime_error(format!(
-                            "class `{}` has no field `{}`",
-                            instance.class_name, field
-                        ))
-                    }),
+                    Value::Instance(instance) => {
+                        let field_value = instance.fields.get(field).unwrap_or_else(|| {
+                            runtime_error(format!(
+                                "class `{}` has no field `{}`",
+                                instance.class_name, field
+                            ))
+                        });
+                        return layout.write_checked(&field_value, dst);
+                    }
                     other => runtime_error(format!(
                         "cannot access field `{}` on non-instance `{}`",
                         field,
@@ -11645,15 +12192,31 @@ fn take_direct_instance_field(
     let Some((field, rest)) = segments.split_first() else {
         return Err("direct runtime received an empty instance field path".to_string());
     };
-    if rest.is_empty() {
-        return instance.fields.remove(*field).ok_or_else(|| {
-            format!(
-                "class `{}` has no field `{}` in move path `{full_path}`",
-                instance.class_name, field
-            )
-        });
+    let missing = |instance: &InstanceValue| {
+        format!(
+            "class `{}` has no field `{}` in move path `{full_path}`",
+            instance.class_name, field
+        )
+    };
+    if let InstanceFields::Typed(typed) = &mut instance.fields {
+        // A path through classes held inline is one place in the block; one
+        // that goes on inside a field's box continues there.
+        if let Some(moved) = typed.take_path(segments) {
+            return moved.ok_or_else(|| missing(instance));
+        }
+        return typed
+            .with_field_mut(field, |nested| {
+                take_direct_instance_field(nested, rest, full_path)
+            })
+            .and_then(|moved| moved);
     }
-    let nested = instance.fields.get_mut(*field).ok_or_else(|| {
+    if rest.is_empty() {
+        return instance
+            .fields
+            .remove(field)
+            .ok_or_else(|| missing(instance));
+    }
+    let nested = instance.fields.map_mut().get_mut(*field).ok_or_else(|| {
         format!(
             "class `{}` has no field `{}` in move path `{full_path}`",
             instance.class_name, field
@@ -11716,7 +12279,8 @@ pub extern "C-unwind" fn aura_direct_instance_set_field(
         let new_value = unsafe { with_value(new_value, try_clone_array_containing_value) };
         updated
             .fields
-            .insert(field, direct_array_result(new_value, 0, 0));
+            .insert(&field, direct_array_result(new_value, 0, 0))
+            .unwrap_or_else(|message| runtime_error(message));
         boxed_value(Value::Instance(updated))
     })
 }
@@ -11772,18 +12336,31 @@ fn set_direct_instance_field_owned(
             }
         }
         Value::Instance(instance) => {
+            if let InstanceFields::Typed(typed) = &mut instance.fields {
+                // As in `take_direct_instance_field`.
+                let new_value = match typed.set_path(segments, new_value) {
+                    Ok(set) => return set,
+                    Err(new_value) => new_value,
+                };
+                return typed
+                    .with_field_mut(projection, |nested| {
+                        set_direct_instance_field_owned(nested, rest, full_path, new_value)
+                    })
+                    .and_then(|set| set);
+            }
+            let fields = instance.fields.map_mut();
             if rest.is_empty() {
                 // A field that is present keeps its key, so restoring a lent
                 // field allocates no new name.
-                match instance.fields.get_mut(*projection) {
+                match fields.get_mut(*projection) {
                     Some(slot) => *slot = new_value,
                     None => {
-                        instance.fields.insert((*projection).to_string(), new_value);
+                        fields.insert((*projection).to_string(), new_value);
                     }
                 }
                 return Ok(());
             }
-            let nested = instance.fields.get_mut(*projection).ok_or_else(|| {
+            let nested = fields.get_mut(*projection).ok_or_else(|| {
                 format!(
                     "class `{}` has no field `{}` in assignment path `{full_path}`",
                     instance.class_name, projection

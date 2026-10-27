@@ -47,7 +47,7 @@ impl Drop for Slot {
 }
 
 fn typed(ty: &Type, env: &LayoutEnv) -> TypedLayout {
-    TypedLayout::from_descriptor(&encode_descriptor(ty, env)).expect("a layout")
+    TypedLayout::from_descriptor(&encode_descriptor(ty, env).expect("a layout")).expect("a layout")
 }
 
 fn write(typed: &TypedLayout, value: Value) -> Slot {
@@ -474,9 +474,9 @@ fn generic_values_read_back_with_their_type_arguments() {
     let Value::Instance(read) = (unsafe { cell.take(slot.ptr) }) else {
         panic!("expected an instance");
     };
-    assert_eq!(read.fields.get("value"), Some(&int64(5)));
+    assert_eq!(read.fields.map().get("value"), Some(&int64(5)));
     assert_eq!(
-        read.fields.get(DIRECT_RUNTIME_TYPE_FIELD),
+        read.fields.map().get(DIRECT_RUNTIME_TYPE_FIELD),
         Some(&Value::String(descriptor.clone()))
     );
     // A value that already names its type arguments writes the same way.
@@ -559,14 +559,11 @@ fn values_of_another_shape_are_refused() {
 #[test]
 fn malformed_descriptors_are_refused() {
     assert!(TypedLayout::from_descriptor("not a descriptor").is_err());
-    // A well-formed descriptor of a type that has no layout.
-    let view = Type::ReturnedView(Box::new(aura_core::types::ReturnedViewType {
-        mutable: false,
-        pointee: Type::named("int64"),
-        origin: 0,
-    }));
-    let descriptor = encode_descriptor(&view, &LayoutEnv::default());
+    // A well-formed descriptor whose layout breaks a rule.
+    let descriptor = encode_descriptor(&Type::named("int64"), &LayoutEnv::default())
+        .expect("a layout")
+        .replace("8;8;s", "4;4;s");
     assert!(TypedLayout::from_descriptor(&descriptor)
         .err()
-        .is_some_and(|error| error.contains("has no layout")));
+        .is_some_and(|error| error.contains("wrong scalar size")));
 }

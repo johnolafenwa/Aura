@@ -56,12 +56,12 @@ fn equal_values_hash_the_same() {
     fields.insert("x".to_string(), int(1));
     let plain = Value::Instance(InstanceValue {
         class_name: "Point".to_string(),
-        fields: fields.clone(),
+        fields: fields.clone().into(),
     });
     fields.insert(DIRECT_RUNTIME_TYPE_FIELD.to_string(), text("Point"));
     let tagged = Value::Instance(InstanceValue {
         class_name: "Point".to_string(),
-        fields,
+        fields: fields.into(),
     });
     assert_eq!(plain, tagged);
     assert_eq!(hash_value(&plain), hash_value(&tagged));
