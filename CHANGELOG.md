@@ -35,6 +35,34 @@ in this file.
   fields is. The list keeps each such element in a box of its own, and the
   read borrows that box. At check size, interpreter runs 35% fewer
   instructions, mini_browser 17%, sort_records 11%, and sql_engine 7%.
+- A class instance that native code builds keeps its fields in the
+  class's native layout, one block with scalars and nested classes in
+  place and each `str`, collection, enum, or union in a box of its own.
+  Reading or writing a scalar field, such as `self.count += 1`, loads or
+  stores it in the block instead of copying it through a field map, and an
+  operation on a field, such as `self.items.append(x)`, works on the
+  field's box where it lies. Generic classes and classes that hold
+  themselves keep the map. At check size, order_book runs 83% fewer
+  instructions, regex_match 81%, bank_ledger 54%, raytracer 51%,
+  spreadsheet 39%, lru_cache 35%, sort_records 30%, mini_browser 29%, and
+  sql_engine 26%.
+- Native code changes a field of a list element where it lies.
+  `counters[i].count += 1` checks the list and the element's class once
+  and writes the field in the element's block, and an operation on an
+  element or its field, such as `items[i].tags.append(t)` or
+  `self.levels[p].append(v)`, works on that box where it lies. A class
+  instance appended to a list keeps its box there. Each such write costs
+  about 28 instructions instead of about 6,800. At check size,
+  pubsub_broker runs 15% fewer instructions, order_book 14%,
+  binary_trees 10%, and spreadsheet 6%.
+
+### Fixed
+
+- An assignment to a field of a list element whose right side reads the
+  same list, such as `cells[0].value = cells[0].value + cells[1].value`
+  or `cells[1].seen = not cells[1].seen`, failed `aura run` and
+  `aura build` with AU4001 "invalid MIR loan flow". The right side is now
+  evaluated before the element is lent for the write.
 
 ## VS Code extension 0.8.0 — 2026-10-27
 
@@ -159,11 +187,6 @@ stays 20, and the native cache format stays `v10`.
 
 ### Fixed
 
-- An assignment to a field of a list element whose right side reads the
-  same list, such as `cells[0].value = cells[0].value + cells[1].value`
-  or `cells[1].seen = not cells[1].seen`, failed `aura run` and
-  `aura build` with AU4001 "invalid MIR loan flow". The right side is now
-  evaluated before the element is lent for the write.
 - A `for` loop over a queue whose registered producer tasks were finishing
   no longer ends early. When a producer sent its last item and finished
   between the loop's receive and its check for running producers, the loop
