@@ -18270,6 +18270,36 @@ suite at the check size:
 No other program grows by more than 0.4%, apart from `task_pool`, whose
 count moves with thread scheduling.
 
+### Nested Reads And New Lists
+
+A read of an element of a list held in a field, such as
+`self.asks[level][head].qty` in a method, borrows the element where the
+list keeps it, as a read from a local list does. The borrow lasts until
+the method changes or frees that field, or uses a loan that may reach it;
+the element is copied there first.
+
+A new list with a known element type, `[]` or `list[int64]()`, is built
+by one runtime call that also gives it its type, and it starts in the
+storage of its element type, so the first `append` of an `int64` runs in
+native code. A list, dict, or set appended to a list of lists, dicts, or
+sets keeps its own box in the list, so a list of lists built by appends is
+ready for element loans from the first pass.
+
+Callgrind instruction counts on the shared Linux container, cross-language
+suite at the check size:
+
+| Program | Before | After |
+| --- | ---: | ---: |
+| `order_book` | 16.2M | 11.8M |
+| `regex_match` | 355.1M | 294.6M |
+| `file_io` | 27.4M | 22.9M |
+| `lzw_compress` | 5.2M | 4.7M |
+| `kv_server` | 82.6M | 75.4M |
+| `astar_pathfinding` | 16.2M | 14.8M |
+
+No program grows by more than 0.6%. `http_api` and `task_pool` move by a
+few percent between runs of one build.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

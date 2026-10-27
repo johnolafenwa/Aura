@@ -55,6 +55,18 @@ in this file.
   about 28 instructions instead of about 6,800. At check size,
   pubsub_broker runs 15% fewer instructions, order_book 14%,
   binary_trees 10%, and spreadsheet 6%.
+- Native code reads an element of a list held in a class field, such as
+  `self.asks[level][head]`, without copying it when the method only reads
+  the element. A new typed list, `[]` or `list[int64]()`, takes one
+  runtime call and starts in the storage form of its element type, so its
+  first `append` runs in native code. A list, dict, or set appended to a
+  list keeps its box there, and a value that already has the type a tag
+  names is not tagged again. At check size, order_book runs 27% fewer
+  instructions, regex_match 17%, file_io 16%, lzw_compress 10%,
+  kv_server 9%, and astar_pathfinding 9%.
+- The compiler hands the runtime each class layout as the offsets it
+  computed, so a native program with classes neither links the layout
+  builder nor runs it at startup.
 
 ### Fixed
 

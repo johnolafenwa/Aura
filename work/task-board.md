@@ -52,9 +52,16 @@ Last updated: 2026-10-27
   storage is its own; appended class instances keep their boxes in the
   list (`native_codegen_element_loans.rs`). Details are in
   `2026-10-27-rust-speed-2e-element-loans.md`.
-- Next: 2e part 3 (lent reads of handle fields, such as
-  `self.asks[level][head]`), then cheaper new lists (their type tags take
-  5% to 12% of `order_book`, `bank_ledger`, and `regex_match`), then 2f.
+- Step 2e parts 3 and 4: elements of lists held in fields stay lent past
+  the field's `EndLend`, a typed empty list starts in its element form
+  with its tag in one call, appended lists, dicts, and sets keep their
+  boxes, and layout descriptors carry the compiler's offsets so the
+  runtime links no layout builder. Details are in
+  `2026-10-27-rust-speed-2e-nested-reads.md`. The 2e gates are not met;
+  the rest is calls (Phase 4a), drops (2h), tags (2j), and `Result`
+  values (2f, 2g).
+- Next: 2f, enums and `Result` payloads in their layouts, with `float32`
+  in class fields and enum payloads rendered as `float32`.
 
 ## Aura 0.7.1 preview release (complete)
 
