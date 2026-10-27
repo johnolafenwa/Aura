@@ -92,7 +92,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Generator expressions are not available. They report `AU2005` and point to an eager comprehension or an explicit loop.
 - List and str slices accept one contiguous half-open range. A value slice returns a fresh owned copy. `view part = values[a:b]` lends a list range as a `Span[T]`.
 - Written slice endpoints use `int64`. Negative endpoints normalize once. Invalid or reversed ranges trap with `AU4003`. Endpoints are not clamped.
-- str slice endpoints count Unicode scalar values, and str slicing is O(n).
+- str slice endpoints count Unicode scalar values, and str slicing is O(n): it scans the text up to the end endpoint, or the whole text for a negative or omitted end.
 - Slice steps and slice assignment are reserved `AU2005` forms.
 - Arbitrary sliceable types, str integer indexing, grapheme slicing, and Python-style endpoint clamping are not available.
 - List slicing requires clone-safe, repeatably observable elements.
@@ -264,6 +264,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 
 - Floating-point `/`, `//`, or `%` by zero traps at runtime instead of producing IEEE 754 infinity or NaN.
 - `float32` literals that overflow may become infinity. Prefer `float64` when large literal validation matters.
+- A `float32` held in a class field or an enum payload renders with the digits of its `float64` widening, so `print(P(v=x))` shows `P(v=0.10000000149011612)` for `x: float32 = 0.1`. A `float32` printed directly, rendered by `str`, `to_string()`, or an f-string, or held in a list, set, dict, tuple, or union renders its shortest `float32` spelling.
 - Metrics are process-global counters within one running program.
 - Log and trace APIs emit structured stderr records. They do not include exporters or scoped spans.
 - Package support has local path and git dependencies, but no registry publish or install flow.

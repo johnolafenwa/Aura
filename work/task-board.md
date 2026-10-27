@@ -1,6 +1,18 @@
 # Task Board
 
-Last updated: 2026-10-25
+Last updated: 2026-10-26
+
+## Rust speed Phase 2: typed native layouts (in progress)
+
+- Target: give every concrete type a fixed native layout so native reads
+  borrow in place instead of copying boxed values (Phase 2 of the plan
+  John approved on 2026-10-26, steps 2a to 2k, one PR each). The design
+  is in `architecture_docs/24-typed-layouts-design-note.md`.
+- Step 2a: the shared layout builder (`aura-core` `layout`), the module
+  layout plan (`mir_layout.rs`), layout descriptors, and the runtime
+  converters (`native_typed_layout.rs`). No generated code changes.
+  Details are in `2026-10-26-rust-speed-2a-layout-plan.md`.
+- Next: 2b, specialized generic user functions.
 
 ## Aura 0.7.1 preview release (complete)
 

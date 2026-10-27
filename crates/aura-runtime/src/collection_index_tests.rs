@@ -100,8 +100,8 @@ fn map_keeps_insertion_order_across_the_index_threshold() {
         assert_eq!(entries.insert(int(index), int(index * 10)), None);
     }
     assert_eq!(entries.len(), 100);
-    assert_eq!(entries[0].0, int(99));
-    assert_eq!(entries[99].0, int(0));
+    assert_eq!(entries.get(0).unwrap().0, int(99));
+    assert_eq!(entries.get(99).unwrap().0, int(0));
     for index in 0..100 {
         assert_eq!(entries.value_of(&int(index)), Some(&int(index * 10)));
     }
@@ -119,9 +119,9 @@ fn map_removal_keeps_the_order_of_the_rest() {
     for index in 0..20 {
         entries.insert(text(&format!("k{index}")), int(index));
     }
-    let removed = entries.shift_remove(&text("k3"));
+    let removed = entries.remove(&text("k3"));
     assert_eq!(removed, Some((text("k3"), int(3))));
-    assert_eq!(entries.shift_remove(&text("k3")), None);
+    assert_eq!(entries.remove(&text("k3")), None);
     assert_eq!(entries.len(), 19);
     let expected: Vec<Value> = (0..20)
         .filter(|index| *index != 3)
@@ -137,8 +137,8 @@ fn map_removal_keeps_the_order_of_the_rest() {
 
     // Shrinking below the threshold falls back to scanning.
     while entries.len() > 2 {
-        let key = entries[0].0.clone();
-        entries.shift_remove(&key);
+        let key = entries.first().unwrap().0.clone();
+        entries.remove(&key);
     }
     assert_eq!(entries.value_of(&text("k18")), Some(&int(18)));
     assert_eq!(entries.value_of(&text("k19")), Some(&int(19)));
@@ -153,7 +153,7 @@ fn wrapped_entries_find_the_first_equal_key() {
     raw.push((int(5), int(-5)));
     let entries = DictEntries::from(raw);
     assert_eq!(entries.value_of(&int(5)), Some(&int(5)));
-    let clone = DictEntries::cloned_from(entries.to_vec(), &entries);
+    let clone = DictEntries::cloned_from(entries.clone().into_vec(), &entries);
     assert_eq!(clone.value_of(&int(11)), Some(&int(11)));
 }
 
@@ -169,8 +169,9 @@ fn set_insert_contains_and_remove() {
     assert!(!elements.contains_key(&int(148)));
     assert_eq!(elements.shift_remove(&int(3)), Some(int(3)));
     assert!(!elements.contains_key(&int(3)));
-    assert_eq!(elements[1], int(6));
-    assert_eq!(elements.shift_remove_at(0), int(0));
+    assert_eq!(elements.get(1), Some(&int(6)));
+    assert_eq!(elements.shift_remove_index(0), Some(int(0)));
+    assert_eq!(elements.shift_remove_index(48), None);
     assert!(elements.contains_key(&int(147)));
     assert_eq!(elements.pop(), Some(int(147)));
     assert!(!elements.contains_key(&int(147)));
@@ -317,7 +318,10 @@ fn clones_share_storage_until_a_write() {
             .collect();
         let mut copy = original.clone();
         assert!(original.is_shared() && copy.is_shared());
-        assert_eq!(copy.as_slice().as_ptr(), original.as_slice().as_ptr());
+        assert!(std::ptr::eq(
+            copy.first().unwrap(),
+            original.first().unwrap()
+        ));
 
         copy.insert(int(0), text("changed"));
         assert!(!original.is_shared() && !copy.is_shared());
@@ -334,6 +338,12 @@ fn clones_share_storage_until_a_write() {
         removed.shift_remove(&int(1));
         assert_eq!(removed.position(&int(2)), Some(1));
         assert_eq!(original.position(&int(2)), Some(2));
+
+        let mut holed = original.clone();
+        holed.remove(&int(1));
+        assert_eq!(holed.len(), size - 1);
+        assert_eq!(original.len(), size);
+        assert_eq!(original.value_of(&int(1)), Some(&text("v")));
 
         let mut popped = original.clone();
         assert!(popped.pop().is_some());
@@ -424,5 +434,187 @@ fn str_lookups_agree_with_value_lookups_in_small_and_large_maps() {
             assert_eq!(entries.position_str(probe), entries.position(&needle));
             assert_eq!(entries.value_of_str(probe), entries.value_of(&needle));
         }
+    }
+}
+
+fn key(index: i64) -> Value {
+    text(&format!("k{index}"))
+}
+
+#[test]
+fn map_removal_leaves_holes_that_reads_skip() {
+    let mut entries = DictEntries::new();
+    for index in 0..100 {
+        entries.insert(key(index), int(index));
+    }
+    for index in 10..21 {
+        assert_eq!(entries.remove(&key(index)), Some((key(index), int(index))));
+    }
+    let live: Vec<i64> = (0..100).filter(|index| !(10..21).contains(index)).collect();
+    assert_eq!(entries.len(), live.len());
+    assert_eq!(
+        keys(&entries),
+        live.iter().map(|index| key(*index)).collect::<Vec<_>>()
+    );
+    let mut reversed: Vec<Value> = entries.iter().rev().map(|(key, _)| key.clone()).collect();
+    reversed.reverse();
+    assert_eq!(reversed, keys(&entries));
+    // Positions name slots, which removals leave in place.
+    assert_eq!(entries.position(&key(21)), Some(21));
+    assert_eq!(entries.position_str("k21"), Some(21));
+    assert_eq!(entries.at_slot(21), &(key(21), int(21)));
+    assert_eq!(entries.slot_where(|(_, value)| *value == int(30)), Some(30));
+    assert_eq!(entries.slot_where(|(_, value)| *value == int(15)), None);
+    // Indexes count entries.
+    assert_eq!(entries.get(10), Some(&(key(21), int(21))));
+    assert_eq!(entries.get(live.len()), None);
+    assert_eq!(entries.first(), Some(&(key(0), int(0))));
+    assert_eq!(entries.last(), Some(&(key(99), int(99))));
+    let mut iter = entries.iter();
+    assert_eq!(iter.len(), live.len());
+    iter.next();
+    let copy = iter.clone();
+    assert_eq!(copy.size_hint(), (live.len() - 1, Some(live.len() - 1)));
+    assert!(entries.capacity() >= entries.len());
+    *entries.value_at_mut(30) = int(-30);
+    assert_eq!(entries.value_of(&key(30)), Some(&int(-30)));
+
+    // A new key, and a key put back after its removal, go to the end.
+    entries.insert(key(15), int(15));
+    entries.insert(key(100), int(100));
+    assert_eq!(entries.last(), Some(&(key(100), int(100))));
+    assert_eq!(entries.get(entries.len() - 2), Some(&(key(15), int(15))));
+    assert!(
+        entries == {
+            let mut expected: Vec<(Value, Value)> = live
+                .iter()
+                .map(|index| (key(*index), int(if *index == 30 { -30 } else { *index })))
+                .collect();
+            expected.push((key(15), int(15)));
+            expected.push((key(100), int(100)));
+            expected
+        }
+    );
+    assert_eq!(entries.clone().into_vec().len(), entries.len());
+
+    // A copy built in order reuses the index, with its slots packed.
+    let copy = DictEntries::cloned_from(entries.clone().into_vec(), &entries);
+    for index in live.iter().chain(&[15, 100]) {
+        assert!(copy.contains_key(&key(*index)));
+    }
+    assert_eq!(copy.position(&key(21)), Some(10));
+    entries.try_reserve(50).expect("reserve");
+    assert!(entries.capacity() >= entries.len() + 50);
+}
+
+#[test]
+fn removal_packs_slots_once_holes_pass_half() {
+    let mut entries = DictEntries::new();
+    for index in 0..40 {
+        entries.insert(key(index), int(index));
+    }
+    // Removing the last entry leaves no hole behind it.
+    entries.remove(&key(39));
+    entries.remove(&key(37));
+    entries.remove(&key(38));
+    assert_eq!(entries.len(), 37);
+    assert_eq!(entries.last(), Some(&(key(36), int(36))));
+    for index in 0..18 {
+        entries.remove(&key(index));
+    }
+    // 18 holes in 37 slots stay; the next one packs.
+    assert_eq!(entries.position(&key(18)), Some(18));
+    entries.remove(&key(18));
+    assert_eq!(entries.position(&key(19)), Some(0));
+    assert_eq!(entries.position(&key(36)), Some(17));
+    assert_eq!(keys(&entries), (19..37).map(key).collect::<Vec<_>>());
+
+    // A shifting removal closes every hole at once.
+    entries.remove(&key(20));
+    entries.shift_remove(&key(22));
+    assert_eq!(entries.position(&key(23)), Some(2));
+    entries.remove(&key(24));
+    assert_eq!(entries.shift_remove_index(1), Some((key(21), int(21))));
+    assert_eq!(entries.position(&key(23)), Some(1));
+    assert_eq!(entries.shift_remove_index(entries.len()), None);
+    entries.remove(&key(26));
+    assert_eq!(entries.pop(), Some((key(36), int(36))));
+
+    // Falling to the threshold scans again.
+    while entries.len() > INDEX_THRESHOLD {
+        let first = entries.first().unwrap().0.clone();
+        entries.remove(&first);
+    }
+    assert_eq!(keys(&entries), (28..36).map(key).collect::<Vec<_>>());
+    assert_eq!(entries.position(&key(28)), Some(0));
+}
+
+#[test]
+fn removal_and_insertion_in_turn_match_an_ordered_model() {
+    // An LRU cache's pattern: remove an older key, insert a new one.
+    let mut entries = DictEntries::new();
+    let mut model: Vec<i64> = Vec::new();
+    let mut state: i64 = 7;
+    for index in 0..64 {
+        entries.insert(int(index), int(index));
+        model.push(index);
+    }
+    for next in 64..2000 {
+        state = state * 48271 % 2147483647;
+        let victim = model.remove((state as usize) % model.len());
+        assert_eq!(
+            entries.remove(&int(victim)),
+            Some((int(victim), int(victim)))
+        );
+        entries.insert(int(next), int(next));
+        model.push(next);
+        assert_eq!(entries.len(), model.len());
+        if next % 97 == 0 {
+            let order: Vec<Value> = entries.iter().map(|(key, _)| key.clone()).collect();
+            assert_eq!(
+                order,
+                model.iter().map(|index| int(*index)).collect::<Vec<_>>()
+            );
+            for (position, index) in model.iter().enumerate() {
+                assert_eq!(entries.get(position), Some(&(int(*index), int(*index))));
+            }
+        }
+    }
+    for index in &model {
+        assert_eq!(entries.value_of_i64(*index), Some(&int(*index)));
+    }
+}
+
+#[test]
+fn clearing_keeps_room_unless_shared() {
+    let mut entries: DictEntries = (0..20).map(|index| (int(index), int(index))).collect();
+    entries.remove(&int(3));
+    let capacity = entries.capacity();
+    let shared = entries.clone();
+    entries.clear();
+    assert!(entries.is_empty());
+    assert_eq!(shared.len(), 19);
+    let mut unshared = shared;
+    unshared.clear();
+    assert!(unshared.capacity() >= capacity.min(19));
+    assert!(unshared.is_empty());
+}
+
+#[test]
+fn small_and_large_entries_answer_the_same_reads() {
+    for size in [4_i64, 40] {
+        let entries: DictEntries = (0..size).map(|index| (int(index), int(-index))).collect();
+        let iter = entries.iter();
+        assert_eq!(iter.clone().count(), size as usize);
+        assert_eq!(iter.rev().next(), Some(&(int(size - 1), int(1 - size))));
+        assert_eq!(entries.last(), Some(&(int(size - 1), int(1 - size))));
+        assert_eq!(entries.slot_where(|(_, value)| *value == int(-2)), Some(2));
+        assert_eq!(entries.slot_where(|(_, value)| *value == int(1)), None);
+        assert_eq!(entries.at_slot(3), &(int(3), int(-3)));
+        assert_eq!(entries.get(3), Some(&(int(3), int(-3))));
+        assert_eq!(entries.get(size as usize), None);
+        let copy = entries.clone();
+        assert_eq!(copy.as_ptr(), entries.as_ptr());
+        assert!(entries == copy.into_vec());
     }
 }

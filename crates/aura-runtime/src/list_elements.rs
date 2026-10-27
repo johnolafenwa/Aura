@@ -908,6 +908,14 @@ impl DoubleEndedIterator for Iter<'_> {
             Self::Values(values) => values.next_back().map(Cow::Borrowed)
         )
     }
+
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        each_scalar_iter!(
+            self,
+            values => values.nth_back(n).map(|element| Cow::Owned(element.value())),
+            Self::Values(values) => values.nth_back(n).map(Cow::Borrowed)
+        )
+    }
 }
 
 impl ExactSizeIterator for Iter<'_> {

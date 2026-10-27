@@ -2305,13 +2305,35 @@ pub fn slice_vec_owned(
     end: Option<i128>,
 ) -> Result<VecValue> {
     let (start, end) = normalize_slice_bounds(start, end, vector.elements.len())?;
-    let mut elements = try_array_buffer(end - start, "Array-containing Vec slice")?;
-    for value in vector.elements.iter().skip(start).take(end - start) {
-        elements.push(try_clone_array_containing_value(&value)?);
+    // Each form copies only the slice, so the cost follows its length and
+    // not how far into the list it starts.
+    fn copy_scalars<T: Copy>(values: &[T]) -> Result<SharedVec<T>> {
+        let mut copy = try_array_buffer(values.len(), "Array-containing Vec slice")?;
+        copy.extend_from_slice(values);
+        Ok(copy.into())
     }
+    let elements = match &vector.elements {
+        ListElements::Values(values) => {
+            let mut elements = try_array_buffer(end - start, "Array-containing Vec slice")?;
+            for value in &values[start..end] {
+                elements.push(try_clone_array_containing_value(value)?);
+            }
+            ListElements::from(elements)
+        }
+        ListElements::Int64(values) => ListElements::Int64(copy_scalars(&values[start..end])?),
+        ListElements::Float64(values) => ListElements::Float64(copy_scalars(&values[start..end])?),
+        ListElements::Bool(values) => ListElements::Bool(copy_scalars(&values[start..end])?),
+        ListElements::Int8(values) => ListElements::Int8(copy_scalars(&values[start..end])?),
+        ListElements::Int16(values) => ListElements::Int16(copy_scalars(&values[start..end])?),
+        ListElements::Int32(values) => ListElements::Int32(copy_scalars(&values[start..end])?),
+        ListElements::Uint8(values) => ListElements::Uint8(copy_scalars(&values[start..end])?),
+        ListElements::Uint16(values) => ListElements::Uint16(copy_scalars(&values[start..end])?),
+        ListElements::Uint32(values) => ListElements::Uint32(copy_scalars(&values[start..end])?),
+        ListElements::Uint64(values) => ListElements::Uint64(copy_scalars(&values[start..end])?),
+    };
     Ok(VecValue {
         element_type: vector.element_type.clone(),
-        elements: elements.into(),
+        elements,
         str_view: Default::default(),
     })
 }
@@ -2449,9 +2471,60 @@ pub fn span_fill(vector: &mut VecValue, start: i128, len: i128, value: &Value) -
 }
 
 pub fn slice_string_owned(text: &str, start: Option<i128>, end: Option<i128>) -> Result<String> {
+    let range = string_slice_byte_range(text, start, end)?;
+    Ok(text[range].to_owned())
+}
+
+/// The bytes of `text` that the `str` slice `text[start:end]` covers.
+/// Endpoints count Unicode scalar values. Where the text up to them is
+/// ASCII, each scalar is one byte, so the endpoints are byte positions and
+/// no character is decoded.
+pub fn string_slice_byte_range(
+    text: &str,
+    start: Option<i128>,
+    end: Option<i128>,
+) -> Result<std::ops::Range<usize>> {
+    let bytes = text.as_bytes();
+    // Non-negative endpoints short of the end need only the text before the
+    // end: when it is ASCII, the text holds at least that many scalars. Any
+    // other endpoint counts from the true end, which needs the whole text.
+    let prefix = match (start, end) {
+        (None | Some(0..), Some(end @ 0..)) => {
+            usize::try_from(end).ok().filter(|end| *end < bytes.len())
+        }
+        _ => None,
+    };
+    match prefix {
+        Some(end) if bytes[..end].is_ascii() => {
+            let start = start.unwrap_or(0);
+            if start <= end as i128 {
+                return Ok(start as usize..end);
+            }
+        }
+        None if bytes.is_ascii() => {
+            let (start, end) = normalize_slice_bounds(start, end, bytes.len())?;
+            return Ok(start..end);
+        }
+        _ => {}
+    }
     let scalar_len = text.chars().count();
     let (start, end) = normalize_slice_bounds(start, end, scalar_len)?;
-    Ok(text.chars().skip(start).take(end - start).collect())
+    // One pass finds both byte offsets. The end of the text is the offset
+    // of the position one past the last scalar.
+    let mut offsets = text
+        .char_indices()
+        .map(|(offset, _)| offset)
+        .chain(std::iter::once(bytes.len()));
+    let first = offsets
+        .nth(start)
+        .expect("start is at most the scalar count");
+    let last = match end - start {
+        0 => first,
+        len => offsets
+            .nth(len - 1)
+            .expect("end is at most the scalar count"),
+    };
+    Ok(first..last)
 }
 
 #[derive(Clone, Debug)]
@@ -2635,18 +2708,18 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
         },
         Set {
             set: &'a SetValue,
-            next_index: usize,
+            remaining: crate::collection_index::Iter<'a, Value>,
             elements: Vec<Value>,
         },
         MapKey {
             map: &'a MapValue,
-            next_index: usize,
+            remaining: crate::collection_index::Iter<'a, (Value, Value)>,
             entries: Vec<(Value, Value)>,
             pending_value: &'a Value,
         },
         MapValue {
             map: &'a MapValue,
-            next_index: usize,
+            remaining: crate::collection_index::Iter<'a, (Value, Value)>,
             entries: Vec<(Value, Value)>,
             pending_key: Value,
         },
@@ -2826,28 +2899,30 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     representation_stats::note_cloned_elements(set.elements.len());
                     let elements =
                         try_array_buffer(set.elements.len(), "Array-containing Set copy")?;
-                    if set.elements.is_empty() {
+                    let mut remaining = set.elements.iter();
+                    if let Some(first) = remaining.next() {
+                        state.push_frame(CloneFrame::Set {
+                            set,
+                            remaining,
+                            elements,
+                        })?;
+                        next = Some(first);
+                        None
+                    } else {
                         Some(Value::Set(SetValue {
                             element_type: set.element_type.clone(),
                             elements: elements.into(),
                         }))
-                    } else {
-                        state.push_frame(CloneFrame::Set {
-                            set,
-                            next_index: 1,
-                            elements,
-                        })?;
-                        next = Some(&set.elements[0]);
-                        None
                     }
                 }
                 Value::Map(map) => {
                     representation_stats::note_cloned_elements(map.entries.len());
                     let entries = try_array_buffer(map.entries.len(), "Array-containing Map copy")?;
-                    if let Some((key, pending_value)) = map.entries.first() {
+                    let mut remaining = map.entries.iter();
+                    if let Some((key, pending_value)) = remaining.next() {
                         state.push_frame(CloneFrame::MapKey {
                             map,
-                            next_index: 1,
+                            remaining,
                             entries,
                             pending_value,
                         })?;
@@ -2966,15 +3041,14 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                 }
                 CloneFrame::Set {
                     set,
-                    mut next_index,
+                    mut remaining,
                     mut elements,
                 } => {
                     elements.push(cloned);
-                    if let Some(element) = set.elements.get(next_index) {
-                        next_index += 1;
+                    if let Some(element) = remaining.next() {
                         state.push_frame(CloneFrame::Set {
                             set,
-                            next_index,
+                            remaining,
                             elements,
                         })?;
                         next = Some(element);
@@ -2987,13 +3061,13 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                 }
                 CloneFrame::MapKey {
                     map,
-                    next_index,
+                    remaining,
                     entries,
                     pending_value,
                 } => {
                     state.push_frame(CloneFrame::MapValue {
                         map,
-                        next_index,
+                        remaining,
                         entries,
                         pending_key: cloned,
                     })?;
@@ -3001,16 +3075,15 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                 }
                 CloneFrame::MapValue {
                     map,
-                    mut next_index,
+                    mut remaining,
                     mut entries,
                     pending_key,
                 } => {
                     entries.push((pending_key, cloned));
-                    if let Some((key, pending_value)) = map.entries.get(next_index) {
-                        next_index += 1;
+                    if let Some((key, pending_value)) = remaining.next() {
                         state.push_frame(CloneFrame::MapKey {
                             map,
-                            next_index,
+                            remaining,
                             entries,
                             pending_value,
                         })?;
@@ -7470,7 +7543,7 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
         Object {
             variant: &'a EnumVariantValue,
             map: &'a MapValue,
-            next_index: usize,
+            remaining: crate::collection_index::Iter<'a, (Value, Value)>,
             entries: Vec<(Value, Value)>,
             pending_key: Value,
         },
@@ -7545,13 +7618,14 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
                             })],
                         ))
                     } else {
-                        let (Value::String(key), value) = &map.entries[0] else {
+                        let mut remaining = map.entries.iter();
+                        let (Value::String(key), value) = remaining.next()? else {
                             return None;
                         };
                         frames.push(CloneFrame::Object {
                             variant,
                             map,
-                            next_index: 1,
+                            remaining,
                             entries,
                             pending_key: Value::String(key.clone()),
                         });
@@ -7594,20 +7668,19 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
                 CloneFrame::Object {
                     variant,
                     map,
-                    mut next_index,
+                    mut remaining,
                     mut entries,
                     pending_key,
                 } => {
                     entries.push((pending_key, completed.take()?));
-                    if let Some((key, value)) = map.entries.get(next_index) {
+                    if let Some((key, value)) = remaining.next() {
                         let Value::String(key) = key else {
                             return None;
                         };
-                        next_index += 1;
                         frames.push(CloneFrame::Object {
                             variant,
                             map,
-                            next_index,
+                            remaining,
                             entries,
                             pending_key: Value::String(key.clone()),
                         });
@@ -7786,6 +7859,19 @@ impl Value {
             Value(&'a Value),
             Text(&'a str),
             Static(&'static str),
+            Float32(f32),
+        }
+
+        /// Renders `value`, held where its static type is `ty`. A `float32`
+        /// is stored widened to `float64`, so the enclosing value's type
+        /// says to render its shortest `float32` spelling, as `print` does.
+        fn typed<'a>(value: &'a Value, ty: &Type) -> RenderAction<'a> {
+            match value {
+                Value::Float(number) if is_float32_type(ty) => {
+                    RenderAction::Float32(*number as f32)
+                }
+                _ => RenderAction::Value(value),
+            }
         }
 
         let mut rendered = String::new();
@@ -7795,6 +7881,7 @@ impl Value {
                 RenderAction::Text(text) | RenderAction::Static(text) => {
                     rendered.push_str(text);
                 }
+                RenderAction::Float32(number) => rendered.push_str(&render_float32(number)),
                 RenderAction::Value(value) => {
                     if let Some(hook) = hook.as_mut() {
                         let nominal = match value {
@@ -7821,7 +7908,10 @@ impl Value {
                                 actions.push(RenderAction::Static(","));
                             }
                             for (index, value) in tuple.elements.iter().enumerate().rev() {
-                                actions.push(RenderAction::Value(value));
+                                actions.push(match tuple.element_types.get(index) {
+                                    Some(ty) => typed(value, ty),
+                                    None => RenderAction::Value(value),
+                                });
                                 if index > 0 {
                                     actions.push(RenderAction::Static(", "));
                                 }
@@ -7829,12 +7919,20 @@ impl Value {
                         }
                         Value::Vec(values) if values.elements.as_values().is_none() => {
                             // Scalars render the same with or without a hook.
+                            let float32 = is_float32_type(&values.element_type);
                             rendered.push('[');
                             for (index, value) in values.elements.iter().enumerate() {
                                 if index > 0 {
                                     rendered.push_str(", ");
                                 }
-                                render_scalar(&value, &mut rendered);
+                                match &*value {
+                                    Value::Float(number) if float32 => {
+                                        rendered.push_str(&render_float32(*number as f32))
+                                    }
+                                    value => {
+                                        render_scalar(value, &mut rendered);
+                                    }
+                                }
                             }
                             rendered.push(']');
                         }
@@ -7843,7 +7941,7 @@ impl Value {
                             actions.push(RenderAction::Static("]"));
                             let elements = values.elements.as_values().unwrap_or_default();
                             for (index, value) in elements.iter().enumerate().rev() {
-                                actions.push(RenderAction::Value(value));
+                                actions.push(typed(value, &values.element_type));
                                 if index > 0 {
                                     actions.push(RenderAction::Static(", "));
                                 }
@@ -7858,7 +7956,7 @@ impl Value {
                             rendered.push('{');
                             actions.push(RenderAction::Static("}"));
                             for (index, value) in values.elements.iter().enumerate().rev() {
-                                actions.push(RenderAction::Value(value));
+                                actions.push(typed(value, &values.element_type));
                                 if index > 0 {
                                     actions.push(RenderAction::Static(", "));
                                 }
@@ -7868,9 +7966,9 @@ impl Value {
                             rendered.push('{');
                             actions.push(RenderAction::Static("}"));
                             for (index, (key, value)) in map.entries.iter().enumerate().rev() {
-                                actions.push(RenderAction::Value(value));
+                                actions.push(typed(value, &map.value_type));
                                 actions.push(RenderAction::Static(": "));
-                                actions.push(RenderAction::Value(key));
+                                actions.push(typed(key, &map.key_type));
                                 if index > 0 {
                                     actions.push(RenderAction::Static(", "));
                                 }
@@ -7943,7 +8041,13 @@ impl Value {
                                 }
                             }
                         }
-                        Value::Union(union) => actions.push(RenderAction::Value(&union.payload)),
+                        Value::Union(union) => actions.push(match &union.union_type {
+                            Type::Union(members) => match members.members.get(union.member_index) {
+                                Some(member) => typed(&union.payload, member),
+                                None => RenderAction::Value(&union.payload),
+                            },
+                            _ => RenderAction::Value(&union.payload),
+                        }),
                         Value::EnumVariant(variant) => {
                             rendered.push_str(nominal_runtime_base_name(&variant.enum_name));
                             rendered.push('.');
@@ -7978,6 +8082,10 @@ pub fn render_float(value: f64) -> String {
 
 pub fn render_float32(value: f32) -> String {
     format!("{value:?}")
+}
+
+fn is_float32_type(ty: &Type) -> bool {
+    matches!(ty, Type::Named(name, args) if name == "float32" && args.is_empty())
 }
 
 pub const MAX_FORMAT_COMPONENT: usize = 1_000_000;
@@ -8461,8 +8569,7 @@ pub fn format_runtime_value_with(
             format_numeric_integer(*integer, code, &spec)
         }
         (Some(code @ ('f' | 'e' | '%')), Value::Float(number)) => {
-            let mut number = if matches!(value_type, Type::Named(name, args) if name == "float32" && args.is_empty())
-            {
+            let mut number = if is_float32_type(value_type) {
                 *number as f32 as f64
             } else {
                 *number
@@ -8473,15 +8580,15 @@ pub fn format_runtime_value_with(
             format_numeric_float(number, code, &spec)
         }
         (None, Value::Float(number)) => {
-            let rendered = if matches!(value_type, Type::Named(name, args) if name == "float32" && args.is_empty())
-            {
+            let rendered = if is_float32_type(value_type) {
                 render_float32(*number as f32)
             } else {
                 render_float(*number)
             };
+            // A NaN renders without a sign, as `print` writes it.
             apply_numeric_sign(
                 rendered.trim_start_matches('-').to_string(),
-                number.is_sign_negative(),
+                number.is_sign_negative() && !number.is_nan(),
                 spec.sign,
             )
         }
@@ -16244,8 +16351,7 @@ pub fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
             child_depth: usize,
         },
         Object {
-            entries: &'a [(Value, Value)],
-            next_index: usize,
+            remaining: crate::collection_index::Iter<'a, (Value, Value)>,
             converted: Vec<(String, JsonValue)>,
             pending_key: &'a str,
             child_depth: usize,
@@ -16346,10 +16452,8 @@ pub fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
                         json_runtime_container_capacity(entries.entries.len(), remaining, limit)?;
                     let mut converted = Vec::new();
                     json_runtime_conversion_try_reserve(&mut converted, capacity)?;
-                    if entries.entries.is_empty() {
-                        Some(JsonValue::Object(converted))
-                    } else {
-                        let (key, value) = &entries.entries[0];
+                    let mut remaining = entries.entries.iter();
+                    if let Some((key, value)) = remaining.next() {
                         let Value::String(key) = key else {
                             return Err(malformed(format!(
                                 "Value.Object key must be `str`, found `{}`",
@@ -16360,14 +16464,15 @@ pub fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
                             .try_reserve(1)
                             .map_err(json_runtime_allocation_error)?;
                         frames.push(ConversionFrame::Object {
-                            entries: &entries.entries,
-                            next_index: 1,
+                            remaining,
                             converted,
                             pending_key: key,
                             child_depth,
                         });
                         next = Some((value, child_depth));
                         None
+                    } else {
+                        Some(JsonValue::Object(converted))
                     }
                 }
                 ("Object", [Value::Map(_)]) => {
@@ -16414,8 +16519,7 @@ pub fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
                     }
                 }
                 ConversionFrame::Object {
-                    entries,
-                    mut next_index,
+                    mut remaining,
                     mut converted,
                     pending_key,
                     child_depth,
@@ -16424,20 +16528,18 @@ pub fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
                         .take()
                         .expect("a completed JSON object child has a value");
                     converted.push((clone_string(pending_key)?, value));
-                    if let Some((key, value)) = entries.get(next_index) {
+                    if let Some((key, value)) = remaining.next() {
                         let Value::String(key) = key else {
                             return Err(malformed(format!(
                                 "Value.Object key must be `str`, found `{}`",
                                 key.render()
                             )));
                         };
-                        next_index += 1;
                         frames
                             .try_reserve(1)
                             .map_err(json_runtime_allocation_error)?;
                         frames.push(ConversionFrame::Object {
-                            entries,
-                            next_index,
+                            remaining,
                             converted,
                             pending_key: key,
                             child_depth,

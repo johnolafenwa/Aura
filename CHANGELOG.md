@@ -24,6 +24,13 @@ in this file.
   which used to fail to compile.
 - A user `impl Ord[str] for str` no longer changes what `<` means on `str`,
   in the same way as the other built-in operators.
+- The compiler and the native runtime share one rule for laying out each
+  type in native memory: scalars at their width, classes and tuples as
+  structs, enums and unions as a tag followed by the payload, runtime
+  objects as a pointer, and a pointer to a heap block on a recursive edge.
+  Generated code does not use the layouts yet, so programs build and run
+  exactly as before. The design is in
+  `architecture_docs/24-typed-layouts-design-note.md`.
 
 ### Performance
 
@@ -53,6 +60,25 @@ in this file.
 - On `aura run`, reading an element of a list of class instances, enums, or
   other values that could hold an `Array` copies that element instead of
   the whole list, so a loop that indexes such a list is no longer quadratic.
+- A list slice `values[a:b]` copies only its elements. It used to step over
+  the first `a` elements one by one, so slicing far into a long list cost
+  time proportional to `a`. The `mini_browser` benchmark spent 38% of its
+  instructions slicing a `list[uint8]` and now spends 1%, and runs 37%
+  fewer instructions in all.
+- A slice of a list of `int64`, `float64`, or `bool` elements copies the
+  elements as the list stores them, so the slice keeps the compact storage,
+  instead of building a value for each element.
+- A `str` slice whose text before the end is ASCII finds its endpoints as
+  byte positions with one fast scan instead of decoding every character up
+  to the end, and copies only the result. `text[5000:5010]` of a
+  10,000-character ASCII string takes 2,647 instructions instead of 13,336.
+- `dict.remove` takes expected constant time instead of time proportional to
+  the dictionary's size, and still keeps the order of the remaining entries.
+  A removed entry leaves a gap that iteration skips, and the dictionary
+  closes its gaps once they make up more than half of its slots, as
+  CPython's `dict` does. Both `aura run` and native builds use it. The
+  `lru_cache` benchmark spent 46% of its instructions removing dict entries
+  and now spends 0.2%, and runs 46% fewer instructions in all.
 
 ### Fixed
 
@@ -68,6 +94,13 @@ in this file.
   that loan once the call returns. A body that then wrote the element,
   such as `rows[i][j] = v`, passed `aura check` but failed `aura run` and
   `aura build` with "invalid MIR loan ... overlaps active shared loan".
+- A `float32` renders its shortest `float32` spelling in f-strings, `str`,
+  and `to_string()`, and inside lists, sets, dicts, tuples, and unions, as
+  `print` already wrote it. `f"{x}"` for `x: float32 = 0.1` used to give
+  `0.10000000149011612`, the digits of its `float64` widening. A `float32`
+  in a class field or an enum payload still renders widened.
+- A formatted NaN, as in `f"{x:>6}"`, no longer renders as `-NaN` when
+  its sign bit is set, matching `print`.
 
 ## VS Code extension 0.7.1 — 2026-10-25
 

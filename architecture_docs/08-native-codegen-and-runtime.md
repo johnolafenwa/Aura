@@ -341,7 +341,7 @@ and narrow counters needs no box and no runtime call.
   `aura_direct_cast_float_to_integer`, which convert a value that happens
   to be exact or report the error word for word.
 - **Constants.** A module constant whose initializer is a scalar literal,
-  a negated literal, or a cast of one is read as that literal in MIR. The
+  possibly negated or under `not`, is read as that literal in MIR. The
   program still runs the initializer at startup, so nothing else changes.
   Any other constant reads through `aura_direct_module_constant`.
 

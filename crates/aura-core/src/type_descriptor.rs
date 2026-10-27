@@ -63,12 +63,12 @@ pub fn decode(descriptor: &str) -> Result<Type, String> {
     Ok(ty)
 }
 
-fn push_string(out: &mut String, text: &str) {
+pub(crate) fn push_string(out: &mut String, text: &str) {
     let _ = write!(out, "{}:", text.len());
     out.push_str(text);
 }
 
-fn push_count(out: &mut String, value: usize) {
+pub(crate) fn push_count(out: &mut String, value: usize) {
     let _ = write!(out, "{value};");
 }
 
@@ -112,7 +112,7 @@ fn push_params(out: &mut String, params: &[FunctionParamContract]) {
     }
 }
 
-fn push_type(out: &mut String, ty: &Type) {
+pub(crate) fn push_type(out: &mut String, ty: &Type) {
     match ty {
         Type::Unit => out.push('u'),
         Type::Named(name, args) => {
@@ -191,13 +191,13 @@ fn push_type(out: &mut String, ty: &Type) {
     }
 }
 
-struct Reader<'a> {
-    bytes: &'a [u8],
-    position: usize,
+pub(crate) struct Reader<'a> {
+    pub(crate) bytes: &'a [u8],
+    pub(crate) position: usize,
 }
 
 impl Reader<'_> {
-    fn byte(&mut self) -> Result<u8, String> {
+    pub(crate) fn byte(&mut self) -> Result<u8, String> {
         let byte = *self
             .bytes
             .get(self.position)
@@ -224,7 +224,7 @@ impl Reader<'_> {
         }
     }
 
-    fn count(&mut self) -> Result<usize, String> {
+    pub(crate) fn count(&mut self) -> Result<usize, String> {
         let count = self.digits_until(b';')?;
         // Every counted item takes at least one byte, so a count larger than
         // the rest of the input is malformed and must not size an allocation.
@@ -234,7 +234,7 @@ impl Reader<'_> {
         Ok(count)
     }
 
-    fn string(&mut self) -> Result<String, String> {
+    pub(crate) fn string(&mut self) -> Result<String, String> {
         let len = self.digits_until(b':')?;
         let end = self
             .position
@@ -312,7 +312,7 @@ impl Reader<'_> {
         Ok(types)
     }
 
-    fn read_type(&mut self, depth: usize) -> Result<Type, String> {
+    pub(crate) fn read_type(&mut self, depth: usize) -> Result<Type, String> {
         if depth > MAX_DESCRIPTOR_DEPTH {
             return Err("type descriptor nests too deeply".to_string());
         }

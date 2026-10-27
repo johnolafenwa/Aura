@@ -7,6 +7,7 @@
 pub mod diag;
 pub mod integer;
 pub mod json_text;
+pub mod layout;
 pub mod ops;
 pub mod places;
 pub mod task;
