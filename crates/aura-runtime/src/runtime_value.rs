@@ -15879,33 +15879,71 @@ pub fn claim_task_result_observations(tasks: &[TaskValue]) -> Result<()> {
     Ok(())
 }
 
+/// `member | None`, with the positions of `member` and of `None` in it.
+/// Normalizing a union costs thousands of instructions, and a program's
+/// builtin optional results name few member types, so each thread keeps the
+/// first optional unions it makes of members that name no callable (whose
+/// contracts `==` does not compare).
+fn optional_union(member: aura_core::types::Type) -> (aura_core::types::Type, usize, usize) {
+    use aura_core::types::Type;
+    const KEPT: usize = 32;
+    thread_local! {
+        static OPTIONAL_UNIONS: RefCell<Vec<(Type, Type, usize, usize)>> =
+            const { RefCell::new(Vec::new()) };
+    }
+    fn names_no_callable(ty: &Type) -> bool {
+        match ty {
+            Type::Named(_, args) | Type::Tuple(args) => args.iter().all(names_no_callable),
+            _ => false,
+        }
+    }
+    let kept = names_no_callable(&member);
+    if kept {
+        let found = OPTIONAL_UNIONS.with_borrow(|unions| {
+            unions
+                .iter()
+                .find(|(known, ..)| *known == member)
+                .map(|(_, union, present, absent)| (union.clone(), *present, *absent))
+        });
+        if let Some(found) = found {
+            return found;
+        }
+    }
+    let union_type = aura_core::types::optional_type(member.clone());
+    let Type::Union(union) = &union_type else {
+        unreachable!("an optional union has two members");
+    };
+    let present = union
+        .members
+        .iter()
+        .position(|member| !matches!(member, Type::Unit))
+        .expect("an optional union has a present member");
+    let absent = union
+        .members
+        .iter()
+        .position(|member| matches!(member, Type::Unit))
+        .expect("an optional union has a None member");
+    if kept {
+        OPTIONAL_UNIONS.with_borrow_mut(|unions| {
+            if unions.len() < KEPT {
+                unions.push((member, union_type.clone(), present, absent));
+            }
+        });
+    }
+    (union_type, present, absent)
+}
+
 /// Wraps a present builtin optional result in the canonical `member | None`
 /// union (ADR-0052). Both backends build the same runtime value.
 pub fn optional_present(member: aura_core::types::Type, value: Value) -> Value {
-    let union_type = aura_core::types::optional_type(member);
-    let aura_core::types::Type::Union(union) = &union_type else {
-        unreachable!("an optional union has two members");
-    };
-    let member_index = union
-        .members
-        .iter()
-        .position(|member| !matches!(member, aura_core::types::Type::Unit))
-        .expect("an optional union has a present member");
-    union_value(union_type.clone(), member_index, value)
+    let (union_type, present, _) = optional_union(member);
+    union_value(union_type, present, value)
 }
 
 /// The absent builtin optional result: the `None` member of `member | None`.
 pub fn optional_absent(member: aura_core::types::Type) -> Value {
-    let union_type = aura_core::types::optional_type(member);
-    let aura_core::types::Type::Union(union) = &union_type else {
-        unreachable!("an optional union has two members");
-    };
-    let member_index = union
-        .members
-        .iter()
-        .position(|member| matches!(member, aura_core::types::Type::Unit))
-        .expect("an optional union has a None member");
-    union_value(union_type.clone(), member_index, Value::Unit)
+    let (union_type, _, absent) = optional_union(member);
+    union_value(union_type, absent, Value::Unit)
 }
 
 /// `Some(value)` becomes the present member, `None` the absent member.

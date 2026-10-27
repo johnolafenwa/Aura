@@ -19410,3 +19410,49 @@ fn runtime_names_behave_like_their_text() {
     // A copy shares the text instead of copying it.
     assert!(std::ptr::eq(shared.as_ptr(), shared.clone().as_ptr()));
 }
+
+#[test]
+fn optional_results_reuse_the_unions_of_their_member_types() {
+    use aura_core::types::Type;
+    fn check(value: &Value, member: &Type, present: bool) {
+        let expected = aura_core::types::optional_type(member.clone());
+        let Type::Union(expected_union) = &expected else {
+            panic!("an optional union has two members");
+        };
+        let Value::Union(union) = value else {
+            panic!("an optional result is a union");
+        };
+        assert_eq!(union.union_type, expected);
+        assert_eq!(
+            matches!(expected_union.members[union.member_index], Type::Unit),
+            !present
+        );
+    }
+    let text = Type::named("str");
+    check(
+        &optional_present(text.clone(), Value::String("a".into())),
+        &text,
+        true,
+    );
+    check(
+        &optional_present(text.clone(), Value::String("b".into())),
+        &text,
+        true,
+    );
+    check(&optional_absent(text.clone()), &text, false);
+    let pair = Type::Tuple(vec![Type::named("int64"), Type::named("str")]);
+    check(&optional_absent(pair.clone()), &pair, false);
+    check(&optional_absent(pair.clone()), &pair, false);
+    let param = Type::TypeParam("T".into());
+    check(&optional_absent(param.clone()), &param, false);
+    // Members past the kept count are normalized each time.
+    for index in 0..40 {
+        let kind = Type::named(format!("Kind{index}"));
+        check(&optional_absent(kind.clone()), &kind, false);
+        check(
+            &optional_present(kind.clone(), Value::Bool(true)),
+            &kind,
+            true,
+        );
+    }
+}

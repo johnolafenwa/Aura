@@ -144,9 +144,9 @@ pub fn plan_union_alignment(
     target: &UnionType,
     operation: &str,
 ) -> Result<UnionAlignment, String> {
-    let target_type = Type::Union(Box::new(target.clone()));
     if let Value::Union(union) = value {
-        if union.union_type == target_type {
+        // Union types are equal when their member keys are.
+        if matches!(&union.union_type, Type::Union(own) if own.keys == target.keys) {
             return Ok(UnionAlignment::Exact);
         }
     }
