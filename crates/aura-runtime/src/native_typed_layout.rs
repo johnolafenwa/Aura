@@ -11,6 +11,10 @@
 //! pointer owns one block of its target's size and alignment.
 
 use std::alloc::{alloc, dealloc, handle_alloc_error, Layout as AllocLayout};
+use std::collections::{HashMap, HashSet};
+use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
+use std::sync::{OnceLock, RwLock};
 
 use aura_core::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use aura_core::layout::{
@@ -106,6 +110,439 @@ impl TypedLayout {
     /// [`Self::write`] and does not overlap it.
     pub(crate) unsafe fn clone_into(&self, src: *const u8, dst: *mut u8) {
         unsafe { clone_into(&self.table, self.root, src, dst) }
+    }
+}
+
+/// The layout of a type whose values hold no handle and no heap block, so
+/// a value is its bytes and nothing else. Generated code registers one by
+/// descriptor, and a list of such values keeps them in place, one after
+/// another ([`crate::list_elements::ListElements::Typed`]), where generated
+/// code reads and writes them.
+pub struct PlainLayout {
+    /// The list access code of a list that keeps these values in place.
+    access: u32,
+    layout: TypedLayout,
+    /// The words one value takes in a list: its size, rounded up to whole
+    /// 8-byte words. A plain layout is never empty, so it is never 0.
+    stride_words: NonZeroUsize,
+    /// How values move in and out of the layout. Only registration names
+    /// these, so a program that registers no plain layout links none of
+    /// the converters, however many list operations it has.
+    ops: &'static PlainOps,
+}
+
+struct PlainOps {
+    check: fn(&LayoutTable, LayoutId, &Value) -> Result<(), String>,
+    write: unsafe fn(&LayoutTable, LayoutId, &Value, *mut u8),
+    read: unsafe fn(&LayoutTable, LayoutId, *const u8) -> Value,
+}
+
+static PLAIN_OPS: PlainOps = PlainOps {
+    check,
+    write: write_plain,
+    read,
+};
+
+/// The access code of the first plain layout registered. The codes below
+/// it are the fixed list forms of `DirectListAccess`.
+pub const FIRST_PLAIN_ACCESS: u32 = 0x100;
+
+/// The access code a typed cell holds before its layout is registered.
+/// No list carries it, so generated code that compares a list's code
+/// against an unregistered cell takes the slow path.
+pub const UNREGISTERED_PLAIN_ACCESS: u32 = u32::MAX;
+
+impl PlainLayout {
+    pub fn access(&self) -> u32 {
+        self.access
+    }
+
+    pub fn stride_words(&self) -> usize {
+        self.stride_words.get()
+    }
+
+    /// [`Self::stride_words`], which dividing by needs no zero check.
+    #[inline]
+    pub fn stride(&self) -> NonZeroUsize {
+        self.stride_words
+    }
+
+    /// The bytes one value takes, without the padding to whole words.
+    pub fn size(&self) -> usize {
+        self.layout.table.get(self.layout.root).size as usize
+    }
+
+    /// Whether `value` has this layout's shape, all the way down.
+    pub fn fits(&self, value: &Value) -> bool {
+        (self.ops.check)(&self.layout.table, self.layout.root, value).is_ok()
+    }
+
+    /// Writes `value` into one element's words, padding included.
+    ///
+    /// # Safety
+    ///
+    /// [`Self::fits`] accepted `value`, and `dst` is valid for writes of
+    /// [`Self::stride_words`] words.
+    pub unsafe fn encode(&self, value: &Value, dst: *mut u64) {
+        unsafe {
+            std::ptr::write_bytes(dst, 0, self.stride_words.get());
+            (self.ops.write)(&self.layout.table, self.layout.root, value, dst.cast());
+        }
+    }
+
+    /// The value one element's words hold.
+    ///
+    /// # Safety
+    ///
+    /// `src` holds a value [`Self::encode`] wrote.
+    pub unsafe fn decode(&self, src: *const u64) -> Value {
+        unsafe { self.read(src.cast()) }
+    }
+
+    /// Writes `value` into the layout's bytes at `dst`, as generated code
+    /// keeps a value of this type. A value of another shape is refused
+    /// before anything is written.
+    ///
+    /// # Safety
+    ///
+    /// `dst` is valid for writes of the layout's size, at its alignment.
+    pub unsafe fn write_checked(&self, value: &Value, dst: *mut u8) -> Result<(), String> {
+        (self.ops.check)(&self.layout.table, self.layout.root, value)?;
+        unsafe { (self.ops.write)(&self.layout.table, self.layout.root, value, dst) };
+        Ok(())
+    }
+
+    /// The value the layout's bytes at `src` hold.
+    ///
+    /// # Safety
+    ///
+    /// `src` holds a value of this layout.
+    pub unsafe fn read(&self, src: *const u8) -> Value {
+        unsafe { (self.ops.read)(&self.layout.table, self.layout.root, src) }
+    }
+}
+
+#[derive(Default)]
+struct PlainRegistry {
+    by_descriptor: HashMap<String, &'static PlainLayout>,
+    /// The layouts of classes and tuples, by [`plain_type_key`], so a list
+    /// can keep values of a registered type in place however it was built.
+    by_key: HashMap<String, &'static PlainLayout>,
+    /// Every access code a layout holds.
+    taken: HashSet<u32>,
+    /// The first code a layout registered without one may take.
+    next: u32,
+}
+
+/// The lookup behind [`plain_layout_for_value`], installed when a layout
+/// registers under a key. A program that registered none skips the
+/// registry's lock and links neither the registry nor the shape check.
+static PLAIN_LOOKUP: OnceLock<fn(&Value) -> Option<&'static PlainLayout>> = OnceLock::new();
+
+fn plain_registry() -> &'static RwLock<PlainRegistry> {
+    static REGISTRY: OnceLock<RwLock<PlainRegistry>> = OnceLock::new();
+    REGISTRY.get_or_init(Default::default)
+}
+
+/// The key a class or tuple type registers its plain layout under: the
+/// class's base name, or the tuple's canonical type descriptor.
+fn plain_type_key(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Named(name, args) if args.is_empty() => Some(name.clone()),
+        Type::Tuple(_) => Some(format!("({})", aura_core::type_descriptor::encode(ty))),
+        _ => None,
+    }
+}
+
+fn plain_value_key(value: &Value) -> Option<String> {
+    match value {
+        Value::Instance(instance) => {
+            Some(nominal_runtime_base_name(&instance.class_name).to_string())
+        }
+        Value::Tuple(tuple) => plain_type_key(&Type::Tuple(tuple.element_types.clone())),
+        _ => None,
+    }
+}
+
+/// The plain layout of the type `descriptor` names, registered on first
+/// use under the next free access code. Every call with the same
+/// descriptor returns the same layout. A type whose values hold a handle
+/// or a heap block, take no bytes, or need more than 8-byte alignment has
+/// no plain layout.
+pub fn plain_layout_for_descriptor(descriptor: &str) -> Result<&'static PlainLayout, String> {
+    register_plain_layout(descriptor, None)
+}
+
+/// [`plain_layout_for_descriptor`], under access code `access` when one is
+/// given. A program registers its layouts under the codes its generated
+/// code compares lists against, so a code another layout holds, or a
+/// descriptor registered under another code, is refused.
+pub fn register_plain_layout(
+    descriptor: &str,
+    access: Option<u32>,
+) -> Result<&'static PlainLayout, String> {
+    fn same_code(
+        layout: &'static PlainLayout,
+        access: Option<u32>,
+    ) -> Result<&'static PlainLayout, String> {
+        match access {
+            Some(code) if code != layout.access => Err(format!(
+                "the layout is registered under access code {}, not {code}",
+                layout.access
+            )),
+            _ => Ok(layout),
+        }
+    }
+    let registry = plain_registry();
+    if let Some(layout) = registry
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .by_descriptor
+        .get(descriptor)
+    {
+        return same_code(layout, access);
+    }
+    let layout = TypedLayout::from_descriptor(descriptor)?;
+    let root = layout.table.get(layout.root);
+    // An empty value has no stride, so it keeps the boxed paths too.
+    let stride_words = NonZeroUsize::new((root.size as usize).div_ceil(8))
+        .filter(|_| !layout.table.needs_drop(layout.root) && root.align <= 8)
+        .ok_or_else(|| format!("`{}` has no plain layout", root.ty))?;
+    let key = plain_type_key(&root.ty);
+    let mut registry = registry
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(layout) = registry.by_descriptor.get(descriptor) {
+        return same_code(layout, access);
+    }
+    let access = match access {
+        Some(code) if code < FIRST_PLAIN_ACCESS || code == UNREGISTERED_PLAIN_ACCESS => {
+            return Err(format!("{code} is not a plain layout access code"));
+        }
+        Some(code) if registry.taken.contains(&code) => {
+            return Err(format!("access code {code} names another layout"));
+        }
+        Some(code) => code,
+        None => {
+            let mut code = registry.next.max(FIRST_PLAIN_ACCESS);
+            while registry.taken.contains(&code) {
+                code = match code.checked_add(1) {
+                    Some(next) if next != UNREGISTERED_PLAIN_ACCESS => next,
+                    _ => return Err("too many plain layouts".to_string()),
+                };
+            }
+            registry.next = code.saturating_add(1);
+            code
+        }
+    };
+    registry.taken.insert(access);
+    let plain: &'static PlainLayout = Box::leak(Box::new(PlainLayout {
+        access,
+        layout,
+        stride_words,
+        ops: &PLAIN_OPS,
+    }));
+    registry.by_descriptor.insert(descriptor.to_string(), plain);
+    if let Some(key) = key {
+        registry.by_key.entry(key).or_insert(plain);
+        PLAIN_LOOKUP.get_or_init(|| registered_plain_layout_for_value);
+    }
+    Ok(plain)
+}
+
+/// The registered plain layout `value` fits, when its class or tuple type
+/// registered one.
+pub fn plain_layout_for_value(value: &Value) -> Option<&'static PlainLayout> {
+    if !matches!(value, Value::Instance(_) | Value::Tuple(_)) {
+        return None;
+    }
+    PLAIN_LOOKUP.get()?(value)
+}
+
+fn registered_plain_layout_for_value(value: &Value) -> Option<&'static PlainLayout> {
+    let registry = plain_registry()
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let layout = *registry.by_key.get(&plain_value_key(value)?)?;
+    layout.fits(value).then_some(layout)
+}
+
+/// The cell generated code keeps for one plain layout's descriptor: the
+/// layout's access code and the layout itself, which the runtime helpers
+/// generated code calls read. Both start empty.
+#[repr(C)]
+pub struct PlainLayoutCell {
+    access: AtomicU32,
+    layout: AtomicPtr<PlainLayout>,
+}
+
+impl PlainLayoutCell {
+    /// A cell with no layout yet.
+    pub const fn new() -> Self {
+        Self {
+            access: AtomicU32::new(UNREGISTERED_PLAIN_ACCESS),
+            layout: AtomicPtr::new(std::ptr::null_mut()),
+        }
+    }
+}
+
+impl Default for PlainLayoutCell {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The offset of the access code in a [`PlainLayoutCell`], which
+/// generated code reads, and the cell's size.
+pub const PLAIN_LAYOUT_CELL_ACCESS_OFFSET: i32 =
+    std::mem::offset_of!(PlainLayoutCell, access) as i32;
+pub const PLAIN_LAYOUT_CELL_BYTES: usize = std::mem::size_of::<PlainLayoutCell>();
+
+/// The layout in `cell`, registered from `descriptor` under access code
+/// `access` and stored there on first use.
+///
+/// # Safety
+///
+/// `cell` is null or points to a [`PlainLayoutCell`] that lives for the
+/// rest of the process.
+pub unsafe fn celled_plain_layout(
+    cell: *const PlainLayoutCell,
+    descriptor: &[u8],
+    access: u32,
+) -> Result<&'static PlainLayout, String> {
+    let cell = unsafe { cell.as_ref() }.ok_or("direct runtime received a null layout cell")?;
+    let stored = cell.layout.load(Ordering::Acquire);
+    if !stored.is_null() {
+        // SAFETY: only this function stores into the cell, and it stores a
+        // registered layout, which lives for the rest of the process.
+        return Ok(unsafe { &*stored });
+    }
+    let descriptor =
+        std::str::from_utf8(descriptor).map_err(|_| "a layout descriptor is not UTF-8")?;
+    let layout = register_plain_layout(descriptor, Some(access))?;
+    cell.access.store(layout.access, Ordering::Release);
+    cell.layout
+        .store(std::ptr::from_ref(layout).cast_mut(), Ordering::Release);
+    Ok(layout)
+}
+
+/// The layout registered into `cell`.
+///
+/// # Safety
+///
+/// As for [`celled_plain_layout`].
+pub unsafe fn registered_plain_layout(
+    cell: *const PlainLayoutCell,
+) -> Result<&'static PlainLayout, String> {
+    let cell = unsafe { cell.as_ref() }.ok_or("direct runtime received a null layout cell")?;
+    let stored = cell.layout.load(Ordering::Acquire);
+    // SAFETY: as in `celled_plain_layout`.
+    unsafe { stored.as_ref() }
+        .ok_or_else(|| "a plain layout was used before it was registered".into())
+}
+
+/// Writes `value` into a plain layout without consuming it.
+///
+/// # Safety
+///
+/// [`check`] accepted `value` for `id`, `id`'s layout holds no handle and
+/// no heap block, and `dst` is valid for its bytes at its alignment.
+unsafe fn write_plain(table: &LayoutTable, id: LayoutId, value: &Value, dst: *mut u8) {
+    let layout = table.get(id);
+    unsafe {
+        match (&layout.kind, value) {
+            (LayoutKind::Unit, _) => {}
+            (LayoutKind::Scalar(ScalarLayout::Bool), Value::Bool(flag)) => {
+                dst.write(u8::from(*flag))
+            }
+            (LayoutKind::Scalar(ScalarLayout::Float32), Value::Float(float)) => {
+                dst.cast::<f32>().write(*float as f32)
+            }
+            (LayoutKind::Scalar(ScalarLayout::Float64), Value::Float(float)) => {
+                dst.cast::<f64>().write(*float)
+            }
+            (LayoutKind::Scalar(ScalarLayout::Duration), Value::Duration(nanos)) => {
+                dst.cast::<i128>().write_unaligned(*nanos)
+            }
+            (LayoutKind::Scalar(scalar), Value::Int(integer)) => {
+                let bits = integer_bits(*scalar, *integer).expect("checked to fit");
+                match scalar.size() {
+                    1 => dst.write(bits as u8),
+                    2 => dst.cast::<u16>().write(bits as u16),
+                    4 => dst.cast::<u32>().write(bits as u32),
+                    8 => dst.cast::<u64>().write(bits as u64),
+                    _ => dst.cast::<u128>().write_unaligned(bits),
+                }
+            }
+            (
+                LayoutKind::Struct {
+                    class: Some(_),
+                    fields,
+                },
+                Value::Instance(instance),
+            ) => {
+                for field in fields {
+                    let field_value = instance
+                        .fields
+                        .get(&field.name)
+                        .expect("checked to hold every field");
+                    write_plain(
+                        table,
+                        field.layout,
+                        field_value,
+                        dst.add(field.offset as usize),
+                    );
+                }
+            }
+            (
+                LayoutKind::Struct {
+                    class: None,
+                    fields,
+                },
+                Value::Tuple(tuple),
+            ) => {
+                for (field, element) in fields.iter().zip(&tuple.elements) {
+                    write_plain(table, field.layout, element, dst.add(field.offset as usize));
+                }
+            }
+            (
+                LayoutKind::Tagged {
+                    enum_name: Some(_),
+                    tag_width,
+                    variants,
+                    ..
+                },
+                Value::EnumVariant(variant),
+            ) => {
+                let index = variants
+                    .iter()
+                    .position(|laid| laid.name == *variant.variant_name)
+                    .expect("checked to name a variant");
+                write_tag(dst, *tag_width, index);
+                for (field, payload) in variants[index].fields.iter().zip(&variant.payloads) {
+                    write_plain(table, field.layout, payload, dst.add(field.offset as usize));
+                }
+            }
+            (
+                LayoutKind::Tagged {
+                    enum_name: None,
+                    tag_width,
+                    variants,
+                    ..
+                },
+                Value::Union(union),
+            ) => {
+                write_tag(dst, *tag_width, union.member_index);
+                let field = &variants[union.member_index].fields[0];
+                write_plain(
+                    table,
+                    field.layout,
+                    &union.payload,
+                    dst.add(field.offset as usize),
+                );
+            }
+            _ => unreachable!("checked plain values fit their layout"),
+        }
     }
 }
 

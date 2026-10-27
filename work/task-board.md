@@ -29,7 +29,13 @@ Last updated: 2026-10-27
   type arguments its calls use (`mir_specialize.rs`), and member calls and
   `with` exits resolve to the copies. Details are in
   `2026-10-26-rust-speed-2b-specialized-generics.md`.
-- Next: 2c, `copy class` values and tuples inline.
+- Step 2c: plain records, classes whose fields are all one-word scalars
+  or other plain records, stay in their layouts in lists; indexing,
+  `append`, and indexed assignment read and write the fields in place, and
+  boxing, unboxing, and record field reads take one runtime call. `pop()`
+  on a list of scalars runs in native code. Details are in
+  `2026-10-26-rust-speed-2c-plain-records.md`.
+- Next: 2d, typed `list[T]` buffers with lent element reads.
 
 ## Aura 0.7.1 preview release (complete)
 

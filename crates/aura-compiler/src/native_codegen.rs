@@ -658,6 +658,9 @@ struct NativeCodegen<'a> {
     tag_cells: HashMap<String, DataHandle>,
     /// Every function's frame descriptor, which the main wrapper validates.
     frame_descriptors: Vec<DataHandle>,
+    /// The plain records generated code keeps in their typed layouts, whose
+    /// cells the main wrapper registers.
+    plain_records: plain::PlainRecords,
     /// The module's own retain and release, which `runtime` names in place
     /// of the runtime's.
     ownership: OwnershipFastPaths,
@@ -933,6 +936,7 @@ impl<'a> NativeCodegen<'a> {
             runtime,
             string_data: HashMap::new(),
             tag_cells: HashMap::new(),
+            plain_records: plain::PlainRecords::new(module),
             frame_descriptors: Vec::new(),
             ownership,
         })
@@ -1481,6 +1485,7 @@ impl<'a> NativeCodegen<'a> {
             host_builtin_refs: HashMap::new(),
             string_data: &mut self.string_data,
             tag_cells: &mut self.tag_cells,
+            plain_records: &mut self.plain_records,
             callable_shapes: &self.callable_shapes,
             contract_descriptors: &mut self.contract_descriptors,
             cleanup_places,
@@ -1997,6 +2002,20 @@ impl<'a> NativeCodegen<'a> {
         let count = builder.iconst(types::I64, self.frame_descriptors.len() as i64);
         let validate = builder.import_function(self.runtime[RuntimeFn::ValidateFrameDescriptors]);
         builder.call(validate, &[descriptors, count]);
+        // Registering every plain layout now lets a list built anywhere
+        // keep these records in place, where generated code reads them.
+        if !self.plain_records.cells().is_empty() {
+            let layouts = plain::declare_plain_layout_table(
+                builder.module(),
+                &mut self.string_data,
+                self.plain_records.cells(),
+            )?;
+            let layouts = builder.import_data(layouts);
+            let layouts = builder.symbol_value(types::I64, layouts);
+            let count = builder.iconst(types::I64, self.plain_records.cells().len() as i64);
+            let register = builder.import_function(self.runtime[RuntimeFn::RegisterPlainLayouts]);
+            builder.call(register, &[layouts, count]);
+        }
         let display_wrappers = self
             .module
             .functions
@@ -2698,6 +2717,7 @@ struct FunctionCompiler<'a> {
     host_builtin_refs: HashMap<&'static str, FuncRef>,
     string_data: &'a mut HashMap<Vec<u8>, DataHandle>,
     tag_cells: &'a mut HashMap<String, DataHandle>,
+    plain_records: &'a mut plain::PlainRecords,
     callable_shapes: &'a HashMap<CallableShapeKey, CallableShape>,
     contract_descriptors: &'a mut HashMap<String, callables::ContractDescriptor>,
     cleanup_places: Vec<String>,
@@ -8563,6 +8583,13 @@ impl<'a> FunctionCompiler<'a> {
                 self.coerce_value(element, &direct_type)
             }
             DirectType::Opaque(_) => {
+                let field_ty =
+                    direct_field_type_with_enums(&object.ty, field, &self.classes, &self.enums);
+                if let Some(field_ty) = &field_ty {
+                    if let Some(record) = self.plain_record(field_ty)? {
+                        return self.read_plain_field(&record, object.values[0], field, field_ty);
+                    }
+                }
                 let (field_ptr, field_len) = self.string_constant(field.as_bytes())?;
                 let inst = self.builder.call(
                     self.runtime[RuntimeFn::InstanceGetField],
@@ -8573,9 +8600,7 @@ impl<'a> FunctionCompiler<'a> {
                     ty: DirectType::Opaque(Type::named("Unknown")),
                 };
                 self.mark_temporary_opaque_owned(&loaded);
-                if let Some(field_ty) =
-                    direct_field_type_with_enums(&object.ty, field, &self.classes, &self.enums)
-                {
+                if let Some(field_ty) = field_ty {
                     self.coerce_value(loaded, &field_ty)
                 } else {
                     Ok(loaded)
@@ -8805,6 +8830,10 @@ impl<'a> FunctionCompiler<'a> {
                 DirectType::Union(union) => {
                     let union = union.clone();
                     self.unbox_inline_union(&union, value.values[0])?
+                }
+                DirectType::PlainClass(_) if self.plain_record(target)?.is_some() => {
+                    let record = self.plain_record(target)?.expect("checked above");
+                    self.unbox_plain_record(&record, value.values[0], target)
                 }
                 DirectType::PlainClass(class) => {
                     let mut values = Vec::new();
@@ -9057,23 +9086,33 @@ impl<'a> FunctionCompiler<'a> {
 
     /// The length of `list`, read from its list view when the value is
     /// confined to this thread (see `aura_runtime::native_runtime::DirectListLayout`).
-    fn emit_list_len(&mut self, list: Val) -> Val {
+    fn emit_list_len(&mut self, list: Val, records: bool) -> Val {
         let layout = aura_runtime::native_runtime::direct_list_layout();
         let slow_block = self.builder.create_block();
         let fast_block = self.builder.create_block();
         let join_block = self.builder.create_block();
         self.builder.append_block_param(join_block, types::I64);
-        // Every list form keeps its length in the view.
+        // Every list form keeps its length in the view, and so does a list
+        // that keeps plain records in place. Only a list of plain records
+        // checks for one; any other list in that form takes the call.
         let access = self.emit_list_access(list, &layout);
         let form = self.builder.iadd_imm(
             access,
             -(aura_runtime::native_runtime::DirectListAccess::Values as i64),
         );
-        let is_list = self.builder.icmp_imm(
+        let mut is_list = self.builder.icmp_imm(
             IntCC::UnsignedLessThan,
             form,
             i64::from(aura_runtime::native_runtime::DirectListAccess::LIST_FORMS),
         );
+        if records {
+            let is_typed = self.builder.icmp_imm(
+                IntCC::UnsignedGreaterThanOrEqual,
+                access,
+                i64::from(aura_runtime::native_runtime::FIRST_PLAIN_ACCESS),
+            );
+            is_list = self.builder.bor(is_list, is_typed);
+        }
         self.builder.brif(is_list, fast_block, &[], slow_block, &[]);
 
         self.builder.switch_to_block(fast_block);
@@ -9377,6 +9416,63 @@ impl<'a> FunctionCompiler<'a> {
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
+    }
+
+    /// Removes the last element of a scalar list and returns its bits. A
+    /// confined list that keeps the scalars unboxed in storage no other list
+    /// shares (it has room, see `emit_scalar_list_push`) lowers the view's
+    /// length and reads the element there, and the runtime drops it at its
+    /// next access. Any other list, or an empty one, calls
+    /// `aura_direct_vec_pop_scalar`, which reports the same diagnostic as
+    /// `pop()`.
+    fn emit_scalar_list_pop(&mut self, list: Val, kind: ScalarElement) -> Val {
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let (access, stride) = scalar_list_slot(kind);
+        let slow_block = self.builder.create_block();
+        let fast_block = self.builder.create_block();
+        let pop_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        self.emit_list_access_check(list, access, &layout, slow_block, fast_block);
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let flags = MemFlags::trusted();
+        let len = self
+            .builder
+            .load(types::I64, flags, list, layout.len_offset);
+        let capacity = self.builder.uload32(flags, list, layout.capacity_offset);
+        // Room means unshared storage, and it is at least the length, so a
+        // length below it is not zero.
+        let empty = self.builder.icmp_imm(IntCC::Equal, len, 0);
+        let no_room = self.builder.icmp_imm(IntCC::Equal, capacity, 0);
+        let slow = self.builder.bor(empty, no_room);
+        self.builder.brif(slow, slow_block, &[], pop_block, &[]);
+
+        self.builder.switch_to_block(pop_block);
+        self.builder.seal_block(pop_block);
+        let last = self.builder.iadd_imm(len, -1);
+        let elements = self
+            .builder
+            .load(types::I64, flags, list, layout.elements_offset);
+        let element = self.scalar_list_element(elements, last, stride);
+        let bits = self.load_scalar_list_element(kind, element);
+        self.builder.store(flags, last, list, layout.len_offset);
+        self.builder.jump(join_block, &[bits]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let kind = self
+            .builder
+            .iconst(types::I64, ScalarKind::of_element(kind).direct_kind_word());
+        let inst = self
+            .builder
+            .call(self.runtime[RuntimeFn::VecPopScalar], &[list, kind]);
+        let bits = inst.results[0];
+        self.builder.jump(join_block, &[bits]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        self.builder.block_params(join_block)[0]
     }
 
     /// Replaces element `index` of `list` with a scalar's `bits`. A confined
@@ -10200,7 +10296,10 @@ impl<'a> FunctionCompiler<'a> {
                 self.mark_temporary_opaque_owned(&boxed);
                 Ok(boxed)
             }
-            DirectType::PlainClass(class) => {
+            DirectType::PlainClass(ref class) => {
+                if let Some(record) = self.plain_record(&value.ty)? {
+                    return Ok(self.box_plain_record(&record, &value, &class.class_name));
+                }
                 let (class_ptr, class_len) = self.string_constant(class.class_name.as_bytes())?;
                 let init = self.builder.call(
                     self.runtime[RuntimeFn::InstanceEmpty],
@@ -11985,7 +12084,8 @@ impl<'a> FunctionCompiler<'a> {
         match op {
             ListOp::Slice => self.compile_slice_runtime_op(runtime_op, object, mir_args),
             ListOp::Len => {
-                let len = self.emit_list_len(list);
+                let records = self.plain_record(&element_direct_ty)?.is_some();
+                let len = self.emit_list_len(list, records);
                 Ok(ValueRef {
                     values: vec![len],
                     ty: DirectType::Scalar(int64),
@@ -12013,6 +12113,16 @@ impl<'a> FunctionCompiler<'a> {
                 self.store_receiver_back_in_place(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
+            ListOp::Push if self.plain_record(&element_direct_ty)?.is_some() => {
+                let record = self
+                    .plain_record(&element_direct_ty)?
+                    .expect("checked above");
+                let value = self.load_operand_for_target(&args[0].value, &element_direct_ty)?;
+                let value = self.coerce_value(value, &element_direct_ty)?;
+                self.emit_plain_list_push(&record, list, &value);
+                self.store_receiver_back_in_place(receiver_place, &object)?;
+                Ok(unit_value(&mut *self.builder))
+            }
             ListOp::Push => {
                 let value =
                     self.load_operand_as_opaque_direct(&args[0].value, &element_direct_ty)?;
@@ -12024,6 +12134,22 @@ impl<'a> FunctionCompiler<'a> {
             }
             ListOp::Pop => {
                 let index = self.load_word(args[0], int64, true)?;
+                if let Some(kind) = ScalarElement::of(&element_ty)
+                    .filter(|_| self.integer_constant(index) == Some(-1))
+                {
+                    // `pop()` of a scalar comes back as raw bits, with no box.
+                    let bits = self.emit_scalar_list_pop(list, kind);
+                    self.store_receiver_back_in_place(receiver_place, &object)?;
+                    let value = if kind == ScalarElement::Float64 {
+                        self.builder.bitcast(types::F64, bits)
+                    } else {
+                        bits
+                    };
+                    return Ok(ValueRef {
+                        values: vec![value],
+                        ty: element_direct_ty,
+                    });
+                }
                 let result = self.emit_collection_operation(call, list, None, Some(index));
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(self.owned_opaque_result(vec![result], element_ty))
@@ -12067,6 +12193,17 @@ impl<'a> FunctionCompiler<'a> {
                         ty: element_direct_ty,
                     });
                 }
+                if let Some(record) = self.plain_record(&element_direct_ty)? {
+                    return Ok(self.emit_plain_list_read(
+                        &record,
+                        list,
+                        index,
+                        proven,
+                        line,
+                        column,
+                        &element_direct_ty,
+                    ));
+                }
                 let index = if proven {
                     index
                 } else {
@@ -12087,6 +12224,19 @@ impl<'a> FunctionCompiler<'a> {
                     return Ok(unit_value(&mut *self.builder));
                 }
                 Ok(self.owned_opaque_result(results, optional_type(element_ty)))
+            }
+            ListOp::SetIndex if self.plain_record(&element_direct_ty)?.is_some() => {
+                let record = self
+                    .plain_record(&element_direct_ty)?
+                    .expect("checked above");
+                let index = self.load_word(args[0], int64, false)?;
+                let value = self.load_operand_for_target(&args[1].value, &element_direct_ty)?;
+                let value = self.coerce_value(value, &element_direct_ty)?;
+                let line = self.load_word(args[2], int32, false)?;
+                let column = self.load_word(args[3], int32, false)?;
+                self.emit_plain_list_set(&record, list, index, &value, (line, column));
+                self.store_receiver_back_in_place(receiver_place, &object)?;
+                Ok(unit_value(&mut *self.builder))
             }
             ListOp::SetIndexScalar(kind) => {
                 // A scalar is stored as its bits, with no box.
@@ -15332,6 +15482,9 @@ mod callables;
 
 #[path = "native_codegen_lookups.rs"]
 mod lookups;
+
+#[path = "native_codegen_plain.rs"]
+mod plain;
 
 #[cfg(test)]
 #[path = "native_codegen_tests.rs"]

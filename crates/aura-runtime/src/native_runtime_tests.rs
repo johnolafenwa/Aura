@@ -26187,7 +26187,7 @@ fn list_forms_share_the_access_codes_of_their_layouts() {
         (ListForm::Uint32, DirectListAccess::Uint32),
         (ListForm::Uint64, DirectListAccess::Uint64),
     ] {
-        assert_eq!(form as u32, access as u32, "{form:?}");
+        assert_eq!(form.access(), access as u32, "{form:?}");
     }
 }
 
@@ -26296,6 +26296,79 @@ fn append_like_generated_code(
     };
     super::aura_direct_vec_push_scalar(list, bits, kind);
     false
+}
+
+/// Pops the last `int64` the way generated code does: in place when the
+/// list view has the `Int64` form, room, and an element, and through
+/// `aura_direct_vec_pop_scalar` otherwise. Returns the element and whether
+/// it came off in place.
+fn pop_like_generated_code(list: *mut OpaqueValue) -> (i64, bool) {
+    use super::DirectListAccess;
+    let layout = super::direct_list_layout();
+    let len = list_view_len(list);
+    if list_view_access(list) == DirectListAccess::Int64 as u32
+        && len != 0
+        && list_view_capacity(list) != 0
+    {
+        let base = list as *mut u8;
+        unsafe {
+            let elements = *(base.add(layout.elements_offset as usize) as *const usize) as *mut u8;
+            let bits = *(elements.add((len - 1) * 8) as *const i64);
+            *(base.add(layout.len_offset as usize) as *mut usize) = len - 1;
+            return (bits, true);
+        }
+    }
+    (super::aura_direct_vec_pop_scalar(list, 0), false)
+}
+
+#[test]
+fn scalar_pops_in_place_are_dropped_at_the_next_access() {
+    use super::DirectListAccess;
+    let list = super::aura_direct_vec_empty();
+    for bits in [1, 2, 3, 4] {
+        append_like_generated_code(list, bits, DirectListAccess::Int64);
+    }
+    // The first append went through the runtime and gave the list room.
+    assert_eq!(pop_like_generated_code(list), (4, true));
+    assert_eq!(pop_like_generated_code(list), (3, true));
+    // An append after pops reuses the popped slots.
+    assert!(append_like_generated_code(list, 9, DirectListAccess::Int64));
+    // A runtime read takes the room back and sees the list generated code
+    // left: three elements, not the four the storage held.
+    assert_eq!(super::aura_direct_vec_len(list), 3);
+    assert_eq!(super::aura_direct_vec_index_scalar(list, 2, 0), 9);
+    assert_eq!(list_view_capacity(list), 0);
+    // Without room the pop goes through the runtime, which gives it back.
+    assert_eq!(pop_like_generated_code(list), (9, false));
+    assert_eq!(pop_like_generated_code(list), (2, true));
+    assert_eq!(pop_like_generated_code(list), (1, true));
+    assert_eq!(super::aura_direct_vec_len(list), 0);
+    unsafe { release_value(list) };
+
+    // Pops below the storage length are dropped when the value is shared,
+    // too, so another thread never sees them.
+    let shared = super::aura_direct_vec_empty();
+    for bits in [5, 6] {
+        append_like_generated_code(shared, bits, DirectListAccess::Int64);
+    }
+    assert_eq!(pop_like_generated_code(shared), (6, true));
+    unsafe { super::share_direct_value(shared) };
+    assert_eq!(super::aura_direct_vec_len(shared), 1);
+    assert_eq!(pop_like_generated_code(shared), (5, false));
+    unsafe { release_value(shared) };
+}
+
+#[test]
+fn scalar_pop_of_an_empty_list_reports_the_pop_index() {
+    let diagnostic = capture_direct_boundary_diagnostic(|| {
+        let list = super::aura_direct_vec_empty();
+        super::aura_direct_vec_pop_scalar(list, 0);
+    });
+    assert_eq!(diagnostic.code, "AU4003");
+    assert_eq!(
+        diagnostic.message,
+        "list pop index `-1` is out of bounds for length `0`"
+    );
 }
 
 /// Replaces element `index` with `bits` the way generated code does: in

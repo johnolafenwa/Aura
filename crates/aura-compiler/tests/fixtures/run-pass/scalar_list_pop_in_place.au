@@ -1,0 +1,73 @@
+# Pops of scalar lists run in generated code while the list's storage is its
+# own. The runtime drops the popped elements at its next access, so every
+# read, copy, and handoff sees the shorter list.
+
+
+def drain(values: own list[int64]) -> int64:
+    mut rest = values
+    mut total = 0
+    while rest.len() > 0:
+        total = total * 10 + rest.pop()
+    return total
+
+
+def main():
+    mut stack: list[int64] = []
+    for i in range(6):
+        stack.append(i)
+    first = stack.pop()
+    second = stack.pop()
+    print(f"{first} {second} {stack.len()}")
+    stack.append(40)
+    print(f"{stack} {stack[-1]} {stack.len()}")
+    copy = stack.copy()
+    top = stack.pop()
+    below = stack.pop()
+    print(f"{top} {below} {stack} {copy}")
+    stack.append(7)
+    sum = stack.pop() + stack.pop()
+    print(f"{sum} {stack}")
+
+    # The interleaving the bytecode VM benchmark makes.
+    mut vm: list[int64] = [0]
+    for step in range(5):
+        vm.append(step)
+        b = vm.pop()
+        a = vm.pop()
+        vm.append(a + b)
+    print(f"{vm} {vm.len()}")
+
+    mut floats: list[float64] = [1.5, -2.25]
+    floats.append(0.125)
+    last = floats.pop()
+    print(f"{last} {floats.pop()} {floats}")
+    mut flags: list[bool] = [true]
+    flags.append(false)
+    flag = flags.pop()
+    print(f"{flag} {flags.pop()} {flags.len()}")
+    mut octets: list[uint8] = [250, 251]
+    octets.append(255)
+    octet = octets.pop()
+    print(f"{octet} {octets}")
+    mut wide: list[uint64] = [18446744073709551615]
+    wide.append(1)
+    one = wide.pop()
+    print(f"{one} {wide.pop()} {wide}")
+    mut small: list[int8] = [-128]
+    small.append(127)
+    high = small.pop()
+    print(f"{high} {small}")
+
+    mut handed: list[int64] = [1, 2, 3, 4]
+    handed.pop()
+    print(drain(handed))
+
+    with TaskGroup() as group:
+        mut work: list[int64] = [5, 6, 7]
+        work.pop()
+        task = group.start(drain, work)
+        match task.result():
+            case TaskResult.Ready(total):
+                print(total)
+            case _:
+                print("the task failed")

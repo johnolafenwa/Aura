@@ -1,0 +1,8 @@
+copy class Entry:
+    dist: int64
+    node: int64
+
+def main() -> int32:
+    entries = [Entry(dist=1, node=2)]
+    print(entries[3].dist)
+    return 0

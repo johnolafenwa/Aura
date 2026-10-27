@@ -13693,6 +13693,109 @@ def main():
 }
 
 #[test]
+fn native_record_lists_read_and_write_records_in_place() {
+    let source = r#"
+copy class Point:
+    x: int32
+    y: float32
+    on: bool
+
+copy class Segment:
+    start: Point
+    end: Point
+    id: int64
+
+class Holder:
+    best: Segment
+    all: list[Segment]
+
+copy class Mark:
+    count: uint64
+    gap: None
+
+def walk(segments: mut list[Segment], holder: Holder) -> int64:
+    segments.append(holder.best)
+    last = segments[-1]
+    segments[0] = last
+    mut total = 0
+    for segment in segments:
+        total += segment.id + (segment.start.x as int64)
+    print(segments[1])
+    return total
+
+def marks(count: uint64) -> uint64:
+    mut all: list[Mark] = []
+    all.append(Mark(count=count, gap=None))
+    first = all[0]
+    all[0] = Mark(count=first.count + 1, gap=first.gap)
+    return all[0].count
+
+def main():
+    start = Point(x=1, y=0.5, on=true)
+    segment = Segment(start=start, end=start, id=3)
+    mut segments: list[Segment] = []
+    print(walk(segments, Holder(best=segment, all=[])))
+    print(marks(4))
+"#;
+    let mir = lower_source_to_mir(source).expect("record list source should lower");
+    let object = emit_host_object(&mir).expect("record list source should emit directly");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "aura_direct_register_plain_layouts",
+        "aura_direct_vec_read_plain",
+        "aura_direct_vec_push_plain",
+        "aura_direct_vec_set_plain",
+        "aura_direct_instance_read_plain",
+        "aura_direct_box_plain",
+    ] {
+        assert!(
+            referenced.iter().any(|name| name.ends_with(symbol)),
+            "record code should call `{symbol}`, referenced: {referenced:?}"
+        );
+    }
+    // No element or field is boxed, cloned, or rebuilt one field at a time.
+    for symbol in [
+        "aura_direct_vec_index",
+        "aura_direct_vec_push_in_place",
+        "aura_direct_vec_set_index_in_place",
+        "aura_direct_instance_get_field",
+    ] {
+        assert!(
+            !referenced.iter().any(|name| name.ends_with(symbol)),
+            "record code should not call `{symbol}`"
+        );
+    }
+}
+
+#[test]
+fn native_records_with_union_fields_keep_their_boxes() {
+    let source = r#"
+copy class Slot:
+    value: int64 | None
+
+def main():
+    mut slots: list[Slot] = [Slot(value=None)]
+    slots.append(Slot(value=4))
+    print(slots[1].value)
+"#;
+    let mir = lower_source_to_mir(source).expect("union field source should lower");
+    let object = emit_host_object(&mir).expect("union field source should emit directly");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "aura_direct_register_plain_layouts",
+        "aura_direct_vec_read_plain",
+    ] {
+        assert!(
+            !referenced.iter().any(|name| name.ends_with(symbol)),
+            "a record with a union field should not call `{symbol}`"
+        );
+    }
+    assert!(referenced
+        .iter()
+        .any(|name| name.ends_with("aura_direct_vec_index")));
+}
+
+#[test]
 fn native_executables_check_the_list_layout_they_read() {
     let source = r#"
 def pick(values: list[int64], flags: list[bool], weights: list[float64]) -> int64:

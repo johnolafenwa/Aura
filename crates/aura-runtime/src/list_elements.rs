@@ -3,10 +3,13 @@
 //! A list whose elements are all of one fixed-width scalar type keeps the
 //! scalars themselves: each `int8`..`int64` or `uint8`..`uint64` element
 //! in its own width, each `float32` or `float64` element in 8 bytes, and
-//! each `bool` in 1 byte, instead of a whole `Value`. Any other list keeps
-//! `Value`s. The storage follows the elements alone, and moving between
-//! the forms loses nothing, so a program cannot observe which one a list
-//! uses. Generated code reads and writes the scalar forms in place.
+//! each `bool` in 1 byte, instead of a whole `Value`. A list whose elements
+//! are all values of a class or tuple type that generated code registered a
+//! plain layout for keeps each value's bytes in that layout, one after
+//! another (see [`PlainLayout`]). Any other list keeps `Value`s. The storage
+//! follows the elements alone, and moving between the forms loses nothing,
+//! so a program cannot observe which one a list uses. Generated code reads
+//! and writes the scalar and typed forms in place.
 //!
 //! Every form sits in a [`SharedVec`], so a clone shares the storage and the
 //! first write through a shared handle copies it.
@@ -17,6 +20,7 @@ use std::fmt;
 
 use crate::collection_index::SharedVec;
 use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
+use crate::native_runtime::{plain_layout_for_value, PlainLayout};
 use crate::randomness::DeterministicRng;
 use crate::runtime_value::Value;
 
@@ -34,11 +38,14 @@ pub enum ListElements {
     Uint16(SharedVec<u16>),
     Uint32(SharedVec<u32>),
     Uint64(SharedVec<u64>),
+    /// Boxed, so the typed form keeps every list one pointer and a tag.
+    Typed(Box<TypedElements>),
 }
 
 /// Which form a [`ListElements`] uses. The discriminants are the native
 /// list access codes for the same layouts, so a list view converts its form
-/// without a table.
+/// without a table. A typed list names its layout by the layout's access
+/// code.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum ListForm {
@@ -53,6 +60,213 @@ pub enum ListForm {
     Uint16 = 10,
     Uint32 = 11,
     Uint64 = 12,
+    Typed(u32),
+}
+
+impl ListForm {
+    /// The native list access code of a list in this form.
+    #[inline(always)]
+    pub fn access(self) -> u32 {
+        match self {
+            Self::Typed(access) => access,
+            // SAFETY: a `repr(u32)` enum starts every variant with its
+            // `u32` discriminant, which is the access code.
+            form => unsafe { *std::ptr::from_ref(&form).cast::<u32>() },
+        }
+    }
+}
+
+/// Values of one plain layout, in place: each element takes the layout's
+/// stride of words, and the storage holds whole elements only.
+#[derive(Clone)]
+pub struct TypedElements {
+    layout: &'static PlainLayout,
+    words: SharedVec<u64>,
+}
+
+impl TypedElements {
+    fn new(layout: &'static PlainLayout) -> Self {
+        Self {
+            layout,
+            words: SharedVec::new(),
+        }
+    }
+
+    /// The elements of `values` in `layout`, when every one fits it.
+    fn of(layout: &'static PlainLayout, values: &[Value]) -> Option<Self> {
+        let mut typed = Self::new(layout);
+        for value in values {
+            if !layout.fits(value) {
+                return None;
+            }
+            typed.push(value);
+        }
+        Some(typed)
+    }
+
+    pub fn layout(&self) -> &'static PlainLayout {
+        self.layout
+    }
+
+    /// The elements from `start` up to `end`, which the caller checked
+    /// against the length, in storage of their own, as a slice copies them.
+    pub fn slice(&self, start: usize, end: usize) -> Self {
+        let stride = self.stride();
+        Self {
+            layout: self.layout,
+            words: self.words[start * stride..end * stride].to_vec().into(),
+        }
+    }
+
+    fn stride(&self) -> usize {
+        self.layout.stride_words()
+    }
+
+    fn len(&self) -> usize {
+        self.words.len() / self.layout.stride()
+    }
+
+    /// [`ListElements::adopt_appended`] for this form, out of line for the
+    /// same reason as [`Self::view`].
+    ///
+    /// # Safety
+    ///
+    /// As for [`ListElements::adopt_appended`].
+    #[inline(never)]
+    unsafe fn adopt_appended(&mut self, len: usize) {
+        if let Some(words) = len.checked_mul(self.stride()) {
+            unsafe { adopt_appended(&mut self.words, words) }
+        }
+    }
+
+    /// [`ListElements::get`] for this form. It stays out of line, so the
+    /// scalar forms' reads stay small enough to inline.
+    #[inline(never)]
+    fn get(&self, index: usize) -> Option<Cow<'_, Value>> {
+        (index < self.len()).then(|| Cow::Owned(self.decode(index)))
+    }
+
+    /// [`ListElements::view`] for this form. It divides by the stride, so
+    /// it stays out of line and the scalar forms' view stays small enough
+    /// to inline into every list write.
+    #[inline(never)]
+    fn view(&self) -> (ListForm, usize, usize, usize) {
+        (
+            ListForm::Typed(self.layout.access()),
+            self.words.as_ptr() as usize,
+            self.len(),
+            unshared_capacity(&self.words) / self.layout.stride(),
+        )
+    }
+
+    fn range(&self, index: usize) -> std::ops::Range<usize> {
+        index * self.stride()..(index + 1) * self.stride()
+    }
+
+    /// The words of element `index`, which hold its layout's bytes.
+    pub fn element_words(&self, index: usize) -> &[u64] {
+        &self.words[self.range(index)]
+    }
+
+    fn decode(&self, index: usize) -> Value {
+        decode_typed(self.layout, &self.words[self.range(index)])
+    }
+
+    /// Encodes a value that fits the layout into `stride` new words.
+    fn encoded(&self, value: &Value) -> Vec<u64> {
+        let mut words = vec![0; self.stride()];
+        // SAFETY: the caller checked that `value` fits, and `words` has
+        // room for one element.
+        unsafe { self.layout.encode(value, words.as_mut_ptr()) };
+        words
+    }
+
+    fn push(&mut self, value: &Value) {
+        let encoded = self.encoded(value);
+        self.words.extend_from_slice(&encoded);
+    }
+
+    /// Appends the element whose words are at `src`.
+    ///
+    /// # Safety
+    ///
+    /// `src` is aligned for `u64` and holds a stride of initialized words
+    /// that encode a value of this layout.
+    unsafe fn push_words(&mut self, src: *const u64) {
+        // SAFETY: the caller's contract.
+        let words = unsafe { std::slice::from_raw_parts(src, self.stride()) };
+        self.words.extend_from_slice(words);
+    }
+
+    /// Overwrites element `index` with the words at `src`.
+    ///
+    /// # Safety
+    ///
+    /// As for [`Self::push_words`].
+    unsafe fn set_words(&mut self, index: usize, src: *const u64) {
+        // SAFETY: the caller's contract.
+        let words = unsafe { std::slice::from_raw_parts(src, self.stride()) };
+        let range = self.range(index);
+        self.words[range].copy_from_slice(words);
+    }
+
+    fn replace(&mut self, index: usize, value: &Value) -> Value {
+        let previous = self.decode(index);
+        let encoded = self.encoded(value);
+        let range = self.range(index);
+        self.words[range].copy_from_slice(&encoded);
+        previous
+    }
+
+    fn insert(&mut self, index: usize, value: &Value) {
+        let encoded = self.encoded(value);
+        let at = index * self.stride();
+        self.words.splice(at..at, encoded);
+    }
+
+    fn remove(&mut self, index: usize) -> Value {
+        let value = self.decode(index);
+        let range = self.range(index);
+        self.words.drain(range);
+        value
+    }
+
+    fn pop(&mut self) -> Option<Value> {
+        let last = self.len().checked_sub(1)?;
+        let value = self.decode(last);
+        self.truncate(last);
+        Some(value)
+    }
+
+    fn swap(&mut self, first: usize, second: usize) {
+        if first == second {
+            return;
+        }
+        let stride = self.stride();
+        for word in 0..stride {
+            self.words
+                .swap(first * stride + word, second * stride + word);
+        }
+    }
+
+    /// The elements in the order `order` lists their old positions.
+    fn permuted(&self, order: impl Iterator<Item = usize>) -> Self {
+        let mut words = Vec::with_capacity(self.words.len());
+        for index in order {
+            words.extend_from_slice(&self.words[self.range(index)]);
+        }
+        Self {
+            layout: self.layout,
+            words: words.into(),
+        }
+    }
+
+    fn truncate(&mut self, len: usize) {
+        let words = len * self.stride();
+        if words < self.words.len() {
+            self.words.truncate(words);
+        }
+    }
 }
 
 /// A scalar one of the forms keeps unboxed.
@@ -164,10 +378,11 @@ pub fn int64_bits(value: IntegerValue) -> Option<i64> {
 }
 
 /// Matches `$list` against every form, binding the storage to `$values`.
-/// `$body` runs once per form, with `$values` a `SharedVec` of that form's
-/// element type.
+/// `$body` runs once per form that keeps a `SharedVec`, with `$values` a
+/// `SharedVec` of that form's element type, and `$typed_body` runs for the
+/// typed form, with `$typed` its [`TypedElements`].
 macro_rules! each_form {
-    ($list:expr, $values:ident => $body:expr) => {
+    ($list:expr, $values:ident => $body:expr, $typed:ident => $typed_body:expr) => {
         match $list {
             ListElements::Values($values) => $body,
             ListElements::Int64($values) => $body,
@@ -180,14 +395,16 @@ macro_rules! each_form {
             ListElements::Uint16($values) => $body,
             ListElements::Uint32($values) => $body,
             ListElements::Uint64($values) => $body,
+            ListElements::Typed($typed) => $typed_body,
         }
     };
 }
 
 /// Matches `$list` against the scalar forms, binding the storage to
-/// `$values` for `$body`, and runs `$fallback` for the `Value` form.
+/// `$values` for `$body`, and runs the arms after it for the `Value` and
+/// typed forms.
 macro_rules! each_scalar_form {
-    ($list:expr, $values:ident => $body:expr, $other:pat => $fallback:expr) => {
+    ($list:expr, $values:ident => $body:expr, $($other:pat => $fallback:expr),+ $(,)?) => {
         match $list {
             ListElements::Int64($values) => $body,
             ListElements::Float64($values) => $body,
@@ -199,16 +416,20 @@ macro_rules! each_scalar_form {
             ListElements::Uint16($values) => $body,
             ListElements::Uint32($values) => $body,
             ListElements::Uint64($values) => $body,
-            $other => $fallback,
+            $($other => $fallback,)+
         }
     };
 }
 
 /// Matches a pair of lists that use the same scalar form, binding their
-/// storage to `$left` and `$right` for `$body`, and runs `$fallback` for
-/// any other pair.
+/// storage to `$left` and `$right` for `$body`, and runs the arms after it,
+/// which may have guards, for any other pair.
 macro_rules! same_scalar_forms {
-    ($pair:expr, ($left:ident, $right:ident) => $body:expr, $other:pat => $fallback:expr) => {
+    (
+        $pair:expr,
+        ($left:ident, $right:ident) => $body:expr,
+        $($other:pat $(if $guard:expr)? => $fallback:expr),+ $(,)?
+    ) => {
         match $pair {
             (ListElements::Int64($left), ListElements::Int64($right)) => $body,
             (ListElements::Float64($left), ListElements::Float64($right)) => $body,
@@ -220,7 +441,7 @@ macro_rules! same_scalar_forms {
             (ListElements::Uint16($left), ListElements::Uint16($right)) => $body,
             (ListElements::Uint32($left), ListElements::Uint32($right)) => $body,
             (ListElements::Uint64($left), ListElements::Uint64($right)) => $body,
-            $other => $fallback,
+            $($other $(if $guard)? => $fallback,)+
         }
     };
 }
@@ -240,11 +461,14 @@ fn unshared_capacity<T>(values: &SharedVec<T>) -> usize {
 ///
 /// As for [`ListElements::adopt_appended`].
 #[inline]
-unsafe fn adopt_appended<T>(values: &mut SharedVec<T>, len: usize) {
+unsafe fn adopt_appended<T: Copy>(values: &mut SharedVec<T>, len: usize) {
     if let Some(values) = values.unshared_mut() {
         if len > values.len() && len <= values.capacity() {
             // SAFETY: the caller wrote each element up to `len`.
             unsafe { values.set_len(len) };
+        } else if len < values.len() {
+            // Generated code popped the elements past `len`.
+            values.truncate(len);
         }
     }
 }
@@ -291,6 +515,7 @@ fn keeps(form: ListForm, value: &Value) -> bool {
         ListForm::Uint16 => u16::of(value).is_some(),
         ListForm::Uint32 => u32::of(value).is_some(),
         ListForm::Uint64 => u64::of(value).is_some(),
+        ListForm::Typed(_) => false,
     }
 }
 
@@ -339,6 +564,7 @@ impl ListElements {
             ListForm::Uint16 => Self::Uint16(collect_form(values)?),
             ListForm::Uint32 => Self::Uint32(collect_form(values)?),
             ListForm::Uint64 => Self::Uint64(collect_form(values)?),
+            ListForm::Typed(_) => return None,
         })
     }
 
@@ -356,12 +582,18 @@ impl ListElements {
             Self::Uint16(_) => ListForm::Uint16,
             Self::Uint32(_) => ListForm::Uint32,
             Self::Uint64(_) => ListForm::Uint64,
+            Self::Typed(typed) => ListForm::Typed(typed.layout.access()),
         }
     }
 
     #[inline]
     pub fn len(&self) -> usize {
-        each_form!(self, values => values.len())
+        // Testing for the typed form first leaves a match whose arms all
+        // read a `Vec`'s length the same way, which compiles to one load.
+        if let Self::Typed(typed) = self {
+            return typed.len();
+        }
+        each_form!(self, values => values.len(), typed => typed.len())
     }
 
     #[inline]
@@ -370,9 +602,9 @@ impl ListElements {
     }
 
     /// The form, the address of the first element, the length, and how
-    /// many elements a scalar form has room for when no other list shares
-    /// its storage, or 0. Generated code reads the elements in place and
-    /// appends while the room lasts.
+    /// many elements a scalar or typed form has room for when no other list
+    /// shares its storage, or 0. Generated code reads the elements in place
+    /// and appends while the room lasts.
     #[inline]
     pub fn view(&self) -> (ListForm, usize, usize, usize) {
         #[inline]
@@ -392,12 +624,14 @@ impl ListElements {
             Self::Uint16(values) => scalar(ListForm::Uint16, values),
             Self::Uint32(values) => scalar(ListForm::Uint32, values),
             Self::Uint64(values) => scalar(ListForm::Uint64, values),
+            Self::Typed(typed) => typed.view(),
         }
     }
 
     /// Takes in the elements generated code appended past the end of a
-    /// scalar form, so the storage holds `len` elements. A length that is
-    /// not past the end, or does not fit the storage, changes nothing.
+    /// scalar or typed form, or drops the ones it popped, so the storage
+    /// holds `len` elements. A length that does not fit the storage changes
+    /// nothing.
     ///
     /// # Safety
     ///
@@ -408,20 +642,25 @@ impl ListElements {
         each_scalar_form!(
             self,
             values => unsafe { adopt_appended(values, len) },
-            Self::Values(_) => {}
+            Self::Values(_) => {},
+            Self::Typed(typed) => unsafe { typed.adopt_appended(len) }
         )
     }
 
     /// Whether another handle shares this storage.
     pub fn is_shared(&self) -> bool {
-        each_form!(self, values => values.is_shared())
+        each_form!(self, values => values.is_shared(), typed => typed.words.is_shared())
     }
 
     /// The address of the first element. Two lists with the same address
     /// share their storage.
     #[inline]
     pub fn as_ptr(&self) -> usize {
-        each_form!(self, values => values.as_ptr() as usize)
+        each_form!(
+            self,
+            values => values.as_ptr() as usize,
+            typed => typed.words.as_ptr() as usize
+        )
     }
 
     #[inline]
@@ -429,7 +668,8 @@ impl ListElements {
         each_scalar_form!(
             self,
             values => values.get(index).map(|element| Cow::Owned(element.value())),
-            Self::Values(values) => values.get(index).map(Cow::Borrowed)
+            Self::Values(values) => values.get(index).map(Cow::Borrowed),
+            Self::Typed(typed) => typed.get(index),
         )
     }
 
@@ -470,6 +710,10 @@ impl ListElements {
             Self::Uint16(values) => Iter::Uint16(values.iter()),
             Self::Uint32(values) => Iter::Uint32(values.iter()),
             Self::Uint64(values) => Iter::Uint64(values.iter()),
+            Self::Typed(typed) => Iter::Typed {
+                layout: typed.layout,
+                words: &typed.words,
+            },
         }
     }
 
@@ -541,35 +785,90 @@ impl ListElements {
                 }
                 None => false,
             },
-            Self::Values(_) => false
+            Self::Values(_) => false,
+            Self::Typed(typed) => {
+                let fits = typed.layout.fits(&value);
+                if fits {
+                    typed.push(&value);
+                }
+                fits
+            }
         );
         if pushed {
             return;
         }
         if self.is_empty() {
-            match scalar_form_of(&value) {
-                Some(form) => {
-                    *self = Self::collect(form, std::slice::from_ref(&value))
-                        .expect("the form keeps the value it was picked for");
-                    return;
-                }
-                // An empty `Values` list keeps its capacity, such as after
-                // `clear`.
-                None if !matches!(self, Self::Values(_)) => {
-                    *self = Self::Values(vec![value].into());
-                    return;
-                }
-                None => {}
+            if let Some(form) = scalar_form_of(&value) {
+                *self = Self::collect(form, std::slice::from_ref(&value))
+                    .expect("the form keeps the value it was picked for");
+                return;
+            }
+            if let Some(layout) = plain_layout_for_value(&value) {
+                let mut typed = TypedElements::new(layout);
+                typed.push(&value);
+                *self = Self::Typed(Box::new(typed));
+                return;
+            }
+            // An empty `Values` list keeps its capacity, such as after
+            // `clear`.
+            if !matches!(self, Self::Values(_)) {
+                *self = Self::Values(vec![value].into());
+                return;
             }
         }
         self.values_mut().push(value);
+    }
+
+    /// Appends the plain record whose words are at `src`, as [`Self::push`]
+    /// appends the value they hold. A list that keeps values of `layout`
+    /// copies the words without building the value.
+    ///
+    /// # Safety
+    ///
+    /// `src` is aligned for `u64` and holds `layout.stride_words()`
+    /// initialized words that encode a value of `layout`.
+    pub unsafe fn push_plain(&mut self, layout: &'static PlainLayout, src: *const u64) {
+        match self {
+            Self::Typed(typed) if std::ptr::eq(typed.layout, layout) => {
+                // SAFETY: the caller's contract.
+                unsafe { typed.push_words(src) }
+            }
+            // SAFETY: the caller's contract.
+            list => list.push(unsafe { layout.read(src.cast()) }),
+        }
+    }
+
+    /// Replaces element `index`, which is in range, with the plain record
+    /// whose words are at `src`, as [`Self::replace`] does with the value
+    /// they hold.
+    ///
+    /// # Safety
+    ///
+    /// As for [`Self::push_plain`].
+    pub unsafe fn replace_plain(
+        &mut self,
+        index: usize,
+        layout: &'static PlainLayout,
+        src: *const u64,
+    ) {
+        match self {
+            Self::Typed(typed) if std::ptr::eq(typed.layout, layout) => {
+                // SAFETY: the caller's contract, and `index` is in range.
+                unsafe { typed.set_words(index, src) }
+            }
+            list => {
+                // SAFETY: the caller's contract.
+                list.replace(index, unsafe { layout.read(src.cast()) });
+            }
+        }
     }
 
     pub fn pop(&mut self) -> Option<Value> {
         each_scalar_form!(
             self,
             values => values.pop().map(Element::value),
-            Self::Values(values) => values.pop()
+            Self::Values(values) => values.pop(),
+            Self::Typed(typed) => typed.pop(),
         )
     }
 
@@ -588,7 +887,11 @@ impl ListElements {
             &mut *self,
             values => Element::of(&value)
                 .map(|element| std::mem::replace(&mut values[index], element).value()),
-            Self::Values(_) => None
+            Self::Values(_) => None,
+            Self::Typed(typed) => typed
+                .layout
+                .fits(&value)
+                .then(|| typed.replace(index, &value)),
         );
         match replaced {
             Some(previous) => previous,
@@ -616,7 +919,14 @@ impl ListElements {
                 }
                 None => false,
             },
-            Self::Values(_) => false
+            Self::Values(_) => false,
+            Self::Typed(typed) => {
+                let fits = typed.layout.fits(&value);
+                if fits {
+                    typed.insert(index, &value);
+                }
+                fits
+            }
         );
         if inserted {
             return;
@@ -642,16 +952,32 @@ impl ListElements {
         each_scalar_form!(
             self,
             values => values.remove(index).value(),
-            Self::Values(values) => values.remove(index)
+            Self::Values(values) => values.remove(index),
+            Self::Typed(typed) => typed.remove(index),
         )
     }
 
     pub fn swap(&mut self, first: usize, second: usize) {
-        each_form!(self, values => values.swap(first, second))
+        each_form!(
+            self,
+            values => values.swap(first, second),
+            typed => {
+                assert!(
+                    first.max(second) < typed.len(),
+                    "list swap index is out of range for length {}",
+                    typed.len()
+                );
+                typed.swap(first, second)
+            }
+        )
     }
 
     pub fn reverse(&mut self) {
-        each_form!(self, values => values.reverse())
+        each_form!(
+            self,
+            values => values.reverse(),
+            typed => **typed = typed.permuted((0..typed.len()).rev())
+        )
     }
 
     pub fn clear(&mut self) {
@@ -663,7 +989,7 @@ impl ListElements {
         if len >= self.len() {
             return;
         }
-        each_form!(self, values => values.truncate(len))
+        each_form!(self, values => values.truncate(len), typed => typed.truncate(len))
     }
 
     /// Appends every element of `other`.
@@ -675,6 +1001,9 @@ impl ListElements {
         same_scalar_forms!(
             (&mut *self, other),
             (values, more) => values.extend_from_slice(&more),
+            (Self::Typed(typed), Self::Typed(more)) if std::ptr::eq(typed.layout, more.layout) => {
+                typed.words.extend_from_slice(&more.words)
+            },
             (list, other) => {
                 for value in other {
                     list.push(value);
@@ -706,6 +1035,13 @@ impl ListElements {
             Self::Uint16(values) => Self::Uint16(values.drain(start..end).collect()),
             Self::Uint32(values) => Self::Uint32(values.drain(start..end).collect()),
             Self::Uint64(values) => Self::Uint64(values.drain(start..end).collect()),
+            Self::Typed(typed) => {
+                let stride = typed.stride();
+                Self::Typed(Box::new(TypedElements {
+                    layout: typed.layout,
+                    words: typed.words.drain(start * stride..end * stride).collect(),
+                }))
+            }
         }
     }
 
@@ -732,6 +1068,10 @@ impl ListElements {
             (values, more) => {
                 values.splice(index..index, more.iter().copied());
             },
+            (Self::Typed(typed), Self::Typed(more)) if std::ptr::eq(typed.layout, more.layout) => {
+                let at = index * typed.stride();
+                typed.words.splice(at..at, more.words.iter().copied());
+            },
             (list, other) => {
                 list.update(|values| {
                     values.splice(index..index, other);
@@ -741,23 +1081,43 @@ impl ListElements {
     }
 
     pub fn capacity(&self) -> usize {
-        each_form!(self, values => values.capacity())
+        each_form!(
+            self,
+            values => values.capacity(),
+            typed => typed.words.capacity() / typed.layout.stride()
+        )
     }
 
     pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        each_form!(self, values => values.try_reserve(additional))
+        each_form!(
+            self,
+            values => values.try_reserve(additional),
+            typed => {
+                let stride = typed.stride();
+                typed.words.try_reserve(additional.saturating_mul(stride))
+            }
+        )
     }
 
     /// Shuffles the elements in place with `rng`.
     pub fn shuffle(&mut self, rng: &mut DeterministicRng) {
-        each_form!(self, values => rng.shuffle(values))
+        each_form!(
+            self,
+            values => rng.shuffle(values),
+            typed => {
+                // The same draws as shuffling the elements themselves.
+                let mut order = (0..typed.len()).collect::<Vec<_>>();
+                rng.shuffle(&mut order);
+                **typed = typed.permuted(order.into_iter());
+            }
+        )
     }
 
     pub fn contains(&self, needle: &Value) -> bool {
         let found = each_scalar_form!(
             self,
             values => Element::equal_to(needle).map(|element| values.contains(&element)),
-            Self::Values(_) => None
+            Self::Values(_) | Self::Typed(_) => None,
         );
         found.unwrap_or_else(|| self.iter().any(|element| *element == *needle))
     }
@@ -770,13 +1130,24 @@ impl Default for ListElements {
 }
 
 impl From<Vec<Value>> for ListElements {
-    /// Keeps the scalars when every element fits one scalar form.
+    /// Keeps the scalars when every element fits one scalar form, and the
+    /// values in place when every one fits one registered plain layout.
     fn from(values: Vec<Value>) -> Self {
-        values
+        if let Some(list) = values
             .first()
             .and_then(scalar_form_of)
             .and_then(|form| Self::collect(form, &values))
-            .unwrap_or_else(|| Self::Values(values.into()))
+        {
+            return list;
+        }
+        let typed = values
+            .first()
+            .and_then(plain_layout_for_value)
+            .and_then(|layout| TypedElements::of(layout, &values));
+        if let Some(typed) = typed {
+            return Self::Typed(Box::new(typed));
+        }
+        Self::Values(values.into())
     }
 }
 
@@ -851,12 +1222,26 @@ pub enum Iter<'a> {
     Uint16(std::slice::Iter<'a, u16>),
     Uint32(std::slice::Iter<'a, u32>),
     Uint64(std::slice::Iter<'a, u64>),
+    /// The words of the elements left, whole elements only.
+    Typed {
+        layout: &'static PlainLayout,
+        words: &'a [u64],
+    },
+}
+
+/// The value one typed element's words hold. Decoding builds a `Value`, so
+/// it stays out of line and the other forms' steps stay small.
+#[inline(never)]
+fn decode_typed(layout: &PlainLayout, words: &[u64]) -> Value {
+    // SAFETY: a typed list's words hold whole elements its layout wrote.
+    unsafe { layout.decode(words.as_ptr()) }
 }
 
 /// Matches `$iter` against every scalar iterator, binding it to
-/// `$values`, and runs `$fallback` for the `Value` iterator.
+/// `$values`, and runs the arms after it for the `Value` and typed
+/// iterators.
 macro_rules! each_scalar_iter {
-    ($iter:expr, $values:ident => $body:expr, $other:pat => $fallback:expr) => {
+    ($iter:expr, $values:ident => $body:expr, $($other:pat => $fallback:expr),+ $(,)?) => {
         match $iter {
             Iter::Int64($values) => $body,
             Iter::Float64($values) => $body,
@@ -868,7 +1253,7 @@ macro_rules! each_scalar_iter {
             Iter::Uint16($values) => $body,
             Iter::Uint32($values) => $body,
             Iter::Uint64($values) => $body,
-            $other => $fallback,
+            $($other => $fallback,)+
         }
     };
 }
@@ -876,24 +1261,40 @@ macro_rules! each_scalar_iter {
 impl<'a> Iterator for Iter<'a> {
     type Item = Cow<'a, Value>;
 
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         each_scalar_iter!(
             self,
             values => values.next().map(|element| Cow::Owned(element.value())),
-            Self::Values(values) => values.next().map(Cow::Borrowed)
+            Self::Values(values) => values.next().map(Cow::Borrowed),
+            Self::Typed { layout, words } => {
+                if words.is_empty() {
+                    return None;
+                }
+                let (first, rest) = words.split_at(layout.stride_words());
+                *words = rest;
+                Some(Cow::Owned(decode_typed(layout, first)))
+            }
         )
     }
 
     /// Skips `n` elements without building them, so `skip` on a long list
     /// costs one step.
+    #[inline]
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
         each_scalar_iter!(
             self,
             values => values.nth(n).map(|element| Cow::Owned(element.value())),
-            Self::Values(values) => values.nth(n).map(Cow::Borrowed)
+            Self::Values(values) => values.nth(n).map(Cow::Borrowed),
+            Self::Typed { layout, words } => {
+                let skipped = n.saturating_mul(layout.stride_words()).min(words.len());
+                *words = &words[skipped..];
+                self.next()
+            }
         )
     }
 
+    #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
         let len = self.len();
         (len, Some(len))
@@ -901,11 +1302,20 @@ impl<'a> Iterator for Iter<'a> {
 }
 
 impl DoubleEndedIterator for Iter<'_> {
+    #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
         each_scalar_iter!(
             self,
             values => values.next_back().map(|element| Cow::Owned(element.value())),
-            Self::Values(values) => values.next_back().map(Cow::Borrowed)
+            Self::Values(values) => values.next_back().map(Cow::Borrowed),
+            Self::Typed { layout, words } => {
+                if words.is_empty() {
+                    return None;
+                }
+                let (rest, last) = words.split_at(words.len() - layout.stride_words());
+                *words = rest;
+                Some(Cow::Owned(decode_typed(layout, last)))
+            }
         )
     }
 
@@ -913,17 +1323,24 @@ impl DoubleEndedIterator for Iter<'_> {
         each_scalar_iter!(
             self,
             values => values.nth_back(n).map(|element| Cow::Owned(element.value())),
-            Self::Values(values) => values.nth_back(n).map(Cow::Borrowed)
+            Self::Values(values) => values.nth_back(n).map(Cow::Borrowed),
+            Self::Typed { layout, words } => {
+                let skipped = n.saturating_mul(layout.stride_words()).min(words.len());
+                *words = &words[..words.len() - skipped];
+                self.next_back()
+            }
         )
     }
 }
 
 impl ExactSizeIterator for Iter<'_> {
+    #[inline]
     fn len(&self) -> usize {
         each_scalar_iter!(
             self,
             values => values.len(),
-            Self::Values(values) => values.len()
+            Self::Values(values) => values.len(),
+            Self::Typed { layout, words } => words.len() / layout.stride(),
         )
     }
 }

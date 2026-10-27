@@ -2323,6 +2323,7 @@ pub fn slice_vec_owned(
         ListElements::Int64(values) => ListElements::Int64(copy_scalars(&values[start..end])?),
         ListElements::Float64(values) => ListElements::Float64(copy_scalars(&values[start..end])?),
         ListElements::Bool(values) => ListElements::Bool(copy_scalars(&values[start..end])?),
+        ListElements::Typed(typed) => ListElements::Typed(Box::new(typed.slice(start, end))),
         ListElements::Int8(values) => ListElements::Int8(copy_scalars(&values[start..end])?),
         ListElements::Int16(values) => ListElements::Int16(copy_scalars(&values[start..end])?),
         ListElements::Int32(values) => ListElements::Int32(copy_scalars(&values[start..end])?),
@@ -8063,6 +8064,8 @@ impl Value {
                         }
                         Value::Vec(values) if values.elements.as_values().is_none() => {
                             // Scalars render the same with or without a hook.
+                            // A record a typed list keeps in place renders
+                            // as its value does.
                             let float32 = is_float32_type(&values.element_type);
                             rendered.push('[');
                             for (index, value) in values.elements.iter().enumerate() {
@@ -8074,7 +8077,11 @@ impl Value {
                                         rendered.push_str(&render_float32(*number as f32))
                                     }
                                     value => {
-                                        render_scalar(value, &mut rendered);
+                                        if !render_scalar(value, &mut rendered) {
+                                            rendered.push_str(
+                                                &value.render_inner(hook.as_deref_mut())?,
+                                            );
+                                        }
                                     }
                                 }
                             }
