@@ -1,0 +1,17 @@
+def wrap[T](value: own T) -> T | int64:
+    return value
+
+def pick[T](value: own T, flag: bool) -> T | int64 | str:
+    if flag:
+        return value
+    return 9
+
+def main():
+    print(wrap("s"))
+    print(wrap(5))
+    print(pick(7, true))
+    print(pick(7, false))
+    print(pick("x", true))
+    print(pick("x", false))
+    total = wrap(40)
+    print(total + 2)

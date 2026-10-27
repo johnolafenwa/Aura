@@ -1,0 +1,20 @@
+ok 2
+2
+err 3
+code 3
+err 5
+code 5
+Result.Ok(n3!)
+Result.Err(not positive)
+Result.Ok(None)
+Result.Err(Code(value=-2))
+Result.Ok(Shape.Dot)
+Result.Ok(Shape.Square(2.0))
+Result.Ok(4)
+Result.Err(empty)
+Result.Ok(a)
+-3
+[Result.Ok(0), Result.Err(Code(value=1)), Result.Ok(1), Result.Err(Code(value=3))]
+true
+0
+ok 3

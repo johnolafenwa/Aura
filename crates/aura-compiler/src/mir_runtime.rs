@@ -1826,7 +1826,7 @@ fn check_union_projection(union: &crate::runtime_value::UnionValue, segment: &st
     // A value tagged by a generic frame keeps that frame's symbolic layout
     // until an operation in this frame retags it; the validated tag proof
     // that dominates this projection already selected the active member.
-    let symbolic = matches!(&union.union_type, Type::Union(target)
+    let symbolic = matches!(&*union.union_type, Type::Union(target)
         if target.members.iter().any(|member| matches!(member, Type::TypeParam(_))));
     if index.is_some() && symbolic {
         return Ok(());
@@ -3048,7 +3048,7 @@ impl MirRuntime {
 
     fn infer_value_type(value: &Value) -> Option<Type> {
         match value {
-            Value::Union(union) => Some(union.union_type.clone()),
+            Value::Union(union) => Some(Type::clone(&union.union_type)),
             Value::Int(value) => Some(Type::named(value.runtime_type_name().unwrap_or("int64"))),
             Value::Float(_) => Some(Type::named("float64")),
             Value::Bool(_) => Some(Type::named("bool")),

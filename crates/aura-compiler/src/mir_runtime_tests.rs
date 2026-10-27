@@ -115,7 +115,7 @@ fn adr0061_element_place_segments_round_trip_keys_and_refuse_invalid_encodings()
             ],
         }),
         Value::Union(Box::new(crate::runtime_value::UnionValue {
-            union_type: Type::named("str"),
+            union_type: Type::named("str").into(),
             member_index: 1,
             payload: Value::String("x".to_string()),
         })),
@@ -20890,7 +20890,7 @@ fn union_payload_projections_check_the_active_member_and_symbolic_layouts() {
         .position(|member| *member == Type::named("int64"))
         .expect("int64 member");
     let value = crate::runtime_value::UnionValue {
-        union_type: Type::Union(Box::new(concrete)),
+        union_type: Type::Union(Box::new(concrete)).into(),
         member_index: int_index,
         payload: Value::Int(IntegerValue::from_i64(1)),
     };
@@ -20914,7 +20914,8 @@ fn union_payload_projections_check_the_active_member_and_symbolic_layouts() {
             members: vec![Type::TypeParam("T".to_string()), Type::Unit],
             keys: vec!["T".to_string(), "None".to_string()],
             module_name: "main".to_string(),
-        })),
+        }))
+        .into(),
         member_index: 0,
         payload: Value::Int(IntegerValue::from_i64(1)),
     };
@@ -21766,7 +21767,7 @@ fn union_rvalues_reject_non_union_types_and_missing_layout_plans() {
         "value",
         union_type.clone(),
         Value::Union(Box::new(crate::runtime_value::UnionValue {
-            union_type: union_type.clone(),
+            union_type: union_type.clone().into(),
             member_index: int_index,
             payload: Value::Int(IntegerValue::from_i64(1)),
         })),

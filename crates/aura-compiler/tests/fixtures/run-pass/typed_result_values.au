@@ -1,0 +1,121 @@
+trait From[T]:
+    def from(value: own T) -> Self
+
+
+class Code:
+    value: int64
+
+
+class AppError:
+    message: str
+
+
+impl From[Code] for AppError:
+    def from(value: own Code) -> AppError:
+        return AppError(message="code " + str(value.value))
+
+
+enum Shape:
+    Dot
+    Square(float64)
+
+
+def halve(n: int64) -> Result[int64, Code]:
+    if n % 2 == 0:
+        return Result.Ok(n // 2)
+    return Result.Err(Code(value=n))
+
+
+def quarter(n: int64) -> Result[int64, Code]:
+    half = try halve(n)
+    return halve(half)
+
+
+def quarter_app(n: int64) -> Result[int64, AppError]:
+    half = try halve(n)
+    second = try halve(half)
+    return Result.Ok(second)
+
+
+def label(n: int64) -> Result[str, str]:
+    if n > 0:
+        return Result.Ok(f"n{n}")
+    return Result.Err("not positive")
+
+
+def shout(n: int64) -> Result[str, str]:
+    text = try label(n)
+    return Result.Ok(text + "!")
+
+
+def check(n: int64) -> Result[None, Code]:
+    if n < 0:
+        return Result.Err(Code(value=n))
+    return Result.Ok(None)
+
+
+def area(n: int64) -> Result[Shape, str]:
+    if n == 0:
+        return Result.Ok(Shape.Dot)
+    return Result.Ok(Shape.Square(n as float64))
+
+
+def first[T](items: own list[T]) -> Result[T, str]:
+    mut owned = items
+    if len(owned) == 0:
+        return Result.Err("empty")
+    return Result.Ok(owned.pop(0))
+
+
+def show(result: Result[int64, Code]) -> str:
+    match result:
+        case Result.Ok(value):
+            return f"ok {value}"
+        case Result.Err(code):
+            return f"err {code.value}"
+
+
+def main():
+    for n in [8, 6, 5]:
+        print(show(quarter(n)))
+        match quarter_app(n):
+            case Result.Ok(value):
+                print(value)
+            case Result.Err(error):
+                print(error.message)
+    print(shout(3))
+    print(shout(0))
+    print(check(1))
+    print(check(-2))
+    print(area(0))
+    print(area(2))
+    print(first([4, 5]))
+    print(first(list[int64]()))
+    print(first(["a"]))
+    mut results = list[Result[int64, Code]]()
+    for n in range(4):
+        results.append(halve(n))
+    mut total = 0
+    for result in results:
+        match result:
+            case Result.Ok(value):
+                total += value
+            case Result.Err(code):
+                total -= code.value
+    print(total)
+    print(results)
+    print(results[1] == Result.Err(Code(value=1)))
+    taken = results.pop(0)
+    match own taken:
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(code):
+            print(code.value)
+    worker: def(int64) -> Result[int64, Code] = lambda n: quarter(n)
+    with TaskGroup() as group:
+        task = group.start(worker, 12)
+        match task.result(timeout=5s):
+            case TaskResult.Ready(result):
+                print(show(result))
+            case _:
+                print("no result")

@@ -5,18 +5,18 @@ use super::{
     float_power, flush_buffered_files, flush_buffered_files_at_exit, format_runtime_value,
     io_decode_utf8, io_error, lock_mutex, lookup_found, lookup_missing, may_share_file,
     next_retry_runtime_backoff, non_unix_tls_listener_wait_timeout, optional_absent,
-    optional_present, parse_format_spec, poll_ready, poll_unavailable, process_error_cancelled,
-    process_error_no_command, process_error_other, process_error_spawn, process_error_timed_out,
-    process_supervisor_event_failed, process_supervisor_wait_cancelled,
-    process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
-    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
-    queue_receive_item, queue_receive_timed_out, recv_for_task_group_iteration,
-    remove_file_checked, render_float, render_float32, result_err, result_ok, round_numeric_value,
-    run_blocking_io, run_lightweight_root_task, run_protocol_step, select_outcome_deadline,
-    select_outcome_queue, select_outcome_task, select_runtime_values, send_error_cancelled,
-    send_error_closed, send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
-    slice_string_owned, slice_vec_owned, spawn_lightweight_task,
-    spawn_lightweight_task_with_cancellation,
+    optional_named, optional_present, optional_str_value, parse_format_spec, poll_ready,
+    poll_unavailable, process_error_cancelled, process_error_no_command, process_error_other,
+    process_error_spawn, process_error_timed_out, process_supervisor_event_failed,
+    process_supervisor_wait_cancelled, process_supervisor_wait_event,
+    process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_failed,
+    process_wait_timed_out, queue_receive_cancelled, queue_receive_closed, queue_receive_item,
+    queue_receive_timed_out, recv_for_task_group_iteration, remove_file_checked, render_float,
+    render_float32, result_err, result_ok, round_numeric_value, run_blocking_io,
+    run_lightweight_root_task, run_protocol_step, select_outcome_deadline, select_outcome_queue,
+    select_outcome_task, select_runtime_values, send_error_cancelled, send_error_closed,
+    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler, slice_string_owned,
+    slice_vec_owned, spawn_lightweight_task, spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup,
     spawn_lightweight_task_with_stack, task_group_cleanup_should_cancel, task_result_cancelled,
     task_result_error, task_result_ready, task_result_timed_out, try_lock_mutex,
@@ -18578,7 +18578,7 @@ fn numeric_cast_source_types_render_unions_and_ffi_handles() {
         .position(|member| *member == Type::Unit)
         .expect("None member");
     let union = Value::Union(Box::new(super::UnionValue {
-        union_type: union_type.clone(),
+        union_type: union_type.clone().into(),
         member_index: unit_index,
         payload: Value::Unit,
     }));
@@ -18644,7 +18644,7 @@ fn divmod_without_a_named_operand_type_keeps_untagged_results() {
 fn queue_collection_looks_through_union_payloads() {
     let union_type = coverage_union_type(vec![Type::named("Queue"), Type::Unit]);
     let value = Value::Union(Box::new(super::UnionValue {
-        union_type,
+        union_type: union_type.into(),
         member_index: 0,
         payload: Value::Channel(ChannelValue::new()),
     }));
@@ -19409,4 +19409,64 @@ fn runtime_names_behave_like_their_text() {
     assert_eq!((borrowed, fixed.as_ref() as &str), ("Lookup", "Lookup"));
     // A copy shares the text instead of copying it.
     assert!(std::ptr::eq(shared.as_ptr(), shared.clone().as_ptr()));
+}
+
+#[test]
+fn optional_results_name_the_unions_of_their_member_types() {
+    use aura_core::types::Type;
+    fn check(value: &Value, member: &Type, present: bool) {
+        let expected = aura_core::types::optional_type(member.clone());
+        let Type::Union(expected_union) = &expected else {
+            panic!("an optional union has two members");
+        };
+        let Value::Union(union) = value else {
+            panic!("an optional result is a union");
+        };
+        assert_eq!(*union.union_type, expected);
+        assert_eq!(
+            matches!(expected_union.members[union.member_index], Type::Unit),
+            !present
+        );
+    }
+    let text = Type::named("str");
+    check(
+        &optional_present(text.clone(), Value::String("a".into())),
+        &text,
+        true,
+    );
+    check(
+        &optional_present(text.clone(), Value::String("b".into())),
+        &text,
+        true,
+    );
+    check(&optional_absent(text.clone()), &text, false);
+    // Named optionals share one union per name.
+    let first = optional_named(
+        "int64",
+        Some(Value::Int(crate::integer::IntegerValue::from_i64(1))),
+    );
+    let second = optional_named("int64", None);
+    let int64 = Type::named("int64");
+    check(&first, &int64, true);
+    check(&second, &int64, false);
+    let (Value::Union(first), Value::Union(second)) = (&first, &second) else {
+        panic!("named optionals are unions");
+    };
+    assert!(Arc::ptr_eq(&first.union_type, &second.union_type));
+    check(&optional_str_value(Some("c".into())), &text, true);
+    check(&optional_str_value(None), &text, false);
+    let pair = Type::Tuple(vec![Type::named("int64"), Type::named("str")]);
+    check(&optional_absent(pair.clone()), &pair, false);
+    check(&optional_absent(pair.clone()), &pair, false);
+    let param = Type::TypeParam("T".into());
+    check(&optional_absent(param.clone()), &param, false);
+    for index in 0..4 {
+        let kind = Type::named(format!("Kind{index}"));
+        check(&optional_absent(kind.clone()), &kind, false);
+        check(
+            &optional_present(kind.clone(), Value::Bool(true)),
+            &kind,
+            true,
+        );
+    }
 }

@@ -21,9 +21,11 @@
 //! Any other variant, such as a shared one or one the runtime built with its
 //! payloads as values, takes the runtime call the code made before.
 //!
-//! Only the enums a program defines are kept this way. The runtime builds
-//! and reads the compiler's own enums, such as `Result` and `Lookup`, and
-//! the library's, such as `json.Value`, with their payloads as values.
+//! The enums a program defines and `Result` are kept this way. A `Result`
+//! the runtime returns keeps its payloads as values, and generated code
+//! reads it through the runtime. The runtime builds and reads the
+//! compiler's other enums, such as `Lookup`, and the library's, such as
+//! `json.Value`, with their payloads as values.
 
 use std::rc::Rc;
 
@@ -95,13 +97,13 @@ impl EnumRecord {
 }
 
 /// Whether the variants of `enum_name` may keep their payloads in a layout:
-/// an enum the program defines, not one the runtime builds or reads.
+/// an enum the program defines, or `Result`, not one only the runtime
+/// builds or reads.
 fn program_defines_enum(enum_name: &str) -> bool {
     if matches!(
         enum_name,
         "Lookup"
             | "Poll"
-            | "Result"
             | "SendError"
             | "QueueReceive"
             | "TaskResult"

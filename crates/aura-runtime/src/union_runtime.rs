@@ -18,6 +18,7 @@
 
 use crate::runtime_value::Value;
 use aura_core::types::{Type, UnionType};
+use std::sync::Arc;
 
 /// How a value must change to take the layout of a target union.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -144,9 +145,9 @@ pub fn plan_union_alignment(
     target: &UnionType,
     operation: &str,
 ) -> Result<UnionAlignment, String> {
-    let target_type = Type::Union(Box::new(target.clone()));
     if let Value::Union(union) = value {
-        if union.union_type == target_type {
+        // Union types are equal when their member keys are.
+        if matches!(&*union.union_type, Type::Union(own) if own.keys == target.keys) {
             return Ok(UnionAlignment::Exact);
         }
     }
@@ -190,6 +191,34 @@ pub fn align_union_value(
     target: &UnionType,
     operation: &str,
 ) -> Result<usize, String> {
+    align_to(value, target, None, operation)
+}
+
+/// [`align_union_value`] for a target the caller already shares: a retagged
+/// or lifted value takes a reference to `target` instead of a copy, and a
+/// value already holding that reference is aligned without comparing keys.
+pub fn align_shared_union_value(
+    value: &mut Value,
+    target: &Arc<Type>,
+    operation: &str,
+) -> Result<usize, String> {
+    let Type::Union(union) = &**target else {
+        return Err(format!("{operation} requires a union type"));
+    };
+    if let Value::Union(held) = value {
+        if Arc::ptr_eq(&held.union_type, target) {
+            return Ok(held.member_index);
+        }
+    }
+    align_to(value, union, Some(target), operation)
+}
+
+fn align_to(
+    value: &mut Value,
+    target: &UnionType,
+    shared: Option<&Arc<Type>>,
+    operation: &str,
+) -> Result<usize, String> {
     match plan_union_alignment(value, target, operation)? {
         UnionAlignment::Exact => match value {
             Value::Union(union) => Ok(union.member_index),
@@ -199,14 +228,14 @@ pub fn align_union_value(
             let Value::Union(union) = value else {
                 unreachable!("a retag alignment is a union value")
             };
-            union.union_type = Type::Union(Box::new(target.clone()));
+            union.union_type = shared_union_type(target, shared);
             union.member_index = index;
             Ok(index)
         }
         UnionAlignment::Lift(index) => {
             let payload = std::mem::replace(value, Value::Unit);
-            *value = crate::runtime_value::union_value(
-                Type::Union(Box::new(target.clone())),
+            *value = crate::runtime_value::shared_union_value(
+                shared_union_type(target, shared),
                 index,
                 payload,
             );
@@ -223,6 +252,28 @@ pub fn inject_union_member(
     member_index: usize,
     payload: Value,
 ) -> Result<Value, String> {
+    inject_into(target, None, member_index, payload)
+}
+
+/// [`inject_union_member`] for a target the caller already shares, so the
+/// union value takes a reference to it instead of a copy.
+pub fn inject_shared_union_member(
+    target: &Arc<Type>,
+    member_index: usize,
+    payload: Value,
+) -> Result<Value, String> {
+    let Type::Union(union) = &**target else {
+        return Err("union injection requires a union type".to_string());
+    };
+    inject_into(union, Some(target), member_index, payload)
+}
+
+fn inject_into(
+    target: &UnionType,
+    shared: Option<&Arc<Type>>,
+    member_index: usize,
+    payload: Value,
+) -> Result<Value, String> {
     let Some(member) = target.members.get(member_index) else {
         return Err("union injection member index is out of range".to_string());
     };
@@ -231,14 +282,22 @@ pub fn inject_union_member(
             return Err("union injection cannot nest a union inside a concrete member".to_string());
         }
         let mut flattened = payload;
-        align_union_value(&mut flattened, target, "union injection")?;
+        align_to(&mut flattened, target, shared, "union injection")?;
         return Ok(flattened);
     }
-    Ok(crate::runtime_value::union_value(
-        Type::Union(Box::new(target.clone())),
+    Ok(crate::runtime_value::shared_union_value(
+        shared_union_type(target, shared),
         member_index,
         payload,
     ))
+}
+
+/// `target` as a shared type: the caller's reference, or a new one.
+fn shared_union_type(target: &UnionType, shared: Option<&Arc<Type>>) -> Arc<Type> {
+    match shared {
+        Some(shared) => Arc::clone(shared),
+        None => Arc::new(Type::Union(Box::new(target.clone()))),
+    }
 }
 
 /// Normalizes a value crossing a typed boundary: a union takes the layout of
@@ -250,7 +309,7 @@ pub fn coerce_union_boundary(value: Value, expected: &Type) -> Value {
     match expected {
         Type::Union(target) => {
             let mut value = value;
-            if matches!(&value, Value::Union(union) if union.union_type == *expected) {
+            if matches!(&value, Value::Union(union) if *union.union_type == *expected) {
                 return value;
             }
             let admissible = matches!(&value, Value::Union(_))

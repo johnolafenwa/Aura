@@ -48,14 +48,14 @@ use crate::runtime_value::{
     json_array_metadata_is_exact, json_dump_error_to_diagnostic, json_int_metadata_is_exact,
     json_object_metadata_is_exact, json_parse_inline, json_parse_owned_to_runtime, lookup_found,
     lookup_missing, nominal_runtime_base_name, optional_absent, optional_bytes_value,
-    optional_present, optional_str_value, optional_value, poll_cancellation, poll_ready,
-    poll_unavailable, prepare_json_codec_source, process_error_cancelled, process_error_io,
-    process_error_no_command, process_error_spawn, process_error_timed_out, process_exit_status,
-    process_stdio_inherit, process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
-    process_supervisor_wait_cancelled, process_supervisor_wait_event,
-    process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
-    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
-    queue_receive_item, queue_receive_timed_out, read_file_limited,
+    optional_named, optional_present, optional_str_value, optional_value, poll_cancellation,
+    poll_ready, poll_unavailable, prepare_json_codec_source, process_error_cancelled,
+    process_error_io, process_error_no_command, process_error_spawn, process_error_timed_out,
+    process_exit_status, process_stdio_inherit, process_stdio_null, process_stdio_pipe,
+    process_supervisor_event_failed, process_supervisor_wait_cancelled,
+    process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
+    process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
+    queue_receive_closed, queue_receive_item, queue_receive_timed_out, read_file_limited,
     recv_for_registered_producers_iteration, recv_for_task_group_iteration, render_float,
     render_float32, result_err, result_ok, round_numeric_value, run_blocking_io,
     run_lightweight_root_task_with_forced_exit_cleanup, runtime_value_to_json,
@@ -2393,7 +2393,9 @@ fn runtime_type_pattern_matches(
 /// constants, so the same descriptor recurs on every loop iteration.
 pub(crate) struct RuntimeTypeTag {
     pub(crate) name: Arc<str>,
-    pub(crate) parsed: Type,
+    /// Shared, so a union value built or aligned from the tag takes a
+    /// reference to its type instead of a copy.
+    pub(crate) parsed: Arc<Type>,
     pub(crate) integer_kind: Option<IntegerKind>,
     /// True when tagging only records the name: the value itself never
     /// changes, so no value lock is taken.
@@ -2512,7 +2514,7 @@ fn shared_runtime_type_tag(bytes: &[u8]) -> Arc<RuntimeTypeTag> {
     };
     let tag = Arc::new(RuntimeTypeTag {
         name: Arc::from(name),
-        parsed,
+        parsed: Arc::new(parsed),
         integer_kind,
         name_only,
         shape_free,
@@ -2586,7 +2588,7 @@ unsafe fn set_explicit_runtime_type_tag(ptr: *mut OpaqueValue, tag: &RuntimeType
 /// of another kind costs one compare.
 #[inline]
 fn retag_changes(value: &Value, tag: &RuntimeTypeTag) -> bool {
-    match (value, &tag.parsed) {
+    match (value, &*tag.parsed) {
         (Value::Vec(vector), Type::Named(name, args)) => match args.as_slice() {
             [element] if name == "list" => {
                 vector.element_type != *element || is_float32_element(element)
@@ -2621,7 +2623,7 @@ fn retag_changes(value: &Value, tag: &RuntimeTypeTag) -> bool {
 #[inline(always)]
 fn retag_value(value: &mut Value, tag: &RuntimeTypeTag) {
     let runtime_type_name: &str = &tag.name;
-    let parsed = &tag.parsed;
+    let parsed = &*tag.parsed;
     fn assign_type(slot: &mut Type, ty: &Type) {
         if slot != ty {
             *slot = ty.clone();
@@ -3604,14 +3606,14 @@ fn direct_json_as_bool(args: &DirectHostArgBuffer) -> std::result::Result<Value,
     let name = "json::as_bool";
     args.with_borrow(name, 0, |value| {
         Ok(match direct_json_exact_payload(value, "Bool", name)? {
-            Some(Value::Bool(value)) => optional_present(Type::named("bool"), Value::Bool(*value)),
+            Some(Value::Bool(value)) => optional_named("bool", Some(Value::Bool(*value))),
             Some(_) => {
                 return Err(Diagnostic::coded(
                     "AU4001",
                     "malformed runtime `json.Value.Bool` payload in `json::as_bool`",
                 ))
             }
-            None => optional_absent(Type::named("bool")),
+            None => optional_named("bool", None),
         })
     })
 }
@@ -3621,7 +3623,7 @@ fn direct_json_as_int(args: &DirectHostArgBuffer) -> std::result::Result<Value, 
     args.with_borrow(name, 0, |value| {
         Ok(match direct_json_exact_payload(value, "Int", name)? {
             Some(Value::Int(value)) if json_int_metadata_is_exact(value) => {
-                optional_present(Type::named("int64"), Value::Int(*value))
+                optional_named("int64", Some(Value::Int(*value)))
             }
             Some(_) => {
                 return Err(Diagnostic::coded(
@@ -3629,7 +3631,7 @@ fn direct_json_as_int(args: &DirectHostArgBuffer) -> std::result::Result<Value, 
                     "malformed runtime `json.Value.Int` payload in `json::as_int`",
                 ))
             }
-            None => optional_absent(Type::named("int64")),
+            None => optional_named("int64", None),
         })
     })
 }
@@ -3638,16 +3640,14 @@ fn direct_json_as_float(args: &DirectHostArgBuffer) -> std::result::Result<Value
     let name = "json::as_float";
     args.with_borrow(name, 0, |value| {
         Ok(match direct_json_exact_payload(value, "Float", name)? {
-            Some(Value::Float(value)) => {
-                optional_present(Type::named("float64"), Value::Float(*value))
-            }
+            Some(Value::Float(value)) => optional_named("float64", Some(Value::Float(*value))),
             Some(_) => {
                 return Err(Diagnostic::coded(
                     "AU4001",
                     "malformed runtime `json.Value.Float` payload in `json::as_float`",
                 ))
             }
-            None => optional_absent(Type::named("float64")),
+            None => optional_named("float64", None),
         })
     })
 }
@@ -4963,7 +4963,7 @@ fn is_unknown_runtime_type(ty: &Type) -> bool {
 
 fn inferred_collection_type(value: &Value) -> Type {
     if let Value::Union(union) = value {
-        return union.union_type.clone();
+        return Type::clone(&union.union_type);
     }
     if let Value::Function(function) = value {
         return function.signature.clone();
@@ -4972,7 +4972,7 @@ fn inferred_collection_type(value: &Value) -> Type {
         return runtime_type_from_name(&runtime_type_name);
     }
     match value {
-        Value::Union(union) => union.union_type.clone(),
+        Value::Union(union) => Type::clone(&union.union_type),
         Value::String(_) => Type::named("str"),
         Value::Bool(_) => Type::named("bool"),
         Value::Float(_) => Type::named("float64"),
@@ -7383,7 +7383,7 @@ pub extern "C-unwind" fn aura_direct_vec_empty_tagged(
             runtime_error("direct runtime received a null type tag cell");
         };
         let tag = celled_runtime_type_tag(cell, slice::from_raw_parts(type_ptr, type_len));
-        let element_type = match &tag.parsed {
+        let element_type = match &*tag.parsed {
             Type::Named(name, args) if name == "list" && args.len() == 1 => args[0].clone(),
             _ => runtime_error(format!("an empty list cannot take the type `{}`", tag.name)),
         };
@@ -11447,13 +11447,14 @@ pub extern "C-unwind" fn aura_direct_union_tag_test(
 ) -> i64 {
     task_runtime_boundary(|| {
         let expected = descriptor_runtime_type_tag(type_ptr, type_len, "invalid union tag type");
-        let Type::Union(target) = &expected.parsed else {
+        let target = &expected.parsed;
+        if !matches!(&**target, Type::Union(_)) {
             runtime_error("union tag test requires a union type");
-        };
+        }
         unsafe {
             value_mut(value, |value| {
                 let active =
-                    crate::union_runtime::align_union_value(value, target, "union tag test")
+                    crate::union_runtime::align_shared_union_value(value, target, "union tag test")
                         .unwrap_or_else(|message| runtime_error(message));
                 i64::from(active == member_index)
             })
@@ -11521,13 +11522,15 @@ pub extern "C-unwind" fn aura_direct_union_take_payload(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let expected = descriptor_runtime_type_tag(type_ptr, type_len, "invalid union take type");
-        let Type::Union(target) = &expected.parsed else {
+        let target = &expected.parsed;
+        if !matches!(&**target, Type::Union(_)) {
             runtime_error("union take requires a union type");
-        };
+        }
         let payload = unsafe {
             value_mut(value, |value| {
-                let active = crate::union_runtime::align_union_value(value, target, "union take")
-                    .unwrap_or_else(|message| runtime_error(message));
+                let active =
+                    crate::union_runtime::align_shared_union_value(value, target, "union take")
+                        .unwrap_or_else(|message| runtime_error(message));
                 if active != member_index {
                     runtime_error("union take member or type identity mismatch");
                 }
@@ -11568,24 +11571,63 @@ pub extern "C-unwind" fn aura_direct_union_payload_copy(
     value: *mut OpaqueValue,
     member_index: usize,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        // The lock is released before any failure is raised.
-        let copied = unsafe {
-            with_value(value, |value| match value {
+    task_runtime_boundary(|| unsafe { copy_union_payload(value, member_index) })
+}
+
+/// Moves the active member's payload out of a boxed union the caller owns,
+/// for an inline union read from a temporary. The only reference to a box
+/// gets the same box back, now holding the payload; a box another handle
+/// shares keeps its payload, and the caller's reference goes for a copy.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_union_payload_take(
+    value: *mut OpaqueValue,
+    member_index: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| unsafe {
+        // SAFETY: the caller owns a reference, so the box is live, and a
+        // count of one cannot grow while it holds the only reference.
+        let shared = value
+            .as_ref()
+            .is_some_and(|held| held.ref_count.load(Ordering::Acquire) > 1);
+        if !shared {
+            let unwrapped = value_mut(value, |held| match held {
                 Value::Union(union) if union.member_index == member_index => {
-                    Some(Ok(try_clone_array_containing_value(&union.payload)))
+                    *held = mem::replace(&mut union.payload, Value::Unit);
+                    // The union's tag does not name the payload.
+                    *(*value).runtime_type_name.get() = None;
+                    true
                 }
-                Value::Union(_) => Some(Err("direct union payload copy member mismatch")),
-                _ => None,
-            })
-        };
-        match copied {
-            Some(Ok(Ok(payload))) => boxed_value(payload),
-            Some(Ok(Err(error))) => runtime_diagnostic_error(error),
-            Some(Err(message)) => runtime_error(message),
-            None => runtime_error("direct union payload copy expected a union value"),
+                _ => false,
+            });
+            if unwrapped {
+                return value;
+            }
         }
+        let payload = copy_union_payload(value, member_index);
+        aura_direct_release_value(value);
+        payload
     })
+}
+
+/// A boxed copy of the active member's payload, raising an error when
+/// `value` is not a union with `member_index` active.
+unsafe fn copy_union_payload(value: *mut OpaqueValue, member_index: usize) -> *mut OpaqueValue {
+    // The lock is released before any failure is raised.
+    let copied = unsafe {
+        with_value(value, |value| match value {
+            Value::Union(union) if union.member_index == member_index => {
+                Some(Ok(try_clone_array_containing_value(&union.payload)))
+            }
+            Value::Union(_) => Some(Err("direct union payload copy member mismatch")),
+            _ => None,
+        })
+    };
+    match copied {
+        Some(Ok(Ok(payload))) => boxed_value(payload),
+        Some(Ok(Err(error))) => runtime_diagnostic_error(error),
+        Some(Err(message)) => runtime_error(message),
+        None => runtime_error("direct union payload copy expected a union value"),
+    }
 }
 
 fn direct_union_projection(union: &crate::runtime_value::UnionValue, field: &str) -> bool {
@@ -11601,7 +11643,7 @@ fn direct_union_projection(union: &crate::runtime_value::UnionValue, field: &str
     // A value tagged by a generic frame keeps that frame's symbolic layout
     // until an operation in this frame retags it; the validated tag proof
     // that dominates this projection already selected the active member.
-    let symbolic = matches!(&union.union_type, Type::Union(target)
+    let symbolic = matches!(&*union.union_type, Type::Union(target)
         if target.members.iter().any(|member| matches!(member, Type::TypeParam(_))));
     symbolic
         && field
@@ -11626,14 +11668,15 @@ pub extern "C-unwind" fn aura_direct_union_inject_copy(
         }
         let copied = copied.unwrap_or_else(|error| runtime_diagnostic_error(error));
         let tag = descriptor_runtime_type_tag(type_ptr, type_len, "invalid union injection type");
-        let Type::Union(union) = &tag.parsed else {
+        let Type::Union(union) = &*tag.parsed else {
             runtime_error("union injection requires a union type");
         };
         if member_index >= union.members.len() {
             runtime_error("union injection member index is out of range");
         }
-        let injected = crate::union_runtime::inject_union_member(union, member_index, copied)
-            .unwrap_or_else(|message| runtime_error(message));
+        let injected =
+            crate::union_runtime::inject_shared_union_member(&tag.parsed, member_index, copied)
+                .unwrap_or_else(|message| runtime_error(message));
         boxed_value_with_type(injected, Some(Arc::clone(&tag.name)))
     })
 }
@@ -11647,7 +11690,7 @@ pub extern "C-unwind" fn aura_direct_union_inject(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let tag = descriptor_runtime_type_tag(type_ptr, type_len, "invalid union injection type");
-        let Type::Union(union) = &tag.parsed else {
+        let Type::Union(union) = &*tag.parsed else {
             runtime_error("union injection requires a union type");
         };
         if member_index >= union.members.len() {
@@ -11656,9 +11699,35 @@ pub extern "C-unwind" fn aura_direct_union_inject(
         // Immediate owned calls pass a registered handle. Unlike an argument
         // buffer, this boundary has not already detached its registration.
         let payload = unsafe { consume_owned_value(payload) };
-        let injected = crate::union_runtime::inject_union_member(union, member_index, payload)
-            .unwrap_or_else(|message| runtime_error(message));
+        let injected =
+            crate::union_runtime::inject_shared_union_member(&tag.parsed, member_index, payload)
+                .unwrap_or_else(|message| runtime_error(message));
         boxed_value_with_type(injected, Some(Arc::clone(&tag.name)))
+    })
+}
+
+/// Gives the result of an erased generic call the type its call site
+/// expects, through a cell as in `aura_direct_tag_value_type_cell`. The
+/// erased body built a union over its type parameters (`T | int64`), and a
+/// type argument can collapse it (`int64`) or merge its members, so the
+/// box unwraps to the active payload or takes the merged union's layout.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_union_boundary_cell(
+    value: *mut OpaqueValue,
+    cell: *const AtomicPtr<c_void>,
+    type_ptr: *const u8,
+    type_len: usize,
+) {
+    task_runtime_boundary(|| unsafe {
+        let Some(cell) = cell.as_ref() else {
+            runtime_error("direct runtime received a null type tag cell");
+        };
+        let tag = celled_runtime_type_tag(cell, slice::from_raw_parts(type_ptr, type_len));
+        value_mut(value, |value| {
+            let held = mem::replace(value, Value::Unit);
+            *value = crate::union_runtime::coerce_union_boundary(held, &tag.parsed);
+        });
+        set_explicit_runtime_type_tag(value, tag);
     })
 }
 

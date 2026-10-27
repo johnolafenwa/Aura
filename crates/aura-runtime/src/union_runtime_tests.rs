@@ -20,7 +20,7 @@ fn index_of(target: &UnionType, member: &Type) -> usize {
 
 fn union_value(target: &UnionType, member: &Type, payload: Value) -> Value {
     Value::Union(Box::new(UnionValue {
-        union_type: Type::Union(Box::new(target.clone())),
+        union_type: Type::Union(Box::new(target.clone())).into(),
         member_index: index_of(target, member),
         payload,
     }))
@@ -61,7 +61,7 @@ fn symbolic_values_retag_to_the_concrete_union_by_payload_type() {
     let Value::Union(aligned) = &value else {
         panic!("aligned value stays a union");
     };
-    assert_eq!(aligned.union_type, Type::Union(Box::new(concrete.clone())));
+    assert_eq!(*aligned.union_type, Type::Union(Box::new(concrete.clone())));
     assert_eq!(aligned.member_index, expected);
     assert_eq!(aligned.payload, int(4));
 }
@@ -127,7 +127,10 @@ fn injecting_a_union_payload_behind_a_parameter_flattens() {
     let Value::Union(injected) = injected else {
         panic!("injection builds a union");
     };
-    assert_eq!(injected.union_type, Type::Union(Box::new(symbolic.clone())));
+    assert_eq!(
+        *injected.union_type,
+        Type::Union(Box::new(symbolic.clone()))
+    );
     assert_eq!(injected.member_index, parameter);
     assert_eq!(injected.payload, int(4), "no nested union wrapper");
 
@@ -159,7 +162,7 @@ fn boundaries_retag_lift_and_unwrap() {
     let Value::Union(retagged) = coerce_union_boundary(value, &concrete_type) else {
         panic!("a union stays a union at a union boundary");
     };
-    assert_eq!(retagged.union_type, concrete_type);
+    assert_eq!(*retagged.union_type, concrete_type);
 
     let Value::Union(lifted) = coerce_union_boundary(int(4), &concrete_type) else {
         panic!("a bare member lifts into an expected union");
@@ -412,7 +415,7 @@ fn values_without_a_member_identity_never_compare_equal_or_align() {
 #[test]
 fn forged_union_values_without_a_union_type_have_no_identity() {
     let forged = Value::Union(Box::new(UnionValue {
-        union_type: Type::named("int64"),
+        union_type: Type::named("int64").into(),
         member_index: 0,
         payload: int(1),
     }));
