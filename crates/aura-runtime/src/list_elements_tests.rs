@@ -60,7 +60,7 @@ fn test_record_layout() -> &'static PlainLayout {
             .into(),
             enums: Default::default(),
         };
-        let descriptor = encode_descriptor(&Type::named("ListTestRecord"), &env);
+        let descriptor = encode_descriptor(&Type::named("ListTestRecord"), &env).expect("a layout");
         plain_layout_for_descriptor(&descriptor).expect("the record has a plain layout")
     })
 }

@@ -92,6 +92,10 @@ impl PlainRecords {
         access: u64,
         object: &mut dyn ModuleBackend,
     ) -> std::result::Result<DataHandle, String> {
+        let descriptor = match encode_descriptor(ty, &self.env) {
+            Ok(descriptor) => descriptor,
+            Err(error) => return Err(error.0),
+        };
         let index = self.cells.len();
         let cell = try_or_string_error!(
             object.declare_data(&format!("aura_plain_layout_{index}"), Linkage::Local, true),
@@ -106,7 +110,6 @@ impl PlainRecords {
             object.define_data(cell, data),
             "failed to define a plain layout cell: {}"
         );
-        let descriptor = encode_descriptor(ty, &self.env);
         self.cells.push((cell, descriptor, access));
         Ok(cell)
     }

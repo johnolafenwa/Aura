@@ -18,8 +18,7 @@ use std::sync::{OnceLock, RwLock};
 
 use aura_core::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use aura_core::layout::{
-    decode_descriptor, names_type_param, LayoutBuilder, LayoutId, LayoutKind, LayoutTable,
-    ScalarLayout,
+    decode_descriptor, names_type_param, LayoutId, LayoutKind, LayoutTable, ScalarLayout,
 };
 use aura_core::types::Type;
 
@@ -41,16 +40,10 @@ pub(crate) struct TypedLayout {
 }
 
 impl TypedLayout {
-    /// Lays out the type a descriptor names, with the definitions it
-    /// carries.
+    /// The layouts a descriptor carries, which the compiler computed.
     pub(crate) fn from_descriptor(descriptor: &str) -> Result<Self, String> {
-        let (ty, env) = decode_descriptor(descriptor)?;
-        let mut builder = LayoutBuilder::new(&env);
-        let root = builder.layout(&ty).map_err(|error| error.0)?;
-        Ok(Self {
-            table: builder.into_table(),
-            root,
-        })
+        let (table, root) = decode_descriptor(descriptor)?;
+        Ok(Self { table, root })
     }
 
     pub(crate) fn table(&self) -> &LayoutTable {

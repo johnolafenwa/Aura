@@ -15,8 +15,8 @@
 use std::collections::BTreeMap;
 
 use aura_core::layout::{
-    encode_descriptor, ClassDefinition, EnumDefinition, LayoutBuilder, LayoutEnv, LayoutId,
-    LayoutTable,
+    encode_descriptor, ClassDefinition, EnumDefinition, LayoutBuilder, LayoutEnv, LayoutError,
+    LayoutId, LayoutTable,
 };
 
 use super::{MirFunction, MirModule};
@@ -130,8 +130,8 @@ impl LayoutPlan {
         self.types.values().map(|(ty, id)| (ty, *id))
     }
 
-    /// The descriptor the runtime lays `ty` out from.
-    pub(crate) fn descriptor(&self, ty: &Type) -> String {
+    /// The descriptor the runtime reads `ty`'s layouts from.
+    pub(crate) fn descriptor(&self, ty: &Type) -> Result<String, LayoutError> {
         encode_descriptor(ty, &self.env)
     }
 }

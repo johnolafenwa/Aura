@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use aura_core::layout::{decode_descriptor, LayoutBuilder, LayoutKind};
+use aura_core::layout::{decode_descriptor, LayoutKind};
 
 use super::LayoutPlan;
 use crate::sema::Type;
@@ -103,18 +103,18 @@ fn every_runnable_fixture_type_has_a_layout_the_runtime_recomputes() {
                 _ => {}
             }
         }
-        // The runtime lays each type out again from its descriptor, and
-        // must get the same layout.
+        // Generated code hands the runtime each type's layouts in its
+        // descriptor, which lays the type out on its own, and the runtime
+        // must read the plan's layout back.
         for (ty, id) in plan.types() {
-            let (decoded, env) = decode_descriptor(&plan.descriptor(ty))
+            let descriptor = plan
+                .descriptor(ty)
                 .unwrap_or_else(|error| panic!("{}: `{ty}`: {error}", path.display()));
-            assert_eq!(&decoded, ty, "{}", path.display());
-            let mut builder = LayoutBuilder::new(&env);
-            let again = builder
-                .layout(&decoded)
+            let (decoded, root) = decode_descriptor(&descriptor)
                 .unwrap_or_else(|error| panic!("{}: `{ty}`: {error}", path.display()));
+            assert_eq!(&decoded.get(root).ty, ty, "{}", path.display());
             assert_eq!(
-                builder.table().render(again),
+                decoded.render(root),
                 plan.table().render(id),
                 "{}: `{ty}`",
                 path.display()

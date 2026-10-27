@@ -65,8 +65,11 @@ fn record(name: &str, id: i64, weight: f64) -> Value {
 /// A table entry for class `name`'s layout under `access`, with a cell and
 /// a descriptor that live for the rest of the process.
 fn entry(name: &str, access: u64) -> DirectPlainLayoutEntry {
-    let descriptor: &'static str =
-        Box::leak(encode_descriptor(&Type::named(name), &record_env(name)).into_boxed_str());
+    let descriptor: &'static str = Box::leak(
+        encode_descriptor(&Type::named(name), &record_env(name))
+            .expect("a layout")
+            .into_boxed_str(),
+    );
     DirectPlainLayoutEntry {
         cell: Box::leak(Box::new(PlainLayoutCell::new())),
         descriptor: descriptor.as_ptr(),
@@ -321,7 +324,7 @@ fn registration_refuses_tables_codes_and_descriptors_it_cannot_honor() {
     // `str` holds a handle, so it has no plain layout.
     assert_eq!(
         register_plain_layout(
-            &encode_descriptor(&Type::named("str"), &LayoutEnv::default()),
+            &encode_descriptor(&Type::named("str"), &LayoutEnv::default()).expect("a layout"),
             Some(FIRST_TEST_ACCESS + 14)
         )
         .err(),
@@ -529,7 +532,7 @@ fn enums_of_scalars_lay_out_plain_and_cells_start_empty() {
         .into(),
     };
     let layout = register_plain_layout(
-        &encode_descriptor(&Type::named("PlainTestSlot"), &env),
+        &encode_descriptor(&Type::named("PlainTestSlot"), &env).expect("a layout"),
         None,
     )
     .expect("the enum has a plain layout");
@@ -581,9 +584,11 @@ fn tuples_with_small_integers_and_unions_lay_out_plain() {
         union_type.clone(),
     ];
     let tuple_type = Type::Tuple(element_types.clone());
-    let layout =
-        register_plain_layout(&encode_descriptor(&tuple_type, &LayoutEnv::default()), None)
-            .expect("the tuple has a plain layout");
+    let layout = register_plain_layout(
+        &encode_descriptor(&tuple_type, &LayoutEnv::default()).expect("a layout"),
+        None,
+    )
+    .expect("the tuple has a plain layout");
     let int = |value: i128, kind| {
         Value::Int(
             crate::integer::IntegerValue::from_signed(value)

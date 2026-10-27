@@ -102,6 +102,7 @@ fn book_env(prefix: &str) -> LayoutEnv {
 fn descriptor(prefix: &str, class: &str) -> &'static str {
     Box::leak(
         encode_descriptor(&Type::named(&format!("{prefix}{class}")), &book_env(prefix))
+            .expect("a layout")
             .into_boxed_str(),
     )
 }
@@ -207,7 +208,8 @@ fn classes_register_once_under_one_code() {
     let pair = encode_descriptor(
         &Type::Tuple(vec![Type::named("int64"), Type::named("int64")]),
         &LayoutEnv::default(),
-    );
+    )
+    .expect("a layout");
     let Err(plain) = register_plain_layout(&pair, Some(FIRST_CLASS_ACCESS)) else {
         panic!("a class code");
     };
@@ -256,7 +258,7 @@ fn only_classes_without_parameters_or_recursion_keep_their_fields_in_place() {
         (Type::named("int64"), "is not a class"),
     ];
     for (index, (ty, expected)) in cases.into_iter().enumerate() {
-        let descriptor = encode_descriptor(&ty, &env);
+        let descriptor = encode_descriptor(&ty, &env).expect("a layout");
         let refused = register_class_layout(&descriptor, FIRST_TEST_ACCESS + 0x100 + index as u32)
             .expect_err("kept in a map");
         assert!(refused.contains(expected), "{refused}");
@@ -707,6 +709,7 @@ fn runtime_field_helpers_reach_typed_instances() {
                     &Type::Tuple(vec![Type::named("int64"), Type::named("int64")]),
                     &LayoutEnv::default(),
                 )
+                .expect("a layout")
                 .into_boxed_str(),
             ),
             None,
@@ -717,7 +720,8 @@ fn runtime_field_helpers_reach_typed_instances() {
         let descriptor = encode_descriptor(
             &Type::Tuple(vec![Type::named("int64"), Type::named("int64")]),
             &LayoutEnv::default(),
-        );
+        )
+        .expect("a layout");
         unsafe {
             crate::native_runtime::celled_plain_layout(cell, descriptor.as_bytes(), point.access())
         }

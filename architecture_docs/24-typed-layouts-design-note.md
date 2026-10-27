@@ -97,16 +97,27 @@ module's `LayoutPlan`: the layout of every type its functions' parameters,
 locals, and results, its class fields, its enum payloads, and its constants
 use. Code generation reads the plan from step 2c.
 
-A type's **descriptor** is its canonical type descriptor followed by the
-definition of every class and enum its layout can reach. The runtime decodes
-a descriptor and runs the same builder, so a descriptor is all the runtime
-needs to lay a value out. The descriptor carries definitions rather than
-offsets, so a forged descriptor can describe only a layout the builder would
-make: it cannot place a pointer where the layout holds an integer.
+A type's **descriptor** is every layout a value of the type reaches, as
+the compiler's builder computed them: each layout's type, size, alignment,
+and kind, with the offsets of its fields and payloads. Each layout comes
+after every layout it holds in place, and only a heap pointer may name a
+later one. The runtime reads the layouts back and runs no builder, so a
+program does not link it.
+
+The runtime checks every descriptor before it uses one: each rule
+`LayoutTable::validate` checks (sizes are multiples of alignments, fields
+fit and do not overlap, a tag has aligned room before the payload, every
+id names a layout), and the order rule, so no value holds itself without a
+heap pointer between. A descriptor is static data that the compiler wrote
+next to the code that reads the same offsets. Step 2a's descriptors carried
+the class and enum definitions instead, and the runtime ran the builder
+again. That kept the runtime from reading a layout the builder would not
+make, but it linked the builder into every program with a class: without
+it, the reference agent is 88 KB smaller.
 
 A test lowers every run-pass fixture (672 programs, 34,025 distinct types),
-builds its plan, validates the table, and checks that each type's descriptor
-decodes to the same type and lays out the same way again.
+builds its plan, validates the table, and checks that each type's
+descriptor reads back as the same layout.
 
 ## The Converter Boundary
 
