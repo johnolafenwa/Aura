@@ -88,6 +88,7 @@ pub(crate) struct SigRef(pub(crate) u32);
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ScalarType {
     I8,
+    I16,
     I32,
     I64,
     F32,
@@ -98,6 +99,8 @@ pub(crate) enum ScalarType {
 pub(crate) mod types {
     use super::ScalarType;
 
+    pub(crate) const I8: ScalarType = ScalarType::I8;
+    pub(crate) const I16: ScalarType = ScalarType::I16;
     pub(crate) const I32: ScalarType = ScalarType::I32;
     pub(crate) const I64: ScalarType = ScalarType::I64;
     pub(crate) const F32: ScalarType = ScalarType::F32;
@@ -375,6 +378,11 @@ pub(crate) trait FunctionBackend {
     fn bor(&mut self, left: Val, right: Val) -> Val;
     fn bxor(&mut self, left: Val, right: Val) -> Val;
     fn bxor_imm(&mut self, value: Val, imm: i64) -> Val;
+    /// `value` shifted left, logically right, or arithmetically right by
+    /// `count`, which must be below the width of `value`'s type.
+    fn ishl(&mut self, value: Val, count: Val) -> Val;
+    fn ushr(&mut self, value: Val, count: Val) -> Val;
+    fn sshr(&mut self, value: Val, count: Val) -> Val;
     fn icmp(&mut self, cond: IntCC, left: Val, right: Val) -> Val;
     fn icmp_imm(&mut self, cond: IntCC, value: Val, imm: i64) -> Val;
     fn select(&mut self, condition: Val, if_true: Val, if_false: Val) -> Val;
@@ -392,6 +400,10 @@ pub(crate) trait FunctionBackend {
 
     fn load(&mut self, ty: ScalarType, flags: MemFlags, address: Val, offset: i32) -> Val;
     fn uload8(&mut self, ty: ScalarType, flags: MemFlags, address: Val, offset: i32) -> Val;
+    /// A narrow integer load, sign- or zero-extended to 64 bits.
+    fn sload8(&mut self, flags: MemFlags, address: Val, offset: i32) -> Val;
+    fn uload16(&mut self, flags: MemFlags, address: Val, offset: i32) -> Val;
+    fn sload16(&mut self, flags: MemFlags, address: Val, offset: i32) -> Val;
     fn uload32(&mut self, flags: MemFlags, address: Val, offset: i32) -> Val;
     fn sload32(&mut self, flags: MemFlags, address: Val, offset: i32) -> Val;
     fn store(&mut self, flags: MemFlags, value: Val, address: Val, offset: i32);
@@ -406,4 +418,8 @@ pub(crate) trait FunctionBackend {
     fn fdemote(&mut self, ty: ScalarType, value: Val) -> Val;
     fn fcvt_from_uint(&mut self, ty: ScalarType, value: Val) -> Val;
     fn fcvt_from_sint(&mut self, ty: ScalarType, value: Val) -> Val;
+    /// A float truncated toward zero to a signed or unsigned integer of
+    /// type `ty`. The truncated value must fit the type.
+    fn fcvt_to_sint(&mut self, ty: ScalarType, value: Val) -> Val;
+    fn fcvt_to_uint(&mut self, ty: ScalarType, value: Val) -> Val;
 }

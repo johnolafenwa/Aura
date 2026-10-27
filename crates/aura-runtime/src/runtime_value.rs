@@ -2324,6 +2324,13 @@ pub fn slice_vec_owned(
         ListElements::Float64(values) => ListElements::Float64(copy_scalars(&values[start..end])?),
         ListElements::Bool(values) => ListElements::Bool(copy_scalars(&values[start..end])?),
         ListElements::Typed(typed) => ListElements::Typed(Box::new(typed.slice(start, end))),
+        ListElements::Int8(values) => ListElements::Int8(copy_scalars(&values[start..end])?),
+        ListElements::Int16(values) => ListElements::Int16(copy_scalars(&values[start..end])?),
+        ListElements::Int32(values) => ListElements::Int32(copy_scalars(&values[start..end])?),
+        ListElements::Uint8(values) => ListElements::Uint8(copy_scalars(&values[start..end])?),
+        ListElements::Uint16(values) => ListElements::Uint16(copy_scalars(&values[start..end])?),
+        ListElements::Uint32(values) => ListElements::Uint32(copy_scalars(&values[start..end])?),
+        ListElements::Uint64(values) => ListElements::Uint64(copy_scalars(&values[start..end])?),
     };
     Ok(VecValue {
         element_type: vector.element_type.clone(),
@@ -3367,7 +3374,142 @@ struct TaskGroupState {
 }
 
 struct FileState {
-    file: Mutex<Option<StdFile>>,
+    file: Mutex<Option<OpenFile>>,
+    /// The file a buffering handle writes, when the host names it.
+    identity: Option<FileIdentity>,
+}
+
+/// A file's device and inode, which tell whether two handles write the same
+/// file.
+type FileIdentity = (u64, u64);
+
+#[cfg(unix)]
+fn file_identity(file: &StdFile) -> Option<FileIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    file.metadata()
+        .ok()
+        .map(|metadata| (metadata.dev(), metadata.ino()))
+}
+
+#[cfg(not(unix))]
+fn file_identity(_file: &StdFile) -> Option<FileIdentity> {
+    None
+}
+
+/// Whether two buffering handles may write the same file. A handle whose
+/// file the host does not name may share it with any other.
+fn may_share_file(left: Option<FileIdentity>, right: Option<FileIdentity>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => left == right,
+        _ => true,
+    }
+}
+
+/// Writes to an `fs.File` opened for writing collect in a buffer this big
+/// before they reach the operating system, as in Python and Rust's
+/// `BufWriter`. Each trip to the blocking pool costs tens of microseconds,
+/// so writing small pieces one call at a time used to be dominated by it.
+const FILE_WRITE_BUFFER_BYTES: usize = 64 * 1024;
+
+struct OpenFile {
+    file: StdFile,
+    /// `false` for a handle opened for reading. Its writes go straight to
+    /// the host, so they fail at once as they always did.
+    buffered: bool,
+    /// Bytes written since the last flush, in order.
+    pending: Vec<u8>,
+}
+
+impl OpenFile {
+    /// Hands the buffered bytes to the operating system. The buffer is
+    /// emptied even when the write fails, so the failure is reported once
+    /// and a later flush does not write a partly written prefix again.
+    fn flush_pending(&mut self) -> io::Result<()> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        let result = self.file.write_all(&self.pending);
+        self.pending.clear();
+        result
+    }
+}
+
+impl Drop for FileState {
+    fn drop(&mut self) {
+        let file = match self.file.get_mut() {
+            Ok(file) => file,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(open) = file.as_mut() {
+            let _ = open.flush_pending();
+        }
+    }
+}
+
+/// Every handle that buffers writes. Every filesystem operation and process
+/// start flushes them all first, so the program and the processes it starts
+/// see its writes no matter when a backend drops a handle it no longer uses.
+/// A process that exits through `exit`, as a native program does after a
+/// trap, runs no destructors, so the `atexit` hook flushes them too.
+static BUFFERED_FILES: Mutex<Vec<Weak<FileState>>> = Mutex::new(Vec::new());
+static BUFFERED_FILES_EXIT_HOOK: Once = Once::new();
+
+fn register_buffered_file(state: &Arc<FileState>) {
+    BUFFERED_FILES_EXIT_HOOK.call_once(|| {
+        // SAFETY: the hook is a plain `extern "C"` function that catches its
+        // own panics.
+        unsafe {
+            libc::atexit(flush_buffered_files_at_exit);
+        }
+    });
+    let mut files = lock_mutex(&BUFFERED_FILES);
+    files.retain(|file| file.strong_count() > 0);
+    // Writes through two handles to one file must reach it in the order the
+    // program made them, so once a second handle opens a file that another
+    // still writes, neither buffers: each write goes to the host at once.
+    let siblings = files
+        .iter()
+        .filter_map(Weak::upgrade)
+        .filter(|other| may_share_file(other.identity, state.identity))
+        .collect::<Vec<_>>();
+    if !siblings.is_empty() {
+        for handle in siblings.iter().chain([state]) {
+            if let Some(open) = lock_mutex(&handle.file).as_mut() {
+                let _ = open.flush_pending();
+                open.buffered = false;
+            }
+        }
+    }
+    files.push(Arc::downgrade(state));
+}
+
+/// Hands every open handle's buffered writes to the operating system, in
+/// the order the handles were opened, ignoring failures.
+pub fn flush_buffered_files() {
+    flush_other_buffered_files(None);
+}
+
+/// [`flush_buffered_files`], except for `skip`, a handle that is about to
+/// flush itself and report a failure.
+fn flush_other_buffered_files(skip: Option<&Arc<FileState>>) {
+    let files = {
+        let mut files = lock_mutex(&BUFFERED_FILES);
+        files.retain(|file| file.strong_count() > 0);
+        files
+            .iter()
+            .filter_map(Weak::upgrade)
+            .filter(|state| skip.is_none_or(|skip| !Arc::ptr_eq(state, skip)))
+            .collect::<Vec<_>>()
+    };
+    for state in files {
+        if let Some(open) = lock_mutex(&state.file).as_mut() {
+            let _ = open.flush_pending();
+        }
+    }
+}
+
+extern "C" fn flush_buffered_files_at_exit() {
+    let _ = panic::catch_unwind(flush_buffered_files);
 }
 
 struct TcpListenerState {
@@ -4509,6 +4651,15 @@ fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+/// Locks `mutex` when no other thread holds it.
+fn try_lock_mutex<T>(mutex: &Mutex<T>) -> Option<MutexGuard<'_, T>> {
+    match mutex.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
     }
 }
 
@@ -11216,31 +11367,50 @@ fn websocket_client_request(parsed: &Url) -> io::Result<tungstenite::http::Reque
 }
 
 impl FileValue {
-    fn from_std(file: StdFile) -> Self {
+    fn from_std(file: StdFile, buffered: bool) -> Self {
+        let handle = Self::unregistered(file, buffered);
+        if buffered {
+            register_buffered_file(&handle.inner);
+        }
+        handle
+    }
+
+    /// A handle that no other handle's open or global flush reaches, so a
+    /// test can watch its buffer while other tests run.
+    fn unregistered(file: StdFile, buffered: bool) -> Self {
+        let identity = if buffered { file_identity(&file) } else { None };
         Self {
             inner: Arc::new(FileState {
-                file: Mutex::new(Some(file)),
+                file: Mutex::new(Some(OpenFile {
+                    file,
+                    buffered,
+                    pending: Vec::new(),
+                })),
+                identity,
             }),
         }
     }
 
     pub fn open(path: &str) -> io::Result<Self> {
+        flush_buffered_files();
         let path = path.to_string();
         run_blocking_io(
-            move || StdFile::open(path).map(Self::from_std),
+            move || StdFile::open(path).map(|file| Self::from_std(file, false)),
             current_lightweight_task_cancellation().as_ref(),
         )
     }
 
     pub fn create(path: &str) -> io::Result<Self> {
+        flush_buffered_files();
         let path = path.to_string();
         run_blocking_io(
-            move || StdFile::create(path).map(Self::from_std),
+            move || StdFile::create(path).map(|file| Self::from_std(file, true)),
             current_lightweight_task_cancellation().as_ref(),
         )
     }
 
     pub fn append(path: &str) -> io::Result<Self> {
+        flush_buffered_files();
         let path = path.to_string();
         run_blocking_io(
             move || {
@@ -11248,22 +11418,24 @@ impl FileValue {
                     .create(true)
                     .append(true)
                     .open(path)
-                    .map(Self::from_std)
+                    .map(|file| Self::from_std(file, true))
             },
             current_lightweight_task_cancellation().as_ref(),
         )
     }
 
     pub fn read_all(&self) -> io::Result<String> {
+        flush_other_buffered_files(Some(&self.inner));
         let state = self.inner.clone();
         run_blocking_io(
             move || {
                 let mut file = lock_mutex(&state.file);
-                let Some(file) = file.as_mut() else {
+                let Some(open) = file.as_mut() else {
                     return Err(closed_resource_error());
                 };
+                open.flush_pending()?;
                 io_decode_utf8(&read_std_file_with_limit(
-                    file,
+                    &mut open.file,
                     "file read_all",
                     MAX_FILESYSTEM_READ_BYTES,
                 )?)
@@ -11273,14 +11445,20 @@ impl FileValue {
     }
 
     pub fn read_bytes(&self) -> io::Result<Vec<u8>> {
+        flush_other_buffered_files(Some(&self.inner));
         let state = self.inner.clone();
         run_blocking_io(
             move || {
                 let mut file = lock_mutex(&state.file);
-                let Some(file) = file.as_mut() else {
+                let Some(open) = file.as_mut() else {
                     return Err(closed_resource_error());
                 };
-                read_std_file_with_limit(file, "file read_bytes", MAX_FILESYSTEM_READ_BYTES)
+                open.flush_pending()?;
+                read_std_file_with_limit(
+                    &mut open.file,
+                    "file read_bytes",
+                    MAX_FILESYSTEM_READ_BYTES,
+                )
             },
             current_lightweight_task_cancellation().as_ref(),
         )
@@ -11290,30 +11468,60 @@ impl FileValue {
         self.write_bytes(text.as_bytes())
     }
 
+    /// Buffers `bytes` when they fit beside the bytes already buffered.
+    /// Otherwise one trip to the blocking pool writes the buffer out and
+    /// then buffers `bytes`, or writes them too when they would fill the
+    /// buffer on their own.
     pub fn write_bytes(&self, bytes: &[u8]) -> io::Result<()> {
+        if let Some(mut file) = try_lock_mutex(&self.inner.file) {
+            let Some(open) = file.as_mut() else {
+                return Err(closed_resource_error());
+            };
+            if open.buffered && open.pending.len() + bytes.len() <= FILE_WRITE_BUFFER_BYTES {
+                open.pending.extend_from_slice(bytes);
+                return Ok(());
+            }
+        }
         let state = self.inner.clone();
         let bytes = bytes.to_vec();
         run_blocking_io(
             move || {
                 let mut file = lock_mutex(&state.file);
-                let Some(file) = file.as_mut() else {
+                let Some(open) = file.as_mut() else {
                     return Err(closed_resource_error());
                 };
-                file.write_all(&bytes)
+                open.flush_pending()?;
+                if open.buffered && bytes.len() < FILE_WRITE_BUFFER_BYTES {
+                    open.pending.extend_from_slice(&bytes);
+                    Ok(())
+                } else {
+                    open.file.write_all(&bytes)
+                }
             },
             current_lightweight_task_cancellation().as_ref(),
         )
     }
 
+    /// Hands buffered writes to the operating system. A standard file has
+    /// no buffer of its own, so with nothing buffered there is nothing to do.
     pub fn flush(&self) -> io::Result<()> {
+        if let Some(file) = try_lock_mutex(&self.inner.file) {
+            let Some(open) = file.as_ref() else {
+                return Err(closed_resource_error());
+            };
+            if open.pending.is_empty() {
+                return Ok(());
+            }
+        }
         let state = self.inner.clone();
         run_blocking_io(
             move || {
                 let mut file = lock_mutex(&state.file);
-                let Some(file) = file.as_mut() else {
+                let Some(open) = file.as_mut() else {
                     return Err(closed_resource_error());
                 };
-                file.flush()
+                open.flush_pending()?;
+                open.file.flush()
             },
             current_lightweight_task_cancellation().as_ref(),
         )
@@ -11326,19 +11534,25 @@ impl FileValue {
         run_blocking_io(
             move || {
                 let mut file = lock_mutex(&state.file);
-                let Some(file) = file.as_mut() else {
+                let Some(open) = file.as_mut() else {
                     return Err(closed_resource_error());
                 };
-                file.flush()?;
-                file.sync_all()
+                open.flush_pending()?;
+                open.file.flush()?;
+                open.file.sync_all()
             },
             current_lightweight_task_cancellation().as_ref(),
         )
     }
 
+    /// Writes out the buffer and closes the handle. `close` returns no
+    /// result, so a failed final write is dropped; a program that must know
+    /// calls `flush` or `sync` first.
     pub fn close(&self) {
-        let mut file = lock_mutex(&self.inner.file);
-        *file = None;
+        let open = lock_mutex(&self.inner.file).take();
+        if let Some(mut open) = open {
+            let _ = open.flush_pending();
+        }
     }
 }
 
@@ -11965,6 +12179,8 @@ impl ProcessChildValue {
                 "process.start(...) requires at least one command element",
             ));
         };
+        // The child may read files this program wrote.
+        flush_buffered_files();
         let mut builder = StdCommand::new(program);
         builder.args(command.iter().skip(1));
         if let Some(cwd) = cwd {
@@ -15201,6 +15417,7 @@ pub fn recv_for_registered_producers_iteration(
     channel: &ChannelValue,
     cancellation: &CancellationContext,
 ) -> RecvValueResult {
+    let mut producers_finished = false;
     loop {
         match channel.try_recv() {
             TryRecvResult::Value(value) => {
@@ -15210,6 +15427,7 @@ pub fn recv_for_registered_producers_iteration(
                 return RecvValueResult::Value(value);
             }
             TryRecvResult::Closed => return RecvValueResult::Closed,
+            TryRecvResult::Empty if producers_finished => return RecvValueResult::Closed,
             TryRecvResult::Empty => {}
         }
         let running_producers = channel
@@ -15218,7 +15436,11 @@ pub fn recv_for_registered_producers_iteration(
             .filter(|task| task.completed_result().is_none())
             .collect::<Vec<_>>();
         if running_producers.is_empty() {
-            return RecvValueResult::Closed;
+            // A producer can send its last item and finish between the
+            // receive above and this check, so receive once more before
+            // reporting the end.
+            producers_finished = true;
+            continue;
         }
         match wait_for_runtime_scheduler(
             vec![channel.clone()],
@@ -15418,38 +15640,42 @@ fn exact_runtime_uint8(value: &Value) -> Option<u8> {
     value.as_i128().and_then(|value| u8::try_from(value).ok())
 }
 
-fn runtime_uint8_elements<'a>(value: &'a Value, call: &str) -> Result<&'a [Value]> {
+fn runtime_uint8_elements<'a>(value: &'a Value, call: &str) -> Result<&'a ListElements> {
     let Value::Vec(value) = value else {
         return Err(Diagnostic::coded(
             "AU4001",
             format!("`{call}` expects a runtime `list[uint8]` value"),
         ));
     };
+    // Unboxed `uint8` elements are exact bytes by construction.
     if !matches!(
         &value.element_type,
         Type::Named(name, arguments) if name == "uint8" && arguments.is_empty()
-    ) || value
-        .elements
-        .iter()
-        .any(|value| exact_runtime_uint8(&value).is_none())
+    ) || (value.elements.as_uint8().is_none()
+        && value
+            .elements
+            .iter()
+            .any(|value| exact_runtime_uint8(&value).is_none()))
     {
         return Err(Diagnostic::coded(
             "AU4001",
             format!("`{call}` expects an exact runtime `list[uint8]` value"),
         ));
     }
-    // `uint8` elements are never kept in a scalar form.
-    Ok(value.elements.as_values().unwrap_or_default())
+    Ok(&value.elements)
 }
 
-fn host_bytes_from_runtime_elements(elements: &[Value]) -> Result<Vec<u8>> {
+fn host_bytes_from_runtime_elements(elements: &ListElements) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     bytes_runtime_try_reserve(&mut bytes, elements.len())?;
-    bytes.extend(
-        elements
-            .iter()
-            .map(|value| exact_runtime_uint8(value).expect("runtime bytes were validated")),
-    );
+    match elements.as_uint8() {
+        Some(unboxed) => bytes.extend_from_slice(unboxed),
+        None => bytes.extend(
+            elements
+                .iter()
+                .map(|value| exact_runtime_uint8(&value).expect("runtime bytes were validated")),
+        ),
+    }
     Ok(bytes)
 }
 
@@ -15508,7 +15734,7 @@ fn preflight_runtime_bytes_encoder<'a>(
     value: &'a Value,
     call: &str,
     encoded_len: fn(usize) -> std::result::Result<usize, BytesResourceError>,
-) -> Result<&'a [Value]> {
+) -> Result<&'a ListElements> {
     let elements = runtime_uint8_elements(value, call)?;
     encoded_len(bytes_runtime_encoded_input_len(elements.len()))
         .map_err(bytes_resource_error_to_diagnostic)?;
@@ -15530,15 +15756,10 @@ pub fn runtime_bytes_from_host(bytes: &[u8]) -> Result<Value> {
 
     let mut elements = Vec::new();
     bytes_runtime_try_reserve(&mut elements, bytes.len())?;
-    elements.extend(bytes.iter().copied().map(|byte| {
-        Value::Int(
-            IntegerValue::from_typed_unsigned(u128::from(byte), IntegerKind::Uint8)
-                .expect("every host byte fits the uint8 runtime kind"),
-        )
-    }));
+    elements.extend_from_slice(bytes);
     Ok(Value::Vec(VecValue {
         element_type: Type::Named(bytes_runtime_owned_string("uint8")?, Vec::new()),
-        elements: elements.into(),
+        elements: ListElements::from_uint8(elements),
         str_view: Default::default(),
     }))
 }

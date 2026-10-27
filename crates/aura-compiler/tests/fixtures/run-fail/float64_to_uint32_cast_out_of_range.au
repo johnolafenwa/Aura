@@ -1,0 +1,5 @@
+def main() -> int32:
+    values: list[float64] = [42.9, -1.0]
+    for value in values:
+        print(value as uint32)
+    return 0

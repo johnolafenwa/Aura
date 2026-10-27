@@ -43,15 +43,15 @@ use crate::runtime_value::{
     collect_queue_values, concat_strings_checked, current_lightweight_task_cancellation,
     current_lightweight_task_id, current_task_native_slot, decode_process_restart_policy,
     decode_process_stdio, divmod_numeric_values, embedded_nominal_runtime_type_name,
-    fail_current_lightweight_task, float_floor_divmod, float_power, format_runtime_value_with,
-    host_builtins, io_error, io_read_line, is_clone_leaf, json_array_metadata_is_exact,
-    json_dump_error_to_diagnostic, json_int_metadata_is_exact, json_object_metadata_is_exact,
-    json_parse_inline, json_parse_owned_to_runtime, lookup_found, lookup_missing,
-    nominal_runtime_base_name, optional_absent, optional_bytes_value, optional_present,
-    optional_str_value, optional_value, poll_cancellation, poll_ready, poll_unavailable,
-    prepare_json_codec_source, process_error_cancelled, process_error_io, process_error_no_command,
-    process_error_spawn, process_error_timed_out, process_exit_status, process_stdio_inherit,
-    process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
+    fail_current_lightweight_task, float_floor_divmod, float_power, flush_buffered_files,
+    format_runtime_value_with, host_builtins, io_error, io_read_line, is_clone_leaf,
+    json_array_metadata_is_exact, json_dump_error_to_diagnostic, json_int_metadata_is_exact,
+    json_object_metadata_is_exact, json_parse_inline, json_parse_owned_to_runtime, lookup_found,
+    lookup_missing, nominal_runtime_base_name, optional_absent, optional_bytes_value,
+    optional_present, optional_str_value, optional_value, poll_cancellation, poll_ready,
+    poll_unavailable, prepare_json_codec_source, process_error_cancelled, process_error_io,
+    process_error_no_command, process_error_spawn, process_error_timed_out, process_exit_status,
+    process_stdio_inherit, process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
     process_supervisor_wait_cancelled, process_supervisor_wait_event,
     process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
@@ -2630,22 +2630,15 @@ unsafe fn value_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut Value) -> 
 /// appends of a `list` value or a rank-1 `Array`, or `None` and zeros for
 /// any other value. The storage is on the heap, so the address stays valid
 /// when the box holding the value moves. Only a list that keeps unboxed
-/// scalars or typed values in storage no other list shares has room. It
-/// stays inline, so boxing a value that is not a list folds it away.
-#[inline]
+/// scalars or typed values in storage no other list shares has room.
+// Inlined into the write paths, where a call costs as much as the body.
+#[inline(always)]
 fn list_view_of(value: &Value) -> (u32, usize, usize, u32) {
-    use crate::list_elements::ListForm;
     use crate::runtime_value::ArrayStorage;
     match value {
         Value::Vec(vector) => {
             let (form, elements, len, room) = vector.elements.view();
-            let access = match form {
-                ListForm::Values => DirectListAccess::Values as u32,
-                ListForm::Int64 => DirectListAccess::Int64 as u32,
-                ListForm::Float64 => DirectListAccess::Float64 as u32,
-                ListForm::Bool => DirectListAccess::Bool as u32,
-                ListForm::Typed(access) => access,
-            };
+            let access = form.access();
             let room = u32::try_from(room).unwrap_or(u32::MAX);
             (access, elements, len, room)
         }
@@ -2703,20 +2696,165 @@ pub enum DirectListAccess {
     /// A list of `Value`s that are all `str`. The view's elements are
     /// [`DirectStrViewEntry`] records, one per element.
     Str = 5,
+    /// A list of `int8` elements, 1 byte each.
+    Int8 = 6,
+    /// A list of `int16` elements, 2 bytes each.
+    Int16 = 7,
+    /// A list of `int32` elements, 4 bytes each.
+    Int32 = 8,
+    /// A list of `uint8` elements, 1 byte each.
+    Uint8 = 9,
+    /// A list of `uint16` elements, 2 bytes each.
+    Uint16 = 10,
+    /// A list of `uint32` elements, 4 bytes each.
+    Uint32 = 11,
+    /// A list of `uint64` elements, 8 bytes each.
+    Uint64 = 12,
     /// A rank-1 `Array[int32]`.
-    ArrayInt32 = 6,
+    ArrayInt32 = 13,
     /// A rank-1 `Array[int64]`.
-    ArrayInt64 = 7,
+    ArrayInt64 = 14,
     /// A rank-1 `Array[float32]`.
-    ArrayFloat32 = 8,
+    ArrayFloat32 = 15,
     /// A rank-1 `Array[float64]`.
-    ArrayFloat64 = 9,
+    ArrayFloat64 = 16,
 }
 
 impl DirectListAccess {
     /// The codes of the list forms, which all keep their length in the
     /// view. They are consecutive from [`DirectListAccess::Values`].
-    pub const LIST_FORMS: u32 = 5;
+    pub const LIST_FORMS: u32 = 12;
+}
+
+/// The scalar types generated code names to the runtime in one word: the
+/// element kind of a list read, write, or append, and the source and
+/// target of a cast. A `float32` list element is kept as a `float64`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(i64)]
+pub enum DirectScalarKind {
+    Int64 = 0,
+    Float64 = 1,
+    Bool = 2,
+    Int8 = 3,
+    Int16 = 4,
+    Int32 = 5,
+    Uint8 = 6,
+    Uint16 = 7,
+    Uint32 = 8,
+    Uint64 = 9,
+    Float32 = 10,
+}
+
+impl DirectScalarKind {
+    const ALL: [Self; 11] = [
+        Self::Int64,
+        Self::Float64,
+        Self::Bool,
+        Self::Int8,
+        Self::Int16,
+        Self::Int32,
+        Self::Uint8,
+        Self::Uint16,
+        Self::Uint32,
+        Self::Uint64,
+        Self::Float32,
+    ];
+
+    /// The kind generated code passed as `code`.
+    pub fn from_code(code: i64) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| *kind as i64 == code)
+    }
+
+    fn of_code(code: i64) -> Self {
+        Self::from_code(code)
+            .unwrap_or_else(|| runtime_error(format!("unknown direct scalar kind `{code}`")))
+    }
+
+    /// The integer kind, for an integer.
+    pub fn integer_kind(self) -> Option<IntegerKind> {
+        Some(match self {
+            Self::Int64 => IntegerKind::Int64,
+            Self::Int8 => IntegerKind::Int8,
+            Self::Int16 => IntegerKind::Int16,
+            Self::Int32 => IntegerKind::Int32,
+            Self::Uint8 => IntegerKind::Uint8,
+            Self::Uint16 => IntegerKind::Uint16,
+            Self::Uint32 => IntegerKind::Uint32,
+            Self::Uint64 => IntegerKind::Uint64,
+            Self::Float64 | Self::Bool | Self::Float32 => return None,
+        })
+    }
+
+    pub fn type_name(self) -> &'static str {
+        match self {
+            Self::Float64 => "float64",
+            Self::Bool => "bool",
+            Self::Float32 => "float32",
+            integer => integer
+                .integer_kind()
+                .expect("every other kind is an integer")
+                .runtime_type_name(),
+        }
+    }
+
+    /// The value generated code passes as `bits`: an integer's value, a
+    /// float's bit pattern, or 0 or 1 for a `bool`. An integer outside its
+    /// type stops the program.
+    fn value(self, bits: i64) -> Value {
+        match self {
+            Self::Float64 | Self::Float32 => Value::Float(f64::from_bits(bits as u64)),
+            Self::Bool => Value::Bool(bits != 0),
+            Self::Uint64 => Value::Int(IntegerValue::from_u64(bits as u64)),
+            integer => {
+                let kind = integer
+                    .integer_kind()
+                    .expect("every other kind is an integer");
+                let value = IntegerValue::from_signed(i128::from(bits));
+                Value::Int(value.with_runtime_kind(kind).unwrap_or_else(|| {
+                    runtime_error(format!(
+                        "integer value `{value}` does not fit in `{}`",
+                        kind.runtime_type_name()
+                    ))
+                }))
+            }
+        }
+    }
+
+    /// `value` as generated code takes it: the inverse of
+    /// [`DirectScalarKind::value`]. A value of another type stops the
+    /// program.
+    fn bits(self, value: &Value) -> i64 {
+        match (self, value) {
+            (Self::Float64 | Self::Float32, Value::Float(float)) => float.to_bits() as i64,
+            (Self::Bool, Value::Bool(flag)) => i64::from(*flag),
+            (Self::Uint64, Value::Int(integer)) => match integer
+                .as_i128()
+                .and_then(|value| u64::try_from(value).ok())
+            {
+                Some(value) => value as i64,
+                None => runtime_error(format!(
+                    "integer value `{integer}` does not fit in `uint64`"
+                )),
+            },
+            (kind, Value::Int(integer)) if kind.integer_kind().is_some() => {
+                match integer
+                    .as_i128()
+                    .and_then(|value| i64::try_from(value).ok())
+                {
+                    Some(value) => value,
+                    None => runtime_error(format!(
+                        "integer value `{integer}` does not fit in `{}`",
+                        kind.type_name()
+                    )),
+                }
+            }
+            (kind, other) => runtime_error(format!(
+                "direct backend expected `{}`, found `{}`",
+                kind.type_name(),
+                value_type_name(other)
+            )),
+        }
+    }
 }
 
 /// Where one element of a [`DirectListAccess::Str`] view keeps its UTF-8
@@ -2766,12 +2904,16 @@ impl DirectListLayout {
             DirectListAccess::Bool as i64,
             DirectListAccess::ArrayFloat64 as i64,
             DirectListAccess::Str as i64,
+            DirectListAccess::Uint64 as i64,
+            i64::from(DirectListAccess::LIST_FORMS),
+            DirectScalarKind::Float32 as i64,
             i64::from(DIRECT_STR_VIEW_ENTRY_BYTES),
             i64::from(DIRECT_STR_VIEW_PTR_OFFSET),
             i64::from(DIRECT_STR_VIEW_LEN_OFFSET),
-            // The element layouts: 8-byte `int64` and `float64`, 1-byte
-            // `bool`. Then the 4-byte room count.
-            0x0801,
+            // The element layouts: 8-byte `int64`, `uint64`, and `float64`,
+            // 1-byte `bool`, and each narrower integer in its own width.
+            // Then the 4-byte room count.
+            0x0801_0204,
             4,
         ];
         fields.iter().fold(0x41_75_72_61_i64, |hash, field| {
@@ -3725,15 +3867,7 @@ fn decode_direct_ffi_call_spec(bytes: &[u8]) -> std::result::Result<DirectFfiCal
 fn bytes_vec_value(bytes: Vec<u8>) -> Value {
     Value::Vec(VecValue {
         element_type: Type::named("uint8"),
-        elements: bytes
-            .into_iter()
-            .map(|byte| {
-                Value::Int(
-                    IntegerValue::from_typed_unsigned(byte as u128, IntegerKind::Uint8)
-                        .expect("every byte fits the uint8 runtime kind"),
-                )
-            })
-            .collect(),
+        elements: ListElements::from_uint8(bytes),
         str_view: Default::default(),
     })
 }
@@ -5472,6 +5606,17 @@ pub extern "C-unwind" fn aura_direct_box_i32(value: i64) -> *mut OpaqueValue {
     })
 }
 
+/// Boxes an integer of the [`DirectScalarKind`] `kind` names, given as its
+/// value. Generated code keeps `int8`, `int16`, `uint8`, `uint16`, and
+/// `uint32` values this way.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_box_integer(value: i64, kind: i64) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let kind = DirectScalarKind::of_code(kind);
+        boxed_typed_value(kind.value(value), kind.type_name())
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_box_u64(value: u64) -> *mut OpaqueValue {
     task_runtime_boundary(|| boxed_typed_value(Value::Int(IntegerValue::from_u64(value)), "uint64"))
@@ -7107,19 +7252,14 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
     })
 }
 
-/// The scalar a list write passes as `bits`: `kind` is 0 for `int64`, 1
-/// for `float64` (its bit pattern), and 2 for `bool`.
+/// The scalar a list write passes as `bits`, of the
+/// [`DirectScalarKind`] `kind` names.
 fn scalar_list_value(bits: i64, kind: i64) -> Value {
-    match kind {
-        0 => Value::Int(IntegerValue::from_i64(bits)),
-        1 => Value::Float(f64::from_bits(bits as u64)),
-        2 => Value::Bool(bits != 0),
-        _ => runtime_error("unknown direct scalar list write kind"),
-    }
+    DirectScalarKind::of_code(kind).value(bits)
 }
 
-/// Appends a scalar given as its bits, with no box. `kind` is 0 for
-/// `int64`, 1 for `float64` (its bit pattern), and 2 for `bool`.
+/// Appends a scalar given as its bits, with no box. `kind` names its
+/// [`DirectScalarKind`].
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_push_scalar(vec: *mut OpaqueValue, bits: i64, kind: i64) {
     task_runtime_boundary(|| {
@@ -7641,24 +7781,26 @@ pub extern "C-unwind" fn aura_direct_vec_index(
 }
 
 /// Removes and returns the last element of a scalar list as generated code
-/// keeps it, with no box (see [`scalar_element_bits`]). An empty list stops
-/// the program as `pop()` does.
+/// keeps it, with no box (see [`DirectScalarKind::bits`]). An empty list
+/// stops the program as `pop()` does.
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_pop_scalar(vec: *mut OpaqueValue, kind: i64) -> i64 {
-    task_runtime_boundary(
-        || match with_vector_mut(vec, |vector| vector.elements.pop()) {
-            Some(value) => scalar_element_bits(kind, &value),
+    task_runtime_boundary(|| {
+        let kind = DirectScalarKind::of_code(kind);
+        match with_vector_mut(vec, |vector| vector.elements.pop()) {
+            Some(value) => kind.bits(&value),
             None => runtime_diagnostic_error(Diagnostic::coded(
                 "AU4003",
                 "list pop index `-1` is out of bounds for length `0`".to_string(),
             )),
-        },
-    )
+        }
+    })
 }
 
 /// Reads a scalar list element without boxing it. The caller has already
-/// normalized and bounds-checked `index`. `kind` is 0 for `int64`, 1 for
-/// `float64` (returned as its bit pattern), and 2 for `bool`.
+/// normalized and bounds-checked `index`. `kind` names the element's
+/// [`DirectScalarKind`], and the element comes back as generated code
+/// keeps it: an integer's value, a float's bit pattern, or 0 or 1.
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_index_scalar(
     vec: *mut OpaqueValue,
@@ -7666,12 +7808,13 @@ pub extern "C-unwind" fn aura_direct_vec_index_scalar(
     kind: i64,
 ) -> i64 {
     task_runtime_boundary(|| {
+        let kind = DirectScalarKind::of_code(kind);
         with_vector(vec, |vector| {
             let element = usize::try_from(index)
                 .ok()
                 .and_then(|index| vector.elements.get(index));
             match element {
-                Some(element) => scalar_element_bits(kind, &element),
+                Some(element) => kind.bits(&element),
                 None => runtime_error(format!(
                     "list index `{}` is out of bounds for length `{}`",
                     index,
@@ -7680,27 +7823,6 @@ pub extern "C-unwind" fn aura_direct_vec_index_scalar(
             }
         })
     })
-}
-
-/// A scalar list element as generated code keeps it: for `kind` 0 an
-/// `int64`, for 1 a `float64` as its bit pattern, and for 2 a `bool` as 0
-/// or 1.
-fn scalar_element_bits(kind: i64, element: &Value) -> i64 {
-    match (kind, element) {
-        (0, Value::Int(value)) => match value.as_i128().and_then(|value| i64::try_from(value).ok())
-        {
-            Some(value) => value,
-            None => runtime_error(format!("integer value `{value}` does not fit in `int64`")),
-        },
-        (1, Value::Float(value)) => value.to_bits() as i64,
-        (2, Value::Bool(value)) => i64::from(*value),
-        (0..=2, other) => runtime_error(format!(
-            "direct backend expected `{}`, found `{}`",
-            ["int64", "float64", "bool"][kind as usize],
-            value_type_name(other)
-        )),
-        _ => runtime_error("unknown direct scalar list read kind"),
-    }
 }
 
 /// Runs `read` on one element of `list` where it lies, so nothing is cloned
@@ -10456,21 +10578,22 @@ fn direct_integer_cast_source(value: u64, unsigned: i64) -> Value {
     }
 }
 
+/// The integer type a [`DirectScalarKind`] code names.
 fn direct_integer_cast_target(kind: i64) -> Type {
-    Type::named(match kind {
-        0 => "int32",
-        1 => "int64",
-        2 => "uint64",
-        other => runtime_error(format!("unknown direct integer target kind `{other}`")),
-    })
+    match DirectScalarKind::from_code(kind).and_then(DirectScalarKind::integer_kind) {
+        Some(kind) => Type::named(kind.runtime_type_name()),
+        None => runtime_error(format!("unknown direct integer target kind `{kind}`")),
+    }
 }
 
+/// The float type a [`DirectScalarKind`] code names.
 fn direct_float_cast_target(kind: i64) -> Type {
-    Type::named(match kind {
-        0 => "float32",
-        1 => "float64",
-        other => runtime_error(format!("unknown direct float target kind `{other}`")),
-    })
+    match DirectScalarKind::from_code(kind) {
+        Some(kind @ (DirectScalarKind::Float32 | DirectScalarKind::Float64)) => {
+            Type::named(kind.type_name())
+        }
+        _ => runtime_error(format!("unknown direct float target kind `{kind}`")),
+    }
 }
 
 fn direct_cast_failure(error: Diagnostic, line: i64, column: i64) -> ! {
@@ -13453,39 +13576,45 @@ pub extern "C-unwind" fn aura_direct_fs_exists(path: *mut OpaqueValue) -> *mut O
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_fs_read_to_string(path: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(path) } {
-        Value::String(path) => match run_blocking_io(
-            move || {
-                let bytes = read_file_limited(&path, "fs.read_to_string")?;
-                String::from_utf8(bytes)
-                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    task_runtime_boundary(|| {
+        flush_buffered_files();
+        match unsafe { value_ref(path) } {
+            Value::String(path) => match run_blocking_io(
+                move || {
+                    let bytes = read_file_limited(&path, "fs.read_to_string")?;
+                    String::from_utf8(bytes)
+                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+                },
+                Some(&current_cancellation()),
+            ) {
+                Ok(text) => boxed_value(result_ok(Value::String(text))),
+                Err(error) => boxed_value(result_err(io_error(error))),
             },
-            Some(&current_cancellation()),
-        ) {
-            Ok(text) => boxed_value(result_ok(Value::String(text))),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `str`, found `{}`",
-            value_type_name(other)
-        )),
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        }
     })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_fs_read_bytes(path: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(path) } {
-        Value::String(path) => match run_blocking_io(
-            move || read_file_limited(&path, "fs.read_bytes"),
-            Some(&current_cancellation()),
-        ) {
-            Ok(bytes) => boxed_value(result_ok(bytes_vec_value(bytes))),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `str`, found `{}`",
-            value_type_name(other)
-        )),
+    task_runtime_boundary(|| {
+        flush_buffered_files();
+        match unsafe { value_ref(path) } {
+            Value::String(path) => match run_blocking_io(
+                move || read_file_limited(&path, "fs.read_bytes"),
+                Some(&current_cancellation()),
+            ) {
+                Ok(bytes) => boxed_value(result_ok(bytes_vec_value(bytes))),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            },
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        }
     })
 }
 
@@ -13495,6 +13624,7 @@ pub extern "C-unwind" fn aura_direct_fs_write_string(
     text: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        flush_buffered_files();
         let path = match unsafe { value_ref(path) } {
             Value::String(path) => path.clone(),
             other => runtime_error(format!(
@@ -13525,6 +13655,7 @@ pub extern "C-unwind" fn aura_direct_fs_write_bytes(
     bytes: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        flush_buffered_files();
         let path = expect_string_value(&unsafe { value_ref(path) }, "fs.write_bytes(...)");
         let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "fs.write_bytes(...)");
         match run_blocking_io(
@@ -13543,6 +13674,7 @@ pub extern "C-unwind" fn aura_direct_fs_append_string(
     text: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        flush_buffered_files();
         let path = match unsafe { value_ref(path) } {
             Value::String(path) => path.clone(),
             other => runtime_error(format!(
@@ -13579,6 +13711,7 @@ pub extern "C-unwind" fn aura_direct_fs_append_bytes(
     bytes: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        flush_buffered_files();
         let path = expect_string_value(&unsafe { value_ref(path) }, "fs.append_bytes(...)");
         let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "fs.append_bytes(...)");
         match run_blocking_io(
@@ -13599,46 +13732,52 @@ pub extern "C-unwind" fn aura_direct_fs_append_bytes(
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_fs_create_dir(path: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(path) } {
-        Value::String(path) => match run_blocking_io(
-            move || crate::runtime_value::create_dir_once(path),
-            Some(&current_cancellation()),
-        ) {
-            Ok(()) => boxed_value(result_ok(Value::Unit)),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `str`, found `{}`",
-            value_type_name(other)
-        )),
+    task_runtime_boundary(|| {
+        flush_buffered_files();
+        match unsafe { value_ref(path) } {
+            Value::String(path) => match run_blocking_io(
+                move || crate::runtime_value::create_dir_once(path),
+                Some(&current_cancellation()),
+            ) {
+                Ok(()) => boxed_value(result_ok(Value::Unit)),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            },
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        }
     })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_fs_read_dir(path: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(path) } {
-        Value::String(path) => match run_blocking_io(
-            move || {
-                let mut names = std::fs::read_dir(path)?
-                    .filter_map(|entry| entry.ok())
-                    .map(|entry| entry.file_name().to_string_lossy().to_string())
-                    .collect::<Vec<_>>();
-                names.sort();
-                Ok(names)
+    task_runtime_boundary(|| {
+        flush_buffered_files();
+        match unsafe { value_ref(path) } {
+            Value::String(path) => match run_blocking_io(
+                move || {
+                    let mut names = std::fs::read_dir(path)?
+                        .filter_map(|entry| entry.ok())
+                        .map(|entry| entry.file_name().to_string_lossy().to_string())
+                        .collect::<Vec<_>>();
+                    names.sort();
+                    Ok(names)
+                },
+                Some(&current_cancellation()),
+            ) {
+                Ok(names) => boxed_value(result_ok(Value::Vec(VecValue {
+                    element_type: Type::named("str"),
+                    elements: names.into_iter().map(Value::String).collect(),
+                    str_view: Default::default(),
+                }))),
+                Err(error) => boxed_value(result_err(io_error(error))),
             },
-            Some(&current_cancellation()),
-        ) {
-            Ok(names) => boxed_value(result_ok(Value::Vec(VecValue {
-                element_type: Type::named("str"),
-                elements: names.into_iter().map(Value::String).collect(),
-                str_view: Default::default(),
-            }))),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `str`, found `{}`",
-            value_type_name(other)
-        )),
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        }
     })
 }
 
@@ -13648,6 +13787,7 @@ pub extern "C-unwind" fn aura_direct_fs_rename(
     target: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        flush_buffered_files();
         let source = match unsafe { value_ref(source) } {
             Value::String(source) => source.clone(),
             other => runtime_error(format!(
@@ -13674,18 +13814,21 @@ pub extern "C-unwind" fn aura_direct_fs_rename(
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_fs_remove_file(path: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(path) } {
-        Value::String(path) => match run_blocking_io(
-            move || crate::runtime_value::remove_file_checked(path),
-            Some(&current_cancellation()),
-        ) {
-            Ok(()) => boxed_value(result_ok(Value::Unit)),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `str`, found `{}`",
-            value_type_name(other)
-        )),
+    task_runtime_boundary(|| {
+        flush_buffered_files();
+        match unsafe { value_ref(path) } {
+            Value::String(path) => match run_blocking_io(
+                move || crate::runtime_value::remove_file_checked(path),
+                Some(&current_cancellation()),
+            ) {
+                Ok(()) => boxed_value(result_ok(Value::Unit)),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            },
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        }
     })
 }
 
@@ -13766,7 +13909,7 @@ pub extern "C-unwind" fn aura_direct_file_write_all(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let text = match unsafe { value_ref(text) } {
-            Value::String(text) => text.clone(),
+            Value::String(text) => text,
             other => runtime_error(format!(
                 "expected `str`, found `{}`",
                 value_type_name(other)
@@ -17030,6 +17173,35 @@ pub extern "C-unwind" fn aura_direct_fail_erased_union_mutable_receiver(
 pub extern "C-unwind" fn aura_direct_fail_int32_overflow(value: i64, line: i64, column: i64) -> ! {
     task_runtime_boundary(|| {
         let message = int32_overflow_message(value);
+        match runtime_span(line, column) {
+            Some(span) => runtime_error_at(span, message),
+            None => runtime_error(message),
+        }
+    })
+}
+
+/// Stops the program because an integer result does not fit the
+/// narrow integer type the [`DirectScalarKind`] `kind` names. `value` is
+/// the result, which generated code computed in 64 bits, read as unsigned
+/// when `unsigned` is 1.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_fail_narrow_overflow(
+    value: i64,
+    unsigned: i64,
+    kind: i64,
+    line: i64,
+    column: i64,
+) -> ! {
+    task_runtime_boundary(|| {
+        let value = if unsigned == 0 {
+            i128::from(value)
+        } else {
+            i128::from(value as u64)
+        };
+        let message = format!(
+            "integer value `{value}` does not fit in `{}`",
+            DirectScalarKind::of_code(kind).type_name()
+        );
         match runtime_span(line, column) {
             Some(span) => runtime_error_at(span, message),
             None => runtime_error(message),

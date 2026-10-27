@@ -993,9 +993,12 @@ pub enum ArithmeticTrap {
     /// type, as in `int64` `MIN // -1`.
     DivisionByZeroOrOverflow,
     /// A runtime helper computes the value and makes the checks its
-    /// operands need: powers, bitwise operators, shifts, float floor
-    /// division and remainder, and operands that are not `int32`, `int64`,
-    /// `uint64`, `float32`, `float64`, or `bool`.
+    /// operands need: powers, shifts, bitwise operators other than an
+    /// integer `&`, `|`, `^`, or `~`, float floor division and remainder,
+    /// and operands that are not a fixed-width integer of at most 64 bits,
+    /// `float32`, `float64`, or `bool`. A backend may compute the cases
+    /// that cannot fail inline, as long as every failing case reaches the
+    /// helper.
     Runtime,
 }
 
@@ -10599,6 +10602,24 @@ fn mir_enum_is_copy(program: &Program, variants: &[MirEnumVariant]) -> bool {
         .all(|payload| type_is_copy_in_program(payload, program))
 }
 
+/// Whether `constant` is a scalar the program spells as a literal, such as
+/// `MOD = 1000000007`, `SCALE: float32 = -0.5`, or `MASK: uint8 = 255`.
+/// A read of one lowers to the literal instead of a module constant load.
+fn is_scalar_literal_constant(constant: &crate::sema::ConstantInfo) -> bool {
+    fn literal(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) => true,
+            ExprKind::Unary {
+                op: UnaryOp::Neg | UnaryOp::Not,
+                expr,
+            }
+            | ExprKind::Group(expr) => literal(expr),
+            _ => false,
+        }
+    }
+    checks::NumericKind::of(&constant.ty).is_scalar() && literal(&constant.decl.value)
+}
+
 fn lower_constant_initializer(
     program: &Program,
     name: &str,
@@ -12796,6 +12817,16 @@ impl<'a> Lowerer<'a> {
 
     fn lower_constant_read(&mut self, constant: &crate::sema::ConstantInfo) -> Operand {
         let temp = self.new_typed_temp(constant.ty.clone());
+        if is_scalar_literal_constant(constant) {
+            // The literal has no effects, so each read computes it where
+            // it stands; the program still runs the initializer at startup.
+            let value = self.lower_expr_with_expected(&constant.decl.value, Some(&constant.ty));
+            self.emit(Instruction::Assign {
+                target: temp.clone(),
+                value: Rvalue::Use(value),
+            });
+            return Operand::Place(temp);
+        }
         let key = format!("{}::{}", constant.module_name, constant.decl.name);
         self.emit(Instruction::Assign {
             target: temp.clone(),

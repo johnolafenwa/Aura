@@ -15,6 +15,13 @@ copy class Entry:
     dist: int64
     node: int64
 
+copy class Pixel:
+    red: uint8
+    level: int8
+    count: uint16
+    delta: int16
+    total: uint32
+
 class Holder:
     best: Segment
     all: list[Segment]
@@ -107,3 +114,19 @@ def main():
 
     squares = [Entry(dist=i, node=i * i) for i in range(5)]
     print(squares[4])
+
+    mut pixels: list[Pixel] = []
+    for i in range(4):
+        pixels.append(
+            Pixel(
+                red=(250 + i) as uint8,
+                level=(i as int8) - 2,
+                count=(65530 + i) as uint16,
+                delta=(i as int16) * -1000,
+                total=(4000000000 + i) as uint32,
+            )
+        )
+    pixels[1] = Pixel(red=7, level=-128, count=0, delta=32767, total=1)
+    print(pixels[0])
+    print(f"{pixels[1].level} {pixels[2].red} {pixels[3].count} {pixels[3].delta} {pixels[3].total}")
+    print(pixels[1:3])

@@ -214,8 +214,13 @@ fn collect_leaves(
 /// The layout scalar a direct scalar kind is kept as.
 fn scalar_layout(kind: ScalarKind) -> Option<ScalarLayout> {
     Some(match kind {
+        ScalarKind::Int8 => ScalarLayout::Int8,
+        ScalarKind::Int16 => ScalarLayout::Int16,
         ScalarKind::Int32 => ScalarLayout::Int32,
         ScalarKind::Int64 => ScalarLayout::Int64,
+        ScalarKind::Uint8 => ScalarLayout::Uint8,
+        ScalarKind::Uint16 => ScalarLayout::Uint16,
+        ScalarKind::Uint32 => ScalarLayout::Uint32,
         ScalarKind::Uint64 => ScalarLayout::Uint64,
         ScalarKind::Float32 => ScalarLayout::Float32,
         ScalarKind::Float64 => ScalarLayout::Float64,
@@ -269,7 +274,13 @@ impl FunctionCompiler<'_> {
             .leaves
             .iter()
             .map(|leaf| match leaf.kind {
+                // Integers narrower than a word widen by their signedness.
+                ScalarKind::Int8 => self.builder.sload8(flags, address, leaf.offset),
+                ScalarKind::Int16 => self.builder.sload16(flags, address, leaf.offset),
                 ScalarKind::Int32 => self.builder.sload32(flags, address, leaf.offset),
+                ScalarKind::Uint8 => self.builder.uload8(types::I64, flags, address, leaf.offset),
+                ScalarKind::Uint16 => self.builder.uload16(flags, address, leaf.offset),
+                ScalarKind::Uint32 => self.builder.uload32(flags, address, leaf.offset),
                 ScalarKind::Int64 | ScalarKind::Uint64 => {
                     self.builder.load(types::I64, flags, address, leaf.offset)
                 }
@@ -308,7 +319,9 @@ impl FunctionCompiler<'_> {
         }
         for (leaf, word) in record.leaves.iter().zip(words) {
             let stored = match leaf.kind {
-                ScalarKind::Int32 => self.builder.ireduce(types::I32, *word),
+                ScalarKind::Int8 | ScalarKind::Uint8 => self.builder.ireduce(types::I8, *word),
+                ScalarKind::Int16 | ScalarKind::Uint16 => self.builder.ireduce(types::I16, *word),
+                ScalarKind::Int32 | ScalarKind::Uint32 => self.builder.ireduce(types::I32, *word),
                 ScalarKind::Int64 | ScalarKind::Uint64 | ScalarKind::Float64 => *word,
                 ScalarKind::Float32 => self.builder.fdemote(types::F32, *word),
                 // A `bool` is one byte that holds 0 or 1.

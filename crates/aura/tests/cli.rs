@@ -3538,6 +3538,122 @@ fn old_product_environment_names_are_not_honored() {
 }
 
 #[test]
+fn buffered_file_writes_are_identical_across_backends() {
+    // `fs.File` buffers writes, and a native build drops a handle after its
+    // last use where `aura run` drops it at the end of its scope. Every
+    // filesystem operation flushes the buffers first, and two handles to
+    // one file stop buffering, so both backends print what unbuffered
+    // writes printed: the reread sees its write, the append lands before
+    // `third` overwrites it, and the trap leaves the buffered line on disk.
+    let source = r#"import fs
+import io
+import path
+import sys
+
+
+def reread(file_path: str) -> Result[int64, io.Error]:
+    mut file = try fs.create(file_path.clone())
+    try file.write_all("kept\n")
+    text = try fs.read_to_string(file_path)
+    return Result.Ok(text.byte_len())
+
+
+def two_handles(file_path: str) -> Result[str, io.Error]:
+    mut file = try fs.create(file_path.clone())
+    try file.write_all("first\n")
+    mut other = try fs.append(file_path.clone())
+    try other.write_all("second\n")
+    try file.write_all("third\n")
+    reader = try fs.open(file_path)
+    return Result.Ok(try reader.read_all())
+
+
+def many_lines(file_path: str) -> Result[int64, io.Error]:
+    with file = try fs.create(file_path.clone()):
+        for i in range(20000):
+            try file.write_all(f"line {i}\n")
+    return Result.Ok((try fs.read_bytes(file_path)).len())
+
+
+def task_write(file_path: str) -> int64:
+    match reread(file_path):
+        case Result.Ok(n):
+            return n
+        case Result.Err(_):
+            return -1
+
+
+def run(dir: str) -> Result[None, io.Error]:
+    print(try reread(path.join(dir.clone(), "reread.txt")))
+    print(try two_handles(path.join(dir.clone(), "two.txt")))
+    print(try many_lines(path.join(dir.clone(), "many.txt")))
+    with group = TaskGroup():
+        task = group.start(task_write, path.join(dir.clone(), "task.txt"))
+    print(try fs.read_to_string(path.join(dir.clone(), "task.txt")))
+    mut pending = try fs.create(path.join(dir, "trap.txt"))
+    try pending.write_all("before trap\n")
+    xs: list[int64] = []
+    print(xs[3])
+    return Result.Ok(None)
+
+
+def main() -> int32:
+    match run(sys.args()[0].clone()):
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1
+"#;
+    let (temp, source_path) = write_temp_source("aura-buffered-file-writes", source);
+    let expected_stdout = "5\nfirst\nthird\n\n\n208890\nkept\n\n";
+    let binary = temp.path().join("buffered");
+    let build = Command::new(aura_bin())
+        .args(["build", "--backend", "direct", "-o"])
+        .arg(&binary)
+        .arg(&source_path)
+        .output()
+        .expect("failed to build the buffered-writes program");
+    assert!(
+        build.status.success(),
+        "buffered-writes program should build, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    for backend in ["mir", "direct"] {
+        let dir = temp.path().join(backend);
+        fs::create_dir_all(&dir).expect("failed to create the backend's directory");
+        let output = if backend == "mir" {
+            Command::new(aura_bin())
+                .args(["run", "--backend", "mir"])
+                .arg(&source_path)
+                .arg("--")
+                .arg(&dir)
+                .output()
+        } else {
+            generated_binary(&binary).arg(&dir).output()
+        }
+        .expect("failed to run the buffered-writes program");
+        assert_eq!(output.status.code(), Some(1), "{backend} should trap");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            expected_stdout,
+            "{backend} stdout"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .starts_with("error[AU4003]: list index `3` is out of bounds"),
+            "{backend} should report the trap, stderr was:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("trap.txt")).expect("trap.txt should exist"),
+            "before trap\n",
+            "{backend} flushes buffered writes when it exits after a trap"
+        );
+    }
+}
+
+#[test]
 fn invalid_blocking_pool_configuration_is_au4006_before_user_code_on_every_runtime_path() {
     use std::ffi::OsString;
 

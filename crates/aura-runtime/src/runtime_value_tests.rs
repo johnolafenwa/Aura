@@ -2,11 +2,12 @@ use super::{
     append_string_with_limit, cancel_current_lightweight_task_boundary, cast_numeric_value,
     claim_task_result_observations, create_dir_once, decode_process_restart_policy,
     decode_process_stdio, divmod_numeric_values, finalize_task_execution, float_floor_divmod,
-    float_power, format_runtime_value, io_decode_utf8, io_error, lock_mutex, lookup_found,
-    lookup_missing, next_retry_runtime_backoff, non_unix_tls_listener_wait_timeout,
-    optional_absent, optional_present, parse_format_spec, poll_ready, poll_unavailable,
-    process_error_cancelled, process_error_no_command, process_error_other, process_error_spawn,
-    process_error_timed_out, process_supervisor_event_failed, process_supervisor_wait_cancelled,
+    float_power, flush_buffered_files, flush_buffered_files_at_exit, format_runtime_value,
+    io_decode_utf8, io_error, lock_mutex, lookup_found, lookup_missing, may_share_file,
+    next_retry_runtime_backoff, non_unix_tls_listener_wait_timeout, optional_absent,
+    optional_present, parse_format_spec, poll_ready, poll_unavailable, process_error_cancelled,
+    process_error_no_command, process_error_other, process_error_spawn, process_error_timed_out,
+    process_supervisor_event_failed, process_supervisor_wait_cancelled,
     process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
     queue_receive_item, queue_receive_timed_out, recv_for_task_group_iteration,
@@ -18,21 +19,22 @@ use super::{
     spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup,
     spawn_lightweight_task_with_stack, task_group_cleanup_should_cancel, task_result_cancelled,
-    task_result_error, task_result_ready, task_result_timed_out, validate_format_spec_for_type,
-    validate_read_line_capacity, validate_requested_read_size, validate_retry_runtime_policy,
-    wait_all_cancelled, wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled,
-    wait_any_error, wait_any_ready, wait_any_timed_out, wait_condvar, wait_for_runtime_scheduler,
-    wait_timeout_condvar, ArrayBinaryOp, ArrayDType, ArrayReduction, ArrayStorage, ArrayValue,
-    BlockingIoPool, CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment,
-    EnumVariantValue, FfiHandleValue, FileValue, FloatPowerWidth, FormatSpecErrorKind,
-    FunctionValue, HttpListenerValue, HttpResponseValue, InstanceValue, IntegerArithmeticMode,
-    LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue, ProcessChildValue,
-    ProcessChildWaitStatus, ProcessCompletedValue, ProcessRestartPolicy, ProcessStdioConfig,
-    ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue, ReactorSubscription,
-    RecvValueResult, RngValue, SetValue, TaskCancelledSignal, TaskExecutionResult, TaskGroupValue,
-    TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TryRecvResult, TupleValue,
-    UdpDatagramValue, UdpSocketValue, Value, VecValue, WebSocketListenerValue,
-    MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
+    task_result_error, task_result_ready, task_result_timed_out, try_lock_mutex,
+    validate_format_spec_for_type, validate_read_line_capacity, validate_requested_read_size,
+    validate_retry_runtime_policy, wait_all_cancelled, wait_all_error, wait_all_ready,
+    wait_all_timed_out, wait_any_cancelled, wait_any_error, wait_any_ready, wait_any_timed_out,
+    wait_condvar, wait_for_runtime_scheduler, wait_timeout_condvar, ArrayBinaryOp, ArrayDType,
+    ArrayReduction, ArrayStorage, ArrayValue, BlockingIoPool, CancellationContext, ChannelValue,
+    ClosureCaptureValue, ClosureEnvironment, EnumVariantValue, FfiHandleValue, FileValue,
+    FloatPowerWidth, FormatSpecErrorKind, FunctionValue, HttpListenerValue, HttpResponseValue,
+    InstanceValue, IntegerArithmeticMode, LightweightTaskFailureSignal, MapValue,
+    ModuleNamespaceValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue,
+    ProcessRestartPolicy, ProcessStdioConfig, ProcessSupervisorValue, ProcessSupervisorWaitStatus,
+    RangeValue, ReactorSubscription, RecvValueResult, RngValue, SetValue, TaskCancelledSignal,
+    TaskExecutionResult, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
+    TcpStreamValue, TryRecvResult, TupleValue, UdpDatagramValue, UdpSocketValue, Value, VecValue,
+    WebSocketListenerValue, FILE_WRITE_BUFFER_BYTES, MAX_FILESYSTEM_READ_BYTES,
+    MAX_STREAM_READ_BYTES,
 };
 use super::{install_after_select_queue_commit_hook, install_after_select_source_validation_hook};
 use crate::integer::IntegerKind;
@@ -2478,7 +2480,7 @@ fn owned_slice_helpers_normalize_once_reject_without_clamping_and_copy_values() 
 
 #[test]
 fn list_slices_copy_only_the_slice_and_keep_the_scalar_form() {
-    let lists = [
+    let mut lists = vec![
         (0..10)
             .map(|value| Value::Int(IntegerValue::from_i64(value)))
             .collect::<Vec<_>>(),
@@ -2488,6 +2490,27 @@ fn list_slices_copy_only_the_slice_and_keep_the_scalar_form() {
             .map(|value| Value::String(value.to_string()))
             .collect(),
     ];
+    for kind in [
+        IntegerKind::Int8,
+        IntegerKind::Int16,
+        IntegerKind::Int32,
+        IntegerKind::Uint8,
+        IntegerKind::Uint16,
+        IntegerKind::Uint32,
+        IntegerKind::Uint64,
+    ] {
+        lists.push(
+            (0..10)
+                .map(|value| {
+                    Value::Int(
+                        IntegerValue::from_signed(value)
+                            .with_runtime_kind(kind)
+                            .expect("0..10 fits every integer kind"),
+                    )
+                })
+                .collect(),
+        );
+    }
     for values in lists {
         let vector = VecValue {
             element_type: Type::named("T"),
@@ -11728,6 +11751,240 @@ fn file_and_encoding_helpers_cover_binary_roundtrip_surface() {
             .expect_err("closed file flush should fail")
             .kind(),
         io::ErrorKind::BrokenPipe
+    );
+}
+
+/// A buffering handle that no global flush reaches, so a test can tell
+/// buffered bytes from written ones while other tests open files.
+fn unregistered_buffered_file(path: &std::path::Path) -> FileValue {
+    FileValue::unregistered(
+        fs::File::create(path).expect("file create should succeed"),
+        true,
+    )
+}
+
+#[test]
+fn file_writes_are_buffered_until_flush_close_or_drop() {
+    let temp = TempDir::new("aura-file-buffer");
+    let path = temp.path().join("log.txt");
+    let on_disk = || fs::read(&path).expect("file should be readable");
+
+    let file = unregistered_buffered_file(&path);
+    file.write_all("one ")
+        .expect("buffered write should succeed");
+    file.write_bytes(b"two ")
+        .expect("buffered write should succeed");
+    assert_eq!(on_disk(), b"", "small writes wait in the buffer");
+    file.flush().expect("flush should succeed");
+    assert_eq!(on_disk(), b"one two ");
+    file.flush()
+        .expect("a flush with nothing buffered succeeds");
+
+    file.write_all("three ")
+        .expect("buffered write should succeed");
+    let reader_error = file
+        .read_all()
+        .expect_err("a handle created for writing cannot read");
+    assert_ne!(reader_error.kind(), io::ErrorKind::BrokenPipe);
+    assert_eq!(on_disk(), b"one two three ", "a read flushes first");
+    file.write_all("four ")
+        .expect("buffered write should succeed");
+    file.read_bytes()
+        .expect_err("a handle created for writing cannot read");
+    assert_eq!(on_disk(), b"one two three four ");
+
+    file.write_all("five ")
+        .expect("buffered write should succeed");
+    file.sync().expect("sync should succeed");
+    assert_eq!(on_disk(), b"one two three four five ");
+
+    file.write_all("six")
+        .expect("buffered write should succeed");
+    file.close();
+    assert_eq!(on_disk(), b"one two three four five six", "close flushes");
+
+    let dropped_path = temp.path().join("dropped.txt");
+    let dropped = unregistered_buffered_file(&dropped_path);
+    dropped
+        .write_all("kept")
+        .expect("buffered write should succeed");
+    let shared = dropped.clone();
+    drop(dropped);
+    assert_eq!(fs::read(&dropped_path).expect("file should exist"), b"");
+    drop(shared);
+    assert_eq!(
+        fs::read(&dropped_path).expect("file should exist"),
+        b"kept",
+        "dropping the last reference flushes"
+    );
+}
+
+#[test]
+fn file_writes_keep_their_order_across_a_full_buffer() {
+    let temp = TempDir::new("aura-file-buffer-order");
+    let path = temp.path().join("data.bin");
+    let file = unregistered_buffered_file(&path);
+    let first = vec![b'a'; FILE_WRITE_BUFFER_BYTES - 10];
+    let second = vec![b'b'; 20];
+    let third = vec![b'c'; FILE_WRITE_BUFFER_BYTES];
+    file.write_bytes(&first).expect("first write should buffer");
+    file.write_bytes(&second)
+        .expect("an overflowing write flushes the buffer, then buffers");
+    assert_eq!(
+        fs::read(&path).expect("file should be readable"),
+        first,
+        "the overflowing write is buffered after the flush"
+    );
+    file.write_bytes(&third)
+        .expect("a write as large as the buffer goes straight to the file");
+    let mut expected = first.clone();
+    expected.extend_from_slice(&second);
+    expected.extend_from_slice(&third);
+    assert_eq!(fs::read(&path).expect("file should be readable"), expected);
+    file.close();
+}
+
+#[test]
+fn file_writes_on_a_read_handle_fail_at_once() {
+    let temp = TempDir::new("aura-file-buffer-read-only");
+    let path = temp.path().join("input.txt");
+    fs::write(&path, "input").expect("fixture should be written");
+    let file = FileValue::open(path.to_str().expect("temp path should be valid UTF-8"))
+        .expect("file open should succeed");
+    file.write_all("x")
+        .expect_err("a handle opened for reading cannot write");
+    assert_eq!(file.read_all().expect("read should succeed"), "input");
+    file.close();
+}
+
+#[test]
+fn file_writes_wait_for_a_handle_another_thread_holds() {
+    let temp = TempDir::new("aura-file-buffer-contended");
+    let path = temp.path().join("shared.txt");
+    let file = unregistered_buffered_file(&path);
+    file.write_all("first ")
+        .expect("buffered write should succeed");
+    let held = file.inner.file.lock().expect("lock should not be poisoned");
+    let writer = file.clone();
+    let write = thread::spawn(move || {
+        writer
+            .write_all("second")
+            .expect("contended write should succeed");
+        writer.flush().expect("flush should succeed");
+    });
+    let flusher = file.clone();
+    let flush = thread::spawn(move || flusher.flush().expect("contended flush should succeed"));
+    thread::sleep(StdDuration::from_millis(50));
+    drop(held);
+    write.join().expect("writer should finish");
+    flush.join().expect("flusher should finish");
+    assert_eq!(
+        fs::read(&path).expect("file should be readable"),
+        b"first second"
+    );
+    file.close();
+    file.write_bytes(b"x")
+        .expect_err("a closed handle cannot write");
+}
+
+#[test]
+fn filesystem_operations_flush_every_buffered_handle_first() {
+    let temp = TempDir::new("aura-file-buffer-global");
+    let paths = (0..6)
+        .map(|index| temp.path().join(format!("part-{index}.txt")))
+        .collect::<Vec<_>>();
+    let files = paths
+        .iter()
+        .map(|path| {
+            let file = FileValue::create(path.to_str().expect("temp path should be valid UTF-8"))
+                .expect("file create should succeed");
+            file.write_all("pending")
+                .expect("buffered write should succeed");
+            file
+        })
+        .collect::<Vec<_>>();
+    files[0].close();
+    flush_buffered_files();
+    for path in &paths {
+        assert_eq!(fs::read(path).expect("file should be readable"), b"pending");
+    }
+
+    files[1]
+        .write_all(" more")
+        .expect("buffered write should succeed");
+    let reader = FileValue::open(paths[1].to_str().expect("temp path should be valid UTF-8"))
+        .expect("opening a path flushes every buffered handle first");
+    assert_eq!(
+        reader.read_all().expect("read should succeed"),
+        "pending more"
+    );
+    files[2]
+        .write_all(" more")
+        .expect("buffered write should succeed");
+    assert_eq!(
+        reader
+            .read_all()
+            .expect("a read flushes every buffered handle first"),
+        ""
+    );
+    assert_eq!(
+        fs::read(&paths[2]).expect("file should be readable"),
+        b"pending more"
+    );
+    flush_buffered_files_at_exit();
+}
+
+#[test]
+fn a_second_handle_to_one_file_stops_both_buffering() {
+    let temp = TempDir::new("aura-file-buffer-siblings");
+    let path = temp.path().join("shared.txt");
+    let path_text = path.to_str().expect("temp path should be valid UTF-8");
+    let first = FileValue::create(path_text).expect("file create should succeed");
+    first
+        .write_all("first\n")
+        .expect("buffered write should succeed");
+    let second = FileValue::append(path_text).expect("file append should succeed");
+    assert_eq!(
+        fs::read(&path).expect("file should be readable"),
+        b"first\n",
+        "opening a second handle flushes the first"
+    );
+    second.write_all("second\n").expect("append should succeed");
+    first.write_all("third\n").expect("write should succeed");
+    assert_eq!(
+        fs::read(&path).expect("file should be readable"),
+        b"first\nthird\n\n",
+        "both handles write through, in program order"
+    );
+    first.close();
+    second.close();
+}
+
+#[test]
+fn buffered_files_survive_unnamed_files_and_poisoned_locks() {
+    assert!(may_share_file(Some((1, 2)), Some((1, 2))));
+    assert!(!may_share_file(Some((1, 2)), Some((1, 3))));
+    assert!(
+        may_share_file(None, Some((1, 2))),
+        "a file the host does not name may be any file"
+    );
+
+    let temp = TempDir::new("aura-file-buffer-poisoned");
+    let path = temp.path().join("log.txt");
+    let file = unregistered_buffered_file(&path);
+    file.write_all("kept\n")
+        .expect("buffered write should succeed");
+    let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = file.inner.file.lock().expect("file lock should be free");
+        panic!("poison the file lock for recovery test");
+    }));
+    assert!(poison.is_err());
+    assert!(try_lock_mutex(&file.inner.file).is_some());
+    drop(file);
+    assert_eq!(
+        fs::read(&path).expect("file should be readable"),
+        b"kept\n",
+        "a poisoned lock still flushes on drop"
     );
 }
 

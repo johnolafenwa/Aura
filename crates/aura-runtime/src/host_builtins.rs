@@ -716,11 +716,15 @@ pub fn host_str_to_bytes_ref(value: &Value) -> Result<Value> {
 pub fn host_str_from_bytes_ref(value: &Value) -> Result<Value> {
     let name = "str.from_bytes";
     let elements = runtime_uint8_elements(value, name)?;
-    if let Some(index) = runtime_utf8_error_index(
-        elements
-            .iter()
-            .map(|value| exact_runtime_uint8(value).expect("runtime bytes were validated")),
-    ) {
+    let error_index = match elements.as_uint8() {
+        Some(bytes) => runtime_utf8_error_index(bytes.iter().copied()),
+        None => runtime_utf8_error_index(
+            elements
+                .iter()
+                .map(|value| exact_runtime_uint8(&value).expect("runtime bytes were validated")),
+        ),
+    };
+    if let Some(index) = error_index {
         return bytes_codec_error_to_result(BytesCodecError::Data(BytesDataError::InvalidUtf8 {
             index,
         }));

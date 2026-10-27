@@ -15,6 +15,17 @@ in this file.
 
 ### Changed
 
+- `fs.File` handles from `fs.create` and `fs.append` buffer up to 64 KiB
+  of writes, as Python's files and Rust's `BufWriter` do. Writing a file
+  one line at a time used to cost one blocking-pool round trip, about 65
+  microseconds, per call. The program still sees every write it made:
+  each filesystem operation, read through a handle, and process start
+  flushes all buffered writes first, and two handles to one file write
+  through. Buffers are also flushed by `flush()`, `sync()`, `close()`, the
+  end of a `with` block, dropping the last reference, and program exit,
+  including after a trap. Another program reading the file sees the bytes
+  only after a flush, and a failed write is reported by the call that
+  flushes it.
 - Sorting `float64` values puts NaN after every other value, and NaNs keep
   their input order. `-0.0` and `0.0` sort as equal, so they also keep
   their input order.
@@ -56,6 +67,14 @@ in this file.
   a loop costs 26 instructions instead of 1,318. Writes and appends
   through a `mut` list parameter no longer store the list back after each
   one.
+- A list of `int8`, `int16`, `int32`, `uint8`, `uint16`, `uint32`,
+  `uint64`, or `float32` values is stored unboxed, and native code reads,
+  writes, and appends its elements in place. Native code also runs `as`
+  casts between scalar types, integer `&`, `|`, `^`, and `~`, and shifts
+  inline, and reads a module constant written as a scalar literal without
+  a runtime call. Errors are unchanged. At check size, hashing runs 88%
+  fewer instructions, markdown_render 81%, file_io 56%, lzw_compress 55%,
+  mini_browser 48%, spreadsheet 44%, and sql_engine 38%.
 - `list.sort()` and `list.sort(key = ...)` are a stable merge sort in the
   runtime, so sorting takes O(n log n) comparisons on `aura run` and in
   native builds. They used to be an insertion sort, which took O(n²) and
@@ -95,6 +114,10 @@ in this file.
 
 ### Fixed
 
+- A `for` loop over a queue whose registered producer tasks were finishing
+  no longer ends early. When a producer sent its last item and finished
+  between the loop's receive and its check for running producers, the loop
+  ended without that item, on both backends.
 - A `for` loop over `text.to_bytes()`, directly or through an unannotated
   local, iterates the bytes. It passed `aura check` and then failed at run
   time with AU4001 "MIR `for` requires a `Range`" on both backends.
