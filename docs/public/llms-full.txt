@@ -18426,6 +18426,23 @@ A retain is an inline count update, so instruction counts move less:
 `regex_match` runs 1.9% fewer instructions than with shared arguments
 alone, and no program runs more.
 
+### Collection Writes Change The Collection In Place
+
+A write to a collection held by a local or a `mut` parameter, such as
+`swap`, `append`, `remove`, `extend`, `sort`, a `dict` or `set` write,
+or an `Array` `set`, changes the collection where it is. The local keeps
+holding the same collection, so nothing is stored back into it after
+the write. A `mut` parameter still hands the change to its caller.
+
+| Program | Retains before | Retains after | Instructions before | Instructions after |
+| --- | ---: | ---: | ---: | ---: |
+| `astar_pathfinding` | 7,442 | 0 | 14.9M | 13.3M |
+| `graph_paths` | 13,450 | 0 | 79.1M | 76.0M |
+| `mini_browser` | 15,153 | 30 | 583.2M | 581.4M |
+| `word_freq` | 12,437 | 2,935 | 53.8M | 53.3M |
+| `sort_records` | 4,547 | 1,000 | 45.0M | 44.6M |
+| All 30 programs | 400,936 | 326,693 | | |
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and
