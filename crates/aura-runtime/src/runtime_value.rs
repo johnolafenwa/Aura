@@ -314,9 +314,10 @@ pub enum Value {
 /// `AURA_RUNTIME_STATS` environment variable is `1` reports the totals on
 /// standard error when its program ends, so measurements are the same
 /// numbers on the interpreter and the direct backend. The direct runtime also
-/// counts the retains, releases, and copies of its boxes. Those three
-/// counters run only when the report is requested, so a retain costs one
-/// relaxed load otherwise. The interpreter reports zero for them.
+/// counts the retains, releases, and copies of its boxes, and the boxes it
+/// frees. Those four counters run only when the report is requested, so a
+/// retain costs one relaxed load otherwise. The interpreter reports zero for
+/// them.
 pub mod representation_stats {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -328,6 +329,7 @@ pub mod representation_stats {
     static RETAINS: AtomicU64 = AtomicU64::new(0);
     static RELEASES: AtomicU64 = AtomicU64::new(0);
     static CLONES: AtomicU64 = AtomicU64::new(0);
+    static FREED_BOXES: AtomicU64 = AtomicU64::new(0);
 
     /// Whether the ownership counters count. The direct runtime turns them on
     /// at startup when the report is requested.
@@ -355,6 +357,9 @@ pub mod representation_stats {
         /// Direct-runtime copies of a box's value: explicit clones, and a
         /// consuming helper that copies a box another reference still holds.
         pub clones: u64,
+        /// Direct-runtime boxes freed. A program that ends with every box
+        /// it allocated freed reports as many as `opaque_boxes`.
+        pub freed_boxes: u64,
     }
 
     impl RepresentationStats {
@@ -370,13 +375,14 @@ pub mod representation_stats {
                 retains: self.retains - earlier.retains,
                 releases: self.releases - earlier.releases,
                 clones: self.clones - earlier.clones,
+                freed_boxes: self.freed_boxes - earlier.freed_boxes,
             }
         }
 
         /// The report line a backend prints at exit.
         pub fn report_line(self, backend: &str) -> String {
             format!(
-                "aura runtime stats ({backend}): union_payload_boxes={} closure_environments={} opaque_boxes={} callable_overflow_allocations={} cloned_elements={} retains={} releases={} clones={}",
+                "aura runtime stats ({backend}): union_payload_boxes={} closure_environments={} opaque_boxes={} callable_overflow_allocations={} cloned_elements={} retains={} releases={} clones={} freed_boxes={}",
                 self.union_payload_boxes,
                 self.closure_environments,
                 self.opaque_boxes,
@@ -384,7 +390,8 @@ pub mod representation_stats {
                 self.cloned_elements,
                 self.retains,
                 self.releases,
-                self.clones
+                self.clones,
+                self.freed_boxes
             )
         }
 
@@ -405,6 +412,7 @@ pub mod representation_stats {
                     "retains" => stats.retains = value,
                     "releases" => stats.releases = value,
                     "clones" => stats.clones = value,
+                    "freed_boxes" => stats.freed_boxes = value,
                     _ => return None,
                 }
             }
@@ -471,6 +479,10 @@ pub mod representation_stats {
         note_ownership(&CLONES);
     }
 
+    pub fn note_box_freed() {
+        note_ownership(&FREED_BOXES);
+    }
+
     /// The current totals.
     pub fn snapshot() -> RepresentationStats {
         RepresentationStats {
@@ -482,6 +494,7 @@ pub mod representation_stats {
             retains: RETAINS.load(Ordering::Relaxed),
             releases: RELEASES.load(Ordering::Relaxed),
             clones: CLONES.load(Ordering::Relaxed),
+            freed_boxes: FREED_BOXES.load(Ordering::Relaxed),
         }
     }
 

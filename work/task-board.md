@@ -120,8 +120,14 @@ Last updated: 2026-10-27
   1,523,899; `image_filters` -93% instructions, `nbody` -49%,
   `raytracer` -34%, `astar_pathfinding` -33%. Details are in
   `2026-10-27-rust-speed-2h-scalar-math.md`.
-- Next: the 2h leak, failure, and cancellation tests and the gate
-  report.
+- Step 2h part 6: leak, failure, and cancellation cleanup tests
+  (`crates/aura/tests/cleanup_leaks.rs`). The `AURA_RUNTIME_STATS=1`
+  line reports `freed_boxes` and comes after the module constants are
+  freed. Every one of the 30 programs and the 705 run-pass fixtures ends
+  with no box left. Details are in
+  `2026-10-27-rust-speed-2h-cleanup-tests.md`.
+- Next: the remaining 2h retains (dictionary lookup keys, scalar `get`
+  results) and the gate report.
 
 ## Aura 0.7.1 preview release (complete)
 

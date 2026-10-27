@@ -18989,7 +18989,9 @@ fn representation_stats_count_report_and_parse_round_trip() {
     representation_stats::note_retain();
     representation_stats::note_release();
     representation_stats::note_clone();
+    representation_stats::note_box_freed();
     let delta = representation_stats::snapshot().since(before);
+    assert!(delta.freed_boxes >= 1);
     assert!(delta.retains >= 1);
     assert!(delta.releases >= 1);
     assert!(delta.clones >= 1);
@@ -19008,11 +19010,12 @@ fn representation_stats_count_report_and_parse_round_trip() {
         retains: 7,
         releases: 8,
         clones: 1,
+        freed_boxes: 9,
     };
     let line = stats.report_line("direct");
     assert_eq!(
         line,
-        "aura runtime stats (direct): union_payload_boxes=2 closure_environments=1 opaque_boxes=10 callable_overflow_allocations=0 cloned_elements=4 retains=7 releases=8 clones=1"
+        "aura runtime stats (direct): union_payload_boxes=2 closure_environments=1 opaque_boxes=10 callable_overflow_allocations=0 cloned_elements=4 retains=7 releases=8 clones=1 freed_boxes=9"
     );
     assert_eq!(
         RepresentationStats::parse_report_line(&line),

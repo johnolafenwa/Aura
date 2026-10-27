@@ -19,6 +19,10 @@ in this file.
   printed directly does: `P(v=0.1)` rather than
   `P(v=0.10000000149011612)`. A field or payload whose declared type is a
   type parameter still prints the digits of its `float64` widening.
+- The `AURA_RUNTIME_STATS=1` line of a native program reports
+  `freed_boxes`, the boxes the program freed, and is printed after the
+  module constants are freed. A program that frees everything it allocated
+  reports as many `freed_boxes` as `opaque_boxes`.
 
 ### Performance
 

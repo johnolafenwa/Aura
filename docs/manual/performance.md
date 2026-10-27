@@ -1063,9 +1063,14 @@ process run with `AURA_RUNTIME_STATS=1` prints the totals on standard error
 when its program ends.
 
 The same line reports how often the direct backend retains, releases, and
-copies a boxed value, as `retains`, `releases`, and `clones`. The direct
-runtime counts these only when the report is requested. The interpreter
-reports zero for them.
+copies a boxed value, as `retains`, `releases`, and `clones`, and how many
+of its boxes it freed, as `freed_boxes`. The direct runtime counts these
+only when the report is requested. The interpreter reports zero for them.
+A native program prints the line after its module constants are gone, so a
+program that freed everything it allocated reports as many `freed_boxes`
+as `opaque_boxes`. The cleanup tests in `crates/aura/tests/cleanup_leaks.rs`
+check this for programs that finish, stop at a failed check deep in their
+calls, and fail or cancel tasks that hold values.
 
 `benchmarks/representation` holds the programs.
 `scripts/bench-representation.py` records the counters, the direct binary's

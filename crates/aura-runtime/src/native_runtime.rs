@@ -1976,6 +1976,7 @@ unsafe fn release_untracked_value(value: *mut OpaqueValue) {
 ///
 /// The caller dropped the last reference to `value`.
 unsafe fn free_direct_value(value: *mut OpaqueValue) {
+    crate::runtime_value::representation_stats::note_box_freed();
     #[cfg(coverage)]
     {
         let previous = DIRECT_VALUE_LIVE_COUNT.fetch_sub(1, Ordering::AcqRel);
@@ -5390,8 +5391,11 @@ pub unsafe extern "C-unwind" fn aura_direct_run_root(thunk_ptr: i64) -> i32 {
                 clear_direct_module_constants();
             }
         }
-        let _module_constant_cleanup = ModuleConstantCleanup;
+        let module_constant_cleanup = ModuleConstantCleanup;
         let result = run_direct_root_task(thunk);
+        // The report counts the boxes the program left, so the module
+        // constants go first.
+        drop(module_constant_cleanup);
         crate::runtime_value::representation_stats::report_if_requested("direct");
         match result {
             Ok(Value::Int(value)) => value.as_i128().unwrap_or_default() as i32,
