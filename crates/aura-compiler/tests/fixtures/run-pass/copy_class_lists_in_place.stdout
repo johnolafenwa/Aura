@@ -1,0 +1,20 @@
+10
+3000 3 1.5 false
+9000
+42000 43
+0 7000
+131.5
+5000 2.5 1.0
+99000 11
+Segment(end=Point(on=false, x=10, y=1.25), id=9000, start=Point(on=false, x=9, y=4.5), weight=2.25)
+[Point(on=true, x=1, y=2.0), Point(on=false, x=3, y=4.0)]
+3 [Point(on=true, x=1, y=2.0), Point(on=false, x=3, y=4.0)]
+[Entry(dist=3, node=2), Entry(dist=99, node=1)]
+7 3
+2 true
+true
+true
+[Entry(dist=-1, node=-1), Entry(dist=3, node=6), Entry(dist=6, node=12)]
+Entry(dist=8, node=16)
+132
+Entry(dist=4, node=16)

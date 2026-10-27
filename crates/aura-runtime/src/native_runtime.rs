@@ -143,11 +143,19 @@ mod box_cache;
 mod frame_stack;
 #[path = "native_owned_values.rs"]
 mod owned_values;
-// Generated code converts through typed layouts once values live in them,
-// from step 2c of the typed-layout work; until then only tests do.
+// Generated code reaches typed layouts through plain layouts (step 2c of
+// the typed-layout work); the rest of the converters only tests use until
+// values with handles live in layouts.
 #[cfg_attr(not(test), allow(dead_code))]
 #[path = "native_typed_layout.rs"]
 mod typed_layout;
+
+use typed_layout::{celled_plain_layout, registered_plain_layout};
+pub use typed_layout::{
+    plain_layout_for_descriptor, plain_layout_for_value, register_plain_layout, PlainLayout,
+    PlainLayoutCell, FIRST_PLAIN_ACCESS, PLAIN_LAYOUT_CELL_ACCESS_OFFSET, PLAIN_LAYOUT_CELL_BYTES,
+    UNREGISTERED_PLAIN_ACCESS,
+};
 
 pub use frame_stack::{direct_frame_stack_layout, DirectFrameStack, DirectFrameStackLayout};
 use frame_stack::{
@@ -1368,9 +1376,10 @@ pub struct OpaqueValue {
     /// value is shared, the lock every access takes.
     shared_lock: std::sync::atomic::AtomicPtr<RwLock<()>>,
     ref_count: AtomicU32,
-    /// A [`DirectListAccess`] code: what generated code may read in place
-    /// from the list view. It is [`DirectListAccess::None`] once the value
-    /// is shared.
+    /// A [`DirectListAccess`] code, or a plain layout's access code for a
+    /// list that keeps values of that layout in place: what generated code
+    /// may read in place from the list view. It is
+    /// [`DirectListAccess::None`] once the value is shared.
     list_access: AtomicU32,
     /// The frame stack of the task whose ledger links this value, or null.
     /// Only the thread the value is confined to reads the four ledger
@@ -1378,8 +1387,8 @@ pub struct OpaqueValue {
     owner: std::cell::Cell<*mut DirectFrameStack>,
     /// The references that ledger holds. It never exceeds `ref_count`.
     owned: std::cell::Cell<u32>,
-    /// How many elements a list that keeps unboxed scalars has room for, or
-    /// 0. It shares a word with `owned`, though it belongs to the list
+    /// How many elements a list that keeps unboxed scalars or typed values
+    /// has room for, or 0. It shares a word with `owned`, though it belongs to the list
     /// view. Every write sets it, and only for a confined list
     /// whose storage no other value shares. Generated code that appends
     /// while `list_len` is below it stores the element past the end and
@@ -1440,7 +1449,7 @@ impl OpaqueValue {
             list_elements: std::cell::Cell::new(elements),
             list_len: std::cell::Cell::new(len),
             ref_count: AtomicU32::new(1),
-            list_access: AtomicU32::new(access as u32),
+            list_access: AtomicU32::new(access),
             list_capacity: std::cell::Cell::new(0),
             shared_lock: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
             owner: std::cell::Cell::new(std::ptr::null_mut()),
@@ -1466,14 +1475,15 @@ impl OpaqueValue {
         self.list_elements.set(elements);
         self.list_len.set(len);
         self.list_capacity.set(capacity);
-        self.list_access.store(access as u32, Ordering::Relaxed);
+        self.list_access.store(access, Ordering::Relaxed);
     }
 
     /// Takes in the elements generated code appended in place since the
-    /// last write, and takes back the room for more. Every access to a
-    /// confined value starts here, so runtime code reads and copies the
-    /// whole list, and a copy never shares room with the original. It stays
-    /// out of line, so the check in `access` stays small enough to inline.
+    /// last write, drops the ones it popped, and takes back the room. Every
+    /// access to a confined value starts here, so runtime code reads and
+    /// copies the whole list, and a copy never shares room with the
+    /// original. It stays out of line, so the check in `access` stays small
+    /// enough to inline.
     #[cold]
     #[inline(never)]
     fn adopt_appended_elements(&self) {
@@ -2613,18 +2623,21 @@ unsafe fn value_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut Value) -> 
 /// appends of a `list` value or a rank-1 `Array`, or `None` and zeros for
 /// any other value. The storage is on the heap, so the address stays valid
 /// when the box holding the value moves. Only a list that keeps unboxed
-/// scalars in storage no other list shares has room.
-fn list_view_of(value: &Value) -> (DirectListAccess, usize, usize, u32) {
+/// scalars or typed values in storage no other list shares has room. It
+/// stays inline, so boxing a value that is not a list folds it away.
+#[inline]
+fn list_view_of(value: &Value) -> (u32, usize, usize, u32) {
     use crate::list_elements::ListForm;
     use crate::runtime_value::ArrayStorage;
     match value {
         Value::Vec(vector) => {
             let (form, elements, len, room) = vector.elements.view();
             let access = match form {
-                ListForm::Values => DirectListAccess::Values,
-                ListForm::Int64 => DirectListAccess::Int64,
-                ListForm::Float64 => DirectListAccess::Float64,
-                ListForm::Bool => DirectListAccess::Bool,
+                ListForm::Values => DirectListAccess::Values as u32,
+                ListForm::Int64 => DirectListAccess::Int64 as u32,
+                ListForm::Float64 => DirectListAccess::Float64 as u32,
+                ListForm::Bool => DirectListAccess::Bool as u32,
+                ListForm::Typed(access) => access,
             };
             let room = u32::try_from(room).unwrap_or(u32::MAX);
             (access, elements, len, room)
@@ -2644,9 +2657,9 @@ fn list_view_of(value: &Value) -> (DirectListAccess, usize, usize, u32) {
                     (DirectListAccess::ArrayFloat64, values.as_ptr() as usize)
                 }
             };
-            (access, elements, array.shape[0], 0)
+            (access as u32, elements, array.shape[0], 0)
         }
-        _ => (DirectListAccess::None, 0, 0, 0),
+        _ => (DirectListAccess::None as u32, 0, 0, 0),
     }
 }
 
@@ -2662,7 +2675,9 @@ impl Drop for RefreshListView<'_> {
 /// What generated code may read in place from a boxed value's list view.
 /// Each code names one element layout, so one compare checks both that the
 /// value is confined to its thread and that its elements have the layout
-/// the code expects.
+/// the code expects. A list that keeps values of a plain layout in place
+/// carries that layout's access code instead, from
+/// [`FIRST_PLAIN_ACCESS`] up.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum DirectListAccess {
@@ -7617,6 +7632,24 @@ pub extern "C-unwind" fn aura_direct_vec_index(
     })
 }
 
+/// Removes and returns the last element of a scalar list as generated code
+/// keeps it, with no box (see [`DirectScalarKind::bits`]). `kind` names the
+/// element's [`DirectScalarKind`]. An empty list stops the program as
+/// `pop()` does.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_pop_scalar(vec: *mut OpaqueValue, kind: i64) -> i64 {
+    task_runtime_boundary(|| {
+        let kind = DirectScalarKind::of_code(kind);
+        match with_vector_mut(vec, |vector| vector.elements.pop()) {
+            Some(value) => kind.bits(&value),
+            None => runtime_diagnostic_error(Diagnostic::coded(
+                "AU4003",
+                "list pop index `-1` is out of bounds for length `0`".to_string(),
+            )),
+        }
+    })
+}
+
 /// Reads a scalar list element without boxing it. The caller has already
 /// normalized and bounds-checked `index`. `kind` is 0 for `int64`, 1 for
 /// `float64` (returned as its bit pattern), and 2 for `bool`.
@@ -7697,6 +7730,213 @@ pub extern "C-unwind" fn aura_direct_vec_check_index(
                 direct_vec_index_error(index, len, line, column)
             }
         })
+    })
+}
+
+/// One entry of the plain layout table a program passes to
+/// `aura_direct_register_plain_layouts`: the cell the runtime keeps the
+/// layout in, the layout's descriptor, and the access code generated code
+/// compares a list's code against.
+#[repr(C)]
+pub struct DirectPlainLayoutEntry {
+    pub cell: *const PlainLayoutCell,
+    pub descriptor: *const u8,
+    pub len: usize,
+    pub access: u64,
+}
+
+/// Registers every plain layout the program's generated code names, before
+/// its first call, under the access codes the code compares against, and
+/// fills each cell. From then on a list of one of these types keeps its
+/// values in place, however it was built, and generated code reads and
+/// writes them there.
+///
+/// # Safety
+///
+/// `entries` points to `count` entries. Each cell lives for the rest of the
+/// process, and each descriptor is `len` readable bytes.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_register_plain_layouts(
+    entries: *const DirectPlainLayoutEntry,
+    count: i64,
+) {
+    task_runtime_boundary(|| {
+        let count = usize::try_from(count).unwrap_or_default();
+        if count == 0 {
+            return;
+        }
+        if entries.is_null() {
+            runtime_error("direct runtime received a null plain layout table");
+        }
+        // SAFETY: the caller passes `count` readable entries.
+        for entry in unsafe { slice::from_raw_parts(entries, count) } {
+            if entry.descriptor.is_null() {
+                runtime_error("direct runtime received a null layout descriptor");
+            }
+            let access = u32::try_from(entry.access).unwrap_or(UNREGISTERED_PLAIN_ACCESS);
+            // SAFETY: the entry's contract.
+            let registered = unsafe {
+                celled_plain_layout(
+                    entry.cell,
+                    slice::from_raw_parts(entry.descriptor, entry.len),
+                    access,
+                )
+            };
+            if let Err(error) = registered {
+                runtime_error(format!("invalid plain layout: {error}"));
+            }
+        }
+    })
+}
+
+/// The layout `cell` holds, or a trap.
+///
+/// # Safety
+///
+/// `cell` is null or one of the cells the program registered.
+unsafe fn plain_layout_in(cell: *const PlainLayoutCell) -> &'static PlainLayout {
+    // SAFETY: the caller's contract.
+    unsafe { registered_plain_layout(cell) }.unwrap_or_else(|error| runtime_error(error))
+}
+
+/// Boxes the value whose bytes in the layout of `cell` are at `src`.
+///
+/// # Safety
+///
+/// `src` holds a value of the layout, and `cell` is a registered cell.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_box_plain(
+    src: *const u8,
+    cell: *const PlainLayoutCell,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| unsafe {
+        let layout = plain_layout_in(cell);
+        boxed_value(layout.read(src))
+    })
+}
+
+/// Writes the value `value` holds into its bytes in the layout of `cell`
+/// at `dst`. A value of another shape traps before anything is written.
+///
+/// # Safety
+///
+/// `dst` is valid for writes of the layout's size at its alignment, and
+/// `cell` is a registered cell.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_unbox_plain(
+    value: *mut OpaqueValue,
+    dst: *mut u8,
+    cell: *const PlainLayoutCell,
+) {
+    task_runtime_boundary(|| unsafe {
+        let layout = plain_layout_in(cell);
+        with_unlisted_value(value, |value| layout.write_checked(value, dst))
+            .unwrap_or_else(|error| runtime_error(error))
+    })
+}
+
+/// Writes element `index` of `list` into its bytes in the layout of `cell`
+/// at `dst`. A negative index counts from the end, and an index out of
+/// range traps with the list-index diagnostic at `line:column`.
+///
+/// # Safety
+///
+/// As for [`aura_direct_unbox_plain`].
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_vec_read_plain(
+    list: *mut OpaqueValue,
+    index: i64,
+    line: i64,
+    column: i64,
+    dst: *mut u8,
+    cell: *const PlainLayoutCell,
+) {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller's contract.
+        let layout = unsafe { plain_layout_in(cell) };
+        let written = with_vector(list, |vector| {
+            let len = vector.elements.len();
+            let Some(position) = normalize_vec_index(index, len).filter(|position| *position < len)
+            else {
+                direct_vec_index_error(index, len, line, column)
+            };
+            match &vector.elements {
+                ListElements::Typed(typed) if std::ptr::eq(typed.layout(), layout) => {
+                    let words = typed.element_words(position);
+                    // SAFETY: the element's words hold the layout's bytes,
+                    // and `dst` has room for them.
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(words.as_ptr().cast(), dst, layout.size())
+                    };
+                    Ok(())
+                }
+                // SAFETY: the caller's contract.
+                elements => unsafe {
+                    let element = elements.get(position).expect("the position is in range");
+                    layout.write_checked(&element, dst)
+                },
+            }
+        });
+        written.unwrap_or_else(|error| runtime_error(error))
+    })
+}
+
+/// Appends the value whose bytes in the layout of `cell` are at `src`. A
+/// list that keeps values of that layout copies the words as they are.
+///
+/// # Safety
+///
+/// As for [`aura_direct_box_plain`], and `src` is aligned for `u64` and
+/// holds the layout's whole stride of initialized words.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_vec_push_plain(
+    list: *mut OpaqueValue,
+    src: *const u8,
+    cell: *const PlainLayoutCell,
+) {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller's contract.
+        let layout = unsafe { plain_layout_in(cell) };
+        // SAFETY: the caller's contract.
+        with_vector_mut(list, |vector| unsafe {
+            vector.elements.push_plain(layout, src.cast())
+        });
+    })
+}
+
+/// Replaces element `index` of `list` with the value whose bytes in the
+/// layout of `cell` are at `src`. An index out of range traps with the
+/// list-index diagnostic at `line:column`.
+///
+/// # Safety
+///
+/// As for [`aura_direct_vec_push_plain`].
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_vec_set_plain(
+    list: *mut OpaqueValue,
+    index: i64,
+    line: i64,
+    column: i64,
+    src: *const u8,
+    cell: *const PlainLayoutCell,
+) {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller's contract.
+        let layout = unsafe { plain_layout_in(cell) };
+        let replaced = with_vector_mut(list, |vector| {
+            let len = vector.elements.len();
+            let position = normalize_vec_index(index, len).filter(|position| *position < len);
+            position
+                // SAFETY: the caller's contract, and the position is in
+                // range.
+                .map(|position| unsafe {
+                    vector.elements.replace_plain(position, layout, src.cast())
+                })
+                .ok_or(len)
+        });
+        if let Err(len) = replaced {
+            direct_vec_index_error(index, len, line, column)
+        }
     })
 }
 
@@ -11068,6 +11308,61 @@ pub extern "C-unwind" fn aura_direct_instance_get_field(
             })
         };
         boxed_value(direct_array_result(cloned, 0, 0))
+    })
+}
+
+/// Writes field `field` of the instance, enum payload, or union payload
+/// `value` holds into its bytes in the layout of `cell` at `dst`, as
+/// `aura_direct_instance_get_field` reads it, with no clone and no box.
+///
+/// # Safety
+///
+/// `field_ptr` is `field_len` readable bytes, and `dst` and `cell` are as
+/// for [`aura_direct_unbox_plain`].
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_instance_read_plain(
+    value: *mut OpaqueValue,
+    field_ptr: *const u8,
+    field_len: usize,
+    dst: *mut u8,
+    cell: *const PlainLayoutCell,
+) {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller's contract.
+        let layout = unsafe { plain_layout_in(cell) };
+        let field = literal_str(field_ptr, field_len);
+        let written = unsafe {
+            with_value(value, |value| {
+                let field_value = match value {
+                    Value::EnumVariant(variant) => {
+                        let index = direct_enum_projection_index(variant, field)
+                            .unwrap_or_else(|message| runtime_error(message));
+                        &variant.payloads[index]
+                    }
+                    Value::Union(union) => {
+                        if !direct_union_projection(union, field) {
+                            runtime_error(
+                                "union payload projection does not select the active member",
+                            );
+                        }
+                        &union.payload
+                    }
+                    Value::Instance(instance) => instance.fields.get(field).unwrap_or_else(|| {
+                        runtime_error(format!(
+                            "class `{}` has no field `{}`",
+                            instance.class_name, field
+                        ))
+                    }),
+                    other => runtime_error(format!(
+                        "cannot access field `{}` on non-instance `{}`",
+                        field,
+                        value_type_name(other)
+                    )),
+                };
+                layout.write_checked(field_value, dst)
+            })
+        };
+        written.unwrap_or_else(|error| runtime_error(error))
     })
 }
 
@@ -16780,6 +17075,9 @@ pub extern "C-unwind" fn aura_direct_fail_integer_overflow(
     })
 }
 
+#[cfg(test)]
+#[path = "native_plain_records_tests.rs"]
+mod plain_records_tests;
 #[path = "native_runtime_tests.rs"]
 mod tests;
 #[cfg(test)]

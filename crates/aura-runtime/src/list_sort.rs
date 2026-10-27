@@ -53,9 +53,13 @@ fn check_orderable(values: &[Value]) -> Result<()> {
     {
         return Ok(());
     }
-    Err(Diagnostic::new(
-        "list sort found values without one built-in order",
-    ))
+    Err(unorderable())
+}
+
+/// The error for values without one built-in order. Class instances kept
+/// in place in a list have none, so a list of them gets this error too.
+fn unorderable() -> Diagnostic {
+    Diagnostic::new("list sort found values without one built-in order")
 }
 
 fn directed(ordering: Ordering, reverse: bool) -> Ordering {
@@ -97,6 +101,7 @@ pub fn sort_elements(elements: &mut ListElements, reverse: bool) -> Result<()> {
         ListElements::Bool(_) => {
             return Err(Diagnostic::new("list sort cannot order `bool` values"));
         }
+        ListElements::Typed(_) => return Err(unorderable()),
     }
     Ok(())
 }
@@ -136,6 +141,7 @@ fn sorted_positions(keys: &ListElements, reverse: bool) -> Result<Vec<usize>> {
         ListElements::Bool(_) => {
             return Err(Diagnostic::new("list sort cannot order `bool` keys"));
         }
+        ListElements::Typed(_) => return Err(unorderable()),
     })
 }
 

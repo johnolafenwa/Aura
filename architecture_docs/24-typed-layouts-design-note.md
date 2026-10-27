@@ -1,7 +1,8 @@
 # Typed native layouts: design note
 
 Status: **Design for Phase 2 of the Rust-speed plan.** The owner approved
-the plan's decisions on 2026-10-26. Step 2a ships with this note.
+the plan's decisions on 2026-10-26. Step 2a shipped with this note, and
+steps 2b and 2c follow it.
 
 Date: 2026-10-26. Source baseline: Aura 0.7.1 preview (main @ f517376).
 
@@ -124,14 +125,54 @@ The converters interpret the layout table rather than being generated per
 type, which keeps binaries small. From step 2c they run where a typed value
 meets code that reads `Value`: runtime helpers until they take descriptors,
 host calls, FFI, and `aura run` interop. Step 2j removes every conversion
-from the hot paths of the 30 benchmark programs. Generated code will name a
-layout by a descriptor literal, and the runtime will keep decoded layouts in
-a table keyed by the literal's address, as it does for type tags today.
+from the hot paths of the 30 benchmark programs. Generated code names a
+layout by a cell, a data object the runtime fills with the decoded layout
+when the program starts (see "Plain Records").
 
 A value read back carries everything a box generated code makes would
 carry: integer kinds, tuple element types, the union type, and the type
 arguments of a generic class or enum. A handle written into a layout is a
 new box tagged with the handle's static type.
+
+## Plain Records
+
+Step 2c starts with the values a layout holds without owning anything:
+plain records. A class is plain when every field is a scalar or another
+plain class, which is when the emitter already keeps a value of it in a
+local as one word per field. Its layout holds no handle and no heap block,
+so the bytes are the whole value: copying them copies the value, and
+dropping them does nothing.
+
+- **Lists keep them in place.** `ListElements::Typed` holds the values of
+  one registered layout back to back, each padded to whole 8-byte words. A
+  list takes the form when every element fits the layout and leaves it for
+  `Value`s when one does not, as the scalar forms do, so a program cannot
+  tell which form a list uses. The list view's access code names the
+  layout.
+- **Generated code reads and writes them there.** Indexing a list of
+  records loads each field from its offset in the element, after one check
+  of the access code and, unless the loop proved the index, one bounds
+  check. Appending stores the fields past the end while the storage has
+  room, and replacing an element stores them in place when no other list
+  shares the storage. Every other case is one runtime call that copies the
+  record's bytes.
+- **Crossing into a box is one call.** Boxing a record, reading one out of
+  a box, and reading a record field of a boxed instance each pass the
+  record's bytes through a stack slot. Before 2c each was one call per
+  field, and a field read cloned the record into a new box first.
+- **Startup registers the layouts.** Each record type the code uses gets a
+  cell and an access code. Before the first call, the main wrapper passes
+  every descriptor to `aura_direct_register_plain_layouts`, which registers
+  each layout under its code. A registered layout keeps its code, and a
+  code names one layout, so a list the runtime builds keeps a record type
+  in the form generated code checks for.
+
+A record with a union field keeps its boxed paths, because the emitter's
+words for a union, a tag word and payload words, are not the union's
+layout bytes. Tuples, records held in classes that own handles, and records
+in enum payloads also stay boxed: their owners become structs in steps 2e
+and 2f, and the records move inline with them there. The tuples of the
+cross-language benchmarks all hold `str`, so none is plain.
 
 ## Lent Pointers
 
@@ -224,7 +265,7 @@ In step 2a the converters allocate blocks with the system allocator through
 | --- | --- |
 | 2a | The shared layout builder, `LayoutPlan`, descriptors, the runtime converters, and their tests. No change to generated code. |
 | 2b | Specialized generic user functions, so fewer types name a type parameter. See "Specialized Generic Functions" in [06-mir.md](06-mir.md). |
-| 2c | `copy class` values and tuples inline everywhere: locals, list elements, fields, payloads. |
+| 2c | Plain records in their layouts: lists keep them in place, generated code reads and writes list elements where they lie, and boxing, unboxing, and field reads of boxed owners take one call. See "Plain Records". Tuples, fields of owning classes, and enum payloads move inline with their owners in 2e and 2f. |
 | 2d | `list[T]` as a buffer of inline `T`, with inline index, length, push, set, and iteration, and lent element reads. |
 | 2e | Classes as structs inline in their owners, field reads that lend, writes in place, and generated drop functions. |
 | 2f | Enums as a tag and an inline payload. `match` borrows payloads, and `match own` moves them. |

@@ -1,0 +1,109 @@
+# Lists of copy classes keep each value's fields in place natively. Every
+# list operation reads and writes them as the interpreter does.
+copy class Point:
+    x: int32
+    y: float32
+    on: bool
+
+copy class Segment:
+    start: Point
+    end: Point
+    weight: float64
+    id: int64
+
+copy class Entry:
+    dist: int64
+    node: int64
+
+class Holder:
+    best: Segment
+    all: list[Segment]
+
+
+def make(i: int64) -> Segment:
+    return Segment(
+        start=Point(x=i as int32, y=(i as float32) * 0.5, on=i % 2 == 0),
+        end=Point(x=(i + 1) as int32, y=1.25, on=false),
+        weight=(i as float64) / 4.0,
+        id=i * 1000,
+    )
+
+
+def total(segments: list[Segment]) -> float64:
+    mut sum = 0.0
+    for s in segments:
+        sum += s.weight + (s.start.x as float64) + (s.end.y as float64)
+        if s.start.on:
+            sum += 1.0
+    return sum
+
+
+def worker(entries: list[Entry]) -> int64:
+    mut sum = 0
+    for entry in entries:
+        sum += entry.dist * entry.node
+    return sum
+
+
+def main():
+    mut segments: list[Segment] = []
+    for i in range(10):
+        segments.append(make(i))
+    print(segments.len())
+    print(f"{segments[3].id} {segments[3].start.x} {segments[3].start.y} {segments[3].start.on}")
+    print(segments[-1].id)
+    segments[2] = make(42)
+    print(f"{segments[2].id} {segments[2].end.x}")
+    snapshot = segments.copy()
+    segments[0] = make(7)
+    print(f"{snapshot[0].id} {segments[0].id}")
+    print(total(segments))
+
+    mut holder = Holder(best=make(5), all=segments.copy())
+    best = holder.best
+    print(f"{best.id} {best.start.y} {holder.all[4].weight}")
+    holder.all.append(make(99))
+    holder.best = holder.all[10]
+    print(f"{holder.best.id} {holder.all.len()}")
+    print(segments.pop())
+
+    points = [Point(x=1, y=2.0, on=true), Point(x=3, y=4.0, on=false)]
+    print(points)
+    print(f"{points[1].x} {points}")
+
+    mut heap: list[Entry] = [Entry(dist=5, node=1)]
+    heap.append(Entry(dist=3, node=2))
+    heap[0].dist = 99
+    heap.swap(0, 1)
+    print(heap)
+    heap.reverse()
+    heap.insert(1, Entry(dist=7, node=7))
+    print(f"{heap[1].dist} {heap.len()}")
+    heap.remove(Entry(dist=7, node=7))
+    print(f"{heap.len()} {Entry(dist=3, node=2) in heap}")
+
+    same = [Entry(dist=1, node=2), Entry(dist=3, node=4)]
+    other = [Entry(dist=1, node=2), Entry(dist=3, node=4)]
+    print(same == other)
+    seen: set[list[Entry]] = {same.copy()}
+    print(other in seen)
+
+    mut adjacency: list[list[Entry]] = []
+    for i in range(3):
+        adjacency.append(list[Entry]())
+    for i in range(9):
+        adjacency[i % 3].append(Entry(dist=i, node=i * 2))
+    adjacency[0][0] = Entry(dist=-1, node=-1)
+    print(adjacency[0])
+    print(adjacency[2][-1])
+
+    with TaskGroup() as group:
+        task = group.start(worker, adjacency[1].copy())
+        match task.result():
+            case TaskResult.Ready(sum):
+                print(sum)
+            case _:
+                print("the worker failed")
+
+    squares = [Entry(dist=i, node=i * i) for i in range(5)]
+    print(squares[4])

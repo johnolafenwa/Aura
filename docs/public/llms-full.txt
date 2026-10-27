@@ -18075,6 +18075,33 @@ medians.
 `record_field_reads` still copies each `Lookup` payload and each enum name,
 and every box passes through the task's ownership ledger.
 
+### Plain Record Lists
+
+A plain record is a class whose fields are all `int32`, `int64`, `uint64`,
+`float32`, `float64`, or `bool` values, or other plain records. It holds no
+`str`, collection, handle, or union. Native code keeps a list of plain
+records as the records' fields side by side in the list's storage, the way
+a Rust `Vec` of a `Copy` struct does. Reading `points[i].x` loads the field
+from the list, and `points.append(p)` and `points[i] = p` store the fields
+there. Moving a record into or out of a box, as passing it where any value
+is accepted does, takes one runtime call, and so does reading a record
+field of a class instance that holds a handle.
+
+The storage follows the elements, as for the scalar lists above. A program
+cannot tell which form a list uses: printing, equality, hashing, copies,
+and errors behave the same.
+
+Callgrind instruction counts on the shared Linux container, cross-language
+suite at the check size:
+
+| Program | Before | After |
+| --- | ---: | ---: |
+| `raytracer` | 471.0M | 100.9M |
+| `graph_paths` | 590.3M | 131.3M |
+
+Reading a `float64` field of a record from a `list` costs about 23
+instructions instead of about 4,900.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

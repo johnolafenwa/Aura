@@ -63,55 +63,66 @@ pub fn hash_value(value: &Value) -> u64 {
         }
         _ => {}
     }
-    let mut pending = vec![root];
     let mut budget = HASH_NODE_BUDGET;
+    hash_nodes(root, &mut hasher, &mut budget);
+    hasher.finish()
+}
+
+/// Hashes `root` and everything it holds, depth first, visiting at most
+/// `budget` nodes.
+fn hash_nodes(root: &Value, hasher: &mut impl Hasher, budget: &mut usize) {
+    let mut pending = vec![root];
     while let Some(mut value) = pending.pop() {
-        if budget == 0 {
+        if *budget == 0 {
             break;
         }
-        budget -= 1;
+        *budget -= 1;
         // Union equality compares active payloads, and a bare member equals
         // a union holding it, so a union hashes as its payload.
         while let Value::Union(union) = value {
             value = &union.payload;
         }
-        if hash_scalar(value, &mut hasher) {
+        if hash_scalar(value, hasher) {
             continue;
         }
-        std::mem::discriminant(value).hash(&mut hasher);
+        std::mem::discriminant(value).hash(hasher);
         match value {
-            Value::String(text) => text.hash(&mut hasher),
-            Value::Duration(nanoseconds) => nanoseconds.hash(&mut hasher),
+            Value::String(text) => text.hash(hasher),
+            Value::Duration(nanoseconds) => nanoseconds.hash(hasher),
             Value::Range(range) => {
-                range.start.hash(&mut hasher);
-                range.end.hash(&mut hasher);
+                range.start.hash(hasher);
+                range.end.hash(hasher);
             }
-            Value::ModuleNamespace(namespace) => namespace.path.hash(&mut hasher),
-            Value::Function(function) => function.name.hash(&mut hasher),
+            Value::ModuleNamespace(namespace) => namespace.path.hash(hasher),
+            Value::Function(function) => function.name.hash(hasher),
             Value::Tuple(tuple) => {
-                tuple.elements.len().hash(&mut hasher);
+                tuple.elements.len().hash(hasher);
                 pending.extend(tuple.elements.iter().rev());
             }
             Value::Vec(vector) => {
-                vector.elements.len().hash(&mut hasher);
+                vector.elements.len().hash(hasher);
                 match vector.elements.as_values() {
                     Some(values) => pending.extend(values.iter().rev()),
                     None => {
-                        // Scalar elements would be the next nodes visited
-                        // and push nothing, so hashing them here in order
+                        // The elements would be the next nodes visited, so
+                        // hashing each here in order, scalars in one write
+                        // and records kept in place as their values,
                         // matches hashing the same list of `Value`s.
                         for element in &vector.elements {
-                            if budget == 0 {
+                            if *budget == 0 {
                                 break;
                             }
-                            budget -= 1;
-                            hash_scalar(&element, &mut hasher);
+                            if hash_scalar(&element, hasher) {
+                                *budget -= 1;
+                            } else {
+                                hash_nodes(&element, hasher, budget);
+                            }
                         }
                     }
                 }
             }
             Value::Instance(instance) => {
-                nominal_runtime_base_name(&instance.class_name).hash(&mut hasher);
+                nominal_runtime_base_name(&instance.class_name).hash(hasher);
                 for (name, field) in instance.fields.iter().rev() {
                     if name.as_str() != DIRECT_RUNTIME_TYPE_FIELD {
                         pending.push(field);
@@ -119,24 +130,23 @@ pub fn hash_value(value: &Value) -> u64 {
                 }
                 for name in instance.fields.keys() {
                     if name.as_str() != DIRECT_RUNTIME_TYPE_FIELD {
-                        name.hash(&mut hasher);
+                        name.hash(hasher);
                     }
                 }
             }
             Value::EnumVariant(variant) => {
-                nominal_runtime_base_name(&variant.enum_name).hash(&mut hasher);
-                variant.variant_name.hash(&mut hasher);
-                variant.payloads.len().hash(&mut hasher);
+                nominal_runtime_base_name(&variant.enum_name).hash(hasher);
+                variant.variant_name.hash(hasher);
+                variant.payloads.len().hash(hasher);
                 pending.extend(variant.payloads.iter().rev());
             }
             // Set and dict equality ignore order, so only the size is a
             // structural hash. Every other kind hashes by kind alone.
-            Value::Set(set) => set.elements.len().hash(&mut hasher),
-            Value::Map(map) => map.entries.len().hash(&mut hasher),
+            Value::Set(set) => set.elements.len().hash(hasher),
+            Value::Map(map) => map.entries.len().hash(hasher),
             _ => {}
         }
     }
-    hasher.finish()
 }
 
 /// [`hash_value`] of a `str` value holding `text`, without building one.

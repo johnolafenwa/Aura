@@ -82,6 +82,16 @@ in this file.
   CPython's `dict` does. Both `aura run` and native builds use it. The
   `lru_cache` benchmark spent 46% of its instructions removing dict entries
   and now spends 0.2%, and runs 46% fewer instructions in all.
+- Native builds keep a list of plain records, classes whose fields are
+  all `int32`, `int64`, `uint64`, `float32`, `float64`, `bool`, or other
+  such classes, as the records' fields side by side in the list's storage.
+  Indexing, appending, and assigning an element read and write the fields
+  there, instead of copying each element into a box of its own. Moving
+  such a record into or out of a box, or reading one from a field of a
+  class instance, now takes one runtime call instead of one per field.
+  Programs print and compare these lists exactly as before. `pop()` on a
+  list of scalars also runs in native code, without a runtime call or a
+  box, so `bytecode_vm` runs 86% fewer instructions at the check size.
 
 ### Fixed
 

@@ -7912,6 +7912,8 @@ impl Value {
                         }
                         Value::Vec(values) if values.elements.as_values().is_none() => {
                             // Scalars render the same with or without a hook.
+                            // A record a typed list keeps in place renders
+                            // as its value does.
                             let float32 = is_float32_type(&values.element_type);
                             rendered.push('[');
                             for (index, value) in values.elements.iter().enumerate() {
@@ -7923,7 +7925,11 @@ impl Value {
                                         rendered.push_str(&render_float32(*number as f32))
                                     }
                                     value => {
-                                        render_scalar(value, &mut rendered);
+                                        if !render_scalar(value, &mut rendered) {
+                                            rendered.push_str(
+                                                &value.render_inner(hook.as_deref_mut())?,
+                                            );
+                                        }
                                     }
                                 }
                             }

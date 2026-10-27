@@ -2,10 +2,13 @@
 //!
 //! A list whose elements are all `int64`, all `float64`, or all `bool` keeps
 //! the scalars themselves: 8 bytes for each `int64` or `float64` element and
-//! 1 byte for each `bool`, instead of a whole `Value`. Any other list keeps
-//! `Value`s. The storage follows the elements alone, and moving between the
-//! two forms loses nothing, so a program cannot observe which one a list
-//! uses. Generated code reads the scalar forms in place.
+//! 1 byte for each `bool`, instead of a whole `Value`. A list whose elements
+//! are all values of a class or tuple type that generated code registered a
+//! plain layout for keeps each value's bytes in that layout, one after
+//! another (see [`PlainLayout`]). Any other list keeps `Value`s. The storage
+//! follows the elements alone, and moving between the forms loses nothing,
+//! so a program cannot observe which one a list uses. Generated code reads
+//! the scalar and typed forms in place.
 //!
 //! Every form sits in a [`SharedVec`], so a clone shares the storage and the
 //! first write through a shared handle copies it.
@@ -16,6 +19,7 @@ use std::fmt;
 
 use crate::collection_index::SharedVec;
 use crate::integer::{IntegerKind, IntegerValue};
+use crate::native_runtime::{plain_layout_for_value, PlainLayout};
 use crate::randomness::DeterministicRng;
 use crate::runtime_value::Value;
 
@@ -26,15 +30,195 @@ pub enum ListElements {
     Int64(SharedVec<i64>),
     Float64(SharedVec<f64>),
     Bool(SharedVec<bool>),
+    /// Boxed, so the typed form keeps every list one pointer and a tag.
+    Typed(Box<TypedElements>),
 }
 
-/// Which form a [`ListElements`] uses.
+/// Which form a [`ListElements`] uses. A typed list names its layout by
+/// the layout's access code.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ListForm {
     Values,
     Int64,
     Float64,
     Bool,
+    Typed(u32),
+}
+
+/// Values of one plain layout, in place: each element takes the layout's
+/// stride of words, and the storage holds whole elements only.
+#[derive(Clone)]
+pub struct TypedElements {
+    layout: &'static PlainLayout,
+    words: SharedVec<u64>,
+}
+
+impl TypedElements {
+    fn new(layout: &'static PlainLayout) -> Self {
+        Self {
+            layout,
+            words: SharedVec::new(),
+        }
+    }
+
+    /// The elements of `values` in `layout`, when every one fits it.
+    fn of(layout: &'static PlainLayout, values: &[Value]) -> Option<Self> {
+        let mut typed = Self::new(layout);
+        for value in values {
+            if !layout.fits(value) {
+                return None;
+            }
+            typed.push(value);
+        }
+        Some(typed)
+    }
+
+    pub fn layout(&self) -> &'static PlainLayout {
+        self.layout
+    }
+
+    fn stride(&self) -> usize {
+        self.layout.stride_words()
+    }
+
+    fn len(&self) -> usize {
+        self.words.len() / self.layout.stride()
+    }
+
+    /// [`ListElements::adopt_appended`] for this form, out of line for the
+    /// same reason as [`Self::view`].
+    ///
+    /// # Safety
+    ///
+    /// As for [`ListElements::adopt_appended`].
+    #[inline(never)]
+    unsafe fn adopt_appended(&mut self, len: usize) {
+        if let Some(words) = len.checked_mul(self.stride()) {
+            unsafe { adopt_appended(&mut self.words, words) }
+        }
+    }
+
+    /// [`ListElements::view`] for this form. It divides by the stride, so
+    /// it stays out of line and the scalar forms' view stays small enough
+    /// to inline into every list write.
+    #[inline(never)]
+    fn view(&self) -> (ListForm, usize, usize, usize) {
+        (
+            ListForm::Typed(self.layout.access()),
+            self.words.as_ptr() as usize,
+            self.len(),
+            unshared_capacity(&self.words) / self.layout.stride(),
+        )
+    }
+
+    fn range(&self, index: usize) -> std::ops::Range<usize> {
+        index * self.stride()..(index + 1) * self.stride()
+    }
+
+    /// The words of element `index`, which hold its layout's bytes.
+    pub fn element_words(&self, index: usize) -> &[u64] {
+        &self.words[self.range(index)]
+    }
+
+    fn decode(&self, index: usize) -> Value {
+        decode_typed(self.layout, &self.words[self.range(index)])
+    }
+
+    /// Encodes a value that fits the layout into `stride` new words.
+    fn encoded(&self, value: &Value) -> Vec<u64> {
+        let mut words = vec![0; self.stride()];
+        // SAFETY: the caller checked that `value` fits, and `words` has
+        // room for one element.
+        unsafe { self.layout.encode(value, words.as_mut_ptr()) };
+        words
+    }
+
+    fn push(&mut self, value: &Value) {
+        let encoded = self.encoded(value);
+        self.words.extend_from_slice(&encoded);
+    }
+
+    /// Appends the element whose words are at `src`.
+    ///
+    /// # Safety
+    ///
+    /// `src` is aligned for `u64` and holds a stride of initialized words
+    /// that encode a value of this layout.
+    unsafe fn push_words(&mut self, src: *const u64) {
+        // SAFETY: the caller's contract.
+        let words = unsafe { std::slice::from_raw_parts(src, self.stride()) };
+        self.words.extend_from_slice(words);
+    }
+
+    /// Overwrites element `index` with the words at `src`.
+    ///
+    /// # Safety
+    ///
+    /// As for [`Self::push_words`].
+    unsafe fn set_words(&mut self, index: usize, src: *const u64) {
+        // SAFETY: the caller's contract.
+        let words = unsafe { std::slice::from_raw_parts(src, self.stride()) };
+        let range = self.range(index);
+        self.words[range].copy_from_slice(words);
+    }
+
+    fn replace(&mut self, index: usize, value: &Value) -> Value {
+        let previous = self.decode(index);
+        let encoded = self.encoded(value);
+        let range = self.range(index);
+        self.words[range].copy_from_slice(&encoded);
+        previous
+    }
+
+    fn insert(&mut self, index: usize, value: &Value) {
+        let encoded = self.encoded(value);
+        let at = index * self.stride();
+        self.words.splice(at..at, encoded);
+    }
+
+    fn remove(&mut self, index: usize) -> Value {
+        let value = self.decode(index);
+        let range = self.range(index);
+        self.words.drain(range);
+        value
+    }
+
+    fn pop(&mut self) -> Option<Value> {
+        let last = self.len().checked_sub(1)?;
+        let value = self.decode(last);
+        self.truncate(last);
+        Some(value)
+    }
+
+    fn swap(&mut self, first: usize, second: usize) {
+        if first == second {
+            return;
+        }
+        let stride = self.stride();
+        for word in 0..stride {
+            self.words
+                .swap(first * stride + word, second * stride + word);
+        }
+    }
+
+    /// The elements in the order `order` lists their old positions.
+    fn permuted(&self, order: impl Iterator<Item = usize>) -> Self {
+        let mut words = Vec::with_capacity(self.words.len());
+        for index in order {
+            words.extend_from_slice(&self.words[self.range(index)]);
+        }
+        Self {
+            layout: self.layout,
+            words: words.into(),
+        }
+    }
+
+    fn truncate(&mut self, len: usize) {
+        let words = len * self.stride();
+        if words < self.words.len() {
+            self.words.truncate(words);
+        }
+    }
 }
 
 /// A value that one of the scalar forms keeps exactly.
@@ -81,11 +265,14 @@ fn unshared_capacity<T>(values: &SharedVec<T>) -> usize {
 /// # Safety
 ///
 /// As for [`ListElements::adopt_appended`].
-unsafe fn adopt_appended<T>(values: &mut SharedVec<T>, len: usize) {
+unsafe fn adopt_appended<T: Copy>(values: &mut SharedVec<T>, len: usize) {
     if let Some(values) = values.unshared_mut() {
         if len > values.len() && len <= values.capacity() {
             // SAFETY: the caller wrote each element up to `len`.
             unsafe { values.set_len(len) };
+        } else if len < values.len() {
+            // Generated code popped the elements past `len`.
+            values.truncate(len);
         }
     }
 }
@@ -99,6 +286,11 @@ impl ListElements {
         Self::Values(SharedVec::new())
     }
 
+    /// An empty list that keeps values of `layout` in place.
+    pub fn typed(layout: &'static PlainLayout) -> Self {
+        Self::Typed(Box::new(TypedElements::new(layout)))
+    }
+
     #[inline]
     pub fn form(&self) -> ListForm {
         match self {
@@ -106,16 +298,23 @@ impl ListElements {
             Self::Int64(_) => ListForm::Int64,
             Self::Float64(_) => ListForm::Float64,
             Self::Bool(_) => ListForm::Bool,
+            Self::Typed(typed) => ListForm::Typed(typed.layout.access()),
         }
     }
 
     #[inline]
     pub fn len(&self) -> usize {
+        // Testing for the typed form first leaves a match whose arms all
+        // read a `Vec`'s length the same way, which compiles to one load.
+        if let Self::Typed(typed) = self {
+            return typed.len();
+        }
         match self {
             Self::Values(values) => values.len(),
             Self::Int64(values) => values.len(),
             Self::Float64(values) => values.len(),
             Self::Bool(values) => values.len(),
+            Self::Typed(typed) => typed.len(),
         }
     }
 
@@ -125,9 +324,9 @@ impl ListElements {
     }
 
     /// The form, the address of the first element, the length, and how
-    /// many elements a scalar form has room for when no other list shares
-    /// its storage, or 0. Generated code reads the elements in place and
-    /// appends while the room lasts.
+    /// many elements a scalar or typed form has room for when no other list
+    /// shares its storage, or 0. Generated code reads the elements in place
+    /// and appends while the room lasts.
     #[inline]
     pub fn view(&self) -> (ListForm, usize, usize, usize) {
         match self {
@@ -150,23 +349,27 @@ impl ListElements {
                 values.len(),
                 unshared_capacity(values),
             ),
+            Self::Typed(typed) => typed.view(),
         }
     }
 
     /// Takes in the elements generated code appended past the end of a
-    /// scalar form, so the storage holds `len` elements. A length that is
-    /// not past the end, or does not fit the storage, changes nothing.
+    /// scalar or typed form, or drops the ones it popped, so the storage
+    /// holds `len` elements. A length that does not fit the storage changes
+    /// nothing.
     ///
     /// # Safety
     ///
     /// Every element from the current length up to `len` was written into
     /// this storage's spare room as a valid value of its form.
+    #[inline]
     pub unsafe fn adopt_appended(&mut self, len: usize) {
         match self {
             Self::Values(_) => {}
             Self::Int64(values) => unsafe { adopt_appended(values, len) },
             Self::Float64(values) => unsafe { adopt_appended(values, len) },
             Self::Bool(values) => unsafe { adopt_appended(values, len) },
+            Self::Typed(typed) => unsafe { typed.adopt_appended(len) },
         }
     }
 
@@ -177,6 +380,7 @@ impl ListElements {
             Self::Int64(values) => values.is_shared(),
             Self::Float64(values) => values.is_shared(),
             Self::Bool(values) => values.is_shared(),
+            Self::Typed(typed) => typed.words.is_shared(),
         }
     }
 
@@ -189,6 +393,7 @@ impl ListElements {
             Self::Int64(values) => values.as_ptr() as usize,
             Self::Float64(values) => values.as_ptr() as usize,
             Self::Bool(values) => values.as_ptr() as usize,
+            Self::Typed(typed) => typed.words.as_ptr() as usize,
         }
     }
 
@@ -201,6 +406,7 @@ impl ListElements {
                 .get(index)
                 .map(|float| Cow::Owned(Value::Float(*float))),
             Self::Bool(values) => values.get(index).map(|flag| Cow::Owned(Value::Bool(*flag))),
+            Self::Typed(typed) => (index < typed.len()).then(|| Cow::Owned(typed.decode(index))),
         }
     }
 
@@ -234,6 +440,10 @@ impl ListElements {
             Self::Int64(values) => Iter::Int64(values.iter()),
             Self::Float64(values) => Iter::Float64(values.iter()),
             Self::Bool(values) => Iter::Bool(values.iter()),
+            Self::Typed(typed) => Iter::Typed {
+                layout: typed.layout,
+                words: &typed.words,
+            },
         }
     }
 
@@ -300,10 +510,17 @@ impl ListElements {
             (Self::Int64(values), Some(Scalar::Int64(bits))) => values.push(bits),
             (Self::Float64(values), Some(Scalar::Float64(float))) => values.push(float),
             (Self::Bool(values), Some(Scalar::Bool(flag))) => values.push(flag),
+            (Self::Typed(typed), None) if typed.layout.fits(&value) => typed.push(&value),
             (list, Some(scalar)) if list.is_empty() => *list = Self::single(scalar),
-            (list, None) if list.is_empty() && !matches!(list, Self::Values(_)) => {
-                *list = Self::Values(vec![value].into());
-            }
+            (list, None) if list.is_empty() => match plain_layout_for_value(&value) {
+                Some(layout) => {
+                    let mut typed = TypedElements::new(layout);
+                    typed.push(&value);
+                    *list = Self::Typed(Box::new(typed));
+                }
+                // An empty list of values keeps its storage and its room.
+                None => list.values_mut().push(value),
+            },
             (list, _) => list.values_mut().push(value),
         }
     }
@@ -313,6 +530,50 @@ impl ListElements {
             Scalar::Int64(bits) => Self::Int64(vec![bits].into()),
             Scalar::Float64(float) => Self::Float64(vec![float].into()),
             Scalar::Bool(flag) => Self::Bool(vec![flag].into()),
+        }
+    }
+
+    /// Appends the plain record whose words are at `src`, as [`Self::push`]
+    /// appends the value they hold. A list that keeps values of `layout`
+    /// copies the words without building the value.
+    ///
+    /// # Safety
+    ///
+    /// `src` is aligned for `u64` and holds `layout.stride_words()`
+    /// initialized words that encode a value of `layout`.
+    pub unsafe fn push_plain(&mut self, layout: &'static PlainLayout, src: *const u64) {
+        match self {
+            Self::Typed(typed) if std::ptr::eq(typed.layout, layout) => {
+                // SAFETY: the caller's contract.
+                unsafe { typed.push_words(src) }
+            }
+            // SAFETY: the caller's contract.
+            list => list.push(unsafe { layout.read(src.cast()) }),
+        }
+    }
+
+    /// Replaces element `index`, which is in range, with the plain record
+    /// whose words are at `src`, as [`Self::replace`] does with the value
+    /// they hold.
+    ///
+    /// # Safety
+    ///
+    /// As for [`Self::push_plain`].
+    pub unsafe fn replace_plain(
+        &mut self,
+        index: usize,
+        layout: &'static PlainLayout,
+        src: *const u64,
+    ) {
+        match self {
+            Self::Typed(typed) if std::ptr::eq(typed.layout, layout) => {
+                // SAFETY: the caller's contract, and `index` is in range.
+                unsafe { typed.set_words(index, src) }
+            }
+            list => {
+                // SAFETY: the caller's contract.
+                list.replace(index, unsafe { layout.read(src.cast()) });
+            }
         }
     }
 
@@ -346,6 +607,7 @@ impl ListElements {
                     values.pop().map(Value::Bool)
                 }
             }
+            Self::Typed(typed) => typed.pop(),
         }
     }
 
@@ -370,6 +632,7 @@ impl ListElements {
             (Self::Bool(values), Some(Scalar::Bool(flag))) => {
                 Value::Bool(std::mem::replace(&mut values[index], flag))
             }
+            (Self::Typed(typed), None) if typed.layout.fits(&value) => typed.replace(index, &value),
             (list, _) => std::mem::replace(&mut list.values_mut()[index], value),
         }
     }
@@ -389,6 +652,7 @@ impl ListElements {
             (Self::Int64(values), Some(Scalar::Int64(bits))) => values.insert(index, bits),
             (Self::Float64(values), Some(Scalar::Float64(float))) => values.insert(index, float),
             (Self::Bool(values), Some(Scalar::Bool(flag))) => values.insert(index, flag),
+            (Self::Typed(typed), None) if typed.layout.fits(&value) => typed.insert(index, &value),
             (list, _) if list.is_empty() => list.push(value),
             (list, _) => list.values_mut().insert(index, value),
         }
@@ -410,6 +674,7 @@ impl ListElements {
             Self::Int64(values) => int64_value(values.remove(index)),
             Self::Float64(values) => Value::Float(values.remove(index)),
             Self::Bool(values) => Value::Bool(values.remove(index)),
+            Self::Typed(typed) => typed.remove(index),
         }
     }
 
@@ -419,6 +684,14 @@ impl ListElements {
             Self::Int64(values) => values.swap(first, second),
             Self::Float64(values) => values.swap(first, second),
             Self::Bool(values) => values.swap(first, second),
+            Self::Typed(typed) => {
+                assert!(
+                    first.max(second) < typed.len(),
+                    "list swap index is out of range for length {}",
+                    typed.len()
+                );
+                typed.swap(first, second)
+            }
         }
     }
 
@@ -428,6 +701,7 @@ impl ListElements {
             Self::Int64(values) => values.reverse(),
             Self::Float64(values) => values.reverse(),
             Self::Bool(values) => values.reverse(),
+            Self::Typed(typed) => **typed = typed.permuted((0..typed.len()).rev()),
         }
     }
 
@@ -445,6 +719,7 @@ impl ListElements {
             Self::Int64(values) => values.truncate(len),
             Self::Float64(values) => values.truncate(len),
             Self::Bool(values) => values.truncate(len),
+            Self::Typed(typed) => typed.truncate(len),
         }
     }
 
@@ -458,6 +733,9 @@ impl ListElements {
             (Self::Int64(values), Self::Int64(more)) => values.extend_from_slice(&more),
             (Self::Float64(values), Self::Float64(more)) => values.extend_from_slice(&more),
             (Self::Bool(values), Self::Bool(more)) => values.extend_from_slice(&more),
+            (Self::Typed(typed), Self::Typed(more)) if std::ptr::eq(typed.layout, more.layout) => {
+                typed.words.extend_from_slice(&more.words)
+            }
             (list, other) => {
                 for value in other {
                     list.push(value);
@@ -482,6 +760,13 @@ impl ListElements {
             Self::Int64(values) => Self::Int64(values.drain(start..end).collect()),
             Self::Float64(values) => Self::Float64(values.drain(start..end).collect()),
             Self::Bool(values) => Self::Bool(values.drain(start..end).collect()),
+            Self::Typed(typed) => {
+                let stride = typed.stride();
+                Self::Typed(Box::new(TypedElements {
+                    layout: typed.layout,
+                    words: typed.words.drain(start * stride..end * stride).collect(),
+                }))
+            }
         }
     }
 
@@ -513,6 +798,10 @@ impl ListElements {
             (Self::Bool(values), Self::Bool(more)) => {
                 values.splice(index..index, more.iter().copied());
             }
+            (Self::Typed(typed), Self::Typed(more)) if std::ptr::eq(typed.layout, more.layout) => {
+                let at = index * typed.stride();
+                typed.words.splice(at..at, more.words.iter().copied());
+            }
             (list, other) => {
                 list.update(|values| {
                     values.splice(index..index, other);
@@ -527,6 +816,7 @@ impl ListElements {
             Self::Int64(values) => values.capacity(),
             Self::Float64(values) => values.capacity(),
             Self::Bool(values) => values.capacity(),
+            Self::Typed(typed) => typed.words.capacity() / typed.layout.stride(),
         }
     }
 
@@ -536,6 +826,10 @@ impl ListElements {
             Self::Int64(values) => values.try_reserve(additional),
             Self::Float64(values) => values.try_reserve(additional),
             Self::Bool(values) => values.try_reserve(additional),
+            Self::Typed(typed) => {
+                let stride = typed.stride();
+                typed.words.try_reserve(additional.saturating_mul(stride))
+            }
         }
     }
 
@@ -546,6 +840,12 @@ impl ListElements {
             Self::Int64(values) => rng.shuffle(values),
             Self::Float64(values) => rng.shuffle(values),
             Self::Bool(values) => rng.shuffle(values),
+            Self::Typed(typed) => {
+                // The same draws as shuffling the elements themselves.
+                let mut order = (0..typed.len()).collect::<Vec<_>>();
+                rng.shuffle(&mut order);
+                **typed = typed.permuted(order.into_iter());
+            }
         }
     }
 
@@ -607,7 +907,15 @@ impl From<Vec<Value>> for ListElements {
                     return Self::Bool(scalars.into());
                 }
             }
-            None => {}
+            None => {
+                let typed = values
+                    .first()
+                    .and_then(plain_layout_for_value)
+                    .and_then(|layout| TypedElements::of(layout, &values));
+                if let Some(typed) = typed {
+                    return Self::Typed(Box::new(typed));
+                }
+            }
         }
         Self::Values(values.into())
     }
@@ -678,20 +986,43 @@ pub enum Iter<'a> {
     Int64(std::slice::Iter<'a, i64>),
     Float64(std::slice::Iter<'a, f64>),
     Bool(std::slice::Iter<'a, bool>),
+    /// The words of the elements left, whole elements only.
+    Typed {
+        layout: &'static PlainLayout,
+        words: &'a [u64],
+    },
+}
+
+/// The value one typed element's words hold. Decoding builds a `Value`, so
+/// it stays out of line and the other forms' steps stay small.
+#[inline(never)]
+fn decode_typed(layout: &PlainLayout, words: &[u64]) -> Value {
+    // SAFETY: a typed list's words hold whole elements its layout wrote.
+    unsafe { layout.decode(words.as_ptr()) }
 }
 
 impl<'a> Iterator for Iter<'a> {
     type Item = Cow<'a, Value>;
 
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             Self::Values(values) => values.next().map(Cow::Borrowed),
             Self::Int64(values) => values.next().map(|bits| Cow::Owned(int64_value(*bits))),
             Self::Float64(values) => values.next().map(|float| Cow::Owned(Value::Float(*float))),
             Self::Bool(values) => values.next().map(|flag| Cow::Owned(Value::Bool(*flag))),
+            Self::Typed { layout, words } => {
+                if words.is_empty() {
+                    return None;
+                }
+                let (first, rest) = words.split_at(layout.stride_words());
+                *words = rest;
+                Some(Cow::Owned(decode_typed(layout, first)))
+            }
         }
     }
 
+    #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
         let len = self.len();
         (len, Some(len))
@@ -699,17 +1030,24 @@ impl<'a> Iterator for Iter<'a> {
 
     /// Steps over `n` elements without building them, so `skip` costs the
     /// same however far it skips.
+    #[inline]
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
         match self {
             Self::Values(values) => values.nth(n).map(Cow::Borrowed),
             Self::Int64(values) => values.nth(n).map(|bits| Cow::Owned(int64_value(*bits))),
             Self::Float64(values) => values.nth(n).map(|float| Cow::Owned(Value::Float(*float))),
             Self::Bool(values) => values.nth(n).map(|flag| Cow::Owned(Value::Bool(*flag))),
+            Self::Typed { layout, words } => {
+                let skipped = n.saturating_mul(layout.stride_words()).min(words.len());
+                *words = &words[skipped..];
+                self.next()
+            }
         }
     }
 }
 
 impl DoubleEndedIterator for Iter<'_> {
+    #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
         self.nth_back(0)
     }
@@ -726,17 +1064,27 @@ impl DoubleEndedIterator for Iter<'_> {
             Self::Bool(values) => values
                 .nth_back(n)
                 .map(|flag| Cow::Owned(Value::Bool(*flag))),
+            Self::Typed { layout, words } => {
+                if words.is_empty() {
+                    return None;
+                }
+                let (rest, last) = words.split_at(words.len() - layout.stride_words());
+                *words = rest;
+                Some(Cow::Owned(decode_typed(layout, last)))
+            }
         }
     }
 }
 
 impl ExactSizeIterator for Iter<'_> {
+    #[inline]
     fn len(&self) -> usize {
         match self {
             Self::Values(values) => values.len(),
             Self::Int64(values) => values.len(),
             Self::Float64(values) => values.len(),
             Self::Bool(values) => values.len(),
+            Self::Typed { layout, words } => words.len() / layout.stride(),
         }
     }
 }

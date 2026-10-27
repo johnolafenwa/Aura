@@ -1,5 +1,12 @@
+use std::sync::OnceLock;
+
+use aura_core::layout::{encode_descriptor, ClassDefinition, LayoutEnv};
+use aura_core::types::Type;
+
 use super::*;
 use crate::integer::IntegerKind;
+use crate::native_runtime::plain_layout_for_descriptor;
+use crate::runtime_value::InstanceValue;
 
 fn int(value: i64) -> Value {
     Value::Int(IntegerValue::from_i64(value))
@@ -24,6 +31,103 @@ fn exact(values: &[Value]) -> String {
 
 fn exact_list(list: &ListElements) -> String {
     exact(&list.to_vec())
+}
+
+/// The plain layout of `ListTestRecord`, a class only these tests use, so
+/// registering it changes no other test's lists.
+fn test_record_layout() -> &'static PlainLayout {
+    static LAYOUT: OnceLock<&'static PlainLayout> = OnceLock::new();
+    LAYOUT.get_or_init(|| {
+        let env = LayoutEnv {
+            classes: [(
+                "ListTestRecord".to_string(),
+                ClassDefinition {
+                    type_params: Vec::new(),
+                    fields: vec![
+                        ("x".to_string(), Type::named("int64")),
+                        ("flag".to_string(), Type::named("bool")),
+                        ("y".to_string(), Type::named("float32")),
+                    ],
+                },
+            )]
+            .into(),
+            enums: Default::default(),
+        };
+        let descriptor = encode_descriptor(&Type::named("ListTestRecord"), &env);
+        plain_layout_for_descriptor(&descriptor).expect("the record has a plain layout")
+    })
+}
+
+/// A `ListTestRecord`, whose layout is registered.
+fn record(x: i64) -> Value {
+    test_record_layout();
+    Value::Instance(InstanceValue {
+        class_name: "ListTestRecord".to_string(),
+        fields: [
+            ("x".to_string(), int(x)),
+            ("flag".to_string(), Value::Bool(x % 2 == 0)),
+            ("y".to_string(), Value::Float(x as f64 / 4.0)),
+        ]
+        .into(),
+    })
+}
+
+/// A `ListTestRecord` without the registered shape, which no typed list
+/// keeps.
+fn misshapen_record(x: i64) -> Value {
+    test_record_layout();
+    Value::Instance(InstanceValue {
+        class_name: "ListTestRecord".to_string(),
+        fields: [("x".to_string(), Value::String(format!("r{x}")))].into(),
+    })
+}
+
+#[test]
+fn lists_keep_registered_records_in_place() {
+    let layout = test_record_layout();
+    assert_eq!(layout.stride_words(), 2);
+    let values = vec![record(1), record(-2), record(3)];
+    let list = ListElements::from(values.clone());
+    assert_eq!(list.form(), ListForm::Typed(layout.access()));
+    assert_eq!(exact_list(&list), exact(&values));
+    let (form, elements, len, _) = list.view();
+    assert_eq!(form, ListForm::Typed(layout.access()));
+    assert_ne!(elements, 0);
+    assert_eq!(len, 3);
+
+    // A record of another shape, even under the same name, keeps values.
+    let mixed = ListElements::from(vec![record(1), misshapen_record(2)]);
+    assert_eq!(mixed.form(), ListForm::Values);
+    let mut pushed = ListElements::new();
+    pushed.push(record(4));
+    assert_eq!(pushed.form(), ListForm::Typed(layout.access()));
+    pushed.push(misshapen_record(5));
+    assert_eq!(pushed.form(), ListForm::Values);
+    assert_eq!(
+        exact_list(&pushed),
+        exact(&[record(4), misshapen_record(5)])
+    );
+
+    // Equal lists in either form compare and hash alike.
+    let mut boxed = ListElements::from(values.clone());
+    boxed.values_mut();
+    assert_eq!(boxed.form(), ListForm::Values);
+    assert_eq!(list, boxed);
+    let typed_value = Value::Vec(crate::runtime_value::VecValue {
+        element_type: Type::named("ListTestRecord"),
+        elements: list.clone(),
+        str_view: Default::default(),
+    });
+    let boxed_value = Value::Vec(crate::runtime_value::VecValue {
+        element_type: Type::named("ListTestRecord"),
+        elements: boxed,
+        str_view: Default::default(),
+    });
+    assert_eq!(
+        crate::collection_index::hash_value(&typed_value),
+        crate::collection_index::hash_value(&boxed_value)
+    );
+    assert_eq!(typed_value.render(), boxed_value.render());
 }
 
 #[test]
@@ -80,7 +184,7 @@ fn sample_value(steps: &mut Steps, family: usize) -> Value {
     // Most values match the family's form, so lists stay scalar for a
     // while before a mismatch moves them to the value form.
     let family = if steps.next(10) == 0 {
-        steps.next(5)
+        steps.next(7)
     } else {
         family
     };
@@ -90,15 +194,17 @@ fn sample_value(steps: &mut Steps, family: usize) -> Value {
         1 => Value::Float(small as f64 / 2.0),
         2 => Value::Bool(small > 0),
         3 => untyped(small),
-        _ => Value::String(format!("s{small}")),
+        4 => Value::String(format!("s{small}")),
+        5 => record(small),
+        _ => misshapen_record(small),
     }
 }
 
 #[test]
 fn every_edit_matches_a_plain_vector_of_values() {
-    for seed in 0..60u64 {
+    for seed in 0..84u64 {
         let mut steps = Steps(seed);
-        let family = (seed % 5) as usize;
+        let family = (seed % 7) as usize;
         let mut model: Vec<Value> = (0..steps.next(4))
             .map(|_| sample_value(&mut steps, family))
             .collect();
@@ -459,6 +565,7 @@ fn shuffle_gives_the_same_order_in_every_form() {
         (1..=40).map(int).collect::<Vec<_>>(),
         (1..=40).map(|n| Value::Float(n as f64)).collect(),
         (1..=40).map(|n| Value::Bool(n % 3 == 0)).collect(),
+        (1..=40).map(record).collect(),
     ];
     for values in lists {
         let mut scalars = ListElements::from(values.clone());
@@ -481,6 +588,7 @@ fn reserve_and_capacity_work_in_every_form() {
         vec![int(1)],
         vec![Value::Float(1.0)],
         vec![Value::Bool(true)],
+        vec![record(1)],
     ];
     for values in lists {
         let mut list = ListElements::from(values);
@@ -492,4 +600,25 @@ fn reserve_and_capacity_work_in_every_form() {
         assert!(list.is_empty());
     }
     assert!(ListElements::new().is_empty());
+}
+
+#[test]
+fn records_in_place_sort_only_by_positions() {
+    let layout = test_record_layout();
+    let mut list = ListElements::from(vec![record(1), record(2), record(3)]);
+    assert_eq!(list.form(), ListForm::Typed(layout.access()));
+
+    // Records have no built-in order, as elements or as keys.
+    let unorderable = "list sort found values without one built-in order";
+    let error = crate::list_sort::sort_elements(&mut list, false).unwrap_err();
+    assert!(error.to_string().contains(unorderable), "{error}");
+    let keys = list.clone();
+    let error = crate::list_sort::sort_elements_by_keys(&mut list, &keys, true).unwrap_err();
+    assert!(error.to_string().contains(unorderable), "{error}");
+
+    // The positions a user `Ord` sort computes move the records in place.
+    let order = ListElements::from(vec![int(2), int(0), int(1)]);
+    crate::list_sort::permute_elements(&mut list, &order).expect("a permutation");
+    assert_eq!(list.form(), ListForm::Typed(layout.access()));
+    assert_eq!(exact_list(&list), exact(&[record(3), record(1), record(2)]));
 }
