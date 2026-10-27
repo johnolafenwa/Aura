@@ -501,6 +501,12 @@ pub mod representation_stats {
 /// Boxes a union value and counts the allocation for the representation
 /// measurements; every runtime union construction goes through here.
 pub fn union_value(union_type: Type, member_index: usize, payload: Value) -> Value {
+    shared_union_value(Arc::new(union_type), member_index, payload)
+}
+
+/// A union value whose type other values share, so building and dropping
+/// it neither copies nor frees the type.
+pub fn shared_union_value(union_type: Arc<Type>, member_index: usize, payload: Value) -> Value {
     representation_stats::note_union_payload_box();
     Value::Union(Box::new(UnionValue {
         union_type,
@@ -511,7 +517,7 @@ pub fn union_value(union_type: Type, member_index: usize, payload: Value) -> Val
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct UnionValue {
-    pub union_type: Type,
+    pub union_type: Arc<Type>,
     pub member_index: usize,
     pub payload: Value,
 }
@@ -3637,7 +3643,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     }
                 }
                 CloneFrame::Union { union } => {
-                    state.completed = Some(union_value(
+                    state.completed = Some(shared_union_value(
                         union.union_type.clone(),
                         union.member_index,
                         cloned,
@@ -8725,7 +8731,7 @@ impl Value {
                                 }
                             }
                         }
-                        Value::Union(union) => actions.push(match &union.union_type {
+                        Value::Union(union) => actions.push(match &*union.union_type {
                             Type::Union(members) => match members.members.get(union.member_index) {
                                 Some(member) => typed(&union.payload, member),
                                 None => RenderAction::Value(&union.payload),
@@ -15880,70 +15886,34 @@ pub fn claim_task_result_observations(tasks: &[TaskValue]) -> Result<()> {
 }
 
 /// `member | None`, with the positions of `member` and of `None` in it.
-/// Normalizing a union costs thousands of instructions, and a program's
-/// builtin optional results name few member types, so each thread keeps the
-/// first optional unions it makes of members that name no callable (whose
-/// contracts `==` does not compare).
-fn optional_union(member: aura_core::types::Type) -> (aura_core::types::Type, usize, usize) {
+/// Normalizing a union costs thousands of instructions, so helpers that
+/// return an optional on every call go through [`optional_named`], which
+/// keeps the union.
+fn optional_union(member: aura_core::types::Type) -> (Arc<aura_core::types::Type>, usize, usize) {
     use aura_core::types::Type;
-    const KEPT: usize = 32;
-    thread_local! {
-        static OPTIONAL_UNIONS: RefCell<Vec<(Type, Type, usize, usize)>> =
-            const { RefCell::new(Vec::new()) };
-    }
-    fn names_no_callable(ty: &Type) -> bool {
-        match ty {
-            Type::Named(_, args) | Type::Tuple(args) => args.iter().all(names_no_callable),
-            _ => false,
-        }
-    }
-    let kept = names_no_callable(&member);
-    if kept {
-        let found = OPTIONAL_UNIONS.with_borrow(|unions| {
-            unions
-                .iter()
-                .find(|(known, ..)| *known == member)
-                .map(|(_, union, present, absent)| (union.clone(), *present, *absent))
-        });
-        if let Some(found) = found {
-            return found;
-        }
-    }
-    let union_type = aura_core::types::optional_type(member.clone());
+    let union_type = aura_core::types::optional_type(member);
     let Type::Union(union) = &union_type else {
         unreachable!("an optional union has two members");
     };
-    let present = union
-        .members
-        .iter()
-        .position(|member| !matches!(member, Type::Unit))
-        .expect("an optional union has a present member");
     let absent = union
         .members
         .iter()
         .position(|member| matches!(member, Type::Unit))
         .expect("an optional union has a None member");
-    if kept {
-        OPTIONAL_UNIONS.with_borrow_mut(|unions| {
-            if unions.len() < KEPT {
-                unions.push((member, union_type.clone(), present, absent));
-            }
-        });
-    }
-    (union_type, present, absent)
+    (Arc::new(union_type), 1 - absent, absent)
 }
 
 /// Wraps a present builtin optional result in the canonical `member | None`
 /// union (ADR-0052). Both backends build the same runtime value.
 pub fn optional_present(member: aura_core::types::Type, value: Value) -> Value {
     let (union_type, present, _) = optional_union(member);
-    union_value(union_type, present, value)
+    shared_union_value(union_type, present, value)
 }
 
 /// The absent builtin optional result: the `None` member of `member | None`.
 pub fn optional_absent(member: aura_core::types::Type) -> Value {
     let (union_type, _, absent) = optional_union(member);
-    union_value(union_type, absent, Value::Unit)
+    shared_union_value(union_type, absent, Value::Unit)
 }
 
 /// `Some(value)` becomes the present member, `None` the absent member.
@@ -15954,12 +15924,35 @@ pub fn optional_value(member: aura_core::types::Type, value: Option<Value>) -> V
     }
 }
 
+/// `name | None` for a member type a static name spells, such as `int64`.
+/// Helpers return these on every call, so each thread keeps them by name
+/// and neither builds nor compares a member type to find one.
+pub fn optional_named(name: &'static str, value: Option<Value>) -> Value {
+    type Kept = (&'static str, Arc<aura_core::types::Type>, usize, usize);
+    thread_local! {
+        static NAMED_OPTIONALS: RefCell<Vec<Kept>> = const { RefCell::new(Vec::new()) };
+    }
+    let found = NAMED_OPTIONALS.with_borrow(|unions| {
+        unions
+            .iter()
+            .find(|(known, ..)| *known == name)
+            .map(|(_, union_type, present, absent)| (Arc::clone(union_type), *present, *absent))
+    });
+    let (union_type, present, absent) = found.unwrap_or_else(|| {
+        let made = optional_union(aura_core::types::Type::named(name));
+        NAMED_OPTIONALS
+            .with_borrow_mut(|unions| unions.push((name, Arc::clone(&made.0), made.1, made.2)));
+        made
+    });
+    match value {
+        Some(value) => shared_union_value(union_type, present, value),
+        None => shared_union_value(union_type, absent, Value::Unit),
+    }
+}
+
 /// `str | None` from an optional Rust string.
 pub fn optional_str_value(value: Option<String>) -> Value {
-    optional_value(
-        aura_core::types::Type::named("str"),
-        value.map(Value::String),
-    )
+    optional_named("str", value.map(Value::String))
 }
 
 /// `list[uint8] | None` from an optional already-built byte list value.

@@ -4740,8 +4740,21 @@ impl<'a> FunctionCompiler<'a> {
                 member_index,
             } => {
                 self.require_union_plan(union_type)?;
-                // A consuming take only reaches non-Copy payloads, which stay
-                // runtime values; an inline union's members are all Copy.
+                let member = ensure_direct_type(member_type, &self.classes, "union payload")?;
+                // An inline union local gives its member's words to the
+                // payload and is left moved: the MIR's tag test just before
+                // selected the member.
+                if !place.contains('.') {
+                    if let DirectType::Union(union) = self.local_type(place)? {
+                        let moved = self.take_place(place)?;
+                        self.clear_temporary_union_owned(&moved);
+                        let payload =
+                            self.union_member_from_words(&union, *member_index, &moved.values)?;
+                        self.mark_temporary_opaque_owned(&payload);
+                        self.mark_temporary_callable_owned(&payload);
+                        return self.coerce_value(payload, &member);
+                    }
+                }
                 let value = self.load_operand(&Operand::Place(place.clone()))?;
                 let value = self.ensure_opaque(value)?;
                 let encoded = crate::native_runtime::canonical_runtime_type_name(union_type);
@@ -4757,7 +4770,6 @@ impl<'a> FunctionCompiler<'a> {
                 if !place.contains('.') && self.tracked_roots.contains(place) {
                     self.release_root(place)?;
                 }
-                let member = ensure_direct_type(member_type, &self.classes, "union payload")?;
                 self.coerce_value(payload, &member)
             }
             Rvalue::UnionInject {
@@ -10585,12 +10597,27 @@ impl<'a> FunctionCompiler<'a> {
         Ok(boxed)
     }
 
-    /// Reads a boxed runtime union back into inline words.
+    /// Reads a boxed runtime union back into inline words. A box the
+    /// statement owns gives up its payload and goes; any other box keeps
+    /// its own, and the words take a copy.
     fn unbox_inline_union(
         &mut self,
         union: &DirectUnionType,
         handle: Val,
     ) -> std::result::Result<ValueRef, String> {
+        let boxed = ValueRef {
+            values: vec![handle],
+            ty: DirectType::Opaque(union.union_type.clone()),
+        };
+        let consume = self.temporary_owns_opaque(&boxed);
+        if consume {
+            self.clear_temporary_opaque_owned(&boxed);
+        }
+        let read = if consume {
+            RuntimeFn::UnionPayloadTake
+        } else {
+            RuntimeFn::UnionPayloadCopy
+        };
         let tag_call = self
             .builder
             .call(self.runtime[RuntimeFn::UnionTag], &[handle]);
@@ -10604,10 +10631,9 @@ impl<'a> FunctionCompiler<'a> {
             self.switch_on_union_tag(union, &probe, &result_ty, |codegen, index, _| {
                 let member_ty = union.member(index)?.clone();
                 let index_value = codegen.builder.iconst(types::I64, index as i64);
-                let call = codegen.builder.call(
-                    codegen.runtime[RuntimeFn::UnionPayloadCopy],
-                    &[handle, index_value],
-                );
+                let call = codegen
+                    .builder
+                    .call(codegen.runtime[read], &[handle, index_value]);
                 let payload =
                     codegen.owned_opaque_result(call.results, direct_type_to_type(&member_ty));
                 let member = codegen.coerce_value(payload, &member_ty)?;

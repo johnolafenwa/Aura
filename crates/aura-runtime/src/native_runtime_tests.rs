@@ -2120,7 +2120,7 @@ fn ffi_nullable_handle_direct_conversion_builds_none_or_the_owned_handle() {
         .expect("a non-null result constructs the owned handle member");
     match &present {
         Value::Union(value) => {
-            assert_eq!(value.union_type, Type::Union(union.clone()));
+            assert_eq!(*value.union_type, Type::Union(union.clone()));
             assert_eq!(value.member_index, handle_index);
             match &value.payload {
                 Value::FfiHandle(handle) => {
@@ -2137,7 +2137,7 @@ fn ffi_nullable_handle_direct_conversion_builds_none_or_the_owned_handle() {
         .expect("a null result constructs `None`");
     match &absent {
         Value::Union(value) => {
-            assert_eq!(value.union_type, Type::Union(union.clone()));
+            assert_eq!(*value.union_type, Type::Union(union.clone()));
             assert_eq!(value.member_index, none_index);
             assert_eq!(value.payload, Value::Unit);
         }
@@ -5458,7 +5458,7 @@ fn direct_runtime_type_tags_are_interned_and_retagging_is_idempotent() {
     assert!(Arc::ptr_eq(&first, &second));
     assert_eq!(&*first.name, "list[int64]");
     assert_eq!(
-        first.parsed,
+        *first.parsed,
         Type::Named("list".to_string(), vec![Type::named("int64")])
     );
     assert_eq!(first.integer_kind, None);
@@ -23137,7 +23137,7 @@ fn coverage_union_value(
     payload: Value,
 ) -> Value {
     Value::Union(Box::new(crate::runtime_value::UnionValue {
-        union_type: Type::Union(Box::new(target.clone())),
+        union_type: Type::Union(Box::new(target.clone())).into(),
         member_index,
         payload,
     }))
@@ -24860,6 +24860,45 @@ fn direct_union_tag_and_payload_copy_serve_inline_union_boundaries() {
 }
 
 #[test]
+fn direct_union_payload_takes_move_from_owned_boxes_and_copy_from_shared_ones() {
+    let target = coverage_union(vec![Type::named("str"), Type::Unit]);
+    let text_index = coverage_union_member_index(&target, &Type::named("str"));
+    let none_index = coverage_union_member_index(&target, &Type::Unit);
+    let text = |value: &str| Value::String(value.to_string());
+
+    // The only reference gives up its payload, and the box goes.
+    let owned = boxed_value(coverage_union_value(&target, text_index, text("moved")));
+    let taken = super::aura_direct_union_payload_take(owned, text_index);
+    assert_eq!(unsafe { value_ref(taken) }, text("moved"));
+
+    // A box another handle holds keeps its payload.
+    let shared = boxed_value(coverage_union_value(&target, text_index, text("kept")));
+    let retained = unsafe { super::aura_direct_retain_value(shared) };
+    assert_eq!(retained, shared);
+    let copied = super::aura_direct_union_payload_take(shared, text_index);
+    assert_eq!(unsafe { value_ref(copied) }, text("kept"));
+    assert_eq!(coverage_union_payload(shared), text("kept"));
+
+    let none = boxed_value(coverage_union_value(&target, none_index, Value::Unit));
+    let taken_none = super::aura_direct_union_payload_take(none, none_index);
+    assert_eq!(super::aura_direct_none_test(taken_none), 1);
+    unsafe {
+        release_value(taken);
+        release_value(copied);
+        release_value(shared);
+        release_value(taken_none);
+    }
+
+    let mismatched = boxed_value(coverage_union_value(&target, text_index, text("x"))) as usize;
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            super::aura_direct_union_payload_take(mismatched as *mut OpaqueValue, none_index);
+        }),
+        "direct union payload copy member mismatch"
+    );
+}
+
+#[test]
 fn direct_callable_environment_blocks_allocate_count_and_free() {
     let before = crate::runtime_value::representation_stats::snapshot();
     let env = super::aura_direct_callable_env_alloc(5);
@@ -25511,7 +25550,7 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
     let unions = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("int64"),
         elements: vec![Value::Union(Box::new(crate::runtime_value::UnionValue {
-            union_type: Type::named("int64"),
+            union_type: Type::named("int64").into(),
             member_index: 0,
             payload: Value::Int(IntegerValue::from_i64(7)),
         }))]
@@ -27798,7 +27837,7 @@ fn direct_union_helpers_decode_each_descriptor_once() {
     let second = super::descriptor_runtime_type_tag(copy.as_ptr(), copy.len(), "invalid");
     assert!(Arc::ptr_eq(&first, &second));
     assert!(first.descriptor);
-    assert_eq!(first.parsed, union);
+    assert_eq!(*first.parsed, union);
     // An injected value carries the descriptor's shared name.
     let injected = super::with_direct_task_runtime_scope(|| {
         let payload = super::aura_direct_box_i64(3);
@@ -27915,7 +27954,7 @@ fn direct_union_boundaries_unwrap_collapsed_and_merge_erased_unions() {
     super::aura_direct_union_boundary_cell(text, &cell, encoded.as_ptr(), encoded.len());
     match unsafe { value_ref(text) } {
         Value::Union(union) => {
-            assert_eq!(union.union_type, target);
+            assert_eq!(*union.union_type, target);
             assert_eq!(
                 union.member_index,
                 member_index(&target, &Type::named("str"))

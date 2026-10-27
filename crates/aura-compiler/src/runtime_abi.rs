@@ -282,6 +282,7 @@ runtime_functions! {
     UnionTagTest => ("aura_direct_union_tag_test", [I64, I64, I64, I64], Some(I64)),
     UnionTag => ("aura_direct_union_tag", [I64], Some(I64)),
     UnionPayloadCopy => ("aura_direct_union_payload_copy", [I64, I64], Some(I64)),
+    UnionPayloadTake => ("aura_direct_union_payload_take", [I64, I64], Some(I64)),
     CallableEnvAlloc => ("aura_direct_callable_env_alloc", [I64], Some(I64)),
     CallableEnvFree => ("aura_direct_callable_env_free", [I64], None),
     CallableEnvRetain => ("aura_direct_callable_env_retain", [I64], None),

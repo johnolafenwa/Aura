@@ -38,7 +38,7 @@
 //!   Only a type that names itself with an ever larger type argument
 //!   reaches either limit.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::type_descriptor::{self, Reader};
 use crate::types::{substitute_type_in_context, Type};
@@ -276,12 +276,14 @@ impl LayoutTable {
     /// Whether dropping a value of `id` must release something: a handle,
     /// a heap block, or a value holding one.
     pub fn needs_drop(&self, id: LayoutId) -> bool {
-        let mut seen = BTreeSet::new();
+        // A flag per layout: native programs link this walk, and a set
+        // would link its own code.
+        let mut seen = vec![false; self.layouts.len()];
         self.needs_drop_inner(id, &mut seen)
     }
 
-    fn needs_drop_inner(&self, id: LayoutId, seen: &mut BTreeSet<LayoutId>) -> bool {
-        if !seen.insert(id) {
+    fn needs_drop_inner(&self, id: LayoutId, seen: &mut [bool]) -> bool {
+        if std::mem::replace(&mut seen[id.index()], true) {
             return false;
         }
         match &self.get(id).kind {

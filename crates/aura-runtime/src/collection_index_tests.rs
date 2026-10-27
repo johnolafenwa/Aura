@@ -45,7 +45,7 @@ fn equal_values_hash_the_same() {
         .position(|member| *member == Type::named("int64"))
         .expect("int64 member");
     let union = Value::Union(Box::new(UnionValue {
-        union_type,
+        union_type: union_type.into(),
         member_index,
         payload: int(3),
     }));
@@ -409,7 +409,7 @@ fn string_keys_hash_the_same_bare_and_inside_a_union() {
         .position(|member| *member == Type::named("str"))
         .expect("str member");
     let union = Value::Union(Box::new(UnionValue {
-        union_type,
+        union_type: union_type.into(),
         member_index,
         payload: text.clone(),
     }));
