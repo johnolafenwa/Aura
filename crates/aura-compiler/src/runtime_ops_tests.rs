@@ -59,6 +59,13 @@ fn scalar_element_type(kind: ScalarElement) -> Type {
         ScalarElement::Int64 => "int64",
         ScalarElement::Float64 => "float64",
         ScalarElement::Bool => "bool",
+        ScalarElement::Int8 => "int8",
+        ScalarElement::Int16 => "int16",
+        ScalarElement::Int32 => "int32",
+        ScalarElement::Uint8 => "uint8",
+        ScalarElement::Uint16 => "uint16",
+        ScalarElement::Uint32 => "uint32",
+        ScalarElement::Uint64 => "uint64",
     })
 }
 
@@ -541,7 +548,11 @@ fn collection_ops_specialize_by_element_type_and_literal_key() {
     let text_list = named("list", vec![Type::named("str")]);
     assert_eq!(specialized_member_op(push, &text_list, &[]), push);
     assert_eq!(ScalarElement::of(&text_list), None);
-    assert_eq!(ScalarElement::of(&Type::named("int32")), None);
+    assert_eq!(ScalarElement::of(&Type::named("int128")), None);
+    assert_eq!(
+        ScalarElement::of(&Type::named("float32")),
+        Some(ScalarElement::Float64)
+    );
     assert_eq!(ScalarElement::of(&Type::Unit), None);
 
     let contains = RuntimeOp::Set(SetOp::Contains);

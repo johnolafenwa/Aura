@@ -137,6 +137,46 @@ fn values_without_a_built_in_order_are_an_error() {
     assert!(sort_elements(&mut units, false).is_err());
 }
 
+fn typed(value: i64, kind: IntegerKind) -> Value {
+    Value::Int(
+        IntegerValue::from_signed(i128::from(value))
+            .with_runtime_kind(kind)
+            .expect("the test value fits its kind"),
+    )
+}
+
+#[test]
+fn every_unboxed_integer_form_sorts_and_orders_keys() {
+    let kinds = [
+        IntegerKind::Int8,
+        IntegerKind::Int16,
+        IntegerKind::Int32,
+        IntegerKind::Uint8,
+        IntegerKind::Uint16,
+        IntegerKind::Uint32,
+        IntegerKind::Uint64,
+    ];
+    for kind in kinds {
+        let mut values = list([3, 0, 2, 0, 1].map(|value| typed(value, kind)).to_vec());
+        let form = values.form();
+        assert_ne!(form, crate::list_elements::ListForm::Values, "{kind:?}");
+        sort_elements(&mut values, false).unwrap();
+        assert_eq!(rendered(&values), ["0", "0", "1", "2", "3"], "{kind:?}");
+        sort_elements(&mut values, true).unwrap();
+        assert_eq!(rendered(&values), ["3", "2", "1", "0", "0"], "{kind:?}");
+        assert_eq!(values.form(), form, "{kind:?}");
+
+        let keys = list([2, 1, 2, 1, 0].map(|value| typed(value, kind)).to_vec());
+        let names = || list(vec![text("a"), text("b"), text("c"), text("d"), text("e")]);
+        let mut sorted = names();
+        sort_elements_by_keys(&mut sorted, &keys, false).unwrap();
+        assert_eq!(rendered(&sorted), ["e", "b", "d", "a", "c"], "{kind:?}");
+        let mut sorted = names();
+        sort_elements_by_keys(&mut sorted, &keys, true).unwrap();
+        assert_eq!(rendered(&sorted), ["a", "c", "b", "d", "e"], "{kind:?}");
+    }
+}
+
 #[test]
 fn key_sorts_are_stable_in_both_directions() {
     let names = || list(vec![text("a"), text("b"), text("c"), text("d"), text("e")]);

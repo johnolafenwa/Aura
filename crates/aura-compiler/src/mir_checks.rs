@@ -39,8 +39,13 @@ use crate::sema::Type;
 /// inline, or `Other` for any value a runtime helper computes on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NumericKind {
+    Int8,
+    Int16,
     Int32,
     Int64,
+    Uint8,
+    Uint16,
+    Uint32,
     Uint64,
     Float32,
     Float64,
@@ -54,8 +59,13 @@ impl NumericKind {
         match ty {
             Type::Unit => Self::Unit,
             Type::Named(name, args) if args.is_empty() => match name.as_str() {
+                "int8" => Self::Int8,
+                "int16" => Self::Int16,
                 "int32" => Self::Int32,
                 "int64" => Self::Int64,
+                "uint8" => Self::Uint8,
+                "uint16" => Self::Uint16,
+                "uint32" => Self::Uint32,
                 "uint64" => Self::Uint64,
                 "float32" => Self::Float32,
                 "float64" => Self::Float64,
@@ -67,19 +77,33 @@ impl NumericKind {
     }
 
     fn is_integer(self) -> bool {
-        matches!(self, Self::Int32 | Self::Int64 | Self::Uint64)
+        self.is_signed_integer()
+            || matches!(
+                self,
+                Self::Uint8 | Self::Uint16 | Self::Uint32 | Self::Uint64
+            )
+    }
+
+    fn is_signed_integer(self) -> bool {
+        matches!(self, Self::Int8 | Self::Int16 | Self::Int32 | Self::Int64)
     }
 
     fn is_float(self) -> bool {
         matches!(self, Self::Float32 | Self::Float64)
     }
 
+    /// Whether a value of this kind is one machine word that MIR computes
+    /// on inline: a number or a `bool`.
+    pub(crate) fn is_scalar(self) -> bool {
+        !matches!(self, Self::Unit | Self::Other)
+    }
+
     /// The kind an integer literal loads as: the `hint` when it fits,
     /// otherwise `int64` when it fits in 64 signed bits.
     fn of_literal(value: u128, hint: Option<Self>) -> Self {
         let fits = match hint {
-            Some(Self::Int32 | Self::Int64) => i64::try_from(value).is_ok(),
             Some(Self::Uint64) => u64::try_from(value).is_ok(),
+            Some(kind) if kind.is_integer() => i64::try_from(value).is_ok(),
             _ => false,
         };
         match hint {
@@ -91,8 +115,9 @@ impl NumericKind {
 }
 
 /// The trap of `left op right`. An operand MIR does not compute inline
-/// goes to a runtime helper, and so do powers, bitwise operators, shifts,
-/// and float floor division and remainder.
+/// goes to a runtime helper, and so do powers, shifts, bitwise operators
+/// other than an integer `&`, `|`, or `^`, and float floor division and
+/// remainder.
 pub(crate) fn binary_trap(op: BinaryOp, left: NumericKind, right: NumericKind) -> ArithmeticTrap {
     if left == NumericKind::Other || right == NumericKind::Other {
         return ArithmeticTrap::Runtime;
@@ -100,6 +125,13 @@ pub(crate) fn binary_trap(op: BinaryOp, left: NumericKind, right: NumericKind) -
     let integer = [left, right].into_iter().find(|kind| kind.is_integer());
     let float = left.is_float() || right.is_float();
     match op {
+        // An integer `&`, `|`, or `^` of two values of one type stays in
+        // that type.
+        BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
+            if integer.is_some() && left == right =>
+        {
+            ArithmeticTrap::None
+        }
         BinaryOp::Pow
         | BinaryOp::BitAnd
         | BinaryOp::BitOr
@@ -110,7 +142,7 @@ pub(crate) fn binary_trap(op: BinaryOp, left: NumericKind, right: NumericKind) -
             ArithmeticTrap::Overflow
         }
         // Signed floor division overflows on `MIN // -1`.
-        BinaryOp::FloorDiv if matches!(integer, Some(NumericKind::Int32 | NumericKind::Int64)) => {
+        BinaryOp::FloorDiv if integer.is_some_and(NumericKind::is_signed_integer) => {
             ArithmeticTrap::DivisionByZeroOrOverflow
         }
         BinaryOp::FloorDiv | BinaryOp::Mod if integer.is_some() => ArithmeticTrap::DivisionByZero,
@@ -123,6 +155,7 @@ pub(crate) fn binary_trap(op: BinaryOp, left: NumericKind, right: NumericKind) -
 /// The trap of `op value`. Integer negation overflows on `MIN`.
 pub(crate) fn unary_trap(op: UnaryOp, value: NumericKind) -> ArithmeticTrap {
     match op {
+        UnaryOp::BitNot if value.is_integer() => ArithmeticTrap::None,
         UnaryOp::BitNot => ArithmeticTrap::Runtime,
         _ if value == NumericKind::Other => ArithmeticTrap::Runtime,
         UnaryOp::Neg if value.is_integer() => ArithmeticTrap::Overflow,

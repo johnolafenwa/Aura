@@ -1,0 +1,6 @@
+error[AU4002]: integer value `-1` does not fit in `uint32`
+ --> crates/aura-compiler/tests/fixtures/run-fail/float64_to_uint32_cast_out_of_range.au:4:15
+  |
+4 |         print(value as uint32)
+  |               ^
+  = note: Aura call chain (innermost first): main at 1:1

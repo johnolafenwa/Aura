@@ -851,8 +851,17 @@ pub(crate) fn is_list_sort_member(field: &str) -> bool {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum ScalarElement {
     Int64,
+    /// A `float64` element, or a `float32` one, which a list keeps as the
+    /// `float64` it widens to exactly.
     Float64,
     Bool,
+    Int8,
+    Int16,
+    Int32,
+    Uint8,
+    Uint16,
+    Uint32,
+    Uint64,
 }
 
 impl ScalarElement {
@@ -860,6 +869,13 @@ impl ScalarElement {
         ScalarElement::Int64,
         ScalarElement::Float64,
         ScalarElement::Bool,
+        ScalarElement::Int8,
+        ScalarElement::Int16,
+        ScalarElement::Int32,
+        ScalarElement::Uint8,
+        ScalarElement::Uint16,
+        ScalarElement::Uint32,
+        ScalarElement::Uint64,
     ];
 
     /// The kind a list of `element` stores unboxed, if any.
@@ -872,19 +888,33 @@ impl ScalarElement {
         }
         match name.as_str() {
             "int64" => Some(ScalarElement::Int64),
-            "float64" => Some(ScalarElement::Float64),
+            "float64" | "float32" => Some(ScalarElement::Float64),
             "bool" => Some(ScalarElement::Bool),
+            "int8" => Some(ScalarElement::Int8),
+            "int16" => Some(ScalarElement::Int16),
+            "int32" => Some(ScalarElement::Int32),
+            "uint8" => Some(ScalarElement::Uint8),
+            "uint16" => Some(ScalarElement::Uint16),
+            "uint32" => Some(ScalarElement::Uint32),
+            "uint64" => Some(ScalarElement::Uint64),
             _ => None,
         }
     }
 
-    /// The runtime's kind word: 0 for `int64`, 1 for `float64`, 2 for
-    /// `bool`.
+    /// The runtime's kind word: the element's `DirectScalarKind`.
     const fn words(self) -> &'static [i64] {
+        use aura_runtime::native_runtime::DirectScalarKind as K;
         match self {
-            ScalarElement::Int64 => &[0],
-            ScalarElement::Float64 => &[1],
-            ScalarElement::Bool => &[2],
+            ScalarElement::Int64 => &[K::Int64 as i64],
+            ScalarElement::Float64 => &[K::Float64 as i64],
+            ScalarElement::Bool => &[K::Bool as i64],
+            ScalarElement::Int8 => &[K::Int8 as i64],
+            ScalarElement::Int16 => &[K::Int16 as i64],
+            ScalarElement::Int32 => &[K::Int32 as i64],
+            ScalarElement::Uint8 => &[K::Uint8 as i64],
+            ScalarElement::Uint16 => &[K::Uint16 as i64],
+            ScalarElement::Uint32 => &[K::Uint32 as i64],
+            ScalarElement::Uint64 => &[K::Uint64 as i64],
         }
     }
 }
@@ -1030,6 +1060,13 @@ impl ListOp {
         ListOp::PushScalar(ScalarElement::Int64),
         ListOp::PushScalar(ScalarElement::Float64),
         ListOp::PushScalar(ScalarElement::Bool),
+        ListOp::PushScalar(ScalarElement::Int8),
+        ListOp::PushScalar(ScalarElement::Int16),
+        ListOp::PushScalar(ScalarElement::Int32),
+        ListOp::PushScalar(ScalarElement::Uint8),
+        ListOp::PushScalar(ScalarElement::Uint16),
+        ListOp::PushScalar(ScalarElement::Uint32),
+        ListOp::PushScalar(ScalarElement::Uint64),
         ListOp::Pop,
         ListOp::Get,
         ListOp::Set,
@@ -1047,14 +1084,35 @@ impl ListOp {
         ListOp::IndexScalar(ScalarElement::Int64),
         ListOp::IndexScalar(ScalarElement::Float64),
         ListOp::IndexScalar(ScalarElement::Bool),
+        ListOp::IndexScalar(ScalarElement::Int8),
+        ListOp::IndexScalar(ScalarElement::Int16),
+        ListOp::IndexScalar(ScalarElement::Int32),
+        ListOp::IndexScalar(ScalarElement::Uint8),
+        ListOp::IndexScalar(ScalarElement::Uint16),
+        ListOp::IndexScalar(ScalarElement::Uint32),
+        ListOp::IndexScalar(ScalarElement::Uint64),
         ListOp::IndexUnchecked,
         ListOp::IndexScalarUnchecked(ScalarElement::Int64),
         ListOp::IndexScalarUnchecked(ScalarElement::Float64),
         ListOp::IndexScalarUnchecked(ScalarElement::Bool),
+        ListOp::IndexScalarUnchecked(ScalarElement::Int8),
+        ListOp::IndexScalarUnchecked(ScalarElement::Int16),
+        ListOp::IndexScalarUnchecked(ScalarElement::Int32),
+        ListOp::IndexScalarUnchecked(ScalarElement::Uint8),
+        ListOp::IndexScalarUnchecked(ScalarElement::Uint16),
+        ListOp::IndexScalarUnchecked(ScalarElement::Uint32),
+        ListOp::IndexScalarUnchecked(ScalarElement::Uint64),
         ListOp::SetIndex,
         ListOp::SetIndexScalar(ScalarElement::Int64),
         ListOp::SetIndexScalar(ScalarElement::Float64),
         ListOp::SetIndexScalar(ScalarElement::Bool),
+        ListOp::SetIndexScalar(ScalarElement::Int8),
+        ListOp::SetIndexScalar(ScalarElement::Int16),
+        ListOp::SetIndexScalar(ScalarElement::Int32),
+        ListOp::SetIndexScalar(ScalarElement::Uint8),
+        ListOp::SetIndexScalar(ScalarElement::Uint16),
+        ListOp::SetIndexScalar(ScalarElement::Uint32),
+        ListOp::SetIndexScalar(ScalarElement::Uint64),
         ListOp::Slice,
         ListOp::IndexOption,
         ListOp::TakeIndexOption,
@@ -2312,7 +2370,8 @@ fn metadata_params(metadata: &'static HostBuiltinMetadata) -> Vec<CallableParam<
 /// `bool`, or a boxed value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum PrintKind {
-    /// An `int32` or `int64`.
+    /// A signed integer of at most 64 bits, or an unsigned one of at most
+    /// 32: its value fits one signed word.
     Int,
     Uint64,
     Float32,
@@ -2341,7 +2400,7 @@ impl PrintKind {
             return PrintKind::Value;
         }
         match name.as_str() {
-            "int32" | "int64" => PrintKind::Int,
+            "int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32" => PrintKind::Int,
             "uint64" => PrintKind::Uint64,
             "float32" => PrintKind::Float32,
             "float64" => PrintKind::Float64,

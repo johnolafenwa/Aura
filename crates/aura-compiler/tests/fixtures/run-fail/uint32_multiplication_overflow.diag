@@ -1,0 +1,6 @@
+error[AU4002]: integer value `18446744065119617025` does not fit in `uint32`
+ --> crates/aura-compiler/tests/fixtures/run-fail/uint32_multiplication_overflow.au:3:23
+  |
+3 |     product: uint32 = values[0] * values[1]
+  |                       ^
+  = note: Aura call chain (innermost first): main at 1:1

@@ -2480,7 +2480,7 @@ fn owned_slice_helpers_normalize_once_reject_without_clamping_and_copy_values() 
 
 #[test]
 fn list_slices_copy_only_the_slice_and_keep_the_scalar_form() {
-    let lists = [
+    let mut lists = vec![
         (0..10)
             .map(|value| Value::Int(IntegerValue::from_i64(value)))
             .collect::<Vec<_>>(),
@@ -2490,6 +2490,27 @@ fn list_slices_copy_only_the_slice_and_keep_the_scalar_form() {
             .map(|value| Value::String(value.to_string()))
             .collect(),
     ];
+    for kind in [
+        IntegerKind::Int8,
+        IntegerKind::Int16,
+        IntegerKind::Int32,
+        IntegerKind::Uint8,
+        IntegerKind::Uint16,
+        IntegerKind::Uint32,
+        IntegerKind::Uint64,
+    ] {
+        lists.push(
+            (0..10)
+                .map(|value| {
+                    Value::Int(
+                        IntegerValue::from_signed(value)
+                            .with_runtime_kind(kind)
+                            .expect("0..10 fits every integer kind"),
+                    )
+                })
+                .collect(),
+        );
+    }
     for values in lists {
         let vector = VecValue {
             element_type: Type::named("T"),

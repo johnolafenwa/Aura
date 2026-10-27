@@ -748,15 +748,26 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         release(wide_unsigned);
 
         assert_eq!(
-            aura_direct_cast_integer_to_integer(u64::MAX, 1, 2, 1, 1),
+            aura_direct_cast_integer_to_integer(u64::MAX, 1, DirectScalarKind::Uint64 as i64, 1, 1),
             u64::MAX
         );
         assert_eq!(
-            aura_direct_cast_integer_to_float(1_u64 << 63, 1, 1, 1, 1),
+            aura_direct_cast_integer_to_float(
+                1_u64 << 63,
+                1,
+                DirectScalarKind::Float64 as i64,
+                1,
+                1
+            ),
             (1_u64 << 63) as f64
         );
         assert_eq!(
-            aura_direct_cast_float_to_integer(4_294_967_296.75, 2, 1, 1),
+            aura_direct_cast_float_to_integer(
+                4_294_967_296.75,
+                DirectScalarKind::Uint64 as i64,
+                1,
+                1
+            ),
             4_294_967_296
         );
 

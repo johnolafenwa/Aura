@@ -80,8 +80,13 @@ fn validated_for_emission(module: &MirModule) -> std::result::Result<MirModule, 
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScalarKind {
+    Int8,
+    Int16,
     Int32,
     Int64,
+    Uint8,
+    Uint16,
+    Uint32,
     Uint64,
     Float32,
     Float64,
@@ -90,25 +95,54 @@ enum ScalarKind {
 }
 
 impl ScalarKind {
-    fn signature_type(self) -> ScalarType {
+    /// The kind of the scalar type `name`, if it is one.
+    fn of_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "int8" => ScalarKind::Int8,
+            "int16" => ScalarKind::Int16,
+            "int32" => ScalarKind::Int32,
+            "int64" => ScalarKind::Int64,
+            "uint8" => ScalarKind::Uint8,
+            "uint16" => ScalarKind::Uint16,
+            "uint32" => ScalarKind::Uint32,
+            "uint64" => ScalarKind::Uint64,
+            "float32" => ScalarKind::Float32,
+            "float64" => ScalarKind::Float64,
+            "bool" => ScalarKind::Bool,
+            _ => return None,
+        })
+    }
+
+    fn type_name(self) -> &'static str {
         match self {
-            ScalarKind::Int32
-            | ScalarKind::Int64
-            | ScalarKind::Uint64
-            | ScalarKind::Bool
-            | ScalarKind::Unit => types::I64,
-            ScalarKind::Float32 | ScalarKind::Float64 => types::F64,
+            ScalarKind::Int8 => "int8",
+            ScalarKind::Int16 => "int16",
+            ScalarKind::Int32 => "int32",
+            ScalarKind::Int64 => "int64",
+            ScalarKind::Uint8 => "uint8",
+            ScalarKind::Uint16 => "uint16",
+            ScalarKind::Uint32 => "uint32",
+            ScalarKind::Uint64 => "uint64",
+            ScalarKind::Float32 => "float32",
+            ScalarKind::Float64 => "float64",
+            ScalarKind::Bool => "bool",
+            ScalarKind::Unit => "None",
+        }
+    }
+
+    fn signature_type(self) -> ScalarType {
+        if self.is_float() {
+            types::F64
+        } else {
+            types::I64
         }
     }
 
     fn zero_value(self, builder: &mut dyn FunctionBackend) -> Val {
-        match self {
-            ScalarKind::Int32
-            | ScalarKind::Int64
-            | ScalarKind::Uint64
-            | ScalarKind::Bool
-            | ScalarKind::Unit => builder.iconst(types::I64, 0),
-            ScalarKind::Float32 | ScalarKind::Float64 => builder.f64const(0.0),
+        if self.is_float() {
+            builder.f64const(0.0)
+        } else {
+            builder.iconst(types::I64, 0)
         }
     }
 
@@ -117,10 +151,86 @@ impl ScalarKind {
     }
 
     fn is_integer(self) -> bool {
+        matches!(self, ScalarKind::Int64 | ScalarKind::Uint64) || self.is_narrow_integer()
+    }
+
+    /// An integer narrower than 64 bits. Its word holds the exact value,
+    /// and arithmetic computes in 64 bits, then checks that the result is
+    /// in range.
+    fn is_narrow_integer(self) -> bool {
+        self.narrow_range().is_some()
+    }
+
+    fn is_unsigned_integer(self) -> bool {
         matches!(
             self,
-            ScalarKind::Int32 | ScalarKind::Int64 | ScalarKind::Uint64
+            ScalarKind::Uint8 | ScalarKind::Uint16 | ScalarKind::Uint32 | ScalarKind::Uint64
         )
+    }
+
+    /// The smallest and largest value of a narrow integer.
+    fn narrow_range(self) -> Option<(i64, i64)> {
+        Some(match self {
+            ScalarKind::Int8 => (i8::MIN.into(), i8::MAX.into()),
+            ScalarKind::Int16 => (i16::MIN.into(), i16::MAX.into()),
+            ScalarKind::Int32 => (i32::MIN.into(), i32::MAX.into()),
+            ScalarKind::Uint8 => (0, u8::MAX.into()),
+            ScalarKind::Uint16 => (0, u16::MAX.into()),
+            ScalarKind::Uint32 => (0, u32::MAX.into()),
+            _ => return None,
+        })
+    }
+
+    /// The width in bits of an integer.
+    fn integer_bits(self) -> Option<u32> {
+        Some(match self {
+            ScalarKind::Int8 | ScalarKind::Uint8 => 8,
+            ScalarKind::Int16 | ScalarKind::Uint16 => 16,
+            ScalarKind::Int32 | ScalarKind::Uint32 => 32,
+            ScalarKind::Int64 | ScalarKind::Uint64 => 64,
+            _ => return None,
+        })
+    }
+
+    /// The runtime's word for this kind.
+    fn direct_kind(self) -> Option<aura_runtime::native_runtime::DirectScalarKind> {
+        use aura_runtime::native_runtime::DirectScalarKind as K;
+        Some(match self {
+            ScalarKind::Int8 => K::Int8,
+            ScalarKind::Int16 => K::Int16,
+            ScalarKind::Int32 => K::Int32,
+            ScalarKind::Int64 => K::Int64,
+            ScalarKind::Uint8 => K::Uint8,
+            ScalarKind::Uint16 => K::Uint16,
+            ScalarKind::Uint32 => K::Uint32,
+            ScalarKind::Uint64 => K::Uint64,
+            ScalarKind::Float32 => K::Float32,
+            ScalarKind::Float64 => K::Float64,
+            ScalarKind::Bool => K::Bool,
+            ScalarKind::Unit => return None,
+        })
+    }
+
+    /// The runtime's word for this kind, as generated code passes it.
+    fn direct_kind_word(self) -> i64 {
+        self.direct_kind().map_or(-1, |kind| kind as i64)
+    }
+
+    /// The kind a list keeps unboxed as `element`. A `float32` list keeps
+    /// the `float64` each element widens to.
+    fn of_element(element: ScalarElement) -> Self {
+        match element {
+            ScalarElement::Int64 => ScalarKind::Int64,
+            ScalarElement::Float64 => ScalarKind::Float64,
+            ScalarElement::Bool => ScalarKind::Bool,
+            ScalarElement::Int8 => ScalarKind::Int8,
+            ScalarElement::Int16 => ScalarKind::Int16,
+            ScalarElement::Int32 => ScalarKind::Int32,
+            ScalarElement::Uint8 => ScalarKind::Uint8,
+            ScalarElement::Uint16 => ScalarKind::Uint16,
+            ScalarElement::Uint32 => ScalarKind::Uint32,
+            ScalarElement::Uint64 => ScalarKind::Uint64,
+        }
     }
 }
 
@@ -1319,12 +1429,7 @@ impl<'a> NativeCodegen<'a> {
             |place| {
                 matches!(
                     variable_types.get(place),
-                    Some(DirectType::Scalar(
-                        ScalarKind::Int32
-                            | ScalarKind::Int64
-                            | ScalarKind::Uint64
-                            | ScalarKind::Bool
-                    ))
+                    Some(DirectType::Scalar(kind)) if kind.is_integer() || *kind == ScalarKind::Bool
                 )
             },
         );
@@ -1483,7 +1588,14 @@ impl<'a> NativeCodegen<'a> {
                     lowered_args.extend(unbox_thunk_value(self, builder, raw, param_ty)?);
                 }
                 DirectType::Opaque(_) => lowered_args.push(raw),
-                DirectType::Scalar(ScalarKind::Int32) => {
+                DirectType::Scalar(
+                    ScalarKind::Int8
+                    | ScalarKind::Int16
+                    | ScalarKind::Int32
+                    | ScalarKind::Uint8
+                    | ScalarKind::Uint16
+                    | ScalarKind::Uint32,
+                ) => {
                     let inst = builder.call(unbox_i64, &[raw]);
                     lowered_args.push(inst.results[0]);
                     let _ = builder.call(release_value, &[raw]);
@@ -4629,7 +4741,9 @@ impl<'a> FunctionCompiler<'a> {
         span: Option<Span>,
         trap: ArithmeticTrap,
     ) -> std::result::Result<ValueRef, String> {
-        if matches!(value.ty, DirectType::Opaque(_)) || op == UnaryOp::BitNot {
+        let integer = value.ty.scalar_kind().filter(|kind| kind.is_integer());
+        if matches!(value.ty, DirectType::Opaque(_)) || (op == UnaryOp::BitNot && integer.is_none())
+        {
             let target_ty = value.ty.clone();
             let value = self.ensure_opaque(value)?;
             let opcode = match op {
@@ -4651,10 +4765,27 @@ impl<'a> FunctionCompiler<'a> {
             };
         }
         match (op, value.ty.scalar_kind()) {
-            (UnaryOp::Neg, Some(ScalarKind::Int32)) => Ok(ValueRef {
-                values: vec![self.builder.ineg(value.values[0])],
-                ty: DirectType::Scalar(ScalarKind::Int32),
-            }),
+            (UnaryOp::BitNot, Some(kind)) => {
+                // Every bit of the type flips: all 64 for a signed integer,
+                // whose word is sign-extended, and the type's own bits for
+                // an unsigned one.
+                let mask = match kind.narrow_range() {
+                    Some((0, max)) => max,
+                    _ => -1,
+                };
+                Ok(ValueRef {
+                    values: vec![self.builder.bxor_imm(value.values[0], mask)],
+                    ty: value.ty,
+                })
+            }
+            (UnaryOp::Neg, Some(kind)) if kind.is_narrow_integer() => {
+                let negated = self.builder.ineg(value.values[0]);
+                self.emit_narrow_bounds_check(kind, negated, false, span)?;
+                Ok(ValueRef {
+                    values: vec![negated],
+                    ty: DirectType::Scalar(kind),
+                })
+            }
             (UnaryOp::Neg, Some(ScalarKind::Int64)) => self.compile_wide_integer_negation(
                 WideIntegerKind::Int64,
                 value.values[0],
@@ -4778,72 +4909,20 @@ impl<'a> FunctionCompiler<'a> {
         let result = match (source_kind, target_kind) {
             (_, _) if source_kind == target_kind => source,
             (source_kind, target_kind) if source_kind.is_integer() && target_kind.is_integer() => {
-                let source_code = self.builder.iconst(
-                    types::I64,
-                    if matches!(source_kind, ScalarKind::Uint64) {
-                        1
-                    } else {
-                        0
-                    },
-                );
-                let target_code = self.builder.iconst(
-                    types::I64,
-                    match target_kind {
-                        ScalarKind::Int32 => 0,
-                        ScalarKind::Int64 => 1,
-                        ScalarKind::Uint64 => 2,
-                        _ => unreachable!("integer cast target should be exhaustive"),
-                    },
-                );
-                let (line, column) = self.span_values(span);
-                let inst = self.builder.call(
-                    self.runtime[RuntimeFn::CastIntegerToInteger],
-                    &[source, source_code, target_code, line, column],
-                );
-                inst.results[0]
+                self.emit_integer_conversion(source, source_kind, target_kind, span)?
             }
             (source_kind, target_kind) if source_kind.is_integer() && target_kind.is_float() => {
-                let source_code = self.builder.iconst(
-                    types::I64,
-                    if matches!(source_kind, ScalarKind::Uint64) {
-                        1
-                    } else {
-                        0
-                    },
-                );
-                let target_code = self.builder.iconst(
-                    types::I64,
-                    if matches!(target_kind, ScalarKind::Float32) {
-                        0
-                    } else {
-                        1
-                    },
-                );
-                let (line, column) = self.span_values(span);
-                let inst = self.builder.call(
-                    self.runtime[RuntimeFn::CastIntegerToFloat],
-                    &[source, source_code, target_code, line, column],
-                );
-                inst.results[0]
+                self.emit_integer_to_float(source, source_kind, target_kind, span)
             }
             (source_kind, target_kind) if source_kind.is_float() && target_kind.is_integer() => {
-                let target_code = self.builder.iconst(
-                    types::I64,
-                    match target_kind {
-                        ScalarKind::Int32 => 0,
-                        ScalarKind::Int64 => 1,
-                        ScalarKind::Uint64 => 2,
-                        _ => unreachable!("integer cast target should be exhaustive"),
-                    },
-                );
-                let (line, column) = self.span_values(span);
-                let inst = self.builder.call(
-                    self.runtime[RuntimeFn::CastFloatToInteger],
-                    &[source, target_code, line, column],
-                );
-                inst.results[0]
+                self.emit_float_to_integer(source, target_kind, span)
             }
-            (lhs, rhs) if lhs.is_float() && rhs.is_float() => source,
+            (lhs, rhs) if lhs.is_float() && rhs.is_float() => {
+                return self.normalize_scalar_value(ValueRef {
+                    values: vec![source],
+                    ty: DirectType::Scalar(target_kind),
+                });
+            }
             _ => {
                 return Err(format!(
                     "direct backend only supports numeric casts, found `{}` to `{}`",
@@ -4857,6 +4936,186 @@ impl<'a> FunctionCompiler<'a> {
             values: vec![result],
             ty: DirectType::Scalar(target_kind),
         })
+    }
+
+    /// An integer of `source` kind as `target`, as `as` converts it: the
+    /// value stays the same, and a value outside `target` stops the
+    /// program.
+    fn emit_integer_conversion(
+        &mut self,
+        value: Val,
+        source: ScalarKind,
+        target: ScalarKind,
+        span: Option<Span>,
+    ) -> std::result::Result<Val, String> {
+        if target.is_narrow_integer() {
+            // A `uint64` word above `int64`'s range is read as unsigned, so
+            // the range check sees it as large.
+            self.emit_narrow_bounds_check(target, value, source == ScalarKind::Uint64, span)?;
+            return Ok(value);
+        }
+        // `int64` and `uint64` share the 63-bit range and every narrow
+        // value: only a word with the top bit set differs.
+        let crosses = match target {
+            ScalarKind::Int64 => source == ScalarKind::Uint64,
+            ScalarKind::Uint64 => !source.is_unsigned_integer(),
+            _ => false,
+        };
+        if crosses {
+            let negative = self.builder.icmp_imm(IntCC::SignedLessThan, value, 0);
+            let source_unsigned = self
+                .builder
+                .iconst(types::I64, i64::from(source.is_unsigned_integer()));
+            let target_kind = self.builder.iconst(types::I64, target.direct_kind_word());
+            let (line, column) = self.span_values(span);
+            self.emit_failure_call(
+                negative,
+                RuntimeFn::CastIntegerToInteger,
+                &[value, source_unsigned, target_kind, line, column],
+            );
+        }
+        Ok(value)
+    }
+
+    /// An integer as a float of `target` kind. A value the float holds
+    /// exactly converts inline; any other takes the runtime cast, which
+    /// converts a value that happens to be exact or stops the program.
+    fn emit_integer_to_float(
+        &mut self,
+        value: Val,
+        source: ScalarKind,
+        target: ScalarKind,
+        span: Option<Span>,
+    ) -> Val {
+        // Every integer up to the significand's width converts exactly.
+        let exact_bits = if target == ScalarKind::Float32 {
+            24
+        } else {
+            53
+        };
+        let converted = |builder: &mut dyn FunctionBackend| {
+            if source == ScalarKind::Uint64 {
+                builder.fcvt_from_uint(types::F64, value)
+            } else {
+                builder.fcvt_from_sint(types::F64, value)
+            }
+        };
+        if source.integer_bits().is_some_and(|bits| bits <= exact_bits) {
+            return converted(&mut *self.builder);
+        }
+        let limit = 1i64 << exact_bits;
+        let exact = if source == ScalarKind::Uint64 {
+            self.builder
+                .icmp_imm(IntCC::UnsignedLessThanOrEqual, value, limit)
+        } else {
+            let biased = self.builder.iadd_imm(value, limit);
+            self.builder
+                .icmp_imm(IntCC::UnsignedLessThanOrEqual, biased, 2 * limit)
+        };
+        let fast_block = self.builder.create_block();
+        let slow_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::F64);
+        self.builder.brif(exact, fast_block, &[], slow_block, &[]);
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let fast = converted(&mut *self.builder);
+        self.builder.jump(join_block, &[fast]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        self.builder.set_cold_block(slow_block);
+        let source_unsigned = self
+            .builder
+            .iconst(types::I64, i64::from(source == ScalarKind::Uint64));
+        let target_kind = self.builder.iconst(types::I64, target.direct_kind_word());
+        let (line, column) = self.span_values(span);
+        let inst = self.builder.call(
+            self.runtime[RuntimeFn::CastIntegerToFloat],
+            &[value, source_unsigned, target_kind, line, column],
+        );
+        let slow = inst.results[0];
+        self.builder.jump(join_block, &[slow]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        self.builder.block_params(join_block)[0]
+    }
+
+    /// A float truncated toward zero to an integer of `target` kind. A
+    /// value whose truncation is in range converts inline; a value out of
+    /// range, an infinity, or NaN takes the runtime cast, which stops the
+    /// program.
+    fn emit_float_to_integer(&mut self, value: Val, target: ScalarKind, span: Option<Span>) -> Val {
+        // Truncation lands in range exactly when the value lies strictly
+        // between these bounds, each exact as a `float64`. NaN fails both
+        // compares.
+        let (above, below) = match target.narrow_range() {
+            Some((min, max)) => (min as f64 - 1.0, max as f64 + 1.0),
+            None if target == ScalarKind::Uint64 => (-1.0, 18_446_744_073_709_551_616.0),
+            None => (-9_223_372_036_854_775_809.0, 9_223_372_036_854_775_808.0),
+        };
+        let lower = self.builder.f64const(above);
+        let upper = self.builder.f64const(below);
+        let (lower_cc, lower_bound) = if target == ScalarKind::Int64 {
+            // `-2^63 - 1` rounds to `-2^63` as a `float64`, which is itself
+            // in range.
+            (
+                FloatCC::GreaterThanOrEqual,
+                self.builder.f64const(-9_223_372_036_854_775_808.0),
+            )
+        } else {
+            (FloatCC::GreaterThan, lower)
+        };
+        let above_lower = self.builder.fcmp(lower_cc, value, lower_bound);
+        let below_upper = self.builder.fcmp(FloatCC::LessThan, value, upper);
+        let in_range = self.builder.band(above_lower, below_upper);
+        let fast_block = self.builder.create_block();
+        let slow_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        self.builder
+            .brif(in_range, fast_block, &[], slow_block, &[]);
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let fast = if target == ScalarKind::Uint64 {
+            self.builder.fcvt_to_uint(types::I64, value)
+        } else {
+            self.builder.fcvt_to_sint(types::I64, value)
+        };
+        self.builder.jump(join_block, &[fast]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        self.builder.set_cold_block(slow_block);
+        let target_kind = self.builder.iconst(types::I64, target.direct_kind_word());
+        let (line, column) = self.span_values(span);
+        let inst = self.builder.call(
+            self.runtime[RuntimeFn::CastFloatToInteger],
+            &[value, target_kind, line, column],
+        );
+        let slow = inst.results[0];
+        self.builder.jump(join_block, &[slow]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        self.builder.block_params(join_block)[0]
+    }
+
+    /// Continues when `failed` is clear. When it is set, a cold block calls
+    /// `function` with `args`, which stops the program.
+    fn emit_failure_call(&mut self, failed: Val, function: RuntimeFn, args: &[Val]) {
+        let fail_block = self.builder.create_block();
+        let continue_block = self.builder.create_block();
+        self.builder
+            .brif(failed, fail_block, &[], continue_block, &[]);
+        self.builder.switch_to_block(fail_block);
+        self.builder.seal_block(fail_block);
+        self.builder.set_cold_block(fail_block);
+        self.builder.call(self.runtime[function], args);
+        self.builder.trap(TrapCode::IntegerOverflow);
+        self.builder.switch_to_block(continue_block);
+        self.builder.seal_block(continue_block);
     }
 
     /// Equality of two inline unions of one type: the tags must agree and
@@ -5089,6 +5348,34 @@ impl<'a> FunctionCompiler<'a> {
             let right = self.ensure_opaque(right)?;
             return self.compile_binary(op, left, right, span, trap);
         }
+        if let (Some(lhs), Some(rhs)) = (left.ty.scalar_kind(), right.ty.scalar_kind()) {
+            if lhs != rhs && lhs.is_integer() && rhs.is_integer() {
+                // MIR can compare integers of two kinds, such as a `uint8`
+                // element with a literal it kept as `int64`.
+                if let Some(result) =
+                    self.compile_mixed_integer_comparison(op, lhs, rhs, &left, &right)
+                {
+                    return Ok(result);
+                }
+                let left = self.ensure_opaque(left)?;
+                let right = self.ensure_opaque(right)?;
+                return self.compile_binary(op, left, right, span, trap);
+            }
+        }
+        if let (Some(kind), true) = (left.ty.scalar_kind(), left.ty == right.ty) {
+            if kind.is_integer()
+                && matches!(
+                    op,
+                    BinaryOp::BitAnd
+                        | BinaryOp::BitOr
+                        | BinaryOp::BitXor
+                        | BinaryOp::Shl
+                        | BinaryOp::Shr
+                )
+            {
+                return self.compile_integer_bitwise(kind, op, left, right, span);
+            }
+        }
         if matches!(
             op,
             BinaryOp::Pow
@@ -5208,8 +5495,8 @@ impl<'a> FunctionCompiler<'a> {
             return Ok(self.owned_opaque_result(inst.results, Type::named("Unknown")));
         }
         match (left.ty.scalar_kind(), right.ty.scalar_kind()) {
-            (Some(ScalarKind::Int32), Some(ScalarKind::Int32)) => {
-                self.compile_int32_binary(op, left.values[0], right.values[0], span, trap)
+            (Some(lhs), Some(rhs)) if lhs == rhs && lhs.is_narrow_integer() => {
+                self.compile_narrow_binary(lhs, op, left.values[0], right.values[0], span, trap)
             }
             (Some(ScalarKind::Int64), Some(ScalarKind::Int64)) => self
                 .compile_wide_integer_binary(
@@ -5247,18 +5534,52 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    /// `int32` arithmetic. Every `int32` result is range-checked, since the
-    /// value lives in a 64-bit word: that check is how `trap`'s overflow
-    /// is raised. The divisor is checked when `trap` names it.
-    fn compile_int32_binary(
+    /// `left op right` for a comparison of integers of two kinds. Each word
+    /// holds its value exactly, so one compare of the words orders them:
+    /// signed, or unsigned when one side is a `uint64` and the other is
+    /// unsigned too. `None` for any other operator, or for a `uint64` against
+    /// a signed integer, which the runtime compares.
+    fn compile_mixed_integer_comparison(
         &mut self,
+        op: BinaryOp,
+        lhs: ScalarKind,
+        rhs: ScalarKind,
+        left: &ValueRef,
+        right: &ValueRef,
+    ) -> Option<ValueRef> {
+        let wide_unsigned = lhs == ScalarKind::Uint64 || rhs == ScalarKind::Uint64;
+        if wide_unsigned && !(lhs.is_unsigned_integer() && rhs.is_unsigned_integer()) {
+            return None;
+        }
+        let cc = match (op, wide_unsigned) {
+            (BinaryOp::Eq, _) => IntCC::Equal,
+            (BinaryOp::NotEq, _) => IntCC::NotEqual,
+            (BinaryOp::Less, false) => IntCC::SignedLessThan,
+            (BinaryOp::LessEq, false) => IntCC::SignedLessThanOrEqual,
+            (BinaryOp::Greater, false) => IntCC::SignedGreaterThan,
+            (BinaryOp::GreaterEq, false) => IntCC::SignedGreaterThanOrEqual,
+            (BinaryOp::Less, true) => IntCC::UnsignedLessThan,
+            (BinaryOp::LessEq, true) => IntCC::UnsignedLessThanOrEqual,
+            (BinaryOp::Greater, true) => IntCC::UnsignedGreaterThan,
+            (BinaryOp::GreaterEq, true) => IntCC::UnsignedGreaterThanOrEqual,
+            _ => return None,
+        };
+        Some(self.boolean_from_icmp(cc, left.values[0], right.values[0]))
+    }
+
+    /// Arithmetic on a narrow integer `kind`. Every result is range-checked,
+    /// since the value lives in a 64-bit word: that check is how `trap`'s
+    /// overflow is raised. The divisor is checked when `trap` names it.
+    fn compile_narrow_binary(
+        &mut self,
+        kind: ScalarKind,
         op: BinaryOp,
         left: Val,
         right: Val,
         span: Option<Span>,
         trap: ArithmeticTrap,
     ) -> std::result::Result<ValueRef, String> {
-        let ty = DirectType::Scalar(ScalarKind::Int32);
+        let ty = DirectType::Scalar(kind);
         let value = match op {
             BinaryOp::Add => ValueRef {
                 values: vec![self.builder.iadd(left, right)],
@@ -5268,10 +5589,16 @@ impl<'a> FunctionCompiler<'a> {
                 values: vec![self.builder.isub(left, right)],
                 ty,
             },
-            BinaryOp::Mul => ValueRef {
-                values: vec![self.builder.imul(left, right)],
-                ty,
-            },
+            BinaryOp::Mul => {
+                let product = self.builder.imul(left, right);
+                // The product of two `uint32`s can pass 63 bits, so its
+                // word is read as unsigned. Every other product fits.
+                self.emit_narrow_bounds_check(kind, product, kind.is_unsigned_integer(), span)?;
+                return Ok(ValueRef {
+                    values: vec![product],
+                    ty,
+                });
+            }
             BinaryOp::FloorDiv => {
                 self.emit_int_division_guard_for(trap, right, span)?;
                 ValueRef {
@@ -5302,10 +5629,116 @@ impl<'a> FunctionCompiler<'a> {
             }
         };
 
-        if matches!(value.ty.scalar_kind(), Some(ScalarKind::Int32)) {
-            self.emit_int32_bounds_check(value.values[0], span)?;
+        if value.ty == DirectType::Scalar(kind) {
+            self.emit_narrow_bounds_check(kind, value.values[0], false, span)?;
         }
         Ok(value)
+    }
+
+    /// `left op right` for `&`, `|`, `^`, `<<`, or `>>` on two integers of
+    /// `kind`. The bitwise operators cannot fail. A shift whose count is in
+    /// range, and a left shift that loses no bits, run inline; any other
+    /// shift takes the runtime operation, which reports the error.
+    fn compile_integer_bitwise(
+        &mut self,
+        kind: ScalarKind,
+        op: BinaryOp,
+        left: ValueRef,
+        right: ValueRef,
+        span: Option<Span>,
+    ) -> std::result::Result<ValueRef, String> {
+        let ty = DirectType::Scalar(kind);
+        let (value, count) = (left.values[0], right.values[0]);
+        let result = match op {
+            BinaryOp::BitAnd => self.builder.band(value, count),
+            BinaryOp::BitOr => self.builder.bor(value, count),
+            BinaryOp::BitXor => self.builder.bxor(value, count),
+            BinaryOp::Shl | BinaryOp::Shr => {
+                let width = i64::from(kind.integer_bits().expect("an integer has a width"));
+                // The masked count keeps the shifts defined on the path
+                // that does not use them.
+                let masked = self.builder.band_imm(count, 63);
+                let in_range = self.builder.icmp_imm(IntCC::UnsignedLessThan, count, width);
+                let (shifted, fits) = if op == BinaryOp::Shr {
+                    let shifted = if kind.is_unsigned_integer() {
+                        self.builder.ushr(value, masked)
+                    } else {
+                        self.builder.sshr(value, masked)
+                    };
+                    (shifted, in_range)
+                } else {
+                    let shifted = self.builder.ishl(value, masked);
+                    let kept = if let Some((min, max)) = kind.narrow_range() {
+                        // The shifted value is exact in 64 bits, as for any
+                        // other narrow result: it must lie in range.
+                        let biased = if min == 0 {
+                            shifted
+                        } else {
+                            self.builder.iadd_imm(shifted, -min)
+                        };
+                        self.builder
+                            .icmp_imm(IntCC::UnsignedLessThanOrEqual, biased, max - min)
+                    } else {
+                        // A 64-bit shift keeps every bit when shifting back
+                        // gives the value again.
+                        let back = if kind.is_unsigned_integer() {
+                            self.builder.ushr(shifted, masked)
+                        } else {
+                            self.builder.sshr(shifted, masked)
+                        };
+                        self.builder.icmp(IntCC::Equal, back, value)
+                    };
+                    (shifted, self.builder.band(in_range, kept))
+                };
+                let fast_block = self.builder.create_block();
+                let slow_block = self.builder.create_block();
+                let join_block = self.builder.create_block();
+                self.builder.append_block_param(join_block, types::I64);
+                self.builder.brif(fits, fast_block, &[], slow_block, &[]);
+                self.builder.switch_to_block(fast_block);
+                self.builder.seal_block(fast_block);
+                self.builder.jump(join_block, &[shifted]);
+
+                self.builder.switch_to_block(slow_block);
+                self.builder.seal_block(slow_block);
+                self.builder.set_cold_block(slow_block);
+                let caller_owned = self.layout_scratch.clone();
+                let left = self.ensure_opaque(left)?;
+                let right = self.ensure_opaque(right)?;
+                let opcode = self.builder.iconst(types::I64, Self::binary_opcode(op));
+                let float_width = self.builder.iconst(types::I64, 0);
+                let (line, column) = self.span_values(span);
+                let inst = self.builder.call(
+                    self.runtime[RuntimeFn::BinaryValue],
+                    &[
+                        opcode,
+                        left.values[0],
+                        right.values[0],
+                        float_width,
+                        line,
+                        column,
+                    ],
+                );
+                let boxed = self.owned_opaque_result(inst.results, direct_type_to_type(&ty));
+                let slow = self.coerce_value(boxed, &ty)?;
+                self.release_temporary_owned_since(&caller_owned);
+                self.layout_scratch = caller_owned;
+                self.builder.jump(join_block, &[slow.values[0]]);
+
+                self.builder.switch_to_block(join_block);
+                self.builder.seal_block(join_block);
+                self.builder.block_params(join_block)[0]
+            }
+            other => {
+                return Err(format!(
+                    "direct backend does not support integer bitwise operation `{other:?}`"
+                ))
+            }
+        };
+        Ok(ValueRef {
+            values: vec![result],
+            ty,
+        })
     }
 
     fn compile_signed_floor_divmod(&mut self, left: Val, right: Val, quotient: bool) -> Val {
@@ -6055,14 +6488,18 @@ impl<'a> FunctionCompiler<'a> {
             return Err("direct backend expected `print` to receive one argument".to_string());
         };
         let argument = self.load_operand(&argument.value)?;
-        let scalar_matches = matches!(
-            (kind, argument.ty.scalar_kind()),
-            (PrintKind::Int, Some(ScalarKind::Int32 | ScalarKind::Int64))
-                | (PrintKind::Uint64, Some(ScalarKind::Uint64))
-                | (PrintKind::Float32, Some(ScalarKind::Float32))
-                | (PrintKind::Float64, Some(ScalarKind::Float64))
-                | (PrintKind::Bool, Some(ScalarKind::Bool))
-        );
+        let scalar_matches = match (kind, argument.ty.scalar_kind()) {
+            // Every signed integer and narrow unsigned one is exact in its
+            // `int64` word.
+            (PrintKind::Int, Some(scalar)) => {
+                scalar.is_narrow_integer() || scalar == ScalarKind::Int64
+            }
+            (PrintKind::Uint64, Some(scalar)) => scalar == ScalarKind::Uint64,
+            (PrintKind::Float32, Some(scalar)) => scalar == ScalarKind::Float32,
+            (PrintKind::Float64, Some(scalar)) => scalar == ScalarKind::Float64,
+            (PrintKind::Bool, Some(scalar)) => scalar == ScalarKind::Bool,
+            _ => false,
+        };
         let (function, word) = if scalar_matches {
             (op.runtime_call().function, argument.values[0])
         } else {
@@ -7357,11 +7794,9 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         if let (Operand::Int(value), Some(kind)) = (operand, hint) {
             let raw = match kind {
-                ScalarKind::Int32 | ScalarKind::Int64 => i64::try_from(*value).ok(),
                 ScalarKind::Uint64 => u64::try_from(*value).ok().map(|value| value as i64),
-                ScalarKind::Float32 | ScalarKind::Float64 | ScalarKind::Bool | ScalarKind::Unit => {
-                    None
-                }
+                kind if kind.is_integer() => i64::try_from(*value).ok(),
+                _ => None,
             };
             if let Some(raw) = raw {
                 return Ok(ValueRef {
@@ -8170,8 +8605,8 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         if &value.ty == target {
             let value = self.normalize_scalar_value(value)?;
-            if matches!(target.scalar_kind(), Some(ScalarKind::Int32)) {
-                self.emit_int32_bounds_check(value.values[0], span)?;
+            if let Some(kind) = target.scalar_kind().filter(|kind| kind.is_narrow_integer()) {
+                self.emit_narrow_bounds_check(kind, value.values[0], false, span)?;
             }
             if let DirectType::Opaque(target_ty) = target {
                 // A leaf tag such as `str` only records the name, and the
@@ -8313,7 +8748,14 @@ impl<'a> FunctionCompiler<'a> {
                     self.mark_temporary_callable_owned(&lifted);
                     return Ok(lifted);
                 }
-                DirectType::Scalar(ScalarKind::Int32) => {
+                DirectType::Scalar(
+                    ScalarKind::Int8
+                    | ScalarKind::Int16
+                    | ScalarKind::Int32
+                    | ScalarKind::Uint8
+                    | ScalarKind::Uint16
+                    | ScalarKind::Uint32,
+                ) => {
                     let inst = self
                         .builder
                         .call(self.runtime[RuntimeFn::UnboxI64], &[value.values[0]]);
@@ -8387,8 +8829,8 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 DirectType::Opaque(_) => unreachable!("opaque target handled earlier"),
             };
-            if matches!(target.scalar_kind(), Some(ScalarKind::Int32)) {
-                self.emit_int32_bounds_check(result.values[0], span)?;
+            if let Some(kind) = target.scalar_kind().filter(|kind| kind.is_narrow_integer()) {
+                self.emit_narrow_bounds_check(kind, result.values[0], false, span)?;
             }
             return Ok(result);
         }
@@ -8398,14 +8840,15 @@ impl<'a> FunctionCompiler<'a> {
                 values: value.values,
                 ty: target.clone(),
             }),
-            (Some(ScalarKind::Int32), Some(ScalarKind::Int64)) => Ok(ValueRef {
-                values: value.values,
-                ty: target.clone(),
-            }),
-            (Some(ScalarKind::Int64), Some(ScalarKind::Int32)) => {
-                self.emit_int32_bounds_check(value.values[0], span)?;
+            (Some(source), Some(destination))
+                if source.is_integer() && destination.is_integer() =>
+            {
+                // An integer of another width, such as a literal that
+                // loaded as `int64`, converts as `as` does.
+                let converted =
+                    self.emit_integer_conversion(value.values[0], source, destination, span)?;
                 Ok(ValueRef {
-                    values: value.values,
+                    values: vec![converted],
                     ty: target.clone(),
                 })
             }
@@ -8550,38 +8993,61 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.integer_constant(value)
     }
 
-    fn emit_int32_bounds_check(
+    /// Stops the program unless `value`, a result of the narrow integer
+    /// type `kind` computed in 64 bits, lies in the type's range. The word
+    /// is read as unsigned when `unsigned` is set, as the product of two
+    /// `uint32`s may need.
+    fn emit_narrow_bounds_check(
         &mut self,
+        kind: ScalarKind,
         value: Val,
+        unsigned: bool,
         span: Option<Span>,
     ) -> std::result::Result<(), String> {
-        // `value` is an `int32` iff biasing it by `-i32::MIN` lands inside the
-        // unsigned 32-bit range. That is one add and one compare, where the
-        // signed two-sided form needs two constants, two compares, and an or.
-        // This check runs on the result of every narrow arithmetic operation,
-        // so its cost is what separated `int32` loops from `int64` ones, where
-        // the overflow flag comes free with the add.
+        let Some((min, max)) = kind.narrow_range() else {
+            return Ok(());
+        };
         if let Some(constant) = self.integer_constant(value) {
-            if i32::try_from(constant).is_ok() {
+            if (min..=max).contains(&constant) {
                 return Ok(());
             }
         }
-        let biased = self.builder.iadd_imm(value, -(i32::MIN as i64));
+        // `value` is in range iff biasing it by `-min` lands inside the
+        // unsigned range `0..=max - min`. That is one add and one compare,
+        // where the signed two-sided form needs two constants, two compares,
+        // and an or. This check runs on the result of every narrow
+        // arithmetic operation, so its cost is what separated `int32` loops
+        // from `int64` ones, where the overflow flag comes free with the add.
+        let biased = if min == 0 {
+            value
+        } else {
+            self.builder.iadd_imm(value, -min)
+        };
         let overflow = self
             .builder
-            .icmp_imm(IntCC::UnsignedGreaterThan, biased, u32::MAX as i64);
+            .icmp_imm(IntCC::UnsignedGreaterThan, biased, max - min);
         let fail_block = self.builder.create_block();
         let continue_block = self.builder.create_block();
         self.builder
             .brif(overflow, fail_block, &[], continue_block, &[]);
         self.builder.switch_to_block(fail_block);
+        self.builder.set_cold_block(fail_block);
         // The runtime runs the registered exits after it records this
         // trap as primary, so a trapping exit cannot replace it.
         let (line, column) = self.span_values(span);
-        self.builder.call(
-            self.runtime[RuntimeFn::FailInt32Overflow],
-            &[value, line, column],
-        );
+        if kind == ScalarKind::Int32 && !unsigned {
+            self.builder.call(
+                self.runtime[RuntimeFn::FailInt32Overflow],
+                &[value, line, column],
+            );
+        } else {
+            let unsigned = self.builder.iconst(types::I64, i64::from(unsigned));
+            let kind = self.builder.iconst(types::I64, kind.direct_kind_word());
+            self.builder.call(
+                self.runtime[RuntimeFn::FailNarrowOverflow],
+                &[value, unsigned, kind, line, column],
+            );
+        }
         self.builder.trap(TrapCode::IntegerOverflow);
         self.builder.seal_block(fail_block);
         self.builder.switch_to_block(continue_block);
@@ -8806,27 +9272,22 @@ impl<'a> FunctionCompiler<'a> {
         })
     }
 
-    /// Reads a scalar list element as raw bits. `kind` is 0 for `int64`,
-    /// 1 for `float64`, and 2 for `bool`. A confined list that keeps the
-    /// scalars unboxed is read in place with one bounds check, or none when
-    /// the loop proves the index. Any other list, or an index out of range,
-    /// takes the runtime call, which reports the same diagnostic as before.
+    /// Reads a scalar list element of `kind` as raw bits. A confined list
+    /// that keeps the scalars unboxed is read in place with one bounds
+    /// check, or none when the loop proves the index. Any other list, or an
+    /// index out of range, takes the runtime call, which reports the same
+    /// diagnostic as before.
     fn emit_scalar_list_read(
         &mut self,
         list: Val,
         index: Val,
-        kind: i64,
+        kind: ScalarElement,
         proven: bool,
         line: Val,
         column: Val,
     ) -> std::result::Result<Val, String> {
-        use aura_runtime::native_runtime::DirectListAccess;
         let layout = aura_runtime::native_runtime::direct_list_layout();
-        let (access, stride) = match kind {
-            0 => (DirectListAccess::Int64, 8),
-            1 => (DirectListAccess::Float64, 8),
-            _ => (DirectListAccess::Bool, 1),
-        };
+        let (access, stride) = scalar_list_slot(kind);
         let slow_block = self.builder.create_block();
         let fast_block = self.builder.create_block();
         let join_block = self.builder.create_block();
@@ -8843,23 +9304,16 @@ impl<'a> FunctionCompiler<'a> {
         } else {
             self.emit_list_view_bounds_check(list, index, &layout, slow_block)
         };
-        let offset = if stride == 1 {
-            position
-        } else {
-            self.builder.imul_imm(position, stride)
-        };
-        let element = self.builder.iadd(elements, offset);
-        let bits = if stride == 1 {
-            self.builder.uload8(types::I64, flags, element, 0)
-        } else {
-            self.builder.load(types::I64, flags, element, 0)
-        };
+        let element = self.scalar_list_element(elements, position, stride);
+        let bits = self.load_scalar_list_element(kind, element);
         self.builder.jump(join_block, &[bits]);
 
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
         let normalized = self.emit_vec_index_failure_guard(list, index, line, column)?;
-        let kind = self.builder.iconst(types::I64, kind);
+        let kind = self
+            .builder
+            .iconst(types::I64, ScalarKind::of_element(kind).direct_kind_word());
         let inst = self.builder.call(
             self.runtime[RuntimeFn::VecIndexScalar],
             &[list, normalized, kind],
@@ -8886,13 +9340,8 @@ impl<'a> FunctionCompiler<'a> {
         function: FuncRef,
         words: &[Val],
     ) {
-        use aura_runtime::native_runtime::DirectListAccess;
         let layout = aura_runtime::native_runtime::direct_list_layout();
-        let (access, stride) = match kind {
-            ScalarElement::Int64 => (DirectListAccess::Int64, 8),
-            ScalarElement::Float64 => (DirectListAccess::Float64, 8),
-            ScalarElement::Bool => (DirectListAccess::Bool, 1),
-        };
+        let (access, stride) = scalar_list_slot(kind);
         let slow_block = self.builder.create_block();
         let fast_block = self.builder.create_block();
         let room_block = self.builder.create_block();
@@ -8915,16 +9364,8 @@ impl<'a> FunctionCompiler<'a> {
         let elements = self
             .builder
             .load(types::I64, flags, list, layout.elements_offset);
-        if stride == 1 {
-            // A `bool` element is one byte that holds 0 or 1.
-            let element = self.builder.iadd(elements, len);
-            let flag = self.builder.icmp_imm(IntCC::NotEqual, bits, 0);
-            self.builder.store(flags, flag, element, 0);
-        } else {
-            let offset = self.builder.imul_imm(len, stride);
-            let element = self.builder.iadd(elements, offset);
-            self.builder.store(flags, bits, element, 0);
-        }
+        let element = self.scalar_list_element(elements, len, stride);
+        self.store_scalar_list_element(kind, bits, element);
         let grown = self.builder.iadd_imm(len, 1);
         self.builder.store(flags, grown, list, layout.len_offset);
         self.builder.jump(join_block, &[]);
@@ -8953,13 +9394,8 @@ impl<'a> FunctionCompiler<'a> {
         function: FuncRef,
         words: &[Val],
     ) {
-        use aura_runtime::native_runtime::DirectListAccess;
         let layout = aura_runtime::native_runtime::direct_list_layout();
-        let (access, stride) = match kind {
-            ScalarElement::Int64 => (DirectListAccess::Int64, 8),
-            ScalarElement::Float64 => (DirectListAccess::Float64, 8),
-            ScalarElement::Bool => (DirectListAccess::Bool, 1),
-        };
+        let (access, stride) = scalar_list_slot(kind);
         let slow_block = self.builder.create_block();
         let fast_block = self.builder.create_block();
         let store_block = self.builder.create_block();
@@ -8983,16 +9419,8 @@ impl<'a> FunctionCompiler<'a> {
         let elements = self
             .builder
             .load(types::I64, flags, list, layout.elements_offset);
-        if stride == 1 {
-            // A `bool` element is one byte that holds 0 or 1.
-            let element = self.builder.iadd(elements, position);
-            let flag = self.builder.icmp_imm(IntCC::NotEqual, bits, 0);
-            self.builder.store(flags, flag, element, 0);
-        } else {
-            let offset = self.builder.imul_imm(position, stride);
-            let element = self.builder.iadd(elements, offset);
-            self.builder.store(flags, bits, element, 0);
-        }
+        let element = self.scalar_list_element(elements, position, stride);
+        self.store_scalar_list_element(kind, bits, element);
         self.builder.jump(join_block, &[]);
 
         self.builder.switch_to_block(slow_block);
@@ -9002,6 +9430,52 @@ impl<'a> FunctionCompiler<'a> {
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
+    }
+
+    /// The address of the element at `position` in unboxed storage whose
+    /// elements are `stride` bytes wide.
+    fn scalar_list_element(&mut self, elements: Val, position: Val, stride: i64) -> Val {
+        let offset = if stride == 1 {
+            position
+        } else {
+            self.builder.imul_imm(position, stride)
+        };
+        self.builder.iadd(elements, offset)
+    }
+
+    /// The bits of the unboxed `kind` element at `element`: an integer
+    /// extended to its exact 64-bit value, a `bool` as 0 or 1, or a
+    /// `float64`'s bits.
+    fn load_scalar_list_element(&mut self, kind: ScalarElement, element: Val) -> Val {
+        let flags = MemFlags::trusted();
+        match kind {
+            ScalarElement::Int8 => self.builder.sload8(flags, element, 0),
+            ScalarElement::Int16 => self.builder.sload16(flags, element, 0),
+            ScalarElement::Int32 => self.builder.sload32(flags, element, 0),
+            ScalarElement::Bool | ScalarElement::Uint8 => {
+                self.builder.uload8(types::I64, flags, element, 0)
+            }
+            ScalarElement::Uint16 => self.builder.uload16(flags, element, 0),
+            ScalarElement::Uint32 => self.builder.uload32(flags, element, 0),
+            ScalarElement::Int64 | ScalarElement::Uint64 | ScalarElement::Float64 => {
+                self.builder.load(types::I64, flags, element, 0)
+            }
+        }
+    }
+
+    /// Stores a `kind` scalar's `bits`, which hold a value of that kind, as
+    /// the unboxed element at `element`.
+    fn store_scalar_list_element(&mut self, kind: ScalarElement, bits: Val, element: Val) {
+        let flags = MemFlags::trusted();
+        let stored = match kind {
+            // A `bool` element is one byte that holds 0 or 1.
+            ScalarElement::Bool => self.builder.icmp_imm(IntCC::NotEqual, bits, 0),
+            ScalarElement::Int8 | ScalarElement::Uint8 => self.builder.ireduce(types::I8, bits),
+            ScalarElement::Int16 | ScalarElement::Uint16 => self.builder.ireduce(types::I16, bits),
+            ScalarElement::Int32 | ScalarElement::Uint32 => self.builder.ireduce(types::I32, bits),
+            ScalarElement::Int64 | ScalarElement::Uint64 | ScalarElement::Float64 => bits,
+        };
+        self.builder.store(flags, stored, element, 0);
     }
 
     /// Normalizes a negative `index` against a list view's length, and
@@ -9654,6 +10128,25 @@ impl<'a> FunctionCompiler<'a> {
                 self.mark_temporary_opaque_owned(&boxed);
                 Ok(boxed)
             }
+            DirectType::Scalar(
+                kind @ (ScalarKind::Int8
+                | ScalarKind::Int16
+                | ScalarKind::Uint8
+                | ScalarKind::Uint16
+                | ScalarKind::Uint32),
+            ) => {
+                let kind_word = self.builder.iconst(types::I64, kind.direct_kind_word());
+                let inst = self.builder.call(
+                    self.runtime[RuntimeFn::BoxInteger],
+                    &[value.values[0], kind_word],
+                );
+                let boxed = ValueRef {
+                    values: inst.results,
+                    ty: DirectType::Opaque(Type::named(kind.type_name())),
+                };
+                self.mark_temporary_opaque_owned(&boxed);
+                Ok(boxed)
+            }
             DirectType::Scalar(ScalarKind::Int64) => {
                 let inst = self
                     .builder
@@ -9986,11 +10479,15 @@ impl<'a> FunctionCompiler<'a> {
         let target_ty = self.type_of_place(target)?;
         let lent = self.lent_places.contains(place.as_str());
         let function = match (&target_ty, lent) {
-            (DirectType::Scalar(ScalarKind::Int32), false) => RuntimeFn::VariantPayloadI64,
+            (DirectType::Scalar(kind), false) if kind.is_narrow_integer() => {
+                RuntimeFn::VariantPayloadI64
+            }
             (DirectType::Scalar(ScalarKind::Int64), false) => RuntimeFn::VariantPayloadInt64,
             (DirectType::Scalar(ScalarKind::Uint64), false) => RuntimeFn::VariantPayloadU64,
             (DirectType::Scalar(ScalarKind::Bool), false) => RuntimeFn::VariantPayloadBool,
-            (DirectType::Scalar(ScalarKind::Int32), true) => RuntimeFn::LentVariantPayloadI64,
+            (DirectType::Scalar(kind), true) if kind.is_narrow_integer() => {
+                RuntimeFn::LentVariantPayloadI64
+            }
             (DirectType::Scalar(ScalarKind::Int64), true) => RuntimeFn::LentVariantPayloadInt64,
             (DirectType::Scalar(ScalarKind::Uint64), true) => RuntimeFn::LentVariantPayloadU64,
             (DirectType::Scalar(ScalarKind::Bool), true) => RuntimeFn::LentVariantPayloadBool,
@@ -11136,7 +11633,7 @@ impl<'a> FunctionCompiler<'a> {
                 "int64" => Some(ScalarKind::Int64),
                 "float64" => Some(ScalarKind::Float64),
                 "int32" => {
-                    self.emit_int32_bounds_check(results[0], None)?;
+                    self.emit_narrow_bounds_check(ScalarKind::Int32, results[0], false, None)?;
                     Some(ScalarKind::Int32)
                 }
                 _ => None,
@@ -11558,14 +12055,8 @@ impl<'a> FunctionCompiler<'a> {
                 let proven = op.is_unchecked();
                 if let ListOp::IndexScalar(kind) | ListOp::IndexScalarUnchecked(kind) = op {
                     // A scalar element comes back as raw bits, with no box.
-                    let bits = self.emit_scalar_list_read(
-                        list,
-                        index,
-                        call.immediates[0],
-                        proven,
-                        line,
-                        column,
-                    )?;
+                    let bits =
+                        self.emit_scalar_list_read(list, index, kind, proven, line, column)?;
                     let value = if kind == ScalarElement::Float64 {
                         self.builder.bitcast(types::F64, bits)
                     } else {
@@ -13978,23 +14469,8 @@ fn direct_type_inner(
         Type::Function { .. } | Type::Closure { .. } | Type::Callable(_) => {
             Some(DirectType::Callable(DirectCallableType::new(ty.clone())))
         }
-        Type::Named(name, args) if args.is_empty() && name == "int32" => {
-            Some(DirectType::Scalar(ScalarKind::Int32))
-        }
-        Type::Named(name, args) if args.is_empty() && name == "int64" => {
-            Some(DirectType::Scalar(ScalarKind::Int64))
-        }
-        Type::Named(name, args) if args.is_empty() && name == "uint64" => {
-            Some(DirectType::Scalar(ScalarKind::Uint64))
-        }
-        Type::Named(name, args) if args.is_empty() && name == "bool" => {
-            Some(DirectType::Scalar(ScalarKind::Bool))
-        }
-        Type::Named(name, args) if args.is_empty() && name == "float32" => {
-            Some(DirectType::Scalar(ScalarKind::Float32))
-        }
-        Type::Named(name, args) if args.is_empty() && name == "float64" => {
-            Some(DirectType::Scalar(ScalarKind::Float64))
+        Type::Named(name, args) if args.is_empty() && ScalarKind::of_name(name).is_some() => {
+            ScalarKind::of_name(name).map(DirectType::Scalar)
         }
         Type::Named(name, args) if args.is_empty() && name == "random.Rng" => {
             Some(DirectType::Opaque(Type::named(name)))
@@ -14249,15 +14725,27 @@ fn infer_operand_type(
     }
 }
 
+/// How a list that keeps `kind` scalars unboxed holds them: the view's
+/// access code and each element's width in bytes.
+fn scalar_list_slot(kind: ScalarElement) -> (aura_runtime::native_runtime::DirectListAccess, i64) {
+    use aura_runtime::native_runtime::DirectListAccess;
+    match kind {
+        ScalarElement::Int64 => (DirectListAccess::Int64, 8),
+        ScalarElement::Float64 => (DirectListAccess::Float64, 8),
+        ScalarElement::Bool => (DirectListAccess::Bool, 1),
+        ScalarElement::Int8 => (DirectListAccess::Int8, 1),
+        ScalarElement::Int16 => (DirectListAccess::Int16, 2),
+        ScalarElement::Int32 => (DirectListAccess::Int32, 4),
+        ScalarElement::Uint8 => (DirectListAccess::Uint8, 1),
+        ScalarElement::Uint16 => (DirectListAccess::Uint16, 2),
+        ScalarElement::Uint32 => (DirectListAccess::Uint32, 4),
+        ScalarElement::Uint64 => (DirectListAccess::Uint64, 8),
+    }
+}
+
 fn render_direct_type(ty: &DirectType) -> String {
     match ty {
-        DirectType::Scalar(ScalarKind::Int32) => "int32".to_string(),
-        DirectType::Scalar(ScalarKind::Int64) => "int64".to_string(),
-        DirectType::Scalar(ScalarKind::Uint64) => "uint64".to_string(),
-        DirectType::Scalar(ScalarKind::Float32) => "float32".to_string(),
-        DirectType::Scalar(ScalarKind::Float64) => "float64".to_string(),
-        DirectType::Scalar(ScalarKind::Bool) => "bool".to_string(),
-        DirectType::Scalar(ScalarKind::Unit) => "None".to_string(),
+        DirectType::Scalar(kind) => kind.type_name().to_string(),
         DirectType::PlainClass(class) => class.class_name.clone(),
         DirectType::Union(union) => union.union_type.to_string(),
         DirectType::Callable(callable) => callable.signature.to_string(),
@@ -14377,6 +14865,18 @@ fn box_thunk_value(
             let inst = builder.call(box_i32, &[values[0]]);
             Ok(inst.results[0])
         }
+        DirectType::Scalar(
+            kind @ (ScalarKind::Int8
+            | ScalarKind::Int16
+            | ScalarKind::Uint8
+            | ScalarKind::Uint16
+            | ScalarKind::Uint32),
+        ) => {
+            let box_integer = builder.import_function(codegen.runtime[RuntimeFn::BoxInteger]);
+            let kind_word = builder.iconst(types::I64, kind.direct_kind_word());
+            let inst = builder.call(box_integer, &[values[0], kind_word]);
+            Ok(inst.results[0])
+        }
         DirectType::Scalar(ScalarKind::Int64) => {
             let box_i64 = builder.import_function(codegen.runtime[RuntimeFn::BoxI64]);
             let inst = builder.call(box_i64, &[values[0]]);
@@ -14479,7 +14979,14 @@ fn unbox_thunk_value(
             )
         }
         DirectType::Opaque(_) => Ok(vec![raw]),
-        DirectType::Scalar(ScalarKind::Int32) => {
+        DirectType::Scalar(
+            ScalarKind::Int8
+            | ScalarKind::Int16
+            | ScalarKind::Int32
+            | ScalarKind::Uint8
+            | ScalarKind::Uint16
+            | ScalarKind::Uint32,
+        ) => {
             let unbox_i64 = builder.import_function(codegen.runtime[RuntimeFn::UnboxI64]);
             let inst = builder.call(unbox_i64, &[raw]);
             Ok(inst.results)
@@ -14723,13 +15230,8 @@ fn mangle_cleanup_thunk_symbol(function_name: &str, place: &str, index: usize) -
 
 fn direct_type_to_type(ty: &DirectType) -> Type {
     match ty {
-        DirectType::Scalar(ScalarKind::Int32) => Type::named("int32"),
-        DirectType::Scalar(ScalarKind::Int64) => Type::named("int64"),
-        DirectType::Scalar(ScalarKind::Uint64) => Type::named("uint64"),
-        DirectType::Scalar(ScalarKind::Float32) => Type::named("float32"),
-        DirectType::Scalar(ScalarKind::Float64) => Type::named("float64"),
-        DirectType::Scalar(ScalarKind::Bool) => Type::named("bool"),
         DirectType::Scalar(ScalarKind::Unit) => Type::Unit,
+        DirectType::Scalar(kind) => Type::named(kind.type_name()),
         DirectType::PlainClass(class) => Type::named(&class.class_name),
         DirectType::Union(union) => union.union_type.clone(),
         DirectType::Callable(callable) => callable.signature.clone(),

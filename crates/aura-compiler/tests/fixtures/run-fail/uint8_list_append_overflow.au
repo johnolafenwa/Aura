@@ -1,0 +1,6 @@
+def main() -> int32:
+    mut bytes: list[uint8] = [250]
+    last = bytes[0]
+    bytes.append(last + 10)
+    print(bytes)
+    return 0

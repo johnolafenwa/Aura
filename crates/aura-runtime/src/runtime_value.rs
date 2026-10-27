@@ -2323,6 +2323,13 @@ pub fn slice_vec_owned(
         ListElements::Int64(values) => ListElements::Int64(copy_scalars(&values[start..end])?),
         ListElements::Float64(values) => ListElements::Float64(copy_scalars(&values[start..end])?),
         ListElements::Bool(values) => ListElements::Bool(copy_scalars(&values[start..end])?),
+        ListElements::Int8(values) => ListElements::Int8(copy_scalars(&values[start..end])?),
+        ListElements::Int16(values) => ListElements::Int16(copy_scalars(&values[start..end])?),
+        ListElements::Int32(values) => ListElements::Int32(copy_scalars(&values[start..end])?),
+        ListElements::Uint8(values) => ListElements::Uint8(copy_scalars(&values[start..end])?),
+        ListElements::Uint16(values) => ListElements::Uint16(copy_scalars(&values[start..end])?),
+        ListElements::Uint32(values) => ListElements::Uint32(copy_scalars(&values[start..end])?),
+        ListElements::Uint64(values) => ListElements::Uint64(copy_scalars(&values[start..end])?),
     };
     Ok(VecValue {
         element_type: vector.element_type.clone(),
@@ -15403,6 +15410,7 @@ pub fn recv_for_registered_producers_iteration(
     channel: &ChannelValue,
     cancellation: &CancellationContext,
 ) -> RecvValueResult {
+    let mut producers_finished = false;
     loop {
         match channel.try_recv() {
             TryRecvResult::Value(value) => {
@@ -15412,6 +15420,7 @@ pub fn recv_for_registered_producers_iteration(
                 return RecvValueResult::Value(value);
             }
             TryRecvResult::Closed => return RecvValueResult::Closed,
+            TryRecvResult::Empty if producers_finished => return RecvValueResult::Closed,
             TryRecvResult::Empty => {}
         }
         let running_producers = channel
@@ -15420,7 +15429,11 @@ pub fn recv_for_registered_producers_iteration(
             .filter(|task| task.completed_result().is_none())
             .collect::<Vec<_>>();
         if running_producers.is_empty() {
-            return RecvValueResult::Closed;
+            // A producer can send its last item and finish between the
+            // receive above and this check, so receive once more before
+            // reporting the end.
+            producers_finished = true;
+            continue;
         }
         match wait_for_runtime_scheduler(
             vec![channel.clone()],
@@ -15620,38 +15633,42 @@ fn exact_runtime_uint8(value: &Value) -> Option<u8> {
     value.as_i128().and_then(|value| u8::try_from(value).ok())
 }
 
-fn runtime_uint8_elements<'a>(value: &'a Value, call: &str) -> Result<&'a [Value]> {
+fn runtime_uint8_elements<'a>(value: &'a Value, call: &str) -> Result<&'a ListElements> {
     let Value::Vec(value) = value else {
         return Err(Diagnostic::coded(
             "AU4001",
             format!("`{call}` expects a runtime `list[uint8]` value"),
         ));
     };
+    // Unboxed `uint8` elements are exact bytes by construction.
     if !matches!(
         &value.element_type,
         Type::Named(name, arguments) if name == "uint8" && arguments.is_empty()
-    ) || value
-        .elements
-        .iter()
-        .any(|value| exact_runtime_uint8(&value).is_none())
+    ) || (value.elements.as_uint8().is_none()
+        && value
+            .elements
+            .iter()
+            .any(|value| exact_runtime_uint8(&value).is_none()))
     {
         return Err(Diagnostic::coded(
             "AU4001",
             format!("`{call}` expects an exact runtime `list[uint8]` value"),
         ));
     }
-    // `uint8` elements are never kept in a scalar form.
-    Ok(value.elements.as_values().unwrap_or_default())
+    Ok(&value.elements)
 }
 
-fn host_bytes_from_runtime_elements(elements: &[Value]) -> Result<Vec<u8>> {
+fn host_bytes_from_runtime_elements(elements: &ListElements) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     bytes_runtime_try_reserve(&mut bytes, elements.len())?;
-    bytes.extend(
-        elements
-            .iter()
-            .map(|value| exact_runtime_uint8(value).expect("runtime bytes were validated")),
-    );
+    match elements.as_uint8() {
+        Some(unboxed) => bytes.extend_from_slice(unboxed),
+        None => bytes.extend(
+            elements
+                .iter()
+                .map(|value| exact_runtime_uint8(&value).expect("runtime bytes were validated")),
+        ),
+    }
     Ok(bytes)
 }
 
@@ -15710,7 +15727,7 @@ fn preflight_runtime_bytes_encoder<'a>(
     value: &'a Value,
     call: &str,
     encoded_len: fn(usize) -> std::result::Result<usize, BytesResourceError>,
-) -> Result<&'a [Value]> {
+) -> Result<&'a ListElements> {
     let elements = runtime_uint8_elements(value, call)?;
     encoded_len(bytes_runtime_encoded_input_len(elements.len()))
         .map_err(bytes_resource_error_to_diagnostic)?;
@@ -15732,15 +15749,10 @@ pub fn runtime_bytes_from_host(bytes: &[u8]) -> Result<Value> {
 
     let mut elements = Vec::new();
     bytes_runtime_try_reserve(&mut elements, bytes.len())?;
-    elements.extend(bytes.iter().copied().map(|byte| {
-        Value::Int(
-            IntegerValue::from_typed_unsigned(u128::from(byte), IntegerKind::Uint8)
-                .expect("every host byte fits the uint8 runtime kind"),
-        )
-    }));
+    elements.extend_from_slice(bytes);
     Ok(Value::Vec(VecValue {
         element_type: Type::Named(bytes_runtime_owned_string("uint8")?, Vec::new()),
-        elements: elements.into(),
+        elements: ListElements::from_uint8(elements),
         str_view: Default::default(),
     }))
 }
