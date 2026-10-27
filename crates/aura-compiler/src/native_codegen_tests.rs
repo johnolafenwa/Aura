@@ -2774,8 +2774,10 @@ fn ticket9_uint64_opaque_boundaries_use_typed_boxing_without_generic_detours() {
     let source = r#"
 def main() -> int32:
     values: list[uint64] = [18446744073709551615]
+    limits: dict[str, uint64] = {"max": 18446744073709551615}
     maybe: uint64 | None = 18446744073709551615
     print(values.len())
+    print(limits.len())
     print(maybe != None)
     return 0
 "#;
@@ -13871,7 +13873,8 @@ def main():
         "aura_direct_vec_push_plain",
         "aura_direct_vec_set_plain",
         "aura_direct_instance_read_plain",
-        "aura_direct_box_plain",
+        // A record printed is boxed as an instance that holds its bytes.
+        "aura_direct_instance_new_typed",
     ] {
         assert!(
             referenced.iter().any(|name| name.ends_with(symbol)),
@@ -13884,10 +13887,59 @@ def main():
         "aura_direct_vec_push_in_place",
         "aura_direct_vec_set_index_in_place",
         "aura_direct_instance_get_field",
+        "aura_direct_box_plain",
     ] {
         assert!(
             !referenced.iter().any(|name| name.ends_with(symbol)),
             "record code should not call `{symbol}`"
+        );
+    }
+}
+
+#[test]
+fn native_list_literals_and_queued_records_box_no_element() {
+    let source = r#"
+copy class Point:
+    x: int64
+    y: float64
+
+def main():
+    numbers = [1, 2, 3]
+    flags = [true, false]
+    points = [Point(x=1, y=0.5), Point(x=2, y=1.5)]
+    queue = Queue[Point]()
+    queue.put(points[1])
+    match queue.get():
+        case QueueReceive.Item(p):
+            print(p.x + numbers[2])
+        case _:
+            pass
+    print(flags.len() + points.len())
+"#;
+    let mir = lower_source_to_mir(source).expect("list literal source should lower");
+    let object = emit_host_object(&mir).expect("list literal source should emit directly");
+    let referenced = object_referenced_symbols(&object);
+    // Literal elements go in as their bits, and the queued record is an
+    // instance that holds its bytes, read back where they lie.
+    for symbol in [
+        "aura_direct_vec_push_scalar",
+        "aura_direct_vec_push_plain",
+        "aura_direct_instance_new_typed",
+    ] {
+        assert!(
+            referenced.iter().any(|name| name.ends_with(symbol)),
+            "list literal code should call `{symbol}`, referenced: {referenced:?}"
+        );
+    }
+    for symbol in [
+        "aura_direct_vec_push_in_place",
+        "aura_direct_box_i64",
+        "aura_direct_box_bool",
+        "aura_direct_box_plain",
+    ] {
+        assert!(
+            !referenced.iter().any(|name| name.ends_with(symbol)),
+            "list literal code should not call `{symbol}`"
         );
     }
 }

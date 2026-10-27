@@ -5073,6 +5073,7 @@ impl<'a> FunctionCompiler<'a> {
         };
         let element_direct_ty =
             ensure_direct_type(&resolved_element_type, &self.classes, "Vec element")?;
+        let scalar_element = ScalarElement::of(&resolved_element_type);
         let list_type = Type::Named("list".to_string(), vec![resolved_element_type]);
         let init = if runtime_type_is_wildcard(&list_type) {
             self.builder.call(self.runtime[RuntimeFn::VecEmpty], &[])
@@ -5092,7 +5093,32 @@ impl<'a> FunctionCompiler<'a> {
             call
         };
         let vector = self.owned_opaque_result(init.results, list_type);
+        // A scalar or a record goes in as its bits, with no box, by the
+        // calls `append` falls back to.
+        let scalar = scalar_element.filter(|_| matches!(element_direct_ty, DirectType::Scalar(_)));
+        let record = self.plain_record(&element_direct_ty)?;
         for element in elements {
+            if let Some(kind) = scalar {
+                let loaded =
+                    self.load_operand_with_integer_hint(element, element_direct_ty.scalar_kind())?;
+                let value = self.coerce_value(loaded, &element_direct_ty)?.values[0];
+                let bits = if kind.is_float() {
+                    self.builder.bitcast(types::I64, value)
+                } else {
+                    value
+                };
+                let call = RuntimeOp::List(ListOp::PushScalar(kind)).runtime_call();
+                let mut words = vec![vector.values[0], bits];
+                self.push_runtime_call_words(call, &mut words);
+                self.builder.call(self.runtime[call.function], &words);
+                continue;
+            }
+            if let Some(record) = &record {
+                let value = self.load_operand_for_target(element, &element_direct_ty)?;
+                let value = self.coerce_value(value, &element_direct_ty)?;
+                self.push_plain_record_by_call(record, vector.values[0], &value);
+                continue;
+            }
             let value = self.load_operand_as_opaque_direct(element, &element_direct_ty)?;
             let value = self.transfer_owned_opaque_value(&value);
             self.builder.call(
@@ -9351,7 +9377,7 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 DirectType::PlainClass(_) if self.plain_record(target)?.is_some() => {
                     let record = self.plain_record(target)?.expect("checked above");
-                    self.unbox_plain_record(&record, value.values[0], target)
+                    self.unbox_plain_record(&record, value.values[0], target)?
                 }
                 DirectType::PlainClass(class) => {
                     let mut values = Vec::new();
@@ -10905,7 +10931,7 @@ impl<'a> FunctionCompiler<'a> {
             }
             DirectType::PlainClass(ref class) => {
                 if let Some(record) = self.plain_record(&value.ty)? {
-                    return Ok(self.box_plain_record(&record, &value, &class.class_name));
+                    return self.box_plain_record(&record, &value, &class.class_name);
                 }
                 let (class_ptr, class_len) = self.string_constant(class.class_name.as_bytes())?;
                 let init = self.builder.call(

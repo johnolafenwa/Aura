@@ -18527,6 +18527,34 @@ apart from `file_io`, which varies run to run with its file system.
 Retains across the 30 programs are 98.4% below the 1,062,951 they were
 before the change in Shared Arguments Stay With The Caller.
 
+### Records Cross Tasks And Queues As Their Bytes
+
+A `copy class` value, such as a `Point` of two numbers, lives in machine
+words in native code. When it has to be boxed, for example to go into a
+`Queue[Point]`, to be a task's result, or to be the payload of a
+`QueueReceive.Item`, the box holds the record's bytes in the class's
+layout, and the code that takes the record back out reads those bytes
+where they lie. Before, the box held a copy of each field converted to a
+runtime value, and taking the record out converted each field back.
+
+A list literal of numbers, `bool` values, or `copy class` values, such
+as `[1, 2, 3]` or `[Point(x=1, y=2), Point(x=3, y=4)]`, builds its list
+from the elements' bits. Before, each element was boxed and then stored
+in the list.
+
+| Program | Instructions before | Instructions after |
+| --- | ---: | ---: |
+| 6,000 records and enums through queues, 400 tasks | 165.1M | 122.3M |
+| 300 calls that build lists of records with literals | 3.9M | 1.3M |
+| `graph_paths` | 73.2M | 68.6M |
+| `raytracer` | 24.1M | 22.3M |
+| `mini_browser` | 561.9M | 548.9M |
+| `sql_engine` | 1,377.5M | 1,371.2M |
+
+The first two rows are probe programs; the others are among the 30
+cross-language programs, and no other one of them changes by more than
+0.5%.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

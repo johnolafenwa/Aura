@@ -135,8 +135,21 @@ Last updated: 2026-10-27
   payload loan is a lent payload (`union_payload_loans`). Retains across
   the 30 programs: 87,876 to 16,507. Details are in
   `2026-10-27-rust-speed-2h-lookup-keys.md`.
-- Next: the 2h gate report, then step 2i (typed values across tasks and
-  queues).
+- Step 2h gate: the cleanup tests pass, and retains across the 30
+  programs are 98.4% below 2g (1,062,951 to 16,507). 28 of the 30 drop at
+  least 90%; pubsub_broker drops 89.1% (the rest is `get` copying a
+  subscriber list) and task_pool has almost none to begin with.
+- Step 2i parts 1 and 2: a run-pass fixture and a cleanup test send typed
+  values through queues, task arguments, closures, `select`, and task
+  results on both backends. A boxed `copy class` value keeps its bytes in
+  its class's layout (`box_plain_record`, `unbox_plain_record` in
+  `native_codegen_plain.rs`), list literals of scalars and records push
+  their bits, and `ListElements::push_plain` starts an empty list in the
+  record layout. Details are in
+  `2026-10-27-rust-speed-2i-typed-transfers.md`.
+- Next: step 2i part 3 (a task argument the caller moved is handed to
+  the child instead of shared with a lock), then part 4 (read-only
+  module constants).
 
 ## Aura 0.7.1 preview release (complete)
 

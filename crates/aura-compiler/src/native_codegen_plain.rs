@@ -384,13 +384,35 @@ impl FunctionCompiler<'_> {
         }
     }
 
-    /// Boxes a record value with one call that reads its layout bytes.
+    /// Boxes a record value. A record of a class with a layout is an
+    /// instance kept in that layout: one call makes the block and each leaf
+    /// is stored where it lies, so the box holds the record's bytes. Any
+    /// other record takes one call that reads its layout bytes.
     pub(super) fn box_plain_record(
         &mut self,
         record: &PlainRecord,
         value: &ValueRef,
         class_name: &str,
-    ) -> ValueRef {
+    ) -> std::result::Result<ValueRef, String> {
+        if let Some((class, leaves)) = self.record_class_leaves(&value.ty)? {
+            let cell = self.builder.import_data(class.cell());
+            let cell = self.builder.symbol_value(types::I64, cell);
+            let init = self
+                .builder
+                .call(self.runtime[RuntimeFn::InstanceNewTyped], &[cell]);
+            let object = init.results[0];
+            // A new instance is confined and keeps its fields in place.
+            let block = self.class_block(object);
+            for (leaf, word) in leaves.iter().zip(&value.values) {
+                self.store_leaf(*leaf, *word, block);
+            }
+            let boxed = ValueRef {
+                values: vec![object],
+                ty: DirectType::Opaque(Type::named(class_name)),
+            };
+            self.mark_temporary_opaque_owned(&boxed);
+            return Ok(boxed);
+        }
         let slot = self.plain_slot(record);
         self.store_plain_record(record, &value.values, slot, false);
         let cell = self.plain_cell(record);
@@ -402,11 +424,52 @@ impl FunctionCompiler<'_> {
             ty: DirectType::Opaque(Type::named(class_name)),
         };
         self.mark_temporary_opaque_owned(&boxed);
-        boxed
+        Ok(boxed)
     }
 
-    /// The words of the record a box holds, written by one call.
+    /// The words of the record a box holds. An instance kept in its class's
+    /// layout, which also means it is confined to this thread, is read
+    /// where it lies. Any other box takes one call that writes the words.
     pub(super) fn unbox_plain_record(
+        &mut self,
+        record: &PlainRecord,
+        boxed: Val,
+        ty: &DirectType,
+    ) -> std::result::Result<ValueRef, String> {
+        let Some((class, leaves)) = self.record_class_leaves(ty)? else {
+            return Ok(self.unbox_plain_record_by_call(record, boxed, ty));
+        };
+        let slow_block = self.builder.create_block();
+        let fast_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        for abi in ty.abi_types() {
+            self.builder.append_block_param(join_block, abi);
+        }
+        self.emit_class_check(boxed, class.access(), slow_block, fast_block);
+
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let block = self.class_block(boxed);
+        let values = leaves
+            .iter()
+            .map(|leaf| self.load_leaf(*leaf, block))
+            .collect::<Vec<_>>();
+        self.builder.jump(join_block, &values);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let loaded = self.unbox_plain_record_by_call(record, boxed, ty);
+        self.builder.jump(join_block, &loaded.values);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        Ok(ValueRef {
+            values: self.builder.block_params(join_block).to_vec(),
+            ty: ty.clone(),
+        })
+    }
+
+    fn unbox_plain_record_by_call(
         &mut self,
         record: &PlainRecord,
         boxed: Val,
@@ -554,15 +617,26 @@ impl FunctionCompiler<'_> {
 
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
+        self.push_plain_record_by_call(record, list, value);
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+    }
+
+    /// Appends a record to `list` with one call that reads the record from
+    /// a stack slot, as a list literal builds its list.
+    pub(super) fn push_plain_record_by_call(
+        &mut self,
+        record: &PlainRecord,
+        list: Val,
+        value: &ValueRef,
+    ) {
         let slot = self.plain_slot(record);
         self.store_plain_record(record, &value.values, slot, true);
         let cell = self.plain_cell(record);
         self.builder
             .call(self.runtime[RuntimeFn::VecPushPlain], &[list, slot, cell]);
-        self.builder.jump(join_block, &[]);
-
-        self.builder.switch_to_block(join_block);
-        self.builder.seal_block(join_block);
     }
 
     /// Replaces element `index` of a list of records. A confined list that

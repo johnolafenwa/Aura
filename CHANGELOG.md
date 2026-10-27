@@ -153,6 +153,15 @@ in this file.
   benchmark programs (1,062,951 to 16,507); json_roundtrip,
   csv_aggregate, lru_cache, bank_ledger, and sort_records now retain
   nothing.
+- A `copy class` value that native code boxes, for example to put it in
+  a queue, return it from a task, or keep it in an enum payload, now
+  keeps its bytes in its class's layout instead of being converted field
+  by field, and code that takes it back out reads the bytes where they
+  lie. A list literal of numbers, `bool` values, or `copy class` values
+  builds its list from the elements' bits instead of boxing each one, and
+  the first record pushed into an empty list no longer goes through a
+  runtime value. graph_paths runs 6.3% fewer instructions, raytracer
+  7.3%, and mini_browser 2.3%.
 
 ### Fixed
 
