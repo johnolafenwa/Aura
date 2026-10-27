@@ -33,7 +33,8 @@ fn element_boxes_compare_print_and_copy_their_values() {
 fn element_boxes_copy_an_element_another_reference_holds_before_a_change() {
     let mut list = ListElements::from(vec![text("a"), text("b")]);
     let ptr = list.lend(0).unwrap().as_ptr();
-    // Generated code that keeps a lent element takes a reference to it.
+    // Generated code copies an element it keeps, but should anything take
+    // a reference to a box, a change to the element leaves it the old one.
     unsafe { aura_direct_retain_value(ptr) };
     *list.get_mut(0).unwrap() = text("changed");
     assert_ne!(list.lend(0).unwrap().as_ptr(), ptr);

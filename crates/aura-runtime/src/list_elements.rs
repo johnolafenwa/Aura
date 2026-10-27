@@ -696,7 +696,17 @@ impl ListElements {
             Self::Uint64(values) => scalar(ListForm::Uint64, values),
             Self::Float32(values) => scalar(ListForm::Float32, values),
             // Generated code only reads the boxes, so the form has no room.
-            Self::Boxes(boxes) => (ListForm::Boxes, boxes.as_ptr() as usize, boxes.len(), 0),
+            // It reads only boxes no other list shares, so storage another
+            // list shares shows as values, which generated code reads
+            // through the runtime.
+            Self::Boxes(boxes) => {
+                let form = if boxes.is_shared() {
+                    ListForm::Values
+                } else {
+                    ListForm::Boxes
+                };
+                (form, boxes.as_ptr() as usize, boxes.len(), 0)
+            }
             Self::Typed(typed) => typed.view(),
         }
     }
@@ -880,19 +890,26 @@ impl ListElements {
 
     /// Lends element `index`: the box that holds it, which stays where it
     /// is until the list changes. A list of `Value`s moves its elements
-    /// into boxes first, copying them when another list shares the storage.
-    /// Storage of boxes another list shares stays shared, since a change to
-    /// either list copies it first. Any other form returns `None`.
+    /// into boxes first, copying them when another list shares the storage,
+    /// and a list whose boxes another list shares copies them into boxes of
+    /// its own. So a lent box is reached through this list only. Any other
+    /// form returns `None`.
     pub fn lend(&mut self, index: usize) -> Option<&ElementBox> {
-        if let Self::Values(values) = self {
-            let boxes = match values.unshared_mut() {
-                Some(values) => std::mem::take(values)
-                    .into_iter()
-                    .map(ElementBox::new)
-                    .collect(),
-                None => values.iter().cloned().map(ElementBox::new).collect(),
-            };
-            *self = Self::Boxes(boxes);
+        match self {
+            Self::Values(values) => {
+                let boxes = match values.unshared_mut() {
+                    Some(values) => std::mem::take(values)
+                        .into_iter()
+                        .map(ElementBox::new)
+                        .collect(),
+                    None => values.iter().cloned().map(ElementBox::new).collect(),
+                };
+                *self = Self::Boxes(boxes);
+            }
+            // Another list shares the boxes, so this one takes boxes of
+            // its own, which only it reaches.
+            Self::Boxes(boxes) if boxes.is_shared() => *boxes = boxes.iter().cloned().collect(),
+            _ => {}
         }
         match self {
             Self::Boxes(boxes) => boxes.get(index),

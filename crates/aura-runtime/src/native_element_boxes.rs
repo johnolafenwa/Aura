@@ -6,18 +6,22 @@
 //! keeps each element in a box of its own instead, so a read can lend the
 //! box to generated code and copy nothing (see `aura_direct_vec_lend`).
 //!
-//! The list owns one reference to each box, and no task's ledger links it.
-//! Only code that holds the list reaches the boxes, under the list's own
-//! access (its lock once the list is shared), so a box takes no lock of its
-//! own. Generated code reads a box only while the list is confined to its
-//! thread, and a reference it keeps past the read is counted in the box.
+//! The list owns the only reference to each box, and no task's ledger links
+//! it. Only code that holds the list reaches the boxes, under the list's
+//! own access (its lock once the list is shared), so a box takes no lock of
+//! its own and records no thread. Two lists may share storage of boxes
+//! until either changes, as with every form, but generated code reads a
+//! box only while its list is confined to the thread and shares its
+//! storage with no other list, and only until the list changes. A local
+//! that must keep the element longer copies it. So a box is never read on
+//! one thread while another thread changes it or its count.
 
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 
-use super::{release_untracked_value, untracked_boxed_value, OpaqueValue};
+use super::{element_boxed_value, release_untracked_value, OpaqueValue};
 use crate::runtime_value::Value;
 
 /// One element of a list in the `Boxes` form: a box the list owns.
@@ -31,7 +35,7 @@ unsafe impl Sync for ElementBox {}
 
 impl ElementBox {
     pub fn new(value: Value) -> Self {
-        let ptr = untracked_boxed_value(value, None);
+        let ptr = element_boxed_value(value);
         Self(NonNull::new(ptr).expect("a new box is never null"))
     }
 
@@ -53,15 +57,17 @@ impl ElementBox {
 
     /// Whether anything holds a reference to the box besides the list, or
     /// another thread may read it, so the list must not change it in place.
+    /// Generated code takes no reference to a box, so this only guards the
+    /// rule.
     fn is_shared(&self) -> bool {
         self.header().ref_count.load(Ordering::Acquire) > 1 || self.header().shared_lock().is_some()
     }
 
-    /// The element, to change in place. When generated code holds another
-    /// reference to the box, that reference keeps the old value and the list
-    /// takes a new box with a copy. The box's list view follows the change
-    /// when the returned guard drops, so generated code that reads the
-    /// element's own elements in place sees them.
+    /// The element, to change in place. When anything else holds a
+    /// reference to the box, that reference keeps the old value and the
+    /// list takes a new box with a copy. The box's list view follows the
+    /// change when the returned guard drops, so generated code that reads
+    /// the element's own elements in place sees them.
     pub fn value_mut(&mut self) -> ElementMut<'_> {
         if self.is_shared() {
             *self = Self::new(self.value().clone());

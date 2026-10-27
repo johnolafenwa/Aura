@@ -413,6 +413,27 @@ fn lent_lists_keep_each_element_in_a_box_of_its_own() {
     assert_eq!(boxes[1].as_ptr(), first);
     assert_ne!(list.lend(1).unwrap().as_ptr(), first);
 
+    // Generated code reads only boxes no other list shares. Shared boxes
+    // show as values, and a list lends from them only after taking boxes
+    // of its own.
+    let mut copy = copy;
+    let other = copy.clone();
+    assert_eq!(
+        copy.view().0.access(),
+        crate::native_runtime::DirectListAccess::Values as u32
+    );
+    let own = copy.lend(1).unwrap().as_ptr();
+    assert_ne!(own, first);
+    assert_eq!(
+        copy.view().0.access(),
+        crate::native_runtime::DirectListAccess::Boxes as u32
+    );
+    let ListElements::Boxes(boxes) = &other else {
+        panic!("the other list keeps the boxes");
+    };
+    assert_eq!(boxes[1].as_ptr(), first);
+    assert_eq!(copy, other);
+
     // A list of `Value`s another list shares copies its elements into boxes,
     // and the other list keeps its `Value`s.
     let mut shared = ListElements::from(vec![text("x"), text("y")]);

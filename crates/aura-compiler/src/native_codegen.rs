@@ -3182,9 +3182,9 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    /// Makes lent local `name` own its box: a box the list lends takes a
-    /// new reference, so the list copies the element before it changes or
-    /// drops it.
+    /// Makes lent local `name` own its element: a box the list lends is
+    /// copied into a new box, so the list's box is never reached once the
+    /// list may change, and only the list ever holds a reference to it.
     fn own_lent_element(&mut self, name: &str) -> std::result::Result<(), String> {
         let flag_var = self.lent_elements[name];
         let flag = self.builder.use_var(flag_var);
@@ -3194,9 +3194,13 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.brif(lent, own_block, &[], done_block, &[]);
         self.builder.switch_to_block(own_block);
         self.builder.seal_block(own_block);
-        let word = self.builder.use_var(self.local_vars(name)?[0]);
-        self.builder
-            .call(self.runtime[RuntimeFn::RetainValue], &[word]);
+        let word_var = self.local_vars(name)?[0];
+        let word = self.builder.use_var(word_var);
+        let copy = self
+            .builder
+            .call(self.runtime[RuntimeFn::CloneValue], &[word])
+            .results[0];
+        self.builder.def_var(word_var, copy);
         let zero = self.builder.iconst(types::I64, 0);
         self.builder.def_var(flag_var, zero);
         self.builder.jump(done_block, &[]);
@@ -12359,7 +12363,7 @@ impl<'a> FunctionCompiler<'a> {
                     // `pop()` of a scalar comes back as raw bits, with no box.
                     let bits = self.emit_scalar_list_pop(list, kind);
                     self.store_receiver_back_in_place(receiver_place, &object)?;
-                    let value = if kind == ScalarElement::Float64 {
+                    let value = if kind.is_float() {
                         self.builder.bitcast(types::F64, bits)
                     } else {
                         bits

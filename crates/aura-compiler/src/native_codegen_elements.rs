@@ -10,12 +10,12 @@
 //!
 //! The box lives as long as the list keeps it. A callee reaches a local
 //! list or a parameter only when it is passed in, so only an instruction
-//! that names the list can change or free it. Before each such
-//! instruction that does more than read the list, a lent local that is
-//! still to be read takes its own reference to the box. A list then copies
-//! an element before it changes it (see `ElementBox::value_mut`), so the
-//! local keeps the value it read. A list that a closure, a task, or a
-//! mutable loan can reach is never lent from.
+//! that names the list can change, free, copy, or share it. Before each
+//! such instruction that does more than read the list, a lent local that
+//! is still to be read copies the element into a box of its own, so the
+//! list's box is reached only while the list is unchanged (see
+//! `native_element_boxes.rs` in the runtime). A list that a closure, a
+//! task, or a mutable loan can reach is never lent from.
 
 use std::collections::{HashMap, HashSet};
 
@@ -31,8 +31,8 @@ use crate::runtime_ops::{DictOp, ListOp, RuntimeOp, SetOp};
 pub(super) struct LentElements {
     /// Each local that holds a lent element, with the list it reads.
     pub(super) lists: HashMap<String, String>,
-    /// The lent locals that take their own reference before the
-    /// instruction at each block label and index.
+    /// The lent locals that copy their element before the instruction at
+    /// each block label and index.
     pub(super) promotions: HashMap<(String, usize), Vec<String>>,
 }
 

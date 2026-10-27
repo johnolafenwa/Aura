@@ -35,20 +35,30 @@ and 30% of `sql_engine`.
 ### Part 2: lent element reads
 
 - `ListElements::Boxes` (access code 14, `native_element_boxes.rs`) keeps
-  each element in a box of its own (`ElementBox`). The list owns one
+  each element in a box of its own (`ElementBox`). The list owns the only
   reference to each box and no task ledger links it. Cloning an
-  `ElementBox` copies the value into a new box, so two lists never share
-  one, and storage two lists share stays copy-on-write as in every form.
-- `ElementBox::value_mut` copies the element into a new box first when
-  another reference holds the box, so a reference generated code kept
-  keeps the value it read. Every mutable accessor of the form goes
-  through it. `ElementMut` refreshes the box's list view when it drops.
+  `ElementBox` copies the value into a new box, and storage two lists
+  share stays copy-on-write as in every form.
+- The rule that keeps lending sound across tasks: generated code reads a
+  box only while its list is confined to the thread and shares its
+  storage with no other list, and only until the list changes. A list
+  whose boxes another list shares shows the `Values` access code, so
+  generated code takes the runtime path, which lends only after the list
+  takes boxes of its own. A local that must keep an element longer
+  copies it. So no other thread ever changes a box, or its count, while
+  generated code reads it. Element boxes record no thread for the debug
+  check of cross-thread access, since they move with their list and the
+  list is checked.
+- `ElementBox::value_mut` still copies the element into a new box when
+  another reference holds the box, as a guard on the rule. Every mutable
+  accessor of the form goes through it. `ElementMut` refreshes the box's
+  list view when it drops.
 - `aura_direct_vec_lend(list, index, line, column)` returns the element's
   box with the low bit set when the list is confined, and an owned copy
-  otherwise (as `aura_direct_vec_index` does). A `Values` list moves to
-  `Boxes` only after native code has copied out as many elements as an
-  eighth of its length (`StrView.copied_reads`), so a list read a few
-  times keeps the compact form.
+  otherwise (as `aura_direct_vec_index` does). A `Values` list, or one
+  whose boxes another list shares, takes boxes of its own only after
+  native code has copied out as many elements as an eighth of its length
+  (`StrView.copied_reads`), so a list read a few times keeps its form.
 - Every `ListElements` method has a `Boxes` arm, and readers that walk
   elements use `value_refs()` and `value_at()`, which cover both forms.
   Sorting, hashing, rendering, JSON conversion, and the element path
@@ -64,14 +74,16 @@ and 30% of `sql_engine`.
   A list that a closure or a task captures, or a mutable loan reaches, is
   never lent from.
 - Before each instruction that names the list and does more than read it,
-  while a lent local is still to be read, the local takes its own
-  reference ("promotion"), so `Release items` after the last index, or a
-  write to the list, cannot free or change what the local reads.
+  while a lent local is still to be read, the local copies the element
+  into a box of its own ("promotion"), so `Release items` after the last
+  index, a write to the list, or a call that may copy or share it cannot
+  change what the local reads. Promotions are rare: a `for` loop has
+  none, since the loop borrows the list.
 - The emitter keeps a flag per lent local. The fast path checks the
   access code, the bounds (unless the loop proved them), and loads the
   box pointer. The slow path calls `aura_direct_vec_lend` and reads the
   flag from the low bit. A release skips a lent local, and a promotion
-  retains it and clears the flag.
+  copies it and clears the flag.
 - `str` elements keep the copying read, which their list view already
   makes cheap. Named bindings of list elements are `AU3005` errors (use
   `view`), so part 2 covers temporaries: `for` loop elements and
@@ -83,10 +95,11 @@ and 30% of `sql_engine`.
 - Runtime tests: the list model's edit sequence covers lends, writes
   through a lent element, and a snapshot that stays unchanged after an
   edit; box identity, copy-on-write sharing, sort, and conversion of a
-  shared list; `ElementBox` copies an element another reference holds
-  before a change.
+  shared list; shared box storage shows as values and is copied before a
+  lend; `ElementBox` copies an element another reference holds before a
+  change.
 - Emitter tests: a `for` loop lends each element with no promotion; a
-  released list gives its live element a reference first; keeping,
+  released list gives its live element a copy first; keeping,
   writing, moving, loaning, or writing back through the local copies; a
   list a mutable loan reaches is never lent from, and reading parts keeps
   the read lent.
@@ -96,7 +109,7 @@ and 30% of `sql_engine`.
   past the conversion threshold, nested lists, enums, `json.Value` lists,
   and a task), and `run-pass/lent_list_elements_task_failure.au` (tasks
   that trap while a loop reads a lent element, after the list moved to
-  boxes, and while a promoted element holds its own reference).
+  boxes, and after a promoted element took its copy).
 - Backend parity (every runtime fixture on both backends) passes.
 
 ## Measurements
@@ -122,5 +135,7 @@ No program regresses. The largest increase is `graph_paths`, at 0.6%.
 - Part 3: lend `view` and `match` on `items[i]` (element loans) and
   element path reads, write and append boxes inline, and keep `str`
   views in boxes.
-- A lent local passed to a function is still copied. A promotion would
-  cost one retain instead.
+- A lent local passed to a function is still copied, and so is a promoted
+  one. Sharing the box instead would need its count to stay on one
+  thread, for example by taking a list's boxes back out when the list
+  moves to another task.

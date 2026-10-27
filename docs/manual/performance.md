@@ -662,11 +662,11 @@ its length, so a list that is read only a few times is never converted.
 cheap.
 
 A lent element keeps the value it had when it was read. Before the program
-changes or frees the list while it still reads the element, the element
-takes its own reference, and the list copies an element before it changes
-one that another reference holds. A list that a closure, a task, or a
-mutable borrow can reach is never lent from, and a list that another task
-can reach is read through the runtime as before.
+changes, frees, or passes on the list while it still reads the element,
+the element is copied, as every read used to be. A list that a closure, a
+task, or a mutable borrow can reach is never lent from, and a list that
+another task can reach, or that shares its storage with a copy, is read
+through the runtime first.
 
 Callgrind instruction counts on the shared Linux container, cross-language
 suite at the check size:

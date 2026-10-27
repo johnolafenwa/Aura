@@ -1577,9 +1577,9 @@ impl OpaqueValue {
         // synchronizing handoff after the store.
         let Some(lock) = self.shared_lock() else {
             #[cfg(all(debug_assertions, not(test)))]
-            assert_eq!(
-                self.owner_thread,
-                direct_value_thread_identity(),
+            assert!(
+                self.owner_thread == LIST_ELEMENT_THREAD
+                    || self.owner_thread == direct_value_thread_identity(),
                 "direct runtime value reached another thread without being shared"
             );
             return DirectValueAccess::Confined;
@@ -1822,11 +1822,34 @@ fn boxed_value_with_type(value: Value, runtime_type_name: Option<Arc<str>>) -> *
 /// `release_untracked_value`.
 #[inline]
 fn untracked_boxed_value(value: Value, runtime_type_name: Option<Arc<str>>) -> *mut OpaqueValue {
-    let value = box_cache::allocate(OpaqueValue::new(value, runtime_type_name));
+    allocate_box(OpaqueValue::new(value, runtime_type_name))
+}
+
+fn allocate_box(value: OpaqueValue) -> *mut OpaqueValue {
+    let value = box_cache::allocate(value);
     #[cfg(coverage)]
     DIRECT_VALUE_LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
     crate::runtime_value::representation_stats::note_opaque_box();
     value
+}
+
+/// The thread a box of a list element records in debug builds: none. Such
+/// a box is reached only through its list, which records the thread and
+/// is checked on every access, and it moves to another thread with the
+/// list.
+#[cfg(all(debug_assertions, not(test)))]
+const LIST_ELEMENT_THREAD: usize = 0;
+
+/// A box for an element of a list in the `Boxes` form, which no ledger
+/// tracks (see [`ElementBox`]).
+fn element_boxed_value(value: Value) -> *mut OpaqueValue {
+    #[allow(unused_mut)]
+    let mut element = OpaqueValue::new(value, None);
+    #[cfg(all(debug_assertions, not(test)))]
+    {
+        element.owner_thread = LIST_ELEMENT_THREAD;
+    }
+    allocate_box(element)
 }
 
 // These helpers validate the explicit refcount stored in `OpaqueValue`, but they cannot detect
@@ -7824,21 +7847,24 @@ pub extern "C-unwind" fn aura_direct_vec_pop_scalar(vec: *mut OpaqueValue, kind:
     })
 }
 
-/// The copying reads of a confined list of `Value`s, per element, after
-/// which [`aura_direct_vec_lend`] moves the elements into boxes it can
-/// lend. Moving them costs about one copy each, so the copies before it pay
-/// for it, and a list read only a few times stays as it is.
+/// The copying reads of a confined list of `Value`s, or of a list whose
+/// boxes another list shares, per element, after which
+/// [`aura_direct_vec_lend`] moves the elements into boxes of the list's own
+/// that it can lend. Moving them costs about one copy each, so the copies
+/// before it pay for it, and a list read only a few times stays as it is.
 const LEND_COPIES_PER_ELEMENT: usize = 8;
 
 /// Lends element `index` of `vec`, a list of handles, to generated code,
 /// which reads it in place and copies nothing. The word is the box that
 /// holds the element, with its low bit set, when the list keeps its
 /// elements in boxes; generated code reads that box itself while the list
-/// is confined, and calls here otherwise. A confined list of `Value`s moves
-/// its elements into boxes once its copying reads reach an eighth of its
-/// length. Until then, and for a list another thread may read, the word is
-/// a new box with a copy of the element, which the caller owns, as
-/// [`aura_direct_vec_index`] returns. The caller checked the index.
+/// is confined and no other list shares its boxes, and calls here
+/// otherwise. A confined list of `Value`s, or one whose boxes another list
+/// shares, moves its elements into boxes of its own once its copying reads
+/// reach an eighth of its length. Until then, and for a list another
+/// thread may read, the word is a new box with a copy of the element,
+/// which the caller owns, as [`aura_direct_vec_index`] returns. The caller
+/// checked the index.
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_lend(
     vec: *mut OpaqueValue,
@@ -7869,7 +7895,12 @@ fn lend_vec_element(value: &mut Value, index: i64) -> Option<*mut OpaqueValue> {
     };
     let len = vector.elements.len();
     let position = normalize_vec_index(index, len).filter(|position| *position < len)?;
-    if matches!(vector.elements, ListElements::Values(_)) {
+    let converts = match &vector.elements {
+        ListElements::Values(_) => true,
+        ListElements::Boxes(_) => vector.elements.is_shared(),
+        _ => false,
+    };
+    if converts {
         // SAFETY: the list is confined to this thread, and nothing else
         // holds its view.
         let view = unsafe { vector.str_view.get_or_create() };

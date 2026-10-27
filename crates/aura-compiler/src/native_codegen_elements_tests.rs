@@ -68,7 +68,7 @@ fn a_loop_lends_each_element_and_never_takes_a_reference() {
 }
 
 #[test]
-fn a_released_list_first_gives_its_live_element_a_reference() {
+fn a_released_list_first_gives_its_live_element_a_copy() {
     let first = function("first");
     let found = lent(&first);
     let [(temp, _)] = found.lists.iter().collect::<Vec<_>>()[..] else {
