@@ -15,7 +15,8 @@ use super::{
 };
 use crate::list_elements::{ListElements, ListForm};
 use crate::runtime_value::{
-    run_lightweight_root_task, union_value, EnumVariantValue, InstanceValue, Value, VecValue,
+    run_lightweight_root_task, union_value, EnumVariantValue, InstanceValue, TupleValue, Value,
+    VecValue,
 };
 
 /// The access codes these tests register under, far above the codes
@@ -552,4 +553,65 @@ fn enums_of_scalars_lay_out_plain_and_cells_start_empty() {
         unsafe { registered_plain_layout(&cell) }.err(),
         Some("a plain layout was used before it was registered".to_string())
     );
+}
+
+#[test]
+fn tuples_with_small_integers_and_unions_lay_out_plain() {
+    let (union_type, int_index) = {
+        let union = Type::normalize_union(
+            vec![Type::named("int32"), Type::Unit],
+            "main",
+            &Default::default(),
+        )
+        .expect("the union is valid");
+        let Type::Union(members) = &union else {
+            panic!("two members make a union");
+        };
+        let index = members
+            .members
+            .iter()
+            .position(|member| *member == Type::named("int32"))
+            .expect("int32 is a member");
+        (union, index)
+    };
+    let element_types = vec![
+        Type::named("int8"),
+        Type::named("uint16"),
+        Type::Unit,
+        union_type.clone(),
+    ];
+    let tuple_type = Type::Tuple(element_types.clone());
+    let layout =
+        register_plain_layout(&encode_descriptor(&tuple_type, &LayoutEnv::default()), None)
+            .expect("the tuple has a plain layout");
+    let int = |value: i128, kind| {
+        Value::Int(
+            crate::integer::IntegerValue::from_signed(value)
+                .with_runtime_kind(kind)
+                .expect("the value fits"),
+        )
+    };
+    let tuple = |small: i128, member: usize, payload: Value| {
+        Value::Tuple(TupleValue {
+            element_types: element_types.clone(),
+            elements: vec![
+                int(small, crate::integer::IntegerKind::Int8),
+                int(300 + small, crate::integer::IntegerKind::Uint16),
+                Value::Unit,
+                union_value(union_type.clone(), member, payload),
+            ],
+        })
+    };
+    let values = vec![
+        tuple(-5, int_index, int(7, crate::integer::IntegerKind::Int32)),
+        tuple(6, 1 - int_index, Value::Unit),
+    ];
+    for value in &values {
+        assert_eq!(decoded(layout, &encoded(layout, value)), *value);
+    }
+    // A registered tuple layout is found from a tuple value, so a list of
+    // such tuples keeps them in place.
+    let list = ListElements::from(values.clone());
+    assert_eq!(list.form(), ListForm::Typed(layout.access()));
+    assert_eq!(list.to_vec(), values);
 }

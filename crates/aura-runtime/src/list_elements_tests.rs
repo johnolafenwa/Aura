@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::OnceLock;
 
 use aura_core::layout::{encode_descriptor, ClassDefinition, LayoutEnv};
@@ -670,6 +671,33 @@ fn slices_of_records_in_place_copy_their_words() {
     assert_eq!(slice.elements.form(), ListForm::Typed(layout.access()));
     assert_eq!(exact_list(&slice.elements), exact(&[record(2), record(3)]));
     assert_eq!(vector.elements.len(), 4);
+}
+
+#[test]
+fn records_in_place_iterate_from_either_end() {
+    let layout = test_record_layout();
+    let values: Vec<Value> = (1..=5).map(record).collect();
+    let list = ListElements::from(values.clone());
+    assert_eq!(list.form(), ListForm::Typed(layout.access()));
+    let mut iter = list.iter();
+    assert_eq!(iter.nth(1).map(Cow::into_owned), Some(values[1].clone()));
+    assert_eq!(
+        iter.next_back().map(Cow::into_owned),
+        Some(values[4].clone())
+    );
+    assert_eq!(
+        iter.nth_back(1).map(Cow::into_owned),
+        Some(values[2].clone())
+    );
+    assert_eq!(iter.len(), 0);
+    assert!(iter.next_back().is_none());
+    assert!(list.iter().nth(9).is_none());
+    assert!(list.iter().nth_back(9).is_none());
+    let reversed: Vec<Value> = list.iter().rev().map(Cow::into_owned).collect();
+    assert_eq!(
+        exact(&reversed),
+        exact(&values.iter().rev().cloned().collect::<Vec<_>>())
+    );
 }
 
 #[test]

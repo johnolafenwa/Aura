@@ -13709,6 +13709,10 @@ class Holder:
     best: Segment
     all: list[Segment]
 
+copy class Mark:
+    count: uint64
+    gap: None
+
 def walk(segments: mut list[Segment], holder: Holder) -> int64:
     segments.append(holder.best)
     last = segments[-1]
@@ -13719,11 +13723,19 @@ def walk(segments: mut list[Segment], holder: Holder) -> int64:
     print(segments[1])
     return total
 
+def marks(count: uint64) -> uint64:
+    mut all: list[Mark] = []
+    all.append(Mark(count=count, gap=None))
+    first = all[0]
+    all[0] = Mark(count=first.count + 1, gap=first.gap)
+    return all[0].count
+
 def main():
     start = Point(x=1, y=0.5, on=true)
     segment = Segment(start=start, end=start, id=3)
     mut segments: list[Segment] = []
     print(walk(segments, Holder(best=segment, all=[])))
+    print(marks(4))
 "#;
     let mir = lower_source_to_mir(source).expect("record list source should lower");
     let object = emit_host_object(&mir).expect("record list source should emit directly");

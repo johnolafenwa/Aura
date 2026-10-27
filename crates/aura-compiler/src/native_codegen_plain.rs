@@ -95,8 +95,8 @@ impl PlainRecords {
     }
 
     /// The leaves and size of `class`'s layout, when it is one generated
-    /// code reads in place.
-    fn layout_of(&self, class: &PlainClassType) -> Option<(Vec<PlainLeaf>, u64)> {
+    /// code reads in place. A layout over 4 GiB keeps the boxed paths.
+    fn layout_of(&self, class: &PlainClassType) -> Option<(Vec<PlainLeaf>, u32)> {
         let ty = Type::named(&class.class_name);
         let mut builder = LayoutBuilder::new(&self.env);
         let id = builder.layout(&ty).ok()?;
@@ -113,14 +113,14 @@ impl PlainRecords {
             0,
             &mut leaves,
         )
-        .then_some((leaves, layout.size))
+        .then_some((leaves, u32::try_from(layout.size).ok()?))
     }
 
     fn declare_record(
         &mut self,
         class: &PlainClassType,
         leaves: Vec<PlainLeaf>,
-        size: u64,
+        size: u32,
         object: &mut dyn ModuleBackend,
     ) -> std::result::Result<PlainRecord, String> {
         let index = self.cells.len();
@@ -145,7 +145,7 @@ impl PlainRecords {
         );
         let descriptor = encode_descriptor(&Type::named(&class.class_name), &self.env);
         self.cells.push((cell, descriptor));
-        let stride = size.div_ceil(8) * 8;
+        let stride = u64::from(size).div_ceil(8) * 8;
         let partial_words = (0..stride)
             .step_by(8)
             .filter(|word| {
@@ -155,9 +155,6 @@ impl PlainRecords {
             })
             .map(|word| word as i32)
             .collect();
-        let Ok(size) = u32::try_from(size) else {
-            return Err("a plain record is too large".to_string());
-        };
         Ok(PlainRecord {
             cell,
             access,
