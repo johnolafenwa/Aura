@@ -98,10 +98,15 @@ Last updated: 2026-10-27
   write-back drops none. Retains across the 30 programs: 1,062,951 before
   2h, 696,205 after part 1, 400,936 after part 2. Details are in
   `2026-10-27-rust-speed-2h-mutable-arguments.md`.
-- Next: 2h part 3, runtime collection writes on a local receiver that
-  change the box in place skip the store-back that retains and releases
-  it (`list.swap` in `astar_pathfinding`), then unit results, scalar
-  math, payload bindings, and the leak, failure, and cancellation tests.
+- Step 2h part 3: every receiver store-back after a runtime collection
+  write skips the store for a whole local that is not a view or under a
+  cleanup (`store_receiver_back`), since the helpers change the box in
+  place. Retains across the 30 programs: 326,693; `astar_pathfinding`
+  -10% instructions, `graph_paths` -4%. Details are in
+  `2026-10-27-rust-speed-2h-collection-writes.md`.
+- Next: 2h part 4, a variant payload that only binds a name is read
+  straight into the binding, then unit results, scalar math, and the
+  leak, failure, and cancellation tests.
 
 ## Aura 0.7.1 preview release (complete)
 

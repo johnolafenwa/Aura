@@ -111,6 +111,13 @@ in this file.
   these two changes (1,062,951 to 400,936); regex_match, nbody, and
   raytracer retain almost nothing, and regex_match runs 1.9% fewer
   instructions.
+- A collection write through a local or a `mut` parameter, such as
+  `swap`, `append`, `remove`, `extend`, `sort`, a `dict` or `set` write,
+  or an `Array` `set`, no longer stores the collection back into the
+  local after the runtime changed it in place, which took a reference to
+  the collection and dropped the old one. astar_pathfinding runs 10%
+  fewer instructions and graph_paths 4%; both, with order_book,
+  markdown_render and regex_match, now retain nothing.
 
 ### Fixed
 
