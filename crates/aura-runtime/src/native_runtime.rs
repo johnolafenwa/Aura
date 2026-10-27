@@ -43,15 +43,15 @@ use crate::runtime_value::{
     collect_queue_values, concat_strings_checked, current_lightweight_task_cancellation,
     current_lightweight_task_id, current_task_native_slot, decode_process_restart_policy,
     decode_process_stdio, divmod_numeric_values, embedded_nominal_runtime_type_name,
-    fail_current_lightweight_task, float_floor_divmod, float_power, format_runtime_value_with,
-    host_builtins, io_error, io_read_line, is_clone_leaf, json_array_metadata_is_exact,
-    json_dump_error_to_diagnostic, json_int_metadata_is_exact, json_object_metadata_is_exact,
-    json_parse_inline, json_parse_owned_to_runtime, lookup_found, lookup_missing,
-    nominal_runtime_base_name, optional_absent, optional_bytes_value, optional_present,
-    optional_str_value, optional_value, poll_cancellation, poll_ready, poll_unavailable,
-    prepare_json_codec_source, process_error_cancelled, process_error_io, process_error_no_command,
-    process_error_spawn, process_error_timed_out, process_exit_status, process_stdio_inherit,
-    process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
+    fail_current_lightweight_task, float_floor_divmod, float_power, flush_buffered_files,
+    format_runtime_value_with, host_builtins, io_error, io_read_line, is_clone_leaf,
+    json_array_metadata_is_exact, json_dump_error_to_diagnostic, json_int_metadata_is_exact,
+    json_object_metadata_is_exact, json_parse_inline, json_parse_owned_to_runtime, lookup_found,
+    lookup_missing, nominal_runtime_base_name, optional_absent, optional_bytes_value,
+    optional_present, optional_str_value, optional_value, poll_cancellation, poll_ready,
+    poll_unavailable, prepare_json_codec_source, process_error_cancelled, process_error_io,
+    process_error_no_command, process_error_spawn, process_error_timed_out, process_exit_status,
+    process_stdio_inherit, process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
     process_supervisor_wait_cancelled, process_supervisor_wait_event,
     process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
@@ -13146,39 +13146,45 @@ pub extern "C-unwind" fn aura_direct_fs_exists(path: *mut OpaqueValue) -> *mut O
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_fs_read_to_string(path: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(path) } {
-        Value::String(path) => match run_blocking_io(
-            move || {
-                let bytes = read_file_limited(&path, "fs.read_to_string")?;
-                String::from_utf8(bytes)
-                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    task_runtime_boundary(|| {
+        flush_buffered_files();
+        match unsafe { value_ref(path) } {
+            Value::String(path) => match run_blocking_io(
+                move || {
+                    let bytes = read_file_limited(&path, "fs.read_to_string")?;
+                    String::from_utf8(bytes)
+                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+                },
+                Some(&current_cancellation()),
+            ) {
+                Ok(text) => boxed_value(result_ok(Value::String(text))),
+                Err(error) => boxed_value(result_err(io_error(error))),
             },
-            Some(&current_cancellation()),
-        ) {
-            Ok(text) => boxed_value(result_ok(Value::String(text))),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `str`, found `{}`",
-            value_type_name(other)
-        )),
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        }
     })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_fs_read_bytes(path: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(path) } {
-        Value::String(path) => match run_blocking_io(
-            move || read_file_limited(&path, "fs.read_bytes"),
-            Some(&current_cancellation()),
-        ) {
-            Ok(bytes) => boxed_value(result_ok(bytes_vec_value(bytes))),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `str`, found `{}`",
-            value_type_name(other)
-        )),
+    task_runtime_boundary(|| {
+        flush_buffered_files();
+        match unsafe { value_ref(path) } {
+            Value::String(path) => match run_blocking_io(
+                move || read_file_limited(&path, "fs.read_bytes"),
+                Some(&current_cancellation()),
+            ) {
+                Ok(bytes) => boxed_value(result_ok(bytes_vec_value(bytes))),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            },
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        }
     })
 }
 
@@ -13188,6 +13194,7 @@ pub extern "C-unwind" fn aura_direct_fs_write_string(
     text: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        flush_buffered_files();
         let path = match unsafe { value_ref(path) } {
             Value::String(path) => path.clone(),
             other => runtime_error(format!(
@@ -13218,6 +13225,7 @@ pub extern "C-unwind" fn aura_direct_fs_write_bytes(
     bytes: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        flush_buffered_files();
         let path = expect_string_value(&unsafe { value_ref(path) }, "fs.write_bytes(...)");
         let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "fs.write_bytes(...)");
         match run_blocking_io(
@@ -13236,6 +13244,7 @@ pub extern "C-unwind" fn aura_direct_fs_append_string(
     text: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        flush_buffered_files();
         let path = match unsafe { value_ref(path) } {
             Value::String(path) => path.clone(),
             other => runtime_error(format!(
@@ -13272,6 +13281,7 @@ pub extern "C-unwind" fn aura_direct_fs_append_bytes(
     bytes: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        flush_buffered_files();
         let path = expect_string_value(&unsafe { value_ref(path) }, "fs.append_bytes(...)");
         let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "fs.append_bytes(...)");
         match run_blocking_io(
@@ -13292,46 +13302,52 @@ pub extern "C-unwind" fn aura_direct_fs_append_bytes(
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_fs_create_dir(path: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(path) } {
-        Value::String(path) => match run_blocking_io(
-            move || crate::runtime_value::create_dir_once(path),
-            Some(&current_cancellation()),
-        ) {
-            Ok(()) => boxed_value(result_ok(Value::Unit)),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `str`, found `{}`",
-            value_type_name(other)
-        )),
+    task_runtime_boundary(|| {
+        flush_buffered_files();
+        match unsafe { value_ref(path) } {
+            Value::String(path) => match run_blocking_io(
+                move || crate::runtime_value::create_dir_once(path),
+                Some(&current_cancellation()),
+            ) {
+                Ok(()) => boxed_value(result_ok(Value::Unit)),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            },
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        }
     })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_fs_read_dir(path: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(path) } {
-        Value::String(path) => match run_blocking_io(
-            move || {
-                let mut names = std::fs::read_dir(path)?
-                    .filter_map(|entry| entry.ok())
-                    .map(|entry| entry.file_name().to_string_lossy().to_string())
-                    .collect::<Vec<_>>();
-                names.sort();
-                Ok(names)
+    task_runtime_boundary(|| {
+        flush_buffered_files();
+        match unsafe { value_ref(path) } {
+            Value::String(path) => match run_blocking_io(
+                move || {
+                    let mut names = std::fs::read_dir(path)?
+                        .filter_map(|entry| entry.ok())
+                        .map(|entry| entry.file_name().to_string_lossy().to_string())
+                        .collect::<Vec<_>>();
+                    names.sort();
+                    Ok(names)
+                },
+                Some(&current_cancellation()),
+            ) {
+                Ok(names) => boxed_value(result_ok(Value::Vec(VecValue {
+                    element_type: Type::named("str"),
+                    elements: names.into_iter().map(Value::String).collect(),
+                    str_view: Default::default(),
+                }))),
+                Err(error) => boxed_value(result_err(io_error(error))),
             },
-            Some(&current_cancellation()),
-        ) {
-            Ok(names) => boxed_value(result_ok(Value::Vec(VecValue {
-                element_type: Type::named("str"),
-                elements: names.into_iter().map(Value::String).collect(),
-                str_view: Default::default(),
-            }))),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `str`, found `{}`",
-            value_type_name(other)
-        )),
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        }
     })
 }
 
@@ -13341,6 +13357,7 @@ pub extern "C-unwind" fn aura_direct_fs_rename(
     target: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        flush_buffered_files();
         let source = match unsafe { value_ref(source) } {
             Value::String(source) => source.clone(),
             other => runtime_error(format!(
@@ -13367,18 +13384,21 @@ pub extern "C-unwind" fn aura_direct_fs_rename(
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_fs_remove_file(path: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(path) } {
-        Value::String(path) => match run_blocking_io(
-            move || crate::runtime_value::remove_file_checked(path),
-            Some(&current_cancellation()),
-        ) {
-            Ok(()) => boxed_value(result_ok(Value::Unit)),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `str`, found `{}`",
-            value_type_name(other)
-        )),
+    task_runtime_boundary(|| {
+        flush_buffered_files();
+        match unsafe { value_ref(path) } {
+            Value::String(path) => match run_blocking_io(
+                move || crate::runtime_value::remove_file_checked(path),
+                Some(&current_cancellation()),
+            ) {
+                Ok(()) => boxed_value(result_ok(Value::Unit)),
+                Err(error) => boxed_value(result_err(io_error(error))),
+            },
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        }
     })
 }
 
@@ -13459,7 +13479,7 @@ pub extern "C-unwind" fn aura_direct_file_write_all(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let text = match unsafe { value_ref(text) } {
-            Value::String(text) => text.clone(),
+            Value::String(text) => text,
             other => runtime_error(format!(
                 "expected `str`, found `{}`",
                 value_type_name(other)

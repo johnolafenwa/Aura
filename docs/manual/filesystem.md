@@ -48,11 +48,28 @@ def show_file() -> Result[None, io.Error]:
 | --- | --- | --- |
 | `read_all` | `read_all() -> Result[str, io.Error]` | Reads the remaining contents as strict UTF-8 text. Capped at 256 MiB. |
 | `read_bytes` | `read_bytes() -> Result[list[uint8], io.Error]` | Reads the remaining contents as raw bytes. Capped at 256 MiB. |
-| `write_all` | `write_all(text: str) -> Result[None, io.Error]` | Writes all of `text` to the file. |
-| `write_bytes` | `write_bytes(bytes: list[uint8]) -> Result[None, io.Error]` | Writes all the raw bytes to the file. |
-| `flush` | `flush() -> Result[None, io.Error]` | Flushes pending writes to the operating system. |
-| `sync` | `sync() -> Result[None, io.Error]` | Flushes pending writes, then waits until the file's data and metadata reach storage. This is `fsync`. |
-| `close` | `close() -> None` | Closes the handle. Any later use is invalid. |
+| `write_all` | `write_all(text: str) -> Result[None, io.Error]` | Writes all of `text` to the file. The bytes may wait in the handle's write buffer. |
+| `write_bytes` | `write_bytes(bytes: list[uint8]) -> Result[None, io.Error]` | Writes all the raw bytes to the file. The bytes may wait in the handle's write buffer. |
+| `flush` | `flush() -> Result[None, io.Error]` | Hands buffered writes to the operating system. |
+| `sync` | `sync() -> Result[None, io.Error]` | Flushes buffered writes, then waits until the file's data and metadata reach storage. This is `fsync`. |
+| `close` | `close() -> None` | Flushes buffered writes and closes the handle. Any later use is invalid. |
+
+### Write Buffering
+
+A handle from `fs.create` or `fs.append` buffers its writes, as Python's files and Rust's `BufWriter` do. Writes collect in a 64 KiB buffer, and the handle hands them to the operating system in one call when the buffer would overflow. A single write of 64 KiB or more goes to the operating system at once, after the bytes buffered before it. Writing a file in many small pieces therefore costs about as much as writing it in one piece.
+
+The program itself never sees a buffered write go missing. Before any other filesystem operation, the program hands every handle's buffered writes to the operating system. That covers each one-shot function, `fs.open`, `fs.create`, `fs.append`, and a read through any handle. It does the same before it starts a process, so a child process sees the file as written. When a second handle opens a file that another handle still writes, neither handle buffers from then on, so writes through the two reach the file in the order the program made them.
+
+A handle's buffer is also flushed when:
+
+- the program calls `flush()`, `sync()`, or `close()` on it,
+- a `with` block that owns it ends, in any way, since its exit calls `close()`,
+- the last reference to it goes away, for example when the task that owns it ends,
+- the program exits, including after a trap.
+
+Until then, another program reading the file may not see the buffered bytes. Call `flush()` when one needs them.
+
+A failed write to the operating system is reported by the call that flushed it: a later `write_all` or `write_bytes`, or `flush()` or `sync()`. The bytes in that flush are dropped and are not written again. `close()` and the automatic flushes have no result to report a failure in, so a program that must know a write succeeded calls `flush()` or `sync()` before it closes the handle. A handle from `fs.open` is read-only and does not buffer: a write to it fails at once.
 
 ## Text And Bytes
 
@@ -147,7 +164,7 @@ Each one-shot operation performs the host filesystem action in the table:
 
 Text is strict UTF-8. Invalid text and reads over 256 MiB return `io.Error.InvalidData`. Byte reads keep the bytes as they are.
 
-A file handle keeps an operating-system cursor. Each read sees and advances the same position. Writes and appends take effect as they happen and are not transactional. Ordinary host failures return the closest `io.Error` variant.
+A file handle keeps an operating-system cursor. Each read sees and advances the same position. Writes and appends reach the operating system when the handle flushes its write buffer (see [Write Buffering](#write-buffering)), in the order they were made, and are not transactional. Ordinary host failures return the closest `io.Error` variant.
 
 ## Ownership And Evaluation Order
 

@@ -15,6 +15,17 @@ in this file.
 
 ### Changed
 
+- `fs.File` handles from `fs.create` and `fs.append` buffer up to 64 KiB
+  of writes, as Python's files and Rust's `BufWriter` do. Writing a file
+  one line at a time used to cost one blocking-pool round trip, about 65
+  microseconds, per call. The program still sees every write it made:
+  each filesystem operation, read through a handle, and process start
+  flushes all buffered writes first, and two handles to one file write
+  through. Buffers are also flushed by `flush()`, `sync()`, `close()`, the
+  end of a `with` block, dropping the last reference, and program exit,
+  including after a trap. Another program reading the file sees the bytes
+  only after a flush, and a failed write is reported by the call that
+  flushes it.
 - Sorting `float64` values puts NaN after every other value, and NaNs keep
   their input order. `-0.0` and `0.0` sort as equal, so they also keep
   their input order.
