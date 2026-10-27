@@ -200,6 +200,17 @@ fn direct_mutable_arguments_and_collection_writes_take_no_reference() {
     assert_eq!(direct.retains, 0, "{direct:?}");
 }
 
+const PAYLOAD_BINDINGS: &str = "enum Op:\n    Add\n    Mul\n\nenum Expr:\n    Num(int64)\n    Var(str)\n    Binary(Op, Expr, Expr)\n\ndef eval(expr: Expr, names: dict[str, int64]) -> int64:\n    match expr:\n        case Expr.Num(value):\n            return value\n        case Expr.Var(name):\n            return names[name]\n        case Expr.Binary(op, left, right):\n            a = eval(left, names)\n            b = eval(right, names)\n            match op:\n                case Op.Add:\n                    return a + b\n                case Op.Mul:\n                    return a * b\n\ndef main():\n    names = {\"x\": 3}\n    expr = Expr.Binary(Op.Mul, Expr.Var(\"x\"), Expr.Binary(Op.Add, Expr.Num(1), Expr.Var(\"x\")))\n    mut total = 0\n    for _ in range(10):\n        total += eval(expr, names)\n    print(total)\n";
+
+#[test]
+fn direct_payload_bindings_take_no_reference() {
+    // Each binding holds the box its variant keeps the payload in, which
+    // the scrutinee keeps while the binding is read. The ten evaluations
+    // read 50 payloads and take no reference; building `expr` takes two.
+    let (_, direct) = assert_both_backends("repr-payloads", PAYLOAD_BINDINGS, "120\n");
+    assert!(direct.retains <= 2, "{direct:?}");
+}
+
 #[test]
 fn direct_scalar_union_local_allocates_no_union_box() {
     let (mir, direct) = assert_both_backends("repr-scalar-union", SCALAR_UNION_LOCAL, "42\n");

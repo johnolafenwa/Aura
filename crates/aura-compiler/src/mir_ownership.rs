@@ -869,7 +869,7 @@ pub(crate) fn instruction_accesses(instruction: &Instruction) -> Vec<(&str, Acce
 }
 
 /// [`instruction_accesses`] with each operand of `borrowed` borrowed.
-pub(super) fn instruction_accesses_with<'a>(
+pub(crate) fn instruction_accesses_with<'a>(
     instruction: &'a Instruction,
     borrowed: &[&Operand],
 ) -> Vec<(&'a str, Access)> {

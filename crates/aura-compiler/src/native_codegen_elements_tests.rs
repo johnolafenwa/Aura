@@ -2,7 +2,7 @@ use crate::lower_source_to_mir;
 use crate::mir::{CallTarget, Instruction, MirArg, MirFunction, Operand, Rvalue, Terminator};
 use crate::runtime_ops::{ListOp, RuntimeOp, SetOp, StrOp};
 
-use super::{lent_element_reads, LentElements};
+use super::{lent_element_reads, lent_payload_reads, LentElements};
 
 const SOURCE: &str = r#"
 class Item:
@@ -538,6 +538,257 @@ fn a_loan_of_the_lent_field_ends_the_element_loan_where_it_is_used() {
     let found = lent(&top);
     assert!(
         found.promotions.contains_key(&(end.0, end.1 + 1)),
+        "{found:?}"
+    );
+}
+
+const PAYLOADS: &str = r#"
+enum Op:
+    Add
+    Mul
+
+enum Expr:
+    Num(int64)
+    Var(str)
+    Binary(Op, Expr, Expr)
+
+def eval(expr: Expr, names: dict[str, int64]) -> int64:
+    match expr:
+        case Expr.Num(value):
+            return value
+        case Expr.Var(name):
+            return names[name]
+        case Expr.Binary(op, left, right):
+            a = eval(left, names)
+            b = eval(right, names)
+            match op:
+                case Op.Add:
+                    return a + b
+                case Op.Mul:
+                    return a * b
+
+def sizes(exprs: list[Expr]) -> int64:
+    mut sum = 0
+    for expr in exprs:
+        match expr:
+            case Expr.Var(name):
+                sum += name.len()
+            case _:
+                pass
+    return sum
+
+def through_a_value(expr: Expr) -> int64:
+    run = sizes
+    match expr:
+        case Expr.Var(name):
+            count = run([Expr.Num(1)])
+            return count + name.len()
+        case _:
+            return 0
+
+def copied(expr: Expr) -> int64:
+    match expr:
+        case Expr.Binary(op, _, _):
+            other = op
+            match other:
+                case Op.Add:
+                    return 1
+                case Op.Mul:
+                    return 2
+        case _:
+            return 0
+
+def nested(expr: Expr) -> int64:
+    match expr:
+        case Expr.Binary(_, Expr.Var(name), _):
+            return name.len()
+        case _:
+            return 0
+
+def main():
+    names = {"x": 3}
+    expr = Expr.Binary(Op.Add, Expr.Var("x"), Expr.Num(2))
+    print(eval(expr, names))
+    print(sizes([Expr.Var("ab")]))
+    print(through_a_value(Expr.Var("abc")))
+    print(copied(expr))
+    print(nested(expr))
+"#;
+
+/// The lent element and payload reads of `name` in [`PAYLOADS`], which
+/// lend from `expr` and the temporaries.
+fn lent_payloads(name: &str) -> (MirFunction, LentElements) {
+    let module = lower_source_to_mir(PAYLOADS).expect("the source should lower");
+    let borrowing = crate::mir::ownership::kept_arguments(&module);
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == name)
+        .expect("the function should exist")
+        .clone();
+    let mut found = lent_element_reads(&function, |_| true);
+    lent_payload_reads(
+        &function,
+        &mut found,
+        |_| true,
+        |place| place == "expr" || place.starts_with("%t"),
+        |instruction| {
+            crate::mir::ownership::callee_borrowed_operands(instruction, |name| borrowing.get(name))
+        },
+    );
+    (function, found)
+}
+
+/// The variant and payload index each payload read of `function` reads.
+fn payload_reads(function: &MirFunction) -> Vec<(String, (String, usize))> {
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                target,
+                value:
+                    Rvalue::VariantPayload {
+                        variant_name,
+                        index,
+                        ..
+                    },
+            } => Some((target.clone(), (variant_name.clone(), *index))),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn payloads_only_read_where_they_lie_are_lent() {
+    let (function, found) = lent_payloads("eval");
+    let lent = payload_reads(&function)
+        .into_iter()
+        .filter(|(temp, _)| found.payloads.get(temp).map(String::as_str) == Some("expr"))
+        .map(|(_, read)| read)
+        .collect::<Vec<_>>();
+    // The lookup reads `name`, the recursive calls borrow `left` and
+    // `right`, and the match reads `op`.
+    for (variant, index) in [("Var", 0), ("Binary", 0), ("Binary", 1), ("Binary", 2)] {
+        assert!(
+            lent.contains(&(variant.to_string(), index)),
+            "{variant} payload {index} should be lent: {found:?}"
+        );
+    }
+    assert!(found.promotions.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_payload_of_a_lent_element_is_lent_from_it() {
+    let (_, found) = lent_payloads("sizes");
+    let [(element, list)] = found.lists.iter().collect::<Vec<_>>()[..] else {
+        panic!("the loop should lend its element: {found:?}");
+    };
+    assert_eq!(list, "exprs");
+    let [(_, source)] = found.payloads.iter().collect::<Vec<_>>()[..] else {
+        panic!("the binding should be lent: {found:?}");
+    };
+    assert_eq!(source, element);
+    assert!(found.promotions.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_payload_takes_a_reference_before_its_scrutinee_is_handed_on() {
+    let (function, found) = lent_payloads("through_a_value");
+    let [(temp, source)] = found.payloads.iter().collect::<Vec<_>>()[..] else {
+        panic!("the binding should be lent: {found:?}");
+    };
+    assert_eq!(source, "expr");
+    // The call through a function value takes its own reference to the
+    // list it builds, not to `expr`, so nothing makes `name` take one.
+    assert!(found.promotions.is_empty(), "{found:?}");
+
+    // A call that may keep `expr` makes the binding take its reference
+    // before it.
+    let mut changed = function.clone();
+    let (block, position) = definition(&changed, temp);
+    changed.blocks[block].instructions.insert(
+        position + 1,
+        Instruction::Release {
+            place: "expr".to_string(),
+        },
+    );
+    let mut found = lent_element_reads(&changed, |place| place.starts_with("%t"));
+    lent_payload_reads(
+        &changed,
+        &mut found,
+        |_| true,
+        |place| place == "expr",
+        |_| Vec::new(),
+    );
+    assert_eq!(
+        found
+            .promotions
+            .get(&(changed.blocks[block].label.clone(), position + 1)),
+        Some(&vec![temp.clone()]),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn a_payload_of_a_lent_payload_is_lent_from_it() {
+    let (function, found) = lent_payloads("nested");
+    let reads = payload_reads(&function);
+    let source_of = |read: (&str, usize)| {
+        let (temp, _) = reads
+            .iter()
+            .find(|(_, (variant, index))| (variant.as_str(), *index) == read)
+            .expect("the payload should be read");
+        found.payloads.get(temp).cloned()
+    };
+    let (inner, _) = reads
+        .iter()
+        .find(|(_, (variant, _))| variant == "Binary")
+        .expect("the inner expression should be read");
+    assert_eq!(source_of(("Binary", 1)), Some("expr".to_string()));
+    assert_eq!(source_of(("Var", 0)), Some(inner.clone()));
+    assert!(found.promotions.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_payload_copied_whole_is_not_lent() {
+    let (function, found) = lent_payloads("copied");
+    let reads = payload_reads(&function);
+    // The pattern reads `op` alone and ignores the other payloads.
+    let [(op, read)] = &reads[..] else {
+        panic!("only `op` should be read: {reads:?}");
+    };
+    assert_eq!(read, &("Binary".to_string(), 0));
+    assert!(!found.payloads.contains_key(op), "{found:?}");
+}
+
+#[test]
+fn a_payload_whose_scrutinee_a_task_reaches_is_not_lent() {
+    let (mut function, _) = lent_payloads("eval");
+    function.blocks[0].instructions.insert(
+        0,
+        Instruction::Assign {
+            target: "%t_task".to_string(),
+            value: Rvalue::StartTask {
+                returns_handle: true,
+                result_is_copy: true,
+                stack_size: None,
+                task_group: Operand::Int(0),
+                function: Operand::Place("%t_function".to_string()),
+                args: vec![MirArg {
+                    name: None,
+                    value: Operand::Place("expr".to_string()),
+                    writeback_place: None,
+                }],
+                span: crate::diag::Span::new(1, 1),
+            },
+        },
+    );
+    let mut found = LentElements::default();
+    lent_payload_reads(&function, &mut found, |_| true, |_| true, |_| Vec::new());
+    assert!(
+        found.payloads.values().all(|source| source != "expr"),
         "{found:?}"
     );
 }

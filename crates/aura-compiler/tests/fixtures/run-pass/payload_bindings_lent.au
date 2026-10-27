@@ -1,0 +1,121 @@
+enum Op:
+    Add
+    Mul
+
+enum Expr:
+    Num(int64)
+    Var(str)
+    Neg(Expr)
+    Binary(Op, Expr, Expr)
+
+enum Shape:
+    Circle(int64)
+    Group(list[Shape])
+
+def eval(expr: Expr, names: dict[str, int64]) -> int64:
+    match expr:
+        case Expr.Num(value):
+            return value
+        case Expr.Var(name):
+            return names[name]
+        case Expr.Neg(inner):
+            return -eval(inner, names)
+        case Expr.Binary(op, left, right):
+            a = eval(left, names)
+            b = eval(right, names)
+            match op:
+                case Op.Add:
+                    return a + b
+                case Op.Mul:
+                    return a * b
+
+def describe(expr: Expr) -> str:
+    match expr:
+        case Expr.Num(value):
+            return f"{value}"
+        case Expr.Var(name):
+            return f"{name}({name.len()})"
+        case Expr.Neg(Expr.Num(value)):
+            return f"-{value}"
+        case Expr.Neg(inner):
+            return f"-({describe(inner)})"
+        case Expr.Binary(Op.Add, left, right):
+            return f"{describe(left)} + {describe(right)}"
+        case Expr.Binary(_, left, right):
+            return f"{describe(left)} * {describe(right)}"
+
+def area(shape: Shape) -> int64:
+    match shape:
+        case Shape.Circle(r):
+            return r * r
+        case Shape.Group(parts):
+            mut sum = 0
+            for part in parts:
+                sum += area(part)
+            return sum
+
+def first_area(shape: Shape) -> int64:
+    match shape:
+        case Shape.Group(parts):
+            return area(parts[0])
+        case Shape.Circle(r):
+            return r
+
+def collect(shapes: list[Shape]) -> list[list[Shape]]:
+    mut kept: list[list[Shape]] = []
+    for shape in shapes:
+        match shape:
+            case Shape.Group(parts):
+                kept.append(parts.copy())
+            case Shape.Circle(_):
+                pass
+    return kept
+
+def replace_while_bound(shape: mut Shape) -> int64:
+    match shape:
+        case Shape.Group(parts):
+            count = parts.len()
+            shape = Shape.Circle(7)
+            return count + area(shape)
+        case Shape.Circle(r):
+            return r
+
+def main():
+    names = {"x": 3, "long_name": 4}
+    expr = Expr.Binary(
+        Op.Add,
+        Expr.Binary(Op.Mul, Expr.Var("x"), Expr.Num(5)),
+        Expr.Neg(Expr.Binary(Op.Add, Expr.Var("long_name"), Expr.Num(-1))),
+    )
+    mut total = 0
+    for _ in range(100):
+        total += eval(expr, names)
+    print(total)
+    print(describe(expr))
+    print(describe(Expr.Neg(Expr.Num(2))))
+
+    shapes = [Shape.Group([Shape.Circle(1), Shape.Group([Shape.Circle(2)])]), Shape.Circle(3)]
+    mut covered = 0
+    for shape in shapes:
+        covered += area(shape)
+    print(covered)
+    print(first_area(shapes[0]))
+
+    groups = collect(shapes)
+    print(groups.len())
+    print(groups[0].len())
+
+    mut replaced = Shape.Group([Shape.Circle(1), Shape.Circle(2)])
+    print(replace_while_bound(replaced))
+    print(area(replaced))
+
+    mut items = [Shape.Group([Shape.Circle(4), Shape.Circle(5)]), Shape.Circle(6)]
+    mut seen = 0
+    for i in range(items.len()):
+        match items[i]:
+            case Shape.Group(parts):
+                seen += parts.len() + area(parts[1])
+            case Shape.Circle(r):
+                seen += r
+    items[1] = Shape.Circle(8)
+    print(seen + area(items[1]))

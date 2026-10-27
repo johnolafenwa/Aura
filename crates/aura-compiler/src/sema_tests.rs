@@ -580,6 +580,22 @@ fn s1_sema_final_nested_or_patterns_keep_exact_errors() {
 }
 
 #[test]
+fn a_nested_pattern_on_a_recursive_enum_finds_unreachable_arms() {
+    // A wildcard of a recursive enum after a nested variant pattern used to
+    // split into the enum's variants without end and overflow the stack.
+    crate::check_source(
+        "enum Op:\n    Add\n    Mul\n\nenum Expr:\n    Num(int64)\n    Binary(Op, Expr)\n\ndef eval(expr: Expr) -> int64:\n    match expr:\n        case Expr.Num(value):\n            return value\n        case Expr.Binary(Op.Add, right):\n            return 1 + eval(right)\n        case Expr.Binary(_, right):\n            return eval(right)\n\ndef main():\n    print(eval(Expr.Num(2)))\n",
+    )
+    .expect("an arm after a nested variant pattern is reachable");
+    let covered = crate::check_source(
+        "enum Expr:\n    Num(int64)\n    Neg(Expr)\n\ndef eval(expr: Expr) -> int64:\n    match expr:\n        case Expr.Neg(Expr.Num(_)):\n            return 2\n        case Expr.Neg(Expr.Neg(_)):\n            return 1\n        case Expr.Neg(_):\n            return 3\n        case Expr.Num(value):\n            return value\n\ndef main():\n    print(eval(Expr.Num(2)))\n",
+    )
+    .expect_err("two nested arms cover every payload of the recursive variant");
+    assert_eq!(covered.code, "AU2999");
+    assert_eq!(covered.message, "unreachable match arm");
+}
+
+#[test]
 fn s1_sema_final_match_expression_or_patterns_preserve_result_types() {
     crate::check_source(
         "def classify(value: int64) -> str:\n    return match value:\n        case 1 | 2: \"small\"\n        case _: \"other\"\n\ndef main():\n    print(classify(1))\n",

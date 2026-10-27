@@ -42,6 +42,9 @@ def double(text: str) -> Result[int64, str]:
     print(note)
     return Result.Ok(value * 2)
 
+def count(items: list[str]) -> int64:
+    return items.len()
+
 def main():
     named = Named(label="ada")
     point = Point(x=1, y=2)
@@ -54,6 +57,10 @@ def main():
         print(name)
     view first = names[0]
     print(first)
+    # A call through a function value takes its own reference.
+    counter = count
+    print(counter(names))
+    print(names.len())
     print(named.label)
     print(point.x + point.y + holder.item)
     match double("4"):
@@ -68,7 +75,7 @@ def main():
             print(error)
 "#;
 
-const STDOUT: &str = "a\nb\na\nada\n6\nnote 4\n8\nbad x\n";
+const STDOUT: &str = "a\nb\na\n2\n2\nada\n6\nnote 4\n8\nbad x\n";
 
 fn lowered() -> MirModule {
     lower_source_to_mir(PROGRAM).expect("the program should lower")
