@@ -15925,23 +15925,33 @@ pub fn optional_value(member: aura_core::types::Type, value: Option<Value>) -> V
 }
 
 /// `name | None` for a member type a static name spells, such as `int64`.
-/// Helpers return these on every call, so each thread keeps them by name
-/// and neither builds nor compares a member type to find one.
 pub fn optional_named(name: &'static str, value: Option<Value>) -> Value {
+    optional_kept(name, &|| aura_core::types::Type::named(name), value)
+}
+
+/// `member | None` for a member type that `key` names once and for all, as
+/// `"(str, str)"` names the pair `split_once` returns. Helpers return these
+/// on every call, so each thread keeps them by key and neither builds nor
+/// compares a member type to find one.
+pub fn optional_kept(
+    key: &'static str,
+    member: &dyn Fn() -> aura_core::types::Type,
+    value: Option<Value>,
+) -> Value {
     type Kept = (&'static str, Arc<aura_core::types::Type>, usize, usize);
     thread_local! {
-        static NAMED_OPTIONALS: RefCell<Vec<Kept>> = const { RefCell::new(Vec::new()) };
+        static KEPT_OPTIONALS: RefCell<Vec<Kept>> = const { RefCell::new(Vec::new()) };
     }
-    let found = NAMED_OPTIONALS.with_borrow(|unions| {
+    let found = KEPT_OPTIONALS.with_borrow(|unions| {
         unions
             .iter()
-            .find(|(known, ..)| *known == name)
+            .find(|(known, ..)| *known == key)
             .map(|(_, union_type, present, absent)| (Arc::clone(union_type), *present, *absent))
     });
     let (union_type, present, absent) = found.unwrap_or_else(|| {
-        let made = optional_union(aura_core::types::Type::named(name));
-        NAMED_OPTIONALS
-            .with_borrow_mut(|unions| unions.push((name, Arc::clone(&made.0), made.1, made.2)));
+        let made = optional_union(member());
+        KEPT_OPTIONALS
+            .with_borrow_mut(|unions| unions.push((key, Arc::clone(&made.0), made.1, made.2)));
         made
     });
     match value {

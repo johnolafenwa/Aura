@@ -823,6 +823,38 @@ suite at the check size:
 No other program grows by more than 2.2%, apart from `kv_server`, whose
 count moves by a few percent between runs of one build.
 
+### Unions And Result Values
+
+A union value shares its type with every other value of that union, so
+building, matching, and dropping one no longer copies and frees the type.
+The `str | None`, `int64 | None`, and `(str, str) | None` results of text,
+I/O, and `json` helpers, such as `strip_prefix`, `read_line`, `find`,
+`split_once`, and `as_int`, come ready-made instead of being built by the
+general union code on each call. When native code reads such a result
+into a `match own`, it moves the payload out of the box, and the box is
+reused when nothing else holds it, where it used to copy the string
+twice.
+
+A `Result` that native code builds keeps its payloads in its enum layout,
+as program-defined enums do, and `try` tests and reads it in place. A
+`Result` that a runtime helper returns is read through the runtime, as
+before.
+
+Callgrind instruction counts on the shared Linux container, cross-language
+suite at the check size:
+
+| Program | Before | After |
+| --- | ---: | ---: |
+| `kv_server` | 85.1M | 51.9M |
+| `pubsub_broker` | 133.4M | 85.3M |
+| `bank_ledger` | 18.4M | 13.6M |
+| `http_api` | 31.6M | 25.7M |
+| `docdb` | 79.1M | 66.0M |
+| `mini_browser` | 707.8M | 595.6M |
+| `spreadsheet` | 26.3M | 25.1M |
+
+No other program grows by more than 1.1%.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

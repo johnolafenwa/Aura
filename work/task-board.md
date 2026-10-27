@@ -73,7 +73,17 @@ Last updated: 2026-10-27
   `2026-10-27-rust-speed-2f-enum-layouts.md`. The 2f gates are not met
   (`binary_trees` 3.2x Rust, `interpreter` 12.6x); the rest is boxes and
   drops (2h), tags (2j), and calls (Phase 4a).
-- Next: 2g, unions and `Result` values in their layouts.
+- Step 2g: a union value shares its type (`Arc<Type>`), optional results
+  of runtime helpers come from per-thread tables, generated code moves a
+  union's payload out of a box it owns, and a `Result` that generated
+  code builds uses the typed enum layout of 2f. An erased generic call
+  whose union result collapses converts it at the call site, which fixes
+  a native AU4001 trap. Details are in
+  `2026-10-27-rust-speed-2g-unions-result.md`. The 2g gate is met apart
+  from moving the line out of `read_line`'s `str | None` box (1.2% of
+  `pubsub_broker`): `kv_server` -39%, `pubsub_broker` -36%, `bank_ledger`
+  -26%.
+- Next: 2h, ownership off boxes and the allocation ledger.
 
 ## Aura 0.7.1 preview release (complete)
 

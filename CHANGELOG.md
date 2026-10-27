@@ -81,6 +81,16 @@ in this file.
   Native code also skips retagging a value that already carries its
   static type. At check size, binary_trees runs 69% fewer instructions,
   interpreter 56%, spreadsheet 10%, and lzw_compress 8%.
+- A union value shares its type instead of owning a copy, so building,
+  matching, and dropping one no longer copies and frees the whole type.
+  The `str | None`, `int64 | None`, and `(str, str) | None` results of
+  text, I/O, and `json` helpers come ready-made rather than built anew on
+  each call. Native code reads such a result into a `match own` by moving
+  its payload out, where it used to copy the string twice. A `Result`
+  that native code builds keeps its payloads in its enum layout, and
+  `try` reads them in place. At check size, pubsub_broker runs 36% fewer
+  instructions, kv_server 35%, bank_ledger 26%, docdb 17%, mini_browser
+  16%, and http_api 8%.
 
 ### Fixed
 
@@ -89,6 +99,10 @@ in this file.
   or `cells[1].seen = not cells[1].seen`, failed `aura run` and
   `aura build` with AU4001 "invalid MIR loan flow". The right side is now
   evaluated before the element is lent for the write.
+- A native build trapped with AU4001 "direct backend expected `int64`,
+  found `int64 | T`" when a generic function returning `T | int64` was
+  called with `T = int64`, where `aura run` printed the value. The call
+  now gives its result the type the union collapses to, on both backends.
 
 ## VS Code extension 0.8.0 — 2026-10-27
 

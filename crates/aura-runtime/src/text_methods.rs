@@ -7,7 +7,8 @@
 use crate::diag::{Diagnostic, Result};
 use crate::integer::IntegerValue;
 use crate::runtime_value::{
-    host_bytes_from_runtime, optional_value, TupleValue, Value, VecValue, MAX_STRING_BYTES,
+    host_bytes_from_runtime, optional_kept, optional_named, TupleValue, Value, VecValue,
+    MAX_STRING_BYTES,
 };
 use aura_core::types::Type;
 
@@ -75,7 +76,7 @@ fn string_list(parts: impl IntoIterator<Item = String>) -> Value {
 }
 
 fn optional_index(index: Option<usize>) -> Value {
-    optional_value(Type::named("int64"), index.map(int64_value))
+    optional_named("int64", index.map(int64_value))
 }
 
 /// `str.trim_start()`: removes leading Unicode whitespace.
@@ -108,9 +109,10 @@ pub fn split_once(text: &str, separator: &str, from_end: bool) -> Result<Value> 
     } else {
         text.split_once(separator)
     };
-    let pair_type = Type::Tuple(vec![str_type(), str_type()]);
-    Ok(optional_value(
-        pair_type,
+    let pair_type = || Type::Tuple(vec![str_type(), str_type()]);
+    Ok(optional_kept(
+        "(str, str)",
+        &pair_type,
         split.map(|(before, after)| {
             Value::Tuple(TupleValue {
                 element_types: vec![str_type(), str_type()],
