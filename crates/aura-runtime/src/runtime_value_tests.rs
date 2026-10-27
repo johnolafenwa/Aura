@@ -1147,7 +1147,7 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
                 Value::Map(map) => {
                     pending.extend(map.entries.iter().rev().map(|(_, value)| value));
                 }
-                Value::Instance(instance) => pending.extend(instance.fields.values().rev()),
+                Value::Instance(instance) => pending.extend(instance.fields.map().values().rev()),
                 Value::EnumVariant(variant) => pending.extend(variant.payloads.iter().rev()),
                 Value::Union(union) => pending.push(&union.payload),
                 _ => {}
@@ -1185,7 +1185,8 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
             fields: BTreeMap::from([
                 ("left".to_string(), source_array(&[11, 13])),
                 ("right".to_string(), source_array(&[17, 19])),
-            ]),
+            ])
+            .into(),
         }),
         optional_present(array_type.clone(), source_array(&[23, 29])),
         Value::EnumVariant(EnumVariantValue {
@@ -1275,7 +1276,7 @@ fn array_containing_language_copies_preserve_empty_containers() {
         }),
         Value::Instance(InstanceValue {
             class_name: "EmptyArrayBox".to_string(),
-            fields: BTreeMap::new(),
+            fields: Default::default(),
         }),
         optional_absent(array_type),
     ];
@@ -1412,7 +1413,8 @@ fn adr0038_partial_capture_copies_release_every_projected_value_after_failure() 
                                     variant_name: "Queue".into(),
                                     payloads: vec![channel_value(channel)],
                                 }),
-                            )]),
+                            )])
+                            .into(),
                         })]
                         .into(),
                     })]
@@ -1569,7 +1571,8 @@ fn adr0038_partial_capture_copies_release_every_projected_value_after_failure() 
             fields: BTreeMap::from([
                 ("a_state".to_string(), cleanup_tree(&instance_channel)),
                 ("z_values".to_string(), failing_array()),
-            ]),
+            ])
+            .into(),
         }),
         &instance_channel,
         6,
@@ -1612,7 +1615,8 @@ fn deeply_recursive_reachable_array_copy_completes_on_a_512_kib_stack() {
                                     .unwrap(),
                                 ),
                             ),
-                        ]),
+                        ])
+                        .into(),
                     })],
                 });
             }
@@ -1638,8 +1642,8 @@ fn deeply_recursive_reachable_array_copy_completes_on_a_512_kib_stack() {
                     panic!("each present link should retain its ArrayNode");
                 };
                 let (Some(Value::Array(source_array)), Some(Value::Array(copy_array))) = (
-                    source_node.fields.get("values"),
-                    copy_node.fields.get("values"),
+                    source_node.fields.map().get("values"),
+                    copy_node.fields.map().get("values"),
                 ) else {
                     panic!("each ArrayNode should retain its values field");
                 };
@@ -1660,10 +1664,12 @@ fn deeply_recursive_reachable_array_copy_completes_on_a_512_kib_stack() {
                 );
                 source_cursor = source_node
                     .fields
+                    .map()
                     .get("next")
                     .expect("each ArrayNode should retain its next field");
                 copy_cursor = copy_node
                     .fields
+                    .map()
                     .get("next")
                     .expect("each copied ArrayNode should retain its next field");
             }
@@ -1715,7 +1721,8 @@ fn deeply_recursive_optional_link_array_copy_completes_on_a_512_kib_stack() {
                                     .unwrap(),
                                 ),
                             ),
-                        ]),
+                        ])
+                        .into(),
                     }),
                 );
             }
@@ -1741,8 +1748,8 @@ fn deeply_recursive_optional_link_array_copy_completes_on_a_512_kib_stack() {
                     panic!("each present link should retain its ArrayNode");
                 };
                 let (Some(Value::Array(source_array)), Some(Value::Array(copy_array))) = (
-                    source_node.fields.get("values"),
-                    copy_node.fields.get("values"),
+                    source_node.fields.map().get("values"),
+                    copy_node.fields.map().get("values"),
                 ) else {
                     panic!("each ArrayNode should retain its values field");
                 };
@@ -1763,10 +1770,12 @@ fn deeply_recursive_optional_link_array_copy_completes_on_a_512_kib_stack() {
                 );
                 source_cursor = source_node
                     .fields
+                    .map()
                     .get("next")
                     .expect("each ArrayNode should retain its next field");
                 copy_cursor = copy_node
                     .fields
+                    .map()
                     .get("next")
                     .expect("each copied ArrayNode should retain its next field");
             }
@@ -3278,7 +3287,8 @@ fn p63_embedded_nominal_types_preserve_base_value_identity_and_rendering() {
                     "value".to_string(),
                     Value::Int(IntegerValue::from_signed(7)),
                 ),
-            ]),
+            ])
+            .into(),
         })
     };
 
@@ -11649,7 +11659,8 @@ fn nested_queue_producer_registration_walks_tuples_collections_instances_and_var
             fields: BTreeMap::from([(
                 "queue".to_string(),
                 Value::Channel(queue_in_instance.clone()),
-            )]),
+            )])
+            .into(),
         }),
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Envelope".into(),

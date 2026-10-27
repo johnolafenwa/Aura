@@ -164,6 +164,7 @@ fn classes_and_tuples_lay_fields_out_in_order() {
         LayoutKind::Struct { class: Some(name), .. } if name == "Mixed"
     ));
     assert!(table.needs_drop(id));
+    assert!(!table.holds_block(id));
 
     let (table, id) = layout_of(&env, &Type::Tuple(vec![named("int32"), named("bool")]));
     assert_eq!((table.get(id).size, table.get(id).align), (8, 4));
@@ -341,6 +342,11 @@ fn a_linked_class_stores_its_optional_next_node_behind_a_pointer() {
     assert!(variants
         .iter()
         .any(|variant| variant.fields[0].layout == node));
+    // A node holds a block, through its optional next node; the int alone
+    // holds none.
+    assert!(table.holds_block(node));
+    assert!(table.holds_block(plain_next));
+    assert!(!table.holds_block(node_fields[0].layout));
 }
 
 #[test]

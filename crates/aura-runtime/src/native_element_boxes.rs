@@ -15,6 +15,11 @@
 //! storage with no other list, and only until the list changes. A local
 //! that must keep the element longer copies it. So a box is never read on
 //! one thread while another thread changes it or its count.
+//!
+//! An instance that keeps its fields in its class's layout keeps each
+//! field that is a handle in such a box too (see `native_class_layouts.rs`),
+//! under the same rules: the instance is the one holder, and generated code
+//! reaches a field's box only while the instance is confined to its thread.
 
 use std::fmt;
 use std::ops::{Deref, DerefMut};
@@ -24,7 +29,11 @@ use std::sync::atomic::Ordering;
 use super::{element_boxed_value, release_untracked_value, OpaqueValue};
 use crate::runtime_value::Value;
 
-/// One element of a list in the `Boxes` form: a box the list owns.
+/// One element of a list in the `Boxes` form, or one field of an instance
+/// kept in its layout: a box its holder owns. It is a transparent pointer,
+/// so a field slot holds an `Option<ElementBox>`, null while the field is
+/// moved out.
+#[repr(transparent)]
 pub struct ElementBox(NonNull<OpaqueValue>);
 
 // SAFETY: a list's boxes are reached through the list, under the list's
@@ -39,6 +48,15 @@ impl ElementBox {
         Self(NonNull::new(ptr).expect("a new box is never null"))
     }
 
+    /// Takes over a box with one reference, which no ledger links.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` is a live box, and the caller hands its only reference over.
+    pub(super) unsafe fn from_raw(ptr: *mut OpaqueValue) -> Self {
+        Self(NonNull::new(ptr).expect("a held box is never null"))
+    }
+
     /// The box, which generated code reads the element through.
     pub fn as_ptr(&self) -> *mut OpaqueValue {
         self.0.as_ptr()
@@ -50,9 +68,12 @@ impl ElementBox {
     }
 
     pub fn value(&self) -> &Value {
-        // SAFETY: the list's access covers the box, and a write takes
-        // `&mut self`, so no `&mut Value` exists while this borrow lives.
-        unsafe { &*self.header().value.get() }
+        self.header().held_value()
+    }
+
+    /// Brings the box's list view up to date after its holder changed it.
+    pub(super) fn refresh_view(&self) {
+        self.header().refresh_list_view();
     }
 
     /// Whether anything holds a reference to the box besides the list, or
@@ -70,7 +91,7 @@ impl ElementBox {
     /// the element's own elements in place sees them.
     pub fn value_mut(&mut self) -> ElementMut<'_> {
         if self.is_shared() {
-            *self = Self::new(self.value().clone());
+            *self = self.clone();
         }
         ElementMut(self)
     }
@@ -88,9 +109,17 @@ impl ElementBox {
 }
 
 impl Clone for ElementBox {
-    /// A copy of the element in a new box, so two lists never share a box.
+    /// A copy of the element in a new box with the same type tag, so two
+    /// holders never share a box.
     fn clone(&self) -> Self {
-        Self::new(self.value().clone())
+        let copy = Self::new(self.value().clone());
+        // SAFETY: the copy is new and confined to this thread, and the
+        // holder's access covers this box's tag.
+        unsafe {
+            *copy.header().runtime_type_name.get() =
+                (*self.header().runtime_type_name.get()).clone()
+        };
+        copy
     }
 }
 

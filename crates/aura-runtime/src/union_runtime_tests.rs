@@ -76,7 +76,7 @@ fn concrete_values_retag_to_the_symbolic_parameter_member() {
     let concrete = union(vec![Type::named("Dog"), Type::named("str"), Type::Unit]);
     let dog = Value::Instance(InstanceValue {
         class_name: "Dog".to_string(),
-        fields: BTreeMap::new(),
+        fields: Default::default(),
     });
     let value = union_value(&concrete, &Type::named("Dog"), dog);
     assert_eq!(
@@ -367,7 +367,7 @@ fn runtime_member_type_identifies_every_backend_independent_payload_kind() {
     assert_eq!(
         runtime_member_type(&Value::Instance(InstanceValue {
             class_name: "Dog".to_string(),
-            fields: BTreeMap::new(),
+            fields: Default::default(),
         })),
         Some(Type::named("Dog"))
     );

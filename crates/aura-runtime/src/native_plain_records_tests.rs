@@ -20,8 +20,8 @@ use crate::runtime_value::{
 };
 
 /// The access codes these tests register under, far above the codes
-/// layouts registered without one take.
-const FIRST_TEST_ACCESS: u32 = 0x7000_0000;
+/// layouts registered without one take and below the class codes.
+const FIRST_TEST_ACCESS: u32 = 0x3000_0000;
 
 fn record_env(name: &str) -> LayoutEnv {
     LayoutEnv {
@@ -279,14 +279,14 @@ fn registration_refuses_tables_codes_and_descriptors_it_cannot_honor() {
             }),
         ),
         (
-            "invalid plain layout: the layout is registered under access code 1879048202, not 1879048211",
+            "invalid plain layout: the layout is registered under access code 805306378, not 805306387",
             Box::new(|| {
                 let table = entry("PlainTestCodes", u64::from(FIRST_TEST_ACCESS + 19));
                 unsafe { aura_direct_register_plain_layouts(&table, 1) }
             }),
         ),
         (
-            "invalid plain layout: access code 1879048202 names another layout",
+            "invalid plain layout: access code 805306378 names another layout",
             Box::new(move || {
                 let table = DirectPlainLayoutEntry {
                     cell: Box::leak(Box::new(PlainLayoutCell::new())),

@@ -1,0 +1,104 @@
+# Class instances that keep their fields in their layout move into tasks,
+# share their fields with copies, and change there. A task that traps while
+# a field is lent to a call leaves the instance whole.
+class Account:
+    name: str
+    balance: int64
+    history: list[int64]
+    flags: dict[str, bool]
+
+    def deposit(mut self, amount: int64):
+        self.balance += amount
+        self.history.append(amount)
+
+    def summary(self) -> str:
+        return f"{self.name}:{self.balance}:{self.history.len()}:{self.flags.len()}"
+
+def settle(account: own Account) -> int64:
+    mut mine = account
+    for index in range(10):
+        mine.deposit(index)
+    mine.flags["settled"] = true
+    return mine.balance + mine.history.len()
+
+def total(accounts: list[Account]) -> int64:
+    mut sum = 0
+    for account in accounts:
+        sum += account.balance + account.history.len()
+    return sum
+
+def work(accounts: own list[Account]) -> int64:
+    mut mine = accounts
+    for index in range(mine.len()):
+        mine[index].deposit(index)
+        mine[index].history.append(1)
+    return total(mine)
+
+def replace_then_read(history: mut list[int64], at: int64) -> int64:
+    history = [1, 2]
+    history.append(3)
+    return history[at]
+
+def push_then_read(history: mut list[int64], at: int64) -> int64:
+    history.append(4)
+    return history[at]
+
+def fail_replacing(account: own Account) -> int64:
+    mut mine = account
+    return replace_then_read(mine.history, 9)
+
+def fail_pushing(account: own Account) -> int64:
+    mut mine = account
+    return push_then_read(mine.history, 9) + mine.balance
+
+def fail_in_runtime(account: own Account) -> int64:
+    mut mine = account
+    mine.history.append(5)
+    return mine.history[40]
+
+def fail_popping(account: own Account) -> int64:
+    mut mine = account
+    mine.history.pop()
+    return mine.history.pop()
+
+def outcome(task: Task[int64]) -> str:
+    match task.result(timeout = 5s):
+        case TaskResult.Ready(value):
+            return f"ready {value}"
+        case TaskResult.Error(message):
+            return f"error {message}"
+        case TaskResult.TimedOut:
+            return "timed out"
+        case TaskResult.Cancelled:
+            return "cancelled"
+
+def make(name: own str) -> Account:
+    return Account(name=name, balance=0, history=[], flags={})
+
+def main():
+    mut accounts: list[Account] = []
+    for index in range(30):
+        mut account = make(f"a{index}")
+        account.deposit(index)
+        accounts.append(account)
+    print(total(accounts))
+    copied = accounts.copy()
+    with TaskGroup() as group:
+        first = group.start(settle, make("solo"))
+        second = group.start(work, accounts)
+        third = group.start(work, copied)
+        print(outcome(first))
+        print(outcome(second))
+        print(outcome(third))
+    with TaskGroup() as group:
+        print(outcome(group.start(fail_replacing, make("r"))))
+        print(outcome(group.start(fail_pushing, make("p"))))
+        print(outcome(group.start(fail_in_runtime, make("n"))))
+        mut once = make("o")
+        once.deposit(1)
+        print(outcome(group.start(fail_popping, once)))
+    mut kept = make("kept")
+    kept.deposit(3)
+    print(push_then_read(kept.history, 1))
+    print(replace_then_read(kept.history, 2))
+    print(kept.summary())

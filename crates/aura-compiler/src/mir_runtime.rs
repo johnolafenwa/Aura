@@ -1159,7 +1159,7 @@ impl Env {
                 field, place
             )));
         };
-        match instance.fields.get(field) {
+        match instance.fields.map().get(field) {
             Some(value) => try_clone_mir_value(value),
             None => Err(Diagnostic::new(format!(
                 "class `{}` has no field `{}` in MIR place `{}`",
@@ -1196,12 +1196,14 @@ impl Env {
                     check_union_projection(union, segment)?;
                     &union.payload
                 }
-                Value::Instance(instance) => instance.fields.get(segment).ok_or_else(|| {
-                    Diagnostic::new(format!(
-                        "class `{}` has no field `{}` in MIR place `{}`",
-                        instance.class_name, segment, place
-                    ))
-                })?,
+                Value::Instance(instance) => {
+                    instance.fields.map().get(segment).ok_or_else(|| {
+                        Diagnostic::new(format!(
+                            "class `{}` has no field `{}` in MIR place `{}`",
+                            instance.class_name, segment, place
+                        ))
+                    })?
+                }
                 Value::Vec(vector) if segment.starts_with('[') => {
                     let position = parse_element_index_segment(segment, place)?;
                     match vector.elements.get(position) {
@@ -1652,7 +1654,7 @@ fn encode_entry_key(key: &Value, out: &mut Vec<u8>) -> Result<()> {
             out.push(b'c');
             text(out, &instance.class_name);
             out.extend_from_slice(format!("{};", instance.fields.len()).as_bytes());
-            for (name, value) in &instance.fields {
+            for (name, value) in instance.fields.map() {
                 text(out, name);
                 encode_entry_key(value, out)?;
             }
@@ -1874,10 +1876,13 @@ fn write_nested_place(
         }
         Value::Instance(instance) => {
             if rest.is_empty() {
-                instance.fields.insert((*segment).to_string(), value);
+                instance
+                    .fields
+                    .map_mut()
+                    .insert((*segment).to_string(), value);
                 return Ok(());
             }
-            let child = instance.fields.get_mut(*segment).ok_or_else(|| {
+            let child = instance.fields.map_mut().get_mut(*segment).ok_or_else(|| {
                 Diagnostic::new(format!(
                     "class `{}` has no field `{}` in MIR place `{}`",
                     instance.class_name, segment, full_place
@@ -1958,7 +1963,7 @@ fn take_nested_place(value: &mut Value, segments: &[String], full_place: &str) -
                     ))
                 });
             }
-            let child = instance.fields.get_mut(segment).ok_or_else(|| {
+            let child = instance.fields.map_mut().get_mut(segment).ok_or_else(|| {
                 Diagnostic::new(format!(
                     "class `{}` has no field `{}` in MIR place `{}`",
                     instance.class_name, segment, full_place
@@ -2006,12 +2011,14 @@ fn nested_place_mut<'a>(
             check_union_projection(union, segment)?;
             &mut union.payload
         }
-        Value::Instance(instance) => instance.fields.get_mut(segment).ok_or_else(|| {
-            Diagnostic::new(format!(
-                "class `{}` has no field `{}` in MIR place `{full_place}`",
-                instance.class_name, segment
-            ))
-        })?,
+        Value::Instance(instance) => {
+            instance.fields.map_mut().get_mut(segment).ok_or_else(|| {
+                Diagnostic::new(format!(
+                    "class `{}` has no field `{}` in MIR place `{full_place}`",
+                    instance.class_name, segment
+                ))
+            })?
+        }
         Value::Tuple(tuple) => {
             let index = segment.parse::<usize>().map_err(|_| {
                 Diagnostic::new(format!(
@@ -2548,7 +2555,7 @@ fn collect_queue_handles(value: &Value, queues: &mut Vec<ChannelValue>) {
             }
         }
         Value::Instance(instance) => {
-            for value in instance.fields.values() {
+            for value in instance.fields.map().values() {
                 collect_queue_handles(value, queues);
             }
         }
@@ -3124,7 +3131,7 @@ impl MirRuntime {
 
         let mut substitutions = HashMap::new();
         for field in &class.fields {
-            let actual_value = instance.fields.get(&field.name)?;
+            let actual_value = instance.fields.map().get(&field.name)?;
             let actual_ty = self.infer_runtime_value_type(actual_value)?;
             collect_runtime_type_substitutions(&field.ty, &actual_ty, &mut substitutions);
         }
@@ -4729,7 +4736,7 @@ impl MirRuntime {
                 }
                 Ok(RvalueOutcome::Value(Value::Instance(InstanceValue {
                     class_name: class_name.clone(),
-                    fields: values,
+                    fields: values.into(),
                 })))
             }
             Rvalue::UnionTagTest {

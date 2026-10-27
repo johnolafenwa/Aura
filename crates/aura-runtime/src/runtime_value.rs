@@ -712,7 +712,184 @@ impl PartialEq for FunctionValue {
 #[derive(Clone, Debug)]
 pub struct InstanceValue {
     pub class_name: String,
-    pub fields: BTreeMap<String, Value>,
+    pub fields: InstanceFields,
+}
+
+pub use crate::native_runtime::TypedFields;
+
+/// The fields of a class instance: a map from names to values, or, for an
+/// instance generated code built, one block in its class's layout (see
+/// `native_class_layouts.rs`). Both read the same: [`Self::get`] borrows a
+/// field the instance keeps as a value or a box and reads one it keeps
+/// inline, and [`Self::iter`] visits the fields in name order.
+#[derive(Clone)]
+pub enum InstanceFields {
+    Map(BTreeMap<String, Value>),
+    Typed(TypedFields),
+}
+
+impl Default for InstanceFields {
+    fn default() -> Self {
+        Self::Map(BTreeMap::new())
+    }
+}
+
+impl From<BTreeMap<String, Value>> for InstanceFields {
+    fn from(fields: BTreeMap<String, Value>) -> Self {
+        Self::Map(fields)
+    }
+}
+
+impl<const N: usize> From<[(String, Value); N]> for InstanceFields {
+    fn from(fields: [(String, Value); N]) -> Self {
+        Self::Map(fields.into())
+    }
+}
+
+impl FromIterator<(String, Value)> for InstanceFields {
+    fn from_iter<I: IntoIterator<Item = (String, Value)>>(fields: I) -> Self {
+        Self::Map(fields.into_iter().collect())
+    }
+}
+
+impl fmt::Debug for InstanceFields {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_map().entries(self.iter()).finish()
+    }
+}
+
+/// The fields of an instance, in name order.
+pub enum InstanceFieldIter<'a> {
+    Map(std::collections::btree_map::Iter<'a, String, Value>),
+    Typed(Box<dyn DoubleEndedIterator<Item = (&'a str, Cow<'a, Value>)> + 'a>),
+}
+
+impl<'a> Iterator for InstanceFieldIter<'a> {
+    type Item = (&'a str, Cow<'a, Value>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Map(fields) => fields
+                .next()
+                .map(|(name, value)| (name.as_str(), Cow::Borrowed(value))),
+            Self::Typed(fields) => fields.next(),
+        }
+    }
+}
+
+impl DoubleEndedIterator for InstanceFieldIter<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Map(fields) => fields
+                .next_back()
+                .map(|(name, value)| (name.as_str(), Cow::Borrowed(value))),
+            Self::Typed(fields) => fields.next_back(),
+        }
+    }
+}
+
+impl InstanceFields {
+    pub fn typed(&self) -> Option<&TypedFields> {
+        match self {
+            Self::Typed(typed) => Some(typed),
+            Self::Map(_) => None,
+        }
+    }
+
+    /// The map of an instance that keeps one. Only an instance generated
+    /// code built keeps its fields in a layout, so `aura run` reads its
+    /// instances this way.
+    pub fn map(&self) -> &BTreeMap<String, Value> {
+        match self {
+            Self::Map(fields) => fields,
+            Self::Typed(typed) => panic!(
+                "instance of `{}` keeps its fields in its layout",
+                typed.layout().class_name()
+            ),
+        }
+    }
+
+    /// The map of the instance, made from its layout first if it keeps its
+    /// fields there. Generated code then reads the instance through the
+    /// runtime, so only paths that are rare take it.
+    pub fn map_mut(&mut self) -> &mut BTreeMap<String, Value> {
+        if let Self::Typed(typed) = self {
+            let typed = std::mem::replace(typed, TypedFields::new(typed.layout()));
+            *self = Self::Map(typed.into_map());
+        }
+        match self {
+            Self::Map(fields) => fields,
+            Self::Typed(_) => unreachable!("the layout was turned into a map"),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Map(fields) => fields.len(),
+            Self::Typed(typed) => typed.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn contains_key(&self, name: &str) -> bool {
+        match self {
+            Self::Map(fields) => fields.contains_key(name),
+            Self::Typed(typed) => typed.contains_key(name),
+        }
+    }
+
+    pub fn get(&self, name: &str) -> Option<Cow<'_, Value>> {
+        match self {
+            Self::Map(fields) => fields.get(name).map(Cow::Borrowed),
+            Self::Typed(typed) => typed.get(name),
+        }
+    }
+
+    pub fn iter(&self) -> InstanceFieldIter<'_> {
+        match self {
+            Self::Map(fields) => InstanceFieldIter::Map(fields.iter()),
+            Self::Typed(typed) => InstanceFieldIter::Typed(Box::new(typed.iter())),
+        }
+    }
+
+    /// The names of the fields that are not moved out, in name order.
+    pub fn keys(&self) -> Box<dyn DoubleEndedIterator<Item = &str> + '_> {
+        match self {
+            Self::Map(fields) => Box::new(fields.keys().map(String::as_str)),
+            Self::Typed(typed) => Box::new(typed.keys()),
+        }
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = Cow<'_, Value>> + '_ {
+        self.iter().map(|(_, value)| value)
+    }
+
+    /// Sets field `name`. An instance kept in its layout refuses a name its
+    /// class has no field for, and a value that does not fit the field.
+    pub fn insert(&mut self, name: &str, value: Value) -> std::result::Result<(), String> {
+        match self {
+            Self::Map(fields) => {
+                match fields.get_mut(name) {
+                    Some(slot) => *slot = value,
+                    None => {
+                        fields.insert(name.to_string(), value);
+                    }
+                }
+                Ok(())
+            }
+            Self::Typed(typed) => typed.insert(name, value),
+        }
+    }
+
+    pub fn remove(&mut self, name: &str) -> Option<Value> {
+        match self {
+            Self::Map(fields) => fields.remove(name),
+            Self::Typed(typed) => typed.remove(name),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -906,11 +1083,11 @@ impl PartialEq for InstanceValue {
         }
         self.fields
             .iter()
-            .filter(|(name, _)| name.as_str() != DIRECT_RUNTIME_TYPE_FIELD)
+            .filter(|(name, _)| *name != DIRECT_RUNTIME_TYPE_FIELD)
             .eq(other
                 .fields
                 .iter()
-                .filter(|(name, _)| name.as_str() != DIRECT_RUNTIME_TYPE_FIELD))
+                .filter(|(name, _)| *name != DIRECT_RUNTIME_TYPE_FIELD))
     }
 }
 
@@ -2610,9 +2787,16 @@ fn drop_array_containing_value_iteratively(value: Value, frames: &mut Vec<ArrayC
                     entries: entries.into_iter(),
                     pending_value: None,
                 }),
-                Value::Instance(InstanceValue { fields, .. }) => {
-                    Some(ArrayCloneCleanupFrame::Fields(fields.into_values()))
-                }
+                // A class laid out in place is not recursive, so it drops
+                // its fields itself.
+                Value::Instance(InstanceValue {
+                    fields: InstanceFields::Typed(_),
+                    ..
+                }) => None,
+                Value::Instance(InstanceValue {
+                    fields: InstanceFields::Map(fields),
+                    ..
+                }) => Some(ArrayCloneCleanupFrame::Fields(fields.into_values())),
                 Value::EnumVariant(EnumVariantValue { payloads, .. }) => {
                     Some(ArrayCloneCleanupFrame::Values(payloads.into_iter()))
                 }
@@ -2705,6 +2889,12 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
     match value {
         Value::Tuple(tuple) if tuple.elements.iter().all(is_flat_clone) => return Ok(value.clone()),
         value if is_flat_clone(value) => return Ok(value.clone()),
+        // An instance kept in its layout copies its block, and its field
+        // boxes copy their values.
+        Value::Instance(instance) if instance.fields.typed().is_some() => {
+            representation_stats::note_cloned_elements(instance.fields.len());
+            return Ok(value.clone());
+        }
         _ => {}
     }
     if let Some(shared) = shared_collection_clone(value) {
@@ -2952,9 +3142,15 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                         }))
                     }
                 }
+                // An instance kept in its layout copies its block, as it
+                // does at the top.
+                Value::Instance(instance) if instance.fields.typed().is_some() => {
+                    representation_stats::note_cloned_elements(instance.fields.len());
+                    Some(value.clone())
+                }
                 Value::Instance(instance) => {
                     representation_stats::note_cloned_elements(instance.fields.len());
-                    let mut remaining = instance.fields.iter();
+                    let mut remaining = instance.fields.map().iter();
                     if let Some((name, field_value)) = remaining.next() {
                         state.push_frame(CloneFrame::Instance {
                             instance,
@@ -2967,7 +3163,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     } else {
                         Some(Value::Instance(InstanceValue {
                             class_name: instance.class_name.clone(),
-                            fields: BTreeMap::new(),
+                            fields: InstanceFields::default(),
                         }))
                     }
                 }
@@ -3129,7 +3325,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     } else {
                         state.completed = Some(Value::Instance(InstanceValue {
                             class_name: instance.class_name.clone(),
-                            fields,
+                            fields: fields.into(),
                         }));
                     }
                 }
@@ -8016,6 +8212,9 @@ impl Value {
     fn render_inner(&self, mut hook: Option<&mut DisplayHook<'_>>) -> Result<String> {
         enum RenderAction<'a> {
             Value(&'a Value),
+            /// A field an instance keeps inline in its layout, read out of
+            /// it. It renders on its own, since nothing borrows from it.
+            Owned(Value),
             Text(&'a str),
             Static(&'static str),
             Float32(f32),
@@ -8041,6 +8240,9 @@ impl Value {
                     rendered.push_str(text);
                 }
                 RenderAction::Float32(number) => rendered.push_str(&render_float32(number)),
+                RenderAction::Owned(value) => {
+                    rendered.push_str(&value.render_inner(hook.as_deref_mut())?);
+                }
                 RenderAction::Value(value) => {
                     if let Some(hook) = hook.as_mut() {
                         let nominal = match value {
@@ -8195,10 +8397,16 @@ impl Value {
                             let fields = instance
                                 .fields
                                 .iter()
-                                .filter(|(name, _)| name.as_str() != DIRECT_RUNTIME_TYPE_FIELD)
+                                .filter(|(name, _)| *name != DIRECT_RUNTIME_TYPE_FIELD)
                                 .collect::<Vec<_>>();
                             for (index, (name, value)) in fields.into_iter().enumerate().rev() {
-                                actions.push(RenderAction::Value(value));
+                                // A field read out of a class's block renders
+                                // as its map form renders it, a `float32`
+                                // with `float64` digits as `aura run` does.
+                                actions.push(match value {
+                                    Cow::Borrowed(value) => RenderAction::Value(value),
+                                    Cow::Owned(value) => RenderAction::Owned(value),
+                                });
                                 actions.push(RenderAction::Static("="));
                                 actions.push(RenderAction::Text(name));
                                 if index > 0 {
@@ -9107,7 +9315,7 @@ pub fn collect_queue_values(value: &Value, queues: &mut Vec<ChannelValue>) {
         }
         Value::Instance(instance) => {
             for value in instance.fields.values() {
-                collect_queue_values(value, queues);
+                collect_queue_values(&value, queues);
             }
         }
         Value::EnumVariant(variant) => {

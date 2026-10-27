@@ -300,6 +300,23 @@ impl LayoutTable {
         }
     }
 
+    /// Whether a value of `id` holds a heap block anywhere: an
+    /// [`LayoutKind::Indirect`] that no handle stands in front of. Every
+    /// cycle goes through one, so the walk ends.
+    pub fn holds_block(&self, id: LayoutId) -> bool {
+        match &self.get(id).kind {
+            LayoutKind::Unit | LayoutKind::Scalar(_) | LayoutKind::Handle => false,
+            LayoutKind::Indirect(_) => true,
+            LayoutKind::Struct { fields, .. } => {
+                fields.iter().any(|field| self.holds_block(field.layout))
+            }
+            LayoutKind::Tagged { variants, .. } => variants
+                .iter()
+                .flat_map(|variant| &variant.fields)
+                .any(|field| self.holds_block(field.layout)),
+        }
+    }
+
     /// Checks the rules every layout keeps: sizes are multiples of their
     /// alignment, alignments are powers of two, every field fits inside its
     /// value at an offset its alignment allows, a struct's fields do not

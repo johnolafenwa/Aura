@@ -24,13 +24,14 @@ use aura_core::layout::{
 use aura_core::types::Type;
 
 use super::{
-    canonical_runtime_type_name, consume_owned_untracked_value, explicit_runtime_type_tag,
-    is_unknown_runtime_type, release_untracked_value, retag_value, set_explicit_runtime_type_tag,
-    shared_runtime_type_tag, untracked_boxed_value, value_ref, value_type_name, OpaqueValue,
+    canonical_runtime_type_name, consume_owned_untracked_value, element_boxed_value,
+    is_unknown_runtime_type, release_untracked_value, retag_value, runtime_error,
+    set_explicit_runtime_type_tag, shared_runtime_type_tag, value_type_name, ElementBox,
+    OpaqueValue,
 };
 use crate::runtime_value::{
-    nominal_runtime_base_name, union_value, EnumVariantValue, InstanceValue, TupleValue, Value,
-    DIRECT_RUNTIME_TYPE_FIELD,
+    nominal_runtime_base_name, union_value, EnumVariantValue, InstanceFields, InstanceValue,
+    TupleValue, Value, DIRECT_RUNTIME_TYPE_FIELD,
 };
 
 /// The layout of one type, with every layout it reaches.
@@ -50,6 +51,14 @@ impl TypedLayout {
             table: builder.into_table(),
             root,
         })
+    }
+
+    pub(crate) fn table(&self) -> &LayoutTable {
+        &self.table
+    }
+
+    pub(crate) fn root(&self) -> LayoutId {
+        self.root
     }
 
     pub(crate) fn size(&self) -> usize {
@@ -316,7 +325,7 @@ pub fn register_plain_layout(
         return same_code(layout, access);
     }
     let access = match access {
-        Some(code) if code < FIRST_PLAIN_ACCESS || code == UNREGISTERED_PLAIN_ACCESS => {
+        Some(code) if !(FIRST_PLAIN_ACCESS..super::FIRST_CLASS_ACCESS).contains(&code) => {
             return Err(format!("{code} is not a plain layout access code"));
         }
         Some(code) if registry.taken.contains(&code) => {
@@ -327,7 +336,7 @@ pub fn register_plain_layout(
             let mut code = registry.next.max(FIRST_PLAIN_ACCESS);
             while registry.taken.contains(&code) {
                 code = match code.checked_add(1) {
-                    Some(next) if next != UNREGISTERED_PLAIN_ACCESS => next,
+                    Some(next) if next < super::FIRST_CLASS_ACCESS => next,
                     _ => return Err("too many plain layouts".to_string()),
                 };
             }
@@ -489,7 +498,7 @@ unsafe fn write_plain(table: &LayoutTable, id: LayoutId, value: &Value, dst: *mu
                     write_plain(
                         table,
                         field.layout,
-                        field_value,
+                        &field_value,
                         dst.add(field.offset as usize),
                     );
                 }
@@ -549,14 +558,80 @@ unsafe fn write_plain(table: &LayoutTable, id: LayoutId, value: &Value, dst: *mu
 /// A new box for a handle, which no ledger links: the layout that stores
 /// it owns it. It carries the handle's type, as a box generated code makes
 /// for a value of that static type does. An erased handle carries none.
+/// Like a list element's box, it is reached only through what holds it, so
+/// it records no thread.
 fn untracked_box(value: Value, ty: &Type) -> *mut OpaqueValue {
-    let boxed = untracked_boxed_value(value, None);
+    let boxed = element_boxed_value(value);
     if !names_type_param(ty) && !is_unknown_runtime_type(ty) {
         let tag = shared_runtime_type_tag(canonical_runtime_type_name(ty).as_bytes());
         // SAFETY: the box is new and confined to this thread.
         unsafe { set_explicit_runtime_type_tag(boxed, &tag) };
     }
     boxed
+}
+
+/// The box of a field an instance keeps in its layout (see
+/// `native_class_layouts.rs`).
+pub(super) fn field_box_for(value: Value, ty: &Type) -> ElementBox {
+    // SAFETY: the box is new, and its one reference is the field's.
+    unsafe { ElementBox::from_raw(untracked_box(value, ty)) }
+}
+
+/// Whether `value` has the shape of `id`'s layout, all the way down.
+pub(super) fn fits(table: &LayoutTable, id: LayoutId, value: &Value) -> bool {
+    check(table, id, value).is_ok()
+}
+
+/// Writes `value` into the dead bytes at `dst`.
+///
+/// # Safety
+///
+/// [`fits`] accepted `value` for `id`, and `dst` is valid for the layout's
+/// bytes at its alignment.
+pub(super) unsafe fn write_unchecked(
+    table: &LayoutTable,
+    id: LayoutId,
+    value: Value,
+    dst: *mut u8,
+) {
+    unsafe { write(table, id, value, dst) }
+}
+
+/// A copy of the value of `id` at `src`, which stays where it is.
+///
+/// # Safety
+///
+/// `src` holds a value of `id`'s layout.
+pub(super) unsafe fn read_at(table: &LayoutTable, id: LayoutId, src: *const u8) -> Value {
+    unsafe { read(table, id, src) }
+}
+
+/// Moves the value of `id` at `src` out. Its bytes are dead afterwards.
+///
+/// # Safety
+///
+/// `src` holds a value of `id`'s layout, and nothing reads it again.
+pub(super) unsafe fn take_at(table: &LayoutTable, id: LayoutId, src: *mut u8) -> Value {
+    unsafe { take(table, id, src) }
+}
+
+/// Drops the value of `id` at `ptr`. Its bytes are dead afterwards.
+///
+/// # Safety
+///
+/// As for [`take_at`].
+pub(super) unsafe fn drop_at(table: &LayoutTable, id: LayoutId, ptr: *mut u8) {
+    unsafe { drop_in_place(table, id, ptr) }
+}
+
+/// Writes a copy of the value of `id` at `src` into the dead bytes at `dst`.
+///
+/// # Safety
+///
+/// `src` holds a value of `id`'s layout, and `dst` is valid for its bytes
+/// at its alignment and does not overlap `src`.
+pub(super) unsafe fn clone_at(table: &LayoutTable, id: LayoutId, src: *const u8, dst: *mut u8) {
+    unsafe { clone_into(table, id, src, dst) }
 }
 
 /// Gives a class or enum value read out of a layout the type arguments its
@@ -666,7 +741,7 @@ fn check(table: &LayoutTable, id: LayoutId, value: &Value) -> Result<(), String>
             let named = instance
                 .fields
                 .keys()
-                .filter(|name| name.as_str() != DIRECT_RUNTIME_TYPE_FIELD)
+                .filter(|name| *name != DIRECT_RUNTIME_TYPE_FIELD)
                 .count();
             if named != fields.len() {
                 return mismatch();
@@ -675,7 +750,7 @@ fn check(table: &LayoutTable, id: LayoutId, value: &Value) -> Result<(), String>
                 let Some(field_value) = instance.fields.get(&field.name) else {
                     return mismatch();
                 };
-                check(table, field.layout, field_value)?;
+                check(table, field.layout, &field_value)?;
             }
             Ok(())
         }
@@ -922,8 +997,12 @@ unsafe fn visit(table: &LayoutTable, id: LayoutId, src: *mut u8, mode: Visit) ->
             }
             LayoutKind::Handle => {
                 let boxed = src.cast::<*mut OpaqueValue>().read();
+                if boxed.is_null() {
+                    runtime_error("a value was read after it moved out");
+                }
                 match mode {
-                    Visit::Copy => value_ref(boxed),
+                    // The layout's holder covers the box.
+                    Visit::Copy => (*boxed).held_value().clone(),
                     Visit::Take => consume_owned_untracked_value(boxed),
                 }
             }
@@ -941,15 +1020,22 @@ unsafe fn visit(table: &LayoutTable, id: LayoutId, src: *mut u8, mode: Visit) ->
             } => {
                 let mut value = Value::Instance(InstanceValue {
                     class_name: class.clone(),
-                    fields: fields
-                        .iter()
-                        .map(|field| {
-                            (
-                                field.name.clone(),
-                                visit(table, field.layout, src.add(field.offset as usize), mode),
-                            )
-                        })
-                        .collect(),
+                    fields: InstanceFields::Map(
+                        fields
+                            .iter()
+                            .map(|field| {
+                                (
+                                    field.name.clone(),
+                                    visit(
+                                        table,
+                                        field.layout,
+                                        src.add(field.offset as usize),
+                                        mode,
+                                    ),
+                                )
+                            })
+                            .collect(),
+                    ),
                 });
                 retag_generic(&mut value, &layout.ty);
                 value
@@ -1050,8 +1136,18 @@ unsafe fn clone_into(table: &LayoutTable, id: LayoutId, src: *const u8, dst: *mu
             LayoutKind::Scalar(_) => std::ptr::copy_nonoverlapping(src, dst, layout.size as usize),
             LayoutKind::Handle => {
                 let boxed = src.cast::<*mut OpaqueValue>().read();
-                let copy =
-                    untracked_boxed_value(value_ref(boxed), explicit_runtime_type_tag(boxed));
+                // A moved-out handle stays moved out in the copy.
+                let copy = if boxed.is_null() {
+                    boxed
+                } else {
+                    // The layout's holder covers the box, so neither read
+                    // takes an access of its own.
+                    let copy = element_boxed_value((*boxed).held_value().clone());
+                    let tag = (*(*boxed).runtime_type_name.get()).clone();
+                    // SAFETY: the copy is new and confined to this thread.
+                    *(*copy).runtime_type_name.get() = tag;
+                    copy
+                };
                 dst.cast::<*mut OpaqueValue>().write(copy);
             }
             LayoutKind::Indirect(target) => {

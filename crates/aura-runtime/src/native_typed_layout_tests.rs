@@ -474,9 +474,9 @@ fn generic_values_read_back_with_their_type_arguments() {
     let Value::Instance(read) = (unsafe { cell.take(slot.ptr) }) else {
         panic!("expected an instance");
     };
-    assert_eq!(read.fields.get("value"), Some(&int64(5)));
+    assert_eq!(read.fields.map().get("value"), Some(&int64(5)));
     assert_eq!(
-        read.fields.get(DIRECT_RUNTIME_TYPE_FIELD),
+        read.fields.map().get(DIRECT_RUNTIME_TYPE_FIELD),
         Some(&Value::String(descriptor.clone()))
     );
     // A value that already names its type arguments writes the same way.

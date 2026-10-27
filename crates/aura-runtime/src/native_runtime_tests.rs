@@ -194,7 +194,8 @@ fn adr0038_direct_nested_place_assignment_helper_covers_tuple_and_class_paths() 
                 element_types: vec![Type::named("int64")],
                 elements: vec![Value::Int(IntegerValue::from_signed(1))],
             }),
-        )]),
+        )])
+        .into(),
     });
     super::set_direct_instance_field_owned(
         &mut nested,
@@ -211,7 +212,8 @@ fn adr0038_direct_nested_place_assignment_helper_covers_tuple_and_class_paths() 
             fields: BTreeMap::from([(
                 "value".to_string(),
                 Value::Int(IntegerValue::from_signed(1)),
-            )]),
+            )])
+            .into(),
         })],
     });
     super::set_direct_instance_field_owned(
@@ -271,9 +273,11 @@ fn adr0038_direct_mutable_sink_updates_projected_cleanup_snapshot_before_return(
                     fields: BTreeMap::from([(
                         "value".to_string(),
                         Value::Int(IntegerValue::from_signed(1)),
-                    )]),
+                    )])
+                    .into(),
                 }),
-            )]),
+            )])
+            .into(),
         });
         let cleanup_args = super::aura_direct_arg_buffer_new(1);
         super::aura_direct_arg_buffer_store_owned(
@@ -1532,7 +1536,7 @@ fn direct_nested_array_collection_reads_and_clones_use_fallible_copy() {
 
     let instance = boxed_value(Value::Instance(InstanceValue {
         class_name: "Holder".to_string(),
-        fields: BTreeMap::from([("array".to_string(), array_value(23))]),
+        fields: BTreeMap::from([("array".to_string(), array_value(23))]).into(),
     }));
     let instance_address = instance as usize;
     let diagnostic = allocation_diagnostic(move || {
@@ -5747,7 +5751,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
 
     let instance = boxed_value(Value::Instance(InstanceValue {
         class_name: "Marker".to_string(),
-        fields: BTreeMap::new(),
+        fields: Default::default(),
     }));
     super::aura_direct_tag_value_type(instance, b"Marker[int64]".as_ptr(), "Marker[int64]".len());
     assert_eq!(
@@ -11175,9 +11179,10 @@ fn direct_instance_take_field_moves_nested_value_and_preserves_container() {
             "inner".to_string(),
             Value::Instance(InstanceValue {
                 class_name: "Inner".to_string(),
-                fields: BTreeMap::from([("value".to_string(), Value::String(text))]),
+                fields: BTreeMap::from([("value".to_string(), Value::String(text))]).into(),
             }),
-        )]),
+        )])
+        .into(),
     }));
 
     let moved = super::aura_direct_instance_take_field(
@@ -11191,7 +11196,7 @@ fn direct_instance_take_field_moves_nested_value_and_preserves_container() {
             other => panic!("expected moved str, found {other:?}"),
         });
         super::with_value(holder, |value| match value {
-            Value::Instance(holder) => match holder.fields.get("inner") {
+            Value::Instance(holder) => match holder.fields.map().get("inner") {
                 Some(Value::Instance(inner)) => {
                     assert!(!inner.fields.contains_key("value"));
                 }
@@ -11209,7 +11214,7 @@ fn direct_projected_instance_helpers_report_paths_precisely_without_mutating_on_
     fn instance(class_name: &str, fields: BTreeMap<String, Value>) -> Value {
         Value::Instance(InstanceValue {
             class_name: class_name.to_string(),
-            fields,
+            fields: fields.into(),
         })
     }
 
@@ -11335,11 +11340,11 @@ fn direct_projected_instance_helpers_report_paths_precisely_without_mutating_on_
     let Value::Instance(holder) = &nested_assignment else {
         panic!("expected Holder instance");
     };
-    let Some(Value::Instance(inner)) = holder.fields.get("inner") else {
+    let Some(Value::Instance(inner)) = holder.fields.map().get("inner") else {
         panic!("expected Inner instance");
     };
-    assert_eq!(inner.fields.get("sibling"), Some(&Value::Bool(true)));
-    match inner.fields.get("value") {
+    assert_eq!(inner.fields.map().get("sibling"), Some(&Value::Bool(true)));
+    match inner.fields.map().get("value") {
         Some(Value::String(value)) => assert_eq!(value.as_ptr(), assigned_storage),
         other => panic!("expected nested owned str, found {other:?}"),
     }
@@ -11350,7 +11355,7 @@ fn direct_projected_instance_wrappers_preserve_targets_and_obey_owned_consumptio
     fn instance(class_name: &str, fields: BTreeMap<String, Value>) -> Value {
         Value::Instance(InstanceValue {
             class_name: class_name.to_string(),
-            fields,
+            fields: fields.into(),
         })
     }
     fn assert_au4001(diagnostic: Diagnostic, message: &str) {
@@ -11568,7 +11573,7 @@ fn direct_instance_owned_field_set_preserves_payload_allocation_identity() {
 
     unsafe {
         super::with_value(instance, |value| match value {
-            Value::Instance(instance) => match instance.fields.get("value") {
+            Value::Instance(instance) => match instance.fields.map().get("value") {
                 Some(Value::String(value)) => assert_eq!(value.as_ptr(), text_ptr),
                 other => panic!("expected owned str field, found {other:?}"),
             },
@@ -16487,7 +16492,7 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
     assert_eq!(
         value_type_name(Value::Instance(InstanceValue {
             class_name: "Counter".to_string(),
-            fields: BTreeMap::new(),
+            fields: Default::default(),
         })),
         "Counter"
     );
@@ -22528,7 +22533,8 @@ fn coverage_native_runtime_decodes_closure_patterns_and_uses_type_fallbacks() {
         fields: BTreeMap::from([(
             super::DIRECT_RUNTIME_TYPE_FIELD.to_string(),
             Value::String(embedded_type.to_string()),
-        )]),
+        )])
+        .into(),
     }));
     assert_eq!(
         super::aura_direct_value_has_runtime_type(tagged_instance),
@@ -22548,7 +22554,8 @@ fn coverage_native_runtime_decodes_closure_patterns_and_uses_type_fallbacks() {
         fields: BTreeMap::from([(
             super::DIRECT_RUNTIME_TYPE_FIELD.to_string(),
             Value::Bool(true),
-        )]),
+        )])
+        .into(),
     }));
     assert_eq!(super::aura_direct_value_has_runtime_type(malformed_tag), 0);
 
@@ -23486,7 +23493,7 @@ fn direct_owned_field_assignment_writes_through_enum_and_union_payloads() {
     fn holder(value: Value) -> Value {
         Value::Instance(InstanceValue {
             class_name: "Holder".to_string(),
-            fields: BTreeMap::from([("value".to_string(), value)]),
+            fields: BTreeMap::from([("value".to_string(), value)]).into(),
         })
     }
     fn assign(target: *mut OpaqueValue, path: &str, new_value: Value) {
@@ -23495,7 +23502,7 @@ fn direct_owned_field_assignment_writes_through_enum_and_union_payloads() {
     }
     fn holder_value(value: &Value) -> Value {
         match value {
-            Value::Instance(instance) => instance.fields["value"].clone(),
+            Value::Instance(instance) => instance.fields.map()["value"].clone(),
             other => panic!("expected a Holder instance, found {other:?}"),
         }
     }
@@ -25168,12 +25175,13 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
                     "visits".to_string(),
                     Value::Int(IntegerValue::from_i64(visits)),
                 ),
-            ]),
+            ])
+            .into(),
         })
     }
     fn field_visits(value: &Value) -> String {
         match value {
-            Value::Instance(instance) => instance.fields["visits"].render(),
+            Value::Instance(instance) => instance.fields.map()["visits"].render(),
             other => panic!("expected an instance, found {other:?}"),
         }
     }
@@ -25510,7 +25518,8 @@ fn adr0061_direct_element_paths_keep_collection_field_and_tuple_storage() {
                     }),
                 ],
             }),
-        )]),
+        )])
+        .into(),
     })) as usize;
     assert_eq!(element_path_load(root, "pairs.1.[i]", &[0]).render(), "7");
     element_path_store(
@@ -25525,7 +25534,7 @@ fn adr0061_direct_element_paths_keep_collection_field_and_tuple_storage() {
             let Value::Instance(instance) = value else {
                 panic!("expected the original collection owner");
             };
-            assert_eq!(instance.fields["pairs"].render(), "([5], [17])");
+            assert_eq!(instance.fields.map()["pairs"].render(), "([5], [17])");
         });
         release_value(root as *mut OpaqueValue);
     }

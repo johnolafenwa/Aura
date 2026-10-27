@@ -1491,6 +1491,9 @@ impl<'a> NativeCodegen<'a> {
             lookup_payload: None,
             emptied_store_root: None,
             lent_temps: HashMap::new(),
+            field_lend_temps: classes::field_lend_temps(function),
+            field_lends: HashMap::new(),
+            field_box_receiver: false,
             retain_calls: HashMap::new(),
             retain_releases: HashMap::new(),
             consumed_retains: HashSet::new(),
@@ -2719,6 +2722,14 @@ struct FunctionCompiler<'a> {
     /// as MIR states by giving it no retain. A builtin operation changes a
     /// lent receiver in place, so it stores nothing back.
     lent_temps: HashMap<String, bool>,
+    /// The temporaries of lends of a field to one runtime operation, which
+    /// may lend the field's box as it is. See `classes::field_lend_temps`.
+    field_lend_temps: HashSet<String>,
+    /// The field lends in progress that lent a box as it is, by temporary.
+    field_lends: HashMap<String, classes::FieldLend>,
+    /// Whether the runtime operation being compiled has such a lent box as
+    /// its receiver.
+    field_box_receiver: bool,
     /// Each retained handle with the retain that made it and the handle it
     /// retained. A consumer that copies the value into its slot turns the
     /// retain into the copy.
@@ -3786,14 +3797,18 @@ impl<'a> FunctionCompiler<'a> {
                 temp,
                 mutable,
             } => {
-                self.lent_temps.insert(temp.clone(), *mutable);
-                let value = self.take_lent_place(place)?;
-                self.mark_emptied_store_root(temp);
-                self.store_root(temp, value)?;
+                if !self.lend_class_field(place, temp, *mutable)? {
+                    self.lent_temps.insert(temp.clone(), *mutable);
+                    let value = self.take_lent_place(place)?;
+                    self.mark_emptied_store_root(temp);
+                    self.store_root(temp, value)?;
+                }
             }
             Instruction::EndLend { place, temp, .. } => {
-                let value = self.take_place(temp)?;
-                self.store_place(place, value)?;
+                if !self.end_class_field_lend(place, temp)? {
+                    let value = self.take_place(temp)?;
+                    self.store_place(place, value)?;
+                }
             }
             Instruction::Safepoint => {
                 let Some(fuel_variable) = self.safepoint_fuel else {
@@ -7428,6 +7443,8 @@ impl<'a> FunctionCompiler<'a> {
         if let Some(result) = self.compile_borrowed_element_member_call(object, callee, args)? {
             return Ok(result);
         }
+        let field_box_receiver = matches!(callee, MemberCallee::Runtime(_))
+            && matches!(object, Operand::Place(place) if self.field_lends.contains_key(place));
         let object = match (object, callee) {
             (Operand::Place(place), MemberCallee::Method { .. })
                 if self.moves_lent_temp(place, receiver_place) =>
@@ -7439,7 +7456,10 @@ impl<'a> FunctionCompiler<'a> {
         let receiver_place = receiver_place.filter(|place| {
             !(matches!(callee, MemberCallee::Runtime(_)) && self.lent_temps.contains_key(*place))
         });
-        self.compile_member_callee_on_receiver(object, callee, receiver_place, args)
+        let outer = std::mem::replace(&mut self.field_box_receiver, field_box_receiver);
+        let result = self.compile_member_callee_on_receiver(object, callee, receiver_place, args);
+        self.field_box_receiver = outer;
+        result
     }
 
     /// Whether a call operand reading `place` with `writeback` moves the
@@ -8253,6 +8273,15 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn load_static_place(&mut self, place: &str) -> std::result::Result<ValueRef, String> {
+        if let Some(value) = self.load_class_place(place)? {
+            return Ok(value);
+        }
+        self.load_static_place_slowly(place)
+    }
+
+    /// Reads a static place field by field, a field of a boxed instance
+    /// through the runtime.
+    fn load_static_place_slowly(&mut self, place: &str) -> std::result::Result<ValueRef, String> {
         let mut segments = place.split('.');
         let root = segments
             .next()
@@ -9928,17 +9957,16 @@ impl<'a> FunctionCompiler<'a> {
         let result = if segments.is_empty() {
             self.store_root(root, value)
         } else if matches!(self.variable_types.get(root), Some(DirectType::Opaque(_))) {
-            let current = self.load_root(root)?;
-            let current = self.ensure_opaque(current)?;
-            let updated_value = self.ensure_opaque(value)?;
-            let updated_value = self.transfer_owned_opaque_value(&updated_value);
-            let field_path = segments.join(".");
-            let (field_ptr, field_len) = self.string_constant(field_path.as_bytes())?;
-            self.builder.call(
-                self.runtime[RuntimeFn::InstanceSetFieldOwned],
-                &[current.values[0], field_ptr, field_len, updated_value],
-            );
-            Ok(())
+            match self.store_class_place(place, value)? {
+                None => Ok(()),
+                Some(value) => {
+                    let current = self.load_root(root)?;
+                    let current = self.ensure_opaque(current)?;
+                    let updated_value = self.ensure_opaque(value)?;
+                    let updated_value = self.transfer_owned_opaque_value(&updated_value);
+                    self.emit_set_field_owned(current.values[0], &segments.join("."), updated_value)
+                }
+            }
         } else {
             let root_value = self.load_root(root)?;
             let updated = self.replace_nested_field(root_value, &segments, value)?;
@@ -12332,11 +12360,17 @@ impl<'a> FunctionCompiler<'a> {
                 };
                 let mut words = vec![list, bits];
                 self.push_runtime_call_words(call, &mut words);
-                self.emit_scalar_list_push(list, bits, kind, function, &words);
+                if self.holds_field_box() {
+                    self.builder.call(function, &words);
+                } else {
+                    self.emit_scalar_list_push(list, bits, kind, function, &words);
+                }
                 self.store_receiver_back_in_place(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
-            ListOp::Push if self.plain_record(&element_direct_ty)?.is_some() => {
+            ListOp::Push
+                if self.plain_record(&element_direct_ty)?.is_some() && !self.holds_field_box() =>
+            {
                 let record = self
                     .plain_record(&element_direct_ty)?
                     .expect("checked above");
@@ -12358,7 +12392,7 @@ impl<'a> FunctionCompiler<'a> {
             ListOp::Pop => {
                 let index = self.load_word(args[0], int64, true)?;
                 if let Some(kind) = ScalarElement::of(&element_ty)
-                    .filter(|_| self.integer_constant(index) == Some(-1))
+                    .filter(|_| self.integer_constant(index) == Some(-1) && !self.holds_field_box())
                 {
                     // `pop()` of a scalar comes back as raw bits, with no box.
                     let bits = self.emit_scalar_list_pop(list, kind);
@@ -13267,6 +13301,9 @@ impl<'a> FunctionCompiler<'a> {
             "direct backend does not know class `{}`",
             class_name
         ))?;
+        if let Some(built) = self.construct_class_in_place(class_name, fields, target_ty, &class)? {
+            return Ok(built);
+        }
         let (class_ptr, class_len) = self.string_constant(class_name.as_bytes())?;
         let init = self.builder.call(
             self.runtime[RuntimeFn::InstanceEmpty],
@@ -15714,6 +15751,8 @@ mod reachability;
 
 #[path = "native_codegen_callables.rs"]
 mod callables;
+#[path = "native_codegen_classes.rs"]
+mod classes;
 
 #[path = "native_codegen_elements.rs"]
 mod elements;
