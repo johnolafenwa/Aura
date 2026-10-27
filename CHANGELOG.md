@@ -101,6 +101,16 @@ in this file.
   benchmark programs, generated code retains values 34% less often; at
   check size, sql_engine runs 17% fewer instructions, lru_cache 17%,
   spreadsheet 11%, json_roundtrip 10%, and template_render 5%.
+- A local or a `mut` parameter passed to a `mut` parameter or a `mut
+  self` receiver of a direct call now moves into the call and comes back
+  through the call's write-back, instead of the call taking a new
+  reference that the write-back then drops. Calls through a function
+  value and methods picked at run time keep the old convention, and so
+  does a value a `with` block cleans up. Across the 30 benchmark
+  programs, generated code now retains values 62% less often than before
+  these two changes (1,062,951 to 400,936); regex_match, nbody, and
+  raytracer retain almost nothing, and regex_match runs 1.9% fewer
+  instructions.
 
 ### Fixed
 

@@ -937,6 +937,64 @@ def main():
     }
 
     #[test]
+    fn a_mutable_argument_written_back_to_its_root_moves_in() {
+        let module = crate::lower_source_to_mir(
+            r#"class Counter:
+    total: int64
+    seen: list[int64]
+
+    def add(mut self, value: int64):
+        self.total += value
+        self.seen.append(value)
+
+    def add_pair(mut self, value: int64):
+        self.add(value)
+        self.add(value + 1)
+
+def push(xs: mut list[int64], value: int64):
+    xs.append(value)
+
+def fill(xs: mut list[int64]):
+    push(xs, 1)
+    push(xs, 2)
+
+def main():
+    mut xs: list[int64] = []
+    fill(xs)
+    push(xs, 3)
+    mut counter = Counter(total=0, seen=[])
+    counter.add_pair(1)
+    counter.add(2)
+    adder = push
+    adder(xs, 4)
+    print(xs.len() + counter.total)
+"#,
+        )
+        .expect("the program should lower");
+        checks(&module);
+        // The writeback refills each root its call takes, so neither a
+        // `mut` parameter passed on nor a local passed to a named call or a
+        // `mut self` method is retained.
+        for name in ["fill", "Counter.add_pair"] {
+            let function = function(&module, name);
+            let retains = function
+                .blocks
+                .iter()
+                .flat_map(|block| retained(&block.instructions))
+                .collect::<Vec<_>>();
+            assert!(retains.is_empty(), "{name} retains {retains:?}");
+        }
+        // A call through a function value keeps the owning convention.
+        let main = function(&module, "main");
+        let retains = main
+            .blocks
+            .iter()
+            .flat_map(|block| retained(&block.instructions))
+            .collect::<Vec<_>>();
+        assert_eq!(retains, ["xs"]);
+    }
+
+    #[test]
     fn a_moved_try_operand_leaves_the_error_list() {
         // `try` reads its operand in place, so the pass retains it and lists
         // it for the error edge; the move takes it off the list.

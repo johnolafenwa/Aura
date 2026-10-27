@@ -91,9 +91,17 @@ Last updated: 2026-10-27
   reach. Retains across the 30 programs fall 34%; `sql_engine` and
   `lru_cache` run 17% fewer instructions. Details are in
   `2026-10-27-rust-speed-2h-shared-arguments.md`.
-- Next: 2h part 2, `mut` arguments moved into the call and written back
-  instead of retained, then unit results, scalar math, payload bindings,
-  and the leak, failure, and cancellation tests.
+- Step 2h part 2: a whole local or `mut` parameter passed to a `mut`
+  parameter or `mut self` receiver of a named call or statically
+  dispatched method moves into the call, and the write-back refills it
+  (`ownership::moved_writebacks`), so the call takes no reference and the
+  write-back drops none. Retains across the 30 programs: 1,062,951 before
+  2h, 696,205 after part 1, 400,936 after part 2. Details are in
+  `2026-10-27-rust-speed-2h-mutable-arguments.md`.
+- Next: 2h part 3, runtime collection writes on a local receiver that
+  change the box in place skip the store-back that retains and releases
+  it (`list.swap` in `astar_pathfinding`), then unit results, scalar
+  math, payload bindings, and the leak, failure, and cancellation tests.
 
 ## Aura 0.7.1 preview release (complete)
 

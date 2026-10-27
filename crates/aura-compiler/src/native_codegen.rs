@@ -1500,6 +1500,7 @@ impl<'a> NativeCodegen<'a> {
             return_type: function.return_type.clone(),
             layout_scratch: LayoutScratch::default(),
             tracked_roots: explicit_locals.tracked,
+            moved_operands: explicit_locals.moved,
             loan_locals: explicit_locals.loans,
             closed_matches: explicit_locals.closed_matches,
             lookup_slots,
@@ -2768,6 +2769,9 @@ struct FunctionCompiler<'a> {
     /// whose layout owns a handle holds a boxed Copy value, which the
     /// backend drops itself: see `release_boxed_copy_roots`.
     tracked_roots: HashSet<String>,
+    /// The `mut` arguments and receivers the MIR moves into their call,
+    /// which take their root's value: see `ownership::moved_writebacks`.
+    moved_operands: HashSet<*const Operand>,
     /// The loans, whose locals hold nothing.
     loan_locals: HashSet<String>,
     /// The match blocks whose fall-through the MIR treats as unreachable.
@@ -7024,7 +7028,10 @@ impl<'a> FunctionCompiler<'a> {
             )?;
             let loaded = match &argument.value {
                 Operand::Place(place)
-                    if self.moves_lent_temp(place, argument.writeback_place.as_deref()) =>
+                    if self.moves_lent_temp(place, argument.writeback_place.as_deref())
+                        || self
+                            .moved_operands
+                            .contains(&std::ptr::from_ref(&argument.value)) =>
                 {
                     self.take_place(place)?
                 }
@@ -7676,7 +7683,8 @@ impl<'a> FunctionCompiler<'a> {
             && matches!(object, Operand::Place(place) if self.field_lends.contains_key(place));
         let object = match (object, callee) {
             (Operand::Place(place), MemberCallee::Method { .. })
-                if self.moves_lent_temp(place, receiver_place) =>
+                if self.moves_lent_temp(place, receiver_place)
+                    || self.moved_operands.contains(&std::ptr::from_ref(object)) =>
             {
                 self.take_place(place)?
             }
@@ -12112,10 +12120,18 @@ impl<'a> FunctionCompiler<'a> {
             }
         }
         for (index, argument) in args.iter().enumerate() {
-            let loaded = if let Some(expected_ty) = expected.get(index + 1) {
-                self.load_operand_for_target(&argument.value, expected_ty)?
-            } else {
-                self.load_operand(&argument.value)?
+            let loaded = match &argument.value {
+                Operand::Place(place)
+                    if self
+                        .moved_operands
+                        .contains(&std::ptr::from_ref(&argument.value)) =>
+                {
+                    self.take_place(place)?
+                }
+                operand => match expected.get(index + 1) {
+                    Some(expected_ty) => self.load_operand_for_target(operand, expected_ty)?,
+                    None => self.load_operand(operand)?,
+                },
             };
             let coerced = if let Some(expected_ty) = expected.get(index + 1) {
                 self.coerce_value(loaded, expected_ty)?

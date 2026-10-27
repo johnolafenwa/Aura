@@ -153,6 +153,93 @@ pub fn callee_borrowed_operands<'a, 'm>(
     borrowed
 }
 
+/// The `mut` arguments and receivers of `function`'s calls that move into
+/// the call instead of taking a reference: a whole root that `tracked`
+/// accepts, passed to a `mut` parameter or receiver whose writeback is that
+/// same root. The writeback refills the root when the call returns, so the
+/// value the caller held is dead at the call, and moving it in and out
+/// takes no reference and drops none. Only named calls and statically
+/// dispatched method calls qualify, and a root with a registered cleanup
+/// stays, because a trap in the callee runs the cleanup on it.
+pub(super) fn moved_writebacks<'f>(
+    function: &'f MirFunction,
+    context: &MirLoanValidationContext<'_>,
+    tracked: impl Fn(&str) -> bool,
+) -> Vec<&'f Operand> {
+    let instructions = || function.blocks.iter().flat_map(|block| &block.instructions);
+    let cleanups = instructions()
+        .filter_map(|instruction| match instruction {
+            Instruction::PushCleanup { place, .. } => Some(root_of(place)),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    let mutable_receiver = |name: &str| {
+        context
+            .functions
+            .get(name)
+            .is_some_and(|callee| callee.receiver == Some(MirReceiverKind::BorrowMut))
+    };
+    instructions()
+        .flat_map(|instruction| written_back_operands(instruction, mutable_receiver))
+        .filter(|operand| match operand {
+            Operand::Place(place) => tracked(place) && !cleanups.contains(place.as_str()),
+            _ => false,
+        })
+        .collect()
+}
+
+/// The operands of `instruction`'s call that a writeback to the same whole
+/// root refills: see [`moved_writebacks`].
+fn written_back_operands(
+    instruction: &Instruction,
+    mutable_receiver: impl Fn(&str) -> bool,
+) -> Vec<&Operand> {
+    let (Instruction::Assign {
+        value: Rvalue::Call { callee, args, .. },
+        ..
+    }
+    | Instruction::WriteLoan {
+        value: Rvalue::Call { callee, args, .. },
+        ..
+    }) = instruction
+    else {
+        return Vec::new();
+    };
+    let whole = |operand: &Operand, written: &str| match operand {
+        Operand::Place(place) => place == written && root_of(place) == place,
+        _ => false,
+    };
+    let mut moved = Vec::new();
+    match callee {
+        CallTarget::Name(_) => {}
+        CallTarget::Member {
+            object,
+            receiver_place: Some(written),
+            dispatch: Some(MethodDispatch::Static { function }),
+            ..
+        }
+        | CallTarget::TraitMember {
+            object,
+            receiver_place: Some(written),
+            dispatch: Some(MethodDispatch::Static { function }),
+            ..
+        } => {
+            if mutable_receiver(function) && whole(object, written) {
+                moved.push(object);
+            }
+        }
+        _ => return moved,
+    }
+    for arg in args {
+        if let Some(written) = &arg.writeback_place {
+            if whole(&arg.value, written) {
+                moved.push(&arg.value);
+            }
+        }
+    }
+    moved
+}
+
 /// How a borrowing function (see [`recorded_borrowing`]) takes its
 /// receiver and each parameter.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -922,6 +1009,9 @@ pub(super) struct OwnershipFacts<'f> {
     /// boxed generic values, and the arguments a borrowing callee keeps
     /// with the caller.
     borrowed_operands: HashSet<*const Operand>,
+    /// The `mut` arguments and receivers that move into their call and come
+    /// back through its writeback: see [`moved_writebacks`].
+    moved_operands: HashSet<*const Operand>,
 }
 
 impl<'f> OwnershipFacts<'f> {
@@ -1010,7 +1100,13 @@ impl<'f> OwnershipFacts<'f> {
                     _ => None,
                 })
                 .collect(),
+            moved_operands: HashSet::new(),
         };
+        facts.moved_operands =
+            moved_writebacks(function, context, |root| facts.index.contains_key(root))
+                .into_iter()
+                .map(|operand| operand as *const Operand)
+                .collect();
         facts.borrows = facts.borrowed_roots();
         facts
     }
@@ -1044,6 +1140,21 @@ impl<'f> OwnershipFacts<'f> {
     /// reference: see `mir_lending.rs`.
     pub(super) fn accesses(&self, instruction: &'f Instruction) -> Vec<(&'f str, Access)> {
         let mut accesses = instruction_accesses_with(instruction, &self.borrowed_in(instruction));
+        if !self.moved_operands.is_empty() {
+            for (operand, _) in operand_roles(instruction) {
+                let Operand::Place(moved) = operand else {
+                    continue;
+                };
+                if !self.moved_operands.contains(&(operand as *const Operand)) {
+                    continue;
+                }
+                for (place, access) in &mut accesses {
+                    if *place == moved.as_str() && *access == Access::Consume {
+                        *access = Access::Move;
+                    }
+                }
+            }
+        }
         if self.lent.is_empty() {
             return accesses;
         }
@@ -2499,6 +2610,10 @@ pub(crate) struct ExplicitLocals {
     /// The match blocks whose fall-through edge the module treats as
     /// unreachable, because their chain covers every variant.
     pub(crate) closed_matches: HashSet<String>,
+    /// The call operands that move their root into the call and get it
+    /// back through the writeback, by address in the module: see
+    /// [`moved_writebacks`].
+    pub(crate) moved: HashSet<*const Operand>,
 }
 
 /// The locals each function of an explicit module states ownership for, by
@@ -2528,6 +2643,7 @@ pub(crate) fn explicit_locals(module: &MirModule) -> HashMap<String, ExplicitLoc
                             .collect()
                     })
                     .unwrap_or_default(),
+                moved: facts.moved_operands.clone(),
             };
             (function.name.clone(), locals)
         })
