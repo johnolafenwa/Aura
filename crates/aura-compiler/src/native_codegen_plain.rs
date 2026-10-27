@@ -155,11 +155,14 @@ impl PlainRecords {
             })
             .map(|word| word as i32)
             .collect();
+        let Ok(size) = u32::try_from(size) else {
+            return Err("a plain record is too large".to_string());
+        };
         Ok(PlainRecord {
             cell,
             access,
             leaves,
-            size: u32::try_from(size).map_err(|_| "a plain record is too large".to_string())?,
+            size,
             stride: stride as i64,
             partial_words,
         })

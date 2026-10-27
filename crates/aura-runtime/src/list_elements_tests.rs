@@ -658,6 +658,21 @@ fn reserve_and_capacity_work_in_every_form() {
 }
 
 #[test]
+fn slices_of_records_in_place_copy_their_words() {
+    let layout = test_record_layout();
+    let vector = crate::runtime_value::VecValue {
+        element_type: Type::named("ListTestRecord"),
+        elements: ListElements::from(vec![record(1), record(2), record(3), record(4)]),
+        str_view: Default::default(),
+    };
+    let slice = crate::runtime_value::slice_vec_owned(&vector, Some(1), Some(3))
+        .expect("the slice is in range");
+    assert_eq!(slice.elements.form(), ListForm::Typed(layout.access()));
+    assert_eq!(exact_list(&slice.elements), exact(&[record(2), record(3)]));
+    assert_eq!(vector.elements.len(), 4);
+}
+
+#[test]
 fn records_in_place_sort_only_by_positions() {
     let layout = test_record_layout();
     let mut list = ListElements::from(vec![record(1), record(2), record(3)]);

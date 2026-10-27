@@ -296,7 +296,7 @@ pub fn register_plain_layout(
     let registry = plain_registry();
     if let Some(layout) = registry
         .read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .by_descriptor
         .get(descriptor)
     {
@@ -311,7 +311,7 @@ pub fn register_plain_layout(
     let key = plain_type_key(&root.ty);
     let mut registry = registry
         .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(layout) = registry.by_descriptor.get(descriptor) {
         return same_code(layout, access);
     }
@@ -326,10 +326,10 @@ pub fn register_plain_layout(
         None => {
             let mut code = registry.next.max(FIRST_PLAIN_ACCESS);
             while registry.taken.contains(&code) {
-                code = code
-                    .checked_add(1)
-                    .filter(|code| *code != UNREGISTERED_PLAIN_ACCESS)
-                    .ok_or_else(|| "too many plain layouts".to_string())?;
+                code = match code.checked_add(1) {
+                    Some(next) if next != UNREGISTERED_PLAIN_ACCESS => next,
+                    _ => return Err("too many plain layouts".to_string()),
+                };
             }
             registry.next = code.saturating_add(1);
             code
@@ -362,7 +362,7 @@ pub fn plain_layout_for_value(value: &Value) -> Option<&'static PlainLayout> {
 fn registered_plain_layout_for_value(value: &Value) -> Option<&'static PlainLayout> {
     let registry = plain_registry()
         .read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let layout = *registry.by_key.get(&plain_value_key(value)?)?;
     layout.fits(value).then_some(layout)
 }

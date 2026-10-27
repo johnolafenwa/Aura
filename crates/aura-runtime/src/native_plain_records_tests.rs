@@ -2,7 +2,7 @@
 //! layouts, lists that keep records in place, and the helpers generated code
 //! calls to box, unbox, read, append, and replace records.
 
-use aura_core::layout::{encode_descriptor, ClassDefinition, LayoutEnv};
+use aura_core::layout::{encode_descriptor, ClassDefinition, EnumDefinition, LayoutEnv};
 use aura_core::types::Type;
 
 use super::{
@@ -405,6 +405,41 @@ fn record_helpers_report_bad_cells_shapes_and_positions() {
             }),
         ),
         (
+            "a `str` value does not fit the layout of `PlainTestErrors`",
+            Box::new(move || unsafe {
+                let list = boxed_value(Value::Vec(VecValue {
+                    element_type: Type::named(name),
+                    elements: vec![Value::String("x".to_string())].into(),
+                    str_view: Default::default(),
+                }));
+                aura_direct_vec_read_plain(
+                    list,
+                    0,
+                    0,
+                    0,
+                    vec![0u64; stride].as_mut_ptr().cast(),
+                    cell as *const PlainLayoutCell,
+                );
+            }),
+        ),
+        (
+            "a `str` value does not fit the layout of `PlainTestErrors`",
+            Box::new(move || unsafe {
+                let holder = boxed_value(Value::Instance(InstanceValue {
+                    class_name: "Holder".to_string(),
+                    fields: [("best".to_string(), Value::String("x".to_string()))].into(),
+                }));
+                let field = b"best";
+                aura_direct_instance_read_plain(
+                    holder,
+                    field.as_ptr(),
+                    field.len(),
+                    vec![0u64; stride].as_mut_ptr().cast(),
+                    cell as *const PlainLayoutCell,
+                );
+            }),
+        ),
+        (
             "class `Holder` has no field `missing`",
             Box::new(move || unsafe {
                 let holder = boxed_value(Value::Instance(InstanceValue {
@@ -472,4 +507,49 @@ fn record_helpers_report_bad_cells_shapes_and_positions() {
         assert_eq!(runtime_failure(work), expected);
     }
     assert_eq!(UNREGISTERED_PLAIN_ACCESS, u32::MAX);
+}
+
+#[test]
+fn enums_of_scalars_lay_out_plain_and_cells_start_empty() {
+    // An enum whose payloads are scalars needs no drop code, so it has a
+    // plain layout of a tag and the payload.
+    let env = LayoutEnv {
+        classes: Default::default(),
+        enums: [(
+            "PlainTestSlot".to_string(),
+            EnumDefinition {
+                type_params: Vec::new(),
+                variants: vec![
+                    ("Empty".to_string(), Vec::new()),
+                    ("Full".to_string(), vec![Type::named("int64")]),
+                ],
+            },
+        )]
+        .into(),
+    };
+    let layout = register_plain_layout(
+        &encode_descriptor(&Type::named("PlainTestSlot"), &env),
+        None,
+    )
+    .expect("the enum has a plain layout");
+    for (variant, payloads) in [
+        ("Empty", Vec::new()),
+        (
+            "Full",
+            vec![Value::Int(crate::integer::IntegerValue::from_i64(5))],
+        ),
+    ] {
+        let value = Value::EnumVariant(EnumVariantValue {
+            enum_name: "PlainTestSlot".to_string().into(),
+            variant_name: variant.to_string().into(),
+            payloads,
+        });
+        assert_eq!(decoded(layout, &encoded(layout, &value)), value);
+    }
+
+    let cell = PlainLayoutCell::default();
+    assert_eq!(
+        unsafe { registered_plain_layout(&cell) }.err(),
+        Some("a plain layout was used before it was registered".to_string())
+    );
 }

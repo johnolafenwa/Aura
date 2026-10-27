@@ -533,11 +533,6 @@ impl ListElements {
         Self::Values(SharedVec::new())
     }
 
-    /// An empty list that keeps values of `layout` in place.
-    pub fn typed(layout: &'static PlainLayout) -> Self {
-        Self::Typed(Box::new(TypedElements::new(layout)))
-    }
-
     /// A `list[uint8]` that keeps `bytes` unboxed.
     pub fn from_uint8(bytes: Vec<u8>) -> Self {
         if bytes.is_empty() {
