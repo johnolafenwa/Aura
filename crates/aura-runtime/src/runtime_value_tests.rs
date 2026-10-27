@@ -2447,6 +2447,13 @@ fn owned_slice_helpers_normalize_once_reject_without_clamping_and_copy_values() 
         "even a full Vec slice must be a fresh owned value"
     );
 
+    // A list that keeps its elements in boxes slices into values.
+    let mut boxed = vector.clone();
+    boxed.elements.lend(0);
+    let boxed_middle =
+        slice_vec_owned(&boxed, Some(1), Some(3)).expect("bounds in range should slice");
+    assert_eq!(boxed_middle.elements, middle.elements);
+
     let unicode = "aé🎉e\u{301}";
     assert_eq!(
         slice_string_owned(unicode, Some(1), Some(-1))

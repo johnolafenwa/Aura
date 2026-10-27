@@ -467,6 +467,42 @@ fn lent_lists_keep_each_element_in_a_box_of_its_own() {
 }
 
 #[test]
+fn lent_lists_keep_their_boxes_through_edits_and_reads() {
+    let boxed = |values: Vec<Value>| {
+        let mut list = ListElements::from(values);
+        list.lend(0);
+        list
+    };
+    let mut list = boxed(vec![text("a"), text("d")]);
+    list.append(boxed(vec![text("e")]));
+    list.insert_all(1, boxed(vec![text("b"), text("c")]));
+    assert_eq!(list.form(), ListForm::Boxes);
+    // Generated code appends nothing in place to boxes.
+    unsafe { list.adopt_appended(list.len()) };
+    assert_eq!(
+        exact(&list.value_refs().unwrap().cloned().collect::<Vec<_>>()),
+        exact(&[text("a"), text("b"), text("c"), text("d"), text("e")])
+    );
+    assert!(ListElements::from(vec![int(1)]).value_refs().is_none());
+    // An element edited in its box reads back through the edit.
+    let element = list.get_mut(2).unwrap();
+    assert_eq!(*element, text("c"));
+    drop(element);
+    let mut values = ListElements::from(vec![text("x")]);
+    assert_eq!(*values.get_mut(0).unwrap(), text("x"));
+
+    // Only the scalar forms a first element picks build a list directly,
+    // but every form says which values it keeps.
+    assert!(keeps(ListForm::Float32, &Value::Float(0.5)));
+    assert!(!keeps(ListForm::Float32, &Value::Float(0.1)));
+    assert!(keeps(ListForm::Boxes, &text("a")));
+    let floats = ListElements::collect(ListForm::Float32, &[Value::Float(0.5)]).unwrap();
+    assert_eq!(floats.form(), ListForm::Float32);
+    let boxes = ListElements::collect(ListForm::Boxes, &[text("a")]).unwrap();
+    assert_eq!(boxes.form(), ListForm::Boxes);
+}
+
+#[test]
 fn scalar_lists_keep_their_form_through_whole_element_edits() {
     let mut list = ListElements::from(vec![int(1), int(2), int(3)]);
     list.push(int(4));
@@ -694,8 +730,14 @@ fn reads_iterate_in_both_directions_and_report_their_length() {
             typed(2, IntegerKind::Uint8),
             typed(3, IntegerKind::Uint8),
         ],
+        vec![text("a"), text("b"), text("c")],
     ] {
-        let list = ListElements::from(values.clone());
+        let mut list = ListElements::from(values.clone());
+        // Strings read from their boxes once a list lends one.
+        if matches!(values[0], Value::String(_)) {
+            list.lend(0);
+            assert_eq!(list.form(), ListForm::Boxes);
+        }
         // `skip` steps over elements without building them.
         assert_eq!(
             exact(&list.iter().skip(1).map(Cow::into_owned).collect::<Vec<_>>()),

@@ -26262,6 +26262,47 @@ fn shared_lists_are_never_read_in_place() {
     unsafe { release_value(list) };
 }
 
+#[test]
+fn lists_lend_elements_once_their_copies_pay_for_moving_them_into_boxes() {
+    let list = super::aura_direct_vec_empty();
+    for value in 0..16 {
+        super::aura_direct_vec_push_in_place(list, int_vec(&[value]));
+    }
+    let lend = |index: i64| super::aura_direct_vec_lend(list, index, 1, 1);
+    // Until its copying reads reach an eighth of its length, a list of
+    // values gives each reader a copy of its own.
+    let copy = lend(3);
+    assert_eq!(copy as usize & 1, 0);
+    assert_eq!(expect_vec_ints(copy), vec![3]);
+    // Then it moves its elements into boxes and lends them.
+    let last = lend(-1);
+    assert_eq!(last as usize & 1, 1);
+    let last = last.wrapping_byte_sub(1);
+    assert_eq!(
+        expect_vec_ints(super::aura_direct_clone_value(last)),
+        vec![15]
+    );
+    assert_eq!(lend(-1).wrapping_byte_sub(1), last);
+    // A copy of the list shares the boxes, so the list counts copies again
+    // before it takes boxes of its own.
+    let other = super::aura_direct_clone_value(list);
+    assert_eq!(expect_vec_ints(lend(0)), vec![0]);
+    let own = lend(-1);
+    assert_eq!(own as usize & 1, 1);
+    assert_ne!(own.wrapping_byte_sub(1), last);
+    // A list of scalars, and a list another thread may read, copy.
+    let bytes = int_vec(&[7]);
+    assert_eq!(expect_int(super::aura_direct_vec_lend(bytes, 0, 1, 1)), 7);
+    unsafe { super::share_direct_value(other) };
+    assert_eq!(
+        expect_vec_ints(super::aura_direct_vec_lend(other, 15, 1, 1)),
+        vec![15]
+    );
+    for value in [list, other, bytes] {
+        unsafe { release_value(value) };
+    }
+}
+
 fn list_view_capacity(list: *mut OpaqueValue) -> usize {
     let layout = super::direct_list_layout();
     unsafe { *((list as *const u8).add(layout.capacity_offset as usize) as *const u32) as usize }

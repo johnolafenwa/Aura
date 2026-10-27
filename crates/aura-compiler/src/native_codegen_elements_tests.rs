@@ -1,6 +1,6 @@
 use crate::lower_source_to_mir;
 use crate::mir::{CallTarget, Instruction, MirArg, MirFunction, Operand, Rvalue};
-use crate::runtime_ops::{ListOp, RuntimeOp, StrOp};
+use crate::runtime_ops::{ListOp, RuntimeOp, SetOp, StrOp};
 
 use super::{lent_element_reads, LentElements};
 
@@ -18,10 +18,17 @@ def total(items: list[Item]) -> int64:
 def first(items: list[Item]) -> int64:
     return len(items[0].name)
 
+def count(items: list[Item]) -> int64:
+    mut sum = 0
+    for i in range(len(items)):
+        sum += len(items[i].name)
+    return sum
+
 def main():
     items = [Item(name = "a", weight = 1)]
     print(total(items))
     print(first(items))
+    print(count(items))
 "#;
 
 fn function(name: &str) -> MirFunction {
@@ -63,6 +70,16 @@ fn a_loop_lends_each_element_and_never_takes_a_reference() {
         panic!("one element read should be lent: {found:?}");
     };
     assert!(temp.starts_with("%t"));
+    assert_eq!(list, "items");
+    assert!(found.promotions.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_range_loop_lends_each_element_too() {
+    let found = lent(&function("count"));
+    let [(_, list)] = found.lists.iter().collect::<Vec<_>>()[..] else {
+        panic!("one element read should be lent: {found:?}");
+    };
     assert_eq!(list, "items");
     assert!(found.promotions.is_empty(), "{found:?}");
 }
@@ -232,4 +249,84 @@ fn a_list_another_place_can_change_is_never_lent_from() {
         )
     });
     assert!(!found.lists.is_empty(), "{found:?}");
+}
+
+fn arg(value: Operand) -> MirArg {
+    MirArg {
+        name: None,
+        value,
+        writeback_place: None,
+    }
+}
+
+#[test]
+fn reads_of_the_list_itself_leave_its_element_lent() {
+    // `first` copies its element only before the list's release.
+    assert_eq!(lent_after(|_, _| {}).promotions.len(), 1);
+    let found = lent_after(|tail, _| {
+        tail.insert(
+            0,
+            Instruction::IndexInRange {
+                list: "items".to_string(),
+                index: "%t_i".to_string(),
+            },
+        );
+        tail.insert(
+            1,
+            runtime_call("%t_n", RuntimeOp::List(ListOp::Len), "items", Vec::new()),
+        );
+    });
+    assert_eq!(found.promotions.len(), 1, "{found:?}");
+    // A call that takes the list as an argument may keep it, so the element
+    // is copied before it.
+    let found = lent_after(|tail, _| {
+        tail.insert(
+            0,
+            runtime_call(
+                "%t_n",
+                RuntimeOp::List(ListOp::Count),
+                "items",
+                vec![arg(Operand::Place("items".to_string()))],
+            ),
+        );
+    });
+    assert_eq!(found.promotions.len(), 2, "{found:?}");
+    // A set read of a part of the element stores nothing back.
+    let found = lent_after(|tail, temp| {
+        tail.insert(
+            0,
+            runtime_call(
+                "%t_has",
+                RuntimeOp::Set(SetOp::Contains),
+                &format!("{temp}.tags"),
+                vec![arg(Operand::Int(1))],
+            ),
+        )
+    });
+    assert!(!found.lists.is_empty(), "{found:?}");
+}
+
+#[test]
+fn native_code_lends_handles_and_copies_records_kept_in_place() {
+    let source = format!(
+        "{SOURCE}
+class Point:
+    x: int64
+    y: int64
+
+def sum_x(points: list[Point]) -> int64:
+    mut total = 0
+    for i in range(len(points)):
+        point = points[i]
+        total += point.x
+    return total
+"
+    );
+    let module = lower_source_to_mir(&source).expect("the source should lower");
+    let object = crate::native_backend::without_optimization(|| {
+        crate::native_codegen::emit_host_object(&module)
+    })
+    .expect("the source should compile");
+    let lends = b"aura_direct_vec_lend";
+    assert!(object.windows(lends.len()).any(|window| window == lends));
 }
