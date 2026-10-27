@@ -1,0 +1,136 @@
+class Counter:
+    counts: dict[str, int64]
+    order: list[str]
+
+    def add(mut self, word: str):
+        if word in self.counts:
+            count = self.counts[word]
+            self.counts[word.clone()] = count + 1
+        else:
+            self.counts[word.clone()] = 1
+            self.order.append(word.clone())
+
+    def add_all(mut self, words: list[str]):
+        for word in words:
+            self.add(word)
+
+    def add_twice(mut self, word: str, log: mut list[str]):
+        self.add(word)
+        self.add(word)
+        record(log, word)
+
+class Point:
+    x: int64
+    y: int64
+
+enum Tree:
+    Leaf(int64)
+    Node(list[Tree])
+
+def push(xs: mut list[int64], value: int64):
+    xs.append(value)
+
+def push_both(left: mut list[int64], right: mut list[int64], value: int64):
+    push(left, value)
+    push(right, value * 10)
+
+def fill(xs: mut list[int64], count: int64):
+    if count == 0:
+        return
+    push(xs, count)
+    fill(xs, count - 1)
+
+def record(log: mut list[str], word: str):
+    log.append(f"saw {word}")
+
+def shift(point: mut Point, by: int64):
+    point.x += by
+    point.y -= by
+
+def renamed(name: str | None, suffix: str) -> str:
+    match name:
+        case str as text:
+            return f"{text}{suffix}"
+        case None:
+            return suffix.clone()
+
+def rename(name: mut str | None, suffix: str):
+    name = renamed(name, suffix)
+
+def grown(tree: Tree, value: int64) -> Tree:
+    match tree:
+        case Tree.Leaf(old):
+            return Tree.Node([Tree.Leaf(old), Tree.Leaf(value)])
+        case Tree.Node(parts):
+            mut more = parts.copy()
+            more.append(Tree.Leaf(value))
+            return Tree.Node(more)
+
+def grow(tree: mut Tree, value: int64):
+    tree = grown(tree, value)
+
+def size(tree: Tree) -> int64:
+    match tree:
+        case Tree.Leaf(_):
+            return 1
+        case Tree.Node(parts):
+            mut total = 0
+            for part in parts:
+                total += size(part)
+            return total
+
+def main():
+    mut xs: list[int64] = []
+    for i in range(1000):
+        push(xs, i)
+    print(xs.len())
+    print(xs[999])
+
+    mut left: list[int64] = []
+    mut right: list[int64] = [7]
+    push_both(left, right, 3)
+    push_both(left, right, 4)
+    print(left)
+    print(right)
+
+    mut filled: list[int64] = []
+    fill(filled, 5)
+    print(filled)
+
+    mut counter = Counter(counts={}, order=[])
+    counter.add_all(["a", "b", "a", "c", "a"])
+    mut log: list[str] = []
+    counter.add_twice("b", log)
+    print(counter.order)
+    print(counter.counts["a"])
+    print(counter.counts["b"])
+    print(log)
+
+    mut point = Point(x=1, y=2)
+    shift(point, 5)
+    shift(point, 1)
+    print(point.x)
+    print(point.y)
+
+    mut name: str | None = None
+    rename(name, "ada")
+    rename(name, "!")
+    print(name)
+
+    mut tree = Tree.Leaf(1)
+    grow(tree, 2)
+    grow(tree, 3)
+    print(size(tree))
+
+    mut words: list[str] = []
+    for word in ["x", "y"]:
+        record(words, word)
+    keep = words.copy()
+    record(words, "z")
+    print(keep.len())
+    print(words)
+
+    adder = push
+    mut through_value: list[int64] = []
+    adder(through_value, 9)
+    print(through_value)

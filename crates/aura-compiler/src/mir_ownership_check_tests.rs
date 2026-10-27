@@ -415,6 +415,23 @@ fn retains_match_consuming_operands_one_to_one() {
 }
 
 #[test]
+fn a_mutable_argument_written_back_to_its_root_moves_without_a_retain() {
+    let encoded = lowered();
+    let calls_push =
+        |instruction: &Value| instruction["Assign"]["value"]["Call"]["callee"]["Name"] == "push";
+    // `push(items)` takes the value of `items` and its writeback refills
+    // it, so a retain is left over and a release leaves nothing to move.
+    assert_rejected(
+        inserted(encoded.clone(), "main", calls_push, 0, retain("items")),
+        "leaves a retain of `items` that no operand takes",
+    );
+    assert_rejected(
+        inserted(encoded, "main", calls_push, 0, release("items")),
+        "moves `items` after releasing it",
+    );
+}
+
+#[test]
 fn a_release_names_a_root_whose_value_needs_drop() {
     for place in ["flag", "a.len", "missing"] {
         assert_rejected(

@@ -885,6 +885,34 @@ Linux container:
 
 No other program grows by more than 0.3%.
 
+### Mutable Arguments Move Into The Call
+
+A `mut` parameter hands its value back to the caller when the call
+returns. When a direct call passes a whole local, or a `mut` parameter of
+the calling function, to a `mut` parameter or a `mut self` receiver, the
+value moves into the call and the write-back puts it back, so the call
+takes no new reference and the write-back drops none. A call through a
+function value, a method picked at run time, and a value that a `with`
+block cleans up keep taking a reference.
+
+Retains across the 30 cross-language programs at the check size, with
+the change above and this one together:
+
+| Program | Retains before | Retains after |
+| --- | ---: | ---: |
+| `regex_match` | 249,932 | 221 |
+| `nbody` | 7,011 | 0 |
+| `raytracer` | 12,612 | 0 |
+| `lru_cache` | 23,005 | 2,452 |
+| `mini_browser` | 83,879 | 15,153 |
+| `sql_engine` | 156,514 | 34,867 |
+| `graph_paths` | 25,226 | 13,450 |
+| All 30 programs | 1,062,951 | 400,936 |
+
+A retain is an inline count update, so instruction counts move less:
+`regex_match` runs 1.9% fewer instructions than with shared arguments
+alone, and no program runs more.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and
