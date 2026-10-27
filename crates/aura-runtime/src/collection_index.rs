@@ -20,7 +20,9 @@ use std::sync::{Arc, OnceLock};
 use hashbrown::HashTable;
 
 use crate::integer::{IntegerRepresentation, IntegerValue};
-use crate::runtime_value::{nominal_runtime_base_name, Value, DIRECT_RUNTIME_TYPE_FIELD};
+use crate::runtime_value::{
+    nominal_runtime_base_name, Value, VariantPayloads, DIRECT_RUNTIME_TYPE_FIELD,
+};
 
 /// Collections with at most this many entries scan instead of hashing.
 pub const INDEX_THRESHOLD: usize = 8;
@@ -155,7 +157,20 @@ fn hash_nodes(root: &Value, hasher: &mut impl Hasher, budget: &mut usize) {
                 nominal_runtime_base_name(&variant.enum_name).hash(hasher);
                 variant.variant_name.hash(hasher);
                 variant.payloads.len().hash(hasher);
-                pending.extend(variant.payloads.iter().rev());
+                if let VariantPayloads::Values(payloads) = &variant.payloads {
+                    pending.extend(payloads.iter().rev());
+                    continue;
+                }
+                // The payloads would be the next nodes visited, so hashing
+                // each here, in order, matches hashing the same variant with
+                // its payloads as values. A payload read out of the layout
+                // has nothing to borrow from.
+                for payload in variant.payloads.iter() {
+                    if *budget == 0 {
+                        break;
+                    }
+                    hash_nodes(&payload, hasher, budget);
+                }
             }
             // Set and dict equality ignore order, so only the size is a
             // structural hash. Every other kind hashes by kind alone.

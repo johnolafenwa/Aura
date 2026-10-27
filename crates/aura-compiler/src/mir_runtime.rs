@@ -792,6 +792,9 @@ struct MirRuntime {
     functions: HashMap<String, MirFunction>,
     /// Runtime nominal type name to its synthesized `Display` wrapper.
     display_functions: Arc<HashMap<String, String>>,
+    /// The `float32` fields and payloads the program declares, which render
+    /// with `float32` digits.
+    float32_slots: Arc<crate::runtime_value::Float32Slots>,
     classes: HashMap<String, MirClass>,
     trait_impls: Vec<MirTraitImpl>,
     stdout: Arc<Mutex<String>>,
@@ -1361,12 +1364,16 @@ impl Env {
                 "cannot take enum payload from non-enum MIR place `{place}`"
             )));
         };
-        let payload = variant.payloads.get_mut(index).ok_or_else(|| {
-            Diagnostic::new(format!(
-                "enum variant `{}.{}` does not carry a payload at index {}",
-                variant.enum_name, variant.variant_name, index
-            ))
-        })?;
+        let payload = variant
+            .payloads
+            .values_mut()
+            .get_mut(index)
+            .ok_or_else(|| {
+                Diagnostic::new(format!(
+                    "enum variant `{}.{}` does not carry a payload at index {}",
+                    variant.enum_name, variant.variant_name, index
+                ))
+            })?;
         Ok(std::mem::replace(payload, Value::Unit))
     }
 
@@ -1642,7 +1649,7 @@ fn encode_entry_key(key: &Value, out: &mut Vec<u8>) -> Result<()> {
             text(out, &variant.enum_name);
             text(out, &variant.variant_name);
             out.extend_from_slice(format!("{};", variant.payloads.len()).as_bytes());
-            for payload in &variant.payloads {
+            for payload in variant.payloads.values() {
                 encode_entry_key(payload, out)?;
             }
         }
@@ -2197,7 +2204,7 @@ fn arg_default_value(default: ArgDefault) -> Result<Value> {
         ArgDefault::RestartOnFailure => Value::EnumVariant(EnumVariantValue {
             enum_name: RuntimeName::from_static("process.RestartPolicy"),
             variant_name: RuntimeName::from_static("OnFailure"),
-            payloads: Vec::new(),
+            payloads: Vec::new().into(),
         }),
         ArgDefault::Milliseconds(milliseconds) => {
             Value::Duration(i128::from(milliseconds) * crate::runtime_value::NANOS_PER_MILLISECOND)
@@ -2260,7 +2267,7 @@ fn mir_json_exact_payload<'a>(
     if variant.variant_name != expected_variant {
         return Ok(None);
     }
-    match variant.payloads.as_slice() {
+    match variant.payloads.values() {
         [payload] => Ok(Some(payload)),
         _ => Err(Diagnostic::coded(
             "AU4001",
@@ -2298,7 +2305,7 @@ fn mir_json_into_exact_payload(
             format!("malformed runtime `json.Value.{expected_variant}` payload in `{call}`"),
         ));
     }
-    Ok(variant.payloads.pop())
+    Ok(variant.payloads.values_mut().pop())
 }
 
 fn mir_json_indent(value: &Value) -> Result<Option<i64>> {
@@ -2560,7 +2567,7 @@ fn collect_queue_handles(value: &Value, queues: &mut Vec<ChannelValue>) {
             }
         }
         Value::EnumVariant(variant) => {
-            for payload in &variant.payloads {
+            for payload in variant.payloads.values() {
                 collect_queue_handles(payload, queues);
             }
         }
@@ -2616,6 +2623,7 @@ impl MirRuntime {
                 })
                 .collect::<HashMap<_, _>>(),
         );
+        let float32_slots = Arc::new(crate::mir::float32_slots(&module));
         let mut classes = HashMap::new();
         for class in &module.classes {
             classes.insert(class.name.clone(), class.clone());
@@ -2639,6 +2647,7 @@ impl MirRuntime {
             safepoints_enabled,
             functions,
             display_functions,
+            float32_slots,
             classes,
             trait_impls,
             stdout,
@@ -2659,14 +2668,18 @@ impl MirRuntime {
     /// instance or enum variant whose type implements `Display` renders
     /// through its implementation, at any depth.
     fn render_display(&mut self, value: &Value) -> Result<String> {
+        let float32_slots = Arc::clone(&self.float32_slots);
         if self.display_functions.is_empty() {
-            return Ok(value.render());
+            return value.render_with_slots(None, &float32_slots);
         }
         let display_functions = self.display_functions.clone();
-        value.render_with_display(&mut |type_name, node| {
-            let function_name = display_functions.get(type_name)?;
-            Some(self.call_display_function(function_name, node))
-        })
+        value.render_with_slots(
+            Some(&mut |type_name, node| {
+                let function_name = display_functions.get(type_name)?;
+                Some(self.call_display_function(function_name, node))
+            }),
+            &float32_slots,
+        )
     }
 
     fn call_display_function(&mut self, function_name: &str, value: &Value) -> Result<String> {
@@ -4533,6 +4546,7 @@ impl MirRuntime {
                     ));
                 }
                 let payload = payloads
+                    .values_mut()
                     .pop()
                     .expect("validated Result variant should carry one payload");
                 match variant_name.as_str() {
@@ -4546,7 +4560,7 @@ impl MirRuntime {
                             EnumVariantValue {
                                 enum_name: RuntimeName::from_static("Result"),
                                 variant_name: RuntimeName::from_static("Err"),
-                                payloads: vec![payload],
+                                payloads: vec![payload].into(),
                             },
                         )))
                     }
@@ -4820,10 +4834,11 @@ impl MirRuntime {
             } => Ok(RvalueOutcome::Value(Value::EnumVariant(EnumVariantValue {
                 enum_name: enum_name.as_str().into(),
                 variant_name: variant_name.as_str().into(),
-                payloads: payloads
+                payloads: (payloads
                     .iter()
                     .map(|payload| take_mir_operand(payload, env))
-                    .collect::<Result<Vec<_>>>()?,
+                    .collect::<Result<Vec<_>>>()?)
+                .into(),
             }))),
             Rvalue::VariantPayload {
                 scrutinee,
@@ -4842,12 +4857,17 @@ impl MirRuntime {
                         scrutinee.render()
                     )));
                 };
-                let payload = variant.payloads.into_iter().nth(*index).ok_or_else(|| {
-                    Diagnostic::new(format!(
-                        "enum variant `{}.{}` does not carry a payload at index {}",
-                        variant.enum_name, variant.variant_name, index
-                    ))
-                })?;
+                let payload = variant
+                    .payloads
+                    .into_vec()
+                    .into_iter()
+                    .nth(*index)
+                    .ok_or_else(|| {
+                        Diagnostic::new(format!(
+                            "enum variant `{}.{}` does not carry a payload at index {}",
+                            variant.enum_name, variant.variant_name, index
+                        ))
+                    })?;
                 Ok(RvalueOutcome::Value(payload))
             }
             Rvalue::Member { object, field } => match object {

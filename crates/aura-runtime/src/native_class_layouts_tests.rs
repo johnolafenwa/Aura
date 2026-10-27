@@ -18,11 +18,12 @@ use crate::native_runtime::{
     aura_direct_instance_get_field, aura_direct_instance_new_typed, aura_direct_instance_put_field,
     aura_direct_instance_read_plain, aura_direct_instance_restore_field,
     aura_direct_instance_set_field, aura_direct_instance_set_field_owned,
-    aura_direct_instance_take_field, aura_direct_register_plain_layouts, aura_direct_release_value,
-    aura_direct_retain_value, aura_direct_vec_push_in_place, boxed_value, list_view_of,
-    register_plain_layout, share_direct_value, value_mut, value_ref,
-    with_direct_task_runtime_scope, with_task_runtime_error_capture, DirectPlainLayoutEntry,
-    ElementBox, OpaqueValue, UNREGISTERED_PLAIN_ACCESS,
+    aura_direct_instance_take_field, aura_direct_register_class_layouts,
+    aura_direct_register_plain_layouts, aura_direct_release_value, aura_direct_retain_value,
+    aura_direct_vec_push_in_place, boxed_value, list_view_of, register_plain_layout,
+    share_direct_value, value_mut, value_ref, with_direct_task_runtime_scope,
+    with_task_runtime_error_capture, DirectPlainLayoutEntry, ElementBox, OpaqueValue,
+    UNREGISTERED_PLAIN_ACCESS,
 };
 use crate::runtime_value::{
     run_lightweight_root_task, InstanceFields, InstanceValue, TupleValue, Value, VecValue,
@@ -288,8 +289,21 @@ fn cells_hold_the_layout_once_registered() {
         len: descriptor.len(),
         access: u64::from(FIRST_TEST_ACCESS + 3),
     };
-    // A class code in the plain layout table registers a class layout.
-    unsafe { aura_direct_register_plain_layouts(&entry, 1) };
+    // A class code in the plain layout table is refused: classes register
+    // through a table of their own.
+    let cell_address = std::ptr::from_ref(cell) as usize;
+    let text = descriptor;
+    let refused = runtime_failure(move || {
+        let entry = DirectPlainLayoutEntry {
+            cell: cell_address as *const _,
+            descriptor: text.as_ptr(),
+            len: text.len(),
+            access: u64::from(FIRST_TEST_ACCESS + 3),
+        };
+        unsafe { aura_direct_register_plain_layouts(&entry, 1) };
+    });
+    assert!(refused.contains("invalid plain layout"), "{refused}");
+    unsafe { aura_direct_register_class_layouts(&entry, 1) };
     let registered = unsafe { super::registered_class_layout(cell) }.expect("filled");
     assert_eq!(registered.access(), FIRST_TEST_ACCESS + 3);
     assert_eq!(cell.access.load(Ordering::Acquire), FIRST_TEST_ACCESS + 3);
@@ -303,9 +317,9 @@ fn cells_hold_the_layout_once_registered() {
             len: 1,
             access: u64::from(FIRST_TEST_ACCESS + 4),
         };
-        unsafe { aura_direct_register_plain_layouts(&entry, 1) };
+        unsafe { aura_direct_register_class_layouts(&entry, 1) };
     });
-    assert!(failure.contains("invalid plain layout"), "{failure}");
+    assert!(failure.contains("invalid class layout"), "{failure}");
 }
 
 #[test]

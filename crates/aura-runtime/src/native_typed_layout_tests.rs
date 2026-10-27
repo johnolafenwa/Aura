@@ -98,7 +98,7 @@ fn variant(enum_name: &str, name: &str, payloads: Vec<Value>) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: enum_name.into(),
         variant_name: name.into(),
-        payloads,
+        payloads: payloads.into(),
     })
 }
 
@@ -494,7 +494,7 @@ fn generic_values_read_back_with_their_type_arguments() {
         canonical_runtime_type_name(&maybe_type)
     );
     assert_eq!(read.enum_name.as_str(), expected);
-    assert_eq!(read.payloads, vec![int64(1)]);
+    assert_eq!(read.payloads, vec![int64(1)].into());
 }
 
 #[test]

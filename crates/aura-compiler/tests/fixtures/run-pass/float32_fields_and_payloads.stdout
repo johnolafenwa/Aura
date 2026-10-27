@@ -1,0 +1,8 @@
+Reading(exact=0.123456789, level=0.1)
+Reading(exact=0.123456789, level=0.1)
+[Reading(exact=0.123456789, level=0.1)]
+[Reading(exact=0.123456789, level=0.1), Reading(exact=0.3, level=0.3)]
+Sample.Single(0.1)
+Sample.Pair(0.3, 0.123456789)
+Sample.Missing
+0.1

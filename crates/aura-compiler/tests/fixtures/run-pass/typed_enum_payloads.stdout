@@ -1,0 +1,19 @@
+376
+d3 d2 d1 leaf 8
+376
+move 1 -2
+say hi 0.5
+batch 3
+quit
+Event.Say(hi, 0.5)
+[Event.Move(1, -2), Event.Say(hi, 0.5), Event.Batch([1, 2, 3]), Event.Quit]
+1
+Event.Batch([1, 2, 3, 4])
+[Event.Move(1, -2), Event.Say(hi, 0.5), Event.Quit, Event.Batch([1, 2, 3, 4])]
+Event.Move(3, 4)
+5
+2
+true
+false
+2
+2

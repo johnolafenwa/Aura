@@ -641,6 +641,8 @@ struct NativeCodegen<'a> {
     function_thunks: HashMap<String, FuncHandle>,
     function_default_binders: HashMap<String, FuncHandle>,
     callable_shapes: HashMap<CallableShapeKey, CallableShape>,
+    /// Which boxes the module's functions pass and return already tagged.
+    program_shapes: shapes::ProgramShapes,
     contract_descriptors: HashMap<String, callables::ContractDescriptor>,
     cleanup_thunks: HashMap<(String, String), FuncHandle>,
     classes: HashMap<String, MirClass>,
@@ -899,6 +901,10 @@ impl<'a> NativeCodegen<'a> {
             &function_param_types,
             &classes,
         )?;
+        let program_shapes = shapes::ProgramShapes::new(
+            module,
+            callable_shapes.keys().map(|key| key.function.as_str()),
+        );
         Ok(Self {
             module,
             explicit_locals: crate::mir::ownership::explicit_locals(module),
@@ -911,6 +917,7 @@ impl<'a> NativeCodegen<'a> {
             function_thunks,
             function_default_binders,
             callable_shapes,
+            program_shapes,
             contract_descriptors: HashMap::new(),
             cleanup_thunks,
             classes,
@@ -1445,6 +1452,14 @@ impl<'a> NativeCodegen<'a> {
                 )
         });
         let (native_loan_uses, element_lend_temps) = element_loans::native_element_loans(function);
+        let field_lend_temps = classes::field_lend_temps(function);
+        let shaped_locals = shapes::shaped_locals(function, &self.program_shapes, |local| {
+            lookup_slots.contains(local)
+                || lent_places.contains(local)
+                || lent_element_reads.lists.contains_key(local)
+                || element_lend_temps.contains(local)
+                || field_lend_temps.contains(local)
+        });
         let mut lent_elements = HashMap::new();
         let mut lent_names = lent_element_reads.lists.keys().cloned().collect::<Vec<_>>();
         lent_names.sort();
@@ -1492,7 +1507,7 @@ impl<'a> NativeCodegen<'a> {
             lookup_payload: None,
             emptied_store_root: None,
             lent_temps: HashMap::new(),
-            field_lend_temps: classes::field_lend_temps(function),
+            field_lend_temps,
             field_lends: HashMap::new(),
             field_box_receiver: false,
             native_loan_uses,
@@ -1504,6 +1519,9 @@ impl<'a> NativeCodegen<'a> {
             callable_retains: HashMap::new(),
             retained_unions: HashSet::new(),
             last_runtime_type_tag: None,
+            shaped_locals,
+            shaped_boxes: HashSet::new(),
+            program_shapes: &self.program_shapes,
             view_places: HashMap::new(),
             view_element_keys: HashMap::new(),
             view_selector_vars,
@@ -2033,16 +2051,46 @@ impl<'a> NativeCodegen<'a> {
         builder.call(validate, &[descriptors, count]);
         // Registering every plain layout now lets a list built anywhere
         // keep these records in place, where generated code reads them.
-        if !self.plain_records.cells().is_empty() {
+        // Class and enum layouts register through calls of their own, so a
+        // program links only the registration of the kinds it uses.
+        use aura_runtime::native_runtime::{FIRST_CLASS_ACCESS, FIRST_ENUM_ACCESS};
+        let tables = [
+            (
+                "aura_plain_layouts",
+                RuntimeFn::RegisterPlainLayouts,
+                0..u64::from(FIRST_CLASS_ACCESS),
+            ),
+            (
+                "aura_class_layouts",
+                RuntimeFn::RegisterClassLayouts,
+                u64::from(FIRST_CLASS_ACCESS)..u64::from(FIRST_ENUM_ACCESS),
+            ),
+            (
+                "aura_enum_layouts",
+                RuntimeFn::RegisterEnumLayouts,
+                u64::from(FIRST_ENUM_ACCESS)..u64::MAX,
+            ),
+        ];
+        for (name, runtime_fn, codes) in tables {
+            let cells = self
+                .plain_records
+                .cells()
+                .iter()
+                .filter(|(_, _, access)| codes.contains(access))
+                .collect::<Vec<_>>();
+            if cells.is_empty() {
+                continue;
+            }
             let layouts = plain::declare_plain_layout_table(
                 builder.module(),
                 &mut self.string_data,
-                self.plain_records.cells(),
+                name,
+                &cells,
             )?;
             let layouts = builder.import_data(layouts);
             let layouts = builder.symbol_value(types::I64, layouts);
-            let count = builder.iconst(types::I64, self.plain_records.cells().len() as i64);
-            let register = builder.import_function(self.runtime[RuntimeFn::RegisterPlainLayouts]);
+            let count = builder.iconst(types::I64, cells.len() as i64);
+            let register = builder.import_function(self.runtime[runtime_fn]);
             builder.call(register, &[layouts, count]);
         }
         let display_wrappers = self
@@ -2065,6 +2113,16 @@ impl<'a> NativeCodegen<'a> {
                     declare_string_constant(&mut self.string_data, builder, type_name.as_bytes())?;
                 builder.call(register_display, &[name_ptr, name_len, thunk_addr]);
             }
+        }
+        let float32_slots = crate::mir::float32_slots(self.module);
+        if !float32_slots.is_empty() {
+            let (slots_ptr, slots_len) = declare_string_constant(
+                &mut self.string_data,
+                builder,
+                float32_slots.encode().as_bytes(),
+            )?;
+            let register = builder.import_function(self.runtime[RuntimeFn::RegisterFloat32Slots]);
+            builder.call(register, &[slots_ptr, slots_len]);
         }
         let thunk_ptr = builder.func_addr(types::I64, entry_thunk_ref);
         let result = builder.call(run_root, &[thunk_ptr]);
@@ -2760,6 +2818,15 @@ struct FunctionCompiler<'a> {
     /// The latest `tag_value_type` call: its instruction, value, and encoded
     /// type, so an identical tag that no other call follows is not repeated.
     last_runtime_type_tag: Option<(Inst, Val, String)>,
+    /// The locals whose box always carries the tag of their type. See
+    /// `shapes::shaped_locals`.
+    shaped_locals: HashSet<String>,
+    /// The boxes the instruction being compiled read that carry the tag of
+    /// their static type: from a shaped local, a call whose callee tags
+    /// what it returns, or a variant that keeps its payloads in place.
+    /// Coercing one to that type tags nothing.
+    shaped_boxes: HashSet<Val>,
+    program_shapes: &'a shapes::ProgramShapes,
     view_places: HashMap<String, DirectViewPlace>,
     view_selector_vars: HashMap<String, Var>,
     /// Owned dictionary keys held by entry loans, released at `EndLoan`.
@@ -3572,6 +3639,7 @@ impl<'a> FunctionCompiler<'a> {
             self.layout_scratch.is_empty(),
             "layout temporaries outlived the instruction before {instruction:?}"
         );
+        self.shaped_boxes.clear();
         if !self.element_promotions.is_empty() {
             if let Some(temps) = self
                 .element_promotions
@@ -4236,6 +4304,7 @@ impl<'a> FunctionCompiler<'a> {
         terminator: &Terminator,
         return_ty: &DirectType,
     ) -> std::result::Result<(), String> {
+        self.shaped_boxes.clear();
         match terminator {
             Terminator::Return(operand) => {
                 let value = self.load_operand_for_target(operand, return_ty)?;
@@ -4325,12 +4394,22 @@ impl<'a> FunctionCompiler<'a> {
                         } else {
                             RuntimeFn::VariantMatches
                         };
-                        self.variant_matches_with(
-                            test,
-                            scrutinee.values[0],
-                            arm.enum_name.as_deref().unwrap_or(scrutinee_enum_name),
-                            arm.variant_name.as_deref().unwrap_or_default(),
-                        )?
+                        let enum_name = arm.enum_name.as_deref().unwrap_or(scrutinee_enum_name);
+                        let variant_name = arm.variant_name.as_deref().unwrap_or_default();
+                        let value = scrutinee.values[0];
+                        let typed = if lent || enum_name != scrutinee_enum_name {
+                            None
+                        } else {
+                            self.typed_variant_test(value, &scrutinee.ty, variant_name, |this| {
+                                this.variant_matches_with(test, value, enum_name, variant_name)
+                            })?
+                        };
+                        match typed {
+                            Some(matched) => matched,
+                            None => {
+                                self.variant_matches_with(test, value, enum_name, variant_name)?
+                            }
+                        }
                     };
                     let arm_block = self.compiled_block(&arm.label)?;
                     let matched_cleanup = self.builder.create_block();
@@ -4723,7 +4802,7 @@ impl<'a> FunctionCompiler<'a> {
             ),
             Rvalue::VariantPayload {
                 scrutinee,
-                variant_name: _,
+                variant_name,
                 index,
             } => {
                 if let Operand::Place(place) | Operand::MovePlace(place) = scrutinee {
@@ -4735,7 +4814,30 @@ impl<'a> FunctionCompiler<'a> {
                 if let Operand::MovePlace(place) = scrutinee {
                     return self.compile_take_variant_payload(place, *index);
                 }
+                let lent = matches!(
+                    scrutinee,
+                    Operand::Place(place) if self.lent_places.contains(place.as_str())
+                );
                 let scrutinee = self.load_operand(scrutinee)?;
+                if !lent {
+                    let any = DirectType::Opaque(Type::named("Unknown"));
+                    let read_as = if matches!(target, DirectType::Opaque(_)) {
+                        target
+                    } else {
+                        &any
+                    };
+                    let index = *index;
+                    let slow_scrutinee = scrutinee.clone();
+                    if let Some(payload) = self.typed_variant_payload(
+                        &scrutinee,
+                        variant_name,
+                        index,
+                        read_as,
+                        |this| this.compile_variant_payload(slow_scrutinee, index),
+                    )? {
+                        return Ok(payload);
+                    }
+                }
                 self.compile_variant_payload(scrutinee, *index)
             }
             Rvalue::StartTask {
@@ -6910,6 +7012,11 @@ impl<'a> FunctionCompiler<'a> {
         self.release_mutable_sinks(mutable_sinks);
         let (result, writebacks) = self.split_call_results(name, results)?;
         self.apply_writeback_places(&writeback_places, writebacks)?;
+        if self.program_shapes.returns_tagged(name) {
+            if let (DirectType::Opaque(_), [word]) = (&result.ty, result.values.as_slice()) {
+                self.shaped_boxes.insert(*word);
+            }
+        }
         Ok(result)
     }
 
@@ -7922,6 +8029,18 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn load_operand(&mut self, operand: &Operand) -> std::result::Result<ValueRef, String> {
+        let loaded = self.load_operand_value(operand)?;
+        if let Operand::Place(place) | Operand::MovePlace(place) = operand {
+            if self.shaped_locals.contains(place.as_str()) {
+                if let (DirectType::Opaque(_), [word]) = (&loaded.ty, loaded.values.as_slice()) {
+                    self.shaped_boxes.insert(*word);
+                }
+            }
+        }
+        Ok(loaded)
+    }
+
+    fn load_operand_value(&mut self, operand: &Operand) -> std::result::Result<ValueRef, String> {
         if let Some(retained) = self.take_retained(operand) {
             return Ok(retained);
         }
@@ -8823,6 +8942,8 @@ impl<'a> FunctionCompiler<'a> {
         span: Option<Span>,
     ) -> std::result::Result<ValueRef, String> {
         if &value.ty == target {
+            let shaped =
+                matches!(value.values.as_slice(), [word] if self.shaped_boxes.contains(word));
             let value = self.normalize_scalar_value(value)?;
             if let Some(kind) = target.scalar_kind().filter(|kind| kind.is_narrow_integer()) {
                 self.emit_narrow_bounds_check(kind, value.values[0], false, span)?;
@@ -8831,7 +8952,8 @@ impl<'a> FunctionCompiler<'a> {
                 // A leaf tag such as `str` only records the name, and the
                 // value already carries the same static type, so retagging
                 // it would change nothing.
-                if !is_name_only_runtime_type(target_ty) {
+                if !(is_name_only_runtime_type(target_ty) || shaped && shapes::keeps_tag(target_ty))
+                {
                     self.tag_opaque_runtime_type(&value, target_ty)?;
                 }
             }
@@ -10730,6 +10852,20 @@ impl<'a> FunctionCompiler<'a> {
         payloads: &[Operand],
         target: Option<&DirectType>,
     ) -> std::result::Result<ValueRef, String> {
+        let enum_ty = match target {
+            Some(DirectType::Opaque(ty @ Type::Named(name, _))) if name == enum_name => {
+                Some(ty.clone())
+            }
+            None => Some(Type::named(enum_name)),
+            Some(_) => None,
+        };
+        if let Some(enum_ty) = enum_ty {
+            if let Some(built) =
+                self.construct_variant_in_place(&enum_ty, variant_name, payloads)?
+            {
+                return Ok(built);
+            }
+        }
         let (enum_ptr, enum_len) = self.string_constant(enum_name.as_bytes())?;
         let (variant_ptr, variant_len) = self.string_constant(variant_name.as_bytes())?;
         let expected_payload_types = target.and_then(|target_ty| {
@@ -10836,7 +10972,7 @@ impl<'a> FunctionCompiler<'a> {
         let Rvalue::VariantPayload {
             scrutinee: scrutinee @ Operand::Place(place),
             index,
-            ..
+            variant_name,
         } = value
         else {
             return Ok(None);
@@ -10848,36 +10984,69 @@ impl<'a> FunctionCompiler<'a> {
         let lent = self.lent_places.contains(place.as_str());
         let function = match (&target_ty, lent) {
             (DirectType::Scalar(kind), false) if kind.is_narrow_integer() => {
-                RuntimeFn::VariantPayloadI64
+                Some(RuntimeFn::VariantPayloadI64)
             }
-            (DirectType::Scalar(ScalarKind::Int64), false) => RuntimeFn::VariantPayloadInt64,
-            (DirectType::Scalar(ScalarKind::Uint64), false) => RuntimeFn::VariantPayloadU64,
-            (DirectType::Scalar(ScalarKind::Bool), false) => RuntimeFn::VariantPayloadBool,
+            (DirectType::Scalar(ScalarKind::Int64), false) => Some(RuntimeFn::VariantPayloadInt64),
+            (DirectType::Scalar(ScalarKind::Uint64), false) => Some(RuntimeFn::VariantPayloadU64),
+            (DirectType::Scalar(ScalarKind::Bool), false) => Some(RuntimeFn::VariantPayloadBool),
             (DirectType::Scalar(kind), true) if kind.is_narrow_integer() => {
-                RuntimeFn::LentVariantPayloadI64
+                Some(RuntimeFn::LentVariantPayloadI64)
             }
-            (DirectType::Scalar(ScalarKind::Int64), true) => RuntimeFn::LentVariantPayloadInt64,
-            (DirectType::Scalar(ScalarKind::Uint64), true) => RuntimeFn::LentVariantPayloadU64,
-            (DirectType::Scalar(ScalarKind::Bool), true) => RuntimeFn::LentVariantPayloadBool,
+            (DirectType::Scalar(ScalarKind::Int64), true) => {
+                Some(RuntimeFn::LentVariantPayloadInt64)
+            }
+            (DirectType::Scalar(ScalarKind::Uint64), true) => {
+                Some(RuntimeFn::LentVariantPayloadU64)
+            }
+            (DirectType::Scalar(ScalarKind::Bool), true) => Some(RuntimeFn::LentVariantPayloadBool),
             (_, true) => {
                 return Err(format!(
                     "direct backend cannot read a lent payload into `{target}`"
                 ))
             }
+            // A float payload a variant keeps in place is read where it
+            // lies too.
+            (DirectType::Scalar(_), false) => None,
             _ => return Ok(None),
         };
         let scrutinee = self.load_operand(scrutinee)?;
         let scrutinee = self.ensure_opaque(scrutinee)?;
-        let index = self.builder.iconst(types::I64, *index as i64);
-        let inst = self
-            .builder
-            .call(self.runtime[function], &[scrutinee.values[0], index]);
-        let scalar = ValueRef {
-            values: inst.results,
-            ty: target_ty.clone(),
+        let index = *index;
+        // Without a scalar read of its own, the runtime copies the payload
+        // into a box, which is unboxed.
+        let runtime_read = |this: &mut Self, scrutinee: &ValueRef| match function {
+            Some(function) => {
+                let index = this.builder.iconst(types::I64, index as i64);
+                let inst = this
+                    .builder
+                    .call(this.runtime[function], &[scrutinee.values[0], index]);
+                let scalar = ValueRef {
+                    values: inst.results,
+                    ty: target_ty.clone(),
+                };
+                // The same checks as unboxing a copy: an `int32` stays in
+                // range.
+                this.coerce_value(scalar, &target_ty)
+            }
+            None => {
+                let boxed = this.compile_variant_payload(scrutinee.clone(), index)?;
+                this.coerce_value(boxed, &target_ty)
+            }
         };
-        // The same checks as unboxing a copy: an `int32` stays in range.
-        self.coerce_value(scalar, &target_ty).map(Some)
+        if !lent {
+            let slow_scrutinee = scrutinee.clone();
+            if let Some(scalar) =
+                self.typed_variant_payload(&scrutinee, variant_name, index, &target_ty, |this| {
+                    runtime_read(this, &slow_scrutinee)
+                })?
+            {
+                return Ok(Some(scalar));
+            }
+        }
+        if function.is_none() {
+            return Ok(None);
+        }
+        runtime_read(self, &scrutinee).map(Some)
     }
 
     /// `payload` in place of `lookup` while a lookup slot asks for the
@@ -15775,11 +15944,15 @@ mod classes;
 mod element_loans;
 #[path = "native_codegen_elements.rs"]
 mod elements;
+#[path = "native_codegen_enums.rs"]
+mod enums;
 #[path = "native_codegen_lookups.rs"]
 mod lookups;
 
 #[path = "native_codegen_plain.rs"]
 mod plain;
+#[path = "native_codegen_shapes.rs"]
+mod shapes;
 
 #[cfg(test)]
 #[path = "native_codegen_tests.rs"]

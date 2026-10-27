@@ -23,8 +23,9 @@
 //! nothing.
 
 use std::alloc::{alloc_zeroed, dealloc, handle_alloc_error, Layout as AllocLayout};
+use std::any::Any;
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
@@ -33,7 +34,7 @@ use std::sync::{OnceLock, RwLock};
 use aura_core::layout::{LayoutId, LayoutKind, LayoutTable};
 use aura_core::types::Type;
 
-use super::typed_layout::{self, TypedLayout};
+use super::typed_layout::{self, FieldOps, TypedLayout};
 use super::ElementBox;
 use crate::runtime_value::Value;
 
@@ -57,31 +58,9 @@ pub struct ClassLayout {
     /// The offsets of every field box the layout holds outside an enum or
     /// union payload, nested classes included.
     boxes: Vec<usize>,
-    /// How values move in and out of the block. Only registration names
-    /// these, so a program that registers no class layout links none of
-    /// the converters, however many instances it prints, copies, or drops.
-    ops: &'static ClassOps,
+    /// How values move in and out of the block.
+    ops: &'static FieldOps,
 }
-
-struct ClassOps {
-    fits: fn(&LayoutTable, LayoutId, &Value) -> bool,
-    field_box: fn(Value, &Type) -> ElementBox,
-    write: unsafe fn(&LayoutTable, LayoutId, Value, *mut u8),
-    read: unsafe fn(&LayoutTable, LayoutId, *const u8) -> Value,
-    take: unsafe fn(&LayoutTable, LayoutId, *mut u8) -> Value,
-    drop: unsafe fn(&LayoutTable, LayoutId, *mut u8),
-    clone: unsafe fn(&LayoutTable, LayoutId, *const u8, *mut u8),
-}
-
-static CLASS_OPS: ClassOps = ClassOps {
-    fits: typed_layout::fits,
-    field_box: typed_layout::field_box_for,
-    write: typed_layout::write_unchecked,
-    read: typed_layout::read_at,
-    take: typed_layout::take_at,
-    drop: typed_layout::drop_at,
-    clone: typed_layout::clone_at,
-};
 
 struct ClassField {
     name: String,
@@ -198,8 +177,13 @@ impl ClassLayout {
                 layout: field.layout,
             })
             .collect::<Vec<_>>();
-        let mut by_name = (0..fields.len()).collect::<Vec<_>>();
-        by_name.sort_by(|left, right| fields[*left].name.cmp(&fields[*right].name));
+        // Sorted by insertion: a class has few fields, and a program that
+        // sorts nothing else links no general sort for this one.
+        let mut by_name = Vec::<usize>::with_capacity(fields.len());
+        for (index, field) in fields.iter().enumerate() {
+            let at = by_name.partition_point(|other| fields[*other].name < field.name);
+            by_name.insert(at, index);
+        }
         let mut boxes = Vec::new();
         collect_boxes(table, layout.root(), 0, &mut boxes);
         let class_name = class_name.clone();
@@ -210,20 +194,9 @@ impl ClassLayout {
             fields,
             by_name,
             boxes,
-            ops: &CLASS_OPS,
+            ops: &typed_layout::FIELD_OPS,
         })
     }
-}
-
-#[derive(Default)]
-struct ClassRegistry {
-    by_descriptor: HashMap<String, &'static ClassLayout>,
-    taken: HashSet<u32>,
-}
-
-fn class_registry() -> &'static RwLock<ClassRegistry> {
-    static REGISTRY: OnceLock<RwLock<ClassRegistry>> = OnceLock::new();
-    REGISTRY.get_or_init(Default::default)
 }
 
 /// The class layout of the type `descriptor` names, registered under
@@ -233,43 +206,24 @@ pub fn register_class_layout(
     descriptor: &str,
     access: u32,
 ) -> Result<&'static ClassLayout, String> {
-    if access < FIRST_CLASS_ACCESS || access == super::UNREGISTERED_PLAIN_ACCESS {
+    if !(FIRST_CLASS_ACCESS..super::FIRST_ENUM_ACCESS).contains(&access) {
         return Err(format!("{access} is not a class layout access code"));
     }
-    let registry = class_registry();
-    let same_code = |layout: &'static ClassLayout| {
-        if layout.access == access {
-            Ok(layout)
-        } else {
-            Err(format!(
-                "the layout is registered under access code {}, not {access}",
-                layout.access
-            ))
-        }
+    static REGISTRY: OnceLock<RwLock<typed_layout::LayoutRegistry>> = OnceLock::new();
+    let build = || {
+        let layout: &'static ClassLayout =
+            Box::leak(Box::new(ClassLayout::from_descriptor(descriptor, access)?));
+        Ok(layout as &'static (dyn Any + Send + Sync))
     };
-    if let Some(layout) = registry
-        .read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .by_descriptor
-        .get(descriptor)
-    {
-        return same_code(layout);
-    }
-    let layout = ClassLayout::from_descriptor(descriptor, access)?;
-    let mut registry = registry
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(layout) = registry.by_descriptor.get(descriptor) {
-        return same_code(layout);
-    }
-    if !registry.taken.insert(access) {
-        return Err(format!("access code {access} names another layout"));
-    }
-    let layout: &'static ClassLayout = Box::leak(Box::new(layout));
-    registry
-        .by_descriptor
-        .insert(descriptor.to_string(), layout);
-    Ok(layout)
+    let layout = typed_layout::register_layout(
+        REGISTRY.get_or_init(Default::default),
+        descriptor,
+        access,
+        &build,
+    )?;
+    Ok(layout
+        .downcast_ref()
+        .expect("the class layout registry holds class layouts"))
 }
 
 /// The cell generated code keeps for one class layout: its access code and

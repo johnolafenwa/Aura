@@ -264,7 +264,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 
 - Floating-point `/`, `//`, or `%` by zero traps at runtime instead of producing IEEE 754 infinity or NaN.
 - `float32` literals that overflow may become infinity. Prefer `float64` when large literal validation matters.
-- A `float32` held in a class field or an enum payload renders with the digits of its `float64` widening, so `print(P(v=x))` shows `P(v=0.10000000149011612)` for `x: float32 = 0.1`. A `float32` printed directly, rendered by `str`, `to_string()`, or an f-string, or held in a list, set, dict, tuple, or union renders its shortest `float32` spelling.
+- A `float32` held in a field or payload whose declared type is a type parameter renders with the digits of its `float64` widening, so `print(Box[float32](item=x))` shows `Box(item=0.10000000149011612)` for `x: float32 = 0.1`. A field or payload declared `float32`, a `float32` printed directly or rendered by `str`, `to_string()`, or an f-string, and one held in a list, set, dict, tuple, or union render the shortest `float32` spelling.
 - Metrics are process-global counters within one running program.
 - Log and trace APIs emit structured stderr records. They do not include exporters or scoped spans.
 - Package support has local path and git dependencies, but no registry publish or install flow.

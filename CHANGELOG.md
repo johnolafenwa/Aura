@@ -14,6 +14,11 @@ in this file.
   `aura run` now rounds a float literal written where a `float32` is
   expected, such as `singles.append(0.1)`, as native builds do, so both
   store and print the same list.
+- A `float32` held in a class field or an enum payload declared `float32`
+  prints its shortest `float32` spelling on both backends, as a `float32`
+  printed directly does: `P(v=0.1)` rather than
+  `P(v=0.10000000149011612)`. A field or payload whose declared type is a
+  type parameter still prints the digits of its `float64` widening.
 
 ### Performance
 
@@ -67,6 +72,15 @@ in this file.
 - The compiler hands the runtime each class layout as the offsets it
   computed, so a native program with classes neither links the layout
   builder nor runs it at startup.
+- Native code keeps each variant of an enum the program defines in the
+  enum's native layout: one block with scalar payloads in place and each
+  other payload, a recursive one included, in a box of its own. A `match`
+  tests the variant by comparing its index instead of its name, reads a
+  scalar payload where it lies, and binds any other payload by sharing its
+  box, so matching a tree no longer copies the subtree under each node.
+  Native code also skips retagging a value that already carries its
+  static type. At check size, binary_trees runs 69% fewer instructions,
+  interpreter 56%, spreadsheet 10%, and lzw_compress 8%.
 
 ### Fixed
 
