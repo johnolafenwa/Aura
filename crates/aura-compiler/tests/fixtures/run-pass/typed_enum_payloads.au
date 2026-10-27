@@ -1,0 +1,109 @@
+enum Tree:
+    Leaf(int64)
+    Node(indirect Tree, indirect Tree, str)
+
+
+enum Event:
+    Quit
+    Move(int32, int32)
+    Say(str, float64)
+    Batch(list[int64])
+
+
+class Player:
+    name: str
+    last: Event
+    history: list[Event]
+
+
+def make(depth: int64, label: int64) -> Tree:
+    if depth == 0:
+        return Tree.Leaf(label)
+    return Tree.Node(make(depth - 1, label * 2), make(depth - 1, label * 2 + 1), f"d{depth}")
+
+
+def total(tree: Tree) -> int64:
+    match tree:
+        case Tree.Leaf(value):
+            return value
+        case Tree.Node(left, right, _):
+            return total(left) + total(right)
+
+
+def describe(event: Event) -> str:
+    match event:
+        case Event.Quit:
+            return "quit"
+        case Event.Move(dx, dy):
+            return f"move {dx} {dy}"
+        case Event.Say(text, volume):
+            return f"say {text} {volume}"
+        case Event.Batch(items):
+            return f"batch {len(items)}"
+
+
+def first_label(tree: own Tree) -> str:
+    match own tree:
+        case Tree.Leaf(value):
+            return f"leaf {value}"
+        case Tree.Node(left, _, label):
+            return label + " " + first_label(left)
+
+
+def count_moves(events: list[Event]) -> int64:
+    mut moves = 0
+    for event in events:
+        match event:
+            case Event.Move(_, _):
+                moves += 1
+            case _:
+                pass
+    return moves
+
+
+def main():
+    tree = make(4, 1)
+    print(total(tree))
+    print(first_label(make(3, 1)))
+    print(total(tree))
+
+    mut events = list[Event]()
+    events.append(Event.Move(1, -2))
+    events.append(Event.Say("hi", 0.5))
+    events.append(Event.Batch([1, 2, 3]))
+    events.append(Event.Quit)
+    for event in events:
+        print(describe(event))
+    print(events[1])
+    print(events)
+    print(count_moves(events))
+
+    mut taken = events.pop(2)
+    match mut taken:
+        case Event.Batch(items):
+            items.append(4)
+        case _:
+            pass
+    print(taken)
+    events.append(taken)
+    print(events)
+
+    mut player = Player(name="ada", last=Event.Quit, history=events)
+    player.last = Event.Move(3, 4)
+    player.history.append(Event.Move(3, 4))
+    print(player.last)
+    print(len(player.history))
+    print(count_moves(player.history))
+    print(player.last == Event.Move(3, 4))
+    print(player.last == Event.Move(3, 5))
+
+    mut seen = set[Event]()
+    seen.add(Event.Move(1, 1))
+    seen.add(Event.Move(1, 1))
+    seen.add(Event.Say("x", 1.0))
+    print(len(seen))
+
+    worker: def(list[Event]) -> int64 = lambda batch: count_moves(batch)
+    with TaskGroup() as group:
+        task = group.start(worker, player.history)
+        print(task.result_or(-1, timeout=5s))

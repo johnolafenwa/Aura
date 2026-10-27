@@ -63,8 +63,17 @@ Last updated: 2026-10-27
   `2026-10-27-rust-speed-2e-nested-reads.md`. The 2e gates are not met;
   the rest is calls (Phase 4a), drops (2h), tags (2j), and `Result`
   values (2f, 2g).
-- Next: 2f, enums and `Result` payloads in their layouts, with `float32`
-  in class fields and enum payloads rendered as `float32`.
+- Step 2f: variants of program-defined enums keep their payloads in the
+  enum's layout (`VariantPayloads::Typed`, `native_enum_layouts.rs`);
+  generated code tests a variant by its index, reads scalar payloads in
+  place, and shares payload boxes instead of copying them
+  (`native_codegen_enums.rs`), and skips tags on boxes that already carry
+  them (`native_codegen_shapes.rs`). A `float32` field or payload prints
+  as `float32` on both backends. Details are in
+  `2026-10-27-rust-speed-2f-enum-layouts.md`. The 2f gates are not met
+  (`binary_trees` 3.2x Rust, `interpreter` 12.6x); the rest is boxes and
+  drops (2h), tags (2j), and calls (Phase 4a).
+- Next: 2g, unions and `Result` values in their layouts.
 
 ## Aura 0.7.1 preview release (complete)
 

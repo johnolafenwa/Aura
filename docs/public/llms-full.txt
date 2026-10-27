@@ -18300,6 +18300,42 @@ suite at the check size:
 No program grows by more than 0.6%. `http_api` and `task_pool` move by a
 few percent between runs of one build.
 
+### Enum Payloads In Place
+
+A variant of an enum the program defines keeps its payloads in one block
+in the enum's native layout, as a Rust enum does. Scalar payloads sit in
+the block, and each other payload, a recursive one included, is a pointer
+to a box of its own. A `case` compares the variant's index instead of its
+name, a scalar binding loads the payload from the block, and any other
+binding shares the payload's box. Matching a recursive enum, such as a
+tree, used to copy the subtree under each node it visited, and now copies
+nothing. Building a variant takes one runtime call.
+
+Variants that `aura run`, JSON decoding, or the runtime build keep their
+payloads as values, and so do the compiler's own enums, such as `Result`,
+and the library's, such as `json.Value`. A program cannot tell which form
+a variant uses: printing, equality, hashing, copies, and errors behave the
+same. A variant another task can reach is read through the runtime.
+
+A value read out of a local that only plain assignments write, a
+parameter that only named calls fill, or the result of a function that
+returns only through `return` already carries its static type, so native
+code no longer tags it again when it is assigned or passed on.
+
+Callgrind instruction counts on the shared Linux container, cross-language
+suite at the check size:
+
+| Program | Before | After |
+| --- | ---: | ---: |
+| `binary_trees` | 15.1M | 4.7M |
+| `interpreter` | 231.8M | 101.2M |
+| `spreadsheet` | 29.3M | 26.3M |
+| `lzw_compress` | 4.6M | 4.3M |
+| `order_book` | 11.6M | 11.2M |
+
+No other program grows by more than 2.2%, apart from `kv_server`, whose
+count moves by a few percent between runs of one build.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and
