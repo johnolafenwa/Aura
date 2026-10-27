@@ -1523,6 +1523,7 @@ impl DoubleEndedIterator for Iter<'_> {
             self,
             values => values.nth_back(n).map(|element| Cow::Owned(element.value())),
             Self::Values(values) => values.nth_back(n).map(Cow::Borrowed),
+            Self::Boxes(boxes) => boxes.nth_back(n).map(|element| Cow::Borrowed(element.value())),
             Self::Typed { layout, words } => {
                 let skipped = n.saturating_mul(layout.stride_words()).min(words.len());
                 *words = &words[..words.len() - skipped];

@@ -2327,8 +2327,16 @@ pub fn slice_vec_owned(
             }
             ListElements::from(elements)
         }
+        ListElements::Boxes(boxes) => {
+            let mut elements = try_array_buffer(end - start, "Array-containing Vec slice")?;
+            for element in &boxes[start..end] {
+                elements.push(try_clone_array_containing_value(element.value())?);
+            }
+            ListElements::from(elements)
+        }
         ListElements::Int64(values) => ListElements::Int64(copy_scalars(&values[start..end])?),
         ListElements::Float64(values) => ListElements::Float64(copy_scalars(&values[start..end])?),
+        ListElements::Float32(values) => ListElements::Float32(copy_scalars(&values[start..end])?),
         ListElements::Bool(values) => ListElements::Bool(copy_scalars(&values[start..end])?),
         ListElements::Typed(typed) => ListElements::Typed(Box::new(typed.slice(start, end))),
         ListElements::Int8(values) => ListElements::Int8(copy_scalars(&values[start..end])?),
