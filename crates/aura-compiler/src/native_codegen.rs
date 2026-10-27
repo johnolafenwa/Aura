@@ -7012,12 +7012,51 @@ impl<'a> FunctionCompiler<'a> {
         self.release_mutable_sinks(mutable_sinks);
         let (result, writebacks) = self.split_call_results(name, results)?;
         self.apply_writeback_places(&writeback_places, writebacks)?;
+        let result = self.align_erased_union_result(result, &substitutions)?;
         if self.program_shapes.returns_tagged(name) {
             if let (DirectType::Opaque(_), [word]) = (&result.ty, result.values.as_slice()) {
                 self.shaped_boxes.insert(*word);
             }
         }
         Ok(result)
+    }
+
+    /// The result of a call to an erased generic body whose declared return
+    /// is a union over its type parameters. A type argument that collapses
+    /// the union (`T | int64` with `T = int64`) or merges two of its members
+    /// leaves the box in the erased union's layout, so the runtime unwraps
+    /// it or moves it to the specialized union. A union that keeps its
+    /// members needs nothing here: its readers align it.
+    fn align_erased_union_result(
+        &mut self,
+        result: ValueRef,
+        substitutions: &HashMap<String, Type>,
+    ) -> std::result::Result<ValueRef, String> {
+        let (DirectType::Opaque(declared @ Type::Union(declared_union)), [word]) =
+            (&result.ty, result.values.as_slice())
+        else {
+            return Ok(result);
+        };
+        if substitutions.is_empty() || !aura_core::layout::names_type_param(declared) {
+            return Ok(result);
+        }
+        let specialized = substitute_type(declared, substitutions);
+        if matches!(&specialized, Type::Union(union) if union.members.len() == declared_union.members.len())
+        {
+            return Ok(result);
+        }
+        let word = *word;
+        let encoded = crate::native_runtime::canonical_runtime_type_name(&specialized);
+        let (type_ptr, type_len) = self.string_constant(encoded.as_bytes())?;
+        let cell = self.tag_cell(&encoded)?;
+        self.builder.call(
+            self.runtime[RuntimeFn::UnionBoundary],
+            &[word, cell, type_ptr, type_len],
+        );
+        Ok(ValueRef {
+            values: vec![word],
+            ty: DirectType::Opaque(specialized),
+        })
     }
 
     /// Emits a resolved op with no receiver: a named built-in function,
@@ -11236,7 +11275,13 @@ impl<'a> FunctionCompiler<'a> {
             // release/transfer decision.
             self.clear_temporary_opaque_owned(&value);
         }
-        let ok = self.variant_matches_value(value.values[0], "Result", "Ok")?;
+        let object = value.values[0];
+        let ok = match self.typed_variant_test(object, &value.ty, "Ok", |this| {
+            this.variant_matches_value(object, "Result", "Ok")
+        })? {
+            Some(ok) => ok,
+            None => self.variant_matches_value(object, "Result", "Ok")?,
+        };
         let ok_block = self.builder.create_block();
         let err_block = self.builder.create_block();
         let join_block = self.builder.create_block();
@@ -11246,11 +11291,7 @@ impl<'a> FunctionCompiler<'a> {
         if source_is_owned {
             self.mark_temporary_opaque_owned(&value);
         }
-        let payload = if source_is_owned {
-            self.compile_take_variant_payload_from_value(value.clone(), 0)?
-        } else {
-            self.compile_variant_payload(value.clone(), 0)?
-        };
+        let payload = self.compile_try_payload(&value, "Ok", &target_ty, source_is_owned)?;
         if source_is_owned {
             self.clear_temporary_opaque_owned(&value);
             self.release_opaque_handle(value.values[0]);
@@ -11268,11 +11309,10 @@ impl<'a> FunctionCompiler<'a> {
         let error_result = if source_error_ty == target_error_ty {
             value.clone()
         } else {
-            let payload = if source_is_owned {
-                self.compile_take_variant_payload_from_value(value.clone(), 0)?
-            } else {
-                self.compile_variant_payload(value.clone(), 0)?
-            };
+            let source_error = direct_type(&source_error_ty, &self.classes)
+                .unwrap_or_else(|| DirectType::Opaque(source_error_ty.clone()));
+            let payload =
+                self.compile_try_payload(&value, "Err", &source_error, source_is_owned)?;
             if source_is_owned {
                 self.clear_temporary_opaque_owned(&value);
                 self.release_opaque_handle(value.values[0]);
@@ -11296,6 +11336,36 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
         Ok(())
+    }
+
+    /// The payload of the `Result` variant `variant_name` that `value`
+    /// holds, read as `target`: where it lies when the `Result` keeps its
+    /// payloads in place, and otherwise taken out of an `owned` value or
+    /// copied from a borrowed one.
+    fn compile_try_payload(
+        &mut self,
+        value: &ValueRef,
+        variant_name: &str,
+        target: &DirectType,
+        owned: bool,
+    ) -> std::result::Result<ValueRef, String> {
+        fn runtime_read(
+            this: &mut FunctionCompiler<'_>,
+            value: &ValueRef,
+            owned: bool,
+        ) -> std::result::Result<ValueRef, String> {
+            if owned {
+                this.compile_take_variant_payload_from_value(value.clone(), 0)
+            } else {
+                this.compile_variant_payload(value.clone(), 0)
+            }
+        }
+        match self.typed_variant_payload(value, variant_name, 0, target, |this| {
+            runtime_read(this, value, owned)
+        })? {
+            Some(payload) => Ok(payload),
+            None => runtime_read(self, value, owned),
+        }
     }
 
     /// Converts a `try` error payload with the `From` method MIR names.
