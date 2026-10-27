@@ -123,20 +123,25 @@ come from part 2.
 
 | Program | Before | After | Change | After vs Rust |
 | --- | ---: | ---: | ---: | ---: |
-| `interpreter` | 368.8M | 236.9M | -35.8% | 29.5x |
-| `mini_browser` | 1,392.1M | 1,150.0M | -17.4% | 35.4x |
-| `sort_records` | 75.2M | 66.9M | -11.0% | 16.1x |
-| `sql_engine` | 2,809.7M | 2,596.4M | -7.6% | 54.8x |
-| `nbody` | 16.2M | 15.9M | -2.4% | 19.4x |
-| `text_diff` | 10.6M | 10.4M | -2.0% | 8.2x |
+| `interpreter` | 368.8M | 238.3M | -35.4% | 29.7x |
+| `mini_browser` | 1,392.1M | 1,153.8M | -17.1% | 35.5x |
+| `sort_records` | 75.2M | 67.1M | -10.8% | 16.1x |
+| `sql_engine` | 2,809.7M | 2,616.8M | -6.9% | 55.2x |
+| `nbody` | 16.2M | 16.0M | -1.7% | 19.6x |
+| `text_diff` | 10.6M | 10.4M | -1.6% | 8.3x |
 
-No program regresses. The largest increase is `graph_paths`, at 0.6%.
+No program regresses by more than 1.1% (`order_book`). Copying a promoted
+element instead of sharing its box, and reading shared box storage
+through the runtime, cost `sql_engine` 0.7 points of its gain.
 
 ## Follow-Ups
 
-- Part 3: lend `view` and `match` on `items[i]` (element loans) and
-  element path reads, write and append boxes inline, and keep `str`
-  views in boxes.
+- Part 3, after 2e: lend `view` and `match` on `items[i]` (element loans)
+  and element path reads, write and append boxes inline, and keep `str`
+  views in boxes. Element path reads are 21% of `sql_engine`, 18% of
+  `docdb`, and 13% of `sort_records`, nearly all of it the clone walk
+  (`try_clone_array_containing_value`). Most of those paths end at a
+  field of an element, which 2e lays out, so part 3 follows 2e.
 - A lent local passed to a function is still copied, and so is a promoted
   one. Sharing the box instead would need its count to stay on one
   thread, for example by taking a list's boxes back out when the list

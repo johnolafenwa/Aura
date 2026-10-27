@@ -40,8 +40,9 @@ Last updated: 2026-10-27
   them instead of copying them (`ListElements::Boxes`,
   `aura_direct_vec_lend`, `native_codegen_elements.rs`). Details are in
   `2026-10-26-rust-speed-2d-list-buffers.md`.
-- Next: 2d part 3 (element loans, `view`, and `match` on `items[i]`), then
-  2e, class fields in their layouts.
+- Next: 2e, classes as structs with fields in their layouts, then 2d part
+  3 (element loans, `view`, and `match` on `items[i]`), whose paths mostly
+  end at fields.
 
 ## Aura 0.7.1 preview release (complete)
 

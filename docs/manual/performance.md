@@ -673,13 +673,13 @@ suite at the check size:
 
 | Program | Before | After |
 | --- | ---: | ---: |
-| `interpreter` | 368.8M | 236.9M |
-| `mini_browser` | 1,392.1M | 1,150.0M |
-| `sort_records` | 75.2M | 66.9M |
-| `sql_engine` | 2,809.7M | 2,596.4M |
+| `interpreter` | 368.8M | 238.3M |
+| `mini_browser` | 1,392.1M | 1,153.8M |
+| `sort_records` | 75.2M | 67.1M |
+| `sql_engine` | 2,809.7M | 2,616.8M |
 
-The other programs change by less than 3%. The largest increase is
-`graph_paths`, at 0.6%.
+The other programs change by less than 2%. The largest increase is
+`order_book`, at 1.1%.
 
 ## Performance Direction
 
