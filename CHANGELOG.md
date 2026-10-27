@@ -39,6 +39,12 @@ in this file.
   value and call the runtime three times, about 690 instructions in a native
   build; it now costs one or two. Loops over a `Range` held in a variable
   are unchanged.
+- Native code stores `xs[i] = v` and `xs[i] op= v` on a `list[int64]`,
+  `list[float64]`, or `list[bool]` straight into the list's unboxed
+  storage, without a runtime call or a box. A `float64` element update in
+  a loop costs 26 instructions instead of 1,318. Writes and appends
+  through a `mut` list parameter no longer store the list back after each
+  one.
 - `list.sort()` and `list.sort(key = ...)` are a stable merge sort in the
   runtime, so sorting takes O(n log n) comparisons on `aura run` and in
   native builds. They used to be an insertion sort, which took O(n²) and

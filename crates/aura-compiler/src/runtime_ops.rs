@@ -972,9 +972,9 @@ const fn spanned(function: RuntimeFn, immediates: &'static [i64]) -> RuntimeCall
 }
 
 /// A method of `list[T]`, including the private reads, writes, and slices
-/// that indexing and iteration lower to. `PushScalar` and `IndexScalar` are
-/// the specializations lowering picks for a list of `int64`, `float64`, or
-/// `bool`, which the runtime stores without a box.
+/// that indexing and iteration lower to. `PushScalar`, `IndexScalar`, and
+/// `SetIndexScalar` are the specializations lowering picks for a list of
+/// `int64`, `float64`, or `bool`, which the runtime stores without a box.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum ListOp {
     Len,
@@ -1006,6 +1006,7 @@ pub enum ListOp {
     IndexScalarUnchecked(ScalarElement),
     /// `__set_index(index, value, line, column)`: a checked element write.
     SetIndex,
+    SetIndexScalar(ScalarElement),
     /// `__slice(start, has_start, end, has_end, line, column)`.
     Slice,
     /// `__index_option(index)`: a borrowed iteration read.
@@ -1051,6 +1052,9 @@ impl ListOp {
         ListOp::IndexScalarUnchecked(ScalarElement::Float64),
         ListOp::IndexScalarUnchecked(ScalarElement::Bool),
         ListOp::SetIndex,
+        ListOp::SetIndexScalar(ScalarElement::Int64),
+        ListOp::SetIndexScalar(ScalarElement::Float64),
+        ListOp::SetIndexScalar(ScalarElement::Bool),
         ListOp::Slice,
         ListOp::IndexOption,
         ListOp::TakeIndexOption,
@@ -1083,6 +1087,7 @@ impl ListOp {
             | ListOp::IndexUnchecked
             | ListOp::IndexScalarUnchecked(_)
             | ListOp::SetIndex
+            | ListOp::SetIndexScalar(_)
             | ListOp::Slice
             | ListOp::IndexOption
             | ListOp::TakeIndexOption
@@ -1121,7 +1126,7 @@ impl ListOp {
             | ListOp::IndexScalar(_)
             | ListOp::IndexUnchecked
             | ListOp::IndexScalarUnchecked(_) => INDEX_MEMBER,
-            ListOp::SetIndex => SET_INDEX_MEMBER,
+            ListOp::SetIndex | ListOp::SetIndexScalar(_) => SET_INDEX_MEMBER,
             ListOp::Slice => SLICE_MEMBER,
             ListOp::IndexOption => INDEX_OPTION_MEMBER,
             ListOp::TakeIndexOption => TAKE_INDEX_OPTION_MEMBER,
@@ -1152,7 +1157,7 @@ impl ListOp {
             | ListOp::IndexScalar(_)
             | ListOp::IndexUnchecked
             | ListOp::IndexScalarUnchecked(_) => INDEX_PARAMS,
-            ListOp::SetIndex => SET_INDEX_PARAMS,
+            ListOp::SetIndex | ListOp::SetIndexScalar(_) => SET_INDEX_PARAMS,
             ListOp::Slice => SLICE_PARAMS,
             ListOp::IndexOption | ListOp::TakeIndexOption => INDEX_OPTION_PARAMS,
             ListOp::Sort => SORT_PARAMS,
@@ -1168,6 +1173,7 @@ impl ListOp {
             ListOp::IndexScalar(_) | ListOp::IndexUnchecked | ListOp::IndexScalarUnchecked(_) => {
                 ListOp::Index
             }
+            ListOp::SetIndexScalar(_) => ListOp::SetIndex,
             other => other,
         }
     }
@@ -1234,6 +1240,9 @@ impl ListOp {
                 helper_with(RuntimeFn::VecIndexScalar, kind.words(), 0)
             }
             ListOp::SetIndex => helper(RuntimeFn::VecSetIndexInPlace),
+            ListOp::SetIndexScalar(kind) => {
+                helper_with(RuntimeFn::VecSetIndexScalar, kind.words(), 0)
+            }
             ListOp::Slice => helper(RuntimeFn::VecSlice),
             ListOp::IndexOption => helper(RuntimeFn::VecIndexOption),
             ListOp::TakeIndexOption => helper(RuntimeFn::VecTakeIndexInPlace),
@@ -1259,6 +1268,7 @@ impl ListOp {
             | ListOp::Reverse
             | ListOp::Reserve
             | ListOp::SetIndex
+            | ListOp::SetIndexScalar(_)
             | ListOp::Sort
             | ListOp::SortByKeys
             | ListOp::Permute => Type::Unit,
@@ -2829,7 +2839,7 @@ impl RuntimeOp {
                 private(&[])
             }
             RuntimeOp::Queue(_) => member(),
-            RuntimeOp::List(ListOp::SetIndex) => private(&[1]),
+            RuntimeOp::List(ListOp::SetIndex | ListOp::SetIndexScalar(_)) => private(&[1]),
             RuntimeOp::List(
                 ListOp::Index
                 | ListOp::IndexScalar(_)

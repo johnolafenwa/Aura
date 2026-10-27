@@ -1,0 +1,16 @@
+class Log:
+    values: list[int64]
+
+    def __exit__(mut self) -> None:
+        print(f"exit {self.values.len()} {self.values[0]}")
+
+
+def fill(log: mut Log):
+    log.values[0] = 7
+    log.values.append(9)
+    assert log.values.len() > 5, "too short"
+
+
+def main():
+    with log = Log(values=[1, 2]):
+        fill(log)

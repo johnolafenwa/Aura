@@ -7084,17 +7084,23 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
     })
 }
 
+/// The scalar a list write passes as `bits`: `kind` is 0 for `int64`, 1
+/// for `float64` (its bit pattern), and 2 for `bool`.
+fn scalar_list_value(bits: i64, kind: i64) -> Value {
+    match kind {
+        0 => Value::Int(IntegerValue::from_i64(bits)),
+        1 => Value::Float(f64::from_bits(bits as u64)),
+        2 => Value::Bool(bits != 0),
+        _ => runtime_error("unknown direct scalar list write kind"),
+    }
+}
+
 /// Appends a scalar given as its bits, with no box. `kind` is 0 for
 /// `int64`, 1 for `float64` (its bit pattern), and 2 for `bool`.
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_push_scalar(vec: *mut OpaqueValue, bits: i64, kind: i64) {
     task_runtime_boundary(|| {
-        let value = match kind {
-            0 => Value::Int(IntegerValue::from_i64(bits)),
-            1 => Value::Float(f64::from_bits(bits as u64)),
-            2 => Value::Bool(bits != 0),
-            _ => runtime_error("unknown direct scalar list write kind"),
-        };
+        let value = scalar_list_value(bits, kind);
         with_vector_mut(vec, |vector| {
             if is_unknown_runtime_type(&vector.element_type) {
                 let inferred = inferred_collection_type(&value);
@@ -7880,33 +7886,52 @@ pub extern "C-unwind" fn aura_direct_vec_set_index_in_place(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let value = unsafe { consume_owned_value(value) };
-        let result = with_vector_mut(vec, |vector| {
-            let normalized = match normalize_vec_index(index, vector.elements.len())
-                .filter(|normalized| *normalized < vector.elements.len())
-            {
-                Some(normalized) => normalized,
-                None => return Err(vector.elements.len()),
-            };
-            vector.elements.replace(normalized, value);
-            Ok(())
-        });
-        if let Err(len) = result {
-            match runtime_span(line, column) {
-                Some(span) => runtime_error_at(
-                    span,
-                    format!(
-                        "list index `{}` is out of bounds for length `{}`",
-                        index, len
-                    ),
-                ),
-                None => runtime_error(format!(
-                    "list index `{}` is out of bounds for length `{}`",
-                    index, len
-                )),
-            }
-        }
+        set_vec_element(vec, index, value, line, column);
         boxed_value(Value::Unit)
     })
+}
+
+/// Replaces element `index` of a scalar list with a scalar given as its
+/// bits, with no box. `kind` is as for [`aura_direct_vec_push_scalar`].
+/// Generated code stores in place when the list view allows it, so this
+/// runs when it does not: the list is shared, keeps another form, or has no
+/// room yet, or the index is out of range.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_set_index_scalar(
+    vec: *mut OpaqueValue,
+    index: i64,
+    bits: i64,
+    line: i64,
+    column: i64,
+    kind: i64,
+) {
+    task_runtime_boundary(|| {
+        let value = scalar_list_value(bits, kind);
+        set_vec_element(vec, index, value, line, column);
+    })
+}
+
+/// Replaces element `index` of `vec`. A negative index counts from the
+/// end. An index out of range traps with the list-index diagnostic at
+/// `line:column`.
+fn set_vec_element(vec: *mut OpaqueValue, index: i64, value: Value, line: i64, column: i64) {
+    let result = with_vector_mut(vec, |vector| {
+        let normalized = match normalize_vec_index(index, vector.elements.len())
+            .filter(|normalized| *normalized < vector.elements.len())
+        {
+            Some(normalized) => normalized,
+            None => return Err(vector.elements.len()),
+        };
+        vector.elements.replace(normalized, value);
+        Ok(())
+    });
+    if let Err(len) = result {
+        let message = format!("list index `{index}` is out of bounds for length `{len}`");
+        match runtime_span(line, column) {
+            Some(span) => runtime_error_at(span, message),
+            None => runtime_error(message),
+        }
+    }
 }
 
 fn with_array<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&ArrayValue) -> T) -> T {

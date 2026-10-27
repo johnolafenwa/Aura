@@ -989,7 +989,7 @@ impl<'a> NativeCodegen<'a> {
         let descriptor = builder.symbol_value(types::I64, descriptor);
         // The entry block's code continues after the push, in the block
         // where both of its paths meet.
-        let body = emit_frame_push(builder, &runtime_refs, descriptor);
+        let (body, entered_in_runtime) = emit_frame_push(builder, &runtime_refs, descriptor);
         blocks.insert(function.entry.clone(), body);
 
         let mut variable_index = 0usize;
@@ -1203,6 +1203,39 @@ impl<'a> NativeCodegen<'a> {
             }
             call_slot += 1;
         }
+        // The write-through sink of each mutable parameter. A caller hands
+        // sinks over through the runtime's frame flags, so a call whose
+        // frame was pushed inline has none. The runtime fixes a call's
+        // sinks when the call starts, so a call it entered asks for each
+        // sink once, here.
+        let mut mutable_sink_vars = HashMap::new();
+        let mut sink_slots = mutable_param_indices.values().copied().collect::<Vec<_>>();
+        sink_slots.sort_unstable();
+        if !sink_slots.is_empty() {
+            for slot in &sink_slots {
+                let variable = Var(variable_index as u32);
+                variable_index += 1;
+                builder.declare_var(variable, types::I64);
+                let none = builder.iconst(types::I64, 0);
+                builder.def_var(variable, none);
+                mutable_sink_vars.insert(*slot, variable);
+            }
+            let fetch = builder.create_block();
+            let ready = builder.create_block();
+            builder.set_cold_block(fetch);
+            builder.brif(entered_in_runtime, fetch, &[], ready, &[]);
+            builder.switch_to_block(fetch);
+            builder.seal_block(fetch);
+            for slot in &sink_slots {
+                let index = builder.iconst(types::I64, *slot as i64);
+                let sink = builder.call(runtime_refs[RuntimeFn::CurrentMutableSink], &[index]);
+                builder.def_var(mutable_sink_vars[slot], sink.results[0]);
+            }
+            builder.jump(ready, &[]);
+            builder.switch_to_block(ready);
+            builder.seal_block(ready);
+            blocks.insert(function.entry.clone(), ready);
+        }
         if function.receiver == Some(MirReceiverKind::BorrowMut) {
             let receiver_ty = receiver_type(function, &self.classes)?;
             writeback_locals.push(("self".to_string(), receiver_ty));
@@ -1302,6 +1335,7 @@ impl<'a> NativeCodegen<'a> {
             current_function_path,
             writeback_locals,
             mutable_param_indices,
+            mutable_sink_vars,
             classes: self.classes.clone(),
             enums: self.enums.clone(),
             union_layouts: self.union_layouts.clone(),
@@ -2471,6 +2505,9 @@ struct FunctionCompiler<'a> {
     current_function_path: String,
     writeback_locals: Vec<(String, DirectType)>,
     mutable_param_indices: HashMap<String, usize>,
+    /// The variable that holds each mutable parameter's write-through sink,
+    /// by call slot (see `current_mutable_sink`).
+    mutable_sink_vars: HashMap<usize, Var>,
     classes: HashMap<String, MirClass>,
     enums: HashMap<String, MirEnum>,
     union_layouts: HashMap<String, crate::union_layout::MirUnionLayout>,
@@ -8892,6 +8929,72 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(join_block);
     }
 
+    /// Replaces element `index` of `list` with a scalar's `bits`. A confined
+    /// list that keeps the scalars unboxed in storage no other list shares
+    /// (it has room, see `emit_scalar_list_push`) stores the element in
+    /// place. Any other list, or an index out of range, calls `function`
+    /// with `words`, which copies shared storage, converts the form, or
+    /// reports the same diagnostic as before.
+    fn emit_scalar_list_write(
+        &mut self,
+        list: Val,
+        index: Val,
+        bits: Val,
+        kind: ScalarElement,
+        function: FuncRef,
+        words: &[Val],
+    ) {
+        use aura_runtime::native_runtime::DirectListAccess;
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let (access, stride) = match kind {
+            ScalarElement::Int64 => (DirectListAccess::Int64, 8),
+            ScalarElement::Float64 => (DirectListAccess::Float64, 8),
+            ScalarElement::Bool => (DirectListAccess::Bool, 1),
+        };
+        let slow_block = self.builder.create_block();
+        let fast_block = self.builder.create_block();
+        let store_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.emit_list_access_check(list, access, &layout, slow_block, fast_block);
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let flags = MemFlags::trusted();
+        let position = self.emit_list_view_bounds_check(list, index, &layout, slow_block);
+        // Room covers every element of unshared storage, and a list with
+        // shared storage has none.
+        let capacity = self.builder.uload32(flags, list, layout.capacity_offset);
+        let unshared = self
+            .builder
+            .icmp(IntCC::UnsignedLessThan, position, capacity);
+        self.builder
+            .brif(unshared, store_block, &[], slow_block, &[]);
+
+        self.builder.switch_to_block(store_block);
+        self.builder.seal_block(store_block);
+        let elements = self
+            .builder
+            .load(types::I64, flags, list, layout.elements_offset);
+        if stride == 1 {
+            // A `bool` element is one byte that holds 0 or 1.
+            let element = self.builder.iadd(elements, position);
+            let flag = self.builder.icmp_imm(IntCC::NotEqual, bits, 0);
+            self.builder.store(flags, flag, element, 0);
+        } else {
+            let offset = self.builder.imul_imm(position, stride);
+            let element = self.builder.iadd(elements, offset);
+            self.builder.store(flags, bits, element, 0);
+        }
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        self.builder.call(function, words);
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+    }
+
     /// Normalizes a negative `index` against a list view's length, and
     /// continues in a new block when the position is in range or in `slow`
     /// when it is not.
@@ -8982,13 +9085,14 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     /// Whether storing a receiver back into `place` after an in-place write
-    /// would change nothing: `place` is a plain local holding a handle, so
-    /// the write already changed the value it holds, and no view, mutable
-    /// parameter, or cleanup registration follows it.
+    /// would change nothing: `place` is a plain local or parameter holding a
+    /// handle, so the write already changed the value it holds, and no view
+    /// or cleanup registration follows it. A mutable parameter's caller
+    /// holds the same handle, though a write-through sink may still need
+    /// the value.
     fn receiver_store_is_redundant(&self, place: &str) -> bool {
         !place.contains('.')
             && !self.view_places.contains_key(place)
-            && !self.mutable_param_indices.contains_key(place)
             && !self
                 .cleanup_places
                 .iter()
@@ -10190,11 +10294,7 @@ impl<'a> FunctionCompiler<'a> {
     fn mutable_sink_for_static_place(&mut self, place: &str) -> std::result::Result<Val, String> {
         let (root, projection) = place.split_once('.').unwrap_or((place, ""));
         if let Some(index) = self.mutable_param_indices.get(root).copied() {
-            let index = self.builder.iconst(types::I64, index as i64);
-            let current = self
-                .builder
-                .call(self.runtime[RuntimeFn::CurrentMutableSink], &[index]);
-            let parent = current.results[0];
+            let parent = self.current_mutable_sink(index);
             let (projection_ptr, projection_len) = self.string_constant(projection.as_bytes())?;
             let projected = self.builder.call(
                 self.runtime[RuntimeFn::MutableSinkProject],
@@ -10366,6 +10466,12 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
+    /// The write-through sink the caller gave the mutable parameter in call
+    /// slot `index`, or 0, as the function's entry read it.
+    fn current_mutable_sink(&mut self, index: usize) -> Val {
+        self.builder.use_var(self.mutable_sink_vars[&index])
+    }
+
     fn publish_mutable_root_write_through(
         &mut self,
         root: &str,
@@ -10373,13 +10479,8 @@ impl<'a> FunctionCompiler<'a> {
         let Some(index) = self.mutable_param_indices.get(root).copied() else {
             return Ok(());
         };
-        let index = self.builder.iconst(types::I64, index as i64);
-        let sink = self
-            .builder
-            .call(self.runtime[RuntimeFn::CurrentMutableSink], &[index]);
-        let sink = sink.results[0];
-        let zero = self.builder.iconst(types::I64, 0);
-        let active = self.builder.icmp(IntCC::NotEqual, sink, zero);
+        let sink = self.current_mutable_sink(index);
+        let active = self.builder.icmp_imm(IntCC::NotEqual, sink, 0);
         let publish = self.builder.create_block();
         let done = self.builder.create_block();
         self.builder.brif(active, publish, &[], done, &[]);
@@ -11280,6 +11381,23 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
+    /// [`Self::store_receiver_back`] after a write that changed the
+    /// receiver's value in place, which skips a store that would change
+    /// nothing. A mutable parameter still publishes the value to its
+    /// caller's write-through sink, when it has one.
+    fn store_receiver_back_in_place(
+        &mut self,
+        receiver_place: Option<&str>,
+        object: &ValueRef,
+    ) -> std::result::Result<(), String> {
+        match receiver_place {
+            Some(place) if self.receiver_store_is_redundant(place) => {
+                self.publish_mutable_root_write_through(place)
+            }
+            _ => self.store_receiver_back(receiver_place, object),
+        }
+    }
+
     /// A call to the shared collection operation: the receiver, a value
     /// word, an index word, then the op's operation word. A call that
     /// passes only one of the two leaves the other zero.
@@ -11386,11 +11504,7 @@ impl<'a> FunctionCompiler<'a> {
                 let mut words = vec![list, bits];
                 self.push_runtime_call_words(call, &mut words);
                 self.emit_scalar_list_push(list, bits, kind, function, &words);
-                if let Some(place) = receiver_place {
-                    if !self.receiver_store_is_redundant(place) {
-                        self.store_place(place, object.clone())?;
-                    }
-                }
+                self.store_receiver_back_in_place(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
             ListOp::Push => {
@@ -11473,6 +11587,27 @@ impl<'a> FunctionCompiler<'a> {
                     return Ok(unit_value(&mut *self.builder));
                 }
                 Ok(self.owned_opaque_result(results, optional_type(element_ty)))
+            }
+            ListOp::SetIndexScalar(kind) => {
+                // A scalar is stored as its bits, with no box.
+                let index = self.load_word(args[0], int64, false)?;
+                let loaded = self.load_operand_with_integer_hint(
+                    &args[1].value,
+                    element_direct_ty.scalar_kind(),
+                )?;
+                let value = self.coerce_value(loaded, &element_direct_ty)?.values[0];
+                let bits = if kind == ScalarElement::Float64 {
+                    self.builder.bitcast(types::I64, value)
+                } else {
+                    value
+                };
+                let line = self.load_word(args[2], int32, false)?;
+                let column = self.load_word(args[3], int32, false)?;
+                let mut words = vec![list, index, bits, line, column];
+                self.push_runtime_call_words(call, &mut words);
+                self.emit_scalar_list_write(list, index, bits, kind, function, &words);
+                self.store_receiver_back_in_place(receiver_place, &object)?;
+                Ok(unit_value(&mut *self.builder))
             }
             ListOp::SetIndex => {
                 let index = self.load_word(args[0], int64, false)?;
@@ -12658,12 +12793,13 @@ fn declare_runtime_helper(
 /// unless the stack is full or its flags ask for the runtime. Then
 /// `aura_direct_enter_frame` does the whole push. The main wrapper has
 /// validated every descriptor, so the inline path stores only validated
-/// ones. Returns the block both paths continue in.
+/// ones. Returns the block both paths continue in, and whether the runtime
+/// pushed the frame, as 1 or 0.
 fn emit_frame_push(
     builder: &mut dyn FunctionBackend,
     runtime: &RuntimeTable<FuncRef>,
     descriptor: Val,
-) -> Blk {
+) -> (Blk, Val) {
     let layout = frame_stack_layout();
     let trusted = MemFlags::trusted();
     let stack = builder.call(runtime[RuntimeFn::FrameStack], &[]).results[0];
@@ -12674,6 +12810,7 @@ fn emit_frame_push(
     let full = builder.icmp(IntCC::UnsignedGreaterThanOrEqual, len, limit);
     let slow = builder.bor(full, runtime_work);
     let (fast_block, slow_block, done) = emit_frame_branch(builder, slow);
+    builder.append_block_param(done, types::I64);
 
     builder.switch_to_block(fast_block);
     let entries = builder.load(types::I64, trusted, stack, layout.entries_offset);
@@ -12682,15 +12819,17 @@ fn emit_frame_push(
     builder.store(trusted, descriptor, slot, 0);
     let pushed = builder.iadd_imm(len, 1);
     builder.store(trusted, pushed, stack, layout.len_offset);
-    builder.jump(done, &[]);
+    let inline = builder.iconst(types::I64, 0);
+    builder.jump(done, &[inline]);
 
     builder.switch_to_block(slow_block);
     builder.call(runtime[RuntimeFn::EnterCall], &[descriptor]);
-    builder.jump(done, &[]);
+    let in_runtime = builder.iconst(types::I64, 1);
+    builder.jump(done, &[in_runtime]);
 
     builder.seal_block(done);
     builder.switch_to_block(done);
-    done
+    (done, builder.block_params(done)[0])
 }
 
 fn ownership_fast_path_signature(returns_value: bool) -> Signature {

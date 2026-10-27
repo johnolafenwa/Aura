@@ -15415,6 +15415,64 @@ fn step8d_validator_rejects_forged_collection_ops() {
     assert_public_boundaries_reject(&short, "expected `__index()` to receive `line`");
 }
 
+#[test]
+fn scalar_list_element_writes_lower_to_scalar_set_index() {
+    use crate::runtime_ops::{ListOp, RuntimeOp, ScalarElement};
+    let source = r#"
+def main():
+    mut ints: list[int64] = [1, 2]
+    mut floats: list[float64] = [1.5]
+    mut flags: list[bool] = [false]
+    mut words: list[str] = ["a"]
+    ints[0] = 5
+    ints[-1] += 2
+    floats[0] *= 2.0
+    flags[0] = true
+    words[0] = "b"
+    print(ints[0] + ints[1])
+    print(floats[0])
+    print(flags[0])
+    print(words[0])
+"#;
+    let module = crate::lower_source_to_mir(source).expect("the writes should lower");
+    let found = runtime_ops_in(&module, "main");
+    for op in [
+        RuntimeOp::List(ListOp::SetIndexScalar(ScalarElement::Int64)),
+        RuntimeOp::List(ListOp::SetIndexScalar(ScalarElement::Float64)),
+        RuntimeOp::List(ListOp::SetIndexScalar(ScalarElement::Bool)),
+        RuntimeOp::List(ListOp::SetIndex),
+    ] {
+        assert!(found.contains(&op), "{op} in main: {found:?}");
+    }
+    validate_loan_flow(&module).expect("scalar writes should validate");
+    assert_eq!(
+        crate::run_mir(&module).expect("the writes run").stdout,
+        "9\n3.0\ntrue\nb\n"
+    );
+    // A scalar write of the wrong kind, and the boxed write on a list of
+    // `float64`, are refused.
+    for (to, name) in [
+        (
+            RuntimeOp::List(ListOp::SetIndexScalar(ScalarElement::Int64)),
+            "List.SetIndexScalar(Int64)",
+        ),
+        (RuntimeOp::List(ListOp::SetIndex), "List.SetIndex"),
+    ] {
+        let mut forged = module.clone();
+        let (callee, _) = first_receiver_op_call(&mut forged, "main", |op| {
+            op == RuntimeOp::List(ListOp::SetIndexScalar(ScalarElement::Float64))
+        });
+        let CallTarget::Runtime { op, .. } = callee else {
+            unreachable!()
+        };
+        *op = to;
+        assert_public_boundaries_reject(
+            &forged,
+            &format!("`{name}` in `main` does not match the types of its arguments"),
+        );
+    }
+}
+
 const FORGED_RUNTIME_ARGS: &str = r#"
 def helper(value: int64) -> int64:
     return value

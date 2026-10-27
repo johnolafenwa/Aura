@@ -14049,6 +14049,12 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "vec-set-oob-span" => {
                 super::aura_direct_vec_set_index_in_place(int_vec(&[1]), 5, int_value(9), 2, 7);
             }
+            "vec-set-scalar-oob" => {
+                super::aura_direct_vec_set_index_scalar(int_vec(&[1]), -2, 9, 2, 7, 0);
+            }
+            "vec-set-scalar-kind" => {
+                super::aura_direct_vec_set_index_scalar(int_vec(&[1]), 0, 9, 0, 0, 9);
+            }
             "vec-method-set-too-negative" => {
                 super::aura_direct_vec_set_in_place(int_vec(&[1, 2, 3, 4]), -5, int_value(9));
             }
@@ -15076,6 +15082,14 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         (
             "vec-set-oob-span",
             "list index `5` is out of bounds for length `1`",
+        ),
+        (
+            "vec-set-scalar-oob",
+            "list index `-2` is out of bounds for length `1`",
+        ),
+        (
+            "vec-set-scalar-kind",
+            "unknown direct scalar list write kind",
         ),
         (
             "vec-method-set-too-negative",
@@ -26156,6 +26170,142 @@ fn append_like_generated_code(
     };
     super::aura_direct_vec_push_scalar(list, bits, kind);
     false
+}
+
+/// Replaces element `index` with `bits` the way generated code does: in
+/// place when the list view has form `access`, the index is in range, and
+/// the list has room, and through `aura_direct_vec_set_index_scalar`
+/// otherwise. Returns whether the element went in place.
+fn write_like_generated_code(
+    list: *mut OpaqueValue,
+    index: i64,
+    bits: i64,
+    access: super::DirectListAccess,
+) -> bool {
+    use super::DirectListAccess;
+    let layout = super::direct_list_layout();
+    let len = list_view_len(list);
+    let position = if index < 0 {
+        (len as i64).wrapping_add(index) as usize
+    } else {
+        index as usize
+    };
+    if list_view_access(list) == access as u32
+        && position < len
+        && position < list_view_capacity(list)
+    {
+        unsafe {
+            let base = list as *mut u8;
+            let elements = *(base.add(layout.elements_offset as usize) as *const usize) as *mut u8;
+            match access {
+                DirectListAccess::Bool => *elements.add(position) = u8::from(bits != 0),
+                _ => *(elements.add(position * 8) as *mut i64) = bits,
+            }
+        }
+        return true;
+    }
+    let kind = match access {
+        DirectListAccess::Int64 => 0,
+        DirectListAccess::Float64 => 1,
+        _ => 2,
+    };
+    super::aura_direct_vec_set_index_scalar(list, index, bits, 0, 0, kind);
+    false
+}
+
+#[test]
+fn scalar_writes_go_in_place_only_into_unshared_storage() {
+    use super::DirectListAccess;
+    let int =
+        |list, index, bits| write_like_generated_code(list, index, bits, DirectListAccess::Int64);
+    let float = |list, index, value: f64| {
+        write_like_generated_code(
+            list,
+            index,
+            value.to_bits() as i64,
+            DirectListAccess::Float64,
+        )
+    };
+    let flag =
+        |list, index, bits| write_like_generated_code(list, index, bits, DirectListAccess::Bool);
+
+    // A new box has no room until its first write.
+    let list = boxed_value(Value::Vec(VecValue::new(
+        Type::named("int64"),
+        [1, 2, 3]
+            .into_iter()
+            .map(|value| Value::Int(IntegerValue::from_i64(value)))
+            .collect::<Vec<_>>()
+            .into(),
+    )));
+    assert_eq!(list_view_access(list), DirectListAccess::Int64 as u32);
+    assert_eq!(list_view_capacity(list), 0);
+    assert!(!int(list, 0, 10));
+    assert!(list_view_capacity(list) >= 3);
+    assert!(int(list, -1, 30));
+    assert!(int(list, 1, 20));
+    assert_eq!(list_ints(list), [10, 20, 30]);
+
+    // A copy shares the storage, so neither list has room, and the first
+    // write through either copies the storage first.
+    let copy = super::aura_direct_clone_value(list);
+    assert_eq!(list_view_capacity(list), 0);
+    assert!(!int(copy, 0, 99));
+    assert!(int(copy, 1, 98));
+    assert_eq!(list_ints(list), [10, 20, 30]);
+    assert_eq!(list_ints(copy), [99, 98, 30]);
+    assert!(!int(list, 2, 31));
+    assert!(int(list, 2, 32));
+    assert_eq!(list_ints(list), [10, 20, 32]);
+
+    // Appended elements count as elements, and a runtime read takes them
+    // in and the room back.
+    super::aura_direct_vec_push_scalar(copy, 3, 0);
+    assert!(append_like_generated_code(copy, 4, DirectListAccess::Int64));
+    assert!(int(copy, 3, 40));
+    assert_eq!(super::aura_direct_vec_index_scalar(copy, 3, 0), 40);
+    assert_eq!(list_view_capacity(copy), 0);
+    assert!(!int(copy, 3, 41));
+    assert_eq!(list_ints(copy), [99, 98, 30, 41, 4]);
+
+    // Each scalar form takes its own bits.
+    let floats = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_scalar(floats, 1.5f64.to_bits() as i64, 1);
+    super::aura_direct_vec_push_scalar(floats, 2.5f64.to_bits() as i64, 1);
+    assert!(float(floats, 1, -0.25));
+    assert_eq!(
+        super::aura_direct_vec_index_scalar(floats, 1, 1),
+        (-0.25f64).to_bits() as i64
+    );
+    let flags = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_scalar(flags, 0, 2);
+    super::aura_direct_vec_push_scalar(flags, 1, 2);
+    assert!(flag(flags, 0, 7));
+    assert!(flag(flags, 1, 0));
+    assert_eq!(super::aura_direct_vec_index_scalar(flags, 0, 2), 1);
+    assert_eq!(super::aura_direct_vec_index_scalar(flags, 1, 2), 0);
+    super::aura_direct_vec_set_index_scalar(flags, -1, 1, 0, 0, 2);
+    assert_eq!(super::aura_direct_vec_index_scalar(flags, 1, 2), 1);
+
+    // A list in the `Value` form keeps it, and generated code never
+    // writes it in place.
+    let wide = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_in_place(
+        wide,
+        boxed_value(Value::Int(IntegerValue::from_literal(u64::MAX as u128))),
+    );
+    super::aura_direct_vec_push_in_place(wide, int_value(2));
+    assert!(!int(wide, 1, -3));
+    assert_eq!(list_view_access(wide), DirectListAccess::Values as u32);
+    assert_eq!(super::aura_direct_vec_index_scalar(wide, 1, 0), -3);
+
+    // A shared list is always written under its lock.
+    unsafe { super::share_direct_value(floats) };
+    assert!(!float(floats, 0, 0.0));
+    assert_eq!(super::aura_direct_vec_index_scalar(floats, 0, 1), 0);
+    for value in [list, copy, floats, flags, wide] {
+        unsafe { release_value(value) };
+    }
 }
 
 fn list_ints(list: *mut OpaqueValue) -> Vec<i64> {

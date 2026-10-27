@@ -1,0 +1,8 @@
+error[AU4001]: too short
+ --> crates/aura-compiler/tests/fixtures/run-fail/manager_exit_sees_in_place_list_writes.au:11:5
+   |
+11 |     assert log.values.len() > 5, "too short"
+   |     ^
+  = note: left = 3
+  = note: right = 5
+  = note: Aura call chain (innermost first): fill at 8:1 -> main at 14:1
