@@ -57,8 +57,8 @@ use crate::runtime_value::{
     process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
     queue_receive_closed, queue_receive_item, queue_receive_timed_out, read_file_limited,
     recv_for_registered_producers_iteration, recv_for_task_group_iteration, render_float,
-    render_float32, result_err, result_ok, round_numeric_value, run_blocking_io,
-    run_lightweight_root_task_with_forced_exit_cleanup, runtime_value_to_json,
+    render_float32, result_err, result_ok, round_float_to_int64, round_numeric_value,
+    run_blocking_io, run_lightweight_root_task_with_forced_exit_cleanup, runtime_value_to_json,
     select_runtime_values, send_error_cancelled, send_error_closed, send_error_full,
     send_error_timed_out, set_current_task_native_slot, sleep_with_runtime_scheduler,
     slice_string_owned, slice_vec_owned, spawn_lightweight_task_with_cancellation,
@@ -10303,7 +10303,7 @@ pub extern "C-unwind" fn aura_direct_element_path_probe(
     selector_count: usize,
     line: i64,
     column: i64,
-) -> *mut OpaqueValue {
+) {
     task_runtime_boundary(|| {
         let path = decode_bytes(path_ptr, path_len);
         let selectors = (selectors_ptr, selector_count);
@@ -10325,7 +10325,7 @@ pub extern "C-unwind" fn aura_direct_element_path_promote(
     selector_count: usize,
     line: i64,
     column: i64,
-) -> *mut OpaqueValue {
+) {
     task_runtime_boundary(|| {
         let path = decode_bytes(path_ptr, path_len);
         let selectors = (selectors_ptr, selector_count);
@@ -10339,7 +10339,7 @@ fn probe_element_path(
     (selectors_ptr, selector_count): (*const i64, usize),
     (line, column): (i64, i64),
     promote: bool,
-) -> *mut OpaqueValue {
+) {
     let steps = direct_element_path_steps(path).unwrap_or_else(|message| runtime_error(message));
     let words = direct_element_selector_words(selectors_ptr, selector_count);
     let mut selectors = DirectElementSelectors {
@@ -10369,7 +10369,6 @@ fn probe_element_path(
             })
         };
     }
-    boxed_value(Value::Unit)
 }
 
 /// Moves the value an element path reaches out of `collection`, leaving
@@ -10425,7 +10424,7 @@ pub extern "C-unwind" fn aura_direct_element_path_store(
     value: *mut OpaqueValue,
     line: i64,
     column: i64,
-) -> *mut OpaqueValue {
+) {
     task_runtime_boundary(|| {
         let path = decode_bytes(path_ptr, path_len);
         let steps =
@@ -10445,9 +10444,8 @@ pub extern "C-unwind" fn aura_direct_element_path_store(
                 })?
             })
         };
-        match result {
-            Ok(()) => boxed_value(Value::Unit),
-            Err(error) => direct_element_path_failure(error, line, column),
+        if let Err(error) = result {
+            direct_element_path_failure(error, line, column);
         }
     })
 }
@@ -18002,6 +18000,13 @@ unsafe fn start_direct_task_call(call: DirectTaskCall) -> *mut OpaqueValue {
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_sqrt_f64(value: f64) -> f64 {
     task_runtime_boundary(|| value.sqrt())
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_round_f64(value: f64) -> i64 {
+    task_runtime_boundary(|| {
+        round_float_to_int64(value).unwrap_or_else(|error| runtime_diagnostic_error(error))
+    })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]

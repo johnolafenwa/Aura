@@ -1,0 +1,5 @@
+def main() -> int32:
+    minimum: int8 = -128
+    value: int8 = abs(minimum)
+    print(value)
+    return 0

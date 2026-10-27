@@ -9544,6 +9544,24 @@ pub fn float_power(left: f64, right: f64, width: FloatPowerWidth) -> Result<f64>
     Ok(result)
 }
 
+/// `round(value)` of a float: ties go to the even neighbour, and the result
+/// must fit the complete mathematical `int64` range.
+pub fn round_float_to_int64(value: f64) -> Result<i64> {
+    let rounded = value.round_ties_even();
+    const I64_MIN_AS_F64: f64 = -9_223_372_036_854_775_808.0;
+    const I64_MAX_EXCLUSIVE_AS_F64: f64 = 9_223_372_036_854_775_808.0;
+    if !rounded.is_finite() || !(I64_MIN_AS_F64..I64_MAX_EXCLUSIVE_AS_F64).contains(&rounded) {
+        return Err(Diagnostic::coded(
+            "AU4002",
+            format!(
+                "`round(...)` cannot represent `{}` as `int64`",
+                render_float(value)
+            ),
+        ));
+    }
+    Ok(rounded as i64)
+}
+
 /// Implements Aura's exact `round(value)` numeric contract for both
 /// execution backends. Floating results use ties-to-even and must fit the
 /// complete mathematical `int64` range; integer values retain their exact
@@ -9552,21 +9570,7 @@ pub fn round_numeric_value(value: &Value) -> Result<Value> {
     match value {
         Value::Int(value) => Ok(Value::Int(*value)),
         Value::Float(value) => {
-            let rounded = value.round_ties_even();
-            const I64_MIN_AS_F64: f64 = -9_223_372_036_854_775_808.0;
-            const I64_MAX_EXCLUSIVE_AS_F64: f64 = 9_223_372_036_854_775_808.0;
-            if !rounded.is_finite()
-                || !(I64_MIN_AS_F64..I64_MAX_EXCLUSIVE_AS_F64).contains(&rounded)
-            {
-                return Err(Diagnostic::coded(
-                    "AU4002",
-                    format!(
-                        "`round(...)` cannot represent `{}` as `int64`",
-                        render_float(*value)
-                    ),
-                ));
-            }
-            Ok(Value::Int(IntegerValue::from_i64(rounded as i64)))
+            round_float_to_int64(*value).map(|rounded| Value::Int(IntegerValue::from_i64(rounded)))
         }
         other => Err(Diagnostic::coded(
             "AU4001",

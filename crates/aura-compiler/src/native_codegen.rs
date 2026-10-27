@@ -7218,6 +7218,14 @@ impl<'a> FunctionCompiler<'a> {
             | FunctionOp::WaitAll
             | FunctionOp::WaitAllTimeout => self.compile_wait(op, args),
             FunctionOp::Divmod => self.compile_divmod(args),
+            FunctionOp::Abs
+            | FunctionOp::Min
+            | FunctionOp::Max
+            | FunctionOp::Sqrt
+            | FunctionOp::Round => match self.compile_scalar_math(op, args)? {
+                Some(value) => Ok(value),
+                None => self.compile_plain_function_op(op, args),
+            },
             _ => self.compile_plain_function_op(op, args),
         }
     }
@@ -8452,7 +8460,7 @@ impl<'a> FunctionCompiler<'a> {
         let path = self.element_path_operands(&projection, &alternative.elements)?;
         let stored = self.ensure_opaque(value)?;
         let stored = self.transfer_owned_opaque_value(&stored);
-        let result = self.builder.call(
+        self.builder.call(
             self.runtime[RuntimeFn::ElementPathStore],
             &[
                 collection.values[0],
@@ -8465,7 +8473,6 @@ impl<'a> FunctionCompiler<'a> {
                 path.column,
             ],
         );
-        self.release_opaque_handle(result.results[0]);
         Ok(())
     }
 
@@ -16153,6 +16160,8 @@ mod elements;
 mod enums;
 #[path = "native_codegen_lookups.rs"]
 mod lookups;
+#[path = "native_codegen_math.rs"]
+mod math;
 
 #[path = "native_codegen_plain.rs"]
 mod plain;

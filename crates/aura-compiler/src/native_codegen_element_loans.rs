@@ -476,7 +476,7 @@ impl FunctionCompiler<'_> {
         } else {
             RuntimeFn::ElementPathProbe
         };
-        let inst = self.builder.call(
+        self.builder.call(
             self.runtime[probe],
             &[
                 collection.values[0],
@@ -488,7 +488,6 @@ impl FunctionCompiler<'_> {
                 path.column,
             ],
         );
-        self.release_opaque_handle(inst.results[0]);
         Ok(())
     }
 

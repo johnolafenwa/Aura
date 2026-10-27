@@ -2639,10 +2639,11 @@ def main() -> int32:
 
 #[test]
 fn ticket9_int64_opaque_results_use_the_checked_int64_unbox_helper() {
+    // `abs` of a local computes in words; a literal argument still takes
+    // the boxed helper, whose result unboxes through the checked helper.
     let source = r#"
 def main() -> int32:
-    minimum: int64 = -9223372036854775808
-    value: int64 = abs(minimum)
+    value: int64 = abs(9223372036854775807)
     print(value)
     return 0
 "#;
@@ -15078,4 +15079,47 @@ def main():
         !referenced.contains("aura_direct_vec_set_index_in_place"),
         "{referenced:?}"
     );
+}
+
+#[test]
+fn native_scalar_math_computes_in_words() {
+    let source = r#"
+def blend(a: int64, b: int32, c: uint64, d: float64, e: float32) -> float64:
+    small: int8 = -3
+    print(abs(small))
+    print(min(a, 7) + max(0, a) + abs(a) + round(d))
+    print(max(b, b + 1))
+    print(min(c, c + 1))
+    print(sqrt(e))
+    return sqrt(d) + abs(d) + max(0.0, d)
+
+def main():
+    print(blend(1, 2, 3, 4.0, 5.0))
+"#;
+    let mir = lower_source_to_mir(source).expect("scalar math source should lower");
+    // Unoptimized, so constant arguments do not fold the calls away.
+    let object = emit_unoptimized_object(&mir).expect("scalar math source should emit directly");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "aura_direct_sqrt_f64",
+        "aura_direct_round_f64",
+        "aura_direct_fail_narrow_overflow",
+    ] {
+        assert!(
+            referenced.iter().any(|name| name.ends_with(symbol)),
+            "scalar math should call `{symbol}`, referenced: {referenced:?}"
+        );
+    }
+    for symbol in [
+        "aura_direct_abs",
+        "aura_direct_min",
+        "aura_direct_max",
+        "aura_direct_sqrt",
+        "aura_direct_round",
+    ] {
+        assert!(
+            !referenced.iter().any(|name| name.ends_with(symbol)),
+            "scalar math should not call the boxed `{symbol}`"
+        );
+    }
 }
