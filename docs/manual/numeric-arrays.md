@@ -248,7 +248,7 @@ diagnostics. The bundled VS Code extension uses that compiler-owned surface.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.7 Arrays are CPU-only, contiguous, row-major, and have rank one or
+Aura 0.8 Arrays are CPU-only, contiguous, row-major, and have rank one or
 more. They do not have:
 
 - array-shape broadcasting or mixed promotion

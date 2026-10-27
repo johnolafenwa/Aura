@@ -136,7 +136,7 @@ aura deps update util
 | Command | What it does |
 | --- | --- |
 | `aura help` | Prints CLI usage and exits successfully. |
-| `aura --version` | Prints the build channel and 12-hex-digit source commit, then exits successfully. A release archive prints `aura 0.7.1-preview (0123456789ab)`. A source build prints `aura 0.7.1-dev (0123456789ab)`. |
+| `aura --version` | Prints the build channel and 12-hex-digit source commit, then exits successfully. A release archive prints `aura 0.8.0-preview (0123456789ab)`. A source build prints `aura 0.8.0-dev (0123456789ab)`. |
 | `aura check <file.au>` | Parses and type-checks a program. |
 | `aura run [--backend mir\|direct\|auto] <file.au> [-- <program-args>...]` | Runs a program. The MIR runtime is the default. MIR is the compiler's mid-level intermediate representation. |
 | `aura build -o <output> <file.au>` | Compiles a standalone native binary. |

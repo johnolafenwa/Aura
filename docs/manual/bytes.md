@@ -32,7 +32,7 @@ list or str is a fresh owned value.
 `str.from_bytes` is an associated method, so you call it on the type:
 `str.from_bytes(payload)`. It is not a `str(...)` constructor.
 
-The parameter name `encoding` is reserved. Aura 0.7 accepts no encoding
+The parameter name `encoding` is reserved. Aura 0.8 accepts no encoding
 argument on either conversion.
 
 ## Example
@@ -186,7 +186,7 @@ those uses.
 
 This surface adds no grammar. `list[uint8]`, `import bytes`, associated calls,
 method calls, module calls, named arguments, and `Result` patterns use the
-ordinary forms defined elsewhere in this Manual. Aura 0.7 has no byte-string
+ordinary forms defined elsewhere in this Manual. Aura 0.8 has no byte-string
 literal.
 
 ## Typing Rules
@@ -210,7 +210,7 @@ for the call, so you can reuse an input after `to_bytes`, `from_bytes`, an
 encoder, a decoder, or a hash. These signatures neither require nor imply
 `own`.
 
-An `encoding` argument, positional or named, is not part of the 0.7
+An `encoding` argument, positional or named, is not part of the 0.8
 signature. Ordinary argument checking rejects it.
 
 A source module you write whose last path component is `bytes` does not get
@@ -300,7 +300,7 @@ Whether an allocation within the ceiling succeeds depends on the host. SHA-256
 output is always 32 bytes. Codec output, errors, and offsets do not depend on
 the host.
 
-Aura 0.7 does not provide:
+Aura 0.8 does not provide:
 
 - other text encodings
 - URL-safe or unpadded base64
@@ -314,7 +314,7 @@ The reserved `encoding` parameter is not implemented.
 
 ## Status
 
-`list[uint8]` is the Aura 0.7 bytes type, and the conversion, codec, error,
+`list[uint8]` is the Aura 0.8 bytes type, and the conversion, codec, error,
 and hash behavior on this page is implemented. The bytes module derives no
 codecs for classes and enums. For JSON codecs and schemas, see
 [Typed Codecs](/manual/json#typed-codecs).

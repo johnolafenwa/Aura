@@ -16,7 +16,7 @@ checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
 name = "aura"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "aura-compiler",
  "blake3",
@@ -27,7 +27,7 @@ dependencies = [
 
 [[package]]
 name = "aura-compiler"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "aura-core",
  "aura-runtime",
@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "aura-core"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -53,7 +53,7 @@ dependencies = [
 
 [[package]]
 name = "aura-runtime"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "aura-core",
  "base64",
