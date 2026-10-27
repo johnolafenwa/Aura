@@ -271,12 +271,18 @@ impl Keyed for (Value, Value) {
 
 /// Insertion-ordered entries with a hash index over their keys.
 ///
-/// The type derefs to a slice for reading. Mutation goes through methods
-/// that keep the index current, so a key can never change in place.
+/// Reads go through [`Self::iter`], [`Self::len`], and the lookup methods.
+/// Mutation goes through methods that keep the index current, so a key can
+/// never change in place.
 ///
 /// A small collection is a `Vec`. A large one keeps its entries and index
 /// together. Either sits behind an `Arc`, so a clone shares the storage and
 /// the first write through a shared handle copies it. Reads never copy.
+///
+/// [`Self::remove`] takes expected constant time and keeps the order of the
+/// rest, as CPython's `dict` does: a large collection leaves a hole in the
+/// removed entry's slot instead of shifting every later entry, and packs
+/// its slots again once holes make up more than half of them.
 #[derive(Debug)]
 pub struct IndexedEntries<T> {
     storage: Storage<T>,
@@ -290,9 +296,77 @@ enum Storage<T> {
 
 #[derive(Clone, Debug)]
 struct Large<T> {
-    entries: Vec<T>,
-    /// `(hash, position)` for each distinct key.
+    /// The entries in insertion order. A removed entry leaves `None` behind.
+    /// The last slot is never a hole.
+    slots: Vec<Option<T>>,
+    /// `(hash, slot)` for each distinct key.
     index: HashTable<(u64, usize)>,
+    /// How many slots are holes.
+    holes: usize,
+}
+
+impl<T> Large<T> {
+    /// Takes the entry out of `slot`, which `(hash, slot)` indexes, and
+    /// leaves a hole.
+    fn take_slot(&mut self, slot: usize, hash: u64) -> T {
+        let removed = self.slots[slot]
+            .take()
+            .expect("the index names only slots that hold an entry");
+        if let Ok(found) = self
+            .index
+            .find_entry(hash, |&(_, candidate)| candidate == slot)
+        {
+            found.remove();
+        }
+        self.holes += 1;
+        while let Some(None) = self.slots.last() {
+            self.slots.pop();
+            self.holes -= 1;
+        }
+        if self.holes * 2 > self.slots.len() {
+            self.pack();
+        }
+        removed
+    }
+
+    /// Closes every hole, keeping the order of the entries.
+    fn pack(&mut self) {
+        let mut index = std::mem::take(&mut self.index);
+        self.pack_index(&mut index);
+        self.index = index;
+        self.slots.retain(Option::is_some);
+        self.holes = 0;
+    }
+
+    /// Rewrites `index`, an index of these slots, for the same entries
+    /// with their holes closed: each slot moves down by the holes before it.
+    fn pack_index(&self, index: &mut HashTable<(u64, usize)>) {
+        if self.holes == 0 {
+            return;
+        }
+        let mut moved_to = Vec::with_capacity(self.slots.len());
+        let mut next = 0;
+        for slot in &self.slots {
+            moved_to.push(next);
+            next += usize::from(slot.is_some());
+        }
+        for (_, slot) in index.iter_mut() {
+            *slot = moved_to[*slot];
+        }
+    }
+
+    /// The slot of the entry `index` entries from the start.
+    fn slot_of(&self, index: usize) -> Option<usize> {
+        if self.holes == 0 {
+            return (index < self.slots.len()).then_some(index);
+        }
+        self.slots
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| slot.is_some())
+            .nth(index)
+            .map(|(slot, _)| slot)
+    }
 }
 
 /// The entries of a `dict`: key and value pairs.
@@ -320,18 +394,10 @@ impl<T> Clone for IndexedEntries<T> {
     }
 }
 
-impl<T> Deref for IndexedEntries<T> {
-    type Target = [T];
-
-    fn deref(&self) -> &[T] {
-        self.entries()
-    }
-}
-
 impl<T: PartialEq> PartialEq<Vec<T>> for IndexedEntries<T> {
     /// Compares the entries in order.
     fn eq(&self, other: &Vec<T>) -> bool {
-        self.entries() == other.as_slice()
+        self.len() == other.len() && self.iter().eq(other.iter())
     }
 }
 
@@ -346,10 +412,10 @@ impl<T: Clone> IntoIterator for IndexedEntries<T> {
 
 impl<'a, T> IntoIterator for &'a IndexedEntries<T> {
     type Item = &'a T;
-    type IntoIter = std::slice::Iter<'a, T>;
+    type IntoIter = Iter<'a, T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.entries().iter()
+        self.iter()
     }
 }
 
@@ -372,20 +438,135 @@ impl<T: Keyed + Clone> FromIterator<T> for IndexedEntries<T> {
     }
 }
 
+/// The entries of an [`IndexedEntries`] in order.
+#[derive(Debug)]
+pub struct Iter<'a, T> {
+    slots: Slots<'a, T>,
+    remaining: usize,
+}
+
+#[derive(Debug)]
+enum Slots<'a, T> {
+    Dense(std::slice::Iter<'a, T>),
+    Holes(std::slice::Iter<'a, Option<T>>),
+}
+
+impl<T> Clone for Iter<'_, T> {
+    fn clone(&self) -> Self {
+        let slots = match &self.slots {
+            Slots::Dense(entries) => Slots::Dense(entries.clone()),
+            Slots::Holes(slots) => Slots::Holes(slots.clone()),
+        };
+        Self {
+            slots,
+            remaining: self.remaining,
+        }
+    }
+}
+
+impl<'a, T> Iterator for Iter<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<&'a T> {
+        let entry = match &mut self.slots {
+            Slots::Dense(entries) => entries.next(),
+            Slots::Holes(slots) => slots.find_map(Option::as_ref),
+        };
+        self.remaining -= usize::from(entry.is_some());
+        entry
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl<T> DoubleEndedIterator for Iter<'_, T> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        let entry = match &mut self.slots {
+            Slots::Dense(entries) => entries.next_back(),
+            Slots::Holes(slots) => slots.rev().find_map(Option::as_ref),
+        };
+        self.remaining -= usize::from(entry.is_some());
+        entry
+    }
+}
+
+impl<T> ExactSizeIterator for Iter<'_, T> {}
+
 impl<T> IndexedEntries<T> {
-    fn entries(&self) -> &Vec<T> {
+    pub fn len(&self) -> usize {
         match &self.storage {
-            Storage::Small(entries) => entries,
-            Storage::Large(large) => &large.entries,
+            Storage::Small(entries) => entries.len(),
+            Storage::Large(large) => large.slots.len() - large.holes,
         }
     }
 
-    pub fn as_slice(&self) -> &[T] {
-        self.entries()
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
+    /// The entries in order.
+    pub fn iter(&self) -> Iter<'_, T> {
+        let slots = match &self.storage {
+            Storage::Small(entries) => Slots::Dense(entries.iter()),
+            Storage::Large(large) => Slots::Holes(large.slots.iter()),
+        };
+        Iter {
+            slots,
+            remaining: self.len(),
+        }
+    }
+
+    /// The entry `index` entries from the start. It takes constant time
+    /// unless removals left holes in a large collection.
+    pub fn get(&self, index: usize) -> Option<&T> {
+        match &self.storage {
+            Storage::Small(entries) => entries.get(index),
+            Storage::Large(large) => large
+                .slot_of(index)
+                .and_then(|slot| large.slots[slot].as_ref()),
+        }
+    }
+
+    pub fn first(&self) -> Option<&T> {
+        self.iter().next()
+    }
+
+    pub fn last(&self) -> Option<&T> {
+        self.iter().next_back()
+    }
+
+    /// The entry in `slot`, as the lookup methods return it.
+    ///
+    /// # Panics
+    ///
+    /// Panics when no entry is in `slot`.
+    pub fn at_slot(&self, slot: usize) -> &T {
+        let entry = match &self.storage {
+            Storage::Small(entries) => entries.get(slot),
+            Storage::Large(large) => large.slots.get(slot).and_then(Option::as_ref),
+        };
+        entry.expect("a slot from a lookup holds an entry")
+    }
+
+    /// The slot of the first entry that `matches`, scanning in order.
+    pub fn slot_where(&self, mut matches: impl FnMut(&T) -> bool) -> Option<usize> {
+        match &self.storage {
+            Storage::Small(entries) => entries.iter().position(matches),
+            Storage::Large(large) => large
+                .slots
+                .iter()
+                .position(|slot| slot.as_ref().is_some_and(&mut matches)),
+        }
+    }
+
+    /// How many entries fit before the storage grows.
     pub fn capacity(&self) -> usize {
-        self.entries().capacity()
+        match &self.storage {
+            Storage::Small(entries) => entries.capacity(),
+            Storage::Large(large) => large.slots.capacity() - large.holes,
+        }
     }
 
     /// Whether another handle shares this storage.
@@ -395,26 +576,33 @@ impl<T> IndexedEntries<T> {
             Storage::Large(large) => Arc::strong_count(large) > 1,
         }
     }
+
+    /// The address of the storage, which clones share until a write.
+    pub fn as_ptr(&self) -> *const T {
+        match &self.storage {
+            Storage::Small(entries) => entries.as_ptr(),
+            Storage::Large(large) => large.slots.as_ptr().cast(),
+        }
+    }
 }
 
 impl<T: Clone> IndexedEntries<T> {
-    /// The entries for writing. Shared storage is copied first.
-    fn entries_mut(&mut self) -> &mut Vec<T> {
-        match &mut self.storage {
-            Storage::Small(entries) => Arc::make_mut(entries),
-            Storage::Large(large) => &mut Arc::make_mut(large).entries,
-        }
-    }
-
     pub fn into_vec(self) -> Vec<T> {
         match self.storage {
             Storage::Small(entries) => Arc::unwrap_or_clone(entries),
-            Storage::Large(large) => Arc::unwrap_or_clone(large).entries,
+            Storage::Large(large) => Arc::unwrap_or_clone(large)
+                .slots
+                .into_iter()
+                .flatten()
+                .collect(),
         }
     }
 
     pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        self.entries_mut().try_reserve(additional)
+        match &mut self.storage {
+            Storage::Small(entries) => Arc::make_mut(entries).try_reserve(additional),
+            Storage::Large(large) => Arc::make_mut(large).slots.try_reserve(additional),
+        }
     }
 }
 
@@ -427,17 +615,22 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
     /// index instead of hashing every key again.
     pub fn cloned_from(entries: Vec<T>, source: &Self) -> Self {
         match &source.storage {
-            Storage::Large(large) if entries.len() == large.entries.len() => Self {
-                storage: Storage::Large(Arc::new(Large {
-                    entries,
-                    index: large.index.clone(),
-                })),
-            },
+            Storage::Large(large) if entries.len() == source.len() => {
+                let mut index = large.index.clone();
+                large.pack_index(&mut index);
+                Self {
+                    storage: Storage::Large(Arc::new(Large {
+                        slots: entries.into_iter().map(Some).collect(),
+                        index,
+                        holes: 0,
+                    })),
+                }
+            }
             _ => Self::from(entries),
         }
     }
 
-    /// The position of the entry whose key equals `key`.
+    /// The slot of the entry whose key equals `key`, for [`Self::at_slot`].
     pub fn position(&self, key: &Value) -> Option<usize> {
         self.probe(|| hash_value(key), |candidate| candidate == key)
             .0
@@ -459,8 +652,8 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
         .0
     }
 
-    /// The position of the entry whose key `matches`, and the key's hash
-    /// when the collection hashed it. A small collection scans and hashes
+    /// The slot of the entry whose key `matches`, and the key's hash when
+    /// the collection hashed it. A small collection scans and hashes
     /// nothing. `hash` is the hash of every key that `matches`.
     #[inline(always)]
     fn probe(
@@ -476,10 +669,13 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
                 let hash = hash();
                 let position = large
                     .index
-                    .find(hash, |&(entry_hash, position)| {
-                        entry_hash == hash && matches(large.entries[position].key())
+                    .find(hash, |&(entry_hash, slot)| {
+                        entry_hash == hash
+                            && large.slots[slot]
+                                .as_ref()
+                                .is_some_and(|entry| matches(entry.key()))
                     })
-                    .map(|&(_, position)| position);
+                    .map(|&(_, slot)| slot);
                 (position, Some(hash))
             }
         }
@@ -490,7 +686,19 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
     }
 
     pub fn find(&self, key: &Value) -> Option<&T> {
-        self.position(key).map(|position| &self.entries()[position])
+        self.position(key).map(|slot| self.at_slot(slot))
+    }
+
+    /// The entry in `slot`, for writing.
+    fn at_slot_mut(&mut self, slot: usize) -> &mut T {
+        let entry = match &mut self.storage {
+            Storage::Small(entries) => Arc::make_mut(entries).get_mut(slot),
+            Storage::Large(large) => Arc::make_mut(large)
+                .slots
+                .get_mut(slot)
+                .and_then(Option::as_mut),
+        };
+        entry.expect("a slot from a lookup holds an entry")
     }
 
     /// Appends an entry whose key the caller knows is absent.
@@ -510,36 +718,61 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
             }
             Storage::Large(large) => {
                 let large = Arc::make_mut(large);
-                let position = large.entries.len();
+                let slot = large.slots.len();
                 let hash = hash.unwrap_or_else(|| hash_value(entry.key()));
-                large.entries.push(entry);
+                large.slots.push(Some(entry));
                 large
                     .index
-                    .insert_unique(hash, (hash, position), |&(hash, _)| hash);
+                    .insert_unique(hash, (hash, slot), |&(hash, _)| hash);
             }
         }
     }
 
-    /// Removes the entry at `position` and keeps the order of the rest.
-    pub fn shift_remove_at(&mut self, position: usize) -> T {
+    /// Removes the entry whose key equals `key` in expected constant time,
+    /// and keeps the order of the rest. A large collection may keep a hole
+    /// where the entry was, which makes [`Self::get`] scan.
+    pub fn remove(&mut self, key: &Value) -> Option<T> {
+        let (slot, hash) = self.probe(|| hash_value(key), |candidate| candidate == key);
+        Some(self.remove_slot(slot?, hash, false))
+    }
+
+    /// Removes the entry whose key equals `key` and keeps the order of the
+    /// rest without leaving a hole, so [`Self::get`] stays constant time.
+    /// It takes time proportional to the collection's size, unless the
+    /// entry is the last one.
+    pub fn shift_remove(&mut self, key: &Value) -> Option<T> {
+        let (slot, hash) = self.probe(|| hash_value(key), |candidate| candidate == key);
+        Some(self.remove_slot(slot?, hash, true))
+    }
+
+    /// Removes the entry `index` entries from the start, as
+    /// [`Self::shift_remove`] does.
+    pub fn shift_remove_index(&mut self, index: usize) -> Option<T> {
+        let slot = match &self.storage {
+            Storage::Small(entries) => (index < entries.len()).then_some(index)?,
+            Storage::Large(large) => large.slot_of(index)?,
+        };
+        Some(self.remove_slot(slot, None, true))
+    }
+
+    /// Removes the entry in `slot`, and closes every hole when `pack` is
+    /// set. `hash` is its key's hash when a probe already has it.
+    fn remove_slot(&mut self, slot: usize, hash: Option<u64>, pack: bool) -> T {
         let removed = match &mut self.storage {
-            Storage::Small(entries) => return Arc::make_mut(entries).remove(position),
+            Storage::Small(entries) => return Arc::make_mut(entries).remove(slot),
             Storage::Large(large) => {
                 let large = Arc::make_mut(large);
-                let removed = large.entries.remove(position);
-                let hash = hash_value(removed.key());
-                if let Ok(found) = large
-                    .index
-                    .find_entry(hash, |&(_, candidate)| candidate == position)
-                {
-                    found.remove();
-                }
-                if position < large.entries.len() {
-                    for (_, candidate) in large.index.iter_mut() {
-                        if *candidate > position {
-                            *candidate -= 1;
-                        }
-                    }
+                let hash = hash.unwrap_or_else(|| {
+                    hash_value(
+                        large.slots[slot]
+                            .as_ref()
+                            .expect("a slot from a lookup holds an entry")
+                            .key(),
+                    )
+                });
+                let removed = large.take_slot(slot, hash);
+                if pack && large.holes > 0 {
+                    large.pack();
                 }
                 removed
             }
@@ -550,12 +783,6 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
         removed
     }
 
-    /// Removes the entry whose key equals `key` and keeps the order of the rest.
-    pub fn shift_remove(&mut self, key: &Value) -> Option<T> {
-        self.position(key)
-            .map(|position| self.shift_remove_at(position))
-    }
-
     pub fn clear(&mut self) {
         match &mut self.storage {
             Storage::Small(entries) => match Arc::get_mut(entries) {
@@ -563,12 +790,9 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
                 None => *entries = Arc::new(Vec::new()),
             },
             Storage::Large(large) => {
+                // Clearing an unshared collection keeps its room.
                 let entries = match Arc::get_mut(large) {
-                    Some(large) => {
-                        let mut entries = std::mem::take(&mut large.entries);
-                        entries.clear();
-                        entries
-                    }
+                    Some(large) => Vec::with_capacity(large.slots.capacity()),
                     None => Vec::new(),
                 };
                 self.storage = Storage::Small(Arc::new(entries));
@@ -578,8 +802,8 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
 
     /// Removes and returns the last entry.
     pub fn pop(&mut self) -> Option<T> {
-        let position = self.len().checked_sub(1)?;
-        Some(self.shift_remove_at(position))
+        let index = self.len().checked_sub(1)?;
+        self.shift_remove_index(index)
     }
 
     /// Picks the storage that fits the current length and rebuilds the
@@ -587,7 +811,10 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
     fn rebuild_index(&mut self) {
         let entries = match &mut self.storage {
             Storage::Small(entries) => std::mem::take(Arc::make_mut(entries)),
-            Storage::Large(large) => std::mem::take(&mut Arc::make_mut(large).entries),
+            Storage::Large(large) => std::mem::take(&mut Arc::make_mut(large).slots)
+                .into_iter()
+                .flatten()
+                .collect(),
         };
         if entries.len() <= INDEX_THRESHOLD {
             self.storage = Storage::Small(Arc::new(entries));
@@ -605,7 +832,11 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
                 index.insert_unique(hash, (hash, position), |&(hash, _)| hash);
             }
         }
-        self.storage = Storage::Large(Arc::new(Large { entries, index }));
+        self.storage = Storage::Large(Arc::new(Large {
+            slots: entries.into_iter().map(Some).collect(),
+            index,
+            holes: 0,
+        }));
     }
 }
 
@@ -616,29 +847,24 @@ impl DictEntries {
 
     /// [`Self::value_of`] a `str` key holding `text`.
     pub fn value_of_str(&self, text: &str) -> Option<&Value> {
-        self.position_str(text)
-            .map(|position| &self.entries()[position].1)
+        self.position_str(text).map(|slot| &self.at_slot(slot).1)
     }
 
     /// [`Self::value_of`] an integer key equal to `integer`.
     pub fn value_of_i64(&self, integer: i64) -> Option<&Value> {
-        self.position_i64(integer)
-            .map(|position| &self.entries()[position].1)
+        self.position_i64(integer).map(|slot| &self.at_slot(slot).1)
     }
 
-    /// The value at `position`, for writing.
-    pub fn value_at_mut(&mut self, position: usize) -> &mut Value {
-        &mut self.entries_mut()[position].1
+    /// The value in `slot`, for writing.
+    pub fn value_at_mut(&mut self, slot: usize) -> &mut Value {
+        &mut self.at_slot_mut(slot).1
     }
 
     /// Stores `value` under `key`. An equal key keeps its slot and its
     /// original key, and the replaced value is returned.
     pub fn insert(&mut self, key: Value, value: Value) -> Option<Value> {
         match self.probe(|| hash_value(&key), |candidate| *candidate == key) {
-            (Some(position), _) => Some(std::mem::replace(
-                &mut self.entries_mut()[position].1,
-                value,
-            )),
+            (Some(slot), _) => Some(std::mem::replace(self.value_at_mut(slot), value)),
             (None, hash) => {
                 self.push_new_hashed((key, value), hash);
                 None

@@ -1,0 +1,91 @@
+# dict.remove leaves a gap in a large dictionary instead of shifting the
+# entries after it. Iteration, snapshots, rendering, equality, and lookups
+# skip the gaps, and the dictionary closes them once they pass half its slots.
+def checksum(table: dict[str, int64]) -> int64:
+    mut total = 0
+    for key in table.keys():
+        total = (total * 31 + table[key] + key.len()) % 1000003
+    return total
+
+
+def main():
+    mut table: dict[str, int64] = {}
+    mut i = 0
+    while i < 200:
+        table[f"k{i}"] = i
+        i += 1
+    # A few gaps, well below half of the slots.
+    mut j = 10
+    while j < 30:
+        match table.remove(f"k{j}"):
+            case Lookup.Found(value):
+                if value != j:
+                    print("wrong value")
+            case Lookup.Missing:
+                print("missing")
+        j += 1
+    print(table.len())
+    print(table.keys()[10])
+    print(table.keys()[table.len() - 1])
+    print(checksum(table))
+    # Replacing a value keeps its place, and a removed key comes back last.
+    table["k31"] = -31
+    table["k15"] = 15
+    print(table.keys()[11])
+    print(table.keys()[table.len() - 1])
+    match table.remove("k15"):
+        case Lookup.Found(value):
+            print(value)
+        case Lookup.Missing:
+            print("missing")
+    match table.remove("k15"):
+        case Lookup.Found(value):
+            print(value)
+        case Lookup.Missing:
+            print("missing")
+    # Least recently used order: take the oldest key, add a new one.
+    mut n = 0
+    while n < 500:
+        oldest = table.keys()[0].clone()
+        match table.remove(oldest):
+            case Lookup.Found(value):
+                table[f"n{n}"] = value + n
+            case Lookup.Missing:
+                print("missing")
+        n += 1
+    print(table.len())
+    print(table.keys()[0])
+    print(table.keys()[179])
+    print(checksum(table))
+    print("k199" in table)
+    print("n499" in table)
+    print(table["n499"])
+    match mut table.lookup("n320"):
+        case Lookup.Found(value):
+            value += 1000
+        case Lookup.Missing:
+            print("missing")
+    print(table["n320"])
+    # Copies, snapshots, and equality see the same entries in the same order.
+    copy = table.copy()
+    print(copy == table)
+    mut rebuilt: dict[str, int64] = {}
+    for key, value in table.items():
+        rebuilt[key.clone()] = value
+    print(rebuilt == table)
+    print(rebuilt.keys() == table.keys())
+    mut values_total = 0
+    for value in table.values():
+        values_total = (values_total + value) % 1000003
+    print(values_total)
+    # Removing down to a handful of entries.
+    while table.len() > 3:
+        first = table.keys()[0].clone()
+        match table.remove(first):
+            case Lookup.Found(_):
+                pass
+            case Lookup.Missing:
+                print("missing")
+    print(table)
+    table.update({"z": 1, "n498": 0})
+    print(table)

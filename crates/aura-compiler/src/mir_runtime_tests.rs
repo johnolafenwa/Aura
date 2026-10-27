@@ -5872,8 +5872,8 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
         else {
             panic!("expected map writeback");
         };
-        assert_eq!(string_ptr(&updated.entries[0].0), key_ptr);
-        assert_eq!(string_ptr(&updated.entries[0].1), value_ptr);
+        assert_eq!(string_ptr(&updated.entries.first().unwrap().0), key_ptr);
+        assert_eq!(string_ptr(&updated.entries.first().unwrap().1), value_ptr);
         assert!(env.place_borrow("key").is_err());
         assert!(env.place_borrow("value").is_err());
     }
@@ -5911,8 +5911,14 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
     let Value::Map(updated) = env.place_borrow("map").expect("map should be written back") else {
         panic!("expected map writeback");
     };
-    assert_eq!(string_ptr(&updated.entries[0].0), extended_key_ptr);
-    assert_eq!(string_ptr(&updated.entries[0].1), extended_value_ptr);
+    assert_eq!(
+        string_ptr(&updated.entries.first().unwrap().0),
+        extended_key_ptr
+    );
+    assert_eq!(
+        string_ptr(&updated.entries.first().unwrap().1),
+        extended_value_ptr
+    );
     assert!(env.place_borrow("other").is_err());
 
     let mut runtime = test_runtime();
@@ -5938,7 +5944,7 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
     let Value::Set(updated) = env.place_borrow("set").expect("set should be written back") else {
         panic!("expected set writeback");
     };
-    assert_eq!(string_ptr(&updated.elements[0]), added_ptr);
+    assert_eq!(string_ptr(updated.elements.first().unwrap()), added_ptr);
     assert!(env.place_borrow("added").is_err());
 }
 

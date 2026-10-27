@@ -9364,7 +9364,7 @@ fn direct_set_insert_int64_agrees_with_boxed_insertion() {
         let Value::Set(boxed_set) = (unsafe { value_ref(boxed) }) else {
             panic!("expected a set");
         };
-        assert_eq!(set.elements.as_slice(), boxed_set.elements.as_slice());
+        assert!(set.elements.iter().eq(boxed_set.elements.iter()));
         for probe in [-35, 0, 7, 8, 7 * (count - 1)] {
             assert_eq!(
                 super::aura_direct_set_contains_int64(unboxed, probe),
@@ -11579,7 +11579,7 @@ fn direct_owned_collection_and_queue_adapters_preserve_allocation_identity() {
     expect_lookup_missing(super::aura_direct_map_set_in_place(map, map_key, map_value));
     unsafe {
         super::with_value(map, |value| match value {
-            Value::Map(map) => match map.entries.as_slice() {
+            Value::Map(map) => match map.entries.iter().collect::<Vec<_>>().as_slice() {
                 [(Value::String(key), Value::String(value))] => {
                     assert_eq!(key.as_ptr(), map_key_storage);
                     assert_eq!(value.as_ptr(), map_value_storage);
@@ -11596,7 +11596,7 @@ fn direct_owned_collection_and_queue_adapters_preserve_allocation_identity() {
     assert_eq!(super::aura_direct_set_insert_in_place(set, set_item), 1);
     unsafe {
         super::with_value(set, |value| match value {
-            Value::Set(set) => match set.elements.as_slice() {
+            Value::Set(set) => match set.elements.iter().collect::<Vec<_>>().as_slice() {
                 [Value::String(value)] => assert_eq!(value.as_ptr(), set_storage),
                 other => panic!("expected one str set element, found {other:?}"),
             },

@@ -2701,18 +2701,18 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
         },
         Set {
             set: &'a SetValue,
-            next_index: usize,
+            remaining: crate::collection_index::Iter<'a, Value>,
             elements: Vec<Value>,
         },
         MapKey {
             map: &'a MapValue,
-            next_index: usize,
+            remaining: crate::collection_index::Iter<'a, (Value, Value)>,
             entries: Vec<(Value, Value)>,
             pending_value: &'a Value,
         },
         MapValue {
             map: &'a MapValue,
-            next_index: usize,
+            remaining: crate::collection_index::Iter<'a, (Value, Value)>,
             entries: Vec<(Value, Value)>,
             pending_key: Value,
         },
@@ -2892,28 +2892,30 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     representation_stats::note_cloned_elements(set.elements.len());
                     let elements =
                         try_array_buffer(set.elements.len(), "Array-containing Set copy")?;
-                    if set.elements.is_empty() {
+                    let mut remaining = set.elements.iter();
+                    if let Some(first) = remaining.next() {
+                        state.push_frame(CloneFrame::Set {
+                            set,
+                            remaining,
+                            elements,
+                        })?;
+                        next = Some(first);
+                        None
+                    } else {
                         Some(Value::Set(SetValue {
                             element_type: set.element_type.clone(),
                             elements: elements.into(),
                         }))
-                    } else {
-                        state.push_frame(CloneFrame::Set {
-                            set,
-                            next_index: 1,
-                            elements,
-                        })?;
-                        next = Some(&set.elements[0]);
-                        None
                     }
                 }
                 Value::Map(map) => {
                     representation_stats::note_cloned_elements(map.entries.len());
                     let entries = try_array_buffer(map.entries.len(), "Array-containing Map copy")?;
-                    if let Some((key, pending_value)) = map.entries.first() {
+                    let mut remaining = map.entries.iter();
+                    if let Some((key, pending_value)) = remaining.next() {
                         state.push_frame(CloneFrame::MapKey {
                             map,
-                            next_index: 1,
+                            remaining,
                             entries,
                             pending_value,
                         })?;
@@ -3032,15 +3034,14 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                 }
                 CloneFrame::Set {
                     set,
-                    mut next_index,
+                    mut remaining,
                     mut elements,
                 } => {
                     elements.push(cloned);
-                    if let Some(element) = set.elements.get(next_index) {
-                        next_index += 1;
+                    if let Some(element) = remaining.next() {
                         state.push_frame(CloneFrame::Set {
                             set,
-                            next_index,
+                            remaining,
                             elements,
                         })?;
                         next = Some(element);
@@ -3053,13 +3054,13 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                 }
                 CloneFrame::MapKey {
                     map,
-                    next_index,
+                    remaining,
                     entries,
                     pending_value,
                 } => {
                     state.push_frame(CloneFrame::MapValue {
                         map,
-                        next_index,
+                        remaining,
                         entries,
                         pending_key: cloned,
                     })?;
@@ -3067,16 +3068,15 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                 }
                 CloneFrame::MapValue {
                     map,
-                    mut next_index,
+                    mut remaining,
                     mut entries,
                     pending_key,
                 } => {
                     entries.push((pending_key, cloned));
-                    if let Some((key, pending_value)) = map.entries.get(next_index) {
-                        next_index += 1;
+                    if let Some((key, pending_value)) = remaining.next() {
                         state.push_frame(CloneFrame::MapKey {
                             map,
-                            next_index,
+                            remaining,
                             entries,
                             pending_value,
                         })?;
@@ -7536,7 +7536,7 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
         Object {
             variant: &'a EnumVariantValue,
             map: &'a MapValue,
-            next_index: usize,
+            remaining: crate::collection_index::Iter<'a, (Value, Value)>,
             entries: Vec<(Value, Value)>,
             pending_key: Value,
         },
@@ -7611,13 +7611,14 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
                             })],
                         ))
                     } else {
-                        let (Value::String(key), value) = &map.entries[0] else {
+                        let mut remaining = map.entries.iter();
+                        let (Value::String(key), value) = remaining.next()? else {
                             return None;
                         };
                         frames.push(CloneFrame::Object {
                             variant,
                             map,
-                            next_index: 1,
+                            remaining,
                             entries,
                             pending_key: Value::String(key.clone()),
                         });
@@ -7660,20 +7661,19 @@ fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
                 CloneFrame::Object {
                     variant,
                     map,
-                    mut next_index,
+                    mut remaining,
                     mut entries,
                     pending_key,
                 } => {
                     entries.push((pending_key, completed.take()?));
-                    if let Some((key, value)) = map.entries.get(next_index) {
+                    if let Some((key, value)) = remaining.next() {
                         let Value::String(key) = key else {
                             return None;
                         };
-                        next_index += 1;
                         frames.push(CloneFrame::Object {
                             variant,
                             map,
-                            next_index,
+                            remaining,
                             entries,
                             pending_key: Value::String(key.clone()),
                         });
@@ -16339,8 +16339,7 @@ pub fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
             child_depth: usize,
         },
         Object {
-            entries: &'a [(Value, Value)],
-            next_index: usize,
+            remaining: crate::collection_index::Iter<'a, (Value, Value)>,
             converted: Vec<(String, JsonValue)>,
             pending_key: &'a str,
             child_depth: usize,
@@ -16441,10 +16440,8 @@ pub fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
                         json_runtime_container_capacity(entries.entries.len(), remaining, limit)?;
                     let mut converted = Vec::new();
                     json_runtime_conversion_try_reserve(&mut converted, capacity)?;
-                    if entries.entries.is_empty() {
-                        Some(JsonValue::Object(converted))
-                    } else {
-                        let (key, value) = &entries.entries[0];
+                    let mut remaining = entries.entries.iter();
+                    if let Some((key, value)) = remaining.next() {
                         let Value::String(key) = key else {
                             return Err(malformed(format!(
                                 "Value.Object key must be `str`, found `{}`",
@@ -16455,14 +16452,15 @@ pub fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
                             .try_reserve(1)
                             .map_err(json_runtime_allocation_error)?;
                         frames.push(ConversionFrame::Object {
-                            entries: &entries.entries,
-                            next_index: 1,
+                            remaining,
                             converted,
                             pending_key: key,
                             child_depth,
                         });
                         next = Some((value, child_depth));
                         None
+                    } else {
+                        Some(JsonValue::Object(converted))
                     }
                 }
                 ("Object", [Value::Map(_)]) => {
@@ -16509,8 +16507,7 @@ pub fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
                     }
                 }
                 ConversionFrame::Object {
-                    entries,
-                    mut next_index,
+                    mut remaining,
                     mut converted,
                     pending_key,
                     child_depth,
@@ -16519,20 +16516,18 @@ pub fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
                         .take()
                         .expect("a completed JSON object child has a value");
                     converted.push((clone_string(pending_key)?, value));
-                    if let Some((key, value)) = entries.get(next_index) {
+                    if let Some((key, value)) = remaining.next() {
                         let Value::String(key) = key else {
                             return Err(malformed(format!(
                                 "Value.Object key must be `str`, found `{}`",
                                 key.render()
                             )));
                         };
-                        next_index += 1;
                         frames
                             .try_reserve(1)
                             .map_err(json_runtime_allocation_error)?;
                         frames.push(ConversionFrame::Object {
-                            entries,
-                            next_index,
+                            remaining,
                             converted,
                             pending_key: key,
                             child_depth,
