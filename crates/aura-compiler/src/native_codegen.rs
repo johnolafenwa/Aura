@@ -1448,7 +1448,7 @@ impl<'a> NativeCodegen<'a> {
                 )
             },
         );
-        let lent_element_reads = elements::lent_element_reads(function, |place| {
+        let mut lent_element_reads = elements::lent_element_reads(function, |place| {
             explicit_locals.tracked.contains(place)
                 && matches!(
                     variable_types.get(place),
@@ -1457,15 +1457,45 @@ impl<'a> NativeCodegen<'a> {
         });
         let (native_loan_uses, element_lend_temps) = element_loans::native_element_loans(function);
         let field_lend_temps = classes::field_lend_temps(function);
+        // A local of a Copy type the MIR never releases holds a box all the
+        // same, which `release_boxed_copy_roots` releases by its flag.
+        let owns_its_word = |place: &str| {
+            matches!(variable_types.get(place), Some(DirectType::Opaque(_)))
+                && !explicit_locals.loans.contains(place)
+                && !writeback_locals
+                    .iter()
+                    .any(|(writeback, _)| writeback == place)
+                && !lookup_slots.contains(place)
+                && !lent_places.contains(place)
+                && !element_lend_temps.contains(place)
+                && !field_lend_temps.contains(place)
+        };
+        elements::lent_payload_reads(
+            function,
+            &mut lent_element_reads,
+            owns_its_word,
+            |place| owns_its_word(place) && explicit_locals.tracked.contains(place),
+            |instruction| {
+                crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
+                    self.borrowing.get(name)
+                })
+            },
+        );
         let shaped_locals = shapes::shaped_locals(function, &self.program_shapes, |local| {
             lookup_slots.contains(local)
                 || lent_places.contains(local)
                 || lent_element_reads.lists.contains_key(local)
+                || lent_element_reads.payloads.contains_key(local)
                 || element_lend_temps.contains(local)
                 || field_lend_temps.contains(local)
         });
         let mut lent_elements = HashMap::new();
-        let mut lent_names = lent_element_reads.lists.keys().cloned().collect::<Vec<_>>();
+        let mut lent_names = lent_element_reads
+            .lists
+            .keys()
+            .chain(lent_element_reads.payloads.keys())
+            .cloned()
+            .collect::<Vec<_>>();
         lent_names.sort();
         for name in lent_names {
             let variable = Var(variable_index as u32);
@@ -1507,6 +1537,7 @@ impl<'a> NativeCodegen<'a> {
             lent_places,
             lend_lookup: false,
             lent_elements,
+            lent_payloads: lent_element_reads.payloads.into_keys().collect(),
             element_promotions: lent_element_reads.promotions,
             lend_element: false,
             lent_element_flag: None,
@@ -2791,6 +2822,10 @@ struct FunctionCompiler<'a> {
     /// the variable that is 1 while the box is lent and 0 while the local
     /// owns its box. See `elements::lent_element_reads`.
     lent_elements: HashMap<String, Var>,
+    /// The locals of `lent_elements` that hold a lent payload, which take
+    /// a reference to the box where a lent element copies it. See
+    /// `elements::lent_payload_reads`.
+    lent_payloads: HashSet<String>,
     /// The lent locals that take their own reference before the
     /// instruction at each block label and index.
     element_promotions: HashMap<(String, usize), Vec<String>>,
@@ -3300,7 +3335,8 @@ impl<'a> FunctionCompiler<'a> {
 
     /// Makes lent local `name` own its element: a box the list lends is
     /// copied into a new box, so the list's box is never reached once the
-    /// list may change, and only the list ever holds a reference to it.
+    /// list may change, and only the list ever holds a reference to it. A
+    /// lent payload's box is counted, so a payload takes a reference to it.
     fn own_lent_element(&mut self, name: &str) -> std::result::Result<(), String> {
         let flag_var = self.lent_elements[name];
         let flag = self.builder.use_var(flag_var);
@@ -3312,10 +3348,13 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(own_block);
         let word_var = self.local_vars(name)?[0];
         let word = self.builder.use_var(word_var);
-        let copy = self
-            .builder
-            .call(self.runtime[RuntimeFn::CloneValue], &[word])
-            .results[0];
+        let copy = if self.lent_payloads.contains(name) {
+            self.retain_opaque_handle(word)
+        } else {
+            self.builder
+                .call(self.runtime[RuntimeFn::CloneValue], &[word])
+                .results[0]
+        };
         self.builder.def_var(word_var, copy);
         let zero = self.builder.iconst(types::I64, 0);
         self.builder.def_var(flag_var, zero);

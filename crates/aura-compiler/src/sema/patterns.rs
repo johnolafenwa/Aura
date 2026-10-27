@@ -2737,6 +2737,30 @@ impl FunctionChecker<'_> {
         }
 
         if let Some(variants) = self.enum_variants_for_type(first_ty) {
+            // With no variant to tell apart in this column, the rows that
+            // match anything here cover the rest on their own. Splitting a
+            // wildcard into every variant instead never ends on a recursive
+            // enum, whose payloads split again.
+            if irrefutable(current_first)
+                && !variants.is_empty()
+                && rows.iter().all(|row| {
+                    row.first()
+                        .is_some_and(|first| !matches!(first, Pattern::Variant(_)))
+                })
+            {
+                let specialized = rows
+                    .iter()
+                    .filter_map(|row| {
+                        let (first, remaining) = row.split_first()?;
+                        irrefutable(first).then(|| remaining.to_vec())
+                    })
+                    .collect::<Vec<_>>();
+                return self.pattern_rows_cover_pattern_union(
+                    &specialized,
+                    current_remaining,
+                    remaining_types,
+                );
+            }
             let current_variant_payloads = match current_first {
                 pattern if irrefutable(pattern) => None,
                 Pattern::Variant(current_variant) => Some(current_variant.subpatterns.clone()),

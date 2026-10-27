@@ -118,6 +118,16 @@ in this file.
   the collection and dropped the old one. astar_pathfinding runs 10%
   fewer instructions and graph_paths 4%; both, with order_book,
   markdown_render and regex_match, now retain nothing.
+- A match arm's payload binding, such as `left` in `case Expr.Binary(op,
+  left, right)`, now holds the box the variant keeps the payload in
+  instead of a new reference to it, when the arm only reads the binding
+  or passes it to a shared parameter. The binding takes its own reference
+  only if the scrutinee may change or go away while the binding is still
+  to be read. A payload a pattern ignores with `_` is no longer read.
+  interpreter runs 11% fewer instructions, binary_trees 9.5%, and
+  bank_ledger 2.6%. With the three changes above, generated code now
+  retains values 92% less often across the 30 benchmark programs
+  (1,062,951 to 87,876).
 
 ### Fixed
 
@@ -130,6 +140,12 @@ in this file.
   found `int64 | T`" when a generic function returning `T | int64` was
   called with `T = int64`, where `aura run` printed the value. The call
   now gives its result the type the union collapses to, on both backends.
+- `aura check`, `aura run`, and `aura build` overflowed the stack on a
+  match over a recursive enum where an arm nests a variant pattern in a
+  payload and a later arm does not, such as `case Expr.Binary(Op.Add,
+  right)` followed by `case Expr.Binary(_, right)`. The unreachable-arm
+  check split a wildcard of the enum into its variants without end; it
+  now stops at a column no earlier arm tells apart.
 
 ## VS Code extension 0.8.0 — 2026-10-27
 

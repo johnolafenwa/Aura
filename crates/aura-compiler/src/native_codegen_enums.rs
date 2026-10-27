@@ -359,7 +359,8 @@ impl FunctionCompiler<'_> {
     /// lies, or a new reference to the payload's box, when the variant keeps
     /// its payloads in place, and with `slow` otherwise. `None` when the
     /// enum is not kept in place or generated code cannot read the payload
-    /// as `target`.
+    /// as `target`. A read for a lent payload (see `lend_element`) holds the
+    /// payload's box without a reference and sets `lent_element_flag`.
     pub(super) fn typed_variant_payload(
         &mut self,
         scrutinee: &ValueRef,
@@ -398,6 +399,12 @@ impl FunctionCompiler<'_> {
         for abi in result_ty.abi_types() {
             self.builder.append_block_param(join_block, abi);
         }
+        // The join's last parameter is the lent flag: 1 for the variant's
+        // own box, 0 for a box the slow read made.
+        let lend = shaped && self.lend_element && !self.temporary_owns_opaque(scrutinee);
+        if lend {
+            self.builder.append_block_param(join_block, types::I64);
+        }
         self.emit_variant_check(object, &record, variant, slow_block, fast_block);
 
         self.builder.switch_to_block(fast_block);
@@ -419,7 +426,11 @@ impl FunctionCompiler<'_> {
                     .brif(boxed, present_block, &[], slow_block, &[]);
                 self.builder.switch_to_block(present_block);
                 self.builder.seal_block(present_block);
-                vec![self.retain_opaque_handle(boxed)]
+                if lend {
+                    vec![boxed, self.builder.iconst(types::I64, 1)]
+                } else {
+                    vec![self.retain_opaque_handle(boxed)]
+                }
             }
         };
         self.builder.jump(join_block, &values);
@@ -445,16 +456,24 @@ impl FunctionCompiler<'_> {
         };
         self.clear_temporary_opaque_owned(&loaded);
         self.release_temporary_owned_since(&caller_owned);
-        self.builder.jump(join_block, &loaded.values);
+        let mut values = loaded.values;
+        if lend {
+            values.push(self.builder.iconst(types::I64, 0));
+        }
+        self.builder.jump(join_block, &values);
         self.layout_scratch = caller_owned;
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
+        let mut values = self.builder.block_params(join_block).to_vec();
+        if lend {
+            self.lent_element_flag = values.pop();
+        }
         let value = ValueRef {
-            values: self.builder.block_params(join_block).to_vec(),
+            values,
             ty: result_ty,
         };
-        if handle {
+        if handle && !lend {
             self.mark_temporary_opaque_owned(&value);
         }
         if shaped {

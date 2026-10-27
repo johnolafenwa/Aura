@@ -25,21 +25,28 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::mir::ownership::{instruction_accesses, Access};
+use crate::mir::ownership::{instruction_accesses, instruction_accesses_with, Access};
 use crate::mir::{
     instruction_place_mentions, terminator_place_mentions, BasicBlock, CallTarget, Instruction,
     MirFunction, Operand, Rvalue, Terminator,
 };
 use crate::runtime_ops::{DictOp, ListOp, RuntimeOp, SetOp};
 
-/// The lent element reads of one function.
+/// The lent element and payload reads of one function.
 #[derive(Debug, Default)]
 pub(super) struct LentElements {
     /// Each local that holds a lent element, with the list it reads.
     pub(super) lists: HashMap<String, String>,
-    /// The lent locals that copy their element before the instruction at
-    /// each block label and index.
+    /// Each local that holds a lent payload, with the scrutinee it reads.
+    /// See [`lent_payload_reads`].
+    pub(super) payloads: HashMap<String, String>,
+    /// The lent locals that copy their element, or take a reference to
+    /// their payload, before the instruction at each block label and index.
     pub(super) promotions: HashMap<(String, usize), Vec<String>>,
+    /// Each lent list a `Lend` fills, with the place it lends.
+    lent_places: HashMap<String, String>,
+    /// Each loan, with the place it borrows.
+    loans: HashMap<String, String>,
 }
 
 fn root(place: &str) -> &str {
@@ -111,8 +118,9 @@ fn mentioned_roots(instruction: &Instruction) -> HashSet<&str> {
 }
 
 /// Whether `instruction`, which names the lent local `temp`, only reads
-/// it or its parts, or is its own release.
-fn reads_lent(instruction: &Instruction, temp: &str) -> bool {
+/// it or its parts, or is its own release. `borrowed` are the operands its
+/// callee borrows where they lie.
+fn reads_lent(instruction: &Instruction, temp: &str, borrowed: &[&Operand]) -> bool {
     match instruction {
         Instruction::Release { place } => place == temp,
         // A copy of a part, which the consumer that follows owns.
@@ -143,7 +151,7 @@ fn reads_lent(instruction: &Instruction, temp: &str) -> bool {
         } => false,
         _ => {
             let receiver = read_receiver(instruction);
-            let accesses = instruction_accesses(instruction)
+            let accesses = instruction_accesses_with(instruction, borrowed)
                 .into_iter()
                 .filter(|(place, _)| root(place) == temp)
                 .collect::<Vec<_>>();
@@ -281,20 +289,8 @@ pub(super) fn lent_element_reads(
     lendable: impl Fn(&str) -> bool,
 ) -> LentElements {
     let instructions = || function.blocks.iter().flat_map(|block| &block.instructions);
-    let mut assigned = HashMap::<&str, usize>::new();
-    for instruction in instructions() {
-        for (place, access) in instruction_accesses(instruction) {
-            if access == Access::Assign {
-                *assigned.entry(root(place)).or_default() += 1;
-            }
-        }
-    }
-    let params = function
-        .params
-        .iter()
-        .map(|param| param.name.as_str())
-        .chain(function.receiver.map(|_| "self"))
-        .collect::<HashSet<_>>();
+    let assigned = assignments(function);
+    let params = param_names(function);
     let mut lists = HashMap::<&str, &str>::new();
     for instruction in instructions() {
         let Instruction::Assign { target, value } = instruction else {
@@ -323,7 +319,7 @@ pub(super) fn lent_element_reads(
                         if target == temp && element_read_list(value).is_some()
                 );
                 if shares_list(instruction, list)
-                    || (roots.contains(temp) && !defines && !reads_lent(instruction, temp))
+                    || (roots.contains(temp) && !defines && !reads_lent(instruction, temp, &[]))
                 {
                     rejected.insert(temp);
                 }
@@ -413,7 +409,17 @@ pub(super) fn lent_element_reads(
             })
     });
 
-    let mut lent = LentElements::default();
+    let mut lent = LentElements {
+        lent_places: lent_places
+            .iter()
+            .map(|(&temp, &place)| (temp.to_string(), place.to_string()))
+            .collect(),
+        loans: loans
+            .iter()
+            .map(|(&loan, &place)| (loan.to_string(), place.to_string()))
+            .collect(),
+        ..LentElements::default()
+    };
     let blocks = function
         .blocks
         .iter()
@@ -428,7 +434,7 @@ pub(super) fn lent_element_reads(
             let mut live = live_at_end(block, &live_in, temp);
             for (index, instruction) in block.instructions.iter().enumerate().rev() {
                 live = live_before(instruction, temp, live);
-                if live && ends_element_loan(instruction, list, lent_place, &loans) {
+                if live && ends_element_loan(instruction, list, lent_place, &lent.loans) {
                     lent.promotions
                         .entry((block.label.clone(), index))
                         .or_default()
@@ -444,6 +450,213 @@ pub(super) fn lent_element_reads(
     lent
 }
 
+/// How many times each root of `function` is assigned.
+fn assignments(function: &MirFunction) -> HashMap<&str, usize> {
+    let mut assigned = HashMap::<&str, usize>::new();
+    for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+        for (place, access) in instruction_accesses(instruction) {
+            if access == Access::Assign {
+                *assigned.entry(root(place)).or_default() += 1;
+            }
+        }
+    }
+    assigned
+}
+
+/// The parameters of `function`, with `self` for a method.
+fn param_names(function: &MirFunction) -> HashSet<&str> {
+    function
+        .params
+        .iter()
+        .map(|param| param.name.as_str())
+        .chain(function.receiver.map(|_| "self"))
+        .collect()
+}
+
+/// Adds the payload reads of `function` that native code lends instead of
+/// taking a reference to `lent`, which holds its lent element reads.
+///
+/// A payload that a variant keeps in place in a box of its own is read
+/// into a local that holds the box. A local assigned once from a payload
+/// read of a root local, and otherwise only read, holds the box the
+/// scrutinee's variant holds instead of a reference of its own, with the
+/// flag of a lent element, so its release releases nothing. The MIR keeps
+/// the scrutinee live while the payload is (the ownership pass reads a
+/// payload as a borrow of its scrutinee), and its variant holds the box
+/// while the scrutinee is unchanged. Before each instruction that does
+/// more than read the scrutinee, or that ends the loan of the element or
+/// payload the scrutinee itself holds, a lent payload that is still to be
+/// read takes a reference of its own. A scrutinee that a closure, a task,
+/// or a mutable loan can reach is never lent from.
+///
+/// `lendable` says which locals may hold a lent payload, and `scrutinee`
+/// which locals may be lent from. `borrowed` gives the operands of an
+/// instruction that its callee borrows where they lie, which only read
+/// the value.
+pub(super) fn lent_payload_reads<'f>(
+    function: &'f MirFunction,
+    lent: &mut LentElements,
+    lendable: impl Fn(&str) -> bool,
+    scrutinee: impl Fn(&str) -> bool,
+    borrowed: impl Fn(&'f Instruction) -> Vec<&'f Operand>,
+) {
+    let instructions = || function.blocks.iter().flat_map(|block| &block.instructions);
+    let assigned = assignments(function);
+    let params = param_names(function);
+    let mut sources = HashMap::<&str, &str>::new();
+    for instruction in instructions() {
+        let Instruction::Assign {
+            target,
+            value:
+                Rvalue::VariantPayload {
+                    scrutinee: Operand::Place(source),
+                    ..
+                },
+        } = instruction
+        else {
+            continue;
+        };
+        if !target.contains('.')
+            && !source.contains('.')
+            && target != source
+            && !params.contains(target.as_str())
+            && assigned.get(target.as_str()) == Some(&1)
+            && !lent.lists.contains_key(target.as_str())
+            && lendable(target)
+            && scrutinee(source)
+        {
+            sources.insert(target, source);
+        }
+    }
+    let mut rejected = HashSet::<&str>::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            let roots = mentioned_roots(instruction);
+            let borrowed = borrowed(instruction);
+            for (&temp, &source) in &sources {
+                let defines = matches!(
+                    instruction,
+                    Instruction::Assign {
+                        target,
+                        value: Rvalue::VariantPayload { .. },
+                    } if target == temp
+                );
+                if shares_list(instruction, source)
+                    || (roots.contains(temp)
+                        && !defines
+                        && !reads_lent(instruction, temp, &borrowed))
+                {
+                    rejected.insert(temp);
+                }
+            }
+        }
+        let match_scrutinee = match &block.terminator {
+            Terminator::Match {
+                scrutinee: Operand::Place(place),
+                ..
+            } => Some(place.as_str()),
+            _ => None,
+        };
+        for place in terminator_place_mentions(&block.terminator) {
+            if Some(place) != match_scrutinee && sources.contains_key(root(place)) {
+                rejected.insert(root(place));
+            }
+        }
+    }
+    sources.retain(|temp, _| !rejected.contains(temp));
+
+    let blocks = function
+        .blocks
+        .iter()
+        .map(|block| (block.label.as_str(), block))
+        .collect::<HashMap<_, _>>();
+    let mut temps = sources.iter().collect::<Vec<_>>();
+    temps.sort();
+    for (&temp, &source) in temps {
+        let live_in = live_blocks(function, &blocks, temp);
+        for block in &function.blocks {
+            let mut live = live_at_end(block, &live_in, temp);
+            for (index, instruction) in block.instructions.iter().enumerate().rev() {
+                live = live_before(instruction, temp, live);
+                if live && ends_payload_loan(instruction, source, &sources, lent, &borrowed) {
+                    lent.promotions
+                        .entry((block.label.clone(), index))
+                        .or_default()
+                        .push(temp.to_string());
+                }
+            }
+        }
+    }
+    lent.payloads.extend(
+        sources
+            .into_iter()
+            .map(|(temp, source)| (temp.to_string(), source.to_string())),
+    );
+    for temps in lent.promotions.values_mut() {
+        temps.sort();
+        temps.dedup();
+    }
+}
+
+/// Whether a local that lends a payload of `source` must take its own
+/// reference before `instruction`: the instruction does more than read
+/// `source`, or ends the loan of the payload or element `source` holds.
+fn ends_payload_loan<'f>(
+    instruction: &'f Instruction,
+    source: &str,
+    payloads: &HashMap<&str, &str>,
+    lent: &LentElements,
+    borrowed: &impl Fn(&'f Instruction) -> Vec<&'f Operand>,
+) -> bool {
+    let mut source = source;
+    // Each step follows a payload to the scrutinee it reads, so the number
+    // of payloads bounds the steps.
+    for _ in 0..=payloads.len() {
+        if mentioned_roots(instruction).contains(source)
+            && !only_reads_scrutinee(instruction, source, &borrowed(instruction))
+        {
+            return true;
+        }
+        if let Some(list) = lent.lists.get(source) {
+            return ends_element_loan(
+                instruction,
+                list,
+                lent.lent_places.get(list).map(String::as_str),
+                &lent.loans,
+            );
+        }
+        match payloads.get(source) {
+            Some(parent) => source = parent,
+            None => return false,
+        }
+    }
+    true
+}
+
+/// Whether `instruction`, which names the scrutinee `source`, only reads
+/// it or its parts where they lie, which leaves its variant as it is.
+fn only_reads_scrutinee(instruction: &Instruction, source: &str, borrowed: &[&Operand]) -> bool {
+    match instruction {
+        Instruction::Retain { .. }
+        | Instruction::Release { .. }
+        | Instruction::Lend { .. }
+        | Instruction::EndLend { .. }
+        | Instruction::PushCleanup { .. }
+        | Instruction::PopCleanup { .. }
+        | Instruction::Assign {
+            value: Rvalue::Closure { .. } | Rvalue::StartTask { .. },
+            ..
+        } => false,
+        _ => {
+            let accesses = instruction_accesses_with(instruction, borrowed)
+                .into_iter()
+                .filter(|(place, _)| root(place) == source)
+                .collect::<Vec<_>>();
+            !accesses.is_empty() && accesses.iter().all(|(_, access)| *access == Access::Read)
+        }
+    }
+}
+
 /// Whether a local that lends an element of `list` must own the element
 /// before `instruction`: the instruction does more than read the list, so
 /// it may change or free it. A list that a lend of `lent_place` filled
@@ -454,7 +667,7 @@ fn ends_element_loan(
     instruction: &Instruction,
     list: &str,
     lent_place: Option<&str>,
-    loans: &HashMap<&str, &str>,
+    loans: &HashMap<String, String>,
 ) -> bool {
     let roots = mentioned_roots(instruction);
     if let Some(place) = lent_place {
@@ -469,7 +682,7 @@ fn ends_element_loan(
         }
         if roots.iter().any(|mentioned| {
             loans
-                .get(mentioned)
+                .get(*mentioned)
                 .is_some_and(|borrowed| !apart(borrowed, place))
         }) {
             return true;

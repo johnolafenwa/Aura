@@ -18443,6 +18443,28 @@ the write. A `mut` parameter still hands the change to its caller.
 | `sort_records` | 4,547 | 1,000 | 45.0M | 44.6M |
 | All 30 programs | 400,936 | 326,693 | | |
 
+### Payload Bindings Hold The Variant's Box
+
+A variant keeps a payload that is not a scalar in a box of its own. A
+match arm's binding for such a payload, such as `left` in
+`case Expr.Binary(op, left, right)`, holds that box without a reference
+of its own when the arm only reads the binding, calls its methods, or
+passes it to a shared parameter. The scrutinee keeps the box while the
+binding is in use, since the language does not let it change before the
+binding's last read. If the scrutinee is handed to code that may keep or
+drop it while the binding is still to be read, the binding takes its own
+reference first. A binding that is copied whole takes a reference as
+before, and a payload the pattern ignores with `_` is not read at all.
+
+| Program | Retains before | Retains after | Instructions before | Instructions after |
+| --- | ---: | ---: | ---: | ---: |
+| `interpreter` | 212,087 | 23,005 | 97.6M | 86.8M |
+| `binary_trees` | 8,632 | 0 | 4.6M | 4.2M |
+| `bank_ledger` | 3,575 | 1,156 | 13.5M | 13.2M |
+| `json_roundtrip` | 46,640 | 28,086 | 574.9M | 574.2M |
+| `sql_engine` | 26,017 | 13,422 | 1,412.9M | 1,412.2M |
+| All 30 programs | 326,693 | 87,876 | | |
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

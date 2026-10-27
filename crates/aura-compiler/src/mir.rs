@@ -16149,6 +16149,27 @@ impl<'a> Lowerer<'a> {
             .push(target.to_string());
     }
 
+    /// The local a pattern binds `name` to: the one an earlier alternative
+    /// of the arm bound it to, or a new one of type `ty`.
+    fn pattern_binding_target(&mut self, name: &str, ty: Option<&Type>) -> String {
+        if let Some(target) = self
+            .scoped_names
+            .last()
+            .and_then(|scope| scope.get(name).cloned())
+        {
+            return target;
+        }
+        let target = match ty.cloned() {
+            Some(ty) => self.new_typed_temp(ty),
+            None => self.new_temp(),
+        };
+        self.scoped_names
+            .last_mut()
+            .expect("match arm scope should exist")
+            .insert(name.to_string(), target.clone());
+        target
+    }
+
     fn lower_pattern(
         &mut self,
         pattern: &Pattern,
@@ -16280,22 +16301,7 @@ impl<'a> Lowerer<'a> {
                     .then_some(PatternWriteback::Use(scrutinee))
             }
             Pattern::Binding(binding) => {
-                let target = self
-                    .scoped_names
-                    .last()
-                    .and_then(|scope| scope.get(&binding.name).cloned())
-                    .unwrap_or_else(|| {
-                        let target = if let Some(ty) = scrutinee_ty.cloned() {
-                            self.new_typed_temp(ty)
-                        } else {
-                            self.new_temp()
-                        };
-                        self.scoped_names
-                            .last_mut()
-                            .expect("match arm scope should exist")
-                            .insert(binding.name.clone(), target.clone());
-                        target
-                    });
+                let target = self.pattern_binding_target(&binding.name, scrutinee_ty);
                 if !options.consume_payloads && options.typed_payload_views {
                     let Operand::Place(source) = &scrutinee else {
                         unreachable!("typed payload patterns use captured places");
@@ -16519,13 +16525,38 @@ impl<'a> Lowerer<'a> {
                         next_block = subpattern_success;
                         continue;
                     }
+                    // A payload the pattern ignores is never read.
+                    if matches!(subpattern, Pattern::Wildcard(_))
+                        && !options.typed_payload_views
+                        && !options.collect_writeback
+                    {
+                        self.terminate(Terminator::Goto(self.label(subpattern_success)));
+                        next_block = subpattern_success;
+                        continue;
+                    }
+                    // A payload that only binds a name is read straight into
+                    // the binding: a copy through a temporary would take a
+                    // second reference to it.
+                    let binding = match subpattern {
+                        Pattern::Binding(binding)
+                            if !options.typed_payload_views && !options.collect_writeback =>
+                        {
+                            Some(binding)
+                        }
+                        _ => None,
+                    };
                     let payload_target = if options.typed_payload_views {
                         let Operand::Place(root) = &scrutinee else {
                             unreachable!("typed enum patterns use captured places");
                         };
                         format!("{root}.__variant_payload_{}_{index}", pattern.variant_name)
                     } else {
-                        let target = self.new_typed_temp(payload_ty.clone());
+                        let target = match binding {
+                            Some(binding) => {
+                                self.pattern_binding_target(&binding.name, Some(&payload_ty))
+                            }
+                            None => self.new_typed_temp(payload_ty.clone()),
+                        };
                         self.emit(Instruction::Assign {
                             target: target.clone(),
                             value: Rvalue::VariantPayload {
@@ -16536,6 +16567,11 @@ impl<'a> Lowerer<'a> {
                         });
                         target
                     };
+                    if binding.is_some() {
+                        self.terminate(Terminator::Goto(self.label(subpattern_success)));
+                        next_block = subpattern_success;
+                        continue;
+                    }
                     let child_failure = self.pattern_failure_cleanup(failure_block, first_loan);
                     if let Some(writeback) = self.lower_pattern(
                         subpattern,
