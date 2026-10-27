@@ -1465,7 +1465,9 @@ impl OpaqueValue {
 
     /// Records where a `list` value's elements lie. The caller holds
     /// confinement or the write guard. Generated code never reads the view
-    /// of a shared value, so a shared value keeps its view as it was.
+    /// of a shared value, so a shared value keeps its view as it was. It is
+    /// inlined into every write, which a call would slow.
+    #[inline(always)]
     fn refresh_list_view(&self) {
         if !self.shared_lock.load(Ordering::Acquire).is_null() {
             return;
@@ -2501,8 +2503,9 @@ unsafe fn set_explicit_runtime_type_tag(ptr: *mut OpaqueValue, tag: &RuntimeType
 }
 
 /// Gives `value` the shape a tag records: integer kinds, element types,
-/// and the type arguments of a generic class or enum.
-#[inline]
+/// and the type arguments of a generic class or enum. Both callers inline
+/// it, so tagging a box of a type with no shape stays a few compares.
+#[inline(always)]
 fn retag_value(value: &mut Value, tag: &RuntimeTypeTag) {
     let runtime_type_name: &str = &tag.name;
     let parsed = &tag.parsed;
@@ -2611,12 +2614,16 @@ unsafe fn value_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut Value) -> 
     };
     let _access = value.access(true);
     // Declared after the access, so it refreshes the list view while the
-    // access still holds, even when `write` unwinds.
-    let _refresh = RefreshListView(value);
+    // access still holds when `write` unwinds. A write that returns
+    // refreshes the view itself, so the refresh inlines there.
+    let refresh = RefreshListView(value);
     // SAFETY: `access` returned either confinement to this thread or the
     // shared write guard. Generated code never nests a write inside another
     // access to the same value, which would have deadlocked on the lock.
-    write(unsafe { &mut *value.value.get() })
+    let result = write(unsafe { &mut *value.value.get() });
+    std::mem::forget(refresh);
+    value.refresh_list_view();
+    result
 }
 
 /// The access code, element address, length, and room for in-place
@@ -2667,6 +2674,7 @@ fn list_view_of(value: &Value) -> (u32, usize, usize, u32) {
 struct RefreshListView<'a>(&'a OpaqueValue);
 
 impl Drop for RefreshListView<'_> {
+    #[inline(always)]
     fn drop(&mut self) {
         self.0.refresh_list_view();
     }
@@ -7633,21 +7641,19 @@ pub extern "C-unwind" fn aura_direct_vec_index(
 }
 
 /// Removes and returns the last element of a scalar list as generated code
-/// keeps it, with no box (see [`DirectScalarKind::bits`]). `kind` names the
-/// element's [`DirectScalarKind`]. An empty list stops the program as
-/// `pop()` does.
+/// keeps it, with no box (see [`scalar_element_bits`]). An empty list stops
+/// the program as `pop()` does.
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_pop_scalar(vec: *mut OpaqueValue, kind: i64) -> i64 {
-    task_runtime_boundary(|| {
-        let kind = DirectScalarKind::of_code(kind);
-        match with_vector_mut(vec, |vector| vector.elements.pop()) {
-            Some(value) => kind.bits(&value),
+    task_runtime_boundary(
+        || match with_vector_mut(vec, |vector| vector.elements.pop()) {
+            Some(value) => scalar_element_bits(kind, &value),
             None => runtime_diagnostic_error(Diagnostic::coded(
                 "AU4003",
                 "list pop index `-1` is out of bounds for length `0`".to_string(),
             )),
-        }
-    })
+        },
+    )
 }
 
 /// Reads a scalar list element without boxing it. The caller has already
@@ -7664,31 +7670,37 @@ pub extern "C-unwind" fn aura_direct_vec_index_scalar(
             let element = usize::try_from(index)
                 .ok()
                 .and_then(|index| vector.elements.get(index));
-            match (kind, element.as_deref()) {
-                (0, Some(Value::Int(value))) => {
-                    match value.as_i128().and_then(|value| i64::try_from(value).ok()) {
-                        Some(value) => value,
-                        None => runtime_error(format!(
-                            "integer value `{value}` does not fit in `int64`"
-                        )),
-                    }
-                }
-                (1, Some(Value::Float(value))) => value.to_bits() as i64,
-                (2, Some(Value::Bool(value))) => i64::from(*value),
-                (_, None) => runtime_error(format!(
+            match element {
+                Some(element) => scalar_element_bits(kind, &element),
+                None => runtime_error(format!(
                     "list index `{}` is out of bounds for length `{}`",
                     index,
                     vector.elements.len()
                 )),
-                (0..=2, Some(other)) => runtime_error(format!(
-                    "direct backend expected `{}`, found `{}`",
-                    ["int64", "float64", "bool"][kind as usize],
-                    value_type_name(other)
-                )),
-                _ => runtime_error("unknown direct scalar list read kind"),
             }
         })
     })
+}
+
+/// A scalar list element as generated code keeps it: for `kind` 0 an
+/// `int64`, for 1 a `float64` as its bit pattern, and for 2 a `bool` as 0
+/// or 1.
+fn scalar_element_bits(kind: i64, element: &Value) -> i64 {
+    match (kind, element) {
+        (0, Value::Int(value)) => match value.as_i128().and_then(|value| i64::try_from(value).ok())
+        {
+            Some(value) => value,
+            None => runtime_error(format!("integer value `{value}` does not fit in `int64`")),
+        },
+        (1, Value::Float(value)) => value.to_bits() as i64,
+        (2, Value::Bool(value)) => i64::from(*value),
+        (0..=2, other) => runtime_error(format!(
+            "direct backend expected `{}`, found `{}`",
+            ["int64", "float64", "bool"][kind as usize],
+            value_type_name(other)
+        )),
+        _ => runtime_error("unknown direct scalar list read kind"),
+    }
 }
 
 /// Runs `read` on one element of `list` where it lies, so nothing is cloned

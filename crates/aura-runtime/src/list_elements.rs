@@ -77,6 +77,16 @@ impl TypedElements {
         self.layout
     }
 
+    /// The elements from `start` up to `end`, which the caller checked
+    /// against the length, in storage of their own, as a slice copies them.
+    pub fn slice(&self, start: usize, end: usize) -> Self {
+        let stride = self.stride();
+        Self {
+            layout: self.layout,
+            words: self.words[start * stride..end * stride].to_vec().into(),
+        }
+    }
+
     fn stride(&self) -> usize {
         self.layout.stride_words()
     }
@@ -96,6 +106,13 @@ impl TypedElements {
         if let Some(words) = len.checked_mul(self.stride()) {
             unsafe { adopt_appended(&mut self.words, words) }
         }
+    }
+
+    /// [`ListElements::get`] for this form. It stays out of line, so the
+    /// scalar forms' reads stay small enough to inline.
+    #[inline(never)]
+    fn get(&self, index: usize) -> Option<Cow<'_, Value>> {
+        (index < self.len()).then(|| Cow::Owned(self.decode(index)))
     }
 
     /// [`ListElements::view`] for this form. It divides by the stride, so
@@ -406,7 +423,7 @@ impl ListElements {
                 .get(index)
                 .map(|float| Cow::Owned(Value::Float(*float))),
             Self::Bool(values) => values.get(index).map(|flag| Cow::Owned(Value::Bool(*flag))),
-            Self::Typed(typed) => (index < typed.len()).then(|| Cow::Owned(typed.decode(index))),
+            Self::Typed(typed) => typed.get(index),
         }
     }
 

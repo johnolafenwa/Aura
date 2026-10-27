@@ -603,8 +603,9 @@ suite at the check size:
 
 | Program | Before | After |
 | --- | ---: | ---: |
-| `raytracer` | 471.0M | 100.9M |
-| `graph_paths` | 590.3M | 131.3M |
+| `bytecode_vm` | 48.9M | 6.9M |
+| `graph_paths` | 561.5M | 80.4M |
+| `raytracer` | 464.1M | 94.0M |
 
 Reading a `float64` field of a record from a `list` costs about 23
 instructions instead of about 4,900.

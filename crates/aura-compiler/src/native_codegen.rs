@@ -625,6 +625,17 @@ const SLICE_WORD_KINDS: &[ScalarKind] = &[
     ScalarKind::Int32,
 ];
 
+/// The list access code of the unboxed form of `kind` and its element
+/// size in bytes.
+fn scalar_list_slot(kind: ScalarElement) -> (aura_runtime::native_runtime::DirectListAccess, i64) {
+    use aura_runtime::native_runtime::DirectListAccess;
+    match kind {
+        ScalarElement::Int64 => (DirectListAccess::Int64, 8),
+        ScalarElement::Float64 => (DirectListAccess::Float64, 8),
+        ScalarElement::Bool => (DirectListAccess::Bool, 1),
+    }
+}
+
 fn required_direct_field_slice(
     ty: &DirectType,
     field: &str,
@@ -8925,13 +8936,8 @@ impl<'a> FunctionCompiler<'a> {
         function: FuncRef,
         words: &[Val],
     ) {
-        use aura_runtime::native_runtime::DirectListAccess;
         let layout = aura_runtime::native_runtime::direct_list_layout();
-        let (access, stride) = match kind {
-            ScalarElement::Int64 => (DirectListAccess::Int64, 8),
-            ScalarElement::Float64 => (DirectListAccess::Float64, 8),
-            ScalarElement::Bool => (DirectListAccess::Bool, 1),
-        };
+        let (access, stride) = scalar_list_slot(kind);
         let slow_block = self.builder.create_block();
         let fast_block = self.builder.create_block();
         let room_block = self.builder.create_block();
@@ -9013,16 +9019,21 @@ impl<'a> FunctionCompiler<'a> {
         let elements = self
             .builder
             .load(types::I64, flags, list, layout.elements_offset);
-        let element = self.scalar_list_element(elements, last, stride);
-        let bits = self.load_scalar_list_element(kind, element);
+        let bits = if stride == 1 {
+            // A `bool` element is one byte that holds 0 or 1.
+            let element = self.builder.iadd(elements, last);
+            self.builder.uload8(types::I64, flags, element, 0)
+        } else {
+            let offset = self.builder.imul_imm(last, stride);
+            let element = self.builder.iadd(elements, offset);
+            self.builder.load(types::I64, flags, element, 0)
+        };
         self.builder.store(flags, last, list, layout.len_offset);
         self.builder.jump(join_block, &[bits]);
 
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
-        let kind = self
-            .builder
-            .iconst(types::I64, ScalarKind::of_element(kind).direct_kind_word());
+        let kind = self.builder.iconst(types::I64, kind.words()[0]);
         let inst = self
             .builder
             .call(self.runtime[RuntimeFn::VecPopScalar], &[list, kind]);

@@ -43,7 +43,11 @@ section "Plain Records".
 - The typed form made LLVM stop inlining several hot runtime helpers, which
   cost 3% to 10% on programs that hold no records. The typed form's list
   view and appended-element adoption now sit in their own out-of-line
-  functions, so the scalar forms' paths stay as small as before. A layout's
+  functions, so the scalar forms' paths stay as small as before. So does
+  the typed form's element read. A runtime write refreshes the list view
+  itself when it returns, and the drop guard only when it unwinds, because
+  LLVM stopped inlining the guard, and the type tag path is inlined into
+  both its callers now that 2c adds a second one. A layout's
   stride is a `NonZeroUsize`, the typed storage is boxed so a list stays
   one pointer and a tag, and an empty list of values keeps its storage when
   the first value arrives.
@@ -70,32 +74,33 @@ section "Plain Records".
 ## Measurements
 
 Callgrind instruction counts, Linux container, release builds, cross-language
-suite at the check size. Before is steps 2b, 1b, and 1c together; after adds
-this step.
+suite at the check size. Before is `main` at `addebcca` (steps 2b and 1b),
+after adds this step. Step 1c (PR #154) is not in either build.
 
 | Program | Before | After | Change | After vs Rust |
 | --- | ---: | ---: | ---: | ---: |
-| `bytecode_vm` | 49.6M | 6.9M | -86.1% | 2.6x |
-| `graph_paths` | 563.5M | 81.0M | -85.6% | 29.7x |
-| `raytracer` | 457.2M | 78.9M | -82.7% | 70.4x |
-| `astar_pathfinding` | 17.6M | 16.4M | -6.6% | 14.9x |
-| `sql_engine` | 2,927.1M | 2,809.7M | -4.0% | 59.3x |
+| `bytecode_vm` | 48.9M | 6.9M | -85.9% | 2.6x |
+| `graph_paths` | 561.5M | 80.4M | -85.7% | 29.5x |
+| `raytracer` | 464.1M | 94.0M | -79.7% | 83.8x |
+| `http_api` | 32.3M | 29.0M | -10.1% | 4.5x |
+| `binary_trees` | 16.8M | 15.2M | -9.7% | 10.3x |
+| `astar_pathfinding` | 17.4M | 15.9M | -8.6% | 14.4x |
+| `sql_engine` | 5,034.2M | 4,939.4M | -1.9% | 104.3x |
 
-The other 25 programs stay within 3%. The largest increases are
-`markdown_render` +2.2%, `nbody` +2.0%, and `lzw_compress` +1.9%.
+The other programs stay within 3%. The largest increases are
+`lzw_compress` +2.2%, `text_diff` +1.8%, and `regex_match` +1.4%.
+`task_pool` runs tasks on several threads, so its count moves with
+scheduling: six runs of each build ranged from 41.1M to 44.8M before and
+41.8M to 46.2M after, a mean increase of about 2%.
 
-Measured on step 2b alone, before the rebase onto Phase 1, `mini_browser`
-dropped 36.3%. Step 1c makes the same reads cheap on its own, so on the
-rebased base it stays within 1%.
-
-Operation probes (PR #152), instructions per operation at a count of 10,000,
-measured on step 2b alone:
+Operation probes (PR #152), instructions per operation at a count of
+100,000:
 
 | Probe | Before | After |
 | --- | ---: | ---: |
-| `class_field_read` (`ps[i].x` on a `list[Point]`) | 4,925.7 | 23.3 |
-| `list_push` (a `float64` and a `Point`) | 5,308.9 | 1,034.7 |
-| `field_write` (a class holding `str`) | 5,405.0 | 5,437.1 |
+| `class_field_read` (`ps[i].x` on a `list[Point]`) | 4,855.7 | 23.0 |
+| `list_push` (a `float64` and a `Point`) | 4,579.6 | 30.4 |
+| `field_write` (a class holding `str`) | 5,396.8 | 5,441.8 |
 
 Gates: `raytracer` and `astar_pathfinding` at most 3x Rust are not met. Most
 of what `raytracer` still runs is the `Tracer` instance's fields

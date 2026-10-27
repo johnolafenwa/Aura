@@ -2323,6 +2323,7 @@ pub fn slice_vec_owned(
         ListElements::Int64(values) => ListElements::Int64(copy_scalars(&values[start..end])?),
         ListElements::Float64(values) => ListElements::Float64(copy_scalars(&values[start..end])?),
         ListElements::Bool(values) => ListElements::Bool(copy_scalars(&values[start..end])?),
+        ListElements::Typed(typed) => ListElements::Typed(Box::new(typed.slice(start, end))),
     };
     Ok(VecValue {
         element_type: vector.element_type.clone(),

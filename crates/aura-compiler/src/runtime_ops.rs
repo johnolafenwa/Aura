@@ -880,7 +880,7 @@ impl ScalarElement {
 
     /// The runtime's kind word: 0 for `int64`, 1 for `float64`, 2 for
     /// `bool`.
-    const fn words(self) -> &'static [i64] {
+    pub(crate) const fn words(self) -> &'static [i64] {
         match self {
             ScalarElement::Int64 => &[0],
             ScalarElement::Float64 => &[1],
