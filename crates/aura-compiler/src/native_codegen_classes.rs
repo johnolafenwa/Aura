@@ -270,6 +270,10 @@ impl FunctionCompiler<'_> {
         let Some((root, path)) = place.split_once('.') else {
             return Ok(None);
         };
+        // A view's place lies in what it views, which the view code reaches.
+        if self.view_places.contains_key(root) {
+            return Ok(None);
+        }
         let Some(root_ty) = self.variable_types.get(root).cloned() else {
             return Ok(None);
         };

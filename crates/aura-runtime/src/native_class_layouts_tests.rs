@@ -14,7 +14,8 @@ use crate::collection_index::hash_value;
 use crate::integer::{IntegerKind, IntegerValue};
 use crate::list_elements::ListElements;
 use crate::native_runtime::{
-    aura_direct_element_path_load, aura_direct_element_path_store, aura_direct_instance_get_field,
+    aura_direct_element_path_load, aura_direct_element_path_store, aura_direct_instance_copy_field,
+    aura_direct_instance_get_field,
     aura_direct_instance_new_typed, aura_direct_instance_put_field,
     aura_direct_instance_read_plain, aura_direct_instance_restore_field,
     aura_direct_instance_set_field, aura_direct_instance_set_field_owned,
@@ -576,6 +577,12 @@ fn generated_code_builds_and_writes_typed_instances() {
             unsafe { (*slot("items")).as_ref() }.map(ElementBox::as_ptr),
             Some(other)
         );
+        // A read of a handle field copies the value out of the field box.
+        let copied = aura_direct_instance_copy_field(other);
+        assert_ne!(copied, other);
+        assert_eq!(unsafe { value_ref(copied) }, ints(&[3]));
+        assert_eq!(unsafe { value_ref(other) }, ints(&[3]));
+        unsafe { aura_direct_release_value(copied) };
         unsafe { aura_direct_release_value(built) };
     });
     let failure = runtime_failure(|| {

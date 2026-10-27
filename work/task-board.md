@@ -40,9 +40,15 @@ Last updated: 2026-10-27
   them instead of copying them (`ListElements::Boxes`,
   `aura_direct_vec_lend`, `native_codegen_elements.rs`). Details are in
   `2026-10-26-rust-speed-2d-list-buffers.md`.
-- Next: 2e, classes as structs with fields in their layouts, then 2d part
-  3 (element loans, `view`, and `match` on `items[i]`), whose paths mostly
-  end at fields.
+- Step 2e part 1: class instances that native code builds keep their
+  fields in the class's layout (`InstanceFields::Typed`,
+  `native_class_layouts.rs`); generated code reads and writes scalar
+  fields in the block, lends a field's box to one runtime operation, and
+  builds an instance with one call (`native_codegen_classes.rs`). Details
+  are in `2026-10-27-rust-speed-2e-class-layouts.md`.
+- Next: 2e part 2, classes kept in place in lists and enum payloads, then
+  2d part 3 (element loans, `view`, and `match` on `items[i]`), then 2e
+  part 3 (lent reads of handle fields).
 
 ## Aura 0.7.1 preview release (complete)
 

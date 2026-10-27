@@ -681,6 +681,43 @@ suite at the check size:
 The other programs change by less than 2%. The largest increase is
 `order_book`, at 1.1%.
 
+### Class Fields In Place
+
+A class instance that native code builds keeps its fields in one block in
+the class's native layout, as a Rust struct does. Scalar fields and fields
+that hold other classes sit in the block, and each `str`, collection,
+enum, union, or runtime object field is a pointer to a box of its own.
+Reading `self.count` loads the field from the block and writing it stores
+it there, about five instructions each, where the instance used to keep a
+map from field names to values and every read copied the field into a new
+box. An operation on a field, such as `self.items.append(x)` or
+`self.seen.add(k)`, works on the field's box where it lies, and a class
+literal builds the block with one runtime call.
+
+Generic classes and classes whose fields hold the class itself, such as a
+linked list node, keep the map, and so do instances `aura run` and the
+runtime build, such as those `json` decoding returns. A program cannot
+tell which form an instance uses: printing, equality, hashing, copies,
+and errors behave the same. An instance another task can reach is read
+through the runtime.
+
+Callgrind instruction counts on the shared Linux container, cross-language
+suite at the check size:
+
+| Program | Before | After |
+| --- | ---: | ---: |
+| `order_book` | 114.9M | 19.3M |
+| `regex_match` | 1,940.6M | 366.6M |
+| `bank_ledger` | 41.7M | 19.3M |
+| `raytracer` | 78.1M | 38.4M |
+| `spreadsheet` | 54.4M | 33.4M |
+| `lru_cache` | 426.1M | 276.0M |
+| `sort_records` | 67.1M | 46.9M |
+| `mini_browser` | 1,153.8M | 819.5M |
+| `sql_engine` | 2,616.8M | 1,936.2M |
+
+No other program grows by more than 2.6%.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

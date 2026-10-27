@@ -70,6 +70,21 @@ def area(shape: Shape) -> int64:
         case Shape.Circle(radius):
             return 3 * radius * radius
 
+# A view of an element reads its fields where the element lies.
+def views(books: list[Book], shelves: dict[str, Book]) -> int64:
+    mut total = 0
+    for index in range(books.len()):
+        view book = books[index]
+        for item in book.items:
+            total += item
+        total += book.items.len() + book.meta.count + book.pos.x
+        if book.title != "":
+            total += len(book.title)
+    view shelf = shelves["s"]
+    for tag in shelf.meta.tags:
+        total += len(tag)
+    return total + shelf.seen.len()
+
 def main():
     mut b = Book(
         title="t",
@@ -134,3 +149,20 @@ def main():
     print(books[0].items)
     print(books[0].total)
     print(books[0].describe())
+    mut shelves: dict[str, Book] = {}
+    shelves["s"] = Book(
+        title="s",
+        meta=Meta(name="n", count=2, tags=["ab", "c"]),
+        pos=Point(x=3, y=4),
+        items=[5, 6],
+        counts={},
+        seen={1, 2},
+        shape=Shape.Circle(1),
+        total=0,
+        flag=false,
+        small=1,
+        tiny=1,
+        maybe=None,
+        label=None,
+    )
+    print(views(books, shelves))
