@@ -83,7 +83,17 @@ Last updated: 2026-10-27
   from moving the line out of `read_line`'s `str | None` box (1.2% of
   `pubsub_broker`): `kv_server` -39%, `pubsub_broker` -36%, `bank_ledger`
   -26%.
-- Next: 2h, ownership off boxes and the allocation ledger.
+- Step 2h part 1: a function that only direct calls reach reads its
+  shared arguments and shared `self` where the caller holds them, with no
+  retain at the call and no release at its end. The ownership pass
+  records those functions in the module (`MirModule.borrowing`), and the
+  ownership checker refuses a recorded function another call could
+  reach. Retains across the 30 programs fall 34%; `sql_engine` and
+  `lru_cache` run 17% fewer instructions. Details are in
+  `2026-10-27-rust-speed-2h-shared-arguments.md`.
+- Next: 2h part 2, `mut` arguments moved into the call and written back
+  instead of retained, then unit results, scalar math, payload bindings,
+  and the leak, failure, and cancellation tests.
 
 ## Aura 0.7.1 preview release (complete)
 

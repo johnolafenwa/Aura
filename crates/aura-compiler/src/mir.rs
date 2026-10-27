@@ -663,6 +663,12 @@ pub struct MirModule {
     /// instructions. MIR without the field is `Implicit`.
     #[serde(default, skip_serializing_if = "MirOwnership::is_implicit")]
     pub ownership: MirOwnership,
+    /// The functions whose callers keep their shared parameters and shared
+    /// receiver (Rust-speed step 2h). The ownership pass records them, and
+    /// the ownership checker refuses one that a call could reach another
+    /// way. An implicit module's backends ignore them.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub borrowing: BTreeSet<String>,
 }
 
 /// How a module's MIR states ownership (Batch 7 step 8e).
@@ -2051,6 +2057,9 @@ struct MirLoanValidationContext<'a> {
     returned_views: BTreeMap<&'a str, ValidatedReturnedViewContract>,
     /// Validated explicit-tag layout plans keyed by canonical union identity.
     unions: BTreeMap<String, &'a crate::union_layout::MirUnionLayout>,
+    /// The functions whose callers keep their shared arguments: see
+    /// [`ownership::recorded_borrowing`].
+    borrowing: BTreeMap<String, ownership::BorrowingCallee>,
 }
 
 impl<'a> MirLoanValidationContext<'a> {
@@ -2505,14 +2514,23 @@ impl<'a> MirLoanValidationContext<'a> {
                 returned_views.insert(*name, contract);
             }
         }
-        Ok(Self {
+        let mut context = Self {
             classes,
             enums,
             functions,
             trait_impls: &module.trait_impls,
             returned_views,
             unions,
-        })
+            borrowing: BTreeMap::new(),
+        };
+        context.borrowing = ownership::recorded_borrowing(module, &context);
+        Ok(context)
+    }
+
+    /// How function `name` takes its arguments when its callers keep the
+    /// shared ones.
+    pub(crate) fn borrowing_function(&self, name: &str) -> Option<&ownership::BorrowingCallee> {
+        self.borrowing.get(name)
     }
 
     /// The validated layout plan for a union operation's type; a module that
@@ -10307,9 +10325,11 @@ pub(crate) fn lower_unspecialized(program: &Program) -> MirModule {
 fn make_explicit(program: &Program, mut module: MirModule) -> MirModule {
     resolve_runtime_ops_and_unions(program, &mut module);
     checks::resolve_checks(&mut module);
-    ownership::insert_ownership(&mut module);
+    // The ownership pass reads which function each method call runs, to
+    // keep the arguments a callee borrows.
     type_args::record_call_type_args(&mut module);
     methods::resolve_methods(&mut module);
+    ownership::insert_ownership(&mut module);
     module
 }
 
@@ -10498,6 +10518,7 @@ fn lower_unresolved(program: &Program) -> MirModule {
         trait_impls,
         top_level,
         ownership: MirOwnership::Implicit,
+        borrowing: Default::default(),
     };
     type_param_calls::specialize_type_param_calls(program, &mut module);
     module
@@ -27368,16 +27389,18 @@ pub(crate) fn validate_at_boundary(
     if module.ownership.is_implicit() {
         validate_loan_flow(module).map_err(BoundaryError::LoanFlow)?;
         checks::resolve_checks(module);
-        ownership::insert_ownership(module);
+        // The ownership pass reads which function each method call runs.
         type_args::record_call_type_args(module);
         methods::resolve_methods(module);
+        ownership::insert_ownership(module);
     }
     validate_loan_flow(module).map_err(BoundaryError::LoanFlow)?;
+    // The ownership checker trusts the callees the methods validator checks.
+    methods::validate_methods(module, methods::MethodsConsumer::Native)
+        .map_err(BoundaryError::LoanFlow)?;
     validate_ownership(module).map_err(BoundaryError::Ownership)?;
     checks::validate_checks(module).map_err(BoundaryError::Checks)?;
-    type_args::validate_call_type_args(module).map_err(BoundaryError::LoanFlow)?;
-    methods::validate_methods(module, methods::MethodsConsumer::Native)
-        .map_err(BoundaryError::LoanFlow)
+    type_args::validate_call_type_args(module).map_err(BoundaryError::LoanFlow)
 }
 
 /// The checks the interpreter runs. It decides ownership itself, so an
@@ -27391,14 +27414,15 @@ pub(crate) fn validate_for_interpreter(
     module: &MirModule,
 ) -> std::result::Result<(), BoundaryError> {
     validate_loan_flow(module).map_err(BoundaryError::LoanFlow)?;
-    validate_ownership(module).map_err(BoundaryError::Ownership)?;
     if module.ownership.is_implicit() {
-        return Ok(());
+        return validate_ownership(module).map_err(BoundaryError::Ownership);
     }
-    checks::validate_checks(module).map_err(BoundaryError::Checks)?;
-    type_args::validate_call_type_args(module).map_err(BoundaryError::LoanFlow)?;
+    // The ownership checker trusts the callees the methods validator checks.
     methods::validate_methods(module, methods::MethodsConsumer::Interpreter)
-        .map_err(BoundaryError::LoanFlow)
+        .map_err(BoundaryError::LoanFlow)?;
+    validate_ownership(module).map_err(BoundaryError::Ownership)?;
+    checks::validate_checks(module).map_err(BoundaryError::Checks)?;
+    type_args::validate_call_type_args(module).map_err(BoundaryError::LoanFlow)
 }
 
 pub(crate) use runtime_ops::{

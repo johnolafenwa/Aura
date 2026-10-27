@@ -81,6 +81,7 @@ fn public_object_codegen_reads_host_and_wait_result_types_from_mir() {
         trait_impls: Vec::new(),
         top_level: None,
         ownership: Default::default(),
+        borrowing: Default::default(),
     };
 
     let object = emit_host_native_object(&module).expect("valid typed calls should emit an object");

@@ -187,12 +187,28 @@ fn a_field_given_to_a_shared_parameter_or_receiver_is_lent() {
     checks(&module).expect("the lent module should check");
     let count = function(&module, "Store.count");
     assert_eq!(lends(count), ["self.docs", "self.docs"]);
-    // The callee owns its parameter, so the shared temporary is retained
-    // for the call and moved back afterwards.
+    // Only named calls reach `total`, so it borrows the lent temporary
+    // where it lies, and nothing retains it.
+    assert!(retained(count).is_empty(), "{count:#?}");
+    // A callee that a function value also reaches owns its parameter, so
+    // the shared temporary is retained for the call and moved back
+    // afterwards.
+    let module = lowered(&owning_total());
+    checks(&module).expect("the lent module should check");
+    let count = function(&module, "Store.count");
     let Some(Instruction::Lend { temp, .. }) = instructions(count).next() else {
         panic!("the first instruction should lend: {count:#?}");
     };
     assert_eq!(retained(count), [temp.as_str()]);
+}
+
+/// [`STORE`] with `total` also called through a function value, so it
+/// owns its parameter.
+fn owning_total() -> String {
+    STORE.replace(
+        "def main():\n",
+        "def main():\n    measure = total\n    print(measure([\"x\"]))\n",
+    )
 }
 
 #[test]
@@ -372,7 +388,7 @@ fn the_validator_refuses_forged_lends() {
 
 #[test]
 fn the_checker_refuses_an_unretained_shared_lend() {
-    let error = forged(STORE, "Store.count", |instructions| {
+    let error = forged(&owning_total(), "Store.count", |instructions| {
         let retain = instructions
             .iter()
             .position(|instruction| matches!(instruction, Instruction::Retain { .. }))

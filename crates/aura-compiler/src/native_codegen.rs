@@ -650,6 +650,9 @@ struct NativeCodegen<'a> {
     union_layouts: HashMap<String, crate::union_layout::MirUnionLayout>,
     /// How each method function takes its receiver, by function name.
     method_receivers: HashMap<String, Option<MirReceiverKind>>,
+    /// The functions whose callers keep their shared arguments (see
+    /// `mir::ownership::borrowing_functions`).
+    borrowing: BTreeMap<String, crate::mir::ownership::BorrowingCallee>,
     function_return_types: HashMap<String, DirectType>,
     function_param_types: HashMap<String, Vec<DirectType>>,
     function_writeback_types: HashMap<String, Vec<DirectType>>,
@@ -937,6 +940,7 @@ impl<'a> NativeCodegen<'a> {
                 })
                 .collect(),
             method_receivers,
+            borrowing: crate::mir::ownership::kept_arguments(module),
             function_return_types,
             function_param_types,
             function_writeback_types,
@@ -1492,6 +1496,7 @@ impl<'a> NativeCodegen<'a> {
             enums: self.enums.clone(),
             union_layouts: self.union_layouts.clone(),
             method_receivers: &self.method_receivers,
+            borrowing: &self.borrowing,
             return_type: function.return_type.clone(),
             layout_scratch: LayoutScratch::default(),
             tracked_roots: explicit_locals.tracked,
@@ -1625,7 +1630,17 @@ impl<'a> NativeCodegen<'a> {
 
         let mut lowered_args = Vec::new();
         let param_types = self.function_param_types[&function.name].clone();
+        // A function whose callers keep their shared arguments does not
+        // release them, so the thunk releases what it handed over after
+        // the call.
+        let kept = self
+            .borrowing
+            .get(&function.name)
+            .map(|callee| callee.params.clone())
+            .unwrap_or_default();
+        let mut kept_args = Vec::new();
         for (index, param_ty) in param_types.iter().enumerate() {
+            let first_word = lowered_args.len();
             let raw = builder.load(types::I64, MemFlags::new(), args_ptr, (index as i32) * 8);
             // The uniform function-value buffer is an in/out ownership
             // channel. Clear each incoming slot before transferring its
@@ -1682,9 +1697,15 @@ impl<'a> NativeCodegen<'a> {
                     let _ = builder.call(release_value, &[raw]);
                 }
             }
+            if kept.get(index) == Some(&MirReceiverKind::Borrow) {
+                kept_args.push((lowered_args[first_word..].to_vec(), param_ty.clone()));
+            }
         }
 
         let inst = builder.call(target_ref, &lowered_args);
+        for (values, ty) in &kept_args {
+            release_direct_values(self, builder, values, ty)?;
+        }
         let results = inst.results;
         let return_ty = match self.function_return_types.get(&function.name).cloned() {
             Some(return_ty) => return_ty,
@@ -2739,6 +2760,8 @@ struct FunctionCompiler<'a> {
     enums: HashMap<String, MirEnum>,
     union_layouts: HashMap<String, crate::union_layout::MirUnionLayout>,
     method_receivers: &'a HashMap<String, Option<MirReceiverKind>>,
+    /// The functions whose callers keep their shared arguments.
+    borrowing: &'a BTreeMap<String, crate::mir::ownership::BorrowingCallee>,
     return_type: Type,
     layout_scratch: LayoutScratch,
     /// The roots whose values the MIR retains and releases. Any other root
@@ -3659,13 +3682,19 @@ impl<'a> FunctionCompiler<'a> {
             }
             return self.retain_place(place);
         }
-        let erased = crate::mir::ownership::borrowed_receiver(instruction, |place| {
-            self.type_of_place(place)
-                .ok()
-                .map(|ty| direct_type_to_type(&ty))
+        let mut borrowed = crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
+            self.borrowing.get(name)
         });
+        borrowed.extend(crate::mir::ownership::borrowed_receiver(
+            instruction,
+            |place| {
+                self.type_of_place(place)
+                    .ok()
+                    .map(|ty| direct_type_to_type(&ty))
+            },
+        ));
         self.layout_scratch.consumers = consuming_operands(
-            crate::mir::ownership::operand_roles_with(instruction, erased),
+            crate::mir::ownership::operand_roles_with(instruction, &borrowed),
         );
         let compiled = self.compile_instruction_body(block_label, instruction_index, instruction);
         self.emptied_store_root = None;
@@ -6978,6 +7007,12 @@ impl<'a> FunctionCompiler<'a> {
             .collect::<HashMap<_, _>>();
         let mut writeback_places = Vec::new();
         let mut mutable_sink_places = vec![None; expected.len()];
+        // The arguments the callee borrows stay the caller's.
+        let kept = self
+            .borrowing
+            .get(name)
+            .map(|callee| callee.params.clone())
+            .unwrap_or_default();
         // The shared validator binds one argument to each parameter.
         debug_assert_eq!(args.len(), expected.len(), "arguments of `{name}`");
         for (index, (argument, abi_expected)) in args.iter().zip(&expected).enumerate() {
@@ -7002,6 +7037,12 @@ impl<'a> FunctionCompiler<'a> {
                 if let Some(slot) = mutable_sink_places.get_mut(index) {
                     *slot = Some(place.clone());
                 }
+            }
+            if kept.get(index) == Some(&MirReceiverKind::Borrow)
+                && argument.writeback_place.is_none()
+            {
+                lowered_args.extend(coerced.values.iter().copied());
+                continue;
             }
             let transferred = self.transfer_values(&coerced);
             lowered_args.extend(transferred);
@@ -12048,8 +12089,17 @@ impl<'a> FunctionCompiler<'a> {
         let mut mutable_sink_places = vec![None; expected.len()];
         let receiver_expected = expected.first().cloned().unwrap_or(object.ty.clone());
         let receiver = self.coerce_value(object.clone(), &receiver_expected)?;
-        let transferred = self.transfer_values(&receiver);
-        lowered_args.extend(transferred);
+        // The receiver and arguments the callee borrows stay the caller's.
+        let kept = self.borrowing.get(&method_function_name).cloned();
+        if kept
+            .as_ref()
+            .is_some_and(|callee| callee.receiver == Some(MirReceiverKind::Borrow))
+        {
+            lowered_args.extend(receiver.values.iter().copied());
+        } else {
+            let transferred = self.transfer_values(&receiver);
+            lowered_args.extend(transferred);
+        }
         if mutable_receiver {
             let Some(place) = receiver_place else {
                 return Err(format!(
@@ -12077,6 +12127,14 @@ impl<'a> FunctionCompiler<'a> {
                 if let Some(slot) = mutable_sink_places.get_mut(index + 1) {
                     *slot = Some(place.clone());
                 }
+            }
+            if kept
+                .as_ref()
+                .is_some_and(|callee| callee.params.get(index) == Some(&MirReceiverKind::Borrow))
+                && argument.writeback_place.is_none()
+            {
+                lowered_args.extend(coerced.values.iter().copied());
+                continue;
             }
             let transferred = self.transfer_values(&coerced);
             lowered_args.extend(transferred);

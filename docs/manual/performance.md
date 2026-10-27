@@ -855,6 +855,36 @@ suite at the check size:
 
 No other program grows by more than 1.1%.
 
+### Shared Arguments Stay With The Caller
+
+A shared parameter cannot be rebound or changed while its call runs, so
+a function that only direct calls reach reads its shared arguments, and
+a shared `self`, where the caller holds them. The caller takes no new
+reference for the call and the callee releases nothing when it returns.
+A callee that keeps such a value, by storing it or passing it to an
+`own` parameter, takes its own reference then. Functions reached through
+a function value, a task, a closure, a cleanup, a `From` conversion, or
+a method picked at run time, and functions that return a view, keep
+taking a reference to each argument; so do arguments of types the
+compiler copies freely, such as a `Queue` handle.
+
+Across the 30 cross-language programs at the check size, generated code
+retains values 34% less often. Callgrind instruction counts on the shared
+Linux container:
+
+| Program | Retains before | Retains after | Instructions before | Instructions after |
+| --- | ---: | ---: | ---: | ---: |
+| `sql_engine` | 156,514 | 71,207 | 1,705.4M | 1,413.8M |
+| `lru_cache` | 23,005 | 18,005 | 51.4M | 42.8M |
+| `spreadsheet` | 7,916 | 4,021 | 25.1M | 22.4M |
+| `json_roundtrip` | 55,702 | 49,660 | 644.2M | 576.5M |
+| `template_render` | 7,120 | 4,620 | 34.1M | 32.5M |
+| `interpreter` | 339,335 | 226,756 | 101.5M | 98.0M |
+| `mini_browser` | 83,879 | 38,941 | 595.6M | 584.0M |
+| `raytracer` | 12,612 | 1,850 | 37.0M | 36.5M |
+
+No other program grows by more than 0.3%.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

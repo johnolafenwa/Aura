@@ -497,6 +497,9 @@ def label_of(box: Box) -> str:
 
 def main():
     print(twice("ab"))
+    # A function value keeps `show` owning its parameter.
+    measure = show
+    print(measure("abc"))
     print(label_of(Box(tag=Tag(label="t"))))
     print(pick(true))
     print(swap(false))
@@ -917,14 +920,20 @@ def main():
     #[test]
     fn a_borrowed_parameter_never_moves() {
         let module = lowered();
+        // Only named calls reach `double` and `parse`, so their callers
+        // keep the shared `text`: `double` passes its caller's reference on
+        // and neither retains nor releases it.
+        assert!(module.borrowing.contains("double"));
+        assert!(module.borrowing.contains("parse"));
+        assert!(!module.borrowing.contains("show"));
         let double = function(&module, "double");
         assert!(matches!(
             first_arguments(double, "parse")[..],
             [Operand::Place(_)]
         ));
         let entry = &block(double, "entry").instructions;
-        assert!(retained(entry).contains(&"text"));
-        assert!(released(entry).contains(&"text"));
+        assert!(!retained(entry).contains(&"text"));
+        assert!(!released(entry).contains(&"text"));
     }
 
     #[test]
@@ -1066,7 +1075,7 @@ fn a_call_on_a_boxed_generic_receiver_borrows_it() {
     let generic = call_on("mapper");
     let erased = super::borrowed_receiver(&generic, type_of);
     assert!(erased.is_some());
-    let roles = super::operand_roles_with(&generic, erased)
+    let roles = super::operand_roles_with(&generic, &erased.into_iter().collect::<Vec<_>>())
         .into_iter()
         .map(|(operand, role)| (named(operand), role))
         .collect::<Vec<_>>();

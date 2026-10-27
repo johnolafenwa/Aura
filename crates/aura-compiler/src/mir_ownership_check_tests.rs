@@ -63,6 +63,9 @@ def main() -> int32:
     print(pick(true))
     print(swap(false))
     print(repeat(2, true))
+    # A function value keeps `parse` owning its parameter.
+    checker = parse
+    print(checker("1"))
     match double("4"):
         case Result.Ok(value):
             print(value)
@@ -316,6 +319,51 @@ fn a_wrong_try_list_is_refused() {
         try_value(&mut encoded)["releases_on_error"] = listed;
         assert_rejected(encoded, "but its error edge must release [note, other]");
     }
+}
+
+#[test]
+fn a_parameter_the_caller_keeps_is_never_released_or_moved() {
+    let encoded = lowered();
+    let borrowing = encoded["borrowing"].as_array().unwrap();
+    assert!(borrowing.contains(&json!("double")), "{borrowing:?}");
+    assert!(!borrowing.contains(&json!("parse")), "{borrowing:?}");
+    assert_rejected(
+        inserted(
+            encoded.clone(),
+            "double",
+            assigns("note"),
+            1,
+            release("text"),
+        ),
+        "releases `text`, which its caller keeps",
+    );
+    let mut forged = encoded;
+    let (instructions, index) = around(&mut forged, "double", |instruction| {
+        instruction["Assign"]["value"].get("Try").is_some()
+    });
+    instructions.insert(
+        index + 1,
+        json!({ "Assign": { "target": "%t99", "value": { "Use": { "MovePlace": "text" } } } }),
+    );
+    instructions.insert(index + 2, release("%t99"));
+    function_mut(&mut forged, "double")["local_types"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "name": "%t99", "ty": { "Named": ["str", []] } }));
+    assert_rejected(forged, "returns without `text`, which its caller keeps");
+}
+
+#[test]
+fn a_recorded_function_reached_another_way_is_refused() {
+    let mut encoded = lowered();
+    encoded["borrowing"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("parse"));
+    assert_rejected(
+        encoded,
+        "`parse` keeps its callers' shared arguments, but a call can reach it another way",
+    );
 }
 
 #[test]
