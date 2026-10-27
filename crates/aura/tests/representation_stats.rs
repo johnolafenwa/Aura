@@ -189,6 +189,17 @@ fn direct_backend_moves_a_value_at_its_last_use() {
     );
 }
 
+const MUTABLE_WRITES: &str = "def push(xs: mut list[int64], value: int64):\n    xs.append(value)\n    xs.swap(0, 0)\n\ndef main():\n    mut xs: list[int64] = [0]\n    mut counts: dict[str, int64] = {}\n    for i in range(10):\n        push(xs, i)\n        counts[\"k\"] = i\n    xs.reverse()\n    print(xs.len())\n    print(counts[\"k\"])\n";
+
+#[test]
+fn direct_mutable_arguments_and_collection_writes_take_no_reference() {
+    // `xs` moves into each call and comes back through the write-back, and
+    // each write changes the list's or the dict's box in place, so neither
+    // is retained.
+    let (_, direct) = assert_both_backends("repr-mutable", MUTABLE_WRITES, "11\n9\n");
+    assert_eq!(direct.retains, 0, "{direct:?}");
+}
+
 #[test]
 fn direct_scalar_union_local_allocates_no_union_box() {
     let (mir, direct) = assert_both_backends("repr-scalar-union", SCALAR_UNION_LOCAL, "42\n");

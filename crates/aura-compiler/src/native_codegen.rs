@@ -12582,32 +12582,28 @@ impl<'a> FunctionCompiler<'a> {
         Ok(self.coerce_value(loaded, &DirectType::Scalar(kind))?.values[0])
     }
 
-    /// Stores a receiver a method changed in place back to its place.
+    /// Stores a receiver a runtime helper changed back to its place. The
+    /// helpers change the receiver's box in place, so a local that holds
+    /// that box already holds the changed value: storing it again would
+    /// only retain the box and release the local's reference to it. Such
+    /// a local skips the store, and a mutable parameter still publishes
+    /// the value to its caller's write-through sink, when it has one. A
+    /// receiver the load copied into a temporary is stored, since the
+    /// helper changed the copy.
     fn store_receiver_back(
         &mut self,
         receiver_place: Option<&str>,
         object: &ValueRef,
     ) -> std::result::Result<(), String> {
-        if let Some(place) = receiver_place {
-            self.store_place(place, object.clone())?;
-        }
-        Ok(())
-    }
-
-    /// [`Self::store_receiver_back`] after a write that changed the
-    /// receiver's value in place, which skips a store that would change
-    /// nothing. A mutable parameter still publishes the value to its
-    /// caller's write-through sink, when it has one.
-    fn store_receiver_back_in_place(
-        &mut self,
-        receiver_place: Option<&str>,
-        object: &ValueRef,
-    ) -> std::result::Result<(), String> {
         match receiver_place {
-            Some(place) if self.receiver_store_is_redundant(place) => {
+            Some(place)
+                if self.receiver_store_is_redundant(place)
+                    && !self.temporary_owns_opaque(object) =>
+            {
                 self.publish_mutable_root_write_through(place)
             }
-            _ => self.store_receiver_back(receiver_place, object),
+            Some(place) => self.store_place(place, object.clone()),
+            None => Ok(()),
         }
     }
 
@@ -12722,7 +12718,7 @@ impl<'a> FunctionCompiler<'a> {
                 } else {
                     self.emit_scalar_list_push(list, bits, kind, function, &words);
                 }
-                self.store_receiver_back_in_place(receiver_place, &object)?;
+                self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
             ListOp::Push
@@ -12734,7 +12730,7 @@ impl<'a> FunctionCompiler<'a> {
                 let value = self.load_operand_for_target(&args[0].value, &element_direct_ty)?;
                 let value = self.coerce_value(value, &element_direct_ty)?;
                 self.emit_plain_list_push(&record, list, &value);
-                self.store_receiver_back_in_place(receiver_place, &object)?;
+                self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
             ListOp::Push => {
@@ -12752,7 +12748,7 @@ impl<'a> FunctionCompiler<'a> {
                 {
                     // `pop()` of a scalar comes back as raw bits, with no box.
                     let bits = self.emit_scalar_list_pop(list, kind);
-                    self.store_receiver_back_in_place(receiver_place, &object)?;
+                    self.store_receiver_back(receiver_place, &object)?;
                     let value = if kind.is_float() {
                         self.builder.bitcast(types::F64, bits)
                     } else {
@@ -12859,7 +12855,7 @@ impl<'a> FunctionCompiler<'a> {
                 let line = self.load_word(args[2], int32, false)?;
                 let column = self.load_word(args[3], int32, false)?;
                 self.emit_plain_list_set(&record, list, index, &value, (line, column));
-                self.store_receiver_back_in_place(receiver_place, &object)?;
+                self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
             ListOp::SetIndexScalar(kind) => {
@@ -12880,7 +12876,7 @@ impl<'a> FunctionCompiler<'a> {
                 let mut words = vec![list, index, bits, line, column];
                 self.push_runtime_call_words(call, &mut words);
                 self.emit_scalar_list_write(list, index, bits, kind, function, &words);
-                self.store_receiver_back_in_place(receiver_place, &object)?;
+                self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
             ListOp::SetIndex => {

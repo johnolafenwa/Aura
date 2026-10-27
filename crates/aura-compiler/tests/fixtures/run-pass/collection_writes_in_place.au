@@ -1,0 +1,77 @@
+class Inventory:
+    names: list[str]
+    counts: dict[str, int64]
+
+    def restock(mut self, name: str):
+        self.names.append(name.clone())
+        self.names.sort()
+        self.counts[name.clone()] = 1
+
+def shuffle(xs: mut list[int64]):
+    last = xs.len() - 1
+    xs.swap(0, last)
+    xs.reverse()
+    xs.insert(1, 50)
+    xs.remove(50)
+    xs.extend([7, 8])
+
+def tally(counts: mut dict[str, int64], seen: mut set[str], word: str):
+    if word in counts:
+        count = counts[word]
+        counts[word.clone()] = count + 1
+    else:
+        counts[word.clone()] = 1
+    seen.add(word.clone())
+
+def main():
+    mut xs: list[int64] = [1, 2, 3, 4]
+    xs.swap(0, 3)
+    xs.sort()
+    xs.reverse()
+    xs.extend([9, 10])
+    xs.remove(9)
+    xs.insert(0, 0)
+    before = xs.copy()
+    xs.clear()
+    xs.append(42)
+    print(before)
+    print(xs)
+
+    mut ys: list[int64] = [3, 1, 2]
+    for _ in range(3):
+        shuffle(ys)
+    print(ys)
+
+    mut words: list[str] = ["b", "a"]
+    words.swap(0, 1)
+    words.append("c")
+    words.reverse()
+    print(words)
+
+    mut counts: dict[str, int64] = {}
+    mut seen: set[str] = {}
+    for word in ["x", "y", "x", "z", "x"]:
+        tally(counts, seen, word)
+    counts.remove("z")
+    snapshot = counts.copy()
+    counts.clear()
+    counts["w"] = 5
+    print(snapshot["x"])
+    print(snapshot.len())
+    print(counts["w"])
+    seen.remove("y")
+    print(seen.len())
+    seen.clear()
+    print(seen.len())
+
+    mut inventory = Inventory(names=[], counts={})
+    inventory.restock("pear")
+    inventory.restock("apple")
+    print(inventory.names)
+    print(inventory.counts.len())
+
+    mut grid = Array[int64].zeros([2, 2])
+    grid.fill(3)
+    print(grid.set([1, 1], 7))
+    grid[0, 1] = 6
+    print(grid[1, 1] + grid[0, 1] + grid[0, 0])
