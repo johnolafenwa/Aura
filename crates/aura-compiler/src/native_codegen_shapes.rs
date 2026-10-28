@@ -11,9 +11,12 @@
 //! through `return`, already carries its type's tag, and coercing it to
 //! that type tags nothing.
 //!
-//! A local is left out when anything else may write it: a `try`, a loan,
-//! a lend the callee writes back, a closure capture, a `for` binding, a
-//! write-back argument, or one of the emitter's lent and lookup forms.
+//! A local is left out when anything else may write it: a `try`, a loan
+//! it holds, a mutable lend, a closure capture, a `for` binding, or one of
+//! the emitter's lent and lookup forms. A local passed for write-back stays
+//! in, since storing what the callee hands back tags it, and so does a
+//! local a mutable loan borrows, since the loan changes what the box holds,
+//! not the box.
 
 use std::collections::HashSet;
 
@@ -179,37 +182,12 @@ pub(super) fn shaped_locals(
                         written.insert(temp);
                     }
                 }
-                Instruction::BeginLoan {
-                    loan,
-                    source,
-                    mutable,
-                }
-                | Instruction::BeginElementLoan {
-                    loan,
-                    source,
-                    mutable,
-                    ..
-                }
-                | Instruction::BeginReturnedLoan {
-                    loan,
-                    origin: source,
-                    mutable,
-                    ..
-                }
-                | Instruction::Reborrow {
-                    loan,
-                    parent: source,
-                    mutable,
-                    ..
-                }
-                | Instruction::ReborrowElement {
-                    loan,
-                    parent: source,
-                    mutable,
-                    ..
-                } => {
+                Instruction::BeginLoan { loan, .. }
+                | Instruction::BeginElementLoan { loan, .. }
+                | Instruction::BeginReturnedLoan { loan, .. }
+                | Instruction::Reborrow { loan, .. }
+                | Instruction::ReborrowElement { loan, .. } => {
                     excluded.insert(loan);
-                    let _ = (source, mutable);
                 }
                 Instruction::ReturnLoan { loan, origin } => {
                     excluded.insert(root(loan));
@@ -247,23 +225,19 @@ pub(super) fn shaped_locals(
     shaped.into_iter().map(str::to_string).collect()
 }
 
-/// Leaves out the locals `value` lets a callee or a closure write: write-back
-/// arguments and captures.
+/// Leaves out the locals `value` lets a closure write: its captures. A
+/// write-back argument stays in, since storing what the callee hands back
+/// tags it.
 fn exclude_rvalue_writes<'a>(value: &'a Rvalue, excluded: &mut HashSet<&'a str>) {
-    let args = match value {
-        Rvalue::Call { args, .. } | Rvalue::StartTask { args, .. } => args,
-        Rvalue::Closure { captures, .. } => {
-            for capture in captures {
-                if let Operand::Place(place) | Operand::MovePlace(place) = &capture.value {
-                    excluded.insert(root(place));
-                }
-                if let Some(place) = &capture.source_place {
-                    excluded.insert(root(place));
-                }
-            }
-            return;
-        }
-        _ => return,
+    let Rvalue::Closure { captures, .. } = value else {
+        return;
     };
-    let _ = args;
+    for capture in captures {
+        if let Operand::Place(place) | Operand::MovePlace(place) = &capture.value {
+            excluded.insert(root(place));
+        }
+        if let Some(place) = &capture.source_place {
+            excluded.insert(root(place));
+        }
+    }
 }
