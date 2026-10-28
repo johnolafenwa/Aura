@@ -19011,11 +19011,12 @@ fn representation_stats_count_report_and_parse_round_trip() {
         releases: 8,
         clones: 1,
         freed_boxes: 9,
+        conversions: 3,
     };
     let line = stats.report_line("direct");
     assert_eq!(
         line,
-        "aura runtime stats (direct): union_payload_boxes=2 closure_environments=1 opaque_boxes=10 callable_overflow_allocations=0 cloned_elements=4 retains=7 releases=8 clones=1 freed_boxes=9"
+        "aura runtime stats (direct): union_payload_boxes=2 closure_environments=1 opaque_boxes=10 callable_overflow_allocations=0 cloned_elements=4 retains=7 releases=8 clones=1 freed_boxes=9 conversions=3"
     );
     assert_eq!(
         RepresentationStats::parse_report_line(&line),

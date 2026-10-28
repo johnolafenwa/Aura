@@ -181,6 +181,7 @@ runtime_functions! {
     VecReadPlain => ("aura_direct_vec_read_plain", [I64, I64, I64, I64, I64, I64], None),
     VecPushPlain => ("aura_direct_vec_push_plain", [I64, I64, I64], None),
     VecSetPlain => ("aura_direct_vec_set_plain", [I64, I64, I64, I64, I64, I64], None),
+    VecPopPlain => ("aura_direct_vec_pop_plain", [I64, I64, I64], None),
     CompareStrLiteralAt => ("aura_direct_compare_str_literal_at", [I64, I64, I64, I64, I64, I64, I64, I64], Some(I64)),
     BytesEqual => ("aura_direct_bytes_equal", [I64, I64, I64], Some(I64)),
     CompareValuesAt => ("aura_direct_compare_values_at", [I64, I64, I64, I64, I64, I64, I64], Some(I64)),

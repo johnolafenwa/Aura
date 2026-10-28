@@ -62,6 +62,8 @@ pub(super) struct PlainRecords {
     /// The enum layouts the module's code uses, by the type's descriptor
     /// (see `native_codegen_enums.rs`).
     pub(super) enums: HashMap<String, Option<super::enums::EnumRecord>>,
+    /// The module's Copy classes, whose instances keep every field inline.
+    pub(super) copy_classes: HashSet<String>,
     /// The plain records made so far, which number their access codes.
     plain_count: u32,
     /// Each cell with its type's descriptor and access code, in the order
@@ -76,6 +78,12 @@ impl PlainRecords {
             by_class: HashMap::new(),
             classes: HashMap::new(),
             enums: HashMap::new(),
+            copy_classes: module
+                .classes
+                .iter()
+                .filter(|class| class.copy)
+                .map(|class| class.name.clone())
+                .collect(),
             plain_count: 0,
             cells: Vec::new(),
         }
@@ -691,6 +699,64 @@ impl FunctionCompiler<'_> {
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
+    }
+
+    /// Removes the last record of `list`. A confined list that keeps the
+    /// records in place in storage no other list shares lowers the view's
+    /// length and reads the record where it lay, and the runtime drops the
+    /// element at its next access. Any other list, or an empty one, takes
+    /// one call that writes the record into a stack slot, which reports
+    /// the diagnostic of `pop()`.
+    pub(super) fn emit_plain_list_pop(
+        &mut self,
+        record: &PlainRecord,
+        list: Val,
+        ty: &DirectType,
+    ) -> ValueRef {
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let slow_block = self.builder.create_block();
+        let fast_block = self.builder.create_block();
+        let pop_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        self.emit_plain_list_check(list, record, &layout, slow_block, fast_block);
+
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let flags = MemFlags::trusted();
+        let len = self
+            .builder
+            .load(types::I64, flags, list, layout.len_offset);
+        let capacity = self.builder.uload32(flags, list, layout.capacity_offset);
+        // Room means unshared storage, and it is at least the length.
+        let empty = self.builder.icmp_imm(IntCC::Equal, len, 0);
+        let no_room = self.builder.icmp_imm(IntCC::Equal, capacity, 0);
+        let slow = self.builder.bor(empty, no_room);
+        self.builder.brif(slow, slow_block, &[], pop_block, &[]);
+
+        self.builder.switch_to_block(pop_block);
+        self.builder.seal_block(pop_block);
+        let last = self.builder.iadd_imm(len, -1);
+        let elements = self
+            .builder
+            .load(types::I64, flags, list, layout.elements_offset);
+        let offset = self.builder.imul_imm(last, record.stride);
+        let element = self.builder.iadd(elements, offset);
+        self.builder.store(flags, last, list, layout.len_offset);
+        self.builder.jump(join_block, &[element]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let slot = self.plain_slot(record);
+        let cell = self.plain_cell(record);
+        self.builder
+            .call(self.runtime[RuntimeFn::VecPopPlain], &[list, slot, cell]);
+        self.builder.jump(join_block, &[slot]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        let address = self.builder.block_params(join_block)[0];
+        self.load_plain_record(record, address, ty)
     }
 }
 

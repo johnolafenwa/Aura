@@ -56,6 +56,7 @@ struct Stats {
     releases: u64,
     clones: u64,
     freed_boxes: u64,
+    conversions: u64,
 }
 
 fn parse_stats(stderr: &str, backend: &str) -> Stats {
@@ -78,6 +79,7 @@ fn parse_stats(stderr: &str, backend: &str) -> Stats {
             "releases" => stats.releases = value,
             "clones" => stats.clones = value,
             "freed_boxes" => stats.freed_boxes = value,
+            "conversions" => stats.conversions = value,
             other => panic!("unexpected stats field `{other}`"),
         }
     }
@@ -794,4 +796,20 @@ fn direct_json_document_fields_are_lent_not_copied() {
         "json document fields cloned {} elements on the direct backend",
         direct.cloned_elements
     );
+}
+
+const TYPED_LAYOUT_READS: &str = "enum Value:\n    Int(value: int64)\n    Text(value: str)\n\ncopy class Point:\n    x: int64\n    y: int64\n\nclass Condition:\n    column: int64\n    value: Value\n    at: Point\n\ndef weigh(value: Value) -> int64:\n    match value:\n        case Value.Int(number):\n            return number\n        case Value.Text(text):\n            return text.byte_len()\n\ndef main():\n    mut conditions: list[Condition] = []\n    mut points: list[Point] = []\n    for i in range(4):\n        conditions.append(Condition(column=i, value=Value.Int(i), at=Point(x=i, y=i)))\n        points.append(Point(x=i, y=2 * i))\n    conditions[1].value = Value.Text(\"abc\")\n    mut total = 0\n    for condition in conditions:\n        total += condition.column + weigh(condition.value) + condition.at.y\n    while points.len() > 0:\n        point = points.pop()\n        total += point.y\n    print(total)\n    print([Point(x=1, y=2)])\n";
+
+#[test]
+fn direct_typed_layouts_convert_only_at_the_print() {
+    // Enum fields of a class, records in a list, and popped records move
+    // as boxes and bytes; only printing a list of records builds a value
+    // from a record's bytes. The interpreter keeps no typed layouts.
+    let (mir, direct) = assert_both_backends(
+        "repr-conversions",
+        TYPED_LAYOUT_READS,
+        "32\n[Point(x=1, y=2)]\n",
+    );
+    assert_eq!(mir.conversions, 0);
+    assert_eq!(direct.conversions, 1, "{direct:?}");
 }

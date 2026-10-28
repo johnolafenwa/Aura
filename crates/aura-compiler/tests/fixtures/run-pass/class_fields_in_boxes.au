@@ -1,0 +1,136 @@
+# Enum, union, and class fields of a class, read, written, matched, and
+# moved; records popped from a list; payloads moved out of typed variants.
+
+enum Value:
+    Int(value: int64)
+    Text(value: str)
+
+
+enum Shape:
+    Dot
+    Square(side: int64)
+
+
+copy class Point:
+    x: int64
+    y: int64
+
+
+class Tag:
+    name: str
+    weight: int64
+
+
+class Condition:
+    column: int64
+    value: Value
+    label: str | None
+    shape: Shape
+    tag: Tag
+    at: Point
+
+
+enum Statement:
+    Insert(values: list[Value])
+    Filter(condition: Condition, limit: int64)
+
+
+def describe(value: Value) -> str:
+    match value:
+        case Value.Int(number):
+            return f"int {number}"
+        case Value.Text(text):
+            return f"text {text}"
+
+
+def score(condition: Condition) -> int64:
+    mut total = condition.column + condition.tag.weight + condition.at.x
+    match condition.shape:
+        case Shape.Dot:
+            total += 1
+        case Shape.Square(side):
+            total += side * side
+    match condition.label:
+        case str as label:
+            total += label.byte_len()
+        case None:
+            total += 100
+    return total
+
+
+def build(index: int64) -> Condition:
+    mut value = Value.Int(index)
+    if index % 2 == 1:
+        value = Value.Text(f"v{index}")
+    mut label: str | None = None
+    if index % 3 == 0:
+        label = f"label{index}"
+    return Condition(
+        column=index,
+        value=value,
+        label=label,
+        shape=Shape.Square(index),
+        tag=Tag(name=f"t{index}", weight=index * 10),
+        at=Point(x=index, y=-index),
+    )
+
+
+def parse(index: int64) -> Statement:
+    if index % 2 == 0:
+        return Statement.Insert([Value.Int(index), Value.Text("row")])
+    return Statement.Filter(build(index), index)
+
+
+def main():
+    mut conditions: list[Condition] = []
+    for index in range(6):
+        conditions.append(build(index))
+    mut total = 0
+    for condition in conditions:
+        print(describe(condition.value))
+        total += score(condition)
+    print(total)
+
+    # Writes replace the boxed fields; reads see the new values.
+    mut first = build(4)
+    first.value = Value.Text("changed")
+    first.label = "now"
+    first.shape = Shape.Dot
+    first.tag = Tag(name="other", weight=7)
+    first.tag.weight += 1
+    print(f"{describe(first.value)} {score(first)} {first.tag.name}")
+    kept = first.value
+    first.value = Value.Int(9)
+    print(f"{describe(kept)} {describe(first.value)}")
+
+    # A copy keeps its own fields.
+    items = [first]
+    mut copied = items.copy()
+    copied[0].value = Value.Int(1)
+    copied[0].tag.name = "copied"
+    print(f"{describe(items[0].value)} {describe(copied[0].value)} {items[0].tag.name} {copied[0].tag.name}")
+
+    # Payloads move out of typed variants.
+    for index in range(4):
+        match own parse(index):
+            case Statement.Insert(values):
+                mut texts = 0
+                for value in values:
+                    print(describe(value))
+                    texts += 1
+                print(texts)
+            case Statement.Filter(condition, limit):
+                print(f"{describe(condition.value)} {limit} {score(condition)}")
+
+    # Records pop off a list of records.
+    mut points: list[Point] = []
+    for index in range(5):
+        points.append(Point(x=index, y=index * index))
+    mut sum = 0
+    while points.len() > 2:
+        point = points.pop()
+        sum += point.x * 10 + point.y
+    print(f"{sum} {points.len()} {points[1].y}")
+    points.append(Point(x=7, y=8))
+    last = points.pop()
+    print(f"{last.x} {last.y} {points.len()}")

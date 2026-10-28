@@ -80,7 +80,7 @@ impl ElementBox {
     /// another thread may read it, so the list must not change it in place.
     /// Generated code takes no reference to a box, so this only guards the
     /// rule.
-    fn is_shared(&self) -> bool {
+    pub(super) fn is_shared(&self) -> bool {
         self.header().ref_count.load(Ordering::Acquire) > 1 || self.header().shared_lock().is_some()
     }
 

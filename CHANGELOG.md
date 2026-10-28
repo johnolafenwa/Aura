@@ -23,6 +23,9 @@ in this file.
   `freed_boxes`, the boxes the program freed, and is printed after the
   module constants are freed. A program that frees everything it allocated
   reports as many `freed_boxes` as `opaque_boxes`.
+- The `AURA_RUNTIME_STATS=1` line reports `conversions`, the values a
+  native program built from a class, record, tuple, enum, or union kept
+  in its typed layout, or wrote into one.
 
 ### Performance
 
@@ -174,6 +177,16 @@ in this file.
   lock or a reference count, and a read finds it with one load instead
   of a lookup by name. A probe that reads list and `dict` constants in
   loops and in tasks runs 70% fewer instructions.
+- Native builds keep an enum or union field of a class in a box of its
+  own, so reading or writing it moves that box instead of converting the
+  field's bytes, move a payload out of an enum variant with `match own`
+  as the box it is, and read a record popped off a list of records where
+  it lay. Appends that reach the runtime store a scalar's bits directly,
+  and a value passed to a `mut` parameter, or moved into a call, is no
+  longer given its type again. `nbody` runs 33% fewer instructions,
+  `astar_pathfinding` 18%, `graph_paths` 15%, `interpreter` 12%, and
+  `regex_match` 11%, and 29 of the 30 cross-language programs convert no
+  value between a typed layout and a runtime value.
 
 ### Fixed
 

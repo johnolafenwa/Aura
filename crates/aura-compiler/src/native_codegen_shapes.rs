@@ -11,15 +11,16 @@
 //! through `return`, already carries its type's tag, and coercing it to
 //! that type tags nothing.
 //!
-//! A local is left out when anything else may write it: a `try`, a loan,
-//! a lend the callee writes back, a closure capture, a `for` binding, a
-//! write-back argument, or one of the emitter's lent and lookup forms.
+//! A local is left out when anything else may write it: a `try`, a loan
+//! it holds, a mutable lend, a closure capture, a `for` binding, or one of
+//! the emitter's lent and lookup forms. A local passed for write-back stays
+//! in, since storing what the callee hands back tags it, and so does a
+//! local a mutable loan borrows, since the loan changes what the box holds,
+//! not the box.
 
 use std::collections::HashSet;
 
-use crate::mir::{
-    Instruction, MirFunction, MirModule, MirReceiverKind, Operand, Rvalue, Terminator,
-};
+use crate::mir::{Instruction, MirFunction, MirModule, Operand, Rvalue, Terminator};
 
 /// What the module's functions promise about the tags of the boxes they
 /// pass and return.
@@ -31,6 +32,9 @@ pub(super) struct ProgramShapes {
     /// The functions that return only through `return`, which tags the
     /// value with the return type.
     tagged_returns: HashSet<String>,
+    /// The functions whose parameters only plain assignments write, so a
+    /// write-back hands back a box that carries its parameter's tag.
+    tagged_writebacks: HashSet<String>,
 }
 
 impl ProgramShapes {
@@ -51,21 +55,38 @@ impl ProgramShapes {
             {
                 shapes.direct_only.insert(function.name.clone());
             }
-            if !function.blocks.iter().any(|block| {
-                block.instructions.iter().any(|instruction| {
-                    matches!(
-                        instruction,
-                        Instruction::Assign {
-                            value: Rvalue::Try { .. },
-                            ..
-                        } | Instruction::WriteLoan {
-                            value: Rvalue::Try { .. },
-                            ..
-                        }
-                    )
-                })
+            let instructions = || {
+                function
+                    .blocks
+                    .iter()
+                    .flat_map(|block| block.instructions.iter())
+            };
+            if !instructions().any(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::Assign {
+                        value: Rvalue::Try { .. },
+                        ..
+                    } | Instruction::WriteLoan {
+                        value: Rvalue::Try { .. },
+                        ..
+                    }
+                )
             }) {
                 shapes.tagged_returns.insert(function.name.clone());
+                let is_param = |place: &str| {
+                    function
+                        .params
+                        .iter()
+                        .any(|param| param.name == root(place))
+                };
+                if !instructions().any(|instruction| match instruction {
+                    Instruction::ReadLoan { target, .. } => is_param(target),
+                    Instruction::ReturnLoan { loan, origin } => is_param(loan) || is_param(origin),
+                    _ => false,
+                }) {
+                    shapes.tagged_writebacks.insert(function.name.clone());
+                }
             }
         }
         shapes
@@ -75,6 +96,13 @@ impl ProgramShapes {
     /// type's tag.
     pub(super) fn returns_tagged(&self, function: &str) -> bool {
         self.tagged_returns.contains(function)
+    }
+
+    /// Whether a call of `function` writes back boxes that carry their
+    /// parameters' tags: each is the box the call passed, which the caller
+    /// tagged, or one a plain assignment stored in the parameter.
+    pub(super) fn writes_back_tagged(&self, function: &str) -> bool {
+        self.tagged_writebacks.contains(function)
     }
 }
 
@@ -102,7 +130,7 @@ pub(super) fn shaped_locals(
     let mut lends = Vec::<(&str, &str)>::new();
     let direct_only = program.direct_only.contains(&function.name);
     for param in &function.params {
-        if direct_only && param.passing != MirReceiverKind::BorrowMut {
+        if direct_only {
             written.insert(&param.name);
         } else {
             excluded.insert(&param.name);
@@ -154,39 +182,12 @@ pub(super) fn shaped_locals(
                         written.insert(temp);
                     }
                 }
-                Instruction::BeginLoan {
-                    loan,
-                    source,
-                    mutable,
-                }
-                | Instruction::BeginElementLoan {
-                    loan,
-                    source,
-                    mutable,
-                    ..
-                }
-                | Instruction::BeginReturnedLoan {
-                    loan,
-                    origin: source,
-                    mutable,
-                    ..
-                }
-                | Instruction::Reborrow {
-                    loan,
-                    parent: source,
-                    mutable,
-                    ..
-                }
-                | Instruction::ReborrowElement {
-                    loan,
-                    parent: source,
-                    mutable,
-                    ..
-                } => {
+                Instruction::BeginLoan { loan, .. }
+                | Instruction::BeginElementLoan { loan, .. }
+                | Instruction::BeginReturnedLoan { loan, .. }
+                | Instruction::Reborrow { loan, .. }
+                | Instruction::ReborrowElement { loan, .. } => {
                     excluded.insert(loan);
-                    if *mutable {
-                        excluded.insert(root(source));
-                    }
                 }
                 Instruction::ReturnLoan { loan, origin } => {
                     excluded.insert(root(loan));
@@ -224,26 +225,18 @@ pub(super) fn shaped_locals(
     shaped.into_iter().map(str::to_string).collect()
 }
 
-/// Leaves out the locals `value` lets a callee or a closure write: write-back
-/// arguments and captures.
+/// Leaves out the locals `value` lets a closure write: its captures. A
+/// write-back argument stays in, since storing what the callee hands back
+/// tags it.
 fn exclude_rvalue_writes<'a>(value: &'a Rvalue, excluded: &mut HashSet<&'a str>) {
-    let args = match value {
-        Rvalue::Call { args, .. } | Rvalue::StartTask { args, .. } => args,
-        Rvalue::Closure { captures, .. } => {
-            for capture in captures {
-                if let Operand::Place(place) | Operand::MovePlace(place) = &capture.value {
-                    excluded.insert(root(place));
-                }
-                if let Some(place) = &capture.source_place {
-                    excluded.insert(root(place));
-                }
-            }
-            return;
-        }
-        _ => return,
+    let Rvalue::Closure { captures, .. } = value else {
+        return;
     };
-    for arg in args {
-        if let Some(place) = &arg.writeback_place {
+    for capture in captures {
+        if let Operand::Place(place) | Operand::MovePlace(place) = &capture.value {
+            excluded.insert(root(place));
+        }
+        if let Some(place) = &capture.source_place {
             excluded.insert(root(place));
         }
     }

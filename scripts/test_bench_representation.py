@@ -11,14 +11,15 @@ class RepresentationBenchmarkTests(unittest.TestCase):
     def test_parse_stats_reads_every_counter_for_the_requested_backend(self):
         stderr = ('aura runtime stats (mir): union_payload_boxes=2 closure_environments=1 '
                   'opaque_boxes=0 callable_overflow_allocations=0 cloned_elements=0 '
-                  'retains=0 releases=0 clones=0 freed_boxes=0\n'
+                  'retains=0 releases=0 clones=0 freed_boxes=0 conversions=0\n'
                   'aura runtime stats (direct): union_payload_boxes=1 closure_environments=1 '
                   'opaque_boxes=10 callable_overflow_allocations=0 cloned_elements=3 '
-                  'retains=4 releases=14 clones=1 freed_boxes=9\n')
+                  'retains=4 releases=14 clones=1 freed_boxes=9 conversions=2\n')
         self.assertEqual(bench.parse_stats(stderr, 'direct')['opaque_boxes'], 10)
         self.assertEqual(bench.parse_stats(stderr, 'mir')['union_payload_boxes'], 2)
         self.assertEqual(bench.parse_stats(stderr, 'direct')['retains'], 4)
         self.assertEqual(bench.parse_stats(stderr, 'direct')['freed_boxes'], 9)
+        self.assertEqual(bench.parse_stats(stderr, 'direct')['conversions'], 2)
 
     def test_parse_stats_rejects_missing_or_unknown_counters(self):
         with self.assertRaisesRegex(ValueError, 'missing counters'):

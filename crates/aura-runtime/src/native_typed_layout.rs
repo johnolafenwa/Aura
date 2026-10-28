@@ -73,6 +73,7 @@ impl TypedLayout {
     /// [`Self::align`].
     pub(crate) unsafe fn write(&self, value: Value, dst: *mut u8) -> Result<(), String> {
         check(&self.table, self.root, &value)?;
+        note_conversion(&self.table, self.root);
         unsafe { write(&self.table, self.root, value, dst) };
         Ok(())
     }
@@ -83,6 +84,7 @@ impl TypedLayout {
     ///
     /// `src` holds a value of this layout.
     pub(crate) unsafe fn read(&self, src: *const u8) -> Value {
+        note_conversion(&self.table, self.root);
         unsafe { read(&self.table, self.root, src) }
     }
 
@@ -92,6 +94,7 @@ impl TypedLayout {
     ///
     /// `src` holds a value of this layout, and nothing reads it again.
     pub(crate) unsafe fn take(&self, src: *mut u8) -> Value {
+        note_conversion(&self.table, self.root);
         unsafe { take(&self.table, self.root, src) }
     }
 
@@ -187,6 +190,7 @@ impl PlainLayout {
     /// [`Self::fits`] accepted `value`, and `dst` is valid for writes of
     /// [`Self::stride_words`] words.
     pub unsafe fn encode(&self, value: &Value, dst: *mut u64) {
+        note_conversion(&self.layout.table, self.layout.root);
         unsafe {
             std::ptr::write_bytes(dst, 0, self.stride_words.get());
             (self.ops.write)(&self.layout.table, self.layout.root, value, dst.cast());
@@ -211,6 +215,7 @@ impl PlainLayout {
     /// `dst` is valid for writes of the layout's size, at its alignment.
     pub unsafe fn write_checked(&self, value: &Value, dst: *mut u8) -> Result<(), String> {
         (self.ops.check)(&self.layout.table, self.layout.root, value)?;
+        note_conversion(&self.layout.table, self.layout.root);
         unsafe { (self.ops.write)(&self.layout.table, self.layout.root, value, dst) };
         Ok(())
     }
@@ -221,6 +226,7 @@ impl PlainLayout {
     ///
     /// `src` holds a value of this layout.
     pub unsafe fn read(&self, src: *const u8) -> Value {
+        note_conversion(&self.layout.table, self.layout.root);
         unsafe { (self.ops.read)(&self.layout.table, self.layout.root, src) }
     }
 }
@@ -675,6 +681,7 @@ pub(super) unsafe fn write_unchecked(
     value: Value,
     dst: *mut u8,
 ) {
+    note_conversion(table, id);
     unsafe { write(table, id, value, dst) }
 }
 
@@ -684,6 +691,7 @@ pub(super) unsafe fn write_unchecked(
 ///
 /// `src` holds a value of `id`'s layout.
 pub(super) unsafe fn read_at(table: &LayoutTable, id: LayoutId, src: *const u8) -> Value {
+    note_conversion(table, id);
     unsafe { read(table, id, src) }
 }
 
@@ -693,7 +701,21 @@ pub(super) unsafe fn read_at(table: &LayoutTable, id: LayoutId, src: *const u8) 
 ///
 /// `src` holds a value of `id`'s layout, and nothing reads it again.
 pub(super) unsafe fn take_at(table: &LayoutTable, id: LayoutId, src: *mut u8) -> Value {
+    note_conversion(table, id);
     unsafe { take(table, id, src) }
+}
+
+/// Counts a value built from, or written into, the bytes of a layout that
+/// holds more than one scalar or box: a class, tuple, record, enum, or
+/// union in place (see `conversions` in the runtime stats).
+#[inline]
+fn note_conversion(table: &LayoutTable, id: LayoutId) {
+    if matches!(
+        table.get(id).kind,
+        LayoutKind::Struct { .. } | LayoutKind::Tagged { .. } | LayoutKind::Indirect(_)
+    ) {
+        crate::runtime_value::representation_stats::note_conversion();
+    }
 }
 
 /// Drops the value of `id` at `ptr`. Its bytes are dead afterwards.

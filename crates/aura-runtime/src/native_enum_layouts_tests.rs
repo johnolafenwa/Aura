@@ -483,8 +483,23 @@ fn generated_code_builds_tests_and_reads_typed_variants() {
         assert_eq!(unsafe { value_ref(read) }, text("n"));
         unsafe { aura_direct_release_value(read) };
         let taken = aura_direct_variant_take_payload(built, 0);
+        // The payload's box moves out as it is.
+        assert_eq!(taken, name);
         assert_eq!(unsafe { value_ref(taken) }, text("n"));
         unsafe { aura_direct_release_value(taken) };
+        // A payload box something else holds is copied out.
+        let other = unsafe { aura_direct_enum_new_typed(cell, 2) };
+        let other_block = unsafe { &*other }.list_elements.get();
+        let held = boxed_value(text("h"));
+        unsafe { aura_direct_instance_put_field(other_block as *mut Option<ElementBox>, held) };
+        let read = unsafe { crate::native_runtime::aura_direct_retain_value(held) };
+        let copied = aura_direct_variant_take_payload(other, 0);
+        assert_ne!(copied, held);
+        assert_eq!(unsafe { value_ref(copied) }, text("h"));
+        assert_eq!(unsafe { value_ref(read) }, text("h"));
+        unsafe { aura_direct_release_value(copied) };
+        unsafe { aura_direct_release_value(read) };
+        unsafe { aura_direct_release_value(other) };
         // A change through the runtime turns the payloads into values, and
         // the view follows.
         unsafe {

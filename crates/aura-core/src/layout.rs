@@ -664,6 +664,42 @@ impl<'env> LayoutBuilder<'env> {
         Ok(Some(self.push(layout)))
     }
 
+    /// The layout of an instance of the class `ty` in the box that holds
+    /// it: its fields in order, each field `inline` accepts in its own
+    /// layout and every other field one handle. `None` when `ty` is not an
+    /// instantiated class of the environment.
+    pub fn boxed_class_layout(
+        &mut self,
+        ty: &Type,
+        inline: impl Fn(&Type) -> bool,
+    ) -> Result<Option<LayoutId>, LayoutError> {
+        let Type::Named(name, _) = ty else {
+            return Ok(None);
+        };
+        if !self.env.classes.contains_key(name) || !self.is_nominal(ty) || names_type_param(ty) {
+            return Ok(None);
+        }
+        let fields = self.class_fields(ty).unwrap_or_default();
+        let mut laid = Vec::with_capacity(fields.len());
+        for (field, field_ty) in fields {
+            let layout = if inline(&field_ty) {
+                self.layout(&field_ty)?
+            } else {
+                // As for a boxed enum's payloads: not the layout `layout`
+                // keeps for the type.
+                self.push(Layout {
+                    ty: field_ty,
+                    size: POINTER_BYTES,
+                    align: POINTER_BYTES,
+                    kind: LayoutKind::Handle,
+                })
+            };
+            laid.push((field, layout));
+        }
+        let layout = self.struct_layout(ty, Some(name.clone()), laid);
+        Ok(Some(self.push(layout)))
+    }
+
     fn indirect_to(&mut self, ty: &Type, target: LayoutId) -> LayoutId {
         if let Some(id) = self.indirect.get(&target) {
             return *id;

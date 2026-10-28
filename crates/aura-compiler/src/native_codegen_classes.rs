@@ -23,7 +23,7 @@
 
 use std::rc::Rc;
 
-use aura_core::layout::{LayoutBuilder, LayoutId, LayoutKind, LayoutTable};
+use aura_core::layout::{encode_layouts, LayoutBuilder, LayoutId, LayoutKind, LayoutTable};
 use aura_runtime::native_runtime::FIRST_CLASS_ACCESS;
 
 use super::plain::{collect_leaves, PlainLeaf, PlainRecords};
@@ -83,7 +83,10 @@ impl PlainRecords {
                     .filter(|record| record.is_some())
                     .count();
                 let access = u64::from(FIRST_CLASS_ACCESS) + index as u64;
-                let cell = self.declare_cell(&Type::named(class_name), access, object)?;
+                // The descriptor of the layout itself, which a field held in
+                // a box makes differ from the type's own.
+                let descriptor = encode_layouts(&table, root);
+                let cell = self.declare_cell_for(descriptor, access, object)?;
                 Some(ClassRecord {
                     cell,
                     access: access as i64,
@@ -97,18 +100,43 @@ impl PlainRecords {
         Ok(record)
     }
 
-    fn class_layout(&self, class_name: &str) -> Option<(LayoutTable, LayoutId)> {
+    pub(super) fn class_layout(&self, class_name: &str) -> Option<(LayoutTable, LayoutId)> {
         if !self.env.classes.get(class_name)?.type_params.is_empty() {
             return None;
         }
+        let ty = Type::named(class_name);
         let mut builder = LayoutBuilder::new(&self.env);
-        let root = builder.layout(&Type::named(class_name)).ok()?;
+        let root = builder.layout(&ty).ok()?;
         let table = builder.into_table();
         let in_place = matches!(
             table.get(root).kind,
             LayoutKind::Struct { class: Some(_), .. }
         ) && !table.holds_block(root);
-        in_place.then_some((table, root))
+        if !in_place {
+            return None;
+        }
+        if self.copy_classes.contains(class_name) {
+            return Some((table, root));
+        }
+        // An enum or union field lies in a box of its own, which a read
+        // copies as generated code holds it, instead of a value built from
+        // the field's bytes.
+        let mut builder = LayoutBuilder::new(&self.env);
+        let root = builder
+            .boxed_class_layout(&ty, |field| self.field_lies_inline(field))
+            .ok()??;
+        Some((builder.into_table(), root))
+    }
+
+    /// Whether a field of type `ty` of a class that is not Copy lies in the
+    /// instance's block in its own layout rather than in a box. A class
+    /// field stays inline, where generated code reads its scalars.
+    fn field_lies_inline(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Union(_) => false,
+            Type::Named(name, _) => !self.env.enums.contains_key(name),
+            _ => true,
+        }
     }
 }
 

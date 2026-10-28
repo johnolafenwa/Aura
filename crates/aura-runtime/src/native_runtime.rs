@@ -7713,18 +7713,51 @@ fn narrow_for_scalar_write(vector: &mut VecValue, kind: i64) {
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_push_scalar(vec: *mut OpaqueValue, bits: i64, kind: i64) {
     task_runtime_boundary(|| {
-        let value = scalar_list_value(bits, kind);
+        let kind = DirectScalarKind::of_code(kind);
         with_vector_mut(vec, |vector| {
+            if kind == DirectScalarKind::Float32 {
+                vector.elements.narrow_to_float32();
+            }
+            if push_scalar_bits(&mut vector.elements, kind, bits) {
+                return;
+            }
+            let value = kind.value(bits);
             if is_unknown_runtime_type(&vector.element_type) {
                 let inferred = inferred_collection_type(&value);
                 if !is_unknown_runtime_type(&inferred) {
                     vector.element_type = inferred;
                 }
             }
-            narrow_for_scalar_write(vector, kind);
             vector.elements.push(value);
         });
     })
+}
+
+/// Appends `bits` to `elements` the way generated code's inline append
+/// stores them, when the list keeps scalars of `kind` unboxed, so the
+/// slow path of a scalar push builds no runtime value. Any other form
+/// takes the value path and gets `false`.
+fn push_scalar_bits(elements: &mut ListElements, kind: DirectScalarKind, bits: i64) -> bool {
+    use DirectScalarKind as K;
+    // Generated code passes an integer already in its type's range, so
+    // the narrowing casts keep its value.
+    match (elements, kind) {
+        (ListElements::Int64(values), K::Int64) => values.push(bits),
+        (ListElements::Float64(values), K::Float64) => values.push(f64::from_bits(bits as u64)),
+        (ListElements::Bool(values), K::Bool) => values.push(bits != 0),
+        (ListElements::Int8(values), K::Int8) => values.push(bits as i8),
+        (ListElements::Int16(values), K::Int16) => values.push(bits as i16),
+        (ListElements::Int32(values), K::Int32) => values.push(bits as i32),
+        (ListElements::Uint8(values), K::Uint8) => values.push(bits as u8),
+        (ListElements::Uint16(values), K::Uint16) => values.push(bits as u16),
+        (ListElements::Uint32(values), K::Uint32) => values.push(bits as u32),
+        (ListElements::Uint64(values), K::Uint64) => values.push(bits as u64),
+        (ListElements::Float32(values), K::Float32) => {
+            values.push(f64::from_bits(bits as u64) as f32)
+        }
+        _ => return false,
+    }
+    true
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -8610,6 +8643,55 @@ pub unsafe extern "C-unwind" fn aura_direct_vec_read_plain(
             }
         });
         written.unwrap_or_else(|error| runtime_error(error))
+    })
+}
+
+/// Removes the last element of `list` and writes it into its bytes in the
+/// layout of `cell` at `dst`. A list that keeps values of that layout moves
+/// the words as they are. An empty list traps with the diagnostic of
+/// `pop()`.
+///
+/// # Safety
+///
+/// As for [`aura_direct_unbox_plain`].
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_vec_pop_plain(
+    list: *mut OpaqueValue,
+    dst: *mut u8,
+    cell: *const PlainLayoutCell,
+) {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller's contract.
+        let layout = unsafe { plain_layout_in(cell) };
+        let written = with_vector_mut(list, |vector| {
+            if vector.elements.is_empty() {
+                return Err(None);
+            }
+            let last = vector.elements.len() - 1;
+            if let ListElements::Typed(typed) = &vector.elements {
+                if std::ptr::eq(typed.layout(), layout) {
+                    let words = typed.element_words(last);
+                    // SAFETY: the element's words hold the layout's bytes,
+                    // which need no drop, and `dst` has room for them.
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(words.as_ptr().cast(), dst, layout.size())
+                    };
+                    vector.elements.truncate(last);
+                    return Ok(());
+                }
+            }
+            let element = vector.elements.pop().expect("the list is not empty");
+            // SAFETY: the caller's contract.
+            unsafe { layout.write_checked(&element, dst) }.map_err(Some)
+        });
+        match written {
+            Ok(()) => {}
+            Err(None) => runtime_diagnostic_error(Diagnostic::coded(
+                "AU4003",
+                "list pop index `-1` is out of bounds for length `0`".to_string(),
+            )),
+            Err(Some(error)) => runtime_error(error),
+        }
     })
 }
 
@@ -12214,7 +12296,7 @@ pub extern "C-unwind" fn aura_direct_variant_take_payload(
     task_runtime_boundary(|| {
         let index =
             usize::try_from(index).unwrap_or_else(|_| runtime_error("invalid enum payload index"));
-        let payload = unsafe {
+        unsafe {
             value_mut(value, |value| {
                 let Value::EnumVariant(variant) = value else {
                     runtime_error(format!(
@@ -12222,17 +12304,20 @@ pub extern "C-unwind" fn aura_direct_variant_take_payload(
                         value_type_name(value)
                     ));
                 };
-                variant.payloads.take(index).unwrap_or_else(|| {
+                // A typed variant's payload box moves out as it is.
+                if let Some(element) = variant.payloads.take_box(index) {
+                    return owned_element_box(element);
+                }
+                boxed_value(variant.payloads.take(index).unwrap_or_else(|| {
                     runtime_error(format!(
                         "enum variant `{}.{}` does not carry a payload at index {}",
                         nominal_runtime_base_name(&variant.enum_name),
                         variant.variant_name,
                         index
                     ))
-                })
+                }))
             })
-        };
-        boxed_value(payload)
+        }
     })
 }
 
@@ -12404,6 +12489,25 @@ unsafe fn adopt_only_box(boxed: *mut OpaqueValue) -> Option<ElementBox> {
     }
     // SAFETY: the caller hands over the only reference.
     Some(unsafe { ElementBox::from_raw(boxed) })
+}
+
+/// Turns a box a list, field, or payload held into one the running task
+/// owns: the box itself when the holder's reference was its only one, now
+/// linked by the task's ledger and recording its thread, or else a copy,
+/// and the holder's reference is released.
+fn owned_element_box(element: ElementBox) -> *mut OpaqueValue {
+    if element.is_shared() {
+        return boxed_value(element.into_value());
+    }
+    let boxed = std::mem::ManuallyDrop::new(element).as_ptr();
+    #[cfg(all(debug_assertions, not(test)))]
+    // SAFETY: the holder's reference was the only one, so nothing else
+    // reads the box.
+    unsafe {
+        (*boxed).owner_thread = direct_value_thread_identity();
+    }
+    register_direct_owned_value(boxed);
+    boxed
 }
 
 /// Turns a box generated code owns into the box a field slot keeps: the

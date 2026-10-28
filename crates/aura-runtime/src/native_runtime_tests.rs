@@ -28607,3 +28607,57 @@ fn direct_frozen_values_read_without_a_lock_and_refuse_writes() {
     assert_eq!(message, "a module constant cannot change");
     unsafe { super::free_frozen_direct_value(value) };
 }
+
+#[test]
+fn scalar_pushes_store_their_bits_in_a_list_of_their_form() {
+    use super::DirectScalarKind as K;
+    use crate::list_elements::ListForm;
+    // Each kind pushed onto an empty list of its type lands in the list's
+    // scalar form and reads back as the value the bits name.
+    for (kind, bits, expected) in [
+        (K::Int64, -7, K::Int64.value(-7)),
+        (K::Float64, 2.5f64.to_bits() as i64, Value::Float(2.5)),
+        (K::Bool, 1, Value::Bool(true)),
+        (K::Int8, -3, K::Int8.value(-3)),
+        (K::Int16, -300, K::Int16.value(-300)),
+        (K::Int32, -70_000, K::Int32.value(-70_000)),
+        (K::Uint8, 200, K::Uint8.value(200)),
+        (K::Uint16, 60_000, K::Uint16.value(60_000)),
+        (K::Uint32, 4_000_000_000, K::Uint32.value(4_000_000_000)),
+        (K::Uint64, -1, K::Uint64.value(-1)),
+        (
+            K::Float32,
+            0.1f64.to_bits() as i64,
+            Value::Float(f64::from(0.1f64 as f32)),
+        ),
+    ] {
+        let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+        let list_type = Type::Named("list".to_string(), vec![Type::named(kind.type_name())]);
+        let descriptor = super::canonical_runtime_type_name(&list_type);
+        let list =
+            super::aura_direct_vec_empty_tagged(&cell, descriptor.as_ptr(), descriptor.len());
+        super::aura_direct_vec_push_scalar(list, bits, kind as i64);
+        super::aura_direct_vec_push_scalar(list, bits, kind as i64);
+        match unsafe { value_ref(list) } {
+            Value::Vec(vector) => {
+                assert_ne!(vector.elements.form(), ListForm::Values, "{kind:?}");
+                assert_eq!(vector.elements.len(), 2);
+                assert_eq!(*vector.elements.at(1), expected, "{kind:?}");
+            }
+            other => panic!("expected a list, found {other:?}"),
+        }
+        unsafe { release_value(list) };
+    }
+    // A list that keeps other values takes the scalar as a value.
+    let mixed = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_in_place(mixed, string_value("a"));
+    super::aura_direct_vec_push_scalar(mixed, 4, K::Int64 as i64);
+    match unsafe { value_ref(mixed) } {
+        Value::Vec(vector) => {
+            assert_eq!(vector.elements.form(), ListForm::Values);
+            assert_eq!(*vector.elements.at(1), K::Int64.value(4));
+        }
+        other => panic!("expected a list, found {other:?}"),
+    }
+    unsafe { release_value(mixed) };
+}

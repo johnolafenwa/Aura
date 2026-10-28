@@ -515,6 +515,19 @@ impl TypedPayloads {
         }
     }
 
+    /// Moves the box that holds payload `index` out, leaving its place
+    /// moved out. `None` when the payload is held in place or already
+    /// moved out.
+    pub fn take_box(&mut self, index: usize) -> Option<ElementBox> {
+        let place = self.place(index)?;
+        if !self.layout.is_box(place) {
+            return None;
+        }
+        // SAFETY: the slot holds a box pointer, and `&mut self` keeps the
+        // block.
+        unsafe { payload_box(self.address(place)) }.take()
+    }
+
     /// The payloads as values, which [`Self::from_values`] turns back.
     pub fn into_vec(self) -> Vec<Value> {
         let mut this = std::mem::ManuallyDrop::new(self);
