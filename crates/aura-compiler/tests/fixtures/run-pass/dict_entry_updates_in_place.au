@@ -1,0 +1,36 @@
+# Reading and writing an `int64` dict value through an entry loan changes
+# the entry where the dict keeps it, for `str` and `int64` keys, in a local
+# dict and in a field, and a copy taken before the change keeps its value.
+
+class Tally:
+    counts: dict[str, int64]
+
+
+def bump(counts: mut dict[str, int64], key: str):
+    match mut counts.lookup(key):
+        case Lookup.Found(count):
+            count += 1
+        case Lookup.Missing:
+            counts[key.clone()] = 1
+
+
+def main():
+    mut words: dict[str, int64] = {}
+    for word in "a b a c a b".split(" "):
+        bump(words, word)
+    snapshot = words.copy()
+    bump(words, "a")
+    print(f"{words["a"]} {snapshot["a"]} {words["b"]} {words["c"]}")
+
+    mut squares: dict[int64, int64] = {}
+    for i in range(5):
+        squares[i] = 0
+    for i in range(5):
+        squares[i] += i * i
+        squares[i] *= 2
+    print(squares)
+
+    mut tally = Tally(counts={"x": 1})
+    for _ in range(3):
+        tally.counts["x"] += 10
+    print(tally.counts["x"])

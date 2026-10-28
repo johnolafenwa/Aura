@@ -18667,6 +18667,29 @@ enum values, dicts, or sets now does too.
 | `template_render` | 31.7M | 25.6M |
 | `spreadsheet` | 17.6M | 15.2M |
 
+### Calls With `mut` Arguments Stay In Generated Code
+
+A call that passes a `mut` argument, such as `self.unlink(slot)` inside a
+`mut self` method, used to hand the runtime a list of write-through sinks
+first, which made the runtime push and pop the call's frame. A sink only
+exists inside a `with` block or for a parameter whose caller had one, so
+the call now checks for one and hands nothing over when there is none.
+
+An `int64` value updated through `match mut counts.lookup(key)` is found
+once, when the update begins, and each read and write goes to the entry
+where the dict keeps it. A dict shared with another thread, or a missing
+key, takes the runtime path as before.
+
+| Program | Instructions before | Instructions after |
+| --- | ---: | ---: |
+| `raytracer` | 21.7M | 6.6M |
+| `hashing` | 12.4M | 3.9M |
+| `interpreter` | 66.4M | 33.8M |
+| `graph_paths` | 55.1M | 34.2M |
+| `lru_cache` | 38.6M | 24.7M |
+| `csv_aggregate` | 53.2M | 40.9M |
+| `word_freq` | 42.3M | 35.4M |
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

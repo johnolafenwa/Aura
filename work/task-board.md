@@ -189,6 +189,15 @@ Last updated: 2026-10-27
   template_render -19%, csv_aggregate -17%, mini_browser -16%. Gate
   missed: `str_slice` probe 457 instructions (target 300). Details are in
   `2026-10-28-rust-speed-3a-strings.md`.
+- Step 3c part 1: calls hand mutable write-through sinks to the runtime
+  only when one is live (`install_direct_mutable_sinks` branches on the OR
+  of the sinks), so `mut` argument calls keep the inline frame push;
+  `int64` dict entries updated through a `match mut ... lookup` are loaned
+  by slot (`aura_direct_map_value_slot*`, `LoanPlace::MapValue`).
+  raytracer -70%, hashing -69%, interpreter -49%, graph_paths -38%,
+  lru_cache -36%. Gate (word_freq, lru_cache at most 2x Rust) not yet
+  met: 4.4x and 3.9x by instructions at 50,000. Details are in
+  `2026-10-28-rust-speed-3c-entry-loans.md`.
 
 ## Aura 0.7.1 preview release (complete)
 

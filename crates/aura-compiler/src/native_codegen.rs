@@ -7285,14 +7285,14 @@ impl<'a> FunctionCompiler<'a> {
                     None => self.builder.iconst(types::I64, 0),
                 });
             }
-            self.install_direct_mutable_sinks(&sinks)?;
-            sinks
+            let active = self.install_direct_mutable_sinks(&sinks)?;
+            (Some(active), sinks)
         } else {
-            Vec::new()
+            (None, Vec::new())
         };
         let inst = self.builder.call(func_ref, &lowered_args);
         let results = inst.results;
-        self.release_mutable_sinks(mutable_sinks);
+        self.release_active_mutable_sinks(mutable_sinks.0, mutable_sinks.1);
         let (result, writebacks) = self.split_call_results(name, results)?;
         for (writeback, tagged) in writebacks.iter().zip(&writeback_tagged) {
             if let (true, DirectType::Opaque(_), [word]) =
@@ -11730,13 +11730,26 @@ impl<'a> FunctionCompiler<'a> {
     fn mutable_sink_for_static_place(&mut self, place: &str) -> std::result::Result<Val, String> {
         let (root, projection) = place.split_once('.').unwrap_or((place, ""));
         if let Some(index) = self.mutable_param_indices.get(root).copied() {
+            // A parameter whose caller passed no sink passes none on.
             let parent = self.current_mutable_sink(index);
+            let projected = self.declare_word_var();
+            self.builder.def_var(projected, parent);
+            let project = self.builder.create_block();
+            let done = self.builder.create_block();
+            self.builder.set_cold_block(project);
+            self.builder.brif(parent, project, &[], done, &[]);
+            self.builder.switch_to_block(project);
+            self.builder.seal_block(project);
             let (projection_ptr, projection_len) = self.string_constant(projection.as_bytes())?;
-            let projected = self.builder.call(
+            let sink = self.builder.call(
                 self.runtime[RuntimeFn::MutableSinkProject],
                 &[parent, projection_ptr, projection_len],
             );
-            return Ok(projected.results[0]);
+            self.builder.def_var(projected, sink.results[0]);
+            self.builder.jump(done, &[]);
+            self.builder.switch_to_block(done);
+            self.builder.seal_block(done);
+            return Ok(self.builder.use_var(projected));
         }
 
         let cleanup_place = self
@@ -11821,7 +11834,32 @@ impl<'a> FunctionCompiler<'a> {
         self.mutable_sink_for_resolved_place(resolved)
     }
 
-    fn install_direct_mutable_sinks(&mut self, sinks: &[Val]) -> std::result::Result<(), String> {
+    /// Hands `sinks` to the runtime for the next call, unless every one is
+    /// 0, so a call that publishes nothing keeps its inline frame push.
+    /// Returns whether any sink is active, for
+    /// [`Self::release_active_mutable_sinks`].
+    fn install_direct_mutable_sinks(&mut self, sinks: &[Val]) -> std::result::Result<Val, String> {
+        let mut active = self.builder.iconst(types::I64, 0);
+        for sink in sinks {
+            active = self.builder.bor(active, *sink);
+        }
+        let install = self.builder.create_block();
+        let done = self.builder.create_block();
+        self.builder.set_cold_block(install);
+        self.builder.brif(active, install, &[], done, &[]);
+        self.builder.switch_to_block(install);
+        self.builder.seal_block(install);
+        self.install_direct_mutable_sink_buffer(sinks)?;
+        self.builder.jump(done, &[]);
+        self.builder.switch_to_block(done);
+        self.builder.seal_block(done);
+        Ok(active)
+    }
+
+    fn install_direct_mutable_sink_buffer(
+        &mut self,
+        sinks: &[Val],
+    ) -> std::result::Result<(), String> {
         let count = self.builder.iconst(types::I64, sinks.len() as i64);
         let pointer = if sinks.is_empty() {
             self.builder.iconst(types::I64, 0)
@@ -11893,6 +11931,24 @@ impl<'a> FunctionCompiler<'a> {
             ],
         );
         Ok(())
+    }
+
+    /// Releases `sinks` when `active`, as
+    /// [`Self::install_direct_mutable_sinks`] returned it, says any is live.
+    fn release_active_mutable_sinks(&mut self, active: Option<Val>, sinks: Vec<Val>) {
+        let Some(active) = active else {
+            return;
+        };
+        let release = self.builder.create_block();
+        let done = self.builder.create_block();
+        self.builder.set_cold_block(release);
+        self.builder.brif(active, release, &[], done, &[]);
+        self.builder.switch_to_block(release);
+        self.builder.seal_block(release);
+        self.release_mutable_sinks(sinks);
+        self.builder.jump(done, &[]);
+        self.builder.switch_to_block(done);
+        self.builder.seal_block(done);
     }
 
     fn release_mutable_sinks(&mut self, sinks: impl IntoIterator<Item = Val>) {
@@ -12411,14 +12467,14 @@ impl<'a> FunctionCompiler<'a> {
                     None => self.builder.iconst(types::I64, 0),
                 });
             }
-            self.install_direct_mutable_sinks(&sinks)?;
-            sinks
+            let active = self.install_direct_mutable_sinks(&sinks)?;
+            (Some(active), sinks)
         } else {
-            Vec::new()
+            (None, Vec::new())
         };
         let inst = self.builder.call(func_ref, &lowered_args);
         let results = inst.results;
-        self.release_mutable_sinks(mutable_sinks);
+        self.release_active_mutable_sinks(mutable_sinks.0, mutable_sinks.1);
         let (result, writebacks) = self.split_call_results(&method_function_name, results)?;
         self.apply_writeback_places(&writeback_places, writebacks)?;
         Ok(result)

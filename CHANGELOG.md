@@ -200,6 +200,13 @@ in this file.
   keeps it instead of copying it. `sql_engine` runs 40% fewer
   instructions, `word_freq` and `template_render` 19%, `csv_aggregate`
   17%, and `mini_browser` 16%.
+- A call that passes a `mut` argument no longer goes through the runtime
+  to hand over write-through sinks when there are none to hand over, so
+  such calls keep the frame push generated code does in place. A
+  `match mut counts.lookup(key)` that updates an `int64` entry finds the
+  entry once and updates it where the dict keeps it. `raytracer` and
+  `hashing` run about 69% fewer instructions, `interpreter` 49%,
+  `graph_paths` 38%, `lru_cache` 36%, and `csv_aggregate` 23%.
 
 ### Fixed
 

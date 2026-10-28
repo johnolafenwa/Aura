@@ -322,6 +322,9 @@ enum LoanPlace {
     /// A scalar or plain-record place inside a class element kept in place:
     /// the leaves of the place, in the block at the address.
     Leaves(Vec<PlainLeaf>),
+    /// The `int64` value of a dict entry, in the runtime value at the
+    /// address (see `aura_direct_map_value_slot`).
+    MapValue,
 }
 
 /// Where the list a loan selects from lies.
@@ -371,16 +374,21 @@ impl FunctionCompiler<'_> {
         if (parent.is_none() && alternative.elements.len() != 1)
             || !alternative.conditions.is_empty()
             || !alternative.union_payloads.is_empty()
-            || selector.kind != DirectElementKind::List
         {
             return Ok(false);
         }
         let place = alternative.place.clone();
         let selector = selector.clone();
+        if selector.kind == DirectElementKind::Dict {
+            return match parent {
+                None => self.begin_native_entry_loan(loan, &usage, &place, &selector),
+                Some(_) => Ok(false),
+            };
+        }
         let (list, list_ty) = match parent {
             Some((parent, address)) => (LoanList::Loan(address), self.local_type(&parent)?),
             None => {
-                let Some(list) = self.loan_list(&place)? else {
+                let Some(list) = self.loan_list(&place, "list")? else {
                     return Ok(false);
                 };
                 (list, self.type_of_place(&place)?)
@@ -407,41 +415,14 @@ impl FunctionCompiler<'_> {
         let address = self.declare_word_var();
         let slow_block = self.builder.create_block();
         let join_block = self.builder.create_block();
-        let list_box = match &list {
-            LoanList::Local(name) => self.load_root(name)?.values[0],
-            LoanList::Loan(address) => {
-                let address = self.builder.use_var(*address);
-                let held_block = self.builder.create_block();
-                self.builder.brif(address, held_block, &[], slow_block, &[]);
-                self.builder.switch_to_block(held_block);
-                self.builder.seal_block(held_block);
-                let list = self.builder.load(types::I64, flags, address, 0);
-                // A moved-out field takes the runtime walk, which reports it.
-                let present_block = self.builder.create_block();
-                self.builder.brif(list, present_block, &[], slow_block, &[]);
-                self.builder.switch_to_block(present_block);
-                self.builder.seal_block(present_block);
-                list
-            }
-            LoanList::Field { root, slot } => {
-                let object = self.load_root(root)?.values[0];
-                let fast_block = self.builder.create_block();
-                self.emit_class_check(object, slot.access, slow_block, fast_block);
-                self.builder.switch_to_block(fast_block);
-                self.builder.seal_block(fast_block);
-                let block = self.class_block(object);
-                let field = self.builder.load(types::I64, flags, block, slot.offset);
-                // A moved-out field takes the runtime walk, which reports it.
-                let present_block = self.builder.create_block();
-                self.builder
-                    .brif(field, present_block, &[], slow_block, &[]);
-                self.builder.switch_to_block(present_block);
-                self.builder.seal_block(present_block);
-                field
-            }
-        };
+        let list_box = self.load_loan_list(&list, slow_block)?;
         let index = self.builder.use_var(selector.variable);
         let place_address = match &target {
+            LoanTarget::Place(LoanPlace::MapValue) => {
+                return Err(format!(
+                    "direct backend followed list loan `{loan}` to a dict entry"
+                ));
+            }
             LoanTarget::Place(LoanPlace::Scalar(kind)) => {
                 let (access, stride) = scalar_list_slot(*kind);
                 let fast_block = self.builder.create_block();
@@ -520,6 +501,119 @@ impl FunctionCompiler<'_> {
         Ok(true)
     }
 
+    /// Follows `loan`, which reads and writes the `int64` value of a dict
+    /// entry, to the runtime value the dict keeps it in: the runtime finds
+    /// the entry once, when the loan begins, and each read and write goes
+    /// to it directly instead of walking the path again. A dict shared with
+    /// another thread, or a missing key, takes the runtime walk as before,
+    /// which reports the key.
+    fn begin_native_entry_loan(
+        &mut self,
+        loan: &str,
+        usage: &LoanUse,
+        place: &str,
+        selector: &DirectElementSelector,
+    ) -> std::result::Result<bool, String> {
+        if usage.lends
+            || !selector.projection.is_empty()
+            || self.local_type(loan)? != DirectType::Scalar(ScalarKind::Int64)
+        {
+            return Ok(false);
+        }
+        let find = match &selector.selector_ty {
+            DirectType::Opaque(_) => RuntimeFn::MapValueSlot,
+            DirectType::Scalar(ScalarKind::Int64) => RuntimeFn::MapValueSlotInt64,
+            _ => return Ok(false),
+        };
+        let Some(map) = self.loan_list(place, "dict")? else {
+            return Ok(false);
+        };
+        let address = self.declare_word_var();
+        let slow_block = self.builder.create_block();
+        let found_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        let map_box = self.load_loan_list(&map, slow_block)?;
+        let key = self.builder.use_var(selector.variable);
+        let mutable = self.builder.iconst(types::I64, i64::from(usage.mutable));
+        let slot = self
+            .builder
+            .call(self.runtime[find], &[map_box, key, mutable])
+            .results[0];
+        self.builder.brif(slot, found_block, &[], slow_block, &[]);
+
+        self.builder.switch_to_block(found_block);
+        self.builder.seal_block(found_block);
+        self.builder.def_var(address, slot);
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        // The probe boxes a scalar key for the runtime walk, so its box is
+        // released here, in the block that made it.
+        let baseline = self.layout_scratch.clone();
+        self.emit_element_path_probe(loan, false)?;
+        self.release_temporary_owned_since(&baseline);
+        let missed = self.builder.iconst(types::I64, 0);
+        self.builder.def_var(address, missed);
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        self.native_loans.insert(
+            loan.to_string(),
+            NativeLoan {
+                address,
+                target: LoanTarget::Place(LoanPlace::MapValue),
+            },
+        );
+        Ok(true)
+    }
+
+    /// The box of the list or dict a followed loan selects from, after the
+    /// checks that branch to `slow_block` when generated code cannot reach
+    /// it.
+    fn load_loan_list(
+        &mut self,
+        list: &LoanList,
+        slow_block: Blk,
+    ) -> std::result::Result<Val, String> {
+        let flags = MemFlags::trusted();
+        let list_box = match list {
+            LoanList::Local(name) => self.load_root(name)?.values[0],
+            LoanList::Loan(address) => {
+                let address = self.builder.use_var(*address);
+                let held_block = self.builder.create_block();
+                self.builder.brif(address, held_block, &[], slow_block, &[]);
+                self.builder.switch_to_block(held_block);
+                self.builder.seal_block(held_block);
+                let list = self.builder.load(types::I64, flags, address, 0);
+                // A moved-out field takes the runtime walk, which reports it.
+                let present_block = self.builder.create_block();
+                self.builder.brif(list, present_block, &[], slow_block, &[]);
+                self.builder.switch_to_block(present_block);
+                self.builder.seal_block(present_block);
+                list
+            }
+            LoanList::Field { root, slot } => {
+                let object = self.load_root(root)?.values[0];
+                let fast_block = self.builder.create_block();
+                self.emit_class_check(object, slot.access, slow_block, fast_block);
+                self.builder.switch_to_block(fast_block);
+                self.builder.seal_block(fast_block);
+                let block = self.class_block(object);
+                let field = self.builder.load(types::I64, flags, block, slot.offset);
+                // A moved-out field takes the runtime walk, which reports it.
+                let present_block = self.builder.create_block();
+                self.builder
+                    .brif(field, present_block, &[], slow_block, &[]);
+                self.builder.switch_to_block(present_block);
+                self.builder.seal_block(present_block);
+                field
+            }
+        };
+        Ok(list_box)
+    }
+
     /// Branches to `slow_block` unless the storage of `list_box` is unshared,
     /// so an element at `position` may change in place. Room covers every
     /// element of unshared storage, and a list whose storage another value
@@ -541,7 +635,11 @@ impl FunctionCompiler<'_> {
 
     /// The list a followed loan selects from, at `place`: a local list, or a
     /// field box of a local class instance kept in place.
-    fn loan_list(&mut self, place: &str) -> std::result::Result<Option<LoanList>, String> {
+    fn loan_list(
+        &mut self,
+        place: &str,
+        collection: &str,
+    ) -> std::result::Result<Option<LoanList>, String> {
         let root = root(place);
         // A local that may hold a box it does not own is never followed.
         if self.lent_elements.contains_key(root)
@@ -554,7 +652,7 @@ impl FunctionCompiler<'_> {
         if root == place {
             let is_list = matches!(
                 self.variable_types.get(place),
-                Some(DirectType::Opaque(Type::Named(name, _))) if name == "list"
+                Some(DirectType::Opaque(Type::Named(name, _))) if name == collection
             );
             return Ok(is_list.then(|| LoanList::Local(place.to_string())));
         }
@@ -682,6 +780,11 @@ impl FunctionCompiler<'_> {
                 .iter()
                 .map(|leaf| self.load_leaf(*leaf, address))
                 .collect(),
+            LoanPlace::MapValue => {
+                self.builder
+                    .call(self.runtime[RuntimeFn::ValueSlotInt64], &[address])
+                    .results
+            }
         };
         self.builder.jump(join_block, &values);
 
@@ -745,6 +848,12 @@ impl FunctionCompiler<'_> {
                 for (leaf, word) in leaves.iter().zip(&value.values) {
                     self.store_leaf(*leaf, *word, address);
                 }
+            }
+            LoanPlace::MapValue => {
+                self.builder.call(
+                    self.runtime[RuntimeFn::ValueSlotSetInt64],
+                    &[address, value.values[0]],
+                );
             }
         }
         self.builder.jump(join_block, &[]);
