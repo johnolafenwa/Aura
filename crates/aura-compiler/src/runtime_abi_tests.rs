@@ -208,8 +208,6 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::SetNextMutableSinks,
             RuntimeFn::SetNextIndirectMutableSinks,
             RuntimeFn::VecEmptyTagged,
-            RuntimeFn::VecPopInPlace,
-            RuntimeFn::VecRemoveInPlace,
             RuntimeFn::VecLend,
             RuntimeFn::VecPopScalar,
             RuntimeFn::VecCheckIndex,
@@ -230,7 +228,6 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::MapGetLent,
             RuntimeFn::MapGetStrLent,
             RuntimeFn::MapGetInt64Lent,
-            RuntimeFn::SetRemoveInPlace,
         ]
     );
 }

@@ -410,6 +410,29 @@ each program, and the
 [operation probes](https://github.com/johnolafenwa/Aura/blob/main/benchmarks/operation_probes/README.md)
 give the cost of single operations next to Rust.
 
+The plan's second phase keeps classes, records, tuples, enums, and unions
+in typed layouts, lends them instead of copying them on reads, and takes
+ownership bookkeeping off the boxes. On the same kind of container, at the
+end of that phase:
+
+| Measure | End of phase 1 | End of phase 2 |
+| --- | ---: | ---: |
+| All 30 programs, wall time | 147 s | 48.5 s |
+| Median Aura / Rust, wall time | 16x | 8.2x |
+| Median Aura / Python 3.13, wall time | 2.7x | 0.71x |
+| Programs faster than Python | 9 | 19 |
+| All 30 programs, instructions at the check size | 9,323M | 3,442M |
+
+Its final targets are 1.5x Rust for compute programs, 2x for string and
+data-structure programs, and 1.25x for I/O-bound ones. Only `hashing`
+(1.5x) meets its target; `bytecode_vm` (1.7x) and `image_filters` (2.0x)
+are close, and `sql_engine` (98x), `spreadsheet` (19x), and
+`regex_match` (15x) are furthest. What is left is mostly call frames and
+runtime calls on every function call, reads of elements of nested
+lists, which stay boxed, and strings, dicts, and JSON, which the third
+phase covers. Wall times on the container vary by up to a quarter from
+run to run, so the per-step sections below give instruction counts.
+
 ### Per-Call Attribution
 
 Eleven symbol-preserving xctrace recordings on the foundations host attribute

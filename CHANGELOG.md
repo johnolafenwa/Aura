@@ -187,6 +187,10 @@ in this file.
   `astar_pathfinding` 18%, `graph_paths` 15%, `interpreter` 12%, and
   `regex_match` 11%, and 29 of the 30 cross-language programs convert no
   value between a typed layout and a runtime value.
+- With the second phase of the Rust-speed plan done, the 30
+  cross-language programs run in 48.5 s instead of 147 s on a Linux
+  container, a median of 8.2x Rust instead of 16x, and 19 of them run
+  faster than Python 3.13 instead of 9.
 
 ### Fixed
 

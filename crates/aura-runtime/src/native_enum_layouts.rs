@@ -551,27 +551,6 @@ impl TypedPayloads {
             }
         }
     }
-
-    /// Gives every payload box that another reference shares to that
-    /// reference, and keeps a copy, so the box is reached through this
-    /// variant only. The runtime does this before another thread may
-    /// reach the variant, since the other reference reads the box without
-    /// the variant's lock.
-    pub fn unshare_boxes(&mut self) {
-        for index in 0..self.len() {
-            let Some(place) = self.place(index) else {
-                continue;
-            };
-            if !self.layout.is_box(place) {
-                continue;
-            }
-            // SAFETY: the slot holds a box pointer, and `&mut self` keeps
-            // the block.
-            if let Some(boxed) = unsafe { payload_box(self.address(place)) } {
-                drop(boxed.value_mut());
-            }
-        }
-    }
 }
 
 impl Clone for TypedPayloads {

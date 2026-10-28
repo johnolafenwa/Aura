@@ -406,13 +406,6 @@ fn unsigned(value: u128, kind: IntegerKind) -> IntegerValue {
     IntegerValue::from_typed_unsigned(value, kind).expect("every element fits its integer kind")
 }
 
-/// The bits of an `int64` value, when [`IntegerValue::from_i64`] rebuilds
-/// exactly the same value from them. Integers of other kinds, and untyped
-/// integer literals, stay boxed.
-pub fn int64_bits(value: IntegerValue) -> Option<i64> {
-    i64::of(&Value::Int(value))
-}
-
 /// Matches `$list` against every form, binding the storage to `$values`.
 /// `$body` runs once per form that keeps a `SharedVec`, with `$values` a
 /// `SharedVec` of that form's element type, and `$typed_body` runs for the

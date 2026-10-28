@@ -172,8 +172,14 @@ Last updated: 2026-10-27
   programs convert nothing, `mini_browser` 20 times a run. nbody -33%,
   astar -18%, graph_paths -15%, interpreter -12%, regex -11%. Details
   are in `2026-10-28-rust-speed-2j-conversions.md`.
-- Next: the 2j pull request, then step 2k (delete the boxed paths typed
-  layouts replace, and re-measure).
+- Step 2j merged (#174).
+- Step 2k: deleted `aura_direct_vec_pop_in_place`,
+  `aura_direct_vec_remove_in_place`, and `aura_direct_set_remove_in_place`
+  (replaced by the shared collection operation), `TypedPayloads::unshare_boxes`,
+  and `list_elements::int64_bits`. Re-measured: 30 programs 147 s -> 48.5 s,
+  median 16x -> 8.2x Rust. Gate missed: only `hashing` is within its final
+  target. Details are in `2026-10-28-rust-speed-2k-remeasure.md`.
+- Phase 2 complete. Next: Phase 3 (strings, dicts, and JSON).
 
 ## Aura 0.7.1 preview release (complete)
 

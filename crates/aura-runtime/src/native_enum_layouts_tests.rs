@@ -20,9 +20,8 @@ use crate::native_runtime::{
     aura_direct_enum_new_typed, aura_direct_instance_put_field, aura_direct_register_enum_layouts,
     aura_direct_release_value, aura_direct_variant_matches, aura_direct_variant_payload,
     aura_direct_variant_payload_int64, aura_direct_variant_take_payload, boxed_value, list_view_of,
-    release_untracked_value, retain_untracked_value, share_direct_value, value_mut, value_ref,
-    with_direct_task_runtime_scope, with_task_runtime_error_capture, DirectPlainLayoutEntry,
-    ElementBox, UNREGISTERED_PLAIN_ACCESS,
+    share_direct_value, value_mut, value_ref, with_direct_task_runtime_scope,
+    with_task_runtime_error_capture, DirectPlainLayoutEntry, ElementBox, UNREGISTERED_PLAIN_ACCESS,
 };
 use crate::runtime_value::{
     run_lightweight_root_task, EnumVariantValue, RuntimeName, Value, VariantPayloads,
@@ -278,16 +277,6 @@ fn typed_payloads_read_take_and_convert() {
     assert_eq!(refused, vec![text("x")]);
     assert!(TypedPayloads::from_values(layout, "Circle", Vec::new()).is_err());
     assert!(TypedPayloads::from_values(layout, "Square", Vec::new()).is_err());
-    // Views of the payload boxes follow a change, and a payload box another
-    // reference shares is copied for the variant.
-    let mut shared = typed_payloads(&pair).clone();
-    shared.refresh_views();
-    let held = shared.payload_box(1).map(ElementBox::as_ptr).unwrap();
-    unsafe { retain_untracked_value(held) };
-    shared.unshare_boxes();
-    assert_ne!(shared.payload_box(1).map(ElementBox::as_ptr), Some(held));
-    assert_eq!(unsafe { value_ref(held) }, named);
-    unsafe { release_untracked_value(held) };
 }
 
 #[test]
