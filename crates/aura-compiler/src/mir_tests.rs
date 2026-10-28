@@ -11463,7 +11463,7 @@ fn mir_function_value_helpers_preserve_nested_types_and_imported_specialization(
 }
 
 #[test]
-fn list_algorithms_lower_callbacks_to_ordinary_indirect_calls_before_mutation() {
+fn list_algorithms_call_named_callbacks_directly_before_mutation() {
     let module = crate::lower_source_to_mir(
         r#"
 def key(value: int32) -> int32:
@@ -11496,24 +11496,40 @@ def main():
         .flat_map(|block| &block.instructions)
         .collect::<Vec<_>>();
 
+    // A plain function named as the callback is called by its name, so it
+    // borrows each element as a call written to it would.
+    let is_callback_call = |instruction: &Instruction| {
+        matches!(
+            instruction,
+            Instruction::Assign {
+                value: Rvalue::Call {
+                    callee: CallTarget::Name(name),
+                    args, ..
+                },
+                ..
+            } if args.len() == 1 && matches!(name.as_str(), "key" | "double" | "even")
+        )
+    };
     let callback_calls = instructions
         .iter()
-        .filter(|instruction| {
-            matches!(
-                instruction,
-                Instruction::Assign {
-                    value: Rvalue::Call {
-                        callee: CallTarget::Value(_),
-                        args, ..
-                    },
-                    ..
-                } if args.len() == 1
-            )
-        })
+        .filter(|instruction| is_callback_call(instruction))
         .count();
     assert_eq!(
         callback_calls, 3,
-        "sort, map, and filter should each have one ordinary dynamic call site"
+        "sort, map, and filter should each have one direct call site"
+    );
+    assert!(
+        instructions.iter().all(|instruction| !matches!(
+            instruction,
+            Instruction::Assign {
+                value: Rvalue::Call {
+                    callee: CallTarget::Value(_),
+                    ..
+                },
+                ..
+            }
+        )),
+        "a named callback is not called as a value"
     );
     assert!(
         instructions.iter().all(|instruction| {
@@ -11539,18 +11555,7 @@ def main():
             block
                 .instructions
                 .iter()
-                .any(|instruction| {
-                    matches!(
-                        instruction,
-                        Instruction::Assign {
-                            value: Rvalue::Call {
-                                callee: CallTarget::Value(_),
-                                ..
-                            },
-                            ..
-                        }
-                    )
-                })
+                .any(is_callback_call)
                 .then_some(index)
         })
         .collect::<Vec<_>>();
