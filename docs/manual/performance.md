@@ -1233,6 +1233,20 @@ are `int64` stores the value without a box.
 | `bank_ledger` | 10.9M | 10.2M |
 | `word_freq` | 26.2M | 25.2M |
 
+### JSON Parses And Writes Without A Second Tree
+
+`json.parse` builds the `json.Value` itself as it reads the text, and
+`json.dumps` writes the text straight from the value. A copy of a
+`json.Value`, such as a field read passed to a function, shares the
+storage of the lists and dicts inside it until one side changes them.
+
+| Program | Instructions before | Instructions after |
+| --- | ---: | ---: |
+| `json_roundtrip` | 491.8M | 365.0M |
+| `pubsub_broker` | 67.3M | 58.5M |
+| `docdb` | 35.6M | 32.1M |
+| `http_api` | 28.1M | 26.3M |
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and
