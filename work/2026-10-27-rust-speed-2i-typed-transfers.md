@@ -1,4 +1,4 @@
-# Rust Speed Step 2i Parts 1 And 2: Typed Values Across Tasks And Queues
+# Rust Speed Step 2i Parts 1 To 3: Typed Values Across Tasks And Queues
 
 ## Goal
 
@@ -68,7 +68,32 @@ handed on for its own fix.
 - `ListElements::push_plain` starts an empty list in the record's layout
   with the record's words.
 
-## Measurements
+## Part 3: Moved Task Arguments Move
+
+`start_direct_task_call` called `share_direct_value` on every task
+argument: the box left its task's ledger, got a lock, and lost its list
+view, so every later access on either side took the lock, even when the
+caller had moved the value into the task and never saw it again.
+
+- `compile_start_task` stores an argument the caller moved in, or a box
+  made for the call, with `aura_direct_arg_buffer_store_owned`, so its
+  one reference passes to the buffer. Any other argument is stored with
+  a new reference, as before.
+- `direct_task_arg_hands_over` (`native_runtime.rs`) is true when the
+  buffer's reference is the box's only one and no ledger links it. Such
+  an argument is not shared.
+- `claim_direct_task_args` treats an argument without a lock as handed
+  over: in debug builds it records the child's thread as the box's
+  thread, and it links the box into the child's ledger, so generated
+  code retains and releases it in place. Every other argument is counted
+  by address, as before.
+
+Probe (2,000 tasks, each summing an `Order` with 50 `Point`s or a list of
+100 numbers moved into it): 489.2M instructions before, 99.8M after. In
+the part 2 probe, a call of `sum_order` drops from about 15,400
+instructions to 3,600. No program of the 30 changes by more than 0.4%.
+
+## Part 2 Measurements
 
 Callgrind instructions, Linux container, release builds. Before is
 step 2h part 9.
@@ -89,9 +114,6 @@ suite, show no change.
 
 ## What Is Left In The Probe
 
-- A task that reads a record argument the caller moved into it spends
-  about 14,000 instructions per call on locked field reads: every task
-  argument is shared with a lock when the task starts. Part 3.
 - Tagging the boxes that queues hand back (`aura_direct_tag_value_type`,
   about 7% of the probe) and the queue's task registration (about 9%)
   belong to the hand-off machinery of step 4d.
@@ -105,5 +127,9 @@ suite, show no change.
   and the `uint64` boxing test boxes its `uint64` in a `dict` literal.
 - Runtime test: a record pushed into a list that keeps runtime values is
   appended as a value.
+- Runtime tests: only a box that the argument buffer alone holds is
+  handed over, and a started task finds such an argument unshared and
+  linked in its ledger while an argument the starter still holds is
+  shared.
 - Runtime, compiler, and CLI tests, backend parity, `cargo fmt --check`,
   hygiene, and clippy.

@@ -1014,7 +1014,7 @@ apart from `file_io`, which varies run to run with its file system.
 Retains across the 30 programs are 98.4% below the 1,062,951 they were
 before the change in Shared Arguments Stay With The Caller.
 
-### Records Cross Tasks And Queues As Their Bytes
+### Values Cross Tasks And Queues As They Are
 
 A `copy class` value, such as a `Point` of two numbers, lives in machine
 words in native code. When it has to be boxed, for example to go into a
@@ -1041,6 +1041,16 @@ in the list.
 The first two rows are probe programs; the others are among the 30
 cross-language programs, and no other one of them changes by more than
 0.5%.
+
+A value that a task start moves into the task, such as a record or a
+list built for the call, `group.start(sum_order, make_order(i), 3)`, or
+a local passed for the last time, now goes to the task as it is when
+nothing else holds it. The task reads it in place, with inline list and
+field reads and no lock. A value that the starting task still holds,
+such as a local it reads again after the start, is still shared, and
+both tasks lock it on each access. A probe that starts 2,000 tasks, each
+summing a record with 50 points or a list of 100 numbers moved into it,
+runs 99.8M instructions instead of 489.2M.
 
 ## Performance Direction
 

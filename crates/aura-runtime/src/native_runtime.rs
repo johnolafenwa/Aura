@@ -1693,6 +1693,23 @@ unsafe fn share_direct_value(ptr: *mut OpaqueValue) {
     }
 }
 
+/// Whether a task argument moves to the child task unshared: the argument
+/// buffer holds its only reference, so no other code of the starting task
+/// reaches it, and it is still confined to this thread. The caller then
+/// hands it to the child through the synchronizing start, and
+/// `claim_direct_task_args` confines it to the child's thread.
+///
+/// # Safety
+///
+/// `ptr` is a live box the caller's argument buffer holds a reference to.
+unsafe fn direct_task_arg_hands_over(ptr: *mut OpaqueValue) -> bool {
+    // SAFETY: the caller passes a live box.
+    let header = unsafe { &*ptr };
+    header.ref_count.load(Ordering::Acquire) == 1
+        && header.shared_lock().is_none()
+        && header.owner.get().is_null()
+}
+
 #[cfg(coverage)]
 #[doc(hidden)]
 pub static DIRECT_VALUE_LIVE_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -17433,10 +17450,35 @@ unsafe fn claim_direct_task_args(args: &[i64], claim_flag_address: usize) {
     // raw buffer references itself. Installing the finished map and flipping
     // the raw atomic flag are then allocation-free, so no partially claimed
     // prefix can exist.
+    //
+    // An argument the starting task left unshared was handed over (see
+    // `direct_task_arg_hands_over`): the buffer holds its only reference,
+    // and the box becomes confined to this thread. Unless the ownership
+    // counters count, which keeps every value out of the links, it links
+    // into this task's ledger after the map is installed, which allocates
+    // nothing.
+    let counting = crate::runtime_value::representation_stats::ownership_counting();
+    let handed_over = |argument: i64| {
+        argument != 0
+            && unsafe { &*(argument as *const OpaqueValue) }
+                .shared_lock()
+                .is_none()
+    };
     let mut owned_value_refs = HashMap::<usize, usize, _>::with_hasher(
         std::hash::BuildHasherDefault::<AddressHasher>::default(),
     );
     for argument in args.iter().copied().filter(|argument| *argument != 0) {
+        if handed_over(argument) {
+            #[cfg(all(debug_assertions, not(test)))]
+            // SAFETY: the buffer holds the only reference, so nothing else
+            // reads the box.
+            unsafe {
+                (*(argument as *mut OpaqueValue)).owner_thread = direct_value_thread_identity();
+            }
+            if !counting {
+                continue;
+            }
+        }
         let count = owned_value_refs.entry(argument as usize).or_insert(0usize);
         *count = count
             .checked_add(1)
@@ -17452,6 +17494,24 @@ unsafe fn claim_direct_task_args(args: &[i64], claim_flag_address: usize) {
             "direct task ownership ledger must be empty before argument claim"
         );
         state.owned_values_mut().install_others(owned_value_refs);
+        if counting {
+            return;
+        }
+        let owner = state.frames.as_ptr();
+        for argument in args
+            .iter()
+            .copied()
+            .filter(|argument| handed_over(*argument))
+        {
+            // SAFETY: the box is live and confined to this thread, and no
+            // ledger links it, so linking it allocates nothing.
+            let added = unsafe {
+                state
+                    .owned_values_mut()
+                    .add(owner, argument as *mut OpaqueValue)
+            };
+            assert!(added, "direct task argument reference count overflow");
+        }
     });
     unsafe {
         mark_direct_task_args_claimed(claim_flag_address);
@@ -17921,9 +17981,13 @@ unsafe fn start_direct_task_call(call: DirectTaskCall) -> *mut OpaqueValue {
                 with_value(arg as *mut OpaqueValue, |value| {
                     collect_queue_values(value, &mut queue_producers)
                 });
-                // The child may run on another worker while this task still
-                // holds the same handle, so both sides lock from here on.
-                share_direct_value(arg as *mut OpaqueValue);
+                // A value the buffer alone holds moves to the child, which
+                // takes it over unshared. Any other value the child may read
+                // while this task still holds the same handle, so both sides
+                // lock from here on.
+                if !direct_task_arg_hands_over(arg as *mut OpaqueValue) {
+                    share_direct_value(arg as *mut OpaqueValue);
+                }
             }
         }
         let group = if task_group.is_null() {

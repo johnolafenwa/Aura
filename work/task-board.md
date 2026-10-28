@@ -147,9 +147,13 @@ Last updated: 2026-10-27
   their bits, and `ListElements::push_plain` starts an empty list in the
   record layout. Details are in
   `2026-10-27-rust-speed-2i-typed-transfers.md`.
-- Next: step 2i part 3 (a task argument the caller moved is handed to
-  the child instead of shared with a lock), then part 4 (read-only
-  module constants).
+- Step 2i part 3: a task argument whose box the argument buffer alone
+  holds moves to the child unshared (`direct_task_arg_hands_over`,
+  `claim_direct_task_args`), and the emitter hands a temporary's
+  reference to the buffer (`ArgBufferStoreOwned`). A probe of 2,000 tasks
+  reading moved records and lists drops from 489.2M to 99.8M
+  instructions.
+- Next: step 2i part 4 (read-only module constants).
 
 ## Aura 0.7.1 preview release (complete)
 

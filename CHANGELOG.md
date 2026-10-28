@@ -162,6 +162,13 @@ in this file.
   the first record pushed into an empty list no longer goes through a
   runtime value. graph_paths runs 6.3% fewer instructions, raytracer
   7.3%, and mini_browser 2.3%.
+- A value a native program moves into a task, such as a freshly built
+  record or list passed to `group.start`, or a local passed for the last
+  time, now moves to the task without a lock when nothing else holds it.
+  Before, every task argument was shared, so each read of it on either
+  side took a lock and missed the inline list reads. A probe that starts
+  2,000 tasks reading records and lists moved into them runs 80% fewer
+  instructions.
 
 ### Fixed
 

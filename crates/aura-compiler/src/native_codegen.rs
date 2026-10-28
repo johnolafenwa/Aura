@@ -13893,10 +13893,17 @@ impl<'a> FunctionCompiler<'a> {
             let value = self.coerce_value(loaded, expected_ty)?;
             let value = self.ensure_opaque(value)?;
             let index_value = self.builder.iconst(types::I64, index as i64);
-            self.builder.call(
-                self.runtime[RuntimeFn::ArgBufferStore],
-                &[buffer, index_value, value.values[0]],
-            );
+            // A value the caller moved in or made for the call hands its
+            // reference to the task, so when nothing else holds it the task
+            // takes it over unshared.
+            let store = if self.temporary_owns_opaque(&value) {
+                self.clear_temporary_opaque_owned(&value);
+                RuntimeFn::ArgBufferStoreOwned
+            } else {
+                RuntimeFn::ArgBufferStore
+            };
+            self.builder
+                .call(self.runtime[store], &[buffer, index_value, value.values[0]]);
         }
         let transfer_defaults = self.builder.iconst(types::I64, 1);
         self.builder.call(
