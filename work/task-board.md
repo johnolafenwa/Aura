@@ -126,8 +126,17 @@ Last updated: 2026-10-27
   freed. Every one of the 30 programs and the 705 run-pass fixtures ends
   with no box left. Details are in
   `2026-10-27-rust-speed-2h-cleanup-tests.md`.
-- Next: the remaining 2h retains (dictionary lookup keys, scalar `get`
-  results) and the gate report.
+- Step 2h parts 7 to 9: an element loan whose key is copied from a
+  place nothing changes until the loan ends borrows the place
+  (`select_with_unchanged_places` in `mir_ownership.rs`) and native code
+  lends it the key; a scalar found by `get` is read out of the found box;
+  plain named callbacks of `sort(key=...)`, `map`, and `filter` are
+  called by name (`vec_callback_target`); a read of a union member's
+  payload loan is a lent payload (`union_payload_loans`). Retains across
+  the 30 programs: 87,876 to 16,507. Details are in
+  `2026-10-27-rust-speed-2h-lookup-keys.md`.
+- Next: the 2h gate report, then step 2i (typed values across tasks and
+  queues).
 
 ## Aura 0.7.1 preview release (complete)
 

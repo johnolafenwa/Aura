@@ -140,6 +140,19 @@ in this file.
   allocate a result. Native builds of the 30 benchmark programs allocate
   19% fewer boxes; image_filters runs 93% fewer instructions, nbody 49%,
   raytracer 34%, astar_pathfinding 33%, and spreadsheet 17%.
+- A dictionary lookup such as `match table.lookup(key)` no longer takes a
+  reference to its key when the key is a parameter, or a local that does
+  not change while the lookup's element is in use; the lookup reads the
+  key where it lies. An `int`, `float`, or `bool` value found by `get` is
+  read straight out of the dictionary. A plain named function passed to a
+  list's `sort(key=...)`, `map`, or `filter` is called directly, so it
+  borrows each element instead of taking a reference to it. A `str` bound
+  from a narrowed union, such as `digits` in `case str as digits`, holds
+  the union's string while the arm only reads it. With the changes above,
+  generated code now retains values 98% less often across the 30
+  benchmark programs (1,062,951 to 16,507); json_roundtrip,
+  csv_aggregate, lru_cache, bank_ledger, and sort_records now retain
+  nothing.
 
 ### Fixed
 

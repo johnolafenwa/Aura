@@ -463,6 +463,52 @@ fn assignments(function: &MirFunction) -> HashMap<&str, usize> {
     assigned
 }
 
+/// The loans of `function` that hold a union member's payload of a root
+/// local, each begun once, with that local. The union keeps the payload's
+/// box while it is unchanged, as a variant does.
+fn union_payload_loans(function: &MirFunction) -> HashMap<&str, &str> {
+    let mut begun = HashMap::<&str, Option<&str>>::new();
+    for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+        let Some((loan, source)) = (match instruction {
+            Instruction::BeginLoan { loan, source, .. }
+            | Instruction::BeginElementLoan { loan, source, .. }
+            | Instruction::Reborrow {
+                loan,
+                parent: source,
+                ..
+            }
+            | Instruction::ReborrowElement {
+                loan,
+                parent: source,
+                ..
+            } => Some((loan.as_str(), source.as_str())),
+            Instruction::BeginReturnedLoan { loan, .. } => Some((loan.as_str(), "")),
+            _ => None,
+        }) else {
+            continue;
+        };
+        let payload_of = match instruction {
+            Instruction::BeginLoan { mutable: false, .. } => source
+                .split_once('.')
+                .filter(|(root, field)| {
+                    field.starts_with("__union_payload_")
+                        && !field.contains('.')
+                        && !root.is_empty()
+                })
+                .map(|(root, _)| root),
+            _ => None,
+        };
+        if begun.insert(loan, payload_of).is_some() {
+            // A loan begun twice may lend another place the second time.
+            begun.insert(loan, None);
+        }
+    }
+    begun
+        .into_iter()
+        .filter_map(|(loan, root)| root.map(|root| (loan, root)))
+        .collect()
+}
+
 /// The parameters of `function`, with `self` for a method.
 fn param_names(function: &MirFunction) -> HashSet<&str> {
     function
@@ -478,9 +524,10 @@ fn param_names(function: &MirFunction) -> HashSet<&str> {
 ///
 /// A payload that a variant keeps in place in a box of its own is read
 /// into a local that holds the box. A local assigned once from a payload
-/// read of a root local, and otherwise only read, holds the box the
-/// scrutinee's variant holds instead of a reference of its own, with the
-/// flag of a lent element, so its release releases nothing. The MIR keeps
+/// read of a root local, or from a read of a loan of a union member's
+/// payload of one, and otherwise only read, holds the box the scrutinee's
+/// variant or union member holds instead of a reference of its own, with
+/// the flag of a lent element, so its release releases nothing. The MIR keeps
 /// the scrutinee live while the payload is (the ownership pass reads a
 /// payload as a borrow of its scrutinee), and its variant holds the box
 /// while the scrutinee is unchanged. Before each instruction that does
@@ -503,18 +550,23 @@ pub(super) fn lent_payload_reads<'f>(
     let instructions = || function.blocks.iter().flat_map(|block| &block.instructions);
     let assigned = assignments(function);
     let params = param_names(function);
+    let union_loans = union_payload_loans(function);
     let mut sources = HashMap::<&str, &str>::new();
     for instruction in instructions() {
-        let Instruction::Assign {
-            target,
-            value:
-                Rvalue::VariantPayload {
-                    scrutinee: Operand::Place(source),
-                    ..
-                },
-        } = instruction
-        else {
-            continue;
+        let (target, source) = match instruction {
+            Instruction::Assign {
+                target,
+                value:
+                    Rvalue::VariantPayload {
+                        scrutinee: Operand::Place(source),
+                        ..
+                    },
+            } => (target, source.as_str()),
+            Instruction::ReadLoan { target, loan } => match union_loans.get(loan.as_str()) {
+                Some(&source) => (target, source),
+                None => continue,
+            },
+            _ => continue,
         };
         if !target.contains('.')
             && !source.contains('.')
@@ -539,7 +591,8 @@ pub(super) fn lent_payload_reads<'f>(
                     Instruction::Assign {
                         target,
                         value: Rvalue::VariantPayload { .. },
-                    } if target == temp
+                    }
+                    | Instruction::ReadLoan { target, .. } if target == temp
                 );
                 if shares_list(instruction, source)
                     || (roots.contains(temp)

@@ -131,19 +131,6 @@ fn a_target_takes_what_it_is_given() {
         })),
         expect(&[("a", Consume)])
     );
-    assert_eq!(
-        roles(&Instruction::BeginElementLoan {
-            loan: "l".to_string(),
-            source: "items".to_string(),
-            selector: place("key"),
-            projection: String::new(),
-            mutable: false,
-            span: Span::new(1, 1),
-            checked: true,
-        }),
-        expect(&[("key", Consume)]),
-        "the loan owns its selector"
-    );
 }
 
 #[test]
@@ -171,6 +158,19 @@ fn reads_and_projections_borrow() {
             trap: crate::mir::ArithmeticTrap::None,
         })),
         expect(&[("a", Borrow)])
+    );
+    assert_eq!(
+        roles(&Instruction::BeginElementLoan {
+            loan: "l".to_string(),
+            source: "items".to_string(),
+            selector: place("key"),
+            projection: String::new(),
+            mutable: false,
+            span,
+            checked: true,
+        }),
+        expect(&[("key", Borrow)]),
+        "the loan borrows its selector until it ends"
     );
     assert_eq!(
         roles(&assign(Rvalue::Member {
@@ -992,6 +992,115 @@ def main():
             .flat_map(|block| retained(&block.instructions))
             .collect::<Vec<_>>();
         assert_eq!(retains, ["xs"]);
+    }
+
+    #[test]
+    fn an_element_loan_borrows_its_key_where_it_lies() {
+        let module = crate::lower_source_to_mir(
+            r#"def count(table: dict[str, str], key: str) -> int64:
+    match table.lookup(key):
+        case Lookup.Found(value):
+            return value.len()
+        case Lookup.Missing:
+            return 0
+
+def bump(table: mut dict[str, int64], key: str):
+    match mut table.lookup(key):
+        case Lookup.Found(value):
+            value += 1
+        case Lookup.Missing:
+            table[key.clone()] = 1
+
+def total(table: dict[str, str]) -> int64:
+    mut sum = 0
+    for key in table.keys():
+        match table.lookup(key):
+            case Lookup.Found(value):
+                sum += value.len()
+            case Lookup.Missing:
+                pass
+    return sum
+
+def local(table: dict[str, str], line: str) -> int64:
+    key = line.clone()
+    match table.lookup(key):
+        case Lookup.Found(value):
+            return value.len()
+        case Lookup.Missing:
+            return 0
+
+def rebound(table: dict[str, str]) -> int64:
+    mut key = "a"
+    mut sum = 0
+    for _ in range(2):
+        match table.lookup(key):
+            case Lookup.Found(value):
+                sum += value.len()
+            case Lookup.Missing:
+                pass
+        key = "b"
+    return sum
+
+def changed(table: dict[str, str]) -> int64:
+    mut key = "a"
+    mut sum = 0
+    match table.lookup(key):
+        case Lookup.Found(value):
+            key = "b"
+            sum += value.len() + key.len()
+        case Lookup.Missing:
+            pass
+    return sum
+
+def main():
+    mut counts: dict[str, int64] = {"a": 1}
+    bump(counts, "a")
+    bump(counts, "b")
+    names = {"a": "x", "b": "yz"}
+    print(counts["a"] + count(names, "a") + total(names) + local(names, "b") + rebound(names) + changed(names))
+"#,
+        )
+        .expect("the program should lower");
+        checks(&module);
+        // A shared parameter or a local bound once is the key itself, and
+        // a key read from a loop's view is not retained either.
+        for name in ["count", "bump", "total", "local"] {
+            let function = function(&module, name);
+            let instructions = || function.blocks.iter().flat_map(|block| &block.instructions);
+            let retains = function
+                .blocks
+                .iter()
+                .flat_map(|block| retained(&block.instructions))
+                .collect::<Vec<_>>();
+            assert!(retains.is_empty(), "{name} retains {retains:?}");
+            assert!(instructions().any(|instruction| matches!(
+                instruction,
+                Instruction::BeginElementLoan {
+                    selector: Operand::Place(_),
+                    ..
+                }
+            )));
+        }
+        let selector = |name| {
+            function(&module, name)
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .find_map(|instruction| match instruction {
+                    Instruction::BeginElementLoan { selector, .. } => Some(selector.clone()),
+                    _ => None,
+                })
+        };
+        for name in ["count", "bump", "local"] {
+            assert_eq!(selector(name), Some(super::place("key")), "{name}");
+        }
+        // A key bound again after the loan ends is the key itself too, and
+        // a key bound again while the loan holds the element stays copied.
+        assert_eq!(selector("rebound"), Some(super::place("key")));
+        assert!(matches!(
+            selector("changed"),
+            Some(Operand::Place(place)) if place.starts_with("%t")
+        ));
     }
 
     #[test]

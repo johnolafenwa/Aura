@@ -1,0 +1,37 @@
+# A `str` read out of a narrowed union holds the union's box while the arm
+# only reads it (Rust-speed step 2h, part 9).
+
+def count(text: str) -> int64:
+    return text.len()
+
+
+def describe(reply: str) -> str:
+    match reply.strip_prefix("INT "):
+        case str as digits:
+            match parse_int64(digits):
+                case Result.Ok(value):
+                    return f"int {value} from {digits.len()} digits"
+                case Result.Err(_):
+                    return "bad " + digits
+        case None:
+            return "other"
+
+
+def main():
+    mut previous: str | None = None
+    mut kept: list[str] = []
+    mut total = 0
+    for word in ["alpha", "beta", "gamma", "beta"]:
+        match previous:
+            case str as before:
+                pair = before + "-" + word
+                total += count(before) + pair.len()
+                kept.append(before.clone())
+            case None:
+                pass
+        previous = word.clone()
+    print(total)
+    print(", ".join(kept))
+    print(describe("INT 42"))
+    print(describe("INT 4x"))
+    print(describe("STR x"))

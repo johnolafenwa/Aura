@@ -975,6 +975,45 @@ an element loan no longer allocate a result either.
 | `sql_engine` | 683,934 | 552,398 | 1,412.2M | 1,375.5M |
 | All 30 programs | 1,886,045 | 1,523,899 | | |
 
+### Lookup Keys, Callbacks, And Union Strings Take No Reference
+
+A dictionary lookup such as `match table.lookup(key)` reads its key where
+it lies, without a reference of its own, when the key is a parameter or
+a local that nothing rebinds, moves, or changes while the lookup's
+element is in use. A key that may change in that time is still copied
+first, so the lookup keeps the key it started with. An `int`, `float`,
+or `bool` that `get` finds is read straight out of the dictionary.
+
+A plain function named as the callback of a list's `sort(key=...)`,
+`map`, or `filter` is called directly, as a call written to it would be,
+so each element is lent to it. A lambda, or a function value held in a
+local, is still called as a value.
+
+A `str` bound from a narrowed union, such as `digits` in
+`case str as digits`, holds the string the union keeps while the arm
+only reads it: passes it to `parse_int64`, calls its methods, or joins it
+with `+`.
+
+| Program | Retains before | Retains after | Instructions before | Instructions after |
+| --- | ---: | ---: | ---: | ---: |
+| `json_roundtrip` | 28,086 | 0 | 566.6M | 568.0M |
+| `interpreter` | 23,005 | 8,245 | 83.2M | 82.9M |
+| `sql_engine` | 13,422 | 5,946 | 1,375.5M | 1,377.5M |
+| `docdb` | 6,104 | 40 | 64.6M | 64.6M |
+| `csv_aggregate` | 5,548 | 0 | 65.1M | 65.0M |
+| `word_freq` | 2,935 | 1,000 | 53.0M | 53.0M |
+| `lru_cache` | 2,447 | 0 | 42.2M | 42.2M |
+| `bank_ledger` | 1,156 | 0 | 13.2M | 13.2M |
+| `sort_records` | 1,000 | 0 | 41.3M | 41.3M |
+| `kv_server` | 563 | 4 | 54.6M | 54.8M |
+| All 30 programs | 87,876 | 16,507 | | |
+
+Native code already took and dropped these references inline, so
+instruction counts hardly move: no program changes by more than 0.4%
+apart from `file_io`, which varies run to run with its file system.
+Retains across the 30 programs are 98.4% below the 1,062,951 they were
+before the change in Shared Arguments Stay With The Caller.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

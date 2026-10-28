@@ -467,10 +467,12 @@ pub fn operand_roles(instruction: &Instruction) -> Vec<(&Operand, OperandRole)> 
         | Instruction::ReturnLoan { .. }
         | Instruction::PushCleanup { .. }
         | Instruction::PopCleanup { .. } => {}
-        // The loan owns its selector until `EndLoan`.
+        // The loan reads its selector where it lies: the selector's place
+        // stays live, and so unchanged, until the loan ends (see
+        // `OwnershipFacts::borrowed_roots`).
         Instruction::BeginElementLoan { selector, .. }
         | Instruction::ReborrowElement { selector, .. } => {
-            roles.push((selector, OperandRole::Consume))
+            roles.push((selector, OperandRole::Borrow))
         }
         Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. } => {
             rvalue_roles(value, &mut roles)
@@ -1171,9 +1173,11 @@ impl<'f> OwnershipFacts<'f> {
         accesses
     }
 
-    /// The roots each loan and each borrowing closure borrows from. A loan
-    /// of a loan borrows what its parent borrows, and a closure copied to
-    /// another local keeps its borrows there.
+    /// The roots each loan and each borrowing closure borrows from. An
+    /// element loan also borrows the place of its selector, which keeps the
+    /// key the loan walks to its element with. A loan of a loan borrows
+    /// what its parent borrows, and a closure copied to another local keeps
+    /// its borrows there.
     fn borrowed_roots(&self) -> HashMap<&'f str, Vec<usize>> {
         // `(borrower, source, direct)`: a direct borrower borrows the
         // source root itself; a copy only carries the source's borrows.
@@ -1186,6 +1190,17 @@ impl<'f> OwnershipFacts<'f> {
         {
             if let Some((loan, source)) = begun_loan(instruction) {
                 edges.push((loan, root_of(source), true));
+                if let Instruction::BeginElementLoan {
+                    selector: Operand::Place(selector),
+                    ..
+                }
+                | Instruction::ReborrowElement {
+                    selector: Operand::Place(selector),
+                    ..
+                } = instruction
+                {
+                    edges.push((loan, root_of(selector), true));
+                }
                 continue;
             }
             let Instruction::Assign { target, value } = instruction else {
@@ -1622,6 +1637,13 @@ fn insert_ownership_within(module: &mut MirModule, state_cells: usize) {
     if module.ownership == MirOwnership::Explicit {
         return;
     }
+    for function in module
+        .functions
+        .iter_mut()
+        .chain(module.top_level.iter_mut())
+    {
+        select_with_unchanged_places(function);
+    }
     module.borrowing = borrowing_functions(module);
     let rewrites = (|| {
         let context = MirLoanValidationContext::new(module).ok()?;
@@ -1836,6 +1858,219 @@ fn cancelled_function(
     Some(candidate)
 }
 
+/// Selects with a key's place where it lies. Lowering copies the selector
+/// of an element loan into a temporary, so that rebinding the place it
+/// read cannot change the loan's key (ADR-0061, 2026-09-21 section, A2),
+/// and the copy takes a reference to the key. A temporary copied from a
+/// root place just before the one loan it selects for, and read nowhere
+/// else, gives way to the place when nothing rebinds, moves, or changes
+/// the place from the copy until the loan ends. The loan then borrows the
+/// place.
+fn select_with_unchanged_places(function: &mut MirFunction) {
+    let shared = function
+        .params
+        .iter()
+        .filter(|param| param.passing == MirReceiverKind::Borrow)
+        .map(|param| param.name.as_str())
+        .collect::<HashSet<_>>();
+    let labels = function
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| (block.label.as_str(), index))
+        .collect::<HashMap<_, _>>();
+    let mut assigned = HashMap::<&str, usize>::new();
+    let mut mentions = HashMap::<&str, usize>::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            for (place, access) in instruction_accesses(instruction) {
+                if access == Access::Assign {
+                    *assigned.entry(place).or_default() += 1;
+                }
+            }
+            let mut named = Vec::new();
+            super::instruction_place_mentions(instruction, &mut named);
+            for place in named {
+                *mentions.entry(root_of(place)).or_default() += 1;
+            }
+        }
+        for place in super::terminator_place_mentions(&block.terminator) {
+            *mentions.entry(root_of(place)).or_default() += 1;
+        }
+    }
+    let mut replaced = HashMap::<String, String>::new();
+    for (block_index, block) in function.blocks.iter().enumerate() {
+        for (copy, instruction) in block.instructions.iter().enumerate() {
+            let Instruction::Assign {
+                target: temp,
+                value: Rvalue::Use(Operand::Place(source)),
+            } = instruction
+            else {
+                continue;
+            };
+            if !temp.starts_with("%t")
+                || root_of(source) != source
+                || assigned.get(temp.as_str()) != Some(&1)
+                // Read only where it selects one element.
+                || mentions.get(temp.as_str()) != Some(&1)
+            {
+                continue;
+            }
+            let shared = shared.contains(source.as_str());
+            let rest = &block.instructions[copy + 1..];
+            let Some(offset) = rest.iter().position(|instruction| {
+                changes_place(instruction, source, shared)
+                    || selects_with(instruction, temp).is_some()
+            }) else {
+                continue;
+            };
+            let Some(loan) = selects_with(&rest[offset], temp) else {
+                continue;
+            };
+            if unchanged_while_loaned(
+                function,
+                &labels,
+                (block_index, copy + offset + 2),
+                loan,
+                source,
+                shared,
+            ) {
+                replaced.insert(temp.clone(), source.clone());
+            }
+        }
+    }
+    if replaced.is_empty() {
+        return;
+    }
+    for block in &mut function.blocks {
+        block.instructions.retain(|instruction| {
+            !matches!(
+                instruction,
+                Instruction::Assign { target, .. } if replaced.contains_key(target)
+            )
+        });
+        for instruction in &mut block.instructions {
+            if let Instruction::BeginElementLoan {
+                selector: Operand::Place(selector),
+                ..
+            }
+            | Instruction::ReborrowElement {
+                selector: Operand::Place(selector),
+                ..
+            } = instruction
+            {
+                if let Some(source) = replaced.get(selector) {
+                    selector.clone_from(source);
+                }
+            }
+        }
+    }
+    function
+        .local_types
+        .retain(|local| !replaced.contains_key(&local.name));
+}
+
+/// The loan `instruction` begins, when it selects with `temp`.
+fn selects_with<'f>(instruction: &'f Instruction, temp: &str) -> Option<&'f str> {
+    match instruction {
+        Instruction::BeginElementLoan {
+            loan,
+            selector: Operand::Place(selector),
+            ..
+        }
+        | Instruction::ReborrowElement {
+            loan,
+            selector: Operand::Place(selector),
+            ..
+        } if selector == temp => Some(loan),
+        _ => None,
+    }
+}
+
+/// Whether `instruction` rebinds, moves, or may change the root place
+/// `place`. A method call names its receiver as a writeback, which a
+/// shared parameter never changes.
+fn changes_place(instruction: &Instruction, place: &str, shared: bool) -> bool {
+    let mutably_loaned = matches!(
+        instruction,
+        Instruction::BeginLoan {
+            source,
+            mutable: true,
+            ..
+        } | Instruction::BeginElementLoan {
+            source,
+            mutable: true,
+            ..
+        } if root_of(source) == place
+    );
+    mutably_loaned
+        || instruction_accesses(instruction)
+            .into_iter()
+            .any(|(touched, access)| {
+                root_of(touched) == place
+                    && match access {
+                        Access::Assign | Access::Move | Access::TakePart => true,
+                        Access::Writeback => !shared,
+                        Access::Read | Access::Consume => false,
+                    }
+            })
+}
+
+/// Whether nothing changes `place` on any path from `start` until `loan`
+/// ends.
+fn unchanged_while_loaned(
+    function: &MirFunction,
+    labels: &HashMap<&str, usize>,
+    start: (usize, usize),
+    loan: &str,
+    place: &str,
+    shared: bool,
+) -> bool {
+    let mut pending = vec![start];
+    let mut entered = HashSet::new();
+    while let Some((block_index, from)) = pending.pop() {
+        let block = &function.blocks[block_index];
+        let mut ended = false;
+        for instruction in &block.instructions[from..] {
+            if matches!(
+                instruction,
+                Instruction::EndLoan { loan: ended_loan }
+                | Instruction::ReturnLoan { loan: ended_loan, .. } if ended_loan == loan
+            ) {
+                ended = true;
+                break;
+            }
+            if changes_place(instruction, place, shared) {
+                return false;
+            }
+        }
+        if ended {
+            continue;
+        }
+        let rebinds = matches!(
+            &block.terminator,
+            Terminator::ForRange { binding, .. } if root_of(binding) == place
+        );
+        if rebinds
+            || terminator_accesses(&block.terminator)
+                .into_iter()
+                .any(|(touched, access)| {
+                    root_of(touched) == place && matches!(access, Access::Move | Access::TakePart)
+                })
+        {
+            return false;
+        }
+        for label in mir_successors(&block.terminator) {
+            if let Some(&next) = labels.get(label) {
+                if entered.insert(next) {
+                    pending.push((next, 0));
+                }
+            }
+        }
+    }
+    true
+}
+
 /// The retains of `function` that cancel against a release.
 fn move_pairs(function: &MirFunction, context: &MirLoanValidationContext<'_>) -> Vec<MovePair> {
     let mut facts = OwnershipFacts::new(function, context);
@@ -1872,15 +2107,6 @@ fn move_pairs(function: &MirFunction, context: &MirLoanValidationContext<'_>) ->
             // The retains of one consumer come right before it.
             let consumer = (retain + 1..instructions.len())
                 .find(|position| !matches!(instructions[*position], Instruction::Retain { .. }));
-            // An element loan selects with a place it keeps.
-            if consumer.is_some_and(|position| {
-                matches!(
-                    instructions[position],
-                    Instruction::BeginElementLoan { .. } | Instruction::ReborrowElement { .. }
-                )
-            }) {
-                continue;
-            }
             let accesses = match consumer {
                 Some(position) => facts.accesses(&instructions[position]),
                 None => terminator_accesses(&block.terminator),
@@ -2030,8 +2256,6 @@ fn apply_move_pairs(function: &mut MirFunction, pairs: &[MovePair]) {
 fn place_operand_mut<'a>(instruction: &'a mut Instruction, name: &str) -> Option<&'a mut Operand> {
     let mut operands = Vec::new();
     match instruction {
-        Instruction::BeginElementLoan { selector, .. }
-        | Instruction::ReborrowElement { selector, .. } => operands.push(selector),
         Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. } => {
             rvalue_operands_mut(value, &mut operands)
         }
@@ -2043,8 +2267,10 @@ fn place_operand_mut<'a>(instruction: &'a mut Instruction, name: &str) -> Option
         | Instruction::EndLend { .. }
         | Instruction::IndexInRange { .. }
         | Instruction::BeginLoan { .. }
+        | Instruction::BeginElementLoan { .. }
         | Instruction::BeginReturnedLoan { .. }
         | Instruction::Reborrow { .. }
+        | Instruction::ReborrowElement { .. }
         | Instruction::ReadLoan { .. }
         | Instruction::EndLoan { .. }
         | Instruction::ReturnLoan { .. }

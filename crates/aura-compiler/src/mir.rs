@@ -19912,7 +19912,7 @@ impl<'a> Lowerer<'a> {
                         self.lower_expr_at_sequence_point(&argument.value, Some(&callback_ty));
                     let key_ty = callback_result_type(callback_ty)
                         .expect("checked list.sort key should have a callable type");
-                    (callback, key_ty)
+                    (self.vec_callback_target(&argument.value, callback), key_ty)
                 });
                 let reverse = ordered[1]
                     .map(|argument| {
@@ -19974,6 +19974,7 @@ impl<'a> Lowerer<'a> {
                     .expect("checked Vec callback should have a function type");
                 let callback =
                     self.lower_expr_at_sequence_point(&callback_arg.value, Some(&callback_ty));
+                let callback = self.vec_callback_target(&callback_arg.value, callback);
                 let output_ty = if member == BuiltinMember::VecMap {
                     let Type::Named(name, output_args) = self
                         .infer_expr_type(expr)
@@ -20329,11 +20330,37 @@ impl<'a> Lowerer<'a> {
         self.lower_expr_at_sequence_point(object, expected.as_ref())
     }
 
+    /// The callee a `list` algorithm calls once per element. A plain
+    /// function named as the callback is called by its name, as a call
+    /// written to it would be, so each element is lent to it rather than
+    /// handed over as an owned reference through the function-value
+    /// contract. Any other callback is called as a value.
+    fn vec_callback_target(&self, expr: &Expr, callback: Operand) -> CallTarget {
+        let Operand::Function { name, .. } = &callback else {
+            return CallTarget::Value(callback);
+        };
+        match self.resolve_function_value_target(expr) {
+            Some((runtime_name, function))
+                if runtime_name == *name
+                    && function.decl.type_params.is_empty()
+                    && function.decl.view_return.is_none()
+                    && matches!(
+                        function.decl.params.as_slice(),
+                        [param] if param.mode == crate::ast::ParamMode::Default
+                            && !param.keyword_only
+                    ) =>
+            {
+                CallTarget::Name(runtime_name)
+            }
+            _ => CallTarget::Value(callback),
+        }
+    }
+
     fn lower_vec_key_collection_loop(
         &mut self,
         source: Operand,
         element_ty: &Type,
-        callback: Operand,
+        callback: CallTarget,
         keys: &str,
         key_ty: &Type,
         span: Span,
@@ -20385,7 +20412,7 @@ impl<'a> Lowerer<'a> {
         self.emit(Instruction::Assign {
             target: key.clone(),
             value: Rvalue::Call {
-                callee: CallTarget::Value(callback),
+                callee: callback,
                 args: vec![MirArg {
                     name: None,
                     value: Operand::Place(element),
@@ -20408,7 +20435,7 @@ impl<'a> Lowerer<'a> {
         &mut self,
         source: Operand,
         element_ty: &Type,
-        callback: Operand,
+        callback: CallTarget,
         output: VecTransformOutput<'_>,
         filter: bool,
         span: Span,
@@ -20481,7 +20508,7 @@ impl<'a> Lowerer<'a> {
         self.emit(Instruction::Assign {
             target: callback_result.clone(),
             value: Rvalue::Call {
-                callee: CallTarget::Value(callback),
+                callee: callback,
                 args: vec![MirArg {
                     name: None,
                     value: Operand::Place(element.clone()),
