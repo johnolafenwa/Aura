@@ -28773,10 +28773,31 @@ fn entry_loans_read_and_write_values_where_the_map_keeps_them() {
     let not_a_map = super::aura_direct_box_i64(1);
     assert!(super::aura_direct_map_value_slot_int64(not_a_map, 0, 0).is_null());
     assert!(super::aura_direct_map_value_slot_int64(not_a_map, 0, 1).is_null());
+    // A probe tells a missing key from an entry it cannot follow.
+    let probe = super::aura_direct_map_probe_slot(words, key, 1);
+    assert_eq!(unsafe { super::aura_direct_value_slot_int64(probe) }, 5);
+    assert!(super::aura_direct_map_probe_slot(words, missing, 0).is_null());
+    assert!(!super::aura_direct_map_probe_slot_int64(ints, 1, 0).is_null());
+    // An `int64` value is stored from its word.
+    super::aura_direct_map_set_index_int64(words, string_value("c"), 7);
+    let stored_key = string_value("c");
+    let stored = super::aura_direct_map_value_slot(words, stored_key, 0);
+    assert_eq!(unsafe { super::aura_direct_value_slot_int64(stored) }, 7);
     unsafe { super::share_direct_value(ints) };
     assert!(super::aura_direct_map_value_slot_int64(ints, 2, 0).is_null());
+    assert_eq!(
+        super::aura_direct_map_probe_slot_int64(ints, 2, 0) as usize,
+        1
+    );
+    assert!(super::aura_direct_map_probe_slot_int64(ints, 9, 0).is_null());
+    unsafe { super::share_direct_value(not_a_map) };
+    let not_a_map_address = not_a_map as usize;
+    let message = capture_direct_boundary_error_message(move || {
+        super::aura_direct_map_probe_slot_int64(not_a_map_address as *mut OpaqueValue, 0, 0);
+    });
+    assert_eq!(message, "expected `dict`, found `integer`");
     unsafe {
-        for value in [ints, words, key, missing, not_a_map] {
+        for value in [ints, words, key, missing, not_a_map, stored_key] {
             release_value(value);
         }
     }

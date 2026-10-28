@@ -10254,6 +10254,23 @@ pub extern "C-unwind" fn aura_direct_map_set_index_in_place(
     })
 }
 
+/// `map[key] = value` for an `int64` value, which generated code passes as
+/// its word.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_set_index_int64(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    value: i64,
+) {
+    task_runtime_boundary(|| {
+        let key = unsafe { consume_owned_value(key) };
+        with_map_mut(map, |map| {
+            map.entries
+                .insert(key, Value::Int(IntegerValue::from_i64(value)));
+        });
+    })
+}
+
 /// Borrows the value at `segments` inside `value` (ADR-0061, 2026-09-21
 /// section): an element or entry loan's projected read clones only the
 /// value it reaches, never the element that holds it.
@@ -10984,6 +11001,60 @@ pub extern "C-unwind" fn aura_direct_map_value_slot_int64(
     mutable: i64,
 ) -> *mut Value {
     task_runtime_boundary(|| map_value_slot(map, mutable != 0, |entries| entries.position_i64(key)))
+}
+
+/// [`aura_direct_map_value_slot`] for a `contains_key` test whose entry
+/// loan follows (see `fused_entry_probes` in the compiler): the slot, 1 when
+/// the key is present but the map is shared with another thread, or null
+/// when the key is missing.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_probe_slot(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    mutable: i64,
+) -> *mut Value {
+    task_runtime_boundary(|| unsafe {
+        with_value(key, |key| {
+            map_probe_slot(map, mutable != 0, |entries| entries.position(key))
+        })
+    })
+}
+
+/// [`aura_direct_map_probe_slot`] for an `int64` key.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_probe_slot_int64(
+    map: *mut OpaqueValue,
+    key: i64,
+    mutable: i64,
+) -> *mut Value {
+    task_runtime_boundary(|| map_probe_slot(map, mutable != 0, |entries| entries.position_i64(key)))
+}
+
+fn map_probe_slot(
+    map: *mut OpaqueValue,
+    mutable: bool,
+    position: impl FnOnce(&crate::collection_index::DictEntries) -> Option<usize>,
+) -> *mut Value {
+    // SAFETY: generated code passes a live box.
+    let confined = unsafe { map.as_ref() }.is_some_and(|header| header.shared_lock().is_none());
+    if confined {
+        return map_value_slot(map, mutable, position);
+    }
+    // SAFETY: as above.
+    let present = unsafe {
+        with_value(map, |value| match value {
+            Value::Map(map) => position(&map.entries).is_some(),
+            other => runtime_error(format!(
+                "expected `dict`, found `{}`",
+                value_type_name(other)
+            )),
+        })
+    };
+    if present {
+        std::ptr::without_provenance_mut(1)
+    } else {
+        std::ptr::null_mut()
+    }
 }
 
 fn map_value_slot(

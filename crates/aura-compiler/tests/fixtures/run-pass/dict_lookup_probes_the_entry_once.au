@@ -1,0 +1,56 @@
+def bump(counts: mut dict[str, int64], key: own str):
+    match mut counts.lookup(key):
+        case Lookup.Found(count):
+            count += 1
+        case Lookup.Missing:
+            counts[key] = 1
+
+
+def bump_int(counts: mut dict[int64, int64], key: int64):
+    match mut counts.lookup(key):
+        case Lookup.Found(count):
+            count += key
+        case Lookup.Missing:
+            counts[key] = 1
+
+
+class Counter:
+    counts: dict[str, int64]
+
+    def add(mut self, key: str):
+        match mut self.counts.lookup(key):
+            case Lookup.Found(count):
+                count += 1
+            case Lookup.Missing:
+                self.counts[key.clone()] = 1
+
+
+def group(groups: mut dict[str, list[int64]], key: str, value: int64):
+    match mut groups.lookup(key):
+        case Lookup.Found(values):
+            values.append(value)
+        case Lookup.Missing:
+            groups[key.clone()] = [value]
+
+
+def main():
+    mut c: dict[str, int64] = {}
+    for w in "a b a c b a".split(" "):
+        bump(c, w.clone())
+    print(c)
+    mut d: dict[int64, int64] = {}
+    for k in [3, 4, 3, 3, 9]:
+        bump_int(d, k)
+    print(d)
+    shared = c.copy()
+    bump(c, "a")
+    print(c)
+    print(shared)
+    mut counter = Counter(counts={})
+    for w in ["x", "y", "x"]:
+        counter.add(w)
+    print(counter.counts)
+    mut groups: dict[str, list[int64]] = {}
+    for i in range(5):
+        group(groups, f"g{i % 2}", i)
+    print(groups)

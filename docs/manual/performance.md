@@ -1218,6 +1218,21 @@ own.
 | `csv_aggregate` | 36.5M | 33.0M |
 | `markdown_render` | 5.6M | 5.1M |
 
+### Dictionary Lookups Probe Once
+
+`match mut counts.lookup(key)` with a `Found` arm that changes an `int64`
+value finds the entry once: the test for the key and the update of its
+value share the same probe. `counts[key] = 1` on a `dict` whose values
+are `int64` stores the value without a box.
+
+| Program | Instructions before | Instructions after |
+| --- | ---: | ---: |
+| `lru_cache` | 24.5M | 22.7M |
+| `interpreter` | 33.3M | 31.0M |
+| `lzw_compress` | 3.6M | 3.3M |
+| `bank_ledger` | 10.9M | 10.2M |
+| `word_freq` | 26.2M | 25.2M |
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and
