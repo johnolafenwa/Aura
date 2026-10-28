@@ -135,8 +135,34 @@ Last updated: 2026-10-27
   payload loan is a lent payload (`union_payload_loans`). Retains across
   the 30 programs: 87,876 to 16,507. Details are in
   `2026-10-27-rust-speed-2h-lookup-keys.md`.
-- Next: the 2h gate report, then step 2i (typed values across tasks and
-  queues).
+- Step 2h gate: the cleanup tests pass, and retains across the 30
+  programs are 98.4% below 2g (1,062,951 to 16,507). 28 of the 30 drop at
+  least 90%; pubsub_broker drops 89.1% (the rest is `get` copying a
+  subscriber list) and task_pool has almost none to begin with.
+- Step 2i parts 1 and 2: a run-pass fixture and a cleanup test send typed
+  values through queues, task arguments, closures, `select`, and task
+  results on both backends. A boxed `copy class` value keeps its bytes in
+  its class's layout (`box_plain_record`, `unbox_plain_record` in
+  `native_codegen_plain.rs`), list literals of scalars and records push
+  their bits, and `ListElements::push_plain` starts an empty list in the
+  record layout. Details are in
+  `2026-10-27-rust-speed-2i-typed-transfers.md`.
+- Step 2i part 3: a task argument whose box the argument buffer alone
+  holds moves to the child unshared (`direct_task_arg_hands_over`,
+  `claim_direct_task_args`), and the emitter hands a temporary's
+  reference to the buffer (`ArgBufferStoreOwned`). A probe of 2,000 tasks
+  reading moved records and lists drops from 489.2M to 99.8M
+  instructions.
+- Step 2i part 4: a module constant is built and tagged once and then
+  frozen (`freeze_direct_value`): a static lock marker and a count of
+  `1 << 30` make every retain, release, share, and claim pass it by,
+  reads take no lock, and a write is a runtime error. A read loads the
+  constant from a per-constant word (`aura_direct_module_constant` now
+  takes the word, a tag cell, and the type). A probe reading list and
+  `dict` constants in loops and tasks drops from 47.8M to 14.2M
+  instructions; the 30 programs run 0.1% to 1.1% more.
+- Next: the 2i pull request, then step 2j (convert to and from runtime
+  values only at host calls, FFI, and `aura run`).
 
 ## Aura 0.7.1 preview release (complete)
 

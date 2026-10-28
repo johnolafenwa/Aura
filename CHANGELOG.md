@@ -153,6 +153,27 @@ in this file.
   benchmark programs (1,062,951 to 16,507); json_roundtrip,
   csv_aggregate, lru_cache, bank_ledger, and sort_records now retain
   nothing.
+- A `copy class` value that native code boxes, for example to put it in
+  a queue, return it from a task, or keep it in an enum payload, now
+  keeps its bytes in its class's layout instead of being converted field
+  by field, and code that takes it back out reads the bytes where they
+  lie. A list literal of numbers, `bool` values, or `copy class` values
+  builds its list from the elements' bits instead of boxing each one, and
+  the first record pushed into an empty list no longer goes through a
+  runtime value. graph_paths runs 6.3% fewer instructions, raytracer
+  7.3%, and mini_browser 2.3%.
+- A value a native program moves into a task, such as a freshly built
+  record or list passed to `group.start`, or a local passed for the last
+  time, now moves to the task without a lock when nothing else holds it.
+  Before, every task argument was shared, so each read of it on either
+  side took a lock and missed the inline list reads. A probe that starts
+  2,000 tasks reading records and lists moved into them runs 80% fewer
+  instructions.
+- A native program builds each module constant that is not a plain
+  number once and freezes it, so every task reads it in place without a
+  lock or a reference count, and a read finds it with one load instead
+  of a lookup by name. A probe that reads list and `dict` constants in
+  loops and in tasks runs 70% fewer instructions.
 
 ### Fixed
 

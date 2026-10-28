@@ -981,8 +981,9 @@ impl ListElements {
     }
 
     /// Appends the plain record whose words are at `src`, as [`Self::push`]
-    /// appends the value they hold. A list that keeps values of `layout`
-    /// copies the words without building the value.
+    /// appends the value they hold. A list that keeps values of `layout`,
+    /// or an empty one, which starts to, copies the words without building
+    /// the value.
     ///
     /// # Safety
     ///
@@ -993,6 +994,12 @@ impl ListElements {
             Self::Typed(typed) if std::ptr::eq(typed.layout, layout) => {
                 // SAFETY: the caller's contract.
                 unsafe { typed.push_words(src) }
+            }
+            list if list.is_empty() => {
+                let mut typed = TypedElements::new(layout);
+                // SAFETY: the caller's contract.
+                unsafe { typed.push_words(src) };
+                *list = Self::Typed(Box::new(typed));
             }
             // SAFETY: the caller's contract.
             list => list.push(unsafe { layout.read(src.cast()) }),

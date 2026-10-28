@@ -1,0 +1,233 @@
+copy class Point:
+    x: int64
+    y: int64
+
+class Order:
+    id: int64
+    tags: list[str]
+    points: list[Point]
+    groups: dict[str, list[Point]]
+
+enum Shape:
+    Dot(Point)
+    Line(Point, Point)
+    Named(str)
+
+def describe(shape: Shape) -> str:
+    match shape:
+        case Shape.Dot(p):
+            return f"dot {p.x},{p.y}"
+        case Shape.Line(a, b):
+            return f"line {a.x},{a.y}-{b.x},{b.y}"
+        case Shape.Named(name):
+            return f"named {name}"
+
+def order_total(order: Order) -> int64:
+    mut total = order.id
+    for p in order.points:
+        total += p.x * p.y
+    for name, points in order.groups.items():
+        total += name.len()
+        for p in points:
+            total += p.x + p.y
+    return total + order.tags.len()
+
+def make_order(id: int64) -> Order:
+    return Order(
+        id=id,
+        tags=[f"t{id}", "x"],
+        points=[Point(x=id, y=2), Point(x=3, y=id)],
+        groups={"near": [Point(x=1, y=id)], "far": [Point(x=id, y=id), Point(x=0, y=1)]},
+    )
+
+def point_echo(input: Queue[Point], output: Queue[(int64, Point)]):
+    mut count = 0
+    for p in input:
+        count += 1
+        output.put((count, Point(x=p.y, y=p.x)))
+    output.close()
+
+def order_echo(input: Queue[Order], output: Queue[Order]):
+    for order in input:
+        mut kept = order
+        kept.points.append(Point(x=kept.id, y=kept.id))
+        kept.tags.append("seen")
+        output.put(kept)
+    output.close()
+
+def shape_names(input: Queue[Shape], output: Queue[str]):
+    while true:
+        match input.get():
+            case QueueReceive.Item(shape):
+                output.put(describe(shape))
+            case QueueReceive.Closed:
+                break
+            case _:
+                break
+    output.close()
+
+def results_of(input: Queue[Result[Point, str]]) -> str:
+    mut text = ""
+    for item in input:
+        match item:
+            case Result.Ok(p):
+                text = f"{text} ok({p.x},{p.y})"
+            case Result.Err(message):
+                text = f"{text} err({message})"
+    return text
+
+def sum_owned(order: own Order, scale: int64) -> int64:
+    return order_total(order) * scale
+
+def sum_points(points: own list[Point]) -> int64:
+    mut total = 0
+    for p in points:
+        total += p.x - p.y
+    return total
+
+def flip(p: Point) -> Point:
+    return Point(x=p.y, y=p.x)
+
+def build_order(id: int64) -> Order:
+    return make_order(id)
+
+def pick_shape(index: int64) -> Shape:
+    if index % 3 == 0:
+        return Shape.Dot(Point(x=index, y=0))
+    if index % 3 == 1:
+        return Shape.Line(Point(x=index, y=1), Point(x=2, y=index))
+    return Shape.Named(f"s{index}")
+
+def show_selected(outcome: own SelectOutcome[Point, None]):
+    match own outcome:
+        case SelectOutcome.Queue(index, QueueReceive.Item(p)):
+            print(f"selected {index}: {p.x},{p.y}")
+        case SelectOutcome.Queue(index, _):
+            print(f"selected {index}: nothing")
+        case _:
+            print("selected something else")
+
+def main():
+    with TaskGroup() as group:
+        points_in = Queue[Point](capacity=2)
+        points_out = Queue[(int64, Point)](capacity=2)
+        group.start_soon(point_echo, points_in, points_out)
+        for i in range(5):
+            points_in.put(Point(x=i, y=10 * i))
+        points_in.close()
+        for count, p in points_out:
+            print(f"point {count}: {p.x},{p.y}")
+
+    with TaskGroup() as group:
+        orders_in = Queue[Order](capacity=1)
+        orders_out = Queue[Order]()
+        group.start_soon(order_echo, orders_in, orders_out)
+        for i in range(3):
+            orders_in.put(make_order(i))
+        orders_in.close()
+        for order in orders_out:
+            print(f"order {order.id}: {order_total(order)} {order.tags} {order.points.len()}")
+
+    with TaskGroup() as group:
+        shapes_in = Queue[Shape]()
+        names_out = Queue[str]()
+        group.start_soon(shape_names, shapes_in, names_out)
+        for i in range(4):
+            shapes_in.put(pick_shape(i))
+        shapes_in.close()
+        for name in names_out:
+            print(name)
+
+    with TaskGroup() as group:
+        outcomes = Queue[Result[Point, str]]()
+        reader = group.start(results_of, outcomes)
+        outcomes.put(Result.Ok(Point(x=1, y=2)))
+        outcomes.put(Result.Err("bad"))
+        outcomes.put(Result.Ok(Point(x=3, y=4)))
+        outcomes.close()
+        match reader.result():
+            case TaskResult.Ready(text):
+                print(f"results:{text}")
+            case _:
+                print("reader failed")
+
+    with TaskGroup() as group:
+        mut handles: list[Task[int64]] = []
+        for i in range(3):
+            handles.append(group.start(sum_owned, make_order(i), i + 1))
+            handles.append(group.start(sum_points, [Point(x=i, y=1), Point(x=5, y=i)]))
+        flipped = group.start(flip, Point(x=7, y=8))
+        built = group.start(build_order, 9)
+        mut total = 0
+        for handle in handles:
+            match handle.result():
+                case TaskResult.Ready(value):
+                    total += value
+                case _:
+                    print("task failed")
+        print(f"tasks {total}")
+        match flipped.result():
+            case TaskResult.Ready(p):
+                print(f"flipped {p.x},{p.y}")
+            case _:
+                print("flip failed")
+        match built.result():
+            case TaskResult.Ready(order):
+                print(f"built {order.id} {order_total(order)} {order.groups.len()}")
+            case _:
+                print("build failed")
+
+    captured = make_order(5)
+    corner = Point(x=6, y=7)
+    with TaskGroup() as group:
+        job: def() -> int64 = lambda: order_total(captured) + corner.x * corner.y
+        from_closure = group.start(job)
+        match from_closure.result():
+            case TaskResult.Ready(value):
+                print(f"closure {value}")
+            case _:
+                print("closure failed")
+    print(f"still here {corner.y}")
+
+    near = Queue[Point]()
+    far = Queue[Point]()
+    far.put(Point(x=8, y=9))
+    show_selected(select(near, far))
+    near.put(Point(x=10, y=11))
+    near.close()
+    show_selected(select(near, far))
+    show_selected(select(near))
+
+    full = Queue[Point](capacity=1)
+    match full.try_put(Point(x=1, y=1)):
+        case Result.Ok(_):
+            print("first fits")
+        case Result.Err(_):
+            print("first refused")
+    match full.try_put(Point(x=2, y=3)):
+        case Result.Ok(_):
+            print("second fits")
+        case Result.Err(SendError.Full(p)):
+            print(f"full, kept {p.x},{p.y}")
+        case Result.Err(_):
+            print("second refused")
+    match full.poll():
+        case Poll.Ready(p):
+            print(f"polled {p.x},{p.y}")
+        case Poll.Unavailable:
+            print("nothing")
+    fallback = full.get_or(Point(x=-1, y=-1))
+    print(f"fallback {fallback.x},{fallback.y}")
+    full.close()
+    match full.put(Point(x=4, y=5)):
+        case Result.Err(SendError.Closed(p)):
+            print(f"closed, kept {p.x},{p.y}")
+        case _:
+            print("sent after close")
+    orders_closed = Queue[Order]()
+    orders_closed.close()
+    match orders_closed.put(make_order(4)):
+        case Result.Err(SendError.Closed(order)):
+            print(f"closed, kept order {order.id} {order_total(order)}")
+        case _:
+            print("sent after close")

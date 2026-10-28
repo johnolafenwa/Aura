@@ -113,6 +113,14 @@ impl PlainRecords {
 }
 
 impl ClassRecord {
+    pub(super) fn cell(&self) -> DataHandle {
+        self.cell
+    }
+
+    pub(super) fn access(&self) -> i64 {
+        self.access
+    }
+
     /// The place `segments` reach through fields of classes and tuples held
     /// inline, as `meta.count` reaches `count` inside `meta`, and the
     /// generated-code form of a place of direct type `ty` there.
@@ -621,6 +629,32 @@ impl FunctionCompiler<'_> {
     /// it changes a lent receiver in place.
     pub(super) fn holds_field_box(&self) -> bool {
         self.field_box_receiver
+    }
+
+    /// The layout of a copy-class record's class and the scalars of the
+    /// whole record in its block, so a box of the record can hold the
+    /// record's bytes. `None` for a record of any other type, or of a class
+    /// generated code does not keep in place.
+    pub(super) fn record_class_leaves(
+        &mut self,
+        ty: &DirectType,
+    ) -> std::result::Result<Option<(ClassRecord, Vec<PlainLeaf>)>, String> {
+        let DirectType::PlainClass(class) = ty else {
+            return Ok(None);
+        };
+        let Some(record) = self
+            .plain_records
+            .class_record(&class.class_name, self.builder.module())?
+        else {
+            return Ok(None);
+        };
+        Ok(match record.slot(&[], ty) {
+            Some(ClassSlot {
+                kind: SlotKind::Leaves(leaves),
+                ..
+            }) => Some((record, leaves)),
+            _ => None,
+        })
     }
 
     /// Builds an instance of `class_name` in its layout: one call makes the

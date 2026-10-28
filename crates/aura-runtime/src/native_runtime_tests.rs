@@ -5301,7 +5301,7 @@ fn runtime_init_is_callable() {
 }
 
 #[test]
-fn native_runtime_ref_count_helpers_reject_zero_and_overflow() {
+fn native_runtime_ref_count_helpers_reject_zero_and_keep_frozen_counts() {
     let released = AtomicU32::new(1);
     assert!(super::release_ref_count(&released).expect("final release should succeed"));
     assert_eq!(released.load(Ordering::Relaxed), 0);
@@ -5311,11 +5311,13 @@ fn native_runtime_ref_count_helpers_reject_zero_and_overflow() {
         .expect_err("retain after release should be rejected");
     assert!(retain_after_release_error.contains("already-released"));
 
-    let overflow = AtomicU32::new(u32::MAX);
-    let overflow_error =
-        super::retain_ref_count(&overflow).expect_err("overflow should be rejected");
-    assert!(overflow_error.contains("overflow"));
-    assert_eq!(overflow.load(Ordering::Relaxed), u32::MAX);
+    // A count at the frozen mark or above is left as it is.
+    for count in [super::FROZEN_REFERENCES, u32::MAX] {
+        let frozen = AtomicU32::new(count);
+        super::retain_ref_count(&frozen).expect("a frozen count takes a retain");
+        assert!(!super::release_ref_count(&frozen).expect("a frozen count takes a release"));
+        assert_eq!(frozen.load(Ordering::Relaxed), count);
+    }
 
     let zero = AtomicU32::new(0);
     let underflow_error =
@@ -10214,6 +10216,103 @@ fn native_runtime_direct_task_registers_captured_queue_before_submission() {
         baseline,
         "normal completion must release the direct task claim flag"
     );
+}
+
+unsafe extern "C-unwind" fn direct_task_reads_moved_and_kept_arguments(
+    args: *const i64,
+    arg_count: usize,
+) -> *mut OpaqueValue {
+    assert_eq!(arg_count, 2);
+    let moved = unsafe { *args } as *mut OpaqueValue;
+    let kept = unsafe { *args.add(1) } as *mut OpaqueValue;
+    let stack = super::current_direct_frame_stack().expect("a direct task has a frame stack");
+    // SAFETY: the stack belongs to this task, and nothing else uses its
+    // ledger during the checks.
+    let ledger = unsafe { &stack.as_ref().owned_values };
+    let moved_header = unsafe { &*moved };
+    assert!(
+        moved_header.shared_lock().is_none(),
+        "an argument the buffer alone held must reach the child unshared"
+    );
+    assert_eq!(
+        moved_header.owner.get(),
+        stack.as_ptr(),
+        "the child's ledger must link the argument it took over"
+    );
+    assert_eq!(ledger.count(moved), 1);
+    assert!(
+        unsafe { &*kept }.shared_lock().is_some(),
+        "an argument the starting task still holds must be shared"
+    );
+    assert_eq!(ledger.count(kept), 1);
+    let total = [moved, kept]
+        .into_iter()
+        .map(|argument| match unsafe { value_ref(argument) } {
+            Value::Int(value) => value.as_i128().expect("expected signed integer") as i64,
+            other => panic!("expected int arg, found {other:?}"),
+        })
+        .sum();
+    for argument in [moved, kept] {
+        unsafe { super::aura_direct_release_value(argument) };
+    }
+    assert!(ledger.is_empty());
+    super::aura_direct_box_i64(total)
+}
+
+#[test]
+fn native_runtime_direct_task_hands_over_only_a_box_the_buffer_alone_holds() {
+    let only = int_value(5);
+    assert!(unsafe { super::direct_task_arg_hands_over(only) });
+    let kept = unsafe { retain_value(only) };
+    assert!(!unsafe { super::direct_task_arg_hands_over(only) });
+    unsafe { release_value(kept) };
+    assert!(unsafe { super::direct_task_arg_hands_over(only) });
+    unsafe { super::share_direct_value(only) };
+    assert!(!unsafe { super::direct_task_arg_hands_over(only) });
+    unsafe { release_value(only) };
+}
+
+#[test]
+fn native_runtime_direct_task_takes_over_a_moved_argument_unshared() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
+    let baseline = super::direct_task_claim_flag_live_count();
+    let result = run_lightweight_root_task(move || {
+        let moved = super::aura_direct_box_i64(20);
+        let kept = super::aura_direct_box_i64(22);
+        let args = super::aura_direct_arg_buffer_new(2);
+        super::aura_direct_arg_buffer_store_owned(args, 0, moved as i64);
+        super::aura_direct_arg_buffer_store(args, 1, kept as i64);
+        let group = super::aura_direct_task_group_new();
+        let task = unsafe {
+            super::aura_direct_start_task_call(
+                direct_task_reads_moved_and_kept_arguments as *const () as usize as i64,
+                args,
+                2,
+                1,
+                group,
+                1,
+                0,
+                0,
+            )
+        };
+        assert!(unsafe { &*kept }.shared_lock().is_some());
+        assert_eq!(
+            expect_variant_ptr(super::aura_direct_task_join(task), "TaskResult", "Ready"),
+            vec![Value::Int(IntegerValue::from_signed(42))]
+        );
+        assert_eq!(unsafe { &*kept }.ref_count.load(Ordering::Acquire), 1);
+        unsafe {
+            release_value(task);
+            release_value(group);
+            release_value(kept);
+        }
+        Ok(Value::Unit)
+    });
+    assert_eq!(
+        result.expect("a task that takes over its argument should complete"),
+        Value::Unit
+    );
+    assert_eq!(super::direct_task_claim_flag_live_count(), baseline);
 }
 
 #[test]
@@ -22078,6 +22177,25 @@ unsafe extern "C-unwind" fn counted_direct_constant_initializer(
     int_value(42)
 }
 
+/// Reads module constant `key` as generated code does, with no type tag.
+fn read_module_constant(
+    key: &str,
+    thunk: i64,
+    slot: *const std::sync::atomic::AtomicPtr<OpaqueValue>,
+) -> *mut OpaqueValue {
+    unsafe {
+        super::aura_direct_module_constant(
+            key.as_ptr(),
+            key.len(),
+            thunk,
+            slot,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+        )
+    }
+}
+
 #[test]
 fn direct_module_constant_abi_initializes_once_caches_and_reinitializes_after_reset() {
     const HELPER: &str = "direct-module-constant-cache";
@@ -22102,8 +22220,30 @@ fn direct_module_constant_abi_initializes_once_caches_and_reinitializes_after_re
     let key = "tests::answer";
     let thunk = counted_direct_constant_initializer as *const () as usize as i64;
 
-    let first = super::aura_direct_module_constant(key.as_ptr(), key.len(), thunk);
-    let second = super::aura_direct_module_constant(key.as_ptr(), key.len(), thunk);
+    static SLOT: std::sync::atomic::AtomicPtr<OpaqueValue> =
+        std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    let first = read_module_constant(key, thunk, &SLOT);
+    let second = read_module_constant(key, thunk, &SLOT);
+    let unslotted = read_module_constant(key, thunk, std::ptr::null());
+    assert_eq!(first, second, "a read finds the constant in its slot");
+    assert_eq!(first, unslotted, "a read without a slot finds it by key");
+    assert_eq!(SLOT.load(Ordering::Acquire), first);
+    let header = unsafe { &*first };
+    assert!(header.is_frozen());
+    assert_eq!(
+        header.ref_count.load(Ordering::Acquire),
+        super::FROZEN_REFERENCES
+    );
+    unsafe {
+        retain_value(first);
+        release_value(first);
+        release_value(first);
+    }
+    assert_eq!(
+        header.ref_count.load(Ordering::Acquire),
+        super::FROZEN_REFERENCES,
+        "a frozen value's count never changes"
+    );
     assert_eq!(expect_int(first), 42);
     assert_eq!(expect_int(second), 42);
     assert_eq!(
@@ -22113,7 +22253,11 @@ fn direct_module_constant_abi_initializes_once_caches_and_reinitializes_after_re
     );
 
     super::clear_direct_module_constants();
-    let after_reset = super::aura_direct_module_constant(key.as_ptr(), key.len(), thunk);
+    assert!(
+        SLOT.load(Ordering::Acquire).is_null(),
+        "a reset empties the slot"
+    );
+    let after_reset = read_module_constant(key, thunk, &SLOT);
     assert_eq!(expect_int(after_reset), 42);
     assert_eq!(
         DIRECT_CONSTANT_INITIALIZER_CALLS.load(Ordering::SeqCst),
@@ -22145,7 +22289,7 @@ fn direct_module_constant_abi_rejects_a_null_initializer_exactly() {
     super::clear_direct_module_constants();
     let key = "tests::missing_initializer";
     let diagnostic = capture_direct_boundary_diagnostic(move || {
-        super::aura_direct_module_constant(key.as_ptr(), key.len(), 0);
+        read_module_constant(key, 0, std::ptr::null());
     });
     assert_eq!(diagnostic.code, "AU4001");
     assert_eq!(
@@ -22164,11 +22308,7 @@ unsafe extern "C-unwind" fn reentrant_direct_constant_initializer(
     assert!(args.is_null());
     assert_eq!(len, 0);
     let thunk = reentrant_direct_constant_initializer as *const () as usize as i64;
-    super::aura_direct_module_constant(
-        REENTRANT_DIRECT_CONSTANT_KEY.as_ptr(),
-        REENTRANT_DIRECT_CONSTANT_KEY.len(),
-        thunk,
-    )
+    read_module_constant(REENTRANT_DIRECT_CONSTANT_KEY, thunk, std::ptr::null())
 }
 
 #[test]
@@ -22193,11 +22333,7 @@ fn direct_module_constant_abi_reports_reentrancy_then_remembers_failure() {
     super::clear_direct_module_constants();
     let thunk = reentrant_direct_constant_initializer as *const () as usize as i64;
     let first = capture_direct_boundary_diagnostic(move || {
-        super::aura_direct_module_constant(
-            REENTRANT_DIRECT_CONSTANT_KEY.as_ptr(),
-            REENTRANT_DIRECT_CONSTANT_KEY.len(),
-            thunk,
-        );
+        read_module_constant(REENTRANT_DIRECT_CONSTANT_KEY, thunk, std::ptr::null());
     });
     assert_eq!(first.code, "AU4001");
     assert_eq!(
@@ -22206,11 +22342,7 @@ fn direct_module_constant_abi_reports_reentrancy_then_remembers_failure() {
     );
 
     let second = capture_direct_boundary_diagnostic(move || {
-        super::aura_direct_module_constant(
-            REENTRANT_DIRECT_CONSTANT_KEY.as_ptr(),
-            REENTRANT_DIRECT_CONSTANT_KEY.len(),
-            thunk,
-        );
+        read_module_constant(REENTRANT_DIRECT_CONSTANT_KEY, thunk, std::ptr::null());
     });
     assert_eq!(second.code, "AU4001");
     assert_eq!(
@@ -28455,4 +28587,23 @@ fn registered_float32_slots_render_through_print_and_str() {
         diagnostic.message,
         "direct runtime received a malformed float32 slot record"
     );
+}
+
+#[test]
+fn direct_frozen_values_read_without_a_lock_and_refuse_writes() {
+    let value = boxed_value(Value::Bool(true));
+    unsafe { super::freeze_direct_value(value) };
+    let header = unsafe { &*value };
+    assert!(header.is_frozen());
+    assert!(matches!(
+        header.access(false),
+        super::DirectValueAccess::Confined
+    ));
+    let address = value as usize;
+    let message = capture_runtime_error_message(panic::AssertUnwindSafe(move || {
+        let header = unsafe { &*(address as *mut OpaqueValue) };
+        let _ = header.access(true);
+    }));
+    assert_eq!(message, "a module constant cannot change");
+    unsafe { super::free_frozen_direct_value(value) };
 }

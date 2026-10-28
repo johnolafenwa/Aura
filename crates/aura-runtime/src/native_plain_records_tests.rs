@@ -196,6 +196,13 @@ fn registered_records_live_in_lists_and_cross_with_one_call() {
         vector.elements.get(0).unwrap().into_owned(),
         record(name, 40, 9.0)
     );
+    // And appends one as a value.
+    unsafe { aura_direct_vec_push_plain(values, replacement.as_ptr().cast(), cell) };
+    let Value::Vec(vector) = (unsafe { value_ref(values) }) else {
+        panic!("a list stays a list");
+    };
+    assert_eq!(vector.elements.form(), ListForm::Values);
+    assert_eq!(vector.elements.len(), 2);
 
     // A box is made from the bytes and read back into them.
     let boxed = unsafe { aura_direct_box_plain(replacement.as_ptr().cast(), cell) };

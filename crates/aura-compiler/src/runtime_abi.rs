@@ -101,7 +101,7 @@ runtime_functions! {
     BoxF64 => ("aura_direct_box_f64", [F64], Some(I64)),
     BoxBool => ("aura_direct_box_bool", [I64], Some(I64)),
     FunctionValue => ("aura_direct_function_value", [I64, I64, I64, I64, I64, I64, I64, I64, I64, I64], Some(I64)),
-    ModuleConstant => ("aura_direct_module_constant", [I64, I64, I64], Some(I64)),
+    ModuleConstant => ("aura_direct_module_constant", [I64, I64, I64, I64, I64, I64, I64], Some(I64)),
     ClosureValue => ("aura_direct_closure_value", [I64, I64, I64, I64, I64], Some(I64)),
     FunctionCall => ("aura_direct_function_call", [I64, I64, I64], Some(I64)),
     FunctionBindDefaults => ("aura_direct_function_bind_defaults", [I64, I64, I64, I64], None),

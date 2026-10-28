@@ -357,7 +357,9 @@ This step, added after step 6, stores scalar list elements without a
   both that the value is confined and that its elements have the expected
   layout. `emit_list_len` accepts any list form.
 - The reference count overflows at 4,294,967,295 references to one box,
-  which reports the existing overflow error.
+  which reports the existing overflow error. (Since Rust-speed step 2i, a
+  count of `1 << 30` marks a frozen module constant, and retains and
+  releases leave a count that high as it is, so it cannot overflow.)
 - Rust-speed step 1c added a form for every other fixed-width integer:
   `Int8`, `Int16`, `Int32`, `Uint8`, `Uint16`, `Uint32`, and `Uint64`, each
   element in its own width. The rule is the same: a list takes a form only

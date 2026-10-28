@@ -5,9 +5,9 @@ use crate::diag::Span;
 use crate::ffi::FfiType;
 use crate::mir::{
     ArithmeticTrap, BasicBlock, CallTarget, CleanupAction, CleanupCallee, Instruction,
-    MethodCandidate, MethodDispatch, MirArg, MirClass, MirEnum, MirExternCall, MirFormatPart,
-    MirFunction, MirMapEntry, MirModule, MirReceiverKind, Operand, Rvalue, Terminator,
-    NATIVE_LOOP_SAFEPOINT_INTERVAL,
+    MethodCandidate, MethodDispatch, MirArg, MirClass, MirConstant, MirEnum, MirExternCall,
+    MirFormatPart, MirFunction, MirMapEntry, MirModule, MirReceiverKind, Operand, Rvalue,
+    Terminator, NATIVE_LOOP_SAFEPOINT_INTERVAL,
 };
 use crate::native_backend::{
     types, Blk, CallConv, DataDescription, DataHandle, DefineError, FloatCC, FuncHandle, FuncRef,
@@ -749,6 +749,70 @@ fn required_direct_field_slice(
         field,
         render_direct_type(ty)
     ))
+}
+
+/// The address of the writable word `cells` keeps for `key`, declared on
+/// first use: a type tag cell, where the runtime keeps the decoded tag, or
+/// a module constant's cell (see [`module_constant_cell_key`]).
+fn word_cell(
+    cells: &mut HashMap<String, DataHandle>,
+    builder: &mut dyn FunctionBackend,
+    key: &str,
+) -> std::result::Result<Val, String> {
+    let id = match cells.get(key) {
+        Some(id) => *id,
+        None => {
+            let name = format!("aura_tag_cell_{}", cells.len());
+            let module = builder.module();
+            let id = try_or_string_error!(
+                module.declare_data(&name, Linkage::Local, true),
+                "failed to declare a type tag cell: {}"
+            );
+            let mut data = DataDescription::new(vec![0u8; 8]);
+            data.align = Some(8);
+            try_or_string_error!(
+                module.define_data(id, data),
+                "failed to define a type tag cell: {}"
+            );
+            cells.insert(key.to_string(), id);
+            id
+        }
+    };
+    let global = builder.import_data(id);
+    Ok(builder.symbol_value(types::I64, global))
+}
+
+/// The key of the word where the runtime keeps module constant `key` once
+/// it is made, so a read finds it without a lookup. No type tag starts
+/// with a NUL.
+fn module_constant_cell_key(key: &str) -> String {
+    format!("\0module constant {key}")
+}
+
+/// The arguments every module constant read passes: the constant's key,
+/// its initializer, the word it is kept in, and the type tag it gets once.
+fn module_constant_args(
+    string_data: &mut HashMap<Vec<u8>, DataHandle>,
+    cells: &mut HashMap<String, DataHandle>,
+    builder: &mut dyn FunctionBackend,
+    key: &str,
+    initializer: Val,
+    ty: &Type,
+) -> std::result::Result<[Val; 7], String> {
+    let (key_ptr, key_len) = declare_string_constant(string_data, builder, key.as_bytes())?;
+    let slot = word_cell(cells, builder, &module_constant_cell_key(key))?;
+    let encoded = crate::native_runtime::canonical_runtime_type_name(ty);
+    let (type_ptr, type_len) = declare_string_constant(string_data, builder, encoded.as_bytes())?;
+    let tag_cell = word_cell(cells, builder, &encoded)?;
+    Ok([
+        key_ptr,
+        key_len,
+        initializer,
+        slot,
+        tag_cell,
+        type_ptr,
+        type_len,
+    ])
 }
 
 impl<'a> NativeCodegen<'a> {
@@ -1578,6 +1642,7 @@ impl<'a> NativeCodegen<'a> {
             host_builtin_refs: HashMap::new(),
             string_data: &mut self.string_data,
             tag_cells: &mut self.tag_cells,
+            module_constants: &self.module.constants,
             plain_records: &mut self.plain_records,
             callable_shapes: &self.callable_shapes,
             contract_descriptors: &mut self.contract_descriptors,
@@ -1658,12 +1723,15 @@ impl<'a> NativeCodegen<'a> {
                         })?;
                 let initializer = builder.import_function(*initializer);
                 let initializer = builder.func_addr(types::I64, initializer);
-                let (key_ptr, key_len) = declare_string_constant(
+                let args = module_constant_args(
                     &mut self.string_data,
+                    &mut self.tag_cells,
                     builder,
-                    constant.key.as_bytes(),
+                    &constant.key,
+                    initializer,
+                    &constant.ty,
                 )?;
-                let call = builder.call(module_constant, &[key_ptr, key_len, initializer]);
+                let call = builder.call(module_constant, &args);
                 let value = call.results[0];
                 builder.call(release_value, &[value]);
             }
@@ -2911,6 +2979,8 @@ struct FunctionCompiler<'a> {
     host_builtin_refs: HashMap<&'static str, FuncRef>,
     string_data: &'a mut HashMap<Vec<u8>, DataHandle>,
     tag_cells: &'a mut HashMap<String, DataHandle>,
+    /// The program's module constants, whose types their reads tag them with.
+    module_constants: &'a [MirConstant],
     plain_records: &'a mut plain::PlainRecords,
     callable_shapes: &'a HashMap<CallableShapeKey, CallableShape>,
     contract_descriptors: &'a mut HashMap<String, callables::ContractDescriptor>,
@@ -4695,12 +4765,32 @@ impl<'a> FunctionCompiler<'a> {
                     )
                 })?;
                 let thunk_ptr = self.builder.func_addr(types::I64, thunk);
-                let (key_ptr, key_len) = self.string_constant(key.as_bytes())?;
-                let call = self.builder.call(
-                    self.runtime[RuntimeFn::ModuleConstant],
-                    &[key_ptr, key_len, thunk_ptr],
-                );
-                let value = self.owned_opaque_result(call.results, Type::named("Unknown"));
+                // Lowering records every constant it reads.
+                let ty = match self
+                    .module_constants
+                    .iter()
+                    .find(|constant| constant.key == *key)
+                {
+                    Some(constant) => constant.ty.clone(),
+                    None => Type::named("Unknown"),
+                };
+                let args = module_constant_args(
+                    self.string_data,
+                    self.tag_cells,
+                    &mut *self.builder,
+                    key,
+                    thunk_ptr,
+                    &ty,
+                )?;
+                let call = self
+                    .builder
+                    .call(self.runtime[RuntimeFn::ModuleConstant], &args);
+                // The constant got its tag when it was made, so a box of the
+                // constant's own type needs none.
+                let value = self.owned_opaque_result(call.results, ty);
+                if value.ty == *target {
+                    return Ok(value);
+                }
                 self.coerce_value(value, target)
             }
             Rvalue::Closure {
@@ -5073,6 +5163,7 @@ impl<'a> FunctionCompiler<'a> {
         };
         let element_direct_ty =
             ensure_direct_type(&resolved_element_type, &self.classes, "Vec element")?;
+        let scalar_element = ScalarElement::of(&resolved_element_type);
         let list_type = Type::Named("list".to_string(), vec![resolved_element_type]);
         let init = if runtime_type_is_wildcard(&list_type) {
             self.builder.call(self.runtime[RuntimeFn::VecEmpty], &[])
@@ -5092,7 +5183,32 @@ impl<'a> FunctionCompiler<'a> {
             call
         };
         let vector = self.owned_opaque_result(init.results, list_type);
+        // A scalar or a record goes in as its bits, with no box, by the
+        // calls `append` falls back to.
+        let scalar = scalar_element.filter(|_| matches!(element_direct_ty, DirectType::Scalar(_)));
+        let record = self.plain_record(&element_direct_ty)?;
         for element in elements {
+            if let Some(kind) = scalar {
+                let loaded =
+                    self.load_operand_with_integer_hint(element, element_direct_ty.scalar_kind())?;
+                let value = self.coerce_value(loaded, &element_direct_ty)?.values[0];
+                let bits = if kind.is_float() {
+                    self.builder.bitcast(types::I64, value)
+                } else {
+                    value
+                };
+                let call = RuntimeOp::List(ListOp::PushScalar(kind)).runtime_call();
+                let mut words = vec![vector.values[0], bits];
+                self.push_runtime_call_words(call, &mut words);
+                self.builder.call(self.runtime[call.function], &words);
+                continue;
+            }
+            if let Some(record) = &record {
+                let value = self.load_operand_for_target(element, &element_direct_ty)?;
+                let value = self.coerce_value(value, &element_direct_ty)?;
+                self.push_plain_record_by_call(record, vector.values[0], &value);
+                continue;
+            }
             let value = self.load_operand_as_opaque_direct(element, &element_direct_ty)?;
             let value = self.transfer_owned_opaque_value(&value);
             self.builder.call(
@@ -9351,7 +9467,7 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 DirectType::PlainClass(_) if self.plain_record(target)?.is_some() => {
                     let record = self.plain_record(target)?.expect("checked above");
-                    self.unbox_plain_record(&record, value.values[0], target)
+                    self.unbox_plain_record(&record, value.values[0], target)?
                 }
                 DirectType::PlainClass(class) => {
                     let mut values = Vec::new();
@@ -9479,27 +9595,7 @@ impl<'a> FunctionCompiler<'a> {
     /// The address of the module's tag cell for `encoded`. The runtime
     /// stores the decoded tag there on first use and reads it back after.
     fn tag_cell(&mut self, encoded: &str) -> std::result::Result<Val, String> {
-        let id = match self.tag_cells.get(encoded) {
-            Some(id) => *id,
-            None => {
-                let name = format!("aura_tag_cell_{}", self.tag_cells.len());
-                let module = self.builder.module();
-                let id = try_or_string_error!(
-                    module.declare_data(&name, Linkage::Local, true),
-                    "failed to declare a type tag cell: {}"
-                );
-                let mut data = DataDescription::new(vec![0u8; 8]);
-                data.align = Some(8);
-                try_or_string_error!(
-                    module.define_data(id, data),
-                    "failed to define a type tag cell: {}"
-                );
-                self.tag_cells.insert(encoded.to_string(), id);
-                id
-            }
-        };
-        let global = self.builder.import_data(id);
-        Ok(self.builder.symbol_value(types::I64, global))
+        word_cell(self.tag_cells, &mut *self.builder, encoded)
     }
 
     /// Whether `inst` is in the current block and no call that could change
@@ -10905,7 +11001,7 @@ impl<'a> FunctionCompiler<'a> {
             }
             DirectType::PlainClass(ref class) => {
                 if let Some(record) = self.plain_record(&value.ty)? {
-                    return Ok(self.box_plain_record(&record, &value, &class.class_name));
+                    return self.box_plain_record(&record, &value, &class.class_name);
                 }
                 let (class_ptr, class_len) = self.string_constant(class.class_name.as_bytes())?;
                 let init = self.builder.call(
@@ -13867,10 +13963,17 @@ impl<'a> FunctionCompiler<'a> {
             let value = self.coerce_value(loaded, expected_ty)?;
             let value = self.ensure_opaque(value)?;
             let index_value = self.builder.iconst(types::I64, index as i64);
-            self.builder.call(
-                self.runtime[RuntimeFn::ArgBufferStore],
-                &[buffer, index_value, value.values[0]],
-            );
+            // A value the caller moved in or made for the call hands its
+            // reference to the task, so when nothing else holds it the task
+            // takes it over unshared.
+            let store = if self.temporary_owns_opaque(&value) {
+                self.clear_temporary_opaque_owned(&value);
+                RuntimeFn::ArgBufferStoreOwned
+            } else {
+                RuntimeFn::ArgBufferStore
+            };
+            self.builder
+                .call(self.runtime[store], &[buffer, index_value, value.values[0]]);
         }
         let transfer_defaults = self.builder.iconst(types::I64, 1);
         self.builder.call(

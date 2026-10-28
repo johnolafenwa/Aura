@@ -18527,6 +18527,55 @@ apart from `file_io`, which varies run to run with its file system.
 Retains across the 30 programs are 98.4% below the 1,062,951 they were
 before the change in Shared Arguments Stay With The Caller.
 
+### Values Cross Tasks And Queues As They Are
+
+A `copy class` value, such as a `Point` of two numbers, lives in machine
+words in native code. When it has to be boxed, for example to go into a
+`Queue[Point]`, to be a task's result, or to be the payload of a
+`QueueReceive.Item`, the box holds the record's bytes in the class's
+layout, and the code that takes the record back out reads those bytes
+where they lie. Before, the box held a copy of each field converted to a
+runtime value, and taking the record out converted each field back.
+
+A list literal of numbers, `bool` values, or `copy class` values, such
+as `[1, 2, 3]` or `[Point(x=1, y=2), Point(x=3, y=4)]`, builds its list
+from the elements' bits. Before, each element was boxed and then stored
+in the list.
+
+| Program | Instructions before | Instructions after |
+| --- | ---: | ---: |
+| 6,000 records and enums through queues, 400 tasks | 165.1M | 122.3M |
+| 300 calls that build lists of records with literals | 3.9M | 1.3M |
+| `graph_paths` | 73.2M | 68.6M |
+| `raytracer` | 24.1M | 22.3M |
+| `mini_browser` | 561.9M | 548.9M |
+| `sql_engine` | 1,377.5M | 1,371.2M |
+
+The first two rows are probe programs; the others are among the 30
+cross-language programs, and no other one of them changes by more than
+0.5%.
+
+A value that a task start moves into the task, such as a record or a
+list built for the call, `group.start(sum_order, make_order(i), 3)`, or
+a local passed for the last time, now goes to the task as it is when
+nothing else holds it. The task reads it in place, with inline list and
+field reads and no lock. A value that the starting task still holds,
+such as a local it reads again after the start, is still shared, and
+both tasks lock it on each access. A probe that starts 2,000 tasks, each
+summing a record with 50 points or a list of 100 numbers moved into it,
+runs 99.8M instructions instead of 489.2M.
+
+A module constant that is not a plain number, such as
+`WORDS: list[str] = ["alpha", "beta"]` or a `dict` constant, is built
+once, the first time the program needs it, and then frozen: every task
+reads it in place, with inline list reads and no lock or reference
+count. Before, each read looked the constant up by name, took a
+reference, and gave the value its type again, and a constant read from
+two tasks was shared and locked. A constant still cannot change: code
+that wants to change one copies it first, as before. A probe that reads
+list and `dict` constants in loops, in the main task and in two worker
+tasks, runs 14.2M instructions instead of 47.8M.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and
