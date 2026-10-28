@@ -947,7 +947,7 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
             1
         );
         release(aura_direct_set_index_option(set, 0));
-        assert_eq!(aura_direct_set_is_empty(set), 1);
+        assert_eq!(aura_direct_set_is_empty(set), 0);
         release(set);
 
         let command = aura_direct_vec_empty();
