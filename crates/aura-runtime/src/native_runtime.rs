@@ -8646,6 +8646,55 @@ pub unsafe extern "C-unwind" fn aura_direct_vec_read_plain(
     })
 }
 
+/// Removes the last element of `list` and writes it into its bytes in the
+/// layout of `cell` at `dst`. A list that keeps values of that layout moves
+/// the words as they are. An empty list traps with the diagnostic of
+/// `pop()`.
+///
+/// # Safety
+///
+/// As for [`aura_direct_unbox_plain`].
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_vec_pop_plain(
+    list: *mut OpaqueValue,
+    dst: *mut u8,
+    cell: *const PlainLayoutCell,
+) {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller's contract.
+        let layout = unsafe { plain_layout_in(cell) };
+        let written = with_vector_mut(list, |vector| {
+            if vector.elements.is_empty() {
+                return Err(None);
+            }
+            let last = vector.elements.len() - 1;
+            if let ListElements::Typed(typed) = &vector.elements {
+                if std::ptr::eq(typed.layout(), layout) {
+                    let words = typed.element_words(last);
+                    // SAFETY: the element's words hold the layout's bytes,
+                    // which need no drop, and `dst` has room for them.
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(words.as_ptr().cast(), dst, layout.size())
+                    };
+                    vector.elements.truncate(last);
+                    return Ok(());
+                }
+            }
+            let element = vector.elements.pop().expect("the list is not empty");
+            // SAFETY: the caller's contract.
+            unsafe { layout.write_checked(&element, dst) }.map_err(Some)
+        });
+        match written {
+            Ok(()) => {}
+            Err(None) => runtime_diagnostic_error(Diagnostic::coded(
+                "AU4003",
+                "list pop index `-1` is out of bounds for length `0`".to_string(),
+            )),
+            Err(Some(error)) => runtime_error(error),
+        }
+    })
+}
+
 /// Appends the value whose bytes in the layout of `cell` are at `src`. A
 /// list that keeps values of that layout copies the words as they are.
 ///
@@ -12247,7 +12296,7 @@ pub extern "C-unwind" fn aura_direct_variant_take_payload(
     task_runtime_boundary(|| {
         let index =
             usize::try_from(index).unwrap_or_else(|_| runtime_error("invalid enum payload index"));
-        let payload = unsafe {
+        unsafe {
             value_mut(value, |value| {
                 let Value::EnumVariant(variant) = value else {
                     runtime_error(format!(
@@ -12255,17 +12304,20 @@ pub extern "C-unwind" fn aura_direct_variant_take_payload(
                         value_type_name(value)
                     ));
                 };
-                variant.payloads.take(index).unwrap_or_else(|| {
+                // A typed variant's payload box moves out as it is.
+                if let Some(element) = variant.payloads.take_box(index) {
+                    return owned_element_box(element);
+                }
+                boxed_value(variant.payloads.take(index).unwrap_or_else(|| {
                     runtime_error(format!(
                         "enum variant `{}.{}` does not carry a payload at index {}",
                         nominal_runtime_base_name(&variant.enum_name),
                         variant.variant_name,
                         index
                     ))
-                })
+                }))
             })
-        };
-        boxed_value(payload)
+        }
     })
 }
 
@@ -12437,6 +12489,25 @@ unsafe fn adopt_only_box(boxed: *mut OpaqueValue) -> Option<ElementBox> {
     }
     // SAFETY: the caller hands over the only reference.
     Some(unsafe { ElementBox::from_raw(boxed) })
+}
+
+/// Turns a box a list, field, or payload held into one the running task
+/// owns: the box itself when the holder's reference was its only one, now
+/// linked by the task's ledger and recording its thread, or else a copy,
+/// and the holder's reference is released.
+fn owned_element_box(element: ElementBox) -> *mut OpaqueValue {
+    if element.is_shared() {
+        return boxed_value(element.into_value());
+    }
+    let boxed = std::mem::ManuallyDrop::new(element).as_ptr();
+    #[cfg(all(debug_assertions, not(test)))]
+    // SAFETY: the holder's reference was the only one, so nothing else
+    // reads the box.
+    unsafe {
+        (*boxed).owner_thread = direct_value_thread_identity();
+    }
+    register_direct_owned_value(boxed);
+    boxed
 }
 
 /// Turns a box generated code owns into the box a field slot keeps: the

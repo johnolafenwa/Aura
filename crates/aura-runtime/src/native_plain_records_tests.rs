@@ -7,9 +7,9 @@ use aura_core::types::Type;
 
 use super::{
     aura_direct_box_plain, aura_direct_instance_read_plain, aura_direct_register_plain_layouts,
-    aura_direct_unbox_plain, aura_direct_vec_empty, aura_direct_vec_push_plain,
-    aura_direct_vec_read_plain, aura_direct_vec_set_plain, boxed_value, list_view_of,
-    register_plain_layout, registered_plain_layout, value_mut, value_ref,
+    aura_direct_unbox_plain, aura_direct_vec_empty, aura_direct_vec_pop_plain,
+    aura_direct_vec_push_plain, aura_direct_vec_read_plain, aura_direct_vec_set_plain, boxed_value,
+    list_view_of, register_plain_layout, registered_plain_layout, value_mut, value_ref,
     with_direct_task_runtime_scope, with_task_runtime_error_capture, DirectPlainLayoutEntry,
     OpaqueValue, PlainLayout, PlainLayoutCell, UNREGISTERED_PLAIN_ACCESS,
 };
@@ -626,4 +626,69 @@ fn tuples_with_small_integers_and_unions_lay_out_plain() {
     let list = ListElements::from(values.clone());
     assert_eq!(list.form(), ListForm::Typed(layout.access()));
     assert_eq!(list.to_vec(), values);
+}
+
+#[test]
+fn records_pop_off_a_list_with_one_call() {
+    let name = "PlainTestPop";
+    let (cell, layout) = registered(name, FIRST_TEST_ACCESS + 30);
+    let list = aura_direct_vec_empty();
+    for id in 0..3 {
+        let words = encoded(layout, &record(name, id, id as f64));
+        unsafe { aura_direct_vec_push_plain(list, words.as_ptr().cast(), cell) };
+    }
+    let mut words = vec![0u64; layout.stride_words()];
+    unsafe { aura_direct_vec_pop_plain(list, words.as_mut_ptr().cast(), cell) };
+    assert_eq!(decoded(layout, &words), record(name, 2, 2.0));
+    assert_eq!(list_form(list), FIRST_TEST_ACCESS + 30);
+    let Value::Vec(vector) = (unsafe { value_ref(list) }) else {
+        panic!("a list stays a list");
+    };
+    assert_eq!(vector.elements.len(), 2);
+
+    // A list that keeps the records as values pops one the same way.
+    let mut elements = ListElements::from(vec![record(name, 7, 0.25), record(name, 8, 0.5)]);
+    elements.values_mut();
+    let values = boxed_value(Value::Vec(VecValue {
+        element_type: Type::named(name),
+        elements,
+        str_view: Default::default(),
+    }));
+    unsafe { aura_direct_vec_pop_plain(values, words.as_mut_ptr().cast(), cell) };
+    assert_eq!(decoded(layout, &words), record(name, 8, 0.5));
+
+    // An empty list traps as `pop()` does, and a value of another shape
+    // traps before anything is written.
+    let address = aura_direct_vec_empty() as usize;
+    let cell_address = cell as usize;
+    let failure = runtime_failure(move || {
+        let mut words = [0u64; 4];
+        unsafe {
+            aura_direct_vec_pop_plain(
+                address as *mut OpaqueValue,
+                words.as_mut_ptr().cast(),
+                cell_address as *const PlainLayoutCell,
+            )
+        };
+    });
+    assert!(
+        failure.contains("out of bounds for length `0`"),
+        "{failure}"
+    );
+    let other = boxed_value(Value::Vec(VecValue {
+        element_type: Type::named(name),
+        elements: ListElements::from(vec![Value::Bool(true)]),
+        str_view: Default::default(),
+    })) as usize;
+    let failure = runtime_failure(move || {
+        let mut words = [0u64; 4];
+        unsafe {
+            aura_direct_vec_pop_plain(
+                other as *mut OpaqueValue,
+                words.as_mut_ptr().cast(),
+                cell_address as *const PlainLayoutCell,
+            )
+        };
+    });
+    assert!(!failure.is_empty());
 }

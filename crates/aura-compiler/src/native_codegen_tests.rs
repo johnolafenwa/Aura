@@ -2,6 +2,8 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use aura_core::layout::LayoutKind;
+
 use object::{Object, ObjectSection, ObjectSymbol, RelocationTarget};
 
 use super::{
@@ -15256,4 +15258,95 @@ def main():
     let bump = super::shapes::shaped_locals(function("bump"), &program, |_| false);
     assert!(bump.contains("xs") && bump.contains("names"), "{bump:?}");
     emit_host_object(&mir).expect("write-back source should compile directly");
+}
+
+#[test]
+fn direct_class_layouts_keep_enum_union_and_class_fields_in_boxes() {
+    let source = r#"
+enum Value:
+    Int(value: int64)
+    Text(value: str)
+
+copy class Point:
+    x: int64
+    y: int64
+
+copy class Pair:
+    left: Point
+    right: Point
+
+class Tag:
+    name: str
+
+class Condition:
+    column: int64
+    value: Value
+    label: str | None
+    tag: Tag
+    at: Point
+
+def main():
+    condition = Condition(column=1, value=Value.Int(2), label=None, tag=Tag(name="t"), at=Point(x=1, y=2))
+    pair = Pair(left=Point(x=1, y=2), right=Point(x=3, y=4))
+    print(condition.column + pair.right.y)
+"#;
+    let mir = lower_source_to_mir(source).expect("class layout source should lower");
+    let records = super::plain::PlainRecords::new(&mir);
+    let (table, root) = records
+        .class_layout("Condition")
+        .expect("the class is kept in place");
+    let LayoutKind::Struct { fields, .. } = &table.get(root).kind else {
+        panic!("a class lays out as a struct");
+    };
+    let kinds = fields
+        .iter()
+        .map(|field| (field.name.as_str(), table.get(field.layout).kind.clone()))
+        .collect::<Vec<_>>();
+    assert!(matches!(kinds[0], ("column", LayoutKind::Scalar(_))));
+    assert!(matches!(kinds[1], ("value", LayoutKind::Handle)));
+    assert!(matches!(kinds[2], ("label", LayoutKind::Handle)));
+    // A class field stays inline, where its scalars are read in place.
+    assert!(matches!(kinds[3], ("tag", LayoutKind::Struct { .. })));
+    // A Copy class field still lies inline.
+    assert!(matches!(kinds[4], ("at", LayoutKind::Struct { .. })));
+    // A Copy class keeps its own layout.
+    let (table, root) = records
+        .class_layout("Pair")
+        .expect("the Copy class is kept in place");
+    let LayoutKind::Struct { fields, .. } = &table.get(root).kind else {
+        panic!("a class lays out as a struct");
+    };
+    assert!(fields
+        .iter()
+        .all(|field| matches!(table.get(field.layout).kind, LayoutKind::Struct { .. })));
+    emit_host_object(&mir).expect("class layout source should compile directly");
+}
+
+#[test]
+fn direct_record_list_pops_read_the_record_in_place() {
+    let source = r#"
+copy class Entry:
+    dist: int64
+    node: int64
+
+def main():
+    mut heap: list[Entry] = []
+    heap.append(Entry(dist=3, node=1))
+    heap.append(Entry(dist=1, node=2))
+    top = heap.pop()
+    print(top.dist + top.node)
+"#;
+    let mir = lower_source_to_mir(source).expect("record pop source should lower");
+    let object = emit_host_object(&mir).expect("record pop source should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    assert!(
+        referenced.contains("aura_direct_vec_pop_plain"),
+        "a record pop should call the plain pop: {referenced:?}"
+    );
+    for forbidden in ["aura_direct_unbox_plain", "aura_direct_vec_pop_in_place"] {
+        assert!(
+            !referenced.contains(forbidden),
+            "a record pop must not reference `{forbidden}`: {referenced:?}"
+        );
+    }
 }

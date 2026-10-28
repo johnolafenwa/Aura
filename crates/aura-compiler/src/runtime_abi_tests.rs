@@ -180,11 +180,11 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
     // Every `list`, `dict`, `set`, and `Array` helper a member call makes
     // has an op. The shared collection operation pops and removes, an
     // element path checks its index, and a lent element's `len` and `get`
-    // are read in place. A plain record element is read, appended, and
-    // replaced in place. An empty list literal of a known type is built and
-    // tagged in one call. A `get` whose `Lookup` is kept as its found value
-    // calls the `_payload` form of the op's helper, and one whose found
-    // value is only read calls the `_lent` form.
+    // are read in place. A plain record element is read, appended,
+    // replaced, and popped in place. An empty list literal of a known type
+    // is built and tagged in one call. A `get` whose `Lookup` is kept as its
+    // found value calls the `_payload` form of the op's helper, and one
+    // whose found value is only read calls the `_lent` form.
     let uncovered = RuntimeFn::ALL
         .iter()
         .copied()
@@ -216,6 +216,7 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::VecReadPlain,
             RuntimeFn::VecPushPlain,
             RuntimeFn::VecSetPlain,
+            RuntimeFn::VecPopPlain,
             RuntimeFn::VecElementLen,
             RuntimeFn::VecElementMapGet,
             RuntimeFn::VecElementMapGetPayload,

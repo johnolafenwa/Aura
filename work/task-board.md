@@ -161,8 +161,19 @@ Last updated: 2026-10-27
   takes the word, a tag cell, and the type). A probe reading list and
   `dict` constants in loops and tasks drops from 47.8M to 14.2M
   instructions; the 30 programs run 0.1% to 1.1% more.
-- Next: the 2i pull request, then step 2j (convert to and from runtime
-  values only at host calls, FFI, and `aura run`).
+- Step 2i merged (#173).
+- Step 2j: the `AURA_RUNTIME_STATS` line counts `conversions`; runtime
+  scalar appends store bits (`push_scalar_bits`); write-backs, moved
+  arguments, and mutable parameters keep their type tags
+  (`native_codegen_shapes.rs`); a non-Copy class keeps enum and union
+  fields in boxes (`LayoutBuilder::boxed_class_layout`); `match own`
+  moves typed payload boxes (`owned_element_box`); `pop()` of a record
+  list reads the record in place (`emit_plain_list_pop`). Gate: 29 of 30
+  programs convert nothing, `mini_browser` 20 times a run. nbody -33%,
+  astar -18%, graph_paths -15%, interpreter -12%, regex -11%. Details
+  are in `2026-10-28-rust-speed-2j-conversions.md`.
+- Next: the 2j pull request, then step 2k (delete the boxed paths typed
+  layouts replace, and re-measure).
 
 ## Aura 0.7.1 preview release (complete)
 

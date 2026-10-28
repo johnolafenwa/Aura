@@ -330,6 +330,7 @@ pub mod representation_stats {
     static RELEASES: AtomicU64 = AtomicU64::new(0);
     static CLONES: AtomicU64 = AtomicU64::new(0);
     static FREED_BOXES: AtomicU64 = AtomicU64::new(0);
+    static CONVERSIONS: AtomicU64 = AtomicU64::new(0);
 
     /// Whether the ownership counters count. The direct runtime turns them on
     /// at startup when the report is requested.
@@ -360,6 +361,9 @@ pub mod representation_stats {
         /// Direct-runtime boxes freed. A program that ends with every box
         /// it allocated freed reports as many as `opaque_boxes`.
         pub freed_boxes: u64,
+        /// Values the direct runtime built from a class, enum, tuple, or
+        /// record's bytes in a typed layout, or wrote into such bytes.
+        pub conversions: u64,
     }
 
     impl RepresentationStats {
@@ -376,13 +380,14 @@ pub mod representation_stats {
                 releases: self.releases - earlier.releases,
                 clones: self.clones - earlier.clones,
                 freed_boxes: self.freed_boxes - earlier.freed_boxes,
+                conversions: self.conversions - earlier.conversions,
             }
         }
 
         /// The report line a backend prints at exit.
         pub fn report_line(self, backend: &str) -> String {
             format!(
-                "aura runtime stats ({backend}): union_payload_boxes={} closure_environments={} opaque_boxes={} callable_overflow_allocations={} cloned_elements={} retains={} releases={} clones={} freed_boxes={}",
+                "aura runtime stats ({backend}): union_payload_boxes={} closure_environments={} opaque_boxes={} callable_overflow_allocations={} cloned_elements={} retains={} releases={} clones={} freed_boxes={} conversions={}",
                 self.union_payload_boxes,
                 self.closure_environments,
                 self.opaque_boxes,
@@ -391,7 +396,8 @@ pub mod representation_stats {
                 self.retains,
                 self.releases,
                 self.clones,
-                self.freed_boxes
+                self.freed_boxes,
+                self.conversions
             )
         }
 
@@ -413,6 +419,7 @@ pub mod representation_stats {
                     "releases" => stats.releases = value,
                     "clones" => stats.clones = value,
                     "freed_boxes" => stats.freed_boxes = value,
+                    "conversions" => stats.conversions = value,
                     _ => return None,
                 }
             }
@@ -483,6 +490,10 @@ pub mod representation_stats {
         note_ownership(&FREED_BOXES);
     }
 
+    pub fn note_conversion() {
+        note_ownership(&CONVERSIONS);
+    }
+
     /// The current totals.
     pub fn snapshot() -> RepresentationStats {
         RepresentationStats {
@@ -495,6 +506,7 @@ pub mod representation_stats {
             releases: RELEASES.load(Ordering::Relaxed),
             clones: CLONES.load(Ordering::Relaxed),
             freed_boxes: FREED_BOXES.load(Ordering::Relaxed),
+            conversions: CONVERSIONS.load(Ordering::Relaxed),
         }
     }
 
@@ -1047,6 +1059,16 @@ impl VariantPayloads {
                 .get_mut(index)
                 .map(|payload| std::mem::replace(payload, Value::Unit)),
             Self::Typed(typed) => typed.take(index),
+        }
+    }
+
+    /// Moves the box that holds payload `index` out of a typed variant,
+    /// leaving its place moved out. `None` when the variant keeps its
+    /// payloads as values or holds this one in place.
+    pub fn take_box(&mut self, index: usize) -> Option<crate::native_runtime::ElementBox> {
+        match self {
+            Self::Values(_) => None,
+            Self::Typed(typed) => typed.take_box(index),
         }
     }
 

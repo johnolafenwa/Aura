@@ -877,3 +877,58 @@ fn an_enum_in_a_box_keeps_scalars_inline_and_every_other_payload_in_a_box() {
     let (decoded, root) = decode_descriptor(&descriptor).expect("a descriptor");
     assert!(matches!(decoded.get(root).kind, LayoutKind::Tagged { .. }));
 }
+
+#[test]
+fn a_class_in_a_box_keeps_the_fields_it_accepts_inline_and_the_rest_in_boxes() {
+    let mut env = LayoutEnv::default();
+    env.enums.insert(
+        "Value".to_string(),
+        enumeration(&[("Int", vec![named("int64")]), ("Text", vec![named("str")])]),
+    );
+    env.classes.insert(
+        "Condition".to_string(),
+        class(&[
+            ("column", named("int64")),
+            ("value", named("Value")),
+            ("name", named("str")),
+            ("flag", named("bool")),
+        ]),
+    );
+    let inline = |ty: &Type| !matches!(ty, Type::Named(name, _) if name == "Value");
+    let mut builder = LayoutBuilder::new(&env);
+    let id = builder
+        .boxed_class_layout(&named("Condition"), inline)
+        .expect("a layout")
+        .expect("a class");
+    // Neither an enum nor a type that is no class is laid out as a class.
+    for ty in [named("Value"), named("int64"), named("Missing")] {
+        assert_eq!(
+            builder.boxed_class_layout(&ty, inline).unwrap(),
+            None,
+            "{ty}"
+        );
+    }
+    let table = builder.into_table();
+    table.validate().expect("a valid table");
+    let LayoutKind::Struct { class, fields } = &table.get(id).kind else {
+        panic!("expected a struct layout");
+    };
+    assert_eq!(class.as_deref(), Some("Condition"));
+    let laid = fields
+        .iter()
+        .map(|field| (field.offset, table.get(field.layout).kind.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        laid,
+        vec![
+            (0, LayoutKind::Scalar(ScalarLayout::Int64)),
+            (8, LayoutKind::Handle),
+            (16, LayoutKind::Handle),
+            (24, LayoutKind::Scalar(ScalarLayout::Bool)),
+        ]
+    );
+    assert_eq!(table.get(id).size, 32);
+    let descriptor = encode_layouts(&table, id);
+    let (decoded, root) = decode_descriptor(&descriptor).expect("a descriptor");
+    assert!(matches!(decoded.get(root).kind, LayoutKind::Struct { .. }));
+}

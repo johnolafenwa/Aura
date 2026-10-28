@@ -338,3 +338,15 @@ fn module_constants_read_across_tasks_free_every_box() {
     );
     assert_frees_everything("leak-frozen-constants", source, expected, 0);
 }
+
+/// Enum, union, and class fields of a class lie in boxes of their own,
+/// payload boxes move out of typed variants, and records pop off a list;
+/// the native run frees every box.
+#[test]
+fn class_fields_in_boxes_free_every_box() {
+    let source =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/class_fields_in_boxes.au");
+    let expected =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/class_fields_in_boxes.stdout");
+    assert_frees_everything("leak-class-field-boxes", source, expected, 0);
+}

@@ -18576,6 +18576,46 @@ that wants to change one copies it first, as before. A probe that reads
 list and `dict` constants in loops, in the main task and in two worker
 tasks, runs 14.2M instructions instead of 47.8M.
 
+### Values Stay In Their Layouts
+
+Native code keeps classes, records, tuples, and enums in typed layouts,
+and converts one to a runtime value only where the runtime needs one:
+printing it, a host call, or FFI. The runtime stats line counts these as
+`conversions`. Three places still converted on every use:
+
+- An enum or union field of a class, such as `value: Value` in
+  `class Condition`, was kept in the field's bytes, so every read built
+  a runtime value from them and every write converted back. Such a field
+  is now kept in a box of its own, which a read or write moves as native
+  code holds the enum. A class field and a `copy class` field stay in
+  place, where native code reads their numbers directly.
+- `match own` of an enum variant took each payload out as a runtime
+  value and boxed it again. It now moves the payload's box.
+- `pop()` of a list of `copy class` records built a runtime value and
+  converted it back to the record's fields. It now reads the record where
+  it lay.
+
+Two costs of the same kind went too. An append that reaches the runtime,
+such as one to a new empty list or a full one, built a runtime value for
+each number and stored it through the generic path; it now stores the
+number's bits. And a box passed to a `mut` parameter, or moved into a
+call, was given its static type again when the call handed it back,
+which compares types; a box whose type nothing can have changed keeps
+its type.
+
+| Program | Instructions before | Instructions after |
+| --- | ---: | ---: |
+| `nbody` | 7.3M | 4.9M |
+| `astar_pathfinding` | 9.0M | 7.4M |
+| `graph_paths` | 68.8M | 58.8M |
+| `interpreter` | 83.6M | 73.6M |
+| `regex_match` | 286.9M | 254.2M |
+| `sql_engine` | 1,377.7M | 1,307.5M |
+
+No other of the 30 cross-language programs changes by more than 3%, and
+29 of them convert no value at all. `mini_browser` converts 20 times a
+run, when it stores a class held in place in a field.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and
@@ -18665,8 +18705,10 @@ when its program ends.
 
 The same line reports how often the direct backend retains, releases, and
 copies a boxed value, as `retains`, `releases`, and `clones`, and how many
-of its boxes it freed, as `freed_boxes`. The direct runtime counts these
-only when the report is requested. The interpreter reports zero for them.
+of its boxes it freed, as `freed_boxes`, and how many values it built
+from a class, record, tuple, enum, or union kept in its typed layout, or
+wrote into one, as `conversions`. The direct runtime counts these only
+when the report is requested. The interpreter reports zero for them.
 A native program prints the line after its module constants are gone, so a
 program that freed everything it allocated reports as many `freed_boxes`
 as `opaque_boxes`. The cleanup tests in `crates/aura/tests/cleanup_leaks.rs`

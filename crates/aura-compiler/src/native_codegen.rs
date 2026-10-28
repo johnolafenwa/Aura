@@ -12988,6 +12988,14 @@ impl<'a> FunctionCompiler<'a> {
                         ty: element_direct_ty,
                     });
                 }
+                if self.integer_constant(index) == Some(-1) && !self.holds_field_box() {
+                    if let Some(record) = self.plain_record(&element_direct_ty)? {
+                        // `pop()` of a record comes back as its words.
+                        let value = self.emit_plain_list_pop(&record, list, &element_direct_ty);
+                        self.store_receiver_back(receiver_place, &object)?;
+                        return Ok(value);
+                    }
+                }
                 let result = self.emit_collection_operation(call, list, None, Some(index));
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(self.owned_opaque_result(vec![result], element_ty))
