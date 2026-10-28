@@ -227,6 +227,14 @@ Last updated: 2026-10-27
   passes, and copying a `json.Value` shares its collections instead of
   rebuilding the tree. json_roundtrip -26%, pubsub_broker -13%, docdb
   -10%. Gate missed. Details are in `2026-10-28-rust-speed-3e-json.md`.
+- Step 4a: the frame push and pop each check one header word (the
+  runtime keeps `limit` at 0 and `pop_floor` at `usize::MAX` while the
+  stack's flags are set), frame stack accesses carry TBAA tags
+  (`AliasClass`), and codegen units link by the functions a body calls
+  rather than every function it imports, so small same-unit callees stay
+  internal and inline. `call` probe 37 -> 12 instructions; raytracer -5%.
+  Gate missed (8 instructions; binary_trees and interpreter targets). Details are in
+  `2026-10-28-rust-speed-4a-call-path.md`.
 
 ## Aura 0.7.1 preview release (complete)
 

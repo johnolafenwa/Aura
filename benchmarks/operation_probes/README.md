@@ -61,3 +61,8 @@ Each operation a Phase 1 step targets now costs at most 14 times Rust's
 instructions. The large ratios left belong to later phases: `class_field_read`, `field_write`, `list_push`, `float_read`,
 and `enum_match` to the typed layouts of Phase 2, and `dict_get_str` to
 the `str` and `dict` work of Phase 3.
+
+`call` (step 4a, added on 28 October 2026) counts a call of a small
+`int64` function that LLVM inlines, against the same arithmetic written
+in the loop, so Rust's cost is 0. Aura's is the frame record each call
+keeps: 37 instructions before step 4a, 12 after.

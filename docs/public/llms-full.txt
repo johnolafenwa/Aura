@@ -18760,6 +18760,16 @@ storage of the lists and dicts inside it until one side changes them.
 | `docdb` | 35.6M | 32.1M |
 | `http_api` | 28.1M | 26.3M |
 
+### Calls Keep Their Frame Records For Less
+
+Each Aura call records its function on the task's frame stack, so a trap
+can report where it happened. Generated code pushes and pops that record
+with one check each, and LLVM can keep the stack's length in a register
+across the record's store. A program large enough to compile in parallel
+units inlines a small function called only from its own unit, as a small
+program does. A call of a small `int64` function costs 12 instructions
+instead of 37.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and
