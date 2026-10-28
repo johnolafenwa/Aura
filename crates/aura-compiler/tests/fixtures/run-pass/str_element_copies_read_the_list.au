@@ -1,0 +1,11 @@
+def main():
+    words = ["alpha", "beta", "a-much-longer-word-than-twenty-nine-bytes", "é"]
+    mut total = 0
+    for round in range(40):
+        for i in range(4):
+            w = words[i].clone()
+            total += w.len()
+        w = words[-1].clone()
+        total += w.len()
+    print(total)
+    print(words[3].clone() + words[-2].clone())

@@ -1,0 +1,9 @@
+prefix: prefix,self,tail
+café: accent,self
+amidst: middle,self
+: self
+prefixes-mid-é: prefix,accent,middle,self,tail
+mixed case, ünïcode|MIXED CASE, ÜNÏCODE
+[a, b, c]
+[one, two, , three]
+xyxy

@@ -66,6 +66,49 @@ impl Text {
         }
     }
 
+    /// `left` followed by `right`, allocated once at its final size.
+    pub fn concat(left: &Text, right: &Text) -> Text {
+        let ascii = left.is_ascii() && right.is_ascii();
+        let len = left.len() + right.len();
+        if len <= INLINE_CAPACITY {
+            let mut bytes = [0; INLINE_CAPACITY];
+            bytes[..left.len()].copy_from_slice(left.as_bytes());
+            bytes[left.len()..len].copy_from_slice(right.as_bytes());
+            return Self(Repr::Inline {
+                ascii,
+                len: len as u8,
+                bytes,
+            });
+        }
+        let mut text = String::with_capacity(len);
+        text.push_str(left);
+        text.push_str(right);
+        Self(Repr::Heap { ascii, text })
+    }
+
+    /// The text with each ASCII letter mapped by `map`, such as
+    /// `u8::to_ascii_lowercase`, or `None` when the text is not ASCII.
+    pub fn map_ascii(&self, map: fn(&u8) -> u8) -> Option<Text> {
+        if !self.is_ascii() {
+            return None;
+        }
+        if self.len() <= INLINE_CAPACITY {
+            let mut bytes = [0; INLINE_CAPACITY];
+            for (out, byte) in bytes.iter_mut().zip(self.as_bytes()) {
+                *out = map(byte);
+            }
+            return Some(Self(Repr::Inline {
+                ascii: true,
+                len: self.len() as u8,
+                bytes,
+            }));
+        }
+        let bytes = self.as_bytes().iter().map(map).collect::<Vec<_>>();
+        // SAFETY: mapping ASCII bytes to ASCII bytes keeps them UTF-8.
+        let text = unsafe { String::from_utf8_unchecked(bytes) };
+        Some(Self(Repr::Heap { ascii: true, text }))
+    }
+
     /// Whether every byte is ASCII.
     pub fn is_ascii(&self) -> bool {
         match &self.0 {

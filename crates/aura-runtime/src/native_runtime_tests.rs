@@ -9699,7 +9699,8 @@ fn native_runtime_task_result_handoff_clones_copy_values_and_moves_noncopy_value
             .expect("external Queue alias should receive the returned alias's value");
             assert_eq!(received, Some(Value::Int(IntegerValue::from_signed(9))));
 
-            let owned_string = string_value("allocation identity");
+            // Longer than an inline text, so it has an allocation to keep.
+            let owned_string = string_value("allocation identity of a heap string");
             let allocation = unsafe {
                 super::with_value(owned_string, |value| match value {
                     Value::String(value) => value.as_ptr(),
@@ -28718,4 +28719,39 @@ fn entry_loans_read_and_write_values_where_the_map_keeps_them() {
             release_value(value);
         }
     }
+}
+
+#[test]
+fn string_concatenation_reads_both_texts_in_place() {
+    let twice = string_value("ab");
+    assert_eq!(
+        expect_string(super::aura_direct_binary_value_at(0, twice, twice, 0, 1, 1)),
+        "abab"
+    );
+    let message = capture_direct_boundary_error_message(|| {
+        super::aura_direct_binary_value_at(0, string_value("n="), int_value(1), 0, 1, 1);
+    });
+    assert!(message.contains("unsupported `+` operands"), "{message}");
+    let message = capture_direct_boundary_error_message(|| {
+        let half = string_value(&"x".repeat(crate::runtime_value::MAX_STRING_BYTES / 2 + 1));
+        super::aura_direct_binary_value_at(0, half, half, 0, 1, 1);
+    });
+    assert!(message.contains("allocation limit"), "{message}");
+}
+
+#[test]
+fn replace_copies_text_without_the_pattern_and_rewrites_every_match() {
+    let replaced = |text: &str, from: &str, to: &str| {
+        expect_string(super::aura_direct_string_replace(
+            string_value(text),
+            string_value(from),
+            string_value(to),
+        ))
+    };
+    assert_eq!(replaced("plain", "&", "&amp;"), "plain");
+    assert_eq!(replaced("a & b & c", "&", "&amp;"), "a &amp; b &amp; c");
+    assert_eq!(replaced("aaaa", "aa", "b"), "bb");
+    assert_eq!(replaced("ab", "", "-"), "-a-b-");
+    let long = "x<".repeat(20);
+    assert_eq!(replaced(&long, "<", "&lt;"), "x&lt;".repeat(20));
 }

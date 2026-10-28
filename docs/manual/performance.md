@@ -1177,6 +1177,28 @@ key, takes the runtime path as before.
 | `csv_aggregate` | 53.2M | 40.9M |
 | `word_freq` | 42.3M | 35.4M |
 
+### String Operations Read In Place
+
+`a + b` on two strings builds the result once at its final size, without
+copying either operand first. `starts_with`, `ends_with`, `contains`, and
+`replace` read their arguments where they lie, and a literal argument,
+such as `word.ends_with(",")`, needs no box at all. `replace` copies text
+that does not contain the pattern as it is. A copy of a `list[str]`
+element, such as `words[i].clone()`, reads the element where the list
+keeps it and copies it once. `split_whitespace()`, `lines()`,
+`to_lower()`, `to_upper()`, and string literals keep a result of at most
+29 bytes inside the value, as other short strings already were.
+
+| Program | Instructions before | Instructions after |
+| --- | ---: | ---: |
+| `word_freq` | 35.3M | 26.2M |
+| `sort_records` | 35.2M | 30.0M |
+| `template_render` | 24.9M | 21.6M |
+| `http_api` | 28.5M | 24.9M |
+| `text_diff` | 8.3M | 7.3M |
+| `csv_aggregate` | 40.9M | 36.5M |
+| `markdown_render` | 6.2M | 5.6M |
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

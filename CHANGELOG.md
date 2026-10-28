@@ -207,6 +207,15 @@ in this file.
   entry once and updates it where the dict keeps it. `raytracer` and
   `hashing` run about 69% fewer instructions, `interpreter` 49%,
   `graph_paths` 38%, `lru_cache` 36%, and `csv_aggregate` 23%.
+- String operations read their texts in place. `a + b` on two strings,
+  `starts_with`, `ends_with`, `contains`, and `replace` no longer copy
+  their operands; a literal argument to the three tests needs no box; a
+  copy of a `list[str]` element such as `words[i].clone()` reads the list
+  directly and copies once; and `split_whitespace`, `lines`, `to_lower`,
+  `to_upper`, and string literals keep short results inside the value.
+  `word_freq` runs 26% fewer instructions, `sort_records` 15%,
+  `template_render` and `http_api` 13%, `text_diff` 12%, and
+  `csv_aggregate` 11%.
 
 ### Fixed
 

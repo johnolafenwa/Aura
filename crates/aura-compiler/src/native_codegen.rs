@@ -1636,6 +1636,7 @@ impl<'a> NativeCodegen<'a> {
             last_runtime_type_tag: None,
             shaped_locals,
             shaped_boxes: HashSet::new(),
+            fresh_str_copies: HashSet::new(),
             program_shapes: &self.program_shapes,
             view_places: HashMap::new(),
             view_element_keys: HashMap::new(),
@@ -2970,6 +2971,10 @@ struct FunctionCompiler<'a> {
     /// what it returns, or a variant that keeps its payloads in place.
     /// Coercing one to that type tags nothing.
     shaped_boxes: HashSet<Val>,
+    /// The `str` boxes this instruction loaded as fresh copies through an
+    /// element path, which no other place holds, so a clone of one is the
+    /// box itself.
+    fresh_str_copies: HashSet<Val>,
     program_shapes: &'a shapes::ProgramShapes,
     view_places: HashMap<String, DirectViewPlace>,
     view_selector_vars: HashMap<String, Var>,
@@ -3824,6 +3829,7 @@ impl<'a> FunctionCompiler<'a> {
             "layout temporaries outlived the instruction before {instruction:?}"
         );
         self.shaped_boxes.clear();
+        self.fresh_str_copies.clear();
         if !self.element_promotions.is_empty() {
             if let Some(temps) = self
                 .element_promotions
@@ -4497,6 +4503,7 @@ impl<'a> FunctionCompiler<'a> {
         return_ty: &DirectType,
     ) -> std::result::Result<(), String> {
         self.shaped_boxes.clear();
+        self.fresh_str_copies.clear();
         match terminator {
             Terminator::Return(operand) => {
                 let value = self.load_operand_for_target(operand, return_ty)?;
@@ -8637,6 +8644,18 @@ impl<'a> FunctionCompiler<'a> {
         };
         let element_type = last.element_type.clone();
         let (collection, projection) = self.load_element_path_root(&alternative.place)?;
+        if let [selector] = alternative.elements.as_slice() {
+            if projection.is_empty()
+                && selector.projection.is_empty()
+                && matches!(selector.kind, DirectElementKind::List)
+                && element_type == Type::named("str")
+            {
+                let index = self.builder.use_var(selector.variable);
+                let copy = self.emit_str_element_copy(collection.values[0], index, selector.span);
+                self.fresh_str_copies.insert(copy);
+                return Ok(self.owned_opaque_result(vec![copy], element_type));
+            }
+        }
         let path = self.element_path_operands(&projection, &alternative.elements)?;
         let inst = self.builder.call(
             self.runtime[RuntimeFn::ElementPathLoad],
@@ -8650,6 +8669,9 @@ impl<'a> FunctionCompiler<'a> {
                 path.column,
             ],
         );
+        if element_type == Type::named("str") {
+            self.fresh_str_copies.insert(inst.results[0]);
+        }
         Ok(self.owned_opaque_result(inst.results, element_type))
     }
 
@@ -9859,6 +9881,58 @@ impl<'a> FunctionCompiler<'a> {
             .call(self.runtime[RuntimeFn::CompareStrLiteralAt], &args);
         let equal = inst.results[0];
         self.builder.jump(join_block, &[equal]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        self.builder.block_params(join_block)[0]
+    }
+
+    /// A new box copying element `index` of the `list[str]` `list`. A list
+    /// whose view is `DirectListAccess::Str` is read in place; any other,
+    /// or an index out of range, takes `aura_direct_vec_str_element`, which
+    /// reports the index and counts the miss.
+    fn emit_str_element_copy(&mut self, list: Val, index: Val, span: Span) -> Val {
+        use aura_runtime::native_runtime::{
+            DirectListAccess, DIRECT_STR_VIEW_ENTRY_BYTES, DIRECT_STR_VIEW_LEN_OFFSET,
+            DIRECT_STR_VIEW_PTR_OFFSET,
+        };
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let slow_block = self.builder.create_block();
+        let fast_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        self.emit_list_access_check(list, DirectListAccess::Str, &layout, slow_block, fast_block);
+
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let flags = MemFlags::trusted();
+        let entries = self
+            .builder
+            .load(types::I64, flags, list, layout.elements_offset);
+        let position = self.emit_list_view_bounds_check(list, index, &layout, slow_block);
+        let offset = self
+            .builder
+            .imul_imm(position, i64::from(DIRECT_STR_VIEW_ENTRY_BYTES));
+        let entry = self.builder.iadd(entries, offset);
+        let bytes = self
+            .builder
+            .load(types::I64, flags, entry, DIRECT_STR_VIEW_PTR_OFFSET);
+        let len = self
+            .builder
+            .load(types::I64, flags, entry, DIRECT_STR_VIEW_LEN_OFFSET);
+        let copy = self
+            .builder
+            .call(self.runtime[RuntimeFn::StringFromView], &[bytes, len]);
+        self.builder.jump(join_block, &[copy.results[0]]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let (line, column) = self.span_operands(span);
+        let copy = self.builder.call(
+            self.runtime[RuntimeFn::VecStrElement],
+            &[list, index, line, column],
+        );
+        self.builder.jump(join_block, &[copy.results[0]]);
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
@@ -12496,6 +12570,32 @@ impl<'a> FunctionCompiler<'a> {
         ) {
             require_bound_args(op, args)?;
         }
+        if let (
+            RuntimeOp::Str(affix @ (StrOp::Contains | StrOp::StartsWith | StrOp::EndsWith)),
+            [MirArg {
+                value: Operand::String(literal),
+                ..
+            }],
+        ) = (op, args)
+        {
+            // A literal argument is read where the program keeps it.
+            let object = self.ensure_opaque(object)?;
+            let (ptr, len) = self.string_constant(literal.as_bytes())?;
+            let kind = match affix {
+                StrOp::StartsWith => 1,
+                StrOp::EndsWith => 2,
+                _ => 0,
+            };
+            let kind = self.builder.iconst(types::I64, kind);
+            let found = self.builder.call(
+                self.runtime[RuntimeFn::StringAffixLiteral],
+                &[object.values[0], ptr, len, kind],
+            );
+            return Ok(ValueRef {
+                values: found.results,
+                ty: DirectType::Scalar(ScalarKind::Bool),
+            });
+        }
         match op {
             RuntimeOp::Scalar(scalar) => self.compile_scalar_runtime_op(scalar, object, args),
             RuntimeOp::Value(value) => self.compile_value_runtime_op(value, object, args),
@@ -12863,6 +12963,14 @@ impl<'a> FunctionCompiler<'a> {
             .result_type(Some(&receiver_ty), &[])
             .ok_or_else(|| format!("direct backend does not know the result type of `{op:?}`"))?;
         let object = self.ensure_opaque(object)?;
+        // A fresh copy of a `str` element is already the clone.
+        if matches!(op, ValueOp::Clone | ValueOp::Copy)
+            && self.fresh_str_copies.remove(&object.values[0])
+            && self.temporary_owns_opaque(&object)
+        {
+            self.clear_temporary_opaque_owned(&object);
+            return Ok(self.owned_opaque_result(object.values, result_ty));
+        }
         let results = self.runtime_call_results(
             self.runtime[runtime_op.runtime_call().function],
             &[object.values[0]],

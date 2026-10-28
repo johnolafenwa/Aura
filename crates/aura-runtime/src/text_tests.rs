@@ -95,3 +95,21 @@ fn a_text_converts_compares_and_formats_as_its_bytes() {
     assert_eq!(pushed.as_str(), "aéb");
     assert!(!pushed.is_ascii() && pushed.capacity() >= 64);
 }
+
+#[test]
+fn joined_and_case_mapped_texts_keep_their_flag_and_stay_inline_when_short() {
+    let short = Text::concat(&Text::from("ab"), &Text::from("cd"));
+    assert_eq!(
+        (short.as_str(), short.is_ascii(), short.capacity()),
+        ("abcd", true, super::INLINE_CAPACITY)
+    );
+    let long = Text::concat(&Text::from("x".repeat(20)), &Text::from("é".repeat(10)));
+    assert_eq!(long.len(), 40);
+    assert!(!long.is_ascii());
+    assert_eq!(long.char_len(), 30);
+    let upper = Text::from("MiXeD").map_ascii(u8::to_ascii_lowercase);
+    assert_eq!(upper.as_deref(), Some("mixed"));
+    let wide = Text::from("a".repeat(40)).map_ascii(u8::to_ascii_uppercase);
+    assert_eq!(wide.map(Text::into_string), Some("A".repeat(40)));
+    assert!(Text::from("é").map_ascii(u8::to_ascii_uppercase).is_none());
+}
