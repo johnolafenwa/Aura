@@ -1,4 +1,4 @@
-# Rust Speed Step 2i Parts 1 To 3: Typed Values Across Tasks And Queues
+# Rust Speed Step 2i: Typed Values Across Tasks And Queues
 
 ## Goal
 
@@ -93,6 +93,54 @@ Probe (2,000 tasks, each summing an `Order` with 50 `Point`s or a list of
 the part 2 probe, a call of `sum_order` drops from about 15,400
 instructions to 3,600. No program of the 30 changes by more than 0.4%.
 
+## Part 4: Module Constants Are Frozen
+
+A native read of a module constant called `aura_direct_module_constant`,
+which hashed the constant's name, looked it up in a registry behind a
+mutex, and retained the value; the read site then tagged the value with
+its type again. A constant read from more than one task was shared, so
+every access took its lock and missed the inline list reads.
+
+- `freeze_direct_value` (`native_runtime.rs`) runs once, after the
+  initializer built the constant and gave it its type tag. It unlinks the
+  box from every ledger, points its lock at the static
+  `FROZEN_VALUE_LOCK`, and sets its reference count to `1 << 30`.
+  `retain_ref_count` and `release_ref_count` leave a count that high as
+  it is, so retains and releases need no extra check. Releasing through
+  a ledger, sharing, claiming, retaining through
+  `aura_direct_retain_value`, and tagging pass a frozen box by; a read
+  takes no lock, and a write is the runtime error "a module constant
+  cannot change". The checker already rejects such writes, so it is a
+  backstop. With the frozen count as the limit, the old count overflow
+  error can no longer happen.
+- Every check of "is this value shared" stays true for a frozen value,
+  so code that changes or keeps a constant copies it, as it did for a
+  shared value. The boxes a frozen value holds have no room for inline
+  appends, so nothing below it needs freezing too.
+- The list view is kept for lists of scalars and strings, so loops over a
+  constant use the inline reads. Lists of boxes and of class or enum
+  layouts drop it and take the runtime path.
+- `aura_direct_module_constant` takes a per-constant word, a type tag
+  cell, and the constant's type. A read loads the word, and only the
+  first read, from the main thunk, runs the registry. The read site no
+  longer tags the value or coerces it when the types match.
+- Frozen constants are freed directly when the program ends.
+
+Probes (release builds, callgrind):
+
+| Probe | Before | After |
+| --- | ---: | ---: |
+| list and `dict` constants read in loops, main task and two workers | 47.8M | 14.2M |
+| 13 kinds of constants read in 8 tasks, copied, changed, compared | 17.4M | 10.4M |
+
+The 30 programs run 0.1% to 1.1% more instructions (median 0.5%). A
+release through a ledger checks for a frozen value, which saves a ledger
+lookup for a constant but costs every other release 4 instructions, and
+tagging checks too, 2 instructions a call. Most of the rest is
+`memcmp` in type comparisons taking longer paths with the heap laid out
+differently (nbody: +32K of its +55K). The checks keep a frozen box out
+of every ledger, which the per-task ledgers need, so they stay.
+
 ## Part 2 Measurements
 
 Callgrind instructions, Linux container, release builds. Before is
@@ -131,5 +179,11 @@ suite, show no change.
   handed over, and a started task finds such an argument unshared and
   linked in its ledger while an argument the starter still holds is
   shared.
+- New fixture `run-pass/module_constants_read_across_tasks.au` reads
+  13 kinds of constants from 8 tasks, copies and changes them, and
+  compares them; `cleanup_leaks.rs` checks the native run frees every
+  box. A codegen test checks that a constant read tags nothing, and the
+  runtime cache test checks the word, the fixed reference count through
+  retain and release, and that a reset empties the word.
 - Runtime, compiler, and CLI tests, backend parity, `cargo fmt --check`,
   hygiene, and clippy.

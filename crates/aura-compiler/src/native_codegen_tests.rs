@@ -15175,3 +15175,37 @@ def main():
         );
     }
 }
+
+#[test]
+fn native_module_constant_reads_find_their_frozen_value_untagged() {
+    let source = r#"
+NAMES: list[str] = ["alpha", "beta"]
+LIMITS: dict[str, int64] = {"alpha": 1}
+
+def count() -> int64:
+    mut total = 0
+    for name in NAMES:
+        total += name.len() + LIMITS.len()
+    return total
+
+def main():
+    print(count())
+"#;
+    let mir = lower_source_to_mir(source).expect("constant source should lower");
+    let object = emit_host_object(&mir).expect("constant source should emit directly");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        referenced
+            .iter()
+            .any(|name| name.ends_with("aura_direct_module_constant")),
+        "constant reads should call the runtime, referenced: {referenced:?}"
+    );
+    // Each constant is tagged once when it is made, so a read of its own
+    // type tags nothing.
+    assert!(
+        !referenced
+            .iter()
+            .any(|name| name.ends_with("aura_direct_tag_value_type")),
+        "constant reads should not tag their value, referenced: {referenced:?}"
+    );
+}

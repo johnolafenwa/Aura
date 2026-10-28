@@ -1052,6 +1052,17 @@ both tasks lock it on each access. A probe that starts 2,000 tasks, each
 summing a record with 50 points or a list of 100 numbers moved into it,
 runs 99.8M instructions instead of 489.2M.
 
+A module constant that is not a plain number, such as
+`WORDS: list[str] = ["alpha", "beta"]` or a `dict` constant, is built
+once, the first time the program needs it, and then frozen: every task
+reads it in place, with inline list reads and no lock or reference
+count. Before, each read looked the constant up by name, took a
+reference, and gave the value its type again, and a constant read from
+two tasks was shared and locked. A constant still cannot change: code
+that wants to change one copies it first, as before. A probe that reads
+list and `dict` constants in loops, in the main task and in two worker
+tasks, runs 14.2M instructions instead of 47.8M.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

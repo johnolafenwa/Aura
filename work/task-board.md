@@ -153,7 +153,16 @@ Last updated: 2026-10-27
   reference to the buffer (`ArgBufferStoreOwned`). A probe of 2,000 tasks
   reading moved records and lists drops from 489.2M to 99.8M
   instructions.
-- Next: step 2i part 4 (read-only module constants).
+- Step 2i part 4: a module constant is built and tagged once and then
+  frozen (`freeze_direct_value`): a static lock marker and a count of
+  `1 << 30` make every retain, release, share, and claim pass it by,
+  reads take no lock, and a write is a runtime error. A read loads the
+  constant from a per-constant word (`aura_direct_module_constant` now
+  takes the word, a tag cell, and the type). A probe reading list and
+  `dict` constants in loops and tasks drops from 47.8M to 14.2M
+  instructions; the 30 programs run 0.1% to 1.1% more.
+- Next: the 2i pull request, then step 2j (convert to and from runtime
+  values only at host calls, FFI, and `aura run`).
 
 ## Aura 0.7.1 preview release (complete)
 

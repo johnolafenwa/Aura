@@ -944,6 +944,8 @@ fn find_direct_frame_stack() -> Option<NonNull<DirectFrameStack>> {
     Some(stack)
 }
 
+/// Links `value` into the running task's ledger. Callers never pass a
+/// frozen value, which no ledger may link.
 fn register_direct_owned_value(value: *mut OpaqueValue) {
     if value.is_null() {
         return;
@@ -1427,7 +1429,7 @@ impl Drop for OpaqueValue {
         // SAFETY: a linked value is confined to this thread.
         unsafe { owned_values::detach_for_drop(self) };
         let lock = *self.shared_lock.get_mut();
-        if !lock.is_null() {
+        if !lock.is_null() && !std::ptr::eq(lock, &FROZEN_VALUE_LOCK) {
             // SAFETY: `share_direct_value` leaked this box for the value.
             drop(unsafe { Box::from_raw(lock) });
         }
@@ -1441,6 +1443,9 @@ impl std::panic::RefUnwindSafe for OpaqueValue {}
 /// The lock an access to a value needs: none while the value is confined to
 /// its creating thread, and the shared lock once it may be reached by another
 /// thread.
+///
+/// A module constant is read as if confined: it is frozen, so every thread
+/// reads it without a lock and none writes (see [`freeze_direct_value`]).
 enum DirectValueAccess<'a> {
     Confined,
     SharedRead(#[allow(dead_code)] std::sync::RwLockReadGuard<'a, ()>),
@@ -1623,6 +1628,17 @@ impl OpaqueValue {
     /// reaches the reader's type error, which never reads its elements.
     #[inline]
     fn access_unlisted(&self, write: bool) -> DirectValueAccess<'_> {
+        match self.access_unless_frozen(write) {
+            Some(access) => access,
+            None if write => runtime_error("a module constant cannot change"),
+            None => DirectValueAccess::Confined,
+        }
+    }
+
+    /// [`Self::access_unlisted`], or `None` for a frozen value, for a
+    /// writer that leaves a frozen value as it is.
+    #[inline]
+    fn access_unless_frozen(&self, write: bool) -> Option<DirectValueAccess<'_>> {
         // Acquire pairs with the release store in `share_direct_value`. The
         // thread that shares a value is the only one that could have accessed
         // it unlocked, and every other thread reaches the value through a
@@ -1634,9 +1650,12 @@ impl OpaqueValue {
                     || self.owner_thread == direct_value_thread_identity(),
                 "direct runtime value reached another thread without being shared"
             );
-            return DirectValueAccess::Confined;
+            return Some(DirectValueAccess::Confined);
         };
-        if write {
+        if std::ptr::eq(lock, &FROZEN_VALUE_LOCK) {
+            return None;
+        }
+        Some(if write {
             match lock.write() {
                 Ok(guard) => DirectValueAccess::SharedWrite(guard),
                 Err(_) => runtime_error("direct runtime value lock was poisoned"),
@@ -1646,7 +1665,81 @@ impl OpaqueValue {
                 Ok(guard) => DirectValueAccess::SharedRead(guard),
                 Err(_) => runtime_error("direct runtime value lock was poisoned"),
             }
+        })
+    }
+}
+
+/// The lock a frozen value names in place of its own. Nothing ever takes
+/// it: a frozen value's accesses only read, so they take no lock (see
+/// [`freeze_direct_value`]).
+static FROZEN_VALUE_LOCK: RwLock<()> = RwLock::new(());
+
+/// A frozen value's count, so it never looks like a box with one reference
+/// that its holder may empty or change. Retains and releases leave a count
+/// this high as it is, so they need not check for a frozen value; a box
+/// would need a billion holders to reach it.
+const FROZEN_REFERENCES: u32 = 1 << 30;
+
+impl OpaqueValue {
+    /// Whether the value is frozen, which only module constants are.
+    #[inline]
+    fn is_frozen(&self) -> bool {
+        std::ptr::eq(self.shared_lock.load(Ordering::Acquire), &FROZEN_VALUE_LOCK)
+    }
+}
+
+/// Whether `ptr` is a frozen value. A null pointer is not.
+#[inline]
+fn direct_value_is_frozen(ptr: *mut OpaqueValue) -> bool {
+    // SAFETY: callers pass null or a live box.
+    unsafe { ptr.as_ref() }.is_some_and(OpaqueValue::is_frozen)
+}
+
+/// Freezes a module constant that its initializer just made: from now on
+/// every thread reads it without a lock, and nothing writes it, which the
+/// checker ensures by keeping module storage immutable. Frozen values are
+/// shared as far as every other check goes, so code that would lend from
+/// them or change them in place copies instead. They keep their list view
+/// when it reads no box in place, so generated code still reads elements
+/// of a list of numbers or records inline. Their counts no longer change:
+/// retains and releases skip them, no ledger lists them, and
+/// `clear_direct_module_constants` frees them when the program ends.
+///
+/// # Safety
+///
+/// `ptr` is a live box confined to this thread, and the caller publishes
+/// it to other threads only after this call, through a synchronizing
+/// operation.
+unsafe fn freeze_direct_value(ptr: *mut OpaqueValue) {
+    // SAFETY: the caller passes a live box.
+    let value = unsafe { &*ptr };
+    if value.shared_lock.load(Ordering::Acquire).is_null() {
+        if value.list_capacity.load(Ordering::Relaxed) != 0 {
+            value.adopt_appended_elements();
         }
+        // SAFETY: the caller is the thread the value is confined to.
+        unsafe { owned_values::detach_for_sharing(ptr, value) };
+    }
+    // The references a ledger counts by address are dropped with the
+    // ledger's entry; the value keeps one count of its own.
+    while unregister_direct_owned_value(ptr) {}
+    let lock = value.shared_lock.swap(
+        (&FROZEN_VALUE_LOCK as *const RwLock<()>).cast_mut(),
+        Ordering::AcqRel,
+    );
+    if !lock.is_null() && !std::ptr::eq(lock, &FROZEN_VALUE_LOCK) {
+        // SAFETY: `share_direct_value` leaked this box for the value.
+        drop(unsafe { Box::from_raw(lock) });
+    }
+    value.ref_count.store(FROZEN_REFERENCES, Ordering::Release);
+    // A view that generated code reads a box through would hand out a box
+    // the value holds, which a reader may then change, so only views of
+    // elements kept in place stay.
+    let access = value.list_access.load(Ordering::Relaxed);
+    if access == DirectListAccess::Boxes as u32 || access >= FIRST_CLASS_ACCESS {
+        value
+            .list_access
+            .store(DirectListAccess::None as u32, Ordering::Release);
     }
 }
 
@@ -1656,6 +1749,7 @@ impl OpaqueValue {
 /// thread through a synchronizing operation after this call.
 unsafe fn share_direct_value(ptr: *mut OpaqueValue) {
     match unsafe { ptr.as_ref() } {
+        Some(value) if value.is_frozen() => {}
         Some(value) => {
             if value.shared_lock.load(Ordering::Acquire).is_null() {
                 // The value is still confined, so the elements generated
@@ -1930,8 +2024,10 @@ fn retain_ref_count(ref_count: &AtomicU32) -> std::result::Result<(), &'static s
         if current == 0 {
             return Err("attempted to retain an already-released direct runtime value");
         }
-        if current == u32::MAX {
-            return Err("direct runtime value reference count overflow");
+        // A frozen value's count never changes (see `FROZEN_REFERENCES`),
+        // so no count can overflow either.
+        if current >= FROZEN_REFERENCES {
+            return Ok(());
         }
         if ref_count
             .compare_exchange_weak(current, current + 1, Ordering::Relaxed, Ordering::Relaxed)
@@ -1947,6 +2043,9 @@ fn release_ref_count(ref_count: &AtomicU32) -> std::result::Result<bool, &'stati
         let current = ref_count.load(Ordering::Acquire);
         if current == 0 {
             return Err("attempted to release an already-released direct runtime value");
+        }
+        if current >= FROZEN_REFERENCES {
+            return Ok(false);
         }
         let next = current - 1;
         if ref_count
@@ -2573,8 +2672,11 @@ unsafe fn set_explicit_runtime_type_tag(ptr: *mut OpaqueValue, tag: &RuntimeType
     match ptr.as_ref() {
         Some(value) => {
             // The tag and the kind of value are all this reads, so a list's
-            // appended elements can wait for the next access.
-            let _access = value.access_unlisted(true);
+            // appended elements can wait for the next access. A module
+            // constant got its tag before it froze.
+            let Some(_access) = value.access_unless_frozen(true) else {
+                return;
+            };
             // SAFETY: as in `value_mut`.
             let stored = unsafe { &mut *value.runtime_type_name.get() };
             let already = stored.as_ref().is_some_and(|existing| {
@@ -6081,7 +6183,8 @@ pub extern "C-unwind" fn aura_direct_function_thunk(function: *mut OpaqueValue) 
 #[derive(Copy, Clone)]
 enum DirectModuleConstantState {
     Initializing,
-    Ready(usize),
+    /// The frozen value, and the word generated code reads it from, or 0.
+    Ready(usize, usize),
     Failed,
 }
 
@@ -6110,28 +6213,71 @@ fn clear_direct_module_constants() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     for key in order.drain(..).rev() {
-        if let Some(DirectModuleConstantState::Ready(address)) = states.remove(&key) {
-            unsafe { release_untracked_value(address as *mut OpaqueValue) };
+        if let Some(DirectModuleConstantState::Ready(address, slot)) = states.remove(&key) {
+            // SAFETY: a nonzero slot is the word generated code passed.
+            if let Some(slot) = unsafe { (slot as *const AtomicPtr<OpaqueValue>).as_ref() } {
+                slot.store(std::ptr::null_mut(), Ordering::Release);
+            }
+            // SAFETY: a frozen value's references are not counted, and the
+            // program reads no constant once it ends.
+            unsafe { free_frozen_direct_value(address as *mut OpaqueValue) };
         }
     }
     states.clear();
 }
 
+/// Frees a frozen module constant when the program ends.
+///
+/// # Safety
+///
+/// `value` is a frozen value nothing reads again.
+unsafe fn free_frozen_direct_value(value: *mut OpaqueValue) {
+    // SAFETY: the caller passes a live box.
+    unsafe { &*value }.ref_count.store(0, Ordering::Release);
+    // SAFETY: the caller's contract.
+    unsafe { free_direct_value(value) };
+}
+
+/// Reads module constant `key`, making it with `initializer_thunk` on the
+/// first read and tagging it with the type in `type_ptr`. The constant is
+/// frozen (see [`freeze_direct_value`]), and `slot`, a word in the
+/// program, keeps it, so later reads cost one load. The result needs no
+/// release.
+///
+/// # Safety
+///
+/// `key_ptr` and `type_ptr` are readable for their lengths, `slot` and
+/// `tag_cell` are null or words only this runtime writes, and the thunk
+/// makes the constant.
 #[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_module_constant(
+pub unsafe extern "C-unwind" fn aura_direct_module_constant(
     key_ptr: *const u8,
     key_len: usize,
     initializer_thunk: i64,
+    slot: *const AtomicPtr<OpaqueValue>,
+    tag_cell: *const AtomicPtr<c_void>,
+    type_ptr: *const u8,
+    type_len: usize,
 ) -> *mut OpaqueValue {
+    // SAFETY: the caller's contract.
+    let slot = unsafe { slot.as_ref() };
+    if let Some(value) = slot
+        .map(|slot| slot.load(Ordering::Acquire))
+        .filter(|value| !value.is_null())
+    {
+        return value;
+    }
+    let slot_address = slot.map_or(0, |slot| slot as *const AtomicPtr<OpaqueValue> as usize);
     task_runtime_boundary(|| {
         let key = decode_bytes(key_ptr, key_len);
         {
             let states = lock_direct_module_constants();
             match states.get(&key).copied() {
-                Some(DirectModuleConstantState::Ready(address)) => {
+                Some(DirectModuleConstantState::Ready(address, _)) => {
                     let value = address as *mut OpaqueValue;
-                    unsafe { retain_untracked_value(value) };
-                    register_direct_owned_value(value);
+                    if let Some(slot) = slot {
+                        slot.store(value, Ordering::Release);
+                    }
                     return value;
                 }
                 Some(DirectModuleConstantState::Initializing) => runtime_diagnostic_error(
@@ -6175,15 +6321,24 @@ pub extern "C-unwind" fn aura_direct_module_constant(
                 "module constant `{key}` initializer returned a null value"
             ));
         }
-        // The registry owns one untracked reference until runtime shutdown;
-        // the thunk's tracked reference remains the caller's read result.
-        // Any task thread can read the registry, so the value is shared.
-        unsafe {
-            retain_untracked_value(value);
-            share_direct_value(value);
+        // The constant keeps the tag of its declared type, since a frozen
+        // value takes no other.
+        // SAFETY: the caller's contract.
+        if let Some(cell) = unsafe { tag_cell.as_ref() }.filter(|_| type_len != 0) {
+            let tag =
+                celled_runtime_type_tag(cell, unsafe { slice::from_raw_parts(type_ptr, type_len) });
+            unsafe { set_explicit_runtime_type_tag(value, tag) };
         }
-        lock_direct_module_constants()
-            .insert(key, DirectModuleConstantState::Ready(value as usize));
+        // Any task thread can read the registry, so the value freezes. The
+        // registry keeps it until the program ends.
+        unsafe { freeze_direct_value(value) };
+        lock_direct_module_constants().insert(
+            key,
+            DirectModuleConstantState::Ready(value as usize, slot_address),
+        );
+        if let Some(slot) = slot {
+            slot.store(value, Ordering::Release);
+        }
         direct_module_constant_order()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -6209,6 +6364,10 @@ pub unsafe extern "C-unwind" fn aura_direct_retain_value(
     task_runtime_boundary(|| {
         if !value.is_null() {
             crate::runtime_value::representation_stats::note_retain();
+        }
+        // A frozen value takes no references and joins no ledger.
+        if direct_value_is_frozen(value) {
+            return value;
         }
         unsafe {
             retain_untracked_value(value);
@@ -6237,6 +6396,10 @@ pub unsafe extern "C-unwind" fn aura_direct_release_value(value: *mut OpaqueValu
 unsafe fn release_direct_value(value: *mut OpaqueValue) {
     if !value.is_null() {
         crate::runtime_value::representation_stats::note_release();
+    }
+    // A frozen value takes no references, so each one is owned.
+    if direct_value_is_frozen(value) {
+        return;
     }
     let owned = unregister_direct_owned_value(value);
     check_released_value_is_owned(value, owned);
@@ -17468,6 +17631,10 @@ unsafe fn claim_direct_task_args(args: &[i64], claim_flag_address: usize) {
         std::hash::BuildHasherDefault::<AddressHasher>::default(),
     );
     for argument in args.iter().copied().filter(|argument| *argument != 0) {
+        // A frozen value has no references to count.
+        if direct_value_is_frozen(argument as *mut OpaqueValue) {
+            continue;
+        }
         if handed_over(argument) {
             #[cfg(all(debug_assertions, not(test)))]
             // SAFETY: the buffer holds the only reference, so nothing else

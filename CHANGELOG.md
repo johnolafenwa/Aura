@@ -169,6 +169,11 @@ in this file.
   side took a lock and missed the inline list reads. A probe that starts
   2,000 tasks reading records and lists moved into them runs 80% fewer
   instructions.
+- A native program builds each module constant that is not a plain
+  number once and freezes it, so every task reads it in place without a
+  lock or a reference count, and a read finds it with one load instead
+  of a lookup by name. A probe that reads list and `dict` constants in
+  loops and in tasks runs 70% fewer instructions.
 
 ### Fixed
 

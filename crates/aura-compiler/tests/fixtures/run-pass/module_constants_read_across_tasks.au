@@ -1,0 +1,87 @@
+copy class Point:
+    x: int64
+    y: int64
+
+class Shelf:
+    name: str
+    items: list[int64]
+    tags: dict[str, int64]
+
+enum Shape:
+    Dot(Point)
+    Named(str)
+
+WORDS: list[str] = ["alpha", "beta", "gamma"]
+WEIGHTS: list[int64] = [3, 1, 4, 1, 5]
+CORNERS: list[Point] = [Point(x=1, y=2), Point(x=3, y=4)]
+LIMITS: dict[str, int64] = {"alpha": 10, "beta": 20}
+SEEN: set[int64] = {2, 4, 6}
+GRID: list[list[int64]] = [[1, 2], [3, 4, 5]]
+SHELF: Shelf = Shelf(name="top", items=[7, 8, 9], tags={"a": 1})
+SHAPES: list[Shape] = [Shape.Dot(Point(x=5, y=6)), Shape.Named("ring")]
+GREETING: str = "hello"
+ORIGIN: Point = Point(x=0, y=0)
+SCALE: float64 = 2.0 * 1.5
+EMPTY: list[str] = []
+PAIR: (int64, str) = (9, "nine")
+
+def total() -> int64:
+    mut sum = 0
+    for w in WEIGHTS:
+        sum += w
+    for p in CORNERS:
+        sum += p.x * p.y
+    for row in GRID:
+        for v in row:
+            sum += v
+    for i in SHELF.items:
+        sum += i
+    for word in WORDS:
+        sum += word.len()
+    match LIMITS.get("beta"):
+        case Lookup.Found(limit):
+            sum += limit
+        case Lookup.Missing:
+            pass
+    if 4 in SEEN:
+        sum += 100
+    for shape in SHAPES:
+        match shape:
+            case Shape.Dot(p):
+                sum += p.x
+            case Shape.Named(name):
+                sum += name.len()
+    sum += GREETING.len() + ORIGIN.x + EMPTY.len() + PAIR[0]
+    sum += SHELF.tags.len() + GRID[1][2] + WEIGHTS[4] + CORNERS[1].y
+    return sum
+
+def worker(rounds: int64) -> int64:
+    mut sum = 0
+    for _ in range(rounds):
+        sum += total()
+    return sum
+
+def main():
+    print(total())
+    print(f"{WORDS} {WEIGHTS} {LIMITS} {GREETING} {SCALE} {EMPTY} {PAIR}")
+    print(f"{SHELF.name} {SHELF.items} {GRID}")
+    mut copy = WEIGHTS.copy()
+    copy.append(10)
+    mut words = WORDS.copy()
+    words[0] = "omega"
+    mut shelf_items = SHELF.items.copy()
+    shelf_items.append(1)
+    print(f"{copy} {WEIGHTS} {words} {WORDS} {shelf_items} {SHELF.items}")
+    print(WORDS == ["alpha", "beta", "gamma"])
+    mut grand = 0
+    with TaskGroup() as group:
+        mut handles: list[Task[int64]] = []
+        for i in range(8):
+            handles.append(group.start(worker, 50 + i))
+        for h in handles:
+            match h.result():
+                case TaskResult.Ready(v):
+                    grand += v
+                case _:
+                    pass
+    print(grand)

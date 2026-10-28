@@ -324,3 +324,17 @@ fn typed_values_crossing_tasks_and_queues_free_every_box() {
         include_str!("../../aura-compiler/tests/fixtures/run-pass/typed_values_cross_tasks.stdout");
     assert_frees_everything("leak-typed-transfers", source, expected, 0);
 }
+
+/// Module constants of every kind are read in place from many tasks,
+/// copied, and changed through copies. Each constant is built once and
+/// frozen, and the native run frees every box, constants included.
+#[test]
+fn module_constants_read_across_tasks_free_every_box() {
+    let source = include_str!(
+        "../../aura-compiler/tests/fixtures/run-pass/module_constants_read_across_tasks.au"
+    );
+    let expected = include_str!(
+        "../../aura-compiler/tests/fixtures/run-pass/module_constants_read_across_tasks.stdout"
+    );
+    assert_frees_everything("leak-frozen-constants", source, expected, 0);
+}
