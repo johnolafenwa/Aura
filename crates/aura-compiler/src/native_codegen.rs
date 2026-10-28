@@ -5176,8 +5176,12 @@ impl<'a> FunctionCompiler<'a> {
         let element_direct_ty =
             ensure_direct_type(&resolved_element_type, &self.classes, "Vec element")?;
         let scalar_element = ScalarElement::of(&resolved_element_type);
+        // A `str` literal of a list whose type is known joins it from where
+        // the program keeps its text.
+        let resolved_is_str = resolved_element_type == Type::named("str");
         let list_type = Type::Named("list".to_string(), vec![resolved_element_type]);
-        let init = if runtime_type_is_wildcard(&list_type) {
+        let wildcard = runtime_type_is_wildcard(&list_type);
+        let init = if wildcard {
             self.builder.call(self.runtime[RuntimeFn::VecEmpty], &[])
         } else {
             // The list starts with its type, so the tag that follows an
@@ -5214,6 +5218,16 @@ impl<'a> FunctionCompiler<'a> {
                 self.push_runtime_call_words(call, &mut words);
                 self.builder.call(self.runtime[call.function], &words);
                 continue;
+            }
+            if let (Operand::String(text), false) = (element, wildcard) {
+                if resolved_is_str {
+                    let (ptr, len) = self.string_constant(text.as_bytes())?;
+                    self.builder.call(
+                        self.runtime[RuntimeFn::VecPushStrLiteral],
+                        &[vector.values[0], ptr, len],
+                    );
+                    continue;
+                }
             }
             if let Some(record) = &record {
                 let value = self.load_operand_for_target(element, &element_direct_ty)?;
@@ -7154,6 +7168,17 @@ impl<'a> FunctionCompiler<'a> {
                     value_type,
                 } => {
                     let value = self.load_operand(value)?;
+                    if value.ty == DirectType::Scalar(ScalarKind::Int64)
+                        && value_type.to_string() == "int64"
+                    {
+                        // An `int64` part is formatted from its word.
+                        let (spec_ptr, spec_len) = self.string_constant(spec.as_bytes())?;
+                        self.builder.call(
+                            self.runtime[RuntimeFn::FormatPushI64Formatted],
+                            &[handle, value.values[0], spec_ptr, spec_len],
+                        );
+                        continue;
+                    }
                     let value = self.ensure_opaque(value)?;
                     let (spec_ptr, spec_len) = self.string_constant(spec.as_bytes())?;
                     let type_name = value_type.to_string();
@@ -12569,6 +12594,27 @@ impl<'a> FunctionCompiler<'a> {
             RuntimeOp::Print(_) | RuntimeOp::Host(_) | RuntimeOp::Function(_)
         ) {
             require_bound_args(op, args)?;
+        }
+        if let (
+            RuntimeOp::Str(StrOp::Replace),
+            [MirArg {
+                value: Operand::String(from),
+                ..
+            }, MirArg {
+                value: Operand::String(to),
+                ..
+            }],
+        ) = (op, args)
+        {
+            // Literal arguments are read where the program keeps them.
+            let object = self.ensure_opaque(object)?;
+            let (from_ptr, from_len) = self.string_constant(from.as_bytes())?;
+            let (to_ptr, to_len) = self.string_constant(to.as_bytes())?;
+            let call = self.builder.call(
+                self.runtime[RuntimeFn::StringReplaceLiteral],
+                &[object.values[0], from_ptr, from_len, to_ptr, to_len],
+            );
+            return Ok(self.owned_opaque_result(call.results, Type::named("str")));
         }
         if let (
             RuntimeOp::Str(affix @ (StrOp::Contains | StrOp::StartsWith | StrOp::EndsWith)),

@@ -22128,9 +22128,38 @@ fn direct_format_builder_appends_the_same_text_as_stringify_and_format() {
         value_type.len(),
     );
     unsafe { release_value(number) };
+    // An `int64` with a spec formats from its word as its box would.
+    expected.push_str("   +42");
+    super::aura_direct_format_push_i64_formatted(builder, 42, spec.as_ptr(), spec.len());
     assert_eq!(expect_string(builder), expected);
     assert!(expected.starts_with("key--9223372036854775808|-1|0|7|9223372036854775807|name"));
-    assert!(expected.ends_with("   +42"));
+    assert!(expected.ends_with("   +42   +42"));
+}
+
+#[test]
+fn literal_replace_reads_its_arguments_where_the_program_keeps_them() {
+    let text = string_value("a<b><");
+    let replaced =
+        super::aura_direct_string_replace_literal(text, "<".as_ptr(), 1, "&lt;".as_ptr(), 4);
+    assert_eq!(expect_string(replaced), "a&lt;b>&lt;");
+    let untouched =
+        super::aura_direct_string_replace_literal(text, "zz".as_ptr(), 2, "".as_ptr(), 0);
+    assert_eq!(expect_string(untouched), "a<b><");
+    unsafe { release_value(text) };
+
+    let number = int_value(1);
+    let address = number as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_string_replace_literal(
+            address as *mut OpaqueValue,
+            "a".as_ptr(),
+            1,
+            "b".as_ptr(),
+            1,
+        );
+    });
+    assert_eq!(diagnostic.message, "expected `str`, found `integer`");
+    unsafe { release_value(number) };
 }
 
 #[test]
@@ -22172,6 +22201,19 @@ fn direct_format_builder_reports_the_string_limit_and_format_errors() {
     );
     assert_eq!(expect_string(builder), "");
     unsafe { release_value(invalid_value) };
+
+    let builder = super::aura_direct_format_begin("".as_ptr(), 0);
+    let address = builder as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_format_push_i64_formatted(
+            address as *mut OpaqueValue,
+            42,
+            "s".as_ptr(),
+            1,
+        );
+    });
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(expect_string(builder), "");
 }
 
 static DIRECT_CONSTANT_INITIALIZER_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -28179,6 +28221,25 @@ fn direct_empty_tagged_lists_start_in_their_element_form() {
     super::aura_direct_tag_value_type_cell(list, &cell, descriptor.as_ptr(), descriptor.len());
     match unsafe { value_ref(list) } {
         Value::Vec(vector) => assert_eq!(vector.elements.form(), ListForm::Int64),
+        other => panic!("expected a list, found {other:?}"),
+    }
+    unsafe { release_value(list) };
+
+    // `str` literals join a tagged `list[str]` without boxes.
+    let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    let descriptor = super::canonical_runtime_type_name(&list_of(Type::named("str")));
+    let list = super::aura_direct_vec_empty_tagged(&cell, descriptor.as_ptr(), descriptor.len());
+    for word in ["let", "a much longer literal than fits inline"] {
+        super::aura_direct_vec_push_str_literal(list, word.as_ptr(), word.len());
+    }
+    match unsafe { value_ref(list) } {
+        Value::Vec(vector) => assert_eq!(
+            vector.elements.to_vec(),
+            vec![
+                Value::String("let".into()),
+                Value::String("a much longer literal than fits inline".into())
+            ]
+        ),
         other => panic!("expected a list, found {other:?}"),
     }
     unsafe { release_value(list) };

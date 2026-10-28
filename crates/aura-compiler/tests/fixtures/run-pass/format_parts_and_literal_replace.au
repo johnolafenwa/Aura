@@ -1,0 +1,24 @@
+class Point:
+    x: int64
+    y: int64
+
+
+def main():
+    word = "a<b>&'c'"
+    print(word.replace("<", "&lt;").replace(">", "&gt;").replace("&", "+"))
+    print("none here".replace("zz", "yy"))
+    print("".replace("", "-"))
+    print("abc".replace("", "-"))
+    cents = 12345
+    name = "kal"
+    p = Point(x=1, y=-2)
+    print(f"{cents // 100}.{cents % 100:02} {name}{name} [{cents:>8}] {-7:04}")
+    print(f"{name}")
+    print(f"{p.x}:{p.y} {3.5} {true} {[1, 2]}")
+    mut words = ["x", "yy"]
+    for w in words:
+        print(f"<{w}>")
+    mut literals = ["let", "value", "a literal longer than twenty-nine bytes"]
+    literals.append("added")
+    literals[0] = "first"
+    print(f"{literals.len()} {literals[0]} {literals[2]} {"|".join(literals)}")
