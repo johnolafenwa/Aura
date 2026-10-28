@@ -6721,8 +6721,42 @@ pub extern "C-unwind" fn aura_direct_format_push_value(
     value: *mut OpaqueValue,
 ) {
     task_runtime_boundary(|| {
-        let rendered = render_direct_value(value);
-        push_format_text(builder, &rendered);
+        // A `str` part is appended from where it lies, without rendering a
+        // copy first.
+        let appended = unsafe {
+            with_value(value, |value| match value {
+                Value::String(text) => {
+                    push_format_text(builder, text);
+                    true
+                }
+                _ => false,
+            })
+        };
+        if !appended {
+            let rendered = render_direct_value(value);
+            push_format_text(builder, &rendered);
+        }
+    })
+}
+
+/// Appends an `int64` part that has a format spec, such as `{cents:02}`,
+/// without boxing it.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_format_push_i64_formatted(
+    builder: *mut OpaqueValue,
+    value: i64,
+    spec_ptr: *const u8,
+    spec_len: usize,
+) {
+    task_runtime_boundary(|| {
+        let spec = literal_str(spec_ptr, spec_len);
+        let value = Value::Int(IntegerValue::from_i64(value));
+        match format_runtime_value_with(&value, &Type::named("int64"), spec, &mut |value| {
+            Ok(render_direct_plain(value))
+        }) {
+            Ok(rendered) => push_format_text(builder, &rendered),
+            Err(error) => runtime_diagnostic_error(error),
+        }
     })
 }
 
@@ -7058,6 +7092,31 @@ pub extern "C-unwind" fn aura_direct_string_replace(
         unsafe {
             with_value(value, |value| match value {
                 Value::String(text) => boxed_value(Value::String(replace_text(text, &from, &to))),
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            })
+        }
+    })
+}
+
+/// `replace` whose pattern and replacement are both literals, read where
+/// the program keeps them.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_string_replace_literal(
+    value: *mut OpaqueValue,
+    from_ptr: *const u8,
+    from_len: usize,
+    to_ptr: *const u8,
+    to_len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let from = literal_str(from_ptr, from_len);
+        let to = literal_str(to_ptr, to_len);
+        unsafe {
+            with_value(value, |value| match value {
+                Value::String(text) => boxed_value(Value::String(replace_text(text, from, to))),
                 other => runtime_error(format!(
                     "expected `str`, found `{}`",
                     value_type_name(other)
@@ -7782,6 +7841,20 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
             }
             vector.elements.push(value);
         });
+    })
+}
+
+/// Appends a `str` literal of a list literal, read where the program keeps
+/// it, so the element needs no box of its own.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_push_str_literal(
+    vec: *mut OpaqueValue,
+    ptr: *const u8,
+    len: usize,
+) {
+    task_runtime_boundary(|| {
+        let value = Value::String(literal_str(ptr, len).into());
+        with_vector_mut(vec, |vector| vector.elements.push(value));
     })
 }
 

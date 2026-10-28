@@ -207,6 +207,13 @@ Last updated: 2026-10-27
   `split_whitespace`, `lines`, and ASCII case maps). word_freq -26%,
   sort_records -15%, template_render -13%. Details are in
   `2026-10-28-rust-speed-3d-strings-in-place.md`.
+- Step 3b: f-strings append `str` parts in place
+  (`aura_direct_format_push_value` fast path), `int64` parts with a spec
+  format from the word (`aura_direct_format_push_i64_formatted`), literal
+  `replace` arguments need no boxes (`aura_direct_string_replace_literal`),
+  and `list[str]` literals push their texts directly
+  (`aura_direct_vec_push_str_literal`). template_render -30%, text_diff
+  -24%. Details are in `2026-10-28-rust-speed-3b-format-buffers.md`.
 
 ## Aura 0.7.1 preview release (complete)
 

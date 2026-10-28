@@ -216,6 +216,13 @@ in this file.
   `word_freq` runs 26% fewer instructions, `sort_records` 15%,
   `template_render` and `http_api` 13%, `text_diff` 12%, and
   `csv_aggregate` 11%.
+- f-strings, `replace`, and `list[str]` literals make fewer boxes. A `str`
+  part of an f-string is appended from where it lies, an `int64` part
+  with a format spec such as `{cents % 100:02}` is formatted from its
+  word, `replace` with two literal arguments reads them in place, and a
+  list literal of `str` literals builds its elements without a box each.
+  `template_render` runs 30% fewer instructions, `text_diff` 24%,
+  `spreadsheet` 13%, and `sort_records` 11%.
 
 ### Fixed
 

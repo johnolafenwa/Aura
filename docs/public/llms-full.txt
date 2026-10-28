@@ -18712,6 +18712,25 @@ keeps it and copies it once. `split_whitespace()`, `lines()`,
 | `csv_aggregate` | 40.9M | 36.5M |
 | `markdown_render` | 6.2M | 5.6M |
 
+### f-Strings Build One Text
+
+An f-string builds its text in one buffer. A `str` part is appended from
+where it lies, and an `int64` part, with or without a format spec such as
+`{cents % 100:02}`, is written from its value without a box. `replace`
+with two literal arguments, as in `text.replace("<", "&lt;")`, reads them
+where the program keeps them, and a list literal of `str` literals, such
+as `["let", "value", "return"]`, adds each element without a box of its
+own.
+
+| Program | Instructions before | Instructions after |
+| --- | ---: | ---: |
+| `template_render` | 21.6M | 15.2M |
+| `text_diff` | 7.3M | 5.5M |
+| `spreadsheet` | 12.9M | 11.3M |
+| `sort_records` | 30.0M | 26.5M |
+| `csv_aggregate` | 36.5M | 33.0M |
+| `markdown_render` | 5.6M | 5.1M |
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

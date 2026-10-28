@@ -160,8 +160,8 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
     }
     // Every `str`, queue, and task helper a member call makes has an op.
     // Slicing, `with` cleanup of a task group, and task start stay in the
-    // backend, as do the tests against a literal argument and copies read
-    // out of a list's `str` view.
+    // backend, as do the tests and replacements with literal arguments and
+    // copies read out of a list's `str` view.
     for helper in RuntimeFn::ALL.iter().copied().filter(|helper| {
         let symbol = helper.symbol();
         (symbol.starts_with("aura_direct_string_")
@@ -172,6 +172,7 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
                 RuntimeFn::StringLiteral
                     | RuntimeFn::StringSlice
                     | RuntimeFn::StringAffixLiteral
+                    | RuntimeFn::StringReplaceLiteral
                     | RuntimeFn::StringFromView
                     | RuntimeFn::TaskGroupClose
                     | RuntimeFn::TaskArgBufferGuard
@@ -185,7 +186,8 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
     // element path checks its index, and a lent element's `len` and `get`
     // are read in place. A plain record element is read, appended,
     // replaced, and popped in place. An empty list literal of a known type
-    // is built and tagged in one call, and a `str` element copied out of a
+    // is built and tagged in one call, its `str` literals join it without
+    // boxes, and a `str` element copied out of a
     // list that keeps no view is read by index. A `get` whose `Lookup` is kept as its
     // found value calls the `_payload` form of the op's helper, and one
     // whose found value is only read calls the `_lent` form.
@@ -213,6 +215,7 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::SetNextIndirectMutableSinks,
             RuntimeFn::VecStrElement,
             RuntimeFn::VecEmptyTagged,
+            RuntimeFn::VecPushStrLiteral,
             RuntimeFn::VecLend,
             RuntimeFn::VecPopScalar,
             RuntimeFn::VecCheckIndex,
