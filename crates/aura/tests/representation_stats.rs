@@ -213,6 +213,17 @@ fn direct_payload_bindings_take_no_reference() {
     assert!(direct.retains <= 2, "{direct:?}");
 }
 
+const LOOKUP_KEYS: &str = "def field(doc: dict[str, str], name: str) -> int64:\n    match doc.lookup(name):\n        case Lookup.Found(value):\n            return value.len()\n        case Lookup.Missing:\n            return 0\n\ndef bump(counts: mut dict[str, int64], key: str):\n    match mut counts.lookup(key):\n        case Lookup.Found(total):\n            total += 1\n        case Lookup.Missing:\n            counts[key.clone()] = 1\n\ndef slot(index: dict[str, int64], key: str) -> int64:\n    match index.get(key):\n        case Lookup.Found(position):\n            return position\n        case Lookup.Missing:\n            return -1\n\ndef main():\n    doc = {\"a\": \"xy\", \"b\": \"z\"}\n    mut counts: dict[str, int64] = {}\n    mut total = 0\n    for _ in range(10):\n        for key in doc.keys():\n            match doc.lookup(key):\n                case Lookup.Found(value):\n                    total += value.len()\n                case Lookup.Missing:\n                    pass\n        total += field(doc, \"a\") + field(doc, \"c\") + slot(counts, \"a\")\n        bump(counts, \"a\")\n    print(total)\n    print(counts[\"a\"])\n";
+
+#[test]
+fn direct_lookup_keys_and_scalar_results_take_no_reference() {
+    // Each loan reads its key where the key lies, a shared parameter or
+    // the temporary the loop's key moved into, and an `int64` found by
+    // `get` is read out of its box, so none is retained.
+    let (_, direct) = assert_both_backends("repr-lookup-keys", LOOKUP_KEYS, "94\n10\n");
+    assert_eq!(direct.retains, 0, "{direct:?}");
+}
+
 #[test]
 fn direct_scalar_union_local_allocates_no_union_box() {
     let (mir, direct) = assert_both_backends("repr-scalar-union", SCALAR_UNION_LOCAL, "42\n");

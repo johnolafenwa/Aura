@@ -1,0 +1,144 @@
+# Element loans read their keys where they lie (Rust-speed step 2h,
+# part 7), and scalars found by `get` are read out of their boxes.
+
+class Book:
+    title: str
+    tags: list[str]
+
+
+def field(doc: dict[str, str], name: str) -> int64:
+    match doc.lookup(name):
+        case Lookup.Found(value):
+            return value.len()
+        case Lookup.Missing:
+            return -1
+
+
+def bump(counts: mut dict[str, int64], key: str):
+    match mut counts.lookup(key):
+        case Lookup.Found(total):
+            total += 1
+        case Lookup.Missing:
+            counts[key.clone()] = 1
+
+
+def take(names: mut dict[str, int64], line: str) -> int64:
+    key = line.clone()
+    mut seen = 0
+    match names.lookup(key):
+        case Lookup.Found(count):
+            seen = count
+        case Lookup.Missing:
+            pass
+    names[key] = seen + 1
+    return seen
+
+
+def tag_count(shelf: dict[str, dict[str, Book]], section: str, name: str) -> int64:
+    match shelf.lookup(section):
+        case Lookup.Found(books):
+            match books.lookup(name):
+                case Lookup.Found(book):
+                    return book.tags.len()
+                case Lookup.Missing:
+                    return 0
+        case Lookup.Missing:
+            return -1
+
+
+def rename(books: mut dict[str, Book], key: str, title: str):
+    match mut books.lookup(key):
+        case Lookup.Found(book):
+            book.title = title.clone()
+        case Lookup.Missing:
+            pass
+
+
+def scalars(ints: dict[str, int64], small: dict[str, int32], wide: dict[str, uint64], floats: dict[str, float64], flags: dict[str, bool], key: str) -> str:
+    mut parts: list[str] = []
+    match ints.get(key):
+        case Lookup.Found(value):
+            parts.append(f"{value}")
+        case Lookup.Missing:
+            parts.append("-")
+    match small.get(key):
+        case Lookup.Found(value):
+            narrow: int32 = value
+            parts.append(f"{narrow}")
+        case Lookup.Missing:
+            parts.append("-")
+    match wide.get(key):
+        case Lookup.Found(value):
+            parts.append(f"{value}")
+        case Lookup.Missing:
+            parts.append("-")
+    match floats.get(key):
+        case Lookup.Found(value):
+            parts.append(f"{value}")
+        case Lookup.Missing:
+            parts.append("-")
+    match flags.get(key):
+        case Lookup.Found(value):
+            parts.append(f"{value}")
+        case Lookup.Missing:
+            parts.append("-")
+    return ",".join(parts)
+
+
+def main():
+    doc = {"title": "Dune", "author": "Herbert"}
+    title = field(doc, "title")
+    year = field(doc, "year")
+    print(f"{title} {year}")
+
+    mut lengths = 0
+    for key in doc.keys():
+        match doc.lookup(key):
+            case Lookup.Found(value):
+                lengths += value.len()
+            case Lookup.Missing:
+                pass
+    print(lengths)
+
+    mut counts: dict[str, int64] = {}
+    for word in ["a", "b", "a", "c", "a"]:
+        bump(counts, word)
+    mut key = "a"
+    match counts.lookup(key):
+        case Lookup.Found(total):
+            key = "b"
+            current = counts[key]
+            print(f"{total} {key} {current}")
+        case Lookup.Missing:
+            pass
+    a = counts["a"]
+    b = counts["b"]
+    c = counts["c"]
+    print(f"{a} {b} {c}")
+
+    mut names: dict[str, int64] = {}
+    first = take(names, "x")
+    second = take(names, "x")
+    stored = names["x"]
+    print(f"{first} {second} {stored}")
+
+    mut shelf: dict[str, dict[str, Book]] = {}
+    shelf["fiction"] = {"dune": Book(title="Dune", tags=["sf", "desert"])}
+    fiction = tag_count(shelf, "fiction", "dune")
+    missing = tag_count(shelf, "fiction", "emma")
+    poetry = tag_count(shelf, "poetry", "dune")
+    print(f"{fiction} {missing} {poetry}")
+    match mut shelf.lookup("fiction"):
+        case Lookup.Found(books):
+            rename(books, "dune", f"Dune {1965}")
+        case Lookup.Missing:
+            pass
+    print(shelf["fiction"]["dune"].title)
+
+    ints = {"k": -7}
+    small: dict[str, int32] = {"k": 12}
+    wide: dict[str, uint64] = {"k": 18446744073709551615}
+    floats = {"k": 2.5}
+    flags = {"k": true}
+    print(scalars(ints, small, wide, floats, flags, "k"))
+    print(scalars(ints, small, wide, floats, flags, "z"))

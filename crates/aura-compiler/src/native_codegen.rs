@@ -8353,13 +8353,24 @@ impl<'a> FunctionCompiler<'a> {
         let element_type = direct_type_to_type(&self.local_type(loan)?);
         let loaded = self.load_operand_for_target(selector, &selector_ty)?;
         let selected = self.coerce_value(loaded, &selector_ty)?;
-        let words = self.transfer_values(&selected);
+        // An explicit module keeps a selector's place until the loan ends,
+        // so a key read from its place is lent to the loan. A key the load
+        // made, such as a string literal's box, is the loan's own until it
+        // ends.
+        let lent_key = matches!(selector_ty, DirectType::Opaque(_))
+            && matches!(selector, Operand::Place(place) if self.tracked_roots.contains(place))
+            && !self.temporary_owns_opaque(&selected);
+        let words = if lent_key {
+            selected.values.clone()
+        } else {
+            self.transfer_values(&selected)
+        };
         let abi = selector_ty.abi_types()[0];
         let variable = Var(self.next_variable_index as u32);
         self.next_variable_index += 1;
         self.builder.declare_var(variable, abi);
         self.builder.def_var(variable, words[0]);
-        if matches!(selector_ty, DirectType::Opaque(_)) {
+        if matches!(selector_ty, DirectType::Opaque(_)) && !lent_key {
             self.view_element_keys
                 .entry(loan.to_string())
                 .or_default()
@@ -11137,11 +11148,21 @@ impl<'a> FunctionCompiler<'a> {
         else {
             return Ok(None);
         };
-        if self.lookup_slots.contains(place.as_str()) {
-            return Ok(None);
-        }
         let target_ty = self.type_of_place(target)?;
         let lent = self.lent_places.contains(place.as_str());
+        if self.lookup_slots.contains(place.as_str()) {
+            // The slot keeps the found value's box until its release, so a
+            // scalar is read out of the box where it lies.
+            if lent || !matches!(target_ty, DirectType::Scalar(_)) {
+                return Ok(None);
+            }
+            let slot = self.load_place(place)?;
+            let found = ValueRef {
+                values: slot.values,
+                ty: DirectType::Opaque(Type::named("Unknown")),
+            };
+            return self.coerce_value(found, &target_ty).map(Some);
+        }
         let function = match (&target_ty, lent) {
             (DirectType::Scalar(kind), false) if kind.is_narrow_integer() => {
                 Some(RuntimeFn::VariantPayloadI64)
