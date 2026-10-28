@@ -28669,3 +28669,53 @@ fn scalar_pushes_store_their_bits_in_a_list_of_their_form() {
     }
     unsafe { release_value(mixed) };
 }
+
+#[test]
+fn entry_loans_read_and_write_values_where_the_map_keeps_them() {
+    let ints = super::aura_direct_map_empty();
+    for key in 0..3 {
+        assert!(super::aura_direct_map_set_index_in_place(
+            ints,
+            super::aura_direct_box_i64(key),
+            super::aura_direct_box_i64(key * 10),
+            0,
+            0,
+        )
+        .is_null());
+    }
+    let words = super::aura_direct_map_empty();
+    assert!(super::aura_direct_map_set_index_in_place(
+        words,
+        string_value("a"),
+        super::aura_direct_box_i64(5),
+        0,
+        0,
+    )
+    .is_null());
+    let slot = super::aura_direct_map_value_slot_int64(ints, 2, 1);
+    assert!(!slot.is_null());
+    unsafe {
+        assert_eq!(super::aura_direct_value_slot_int64(slot), 20);
+        super::aura_direct_value_slot_set_int64(slot, 21);
+    }
+    let read = super::aura_direct_map_value_slot_int64(ints, 2, 0);
+    assert_eq!(unsafe { super::aura_direct_value_slot_int64(read) }, 21);
+    assert!(super::aura_direct_map_value_slot_int64(ints, 9, 0).is_null());
+    let key = string_value("a");
+    for mutable in [0, 1] {
+        let slot = super::aura_direct_map_value_slot(words, key, mutable);
+        assert_eq!(unsafe { super::aura_direct_value_slot_int64(slot) }, 5);
+    }
+    let missing = string_value("b");
+    assert!(super::aura_direct_map_value_slot(words, missing, 1).is_null());
+    let not_a_map = super::aura_direct_box_i64(1);
+    assert!(super::aura_direct_map_value_slot_int64(not_a_map, 0, 0).is_null());
+    assert!(super::aura_direct_map_value_slot_int64(not_a_map, 0, 1).is_null());
+    unsafe { super::share_direct_value(ints) };
+    assert!(super::aura_direct_map_value_slot_int64(ints, 2, 0).is_null());
+    unsafe {
+        for value in [ints, words, key, missing, not_a_map] {
+            release_value(value);
+        }
+    }
+}

@@ -10769,6 +10769,90 @@ pub extern "C-unwind" fn aura_direct_element_path_store(
     })
 }
 
+/// The value `map` keeps under `key`, for an entry loan generated code
+/// follows (see `native_codegen_element_loans.rs` in the compiler), or null
+/// when the map is shared with another thread or holds no such key, so the
+/// loan takes the runtime walk, which reports a missing key. A `mutable`
+/// loan first gives the map entries no other map shares. While the loan
+/// lives nothing else names the map, so the value stays where it is.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_value_slot(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    mutable: i64,
+) -> *mut Value {
+    task_runtime_boundary(|| unsafe {
+        with_value(key, |key| {
+            map_value_slot(map, mutable != 0, |entries| entries.position(key))
+        })
+    })
+}
+
+/// [`aura_direct_map_value_slot`] for an `int64` key.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_value_slot_int64(
+    map: *mut OpaqueValue,
+    key: i64,
+    mutable: i64,
+) -> *mut Value {
+    task_runtime_boundary(|| map_value_slot(map, mutable != 0, |entries| entries.position_i64(key)))
+}
+
+fn map_value_slot(
+    map: *mut OpaqueValue,
+    mutable: bool,
+    position: impl FnOnce(&crate::collection_index::DictEntries) -> Option<usize>,
+) -> *mut Value {
+    // SAFETY: generated code passes a live box.
+    let confined = unsafe { map.as_ref() }.is_some_and(|header| header.shared_lock().is_none());
+    if !confined {
+        return std::ptr::null_mut();
+    }
+    if mutable {
+        // SAFETY: as above.
+        unsafe {
+            value_mut(map, |value| match value {
+                Value::Map(map) => position(&map.entries).map_or(std::ptr::null_mut(), |slot| {
+                    std::ptr::from_mut(map.entries.value_at_mut(slot))
+                }),
+                _ => std::ptr::null_mut(),
+            })
+        }
+    } else {
+        // SAFETY: as above. The slot is only read through.
+        unsafe {
+            with_value(map, |value| match value {
+                Value::Map(map) => position(&map.entries).map_or(std::ptr::null_mut(), |slot| {
+                    std::ptr::from_ref(&map.entries.at_slot(slot).1).cast_mut()
+                }),
+                _ => std::ptr::null_mut(),
+            })
+        }
+    }
+}
+
+/// The `int64` at a slot [`aura_direct_map_value_slot`] found.
+///
+/// # Safety
+///
+/// `slot` is a live slot of a loan that has not ended.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_value_slot_int64(slot: *const Value) -> i64 {
+    // SAFETY: the caller's contract.
+    task_runtime_boundary(|| unbox_int64_of(unsafe { &*slot }))
+}
+
+/// Stores `value` at a slot a mutable [`aura_direct_map_value_slot`] found.
+///
+/// # Safety
+///
+/// As for [`aura_direct_value_slot_int64`].
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_value_slot_set_int64(slot: *mut Value, value: i64) {
+    // SAFETY: the caller's contract.
+    task_runtime_boundary(|| unsafe { *slot = Value::Int(IntegerValue::from_i64(value)) })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_map_clear_in_place(map: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
