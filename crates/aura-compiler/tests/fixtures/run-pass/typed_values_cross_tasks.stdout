@@ -1,0 +1,27 @@
+point 1: 0,0
+point 2: 10,1
+point 3: 20,2
+point 4: 30,3
+point 5: 40,4
+order 0: 12 [t0, x, seen] 3
+order 1: 22 [t1, x, seen] 3
+order 2: 34 [t2, x, seen] 3
+dot 0,0
+line 1,1-2,1
+named s2
+dot 3,0
+results: ok(1,2) err(bad) ok(3,4)
+tasks 150
+flipped 8,7
+built 9 92 2
+closure 98
+still here 7
+selected 1: 8,9
+selected 0: 10,11
+selected 0: nothing
+first fits
+full, kept 2,3
+polled 1,1
+fallback -1,-1
+closed, kept 4,5
+closed, kept order 4 47

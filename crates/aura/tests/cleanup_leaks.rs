@@ -310,3 +310,17 @@ def main() -> int32:
         "the program should stop at the list index, stderr was:\n{stderr}"
     );
 }
+
+/// Typed values cross queues, task arguments, and task results: plain
+/// records, tuples, classes with list and dict fields, enums with record
+/// payloads, and `Result`, including the values `try_put` and a closed
+/// queue's `put` hand back. The debug runtime these tests build checks
+/// that no value reaches another thread without being shared.
+#[test]
+fn typed_values_crossing_tasks_and_queues_free_every_box() {
+    let source =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/typed_values_cross_tasks.au");
+    let expected =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/typed_values_cross_tasks.stdout");
+    assert_frees_everything("leak-typed-transfers", source, expected, 0);
+}
