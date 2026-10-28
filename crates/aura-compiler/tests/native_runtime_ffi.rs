@@ -340,7 +340,7 @@ unsafe fn cloned_value(value: *mut OpaqueValue) -> Value {
 
 unsafe fn expect_string(value: *mut OpaqueValue) -> String {
     let text = match unsafe { cloned_value(value) } {
-        Value::String(text) => text,
+        Value::String(text) => text.into_string(),
         other => panic!("expected string, found {other:?}"),
     };
     unsafe {

@@ -85,7 +85,7 @@ fn misshapen_record(x: i64) -> Value {
     test_record_layout();
     Value::Instance(InstanceValue {
         class_name: "ListTestRecord".to_string(),
-        fields: [("x".to_string(), Value::String(format!("r{x}")))].into(),
+        fields: [("x".to_string(), Value::String(format!("r{x}").into()))].into(),
     })
 }
 
@@ -218,7 +218,7 @@ fn sample_value(steps: &mut Steps, family: usize) -> Value {
         1 => Value::Float(small as f64 / 2.0),
         2 => Value::Bool(small > 0),
         3 => untyped(small),
-        4 => Value::String(format!("s{small}")),
+        4 => Value::String(format!("s{small}").into()),
         5 => typed(small.into(), IntegerKind::Int8),
         6 => int32(small as i32 * 1_000_000),
         7 => typed((small + 3).into(), IntegerKind::Uint8),

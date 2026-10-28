@@ -1,0 +1,32 @@
+# Strings of every length around the size a short string keeps in place:
+# building, slicing, copying, comparing, and joining give the same text
+# whatever the length.
+
+def grow(limit: int64) -> list[str]:
+    mut texts: list[str] = []
+    mut text = ""
+    while text.len() < limit:
+        text += "ab"
+        texts.append(text.clone())
+    return texts
+
+
+def main():
+    texts = grow(64)
+    mut total = 0
+    for text in texts:
+        copy = text.clone()
+        total += copy.len() + text[1:text.len() - 1].len()
+        if copy != text:
+            print("copy differs")
+    print(total)
+    print(texts[13])
+    print(texts[14])
+    print(texts[15][0:29])
+    mut accented = "é"
+    for _ in range(20):
+        accented += "ü"
+    print(f"{accented.len()} {accented.byte_len()} {accented[18:21]}")
+    print(",".join(texts[12:16]).split(",")[3])
+    print("  padded words with spaces around them  ".trim())
+    print(f"{"short" < "shorter"} {texts[20] > texts[2]}")

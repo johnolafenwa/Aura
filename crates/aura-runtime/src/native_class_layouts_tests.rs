@@ -53,7 +53,7 @@ fn ints(values: &[i64]) -> Value {
 }
 
 fn text(value: &str) -> Value {
-    Value::String(value.to_string())
+    Value::String(value.to_string().into())
 }
 
 /// `Book` (with `prefix`) holds a title, a nested `Meta`, a tuple, a list,

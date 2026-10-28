@@ -13773,7 +13773,7 @@ def main():
         .iter()
         .find(|function| function.name == "bump")
         .expect("bump should lower");
-    let (uses, lend_temps) = super::element_loans::native_element_loans(bump);
+    let (uses, lend_temps) = super::element_loans::native_element_loans(bump, |_| Vec::new());
     // Each loan named by the list it selects from (a nested selection
     // begins on another loan) and the place inside the element.
     let mut followed = BTreeSet::new();

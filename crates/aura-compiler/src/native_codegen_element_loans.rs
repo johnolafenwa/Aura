@@ -13,7 +13,13 @@
 //!   after one access-code check each;
 //! - an element of a list of scalars lies in the list's storage;
 //! - a box slot, an element's or a field box's, is lent to one runtime
-//!   operation as it is, as a field lend lends a field's box.
+//!   operation as it is, as a field lend lends a field's box;
+//! - the box in such a slot is passed as it is to a function that borrows
+//!   the parameter, as a local list's lent element is (see
+//!   `native_codegen_elements.rs`), when the loan only reads its place.
+//!
+//! A read-only loan that selects inside another one, such as `row[i]` for
+//! `view row = rows[slot]`, selects from the list in its parent's slot.
 //!
 //! A loan that may change its place also checks the position against the
 //! list's room, which only storage no other value shares has: after
@@ -36,18 +42,21 @@ use super::*;
 use crate::mir::{instruction_place_mentions, terminator_place_mentions};
 
 /// How a function uses one element loan generated code may follow.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct LoanUse {
-    /// Whether the loan only lends its place, rather than reading and
-    /// writing it.
+    /// Whether the loan only lends its place, or passes it to borrowing
+    /// parameters, rather than reading and writing it.
     lends: bool,
     mutable: bool,
+    /// The loan a read-only nested selection begins on.
+    parent: Option<String>,
 }
 
 /// The element loans of `function` generated code may follow, and the
 /// temporaries their lends lend to one runtime operation.
-pub(super) fn native_element_loans(
-    function: &MirFunction,
+pub(super) fn native_element_loans<'f>(
+    function: &'f MirFunction,
+    borrowed: impl Fn(&'f Instruction) -> Vec<&'f Operand>,
 ) -> (HashMap<String, LoanUse>, HashSet<String>) {
     let mut sources = HashMap::new();
     let mut rejected = HashSet::new();
@@ -74,8 +83,32 @@ pub(super) fn native_element_loans(
             .filter(|(_, (source, _))| sources.contains_key(source))
             .map(|(loan, _)| loan.clone()),
     );
+    // A read-only nested selection names the list its parent selects from.
+    let mut parents = HashMap::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            if let Instruction::ReborrowElement {
+                loan,
+                parent,
+                mutable: false,
+                ..
+            } = instruction
+            {
+                let Some((source, _)) = sources.get(parent).cloned() else {
+                    continue;
+                };
+                if sources.insert(loan.clone(), (source, false)).is_some() {
+                    rejected.insert(loan.clone());
+                }
+                parents.insert(loan.clone(), parent.clone());
+            }
+        }
+    }
     let mut accesses = HashSet::new();
     let mut lends = HashSet::new();
+    // The loans passed to borrowing parameters or reborrowed, which must
+    // not change their place.
+    let mut reads = HashSet::new();
     let mut lend_temps = HashSet::new();
     for block in &function.blocks {
         for (index, instruction) in block.instructions.iter().enumerate() {
@@ -94,6 +127,12 @@ pub(super) fn native_element_loans(
                 }
                 _ => None,
             };
+            let passed = passed_loan(instruction, &borrowed, &sources);
+            let reborrowed = match instruction {
+                Instruction::ReborrowElement { parent, .. } => Some(parent.as_str()),
+                _ => None,
+            };
+            let allowed = allowed.or(passed).or(reborrowed);
             let mut allowed_seen = false;
             for mention in mentions {
                 let loan = root(mention);
@@ -117,6 +156,15 @@ pub(super) fn native_element_loans(
                             rejected.insert(loan.to_string());
                         }
                     }
+                    // A nested selection takes the runtime walk from the
+                    // list's root, which an immutable loan leaves as it is.
+                    Instruction::ReborrowElement { .. } => {
+                        reads.insert(loan.to_string());
+                    }
+                    Instruction::Assign { .. } => {
+                        lends.insert(loan.to_string());
+                        reads.insert(loan.to_string());
+                    }
                     _ => {}
                 }
             }
@@ -127,20 +175,88 @@ pub(super) fn native_element_loans(
             }
         }
     }
-    let uses = sources
+    let mut uses = sources
         .into_iter()
         .filter(|(loan, _)| !rejected.contains(loan))
+        .filter(|(loan, (_, mutable))| !(*mutable && reads.contains(loan)))
         .filter(|(loan, _)| accesses.contains(loan) != lends.contains(loan))
         .map(|(loan, (_, mutable))| {
             let lends = lends.contains(&loan);
-            (loan, LoanUse { lends, mutable })
+            let parent = parents.get(&loan).cloned();
+            (
+                loan,
+                LoanUse {
+                    lends,
+                    mutable,
+                    parent,
+                },
+            )
         })
         .collect::<HashMap<_, _>>();
+    // A nested selection is followed only from a parent that lends its box.
+    loop {
+        let orphans = uses
+            .iter()
+            .filter(|(_, usage)| {
+                usage.parent.as_ref().is_some_and(|parent| {
+                    !uses
+                        .get(parent)
+                        .is_some_and(|parent| parent.lends && !parent.mutable)
+                })
+            })
+            .map(|(loan, _)| loan.clone())
+            .collect::<Vec<_>>();
+        if orphans.is_empty() {
+            break;
+        }
+        for orphan in orphans {
+            uses.remove(&orphan);
+        }
+    }
     (uses, lend_temps)
 }
 
 fn root(place: &str) -> &str {
     place.split('.').next().unwrap_or(place)
+}
+
+/// The loan `instruction` passes whole to a parameter a function borrows,
+/// when the call names nothing else the loan's list lies in: the callee
+/// reaches the list only through what it is passed, so it cannot change
+/// the list while it holds the element's box.
+fn passed_loan<'f>(
+    instruction: &'f Instruction,
+    borrowed: &impl Fn(&'f Instruction) -> Vec<&'f Operand>,
+    sources: &HashMap<String, (String, bool)>,
+) -> Option<&'f str> {
+    let Instruction::Assign {
+        target,
+        value: Rvalue::Call {
+            callee: CallTarget::Name(_),
+            ..
+        },
+    } = instruction
+    else {
+        return None;
+    };
+    let mut passed = borrowed(instruction)
+        .into_iter()
+        .filter_map(|operand| match operand {
+            Operand::Place(place) => sources
+                .get(place.as_str())
+                .map(|(source, _)| (place, source)),
+            _ => None,
+        });
+    let (loan, source) = passed.next()?;
+    if passed.next().is_some() || root(target) == source {
+        return None;
+    }
+    let mut mentions = Vec::new();
+    instruction_place_mentions(instruction, &mut mentions);
+    mentions
+        .iter()
+        .all(|mention| root(mention) != source)
+        .then_some(loan.as_str())
 }
 
 /// Whether the `Lend` at `index` lends `loan`'s place to one runtime
@@ -211,6 +327,9 @@ enum LoanPlace {
 /// Where the list a loan selects from lies.
 enum LoanList {
     Local(String),
+    /// In the box slot at the address a followed parent loan keeps, 0 when
+    /// the parent missed.
+    Loan(Var),
     /// In the field box at `slot` of the class instance in `root`.
     Field {
         root: String,
@@ -227,8 +346,18 @@ impl FunctionCompiler<'_> {
         &mut self,
         loan: &str,
     ) -> std::result::Result<bool, String> {
-        let Some(usage) = self.native_loan_uses.get(loan).copied() else {
+        let Some(usage) = self.native_loan_uses.get(loan).cloned() else {
             return Ok(false);
+        };
+        let parent = match &usage.parent {
+            Some(parent) => match self.native_loans.get(parent) {
+                Some(NativeLoan {
+                    address,
+                    target: LoanTarget::Slot,
+                }) => Some((parent.clone(), *address)),
+                _ => return Ok(false),
+            },
+            None => None,
         };
         let Some(view) = self.view_places.get(loan) else {
             return Ok(false);
@@ -236,10 +365,11 @@ impl FunctionCompiler<'_> {
         let [alternative] = view.alternatives.as_slice() else {
             return Ok(false);
         };
-        let [selector] = alternative.elements.as_slice() else {
+        let Some(selector) = alternative.elements.last() else {
             return Ok(false);
         };
-        if !alternative.conditions.is_empty()
+        if (parent.is_none() && alternative.elements.len() != 1)
+            || !alternative.conditions.is_empty()
             || !alternative.union_payloads.is_empty()
             || selector.kind != DirectElementKind::List
         {
@@ -247,10 +377,16 @@ impl FunctionCompiler<'_> {
         }
         let place = alternative.place.clone();
         let selector = selector.clone();
-        let Some(list) = self.loan_list(&place)? else {
-            return Ok(false);
+        let (list, list_ty) = match parent {
+            Some((parent, address)) => (LoanList::Loan(address), self.local_type(&parent)?),
+            None => {
+                let Some(list) = self.loan_list(&place)? else {
+                    return Ok(false);
+                };
+                (list, self.type_of_place(&place)?)
+            }
         };
-        let Type::Named(name, args) = direct_type_to_type(&self.type_of_place(&place)?) else {
+        let Type::Named(name, args) = direct_type_to_type(&list_ty) else {
             return Ok(false);
         };
         let [element] = args.as_slice() else {
@@ -273,6 +409,20 @@ impl FunctionCompiler<'_> {
         let join_block = self.builder.create_block();
         let list_box = match &list {
             LoanList::Local(name) => self.load_root(name)?.values[0],
+            LoanList::Loan(address) => {
+                let address = self.builder.use_var(*address);
+                let held_block = self.builder.create_block();
+                self.builder.brif(address, held_block, &[], slow_block, &[]);
+                self.builder.switch_to_block(held_block);
+                self.builder.seal_block(held_block);
+                let list = self.builder.load(types::I64, flags, address, 0);
+                // A moved-out field takes the runtime walk, which reports it.
+                let present_block = self.builder.create_block();
+                self.builder.brif(list, present_block, &[], slow_block, &[]);
+                self.builder.switch_to_block(present_block);
+                self.builder.seal_block(present_block);
+                list
+            }
             LoanList::Field { root, slot } => {
                 let object = self.load_root(root)?.values[0];
                 let fast_block = self.builder.create_block();
@@ -680,5 +830,83 @@ impl FunctionCompiler<'_> {
             },
         );
         Ok(true)
+    }
+
+    /// Loads `place`, an argument to a parameter the callee borrows, as the
+    /// box in the slot a followed loan reaches when `place` is such a loan:
+    /// the callee reads the element where the list keeps it. A loan that
+    /// missed, or a moved-out slot, loads the place as before, and the copy
+    /// is released after the call as any temporary is. Returns `None` for
+    /// any other place.
+    pub(super) fn pass_native_element(
+        &mut self,
+        place: &str,
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        let address = match self.native_loans.get(place) {
+            Some(NativeLoan {
+                address,
+                target: LoanTarget::Slot,
+            }) => *address,
+            _ => return Ok(None),
+        };
+        let loan_ty = self.local_type(place)?;
+        if !matches!(loan_ty, DirectType::Opaque(_)) {
+            return Ok(None);
+        }
+        let fast_block = self.builder.create_block();
+        let slow_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        self.builder.append_block_param(join_block, types::I64);
+        let address = self.builder.use_var(address);
+        self.builder.brif(address, fast_block, &[], slow_block, &[]);
+
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let boxed = self
+            .builder
+            .load(types::I64, MemFlags::trusted(), address, 0);
+        let lent_block = self.builder.create_block();
+        // A moved-out field takes the runtime walk, which reports it.
+        self.builder.brif(boxed, lent_block, &[], slow_block, &[]);
+
+        self.builder.switch_to_block(lent_block);
+        self.builder.seal_block(lent_block);
+        let none = self.builder.iconst(types::I64, 0);
+        self.builder.jump(join_block, &[boxed, none]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let caller_owned = self.layout_scratch.clone();
+        let loaded = self.load_place(place)?;
+        let loaded = self.coerce_value(loaded, &loan_ty)?;
+        let [word] = loaded.values.as_slice() else {
+            return Err(format!(
+                "direct backend loaded element loan `{place}` as more than one word"
+            ));
+        };
+        let word = *word;
+        let owned = self.layout_scratch.opaque.contains(&word);
+        self.layout_scratch.remove(&word);
+        self.release_temporary_owned_since(&caller_owned);
+        let owned = if owned {
+            word
+        } else {
+            self.builder.iconst(types::I64, 0)
+        };
+        self.builder.jump(join_block, &[word, owned]);
+        self.layout_scratch = caller_owned;
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        let [value, owned] = self.builder.block_params(join_block)[..] else {
+            unreachable!("the join block takes two words");
+        };
+        // The copy a missed loan made, or 0, released once the call is done.
+        self.layout_scratch.opaque.insert(owned);
+        Ok(Some(ValueRef {
+            values: vec![value],
+            ty: loan_ty,
+        }))
     }
 }

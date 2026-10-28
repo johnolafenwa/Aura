@@ -86,7 +86,7 @@ fn concrete_values_retag_to_the_symbolic_parameter_member() {
     let text = union_value(
         &concrete,
         &Type::named("str"),
-        Value::String("x".to_string()),
+        Value::String("x".to_string().into()),
     );
     assert_eq!(
         aligned_member_index(&text, &symbolic, "test"),
@@ -109,7 +109,11 @@ fn bare_member_values_lift_and_nonmembers_fail_closed() {
         Ok(UnionAlignment::Lift(index_of(&concrete, &Type::Unit)))
     );
     assert_eq!(
-        plan_union_alignment(&Value::String("x".to_string()), &concrete, "union tag test"),
+        plan_union_alignment(
+            &Value::String("x".to_string().into()),
+            &concrete,
+            "union tag test"
+        ),
         Err("union tag test type identity mismatch".to_string())
     );
     let mut lifted = int(4);
@@ -178,8 +182,8 @@ fn boundaries_retag_lift_and_unwrap() {
         Value::Union(_)
     ));
     assert_eq!(
-        coerce_union_boundary(Value::String("x".to_string()), &concrete_type),
-        Value::String("x".to_string())
+        coerce_union_boundary(Value::String("x".to_string().into()), &concrete_type),
+        Value::String("x".to_string().into())
     );
     assert_eq!(
         coerce_union_boundary(int(4), &Type::TypeParam("V".to_string())),
@@ -244,7 +248,7 @@ fn union_equality_is_active_member_equality() {
     let text = union_value(
         &concrete,
         &Type::named("str"),
-        Value::String("1".to_string()),
+        Value::String("1".to_string().into()),
     );
     let none = union_value(&concrete, &Type::Unit, Value::Unit);
     assert!(union_values_equal(&one, &another_one));
@@ -291,7 +295,7 @@ fn runtime_member_type_identifies_every_backend_independent_payload_kind() {
     assert_eq!(
         runtime_member_type(&Value::Tuple(TupleValue {
             element_types: vec![Type::named("int64"), Type::named("str")],
-            elements: vec![int(1), Value::String("a".to_string())],
+            elements: vec![int(1), Value::String("a".to_string().into())],
         })),
         Some(Type::Tuple(vec![Type::named("int64"), Type::named("str")]))
     );

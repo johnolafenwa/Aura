@@ -191,6 +191,15 @@ in this file.
   cross-language programs run in 48.5 s instead of 147 s on a Linux
   container, a median of 8.2x Rust instead of 16x, and 19 of them run
   faster than Python 3.13 instead of 9.
+- Strings and element views copy less. A `str` value records whether its
+  bytes are all ASCII, so its length and slices need no decoding, and a
+  string of at most 29 bytes keeps its bytes in place without allocating.
+  A read-only element view passed to a function, such as
+  `view row = self.rows[slot]` passed to `matches(row, conditions)`, and
+  a selection inside it such as `row[i]`, read the element where the list
+  keeps it instead of copying it. `sql_engine` runs 40% fewer
+  instructions, `word_freq` and `template_render` 19%, `csv_aggregate`
+  17%, and `mini_browser` 16%.
 
 ### Fixed
 

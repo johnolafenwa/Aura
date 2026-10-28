@@ -63,8 +63,8 @@ fn adr0061_element_place_segments_round_trip_keys_and_refuse_invalid_encodings()
         Value::Int(IntegerValue::from_typed_signed(i128::MIN, IntegerKind::Int128).unwrap()),
         Value::Bool(false),
         Value::Bool(true),
-        Value::String(String::new()),
-        Value::String("a.b[0] λ".to_string()),
+        Value::String(String::new().into()),
+        Value::String("a.b[0] λ".to_string().into()),
         Value::Float(1.5),
         Value::Float(-0.25),
     ] {
@@ -80,8 +80,8 @@ fn adr0061_element_place_segments_round_trip_keys_and_refuse_invalid_encodings()
         Value::Tuple(TupleValue {
             element_types: vec![Type::named("str"), Type::named("str")],
             elements: vec![
-                Value::String(left.to_string()),
-                Value::String(right.to_string()),
+                Value::String(left.to_string().into()),
+                Value::String(right.to_string().into()),
             ],
         })
     };
@@ -117,7 +117,7 @@ fn adr0061_element_place_segments_round_trip_keys_and_refuse_invalid_encodings()
         Value::Union(Box::new(crate::runtime_value::UnionValue {
             union_type: Type::named("str").into(),
             member_index: 1,
-            payload: Value::String("x".to_string()),
+            payload: Value::String("x".to_string().into()),
         })),
         Value::Instance(InstanceValue {
             class_name: "Point".to_string(),
@@ -200,7 +200,7 @@ fn adr0061_element_place_walkers_report_missing_slots_without_changing_values() 
             key_type: Type::named("str"),
             value_type: Type::named("int64"),
             entries: vec![(
-                Value::String("a".to_string()),
+                Value::String("a".to_string().into()),
                 Value::Int(IntegerValue::from_i64(4)),
             )]
             .into(),
@@ -1560,8 +1560,10 @@ fn adr0038_mir_loan_environment_covers_alias_resolution_and_nested_place_errors(
 fn adr0038_runtime_place_types_fall_back_to_values_and_reject_dynamic_projection() {
     let runtime = test_runtime();
     let mut env = Env::default();
-    env.values
-        .insert("dynamic".to_string(), Value::String("text".to_string()));
+    env.values.insert(
+        "dynamic".to_string(),
+        Value::String("text".to_string().into()),
+    );
     assert_eq!(
         runtime.resolve_place_type("dynamic", &env),
         Some(Type::named("str"))
@@ -2988,7 +2990,11 @@ fn mir_runtime_ffi_marshals_every_scalar_and_shared_view_source_shape() {
         ),
         ("f32_value", Type::named("float32"), Value::Float(3.5)),
         ("f64_value", Type::named("float64"), Value::Float(7.25)),
-        ("text", Type::named("str"), Value::String(String::new())),
+        (
+            "text",
+            Type::named("str"),
+            Value::String(String::new().into()),
+        ),
         (
             "bytes",
             Type::Named("list".to_string(), vec![Type::named("uint8")]),
@@ -3958,7 +3964,7 @@ fn assert_mir_member_length_borrows_receiver(
 fn mir_length_string_len_borrows_receiver_without_snapshot_clone() {
     assert_mir_member_length_borrows_receiver(
         Type::named("str"),
-        Value::String("é🎉e\u{301}".to_string()),
+        Value::String("é🎉e\u{301}".to_string().into()),
         "len",
         4,
         "str.len",
@@ -3969,7 +3975,7 @@ fn mir_length_string_len_borrows_receiver_without_snapshot_clone() {
 fn mir_length_string_byte_len_borrows_receiver_without_snapshot_clone() {
     assert_mir_member_length_borrows_receiver(
         Type::named("str"),
-        Value::String("é🎉e\u{301}".to_string()),
+        Value::String("é🎉e\u{301}".to_string().into()),
         "byte_len",
         9,
         "str.byte_len",
@@ -3983,8 +3989,8 @@ fn mir_length_vec_len_borrows_receiver_without_snapshot_clone() {
         Value::Vec(VecValue {
             element_type: Type::named("str"),
             elements: vec![
-                Value::String("first-vector-payload".repeat(64)),
-                Value::String("second-vector-payload".repeat(64)),
+                Value::String("first-vector-payload".repeat(64).into()),
+                Value::String("second-vector-payload".repeat(64).into()),
             ]
             .into(),
             str_view: Default::default(),
@@ -4007,12 +4013,12 @@ fn mir_length_map_len_borrows_receiver_without_snapshot_clone() {
             value_type: Type::named("str"),
             entries: vec![
                 (
-                    Value::String("first-map-key".repeat(64)),
-                    Value::String("first-map-value".repeat(64)),
+                    Value::String("first-map-key".repeat(64).into()),
+                    Value::String("first-map-value".repeat(64).into()),
                 ),
                 (
-                    Value::String("second-map-key".repeat(64)),
-                    Value::String("second-map-value".repeat(64)),
+                    Value::String("second-map-key".repeat(64).into()),
+                    Value::String("second-map-value".repeat(64).into()),
                 ),
             ]
             .into(),
@@ -4030,8 +4036,8 @@ fn mir_length_set_len_borrows_receiver_without_snapshot_clone() {
         Value::Set(SetValue {
             element_type: Type::named("str"),
             elements: vec![
-                Value::String("first-set-value".repeat(64)),
-                Value::String("second-set-value".repeat(64)),
+                Value::String("first-set-value".repeat(64).into()),
+                Value::String("second-set-value".repeat(64).into()),
             ]
             .into(),
         }),
@@ -4089,8 +4095,8 @@ def measure(values: list[str]) -> int64:
         Value::Vec(VecValue {
             element_type: Type::named("str"),
             elements: vec![
-                Value::String("first-free-len-payload".repeat(64)),
-                Value::String("second-free-len-payload".repeat(64)),
+                Value::String("first-free-len-payload".repeat(64).into()),
+                Value::String("second-free-len-payload".repeat(64).into()),
             ]
             .into(),
             str_view: Default::default(),
@@ -4114,7 +4120,7 @@ fn mir_tuple_construct_project_and_take_preserve_ownership_boundaries() {
     let mut env = Env::default();
     let text = "owned tuple element".repeat(32);
     let text_ptr = text.as_ptr();
-    env.define_typed("text", Type::named("str"), Value::String(text));
+    env.define_typed("text", Type::named("str"), Value::String(text.into()));
     env.define_typed(
         "number",
         Type::named("int64"),
@@ -4296,7 +4302,7 @@ fn mir_tuple_coercion_preserves_owned_element_allocations_and_metadata() {
             Value::Tuple(TupleValue {
                 element_types: vec![Type::named("str"), Type::named("int64")],
                 elements: vec![
-                    Value::String(text),
+                    Value::String(text.into()),
                     Value::Int(IntegerValue::from_signed(7)),
                 ],
             }),
@@ -4396,7 +4402,7 @@ def main():
             Type::named(class_name),
             Value::Instance(InstanceValue {
                 class_name: class_name.to_string(),
-                fields: BTreeMap::from([("value".to_string(), Value::String(text))]).into(),
+                fields: BTreeMap::from([("value".to_string(), Value::String(text.into()))]).into(),
             }),
         );
 
@@ -4429,7 +4435,7 @@ def main():
     let text = "builtin-trait-receiver-".repeat(64);
     let text_ptr = text.as_ptr();
     let mut env = Env::default();
-    env.define_typed("text", Type::named("str"), Value::String(text));
+    env.define_typed("text", Type::named("str"), Value::String(text.into()));
     let returned = runtime
         .evaluate_call(
             &CallTarget::Member {
@@ -4529,12 +4535,12 @@ fn mir_json_borrowed_host_args_reference_the_existing_runtime_value() {
     env.define_typed(
         "text",
         Type::named("str"),
-        Value::String("{\"answer\":42}".repeat(32)),
+        Value::String("{\"answer\":42}".repeat(32).into()),
     );
     env.define_typed(
         "value",
         Type::named("json.Value"),
-        json_value("String", vec![Value::String("payload".repeat(32))]),
+        json_value("String", vec![Value::String("payload".repeat(32).into())]),
     );
 
     let text_ptr = match env.place_borrow("text").expect("text should exist") {
@@ -4569,7 +4575,7 @@ fn mir_json_into_accessors_move_payload_allocations_and_consume_places() {
     env.define_typed(
         "string_value",
         Type::named("json.Value"),
-        json_value("String", vec![Value::String(text)]),
+        json_value("String", vec![Value::String(text.into())]),
     );
     let string_result = call_name(
         &mut runtime,
@@ -4626,7 +4632,7 @@ fn mir_json_into_accessors_move_payload_allocations_and_consume_places() {
     assert!(env.place_borrow("array_value").is_err());
 
     let entries = vec![(
-        Value::String("k".to_string()),
+        Value::String("k".to_string().into()),
         json_value("Null", Vec::new()),
     )];
     let entries_ptr = entries.as_ptr();
@@ -4672,13 +4678,18 @@ fn mir_json_variant_construction_moves_owned_payload_allocations() {
     let values = vec![json_value("Null", Vec::new())];
     let values_ptr = values.as_ptr();
     let entries = vec![(
-        Value::String("key".to_string()),
+        Value::String("key".to_string().into()),
         json_value("Bool", vec![Value::Bool(true)]),
     )];
     let entries_ptr = entries.as_ptr();
 
     let cases = [
-        ("text", "String", Type::named("str"), Value::String(text)),
+        (
+            "text",
+            "String",
+            Type::named("str"),
+            Value::String(text.into()),
+        ),
         (
             "values",
             "Array",
@@ -4772,7 +4783,7 @@ fn mir_json_owned_accessor_moves_a_nested_place_without_cloning_its_payload() {
             class_name: "Holder".to_string(),
             fields: BTreeMap::from([(
                 "value".to_string(),
-                json_value("String", vec![Value::String(text)]),
+                json_value("String", vec![Value::String(text.into())]),
             )])
             .into(),
         }),
@@ -4848,7 +4859,7 @@ fn mir_move_variant_payload_preserves_allocation_and_marks_slot_consumed() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Packet".into(),
             variant_name: "Text".into(),
-            payloads: vec![Value::String(text)].into(),
+            payloads: vec![Value::String(text.into())].into(),
         }),
     );
 
@@ -4882,12 +4893,12 @@ fn mir_json_borrowed_calls_leave_source_allocations_in_place_on_success_and_erro
     env.define_typed(
         "valid_text",
         Type::named("str"),
-        Value::String("{\"answer\":42}".repeat(32)),
+        Value::String("{\"answer\":42}".repeat(32).into()),
     );
     env.define_typed(
         "invalid_text",
         Type::named("str"),
-        Value::String("{".repeat(32)),
+        Value::string("{".repeat(32)),
     );
     let valid_text_ptr = match env.place_borrow("valid_text").unwrap() {
         Value::String(value) => value.as_ptr(),
@@ -4922,7 +4933,7 @@ fn mir_json_borrowed_calls_leave_source_allocations_in_place_on_success_and_erro
     env.define_typed(
         "string_value",
         Type::named("json.Value"),
-        json_value("String", vec![Value::String(payload)]),
+        json_value("String", vec![Value::String(payload.into())]),
     );
     env.define_typed(
         "indent",
@@ -5005,7 +5016,7 @@ fn mir_json_parse_materialization_allocation_failure_is_au4005_and_preserves_sou
     env.define_typed(
         "source",
         Type::named("str"),
-        Value::String("[null]".to_string()),
+        Value::String("[null]".to_string().into()),
     );
     let source_ptr = match env.place_borrow("source").expect("source should exist") {
         Value::String(value) => value.as_ptr(),
@@ -5093,7 +5104,11 @@ fn mir_string_to_bytes_member_diagnostics_preserve_the_receiver() {
     let mut env = Env::default();
     let source = "still available".to_string();
     let source_ptr = source.as_ptr();
-    env.define_typed("source", Type::named("Unknown"), Value::String(source));
+    env.define_typed(
+        "source",
+        Type::named("Unknown"),
+        Value::String(source.into()),
+    );
     let args = [mir_arg(None, Operand::Int(1))];
 
     let error = runtime
@@ -5124,7 +5139,11 @@ fn mir_dynamic_string_to_bytes_borrows_receiver_before_allocation_failure() {
     let mut env = Env::default();
     let source = "dynamic-string-receiver-".repeat(64);
     let source_ptr = source.as_ptr();
-    env.define_typed("source", Type::named("Unknown"), Value::String(source));
+    env.define_typed(
+        "source",
+        Type::named("Unknown"),
+        Value::String(source.into()),
+    );
     let clone_count = super::mir_value_clone_count();
 
     let error = crate::runtime_value::with_bytes_runtime_allocation_budget(0, || {
@@ -5501,12 +5520,12 @@ fn mir_json_host_boundary_reports_malformed_values_without_hiding_consumption() 
     for (place, value, expected_message) in [
         (
             "owned_non_json",
-            Value::String("text".to_string()),
+            Value::String("text".to_string().into()),
             "`json::into_string` expected a runtime `json.Value`",
         ),
         (
             "owned_wrong_enum",
-            lookup_found(Value::String("text".to_string())),
+            lookup_found(Value::String("text".to_string().into())),
             "`json::into_string` expected enum `json.Value`, found `Lookup`",
         ),
         (
@@ -5569,7 +5588,7 @@ fn mir_json_host_argument_errors_preserve_borrowed_sources() {
 
     let text = "{\"answer\":42}".repeat(32);
     let text_ptr = text.as_ptr();
-    env.define_typed("text", Type::named("str"), Value::String(text));
+    env.define_typed("text", Type::named("str"), Value::String(text.into()));
     let consuming_borrow = call_name(
         &mut runtime,
         "json::parse",
@@ -5660,7 +5679,7 @@ fn mir_failed_owned_place_moves_preserve_unmoved_state() {
                             Value::EnumVariant(EnumVariantValue {
                                 enum_name: "Packet".into(),
                                 variant_name: "Text".into(),
-                                payloads: vec![Value::String("owned".repeat(32))].into(),
+                                payloads: vec![Value::String("owned".repeat(32).into())].into(),
                             }),
                         )])
                         .into(),
@@ -5737,7 +5756,7 @@ fn mir_failed_owned_place_moves_preserve_unmoved_state() {
     let moved = env
         .take_variant_payload("outer.inner.payload", 0)
         .expect("the existing nested payload should move out");
-    assert_eq!(moved, Value::String("owned".repeat(32)));
+    assert_eq!(moved, Value::String("owned".repeat(32).into()));
     assert_eq!(
         env.read_place("outer.sibling"),
         Ok(Value::Bool(true)),
@@ -5775,14 +5794,18 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
         let vector = VecValue {
             element_type: string_type.clone(),
             elements: if method == "set" || method == "__set_index" {
-                vec![Value::String("old".to_string())].into()
+                vec![Value::String("old".to_string().into())].into()
             } else {
                 Vec::new().into()
             },
             str_view: Default::default(),
         };
         env.define_typed("vector", vector_type.clone(), Value::Vec(vector.clone()));
-        env.define_typed("payload", string_type.clone(), Value::String(payload));
+        env.define_typed(
+            "payload",
+            string_type.clone(),
+            Value::String(payload.into()),
+        );
         let mut args = vec![
             mir_arg(None, Operand::Int(index)),
             mir_arg(None, Operand::MovePlace("payload".to_string())),
@@ -5825,7 +5848,7 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
         vector_type.clone(),
         Value::Vec(VecValue {
             element_type: string_type.clone(),
-            elements: vec![Value::String(extended)].into(),
+            elements: vec![Value::String(extended.into())].into(),
             str_view: Default::default(),
         }),
     );
@@ -5864,8 +5887,8 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
             entries: Vec::new().into(),
         };
         env.define_typed("map", map_type.clone(), Value::Map(map.clone()));
-        env.define_typed("key", string_type.clone(), Value::String(key));
-        env.define_typed("value", string_type.clone(), Value::String(value));
+        env.define_typed("key", string_type.clone(), Value::String(key.into()));
+        env.define_typed("value", string_type.clone(), Value::String(value.into()));
         let mut args = vec![
             mir_arg(None, Operand::MovePlace("key".to_string())),
             mir_arg(None, Operand::MovePlace("value".to_string())),
@@ -5907,7 +5930,11 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
         Value::Map(MapValue {
             key_type: string_type.clone(),
             value_type: string_type.clone(),
-            entries: vec![(Value::String(extended_key), Value::String(extended_value))].into(),
+            entries: vec![(
+                Value::String(extended_key.into()),
+                Value::String(extended_value.into()),
+            )]
+            .into(),
         }),
     );
     runtime
@@ -5942,7 +5969,7 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
         elements: Vec::new().into(),
     };
     env.define_typed("set", set_type, Value::Set(set.clone()));
-    env.define_typed("added", string_type, Value::String(added));
+    env.define_typed("added", string_type, Value::String(added.into()));
     runtime
         .evaluate_set_method(
             set,
@@ -5963,13 +5990,14 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
 fn mir_owned_process_and_http_decoders_transfer_string_allocations() {
     let name = "service-name".repeat(64);
     let name_ptr = name.as_ptr();
-    let decoded_name = super::expect_owned_string_value(Value::String(name), "start(name=...)")
-        .expect("owned service name should decode");
+    let decoded_name =
+        super::expect_owned_string_value(Value::String(name.into()), "start(name=...)")
+            .expect("owned service name should decode");
     assert_eq!(decoded_name.as_ptr(), name_ptr);
 
     let command = vec![
-        Value::String("/bin/echo".repeat(32)),
-        Value::String("payload".repeat(32)),
+        Value::String("/bin/echo".repeat(32).into()),
+        Value::String("payload".repeat(32).into()),
     ];
     let command_ptrs = command
         .iter()
@@ -6011,7 +6039,11 @@ fn mir_owned_process_and_http_decoders_transfer_string_allocations() {
         Value::Map(MapValue {
             key_type: Type::named("str"),
             value_type: Type::named("str"),
-            entries: vec![(Value::String(header_name), Value::String(header_value))].into(),
+            entries: vec![(
+                Value::String(header_name.into()),
+                Value::String(header_value.into()),
+            )]
+            .into(),
         }),
         "respond_text(headers=...)",
     )
@@ -6115,9 +6147,11 @@ fn mir_owned_runtime_decoders_reject_malformed_values_without_partial_conversion
             .expect("an omitted I/O timeout must stay absent"),
         None
     );
-    let timeout_error =
-        super::expect_io_optional_timeout(Some(&Value::String("later".to_string())), "timeout")
-            .expect_err("I/O timeouts must reject strings");
+    let timeout_error = super::expect_io_optional_timeout(
+        Some(&Value::String("later".to_string().into())),
+        "timeout",
+    )
+    .expect_err("I/O timeouts must reject strings");
     assert_eq!(timeout_error.render(), "io.Error.InvalidInput");
 
     assert!(
@@ -6147,7 +6181,7 @@ fn mir_owned_queue_and_task_fallback_adapters_preserve_allocations() {
         let channel = ChannelValue::new();
         let payload = format!("{method}-queue-payload-").repeat(64);
         let payload_ptr = payload.as_ptr();
-        env.define_typed("payload", Type::named("str"), Value::String(payload));
+        env.define_typed("payload", Type::named("str"), Value::String(payload.into()));
         runtime
             .evaluate_channel_method(
                 channel.clone(),
@@ -6170,7 +6204,7 @@ fn mir_owned_queue_and_task_fallback_adapters_preserve_allocations() {
     env.define_typed(
         "queue_fallback",
         Type::named("str"),
-        Value::String(queue_fallback),
+        Value::String(queue_fallback.into()),
     );
     let fallback = runtime
         .evaluate_channel_method(
@@ -6193,7 +6227,7 @@ fn mir_owned_queue_and_task_fallback_adapters_preserve_allocations() {
     env.define_typed(
         "task_fallback",
         Type::named("str"),
-        Value::String(task_fallback),
+        Value::String(task_fallback.into()),
     );
     let pending = TaskValue::from_handle(thread::spawn(|| {
         thread::sleep(StdDuration::from_millis(50));
@@ -6234,7 +6268,7 @@ fn mir_owned_vec_and_set_iteration_take_elements_from_the_private_source() {
         vector_type,
         Value::Vec(VecValue {
             element_type: Type::named("str"),
-            elements: vec![Value::String(vector_text)].into(),
+            elements: vec![Value::String(vector_text.into())].into(),
             str_view: Default::default(),
         }),
     );
@@ -6264,7 +6298,7 @@ fn mir_owned_vec_and_set_iteration_take_elements_from_the_private_source() {
         set_type,
         Value::Set(SetValue {
             element_type: Type::named("str"),
-            elements: vec![Value::String(set_text)].into(),
+            elements: vec![Value::String(set_text.into())].into(),
         }),
     );
     let value = runtime
@@ -6382,7 +6416,7 @@ fn string_vec_value(items: &[&str]) -> Value {
         element_type: Type::named("str"),
         elements: items
             .iter()
-            .map(|item| Value::String((*item).to_string()))
+            .map(|item| Value::String((*item).to_string().into()))
             .collect(),
         str_view: Default::default(),
     })
@@ -6396,8 +6430,8 @@ fn string_map_value(items: &[(&str, &str)]) -> Value {
             .iter()
             .map(|(key, value)| {
                 (
-                    Value::String((*key).to_string()),
-                    Value::String((*value).to_string()),
+                    Value::String((*key).to_string().into()),
+                    Value::String((*value).to_string().into()),
                 )
             })
             .collect(),
@@ -6630,7 +6664,7 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
     assert_eq!(poll_unavailable().render(), "Poll.Unavailable");
     assert_eq!(result_ok(Value::Bool(false)).render(), "Result.Ok(false)");
     assert_eq!(
-        result_err(Value::String("oops".to_string())).render(),
+        result_err(Value::String("oops".to_string().into())).render(),
         "Result.Err(oops)"
     );
     assert_eq!(
@@ -6669,7 +6703,7 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
         super::expect_command_vec(
             &Value::Vec(VecValue {
                 element_type: Type::named("str"),
-                elements: vec![Value::String("echo".to_string())].into(),
+                elements: vec![Value::String("echo".to_string().into())].into(),
                 str_view: Default::default(),
             }),
             "command",
@@ -6706,8 +6740,9 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
         .expect("Unknown integer vectors should decode as bytes"),
         b"AB".to_vec()
     );
-    let bytes_type_error = super::expect_bytes_value(&Value::String("bad".to_string()), "payload")
-        .expect_err("byte helper should reject non-vector payloads");
+    let bytes_type_error =
+        super::expect_bytes_value(&Value::String("bad".to_string().into()), "payload")
+            .expect_err("byte helper should reject non-vector payloads");
     assert!(bytes_type_error
         .message
         .contains("`payload` expects `list[uint8]`"));
@@ -6724,8 +6759,9 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
         .message
         .contains("`payload` expects `list[uint8]`"));
 
-    let bool_type_error = super::expect_bool_value(&Value::String("yes".to_string()), "flag")
-        .expect_err("bool helper should reject strings");
+    let bool_type_error =
+        super::expect_bool_value(&Value::String("yes".to_string().into()), "flag")
+            .expect_err("bool helper should reject strings");
     assert!(bool_type_error
         .message
         .contains("`flag` expects `bool`, found `yes`"));
@@ -6774,7 +6810,7 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
     )
     .expect_err("oversized integers should be rejected as i32");
     assert!(i32_range_error.message.contains("`count` expects `int32`"));
-    let i32_type_error = super::expect_i32_value(&Value::String("7".to_string()), "count")
+    let i32_type_error = super::expect_i32_value(&Value::String("7".to_string().into()), "count")
         .expect_err("i32 helper should reject strings");
     assert!(i32_type_error
         .message
@@ -6804,9 +6840,11 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
         process_timeout_range_error.render(),
         "Error.Io(io.Error.InvalidInput)"
     );
-    let process_timeout_type_error =
-        super::expect_process_optional_timeout(&Value::String("soon".to_string()), "timeout")
-            .expect_err("process timeout helper should reject strings");
+    let process_timeout_type_error = super::expect_process_optional_timeout(
+        &Value::String("soon".to_string().into()),
+        "timeout",
+    )
+    .expect_err("process timeout helper should reject strings");
     assert_eq!(
         process_timeout_type_error.render(),
         "Error.Io(io.Error.InvalidInput)"
@@ -6824,7 +6862,7 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
         "Error.Io(io.Error.InvalidInput)"
     );
     let duration_type_error =
-        super::expect_duration_value(&Value::String("soon".to_string()), "timeout")
+        super::expect_duration_value(&Value::String("soon".to_string().into()), "timeout")
             .expect_err("duration helper should reject strings");
     assert_eq!(
         duration_type_error.render(),
@@ -6868,7 +6906,7 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
         .message
         .contains("must be non-negative"));
     let optional_timeout_type_error =
-        super::expect_optional_timeout(Some(&Value::String("soon".to_string())), "timeout")
+        super::expect_optional_timeout(Some(&Value::String("soon".to_string().into())), "timeout")
             .expect_err("optional timeout should reject strings");
     assert!(optional_timeout_type_error
         .message
@@ -6880,8 +6918,8 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
                 key_type: Type::named("str"),
                 value_type: Type::named("str"),
                 entries: vec![(
-                    Value::String("Accept".to_string()),
-                    Value::String("*/*".to_string())
+                    Value::String("Accept".to_string().into()),
+                    Value::String("*/*".to_string().into())
                 )]
                 .into(),
             }),
@@ -6898,7 +6936,7 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
         &Value::Map(MapValue {
             key_type: Type::named("str"),
             value_type: Type::named("str"),
-            entries: vec![(Value::Bool(true), Value::String("bad".to_string()))].into(),
+            entries: vec![(Value::Bool(true), Value::String("bad".to_string().into()))].into(),
         }),
         "headers",
     )
@@ -6978,7 +7016,7 @@ fn mir_runtime_process_capture_helpers_cover_success_and_malformed_results() {
     let wrong_payload = TaskValue::from_handle(thread::spawn(|| {
         Ok(Value::Vec(VecValue {
             element_type: Type::named("uint8"),
-            elements: vec![Value::String("bad".to_string())].into(),
+            elements: vec![Value::String("bad".to_string().into())].into(),
             str_view: Default::default(),
         }))
     }));
@@ -6992,7 +7030,7 @@ fn mir_runtime_process_capture_helpers_cover_success_and_malformed_results() {
     let wrong_result_type = TaskValue::from_handle(thread::spawn(|| {
         Ok(Value::Vec(VecValue {
             element_type: Type::named("str"),
-            elements: vec![Value::String("bad".to_string())].into(),
+            elements: vec![Value::String("bad".to_string().into())].into(),
             str_view: Default::default(),
         }))
     }));
@@ -7311,7 +7349,10 @@ fn mir_runtime_infers_resource_value_types_for_runtime_backed_surfaces() {
                     )
                     .expect("tls server read_line should succeed"),
             );
-            assert_eq!(expect_present(line), Value::String("secure".to_string()));
+            assert_eq!(
+                expect_present(line),
+                Value::String("secure".to_string().into())
+            );
             assert_eq!(
                 result_ok_payload(
                     server_runtime
@@ -7428,7 +7469,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
         .expect("file read_all should succeed");
     assert_eq!(
         result_ok_payload(file_text),
-        Value::String("hello".to_string())
+        Value::String("hello".to_string().into())
     );
     read_file.close();
 
@@ -7544,7 +7585,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
         runtime
             .evaluate_process_completed_method(completed.clone(), "stdout", &[], &mut env)
             .expect("completed stdout should succeed"),
-        Value::String("out".to_string())
+        Value::String("out".to_string().into())
     );
     assert_eq!(
         runtime
@@ -7603,7 +7644,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
                 .evaluate_process_pipe_method(stdout_pipe, "read_all", &[], &mut env)
                 .expect("pipe read_all should succeed")
         ),
-        Value::String("out".to_string())
+        Value::String("out".to_string().into())
     );
     enum_payloads(
         runtime
@@ -7682,7 +7723,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
                 .evaluate_process_pipe_method(cat_stdout, "read_all", &[], &mut env)
                 .expect("cat stdout should be readable")
         ),
-        Value::String("cat".to_string())
+        Value::String("cat".to_string().into())
     );
     enum_payloads(
         runtime
@@ -7924,7 +7965,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
         runtime
             .evaluate_udp_datagram_method(datagram.clone(), "address", &[], &mut env)
             .expect("udp datagram address should succeed"),
-        Value::String("127.0.0.1:9".to_string())
+        Value::String("127.0.0.1:9".to_string().into())
     );
     assert_eq!(
         runtime
@@ -7938,7 +7979,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
                 .evaluate_udp_datagram_method(datagram.clone(), "text", &[], &mut env)
                 .expect("udp datagram text should succeed")
         ),
-        Value::String("text".to_string())
+        Value::String("text".to_string().into())
     );
     let datagram_error = runtime
         .evaluate_udp_datagram_method(datagram, "missing", &[], &mut env)
@@ -8397,7 +8438,10 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
             )
             .expect("tcp read_line should succeed"),
     );
-    assert_eq!(expect_present(tcp_line), Value::String("pong".to_string()));
+    assert_eq!(
+        expect_present(tcp_line),
+        Value::String("pong".to_string().into())
+    );
     assert_eq!(
         result_ok_payload(
             runtime
@@ -8543,7 +8587,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
             );
             assert_eq!(
                 expect_present(client_text),
-                Value::String("hello websocket".to_string())
+                Value::String("hello websocket".to_string().into())
             );
             assert_eq!(
                 result_ok_payload(
@@ -8666,7 +8710,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
     );
     assert_eq!(
         expect_present(done),
-        Value::String("server-done".to_string())
+        Value::String("server-done".to_string().into())
     );
     assert_eq!(
         runtime
@@ -8697,8 +8741,8 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                     key_type: Type::named("str"),
                     value_type: Type::named("str"),
                     entries: vec![(
-                        Value::String("Content-Type".to_string()),
-                        Value::String("text/plain".to_string()),
+                        Value::String("Content-Type".to_string().into()),
+                        Value::String("text/plain".to_string().into()),
                     )]
                     .into(),
                 }),
@@ -8718,13 +8762,13 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                 server_runtime
                     .evaluate_http_exchange_method(exchange.clone(), "method", &[], &mut server_env)
                     .expect("http method should succeed"),
-                Value::String("POST".to_string())
+                Value::String("POST".to_string().into())
             );
             assert_eq!(
                 server_runtime
                     .evaluate_http_exchange_method(exchange.clone(), "path", &[], &mut server_env)
                     .expect("http path should succeed"),
-                Value::String("/demo".to_string())
+                Value::String("/demo".to_string().into())
             );
             match server_runtime
                 .evaluate_http_exchange_method(exchange.clone(), "headers", &[], &mut server_env)
@@ -8744,7 +8788,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                         )
                         .expect("http body_text should succeed")
                 ),
-                Value::String("body".to_string())
+                Value::String("body".to_string().into())
             );
             assert_eq!(
                 server_runtime
@@ -8836,7 +8880,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
         runtime
             .evaluate_http_response_method(response.clone(), "reason", &[], &mut env)
             .expect("http response reason should succeed"),
-        Value::String("OK".to_string())
+        Value::String("OK".to_string().into())
     );
     match runtime
         .evaluate_http_response_method(response.clone(), "headers", &[], &mut env)
@@ -8851,7 +8895,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                 .evaluate_http_response_method(response.clone(), "text", &[], &mut env)
                 .expect("http response text should succeed")
         ),
-        Value::String("reply".to_string())
+        Value::String("reply".to_string().into())
     );
     assert_eq!(
         runtime
@@ -9760,7 +9804,7 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
     env.define_typed(
         "text_target",
         Type::named("str"),
-        Value::String("old".to_string()),
+        Value::String("old".to_string().into()),
     );
     runtime
         .apply_borrowed_param_writebacks(
@@ -9772,7 +9816,7 @@ fn mir_runtime_writeback_and_spawn_helpers_cover_borrow_mut_edges() {
                 keyword_only: false,
             }],
             &[Some("text_target".to_string())],
-            vec![(0, Value::String(text))],
+            vec![(0, Value::String(text.into()))],
             &mut env,
         )
         .expect("borrow-mut writeback should transfer its returned allocation");
@@ -9867,21 +9911,25 @@ fn mir_runtime_builtin_call_surface_covers_named_and_error_paths() {
         Value::Int(IntegerValue::from_literal(7)),
     );
     env.define_typed("ratio", Type::named("float64"), Value::Float(-2.5));
-    env.define_typed("text", Type::named("str"), Value::String("12".to_string()));
+    env.define_typed(
+        "text",
+        Type::named("str"),
+        Value::String("12".to_string().into()),
+    );
     env.define_typed(
         "word",
         Type::named("str"),
-        Value::String("Aura".to_string()),
+        Value::String("Aura".to_string().into()),
     );
     env.define_typed(
         "float_text",
         Type::named("str"),
-        Value::String("1.5e2".to_string()),
+        Value::String("1.5e2".to_string().into()),
     );
     env.define_typed(
         "infinite_text",
         Type::named("str"),
-        Value::String("inf".to_string()),
+        Value::String("inf".to_string().into()),
     );
 
     assert_eq!(
@@ -10169,7 +10217,7 @@ fn mir_runtime_builtin_call_surface_covers_named_and_error_paths() {
                 &mut env,
             )
             .expect("parse_float64() should return Result.Err for bad strings"),
-        result_err(Value::String("invalid float literal".to_string()))
+        result_err(Value::String("invalid float literal".to_string().into()))
     );
     assert_eq!(
         runtime
@@ -10183,7 +10231,7 @@ fn mir_runtime_builtin_call_surface_covers_named_and_error_paths() {
                 &mut env,
             )
             .expect("parse_float64() should reject non-finite floats as Result.Err"),
-        result_err(Value::String("float must be finite".to_string()))
+        result_err(Value::String("float must be finite".to_string().into()))
     );
     let queue_error = runtime
         .evaluate_call(
@@ -11167,38 +11215,38 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
     env.define_typed(
         "read_path",
         Type::named("str"),
-        Value::String(read_path.to_string_lossy().into_owned()),
+        Value::String(read_path.to_string_lossy().into_owned().into()),
     );
     env.define_typed(
         "write_path",
         Type::named("str"),
-        Value::String(write_path.to_string_lossy().into_owned()),
+        Value::String(write_path.to_string_lossy().into_owned().into()),
     );
     let renamed_path = format!("{}.renamed", read_path.to_string_lossy());
     env.define_typed(
         "renamed_path",
         Type::named("str"),
-        Value::String(renamed_path.clone()),
+        Value::String(renamed_path.clone().into()),
     );
     env.define_typed(
         "bytes_path",
         Type::named("str"),
-        Value::String(bytes_path.to_string_lossy().into_owned()),
+        Value::String(bytes_path.to_string_lossy().into_owned().into()),
     );
     env.define_typed(
         "dir_path",
         Type::named("str"),
-        Value::String(dir_path.to_string_lossy().into_owned()),
+        Value::String(dir_path.to_string_lossy().into_owned().into()),
     );
     env.define_typed(
         "text",
         Type::named("str"),
-        Value::String("hello".to_string()),
+        Value::String("hello".to_string().into()),
     );
     env.define_typed(
         "suffix",
         Type::named("str"),
-        Value::String("-again".to_string()),
+        Value::String("-again".to_string().into()),
     );
     env.define_typed(
         "bytes",
@@ -11232,7 +11280,7 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
             )
             .expect("fs.read_to_string should succeed")
         ),
-        Value::String("hello".to_string())
+        Value::String("hello".to_string().into())
     );
     assert_eq!(
         result_ok_payload(
@@ -11463,7 +11511,7 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
     env.define_typed(
         "tcp_address",
         Type::named("str"),
-        Value::String(tcp_address),
+        Value::String(tcp_address.into()),
     );
     let tcp_server = {
         let listener = tcp_listener.clone();
@@ -11622,7 +11670,7 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
     env.define_typed(
         "http_url",
         Type::named("str"),
-        Value::String(format!("http://{http_address}/builtin")),
+        Value::String(format!("http://{http_address}/builtin").into()),
     );
     env.define_typed(
         "headers",
@@ -12212,7 +12260,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
     env.define_typed(
         "text",
         Type::named("str"),
-        Value::String("Aura".to_string()),
+        Value::String("Aura".to_string().into()),
     );
     env.define_typed(
         "values",
@@ -12237,7 +12285,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
             key_type: Type::named("str"),
             value_type: Type::named("int32"),
             entries: vec![(
-                Value::String("count".to_string()),
+                Value::String("count".to_string().into()),
                 Value::Int(IntegerValue::from_signed(1)),
             )]
             .into(),
@@ -12248,7 +12296,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
         Type::Named("set".to_string(), vec![Type::named("str")]),
         Value::Set(crate::runtime_value::SetValue {
             element_type: Type::named("str"),
-            elements: vec![Value::String("ready".to_string())].into(),
+            elements: vec![Value::String("ready".to_string().into())].into(),
         }),
     );
     env.define_typed(
@@ -12315,7 +12363,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
                 &mut env,
             )
             .expect("int.to_string() should succeed"),
-        Value::String("7".to_string())
+        Value::String("7".to_string().into())
     );
     assert_eq!(
         runtime
@@ -12330,7 +12378,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
                 &mut env,
             )
             .expect("bool.to_string() should succeed"),
-        Value::String("true".to_string())
+        Value::String("true".to_string().into())
     );
     assert_eq!(
         runtime
@@ -12453,7 +12501,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
                 &mut env,
             )
             .expect("class member calls should dispatch"),
-        Value::String("widget".to_string())
+        Value::String("widget".to_string().into())
     );
     assert_eq!(
         runtime
@@ -12468,7 +12516,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
                 &mut env,
             )
             .expect("runtime type fallback trait dispatch should succeed"),
-        Value::String("done".to_string())
+        Value::String("done".to_string().into())
     );
 
     let unsupported = runtime
@@ -12505,7 +12553,7 @@ fn mir_runtime_builtin_error_surface_covers_additional_builtin_branches() {
     env.define_typed(
         "word",
         Type::named("str"),
-        Value::String("aura".to_string()),
+        Value::String("aura".to_string().into()),
     );
     env.define_typed("flag", Type::named("bool"), Value::Bool(true));
     env.define_typed(
@@ -12685,7 +12733,9 @@ fn mir_runtime_builtin_error_surface_covers_additional_builtin_branches() {
                 &mut env,
             )
             .expect("parse_int32() should still return Result.Err for invalid strings"),
-        result_err(Value::String("invalid digit found in string".to_string()))
+        result_err(Value::String(
+            "invalid digit found in string".to_string().into()
+        ))
     );
 }
 
@@ -13281,7 +13331,7 @@ fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
     let non_int_range_error = build_range(vec![EvaluatedMirArg {
         ty: None,
         name: None,
-        value: Value::String("5".to_string()),
+        value: Value::String("5".to_string().into()),
         writeback_place: None,
     }])
     .expect_err("range should reject non-integer arguments");
@@ -13460,8 +13510,8 @@ fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
         assert_eq!(
             eval_ordering(
                 op,
-                Value::String("Zebra".to_string()),
-                Value::String("apple".to_string()),
+                Value::String("Zebra".to_string().into()),
+                Value::String("apple".to_string().into()),
             )
             .expect("str ordering compares UTF-8 bytes"),
             Value::Bool(expected),
@@ -13494,7 +13544,10 @@ fn serialized_mir_helper_reports_invalid_payloads() {
 fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
     let mut runtime = test_runtime();
     let no_context = runtime
-        .convert_try_error_via_from(Value::String("boom".to_string()), &Type::named("str"))
+        .convert_try_error_via_from(
+            Value::String("boom".to_string().into()),
+            &Type::named("str"),
+        )
         .expect_err("try error conversion should require a Result return context");
     assert!(no_context
         .message
@@ -13502,7 +13555,10 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
 
     runtime.return_type_stack.push(Type::named("int32"));
     let non_result_context = runtime
-        .convert_try_error_via_from(Value::String("boom".to_string()), &Type::named("str"))
+        .convert_try_error_via_from(
+            Value::String("boom".to_string().into()),
+            &Type::named("str"),
+        )
         .expect_err("try error conversion should reject non-Result return types");
     assert!(non_result_context
         .message
@@ -13514,7 +13570,10 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
         vec![Type::named("int32"), Type::named("bool")],
     ));
     let mismatch = runtime
-        .convert_try_error_via_from(Value::String("boom".to_string()), &Type::named("str"))
+        .convert_try_error_via_from(
+            Value::String("boom".to_string().into()),
+            &Type::named("str"),
+        )
         .expect_err("try error conversion should reject unrelated error types");
     assert!(mismatch
         .message
@@ -13632,7 +13691,7 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
                 &Type::named("int32")
             )
             .expect("From-based try error conversion should run the impl method"),
-        Value::String("converted".to_string())
+        Value::String("converted".to_string().into())
     );
 }
 
@@ -13729,7 +13788,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
     assert_eq!(
         MirRuntime::infer_value_type(&Value::Set(crate::runtime_value::SetValue {
             element_type: Type::named("str"),
-            elements: vec![Value::String("ready".to_string())].into(),
+            elements: vec![Value::String("ready".to_string().into())].into(),
         })),
         Some(Type::Named("set".to_string(), vec![Type::named("str")]))
     );
@@ -13738,7 +13797,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
             key_type: Type::named("str"),
             value_type: Type::named("int32"),
             entries: vec![(
-                Value::String("count".to_string()),
+                Value::String("count".to_string().into()),
                 Value::Int(IntegerValue::from_signed(1)),
             )]
             .into(),
@@ -13757,7 +13816,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
         Some(Type::Named("Lookup".to_string(), vec![Type::Unit]))
     );
     assert_eq!(
-        MirRuntime::infer_value_type(&result_err(Value::String("oops".to_string()))),
+        MirRuntime::infer_value_type(&result_err(Value::String("oops".to_string().into()))),
         Some(Type::Named(
             "Result".to_string(),
             vec![Type::Unit, Type::named("str")]
@@ -13774,7 +13833,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
         MirRuntime::infer_value_type(&Value::EnumVariant(EnumVariantValue {
             enum_name: "SendError".into(),
             variant_name: "Cancelled".into(),
-            payloads: vec![Value::String("payload".to_string())].into(),
+            payloads: vec![Value::String("payload".to_string().into())].into(),
         })),
         Some(Type::Named(
             "SendError".to_string(),
@@ -13907,7 +13966,7 @@ fn mir_owned_slice_runtime_uses_scalar_bounds_and_preserves_au4003_spans() {
         element_type: Type::named("str"),
         elements: ["zero", "one", "two", "three"]
             .into_iter()
-            .map(|value| Value::String(value.to_string()))
+            .map(|value| Value::String(value.to_string().into()))
             .collect(),
         str_view: Default::default(),
     };
@@ -13944,7 +14003,7 @@ fn mir_owned_slice_runtime_uses_scalar_bounds_and_preserves_au4003_spans() {
         sliced.elements,
         ["one", "two", "three"]
             .into_iter()
-            .map(|value| Value::String(value.to_string()))
+            .map(|value| Value::String(value.to_string().into()))
             .collect::<Vec<_>>()
     );
     assert_ne!(
@@ -13970,7 +14029,7 @@ fn mir_owned_slice_runtime_uses_scalar_bounds_and_preserves_au4003_spans() {
     env.define_typed(
         "source_text",
         Type::named("str"),
-        Value::String(source_text),
+        Value::String(source_text.into()),
     );
     let sliced = runtime
         .evaluate_call(
@@ -14134,7 +14193,7 @@ fn mir_slice_internal_abi_rejects_malformed_endpoint_and_presence_operands() {
     for (index, replacement, expected) in [
         (
             0,
-            Value::String("start".to_string()),
+            Value::String("start".to_string().into()),
             "internal slice start operand must be an integer",
         ),
         (
@@ -14149,7 +14208,7 @@ fn mir_slice_internal_abi_rejects_malformed_endpoint_and_presence_operands() {
         ),
         (
             2,
-            Value::String("end".to_string()),
+            Value::String("end".to_string().into()),
             "internal slice end operand must be an integer",
         ),
         (
@@ -14204,8 +14263,8 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         Value::Vec(crate::runtime_value::VecValue {
             element_type: Type::named("str"),
             elements: vec![
-                Value::String("one".to_string()),
-                Value::String("two".to_string()),
+                Value::String("one".to_string().into()),
+                Value::String("two".to_string().into()),
             ]
             .into(),
             str_view: Default::default(),
@@ -14221,7 +14280,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             key_type: Type::named("str"),
             value_type: Type::named("int32"),
             entries: vec![(
-                Value::String("count".to_string()),
+                Value::String("count".to_string().into()),
                 Value::Int(IntegerValue::from_signed(1)),
             )]
             .into(),
@@ -14237,7 +14296,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             key_type: Type::named("str"),
             value_type: Type::named("int32"),
             entries: vec![(
-                Value::String("next".to_string()),
+                Value::String("next".to_string().into()),
                 Value::Int(IntegerValue::from_signed(9)),
             )]
             .into(),
@@ -14248,7 +14307,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         Type::Named("set".to_string(), vec![Type::named("str")]),
         Value::Set(crate::runtime_value::SetValue {
             element_type: Type::named("str"),
-            elements: vec![Value::String("ready".to_string())].into(),
+            elements: vec![Value::String("ready".to_string().into())].into(),
         }),
     );
     env.define_typed(
@@ -14669,7 +14728,10 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             &mut env,
         )
         .expect("set __index_option should succeed");
-    assert_eq!(set_index, lookup_found(Value::String("ready".to_string())));
+    assert_eq!(
+        set_index,
+        lookup_found(Value::String("ready".to_string().into()))
+    );
 
     let string_len = runtime
         .evaluate_string_method("é🎉e\u{301}".to_string(), "len", &[], &mut env)
@@ -14725,17 +14787,17 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             &mut env,
         )
         .expect("string replace should succeed");
-    assert_eq!(replace, Value::String("Oura".to_string()));
+    assert_eq!(replace, Value::String("Oura".to_string().into()));
 
     let lower = runtime
         .evaluate_string_method("AuRa".to_string(), "to_lower", &[], &mut env)
         .expect("string to_lower should succeed");
-    assert_eq!(lower, Value::String("aura".to_string()));
+    assert_eq!(lower, Value::String("aura".to_string().into()));
 
     let upper = runtime
         .evaluate_string_method("AuRa".to_string(), "to_upper", &[], &mut env)
         .expect("string to_upper should succeed");
-    assert_eq!(upper, Value::String("AURA".to_string()));
+    assert_eq!(upper, Value::String("AURA".to_string().into()));
 
     let suffix = runtime
         .evaluate_string_method(
@@ -14750,12 +14812,12 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     let trim = runtime
         .evaluate_string_method("  Aura  ".to_string(), "trim", &[], &mut env)
         .expect("string trim should succeed");
-    assert_eq!(trim, Value::String("Aura".to_string()));
+    assert_eq!(trim, Value::String("Aura".to_string().into()));
 
     let string_clone = runtime
         .evaluate_string_method("Aura".to_string(), "clone", &[], &mut env)
         .expect("string clone should succeed");
-    assert_eq!(string_clone, Value::String("Aura".to_string()));
+    assert_eq!(string_clone, Value::String("Aura".to_string().into()));
 
     let send = runtime
         .evaluate_channel_method(
@@ -15126,7 +15188,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             vec![Value::Tuple(TupleValue {
                 element_types: vec![Type::named("str"), Type::named("int32")],
                 elements: vec![
-                    Value::String("count".to_string()),
+                    Value::String("count".to_string().into()),
                     Value::Int(IntegerValue::from_signed(1)),
                 ],
             })]
@@ -15212,7 +15274,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             key_type: Type::named("str"),
             value_type: Type::named("int32"),
             entries: vec![(
-                Value::String("count".to_string()),
+                Value::String("count".to_string().into()),
                 Value::Int(IntegerValue::from_signed(9)),
             )]
             .into(),
@@ -15446,7 +15508,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             &mut env,
         )
         .expect("string join should succeed");
-    assert_eq!(join, Value::String("one, two".to_string()));
+    assert_eq!(join, Value::String("one, two".to_string().into()));
 
     let strip = runtime
         .evaluate_string_method(
@@ -15905,7 +15967,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
     env.define_typed(
         "text",
         Type::named("str"),
-        Value::String("aura".to_string()),
+        Value::String("aura".to_string().into()),
     );
 
     let negative = runtime
@@ -16043,7 +16105,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
         key_type: Type::named("str"),
         value_type: Type::named("int32"),
         entries: vec![(
-            Value::String("count".to_string()),
+            Value::String("count".to_string().into()),
             Value::Int(IntegerValue::from_signed(1)),
         )]
         .into(),
@@ -16137,7 +16199,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
 
     let set_value = || crate::runtime_value::SetValue {
         element_type: Type::named("str"),
-        elements: vec![Value::String("ready".to_string())].into(),
+        elements: vec![Value::String("ready".to_string().into())].into(),
     };
     for (field, args, receiver_place, expected) in [
         (
@@ -16232,12 +16294,12 @@ fn mir_runtime_operator_and_task_helpers_cover_additional_branches() {
         runtime
             .eval_binary(
                 crate::ast::BinaryOp::Add,
-                Value::String("au".to_string()),
-                Value::String("ra".to_string()),
+                Value::String("au".to_string().into()),
+                Value::String("ra".to_string().into()),
                 None,
             )
             .expect("string addition should concatenate"),
-        Value::String("aura".to_string())
+        Value::String("aura".to_string().into())
     );
     let overflow = runtime
         .eval_binary(
@@ -16261,7 +16323,7 @@ fn mir_runtime_operator_and_task_helpers_cover_additional_branches() {
         .eval_binary(
             crate::ast::BinaryOp::Add,
             Value::Bool(true),
-            Value::String("x".to_string()),
+            Value::String("x".to_string().into()),
             None,
         )
         .expect_err("unsupported add operands should fail");
@@ -16312,8 +16374,8 @@ fn mir_runtime_operator_and_task_helpers_cover_additional_branches() {
     let bad_sub = runtime
         .eval_binary(
             crate::ast::BinaryOp::Sub,
-            Value::String("x".to_string()),
-            Value::String("y".to_string()),
+            Value::String("x".to_string().into()),
+            Value::String("y".to_string().into()),
             None,
         )
         .expect_err("string subtraction should fail");
@@ -16403,8 +16465,8 @@ fn mir_runtime_operator_and_task_helpers_cover_additional_branches() {
     let bad_div = runtime
         .eval_binary(
             crate::ast::BinaryOp::Div,
-            Value::String("x".to_string()),
-            Value::String("y".to_string()),
+            Value::String("x".to_string().into()),
+            Value::String("y".to_string().into()),
             None,
         )
         .expect_err("string division should fail");
@@ -16805,7 +16867,7 @@ fn mir_runtime_task_result_or_helpers_cover_nonblocking_shortcuts() {
                 &[mir_arg(None, Operand::String("fallback".to_string()))],
                 &mut env,
             )?,
-            Value::String("fallback".to_string())
+            Value::String("fallback".to_string().into())
         );
         Ok(Value::Unit)
     })
@@ -16852,7 +16914,7 @@ fn mir_runtime_task_result_or_helpers_cover_nonblocking_shortcuts() {
                 &mut env,
             )
             .expect("cancelled runtimes should return the fallback"),
-        Value::String("fallback".to_string())
+        Value::String("fallback".to_string().into())
     );
     blocker.close();
     let _ =
@@ -16902,7 +16964,7 @@ fn mir_runtime_single_consumer_task_results_claim_every_observing_attempt() {
     let timed_task = TaskValue::from_handle_with_result_repeatability(
         std::thread::spawn(move || {
             let _ = timeout_unblocker.recv_with_cancellation(None, None);
-            Ok(Value::String("late".to_string()))
+            Ok(Value::String("late".to_string().into()))
         }),
         false,
     );
@@ -16924,7 +16986,7 @@ fn mir_runtime_single_consumer_task_results_claim_every_observing_attempt() {
     let default_task = TaskValue::from_handle_with_result_repeatability(
         std::thread::spawn(move || {
             let _ = default_unblocker.recv_with_cancellation(None, None);
-            Ok(Value::String("late".to_string()))
+            Ok(Value::String("late".to_string().into()))
         }),
         false,
     );
@@ -16937,7 +16999,7 @@ fn mir_runtime_single_consumer_task_results_claim_every_observing_attempt() {
                 &mut env,
             )
             .expect("the first default observation should succeed"),
-        Value::String("fallback".to_string())
+        Value::String("fallback".to_string().into())
     );
     let repeated_default = runtime
         .evaluate_task_method(default_task, "poll", &[], &mut env)
@@ -16969,7 +17031,7 @@ fn mir_runtime_single_consumer_task_results_claim_every_observing_attempt() {
     let cancelled_task = TaskValue::from_handle_with_result_repeatability(
         std::thread::spawn(move || {
             let _ = cancel_unblocker.recv_with_cancellation(None, None);
-            Ok(Value::String("late".to_string()))
+            Ok(Value::String("late".to_string().into()))
         }),
         false,
     );
@@ -16991,7 +17053,7 @@ fn mir_runtime_single_consumer_task_results_claim_every_observing_attempt() {
 fn mir_runtime_wait_helpers_claim_distinct_nonrepeatable_tasks_before_observing() {
     let mut runtime = test_runtime();
     let duplicate = TaskValue::from_handle_with_result_repeatability(
-        std::thread::spawn(|| Ok(Value::String("ready".to_string()))),
+        std::thread::spawn(|| Ok(Value::String("ready".to_string().into()))),
         false,
     );
     let duplicate_error = runtime
@@ -17007,7 +17069,7 @@ fn mir_runtime_wait_helpers_claim_distinct_nonrepeatable_tasks_before_observing(
     assert_eq!(repeated.code, "AU4001");
 
     let duplicate_all = TaskValue::from_handle_with_result_repeatability(
-        std::thread::spawn(|| Ok(Value::String("once".to_string()))),
+        std::thread::spawn(|| Ok(Value::String("once".to_string().into()))),
         false,
     );
     let duplicate_all_error = runtime
@@ -17019,7 +17081,7 @@ fn mir_runtime_wait_helpers_claim_distinct_nonrepeatable_tasks_before_observing(
     assert_eq!(duplicate_all_error.code, "AU4001");
 
     let selected = TaskValue::from_handle_with_result_repeatability(
-        std::thread::spawn(|| Ok(Value::String("selected".to_string()))),
+        std::thread::spawn(|| Ok(Value::String("selected".to_string().into()))),
         false,
     );
     enum_payloads(
@@ -17035,7 +17097,7 @@ fn mir_runtime_wait_helpers_claim_distinct_nonrepeatable_tasks_before_observing(
     assert_eq!(repeated.code, "AU4001");
 
     let first = TaskValue::from_handle_with_result_repeatability(
-        std::thread::spawn(|| Ok(Value::String("first".to_string()))),
+        std::thread::spawn(|| Ok(Value::String("first".to_string().into()))),
         false,
     );
     let second = TaskValue::from_handle_with_result_repeatability(
@@ -17065,10 +17127,10 @@ fn mir_runtime_select_adapter_preserves_source_order_and_queue_losers() {
     let first = ChannelValue::new();
     let second = ChannelValue::new();
     first
-        .send(Value::String("first".to_string()))
+        .send(Value::String("first".to_string().into()))
         .expect("first queue should accept its item");
     second
-        .send(Value::String("second".to_string()))
+        .send(Value::String("second".to_string().into()))
         .expect("second queue should accept its item");
 
     let mut runtime = test_runtime();
@@ -17101,11 +17163,11 @@ fn mir_runtime_select_adapter_preserves_source_order_and_queue_losers() {
     );
     assert_eq!(
         enum_payloads(selected[1].clone(), "QueueReceive", "Item"),
-        vec![Value::String("first".to_string())]
+        vec![Value::String("first".to_string().into())]
     );
     assert_eq!(
         second.try_recv(),
-        crate::runtime_value::TryRecvResult::Value(Value::String("second".to_string())),
+        crate::runtime_value::TryRecvResult::Value(Value::String("second".to_string().into())),
         "a simultaneously ready losing queue must not lose its item"
     );
 
@@ -17131,7 +17193,7 @@ fn mir_runtime_select_adapter_preserves_source_order_and_queue_losers() {
 #[test]
 fn mir_runtime_select_adapter_reports_task_outcomes_and_claims_losers() {
     let ready = TaskValue::from_handle(std::thread::spawn(|| {
-        Ok(Value::String("ready".to_string()))
+        Ok(Value::String("ready".to_string().into()))
     }));
     let failed =
         TaskValue::from_handle(std::thread::spawn(|| Err(Diagnostic::new("select failed"))));
@@ -17166,7 +17228,7 @@ fn mir_runtime_select_adapter_reports_task_outcomes_and_claims_losers() {
     assert_eq!(selected[0], Value::Int(IntegerValue::from_signed(0)));
     assert_eq!(
         enum_payloads(selected[1].clone(), "TaskResult", "Ready"),
-        vec![Value::String("ready".to_string())]
+        vec![Value::String("ready".to_string().into())]
     );
 
     let failed_only =
@@ -17186,7 +17248,7 @@ fn mir_runtime_select_adapter_reports_task_outcomes_and_claims_losers() {
     let failed_outcome = enum_payloads(failed_outcome, "SelectOutcome", "Task");
     assert_eq!(
         enum_payloads(failed_outcome[1].clone(), "TaskResult", "Error"),
-        vec![Value::String("task error".to_string())]
+        vec![Value::String("task error".to_string().into())]
     );
 
     let blocker = ChannelValue::new();
@@ -17194,7 +17256,7 @@ fn mir_runtime_select_adapter_reports_task_outcomes_and_claims_losers() {
     let losing = TaskValue::from_handle_with_result_repeatability(
         std::thread::spawn(move || {
             let _ = unblocker.recv_with_cancellation(None, None);
-            Ok(Value::String("late".to_string()))
+            Ok(Value::String("late".to_string().into()))
         }),
         false,
     );
@@ -17257,7 +17319,7 @@ fn mir_runtime_select_adapter_distinguishes_child_and_current_task_cancellation(
     group.cancel();
     let ready = ChannelValue::new();
     ready
-        .send(Value::String("preserved".to_string()))
+        .send(Value::String("preserved".to_string().into()))
         .expect("queue should accept the ready value");
     let mut runtime = MirRuntime::new(
         MirModule {
@@ -17290,7 +17352,7 @@ fn mir_runtime_select_adapter_distinguishes_child_and_current_task_cancellation(
     assert!(enum_payloads(cancelled, "SelectOutcome", "Cancelled").is_empty());
     assert_eq!(
         ready.try_recv(),
-        crate::runtime_value::TryRecvResult::Value(Value::String("preserved".to_string())),
+        crate::runtime_value::TryRecvResult::Value(Value::String("preserved".to_string().into())),
         "cancellation wins before a ready source and must not consume it"
     );
 }
@@ -17338,7 +17400,7 @@ fn mir_runtime_select_adapter_validates_typed_source_descriptors_before_arbitrat
 
     let missing_type_queue = ChannelValue::new();
     missing_type_queue
-        .send(Value::String("ready".to_string()))
+        .send(Value::String("ready".to_string().into()))
         .expect("the malformed queue should be ready so a missing validation fails promptly");
     env.values.insert(
         "missing_type".to_string(),
@@ -17440,7 +17502,7 @@ fn mir_runtime_select_adapter_validates_typed_source_descriptors_before_arbitrat
         "task_string",
         Type::Named("Task".to_string(), vec![Type::named("str")]),
         Value::Task(TaskValue::from_handle(std::thread::spawn(|| {
-            Ok(Value::String("ready".to_string()))
+            Ok(Value::String("ready".to_string().into()))
         }))),
     );
     env.define_typed(
@@ -17529,7 +17591,7 @@ fn mir_runtime_wait_helpers_cover_task_lists_ready_error_timeout_and_cancel_path
             "TaskResult",
             "Error",
         ),
-        vec![Value::String("task failed".to_string())]
+        vec![Value::String("task failed".to_string().into())]
     );
     assert_eq!(
         enum_payloads(
@@ -17541,7 +17603,7 @@ fn mir_runtime_wait_helpers_cover_task_lists_ready_error_timeout_and_cancel_path
         ),
         vec![
             Value::Int(IntegerValue::from_signed(0)),
-            Value::String("task failed".to_string())
+            Value::String("task failed".to_string().into())
         ]
     );
     let wait_all_error_task =
@@ -17556,7 +17618,7 @@ fn mir_runtime_wait_helpers_cover_task_lists_ready_error_timeout_and_cancel_path
         ),
         vec![
             Value::Int(IntegerValue::from_signed(0)),
-            Value::String("all failed".to_string())
+            Value::String("all failed".to_string().into())
         ]
     );
 
@@ -17735,7 +17797,7 @@ fn mir_runtime_io_write_streams_to_stdout_sink() {
     env.define_typed(
         "text",
         Type::named("str"),
-        Value::String("hello".to_string()),
+        Value::String("hello".to_string().into()),
     );
 
     runtime
@@ -18814,7 +18876,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
             "Result".to_string(),
             vec![Type::named("int32"), Type::named("str")],
         ),
-        result_err(Value::String("boom".to_string())),
+        result_err(Value::String("boom".to_string().into())),
     );
     runtime.return_type_stack.push(Type::Named(
         "Result".to_string(),
@@ -18836,7 +18898,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
             assert_eq!(variant.variant_name, "Err");
             assert_eq!(
                 variant.payloads,
-                vec![Value::String("boom".to_string())].into()
+                vec![Value::String("boom".to_string().into())].into()
             );
         }
         _ => panic!("expected try return outcome"),
@@ -18889,7 +18951,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         Value::EnumVariant(EnumVariantValue {
             enum_name: "Status".into(),
             variant_name: "Ready".into(),
-            payloads: vec![Value::String("ok".to_string())].into(),
+            payloads: vec![Value::String("ok".to_string().into())].into(),
         }),
     );
     match runtime
@@ -18903,7 +18965,9 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         )
         .expect("variant payload extraction should return existing payloads")
     {
-        super::RvalueOutcome::Value(value) => assert_eq!(value, Value::String("ok".to_string())),
+        super::RvalueOutcome::Value(value) => {
+            assert_eq!(value, Value::String("ok".to_string().into()))
+        }
         _ => panic!("expected variant payload value outcome"),
     }
 
@@ -19228,12 +19292,12 @@ fn mir_assert_fail_attaches_typed_bounded_operands_in_source_order() {
     env.define_typed(
         "left_rendered",
         Type::named("str"),
-        Value::String("41".to_string()),
+        Value::String("41".to_string().into()),
     );
     env.define_typed(
         "right_rendered",
         Type::named("str"),
-        Value::String("é".repeat(3_000)),
+        Value::String("é".repeat(3_000).into()),
     );
     let mut loop_state = HashMap::new();
     let mut cleanups = Vec::new();
@@ -19362,7 +19426,7 @@ fn mir_assert_fail_moves_an_owned_message_only_on_the_failure_path() {
     env.define_typed(
         "message",
         Type::named("str"),
-        Value::String("owned message".to_string()),
+        Value::String("owned message".to_string().into()),
     );
     let mut loop_state = HashMap::new();
     let mut cleanups = Vec::new();
@@ -19436,7 +19500,11 @@ def main():
     let mut env = Env::default();
     let owned_message = message.to_string();
     let allocation = owned_message.as_ptr();
-    env.define_typed("message", Type::named("str"), Value::String(owned_message));
+    env.define_typed(
+        "message",
+        Type::named("str"),
+        Value::String(owned_message.into()),
+    );
     let mut loop_state = HashMap::new();
     let mut cleanups = Vec::new();
     let clone_count = super::mir_value_clone_count();
@@ -19716,7 +19784,7 @@ fn mir_function_value_runtime_moves_owned_args_writes_back_mut_args_and_traps_ba
     );
     let text = "owned dynamic argument".to_string();
     let allocation = text.as_ptr();
-    env.define_typed("text", string_type, Value::String(text));
+    env.define_typed("text", string_type, Value::String(text.into()));
     let consumed = runtime
         .evaluate_call(
             &CallTarget::Value(Operand::Place("consumer".to_string())),
@@ -20171,7 +20239,7 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
     env.define_typed(
         "text",
         string_type.clone(),
-        Value::String("captured".to_string()),
+        Value::String("captured".to_string().into()),
     );
 
     let repeatable_signature = Type::Closure {
@@ -20285,7 +20353,7 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
                 &mut env,
             )
             .expect("the first consuming closure call should transfer its environment"),
-        Value::String("captured".to_string())
+        Value::String("captured".to_string().into())
     );
     let repeated = runtime
         .evaluate_call(
@@ -20894,7 +20962,7 @@ fn coverage_member_call(place: &str, field: &str, args: Vec<MirArg>) -> Rvalue {
 fn coverage_string_arg(name: &str, text: &str) -> EvaluatedMirArg {
     EvaluatedMirArg {
         name: Some(name.to_string()),
-        value: Value::String(text.to_string()),
+        value: Value::String(text.to_string().into()),
         ty: Some(Type::named("str")),
         writeback_place: None,
     }
@@ -21315,7 +21383,7 @@ fn owned_collection_methods_require_their_source_places() {
                 &mut env,
             )
             .expect("str.add concatenates"),
-        Value::String("abcd".to_string())
+        Value::String("abcd".to_string().into())
     );
 }
 
@@ -21482,7 +21550,7 @@ fn divmod_builtin_infers_operand_types_for_untyped_places() {
         .insert("right".to_string(), Value::Int(IntegerValue::from_i32(2)));
     env.values.insert("ratio".to_string(), Value::Float(7.5));
     env.values
-        .insert("text".to_string(), Value::String("x".to_string()));
+        .insert("text".to_string(), Value::String("x".to_string().into()));
     let args = |left: &str, right: &str| {
         vec![
             mir_arg(None, Operand::Place(left.to_string())),
@@ -22550,7 +22618,7 @@ fn tls_listener_and_stream_methods_cover_close_eof_and_partial_lines() {
     );
     assert_eq!(
         expect_present(partial),
-        Value::String("partial".to_string())
+        Value::String("partial".to_string().into())
     );
     assert_absent(result_ok_payload(
         runtime
@@ -22753,7 +22821,7 @@ fn process_child_and_supervisor_methods_cover_optional_waits_and_missing_argumen
         Type::Named("list".to_string(), vec![Type::named("str")]),
         Value::Vec(VecValue {
             element_type: Type::named("str"),
-            elements: vec![Value::String("true".to_string())].into(),
+            elements: vec![Value::String("true".to_string().into())].into(),
             str_view: Default::default(),
         }),
     );
@@ -23073,12 +23141,12 @@ fn optional_helpers_infer_lookup_and_poll_types_and_decode_bare_payloads() {
         None
     );
     assert_eq!(
-        super::expect_optional_string_value(&Value::String("dir".to_string()), "cwd")
+        super::expect_optional_string_value(&Value::String("dir".to_string().into()), "cwd")
             .expect("a bare `str` decodes as a present optional string"),
         Some("dir".to_string())
     );
     assert_eq!(
-        super::expect_owned_optional_string_value(Value::String("dir".to_string()), "cwd")
+        super::expect_owned_optional_string_value(Value::String("dir".to_string().into()), "cwd")
             .expect("a bare owned `str` decodes as a present optional string"),
         Some("dir".to_string())
     );
@@ -23375,7 +23443,7 @@ fn mir_runtime_private_sort_members_sort_in_place_and_check_their_arguments() {
         })
     };
     let list_ty = |element: &str| Type::Named("list".to_string(), vec![Type::named(element)]);
-    let text = |value: &str| Value::String(value.to_string());
+    let text = |value: &str| Value::String(value.to_string().into());
     let int = |value: i64| Value::Int(IntegerValue::from_i64(value));
     env.define_typed(
         "words",

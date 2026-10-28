@@ -18639,6 +18639,34 @@ No other of the 30 cross-language programs changes by more than 3%, and
 29 of them convert no value at all. `mini_browser` converts 20 times a
 run, when it stores a class held in place in a field.
 
+### Strings Keep Short Text In Place
+
+A `str` value records whether every byte is ASCII. On ASCII text, `len()`
+is the byte count and `text[a:b]` takes bytes `a` to `b`, so neither
+decodes a character. A string of at most 29 bytes, such as a word, a CSV
+field, a token, or a short slice, keeps its bytes inside the value, so
+making, copying, and freeing it allocates nothing. A longer string keeps
+its bytes on the heap.
+
+A read-only element view passed to a function that only reads the
+parameter, such as `view row = self.rows[slot]` passed to
+`matches(row, conditions)`, gives the function the element where the
+list keeps it instead of a copy. A selection inside the view, such as
+`row[i]`, reads from the same element. A list that keeps its elements as
+plain values moves them into boxes of their own once such reads miss
+often enough, as a list of lists or instances already did; a list of
+enum values, dicts, or sets now does too.
+
+| Program | Instructions before | Instructions after |
+| --- | ---: | ---: |
+| `sql_engine` | 1,307.5M | 779.5M |
+| `mini_browser` | 545.1M | 458.2M |
+| `json_roundtrip` | 569.6M | 523.9M |
+| `word_freq` | 52.5M | 42.3M |
+| `csv_aggregate` | 63.8M | 53.2M |
+| `template_render` | 31.7M | 25.6M |
+| `spreadsheet` | 17.6M | 15.2M |
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

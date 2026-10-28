@@ -21,6 +21,7 @@ pub mod randomness;
 pub mod runtime_config;
 pub mod runtime_reactor;
 pub mod runtime_value;
+pub mod text;
 pub mod text_methods;
 pub mod union_runtime;
 

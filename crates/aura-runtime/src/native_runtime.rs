@@ -38,21 +38,21 @@ use crate::json_codec;
 use crate::list_elements::{ElementRefMut, ListElements};
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
-    append_string_checked, cancel_current_lightweight_task_boundary, cast_numeric_value,
-    claim_task_result_observations, clear_current_task_native_slot, clone_json_codec_source,
-    collect_queue_values, concat_strings_checked, current_lightweight_task_cancellation,
-    current_lightweight_task_id, current_task_native_slot, decode_process_restart_policy,
-    decode_process_stdio, divmod_numeric_values, embedded_nominal_runtime_type_name,
-    fail_current_lightweight_task, float_floor_divmod, float_power, flush_buffered_files,
-    format_runtime_value_with, host_builtins, io_error, io_read_line, is_clone_leaf,
-    json_array_metadata_is_exact, json_dump_error_to_diagnostic, json_int_metadata_is_exact,
-    json_object_metadata_is_exact, json_parse_inline, json_parse_owned_to_runtime, lookup_found,
-    lookup_missing, nominal_runtime_base_name, optional_absent, optional_bytes_value,
-    optional_named, optional_present, optional_str_value, optional_value, poll_cancellation,
-    poll_ready, poll_unavailable, prepare_json_codec_source, process_error_cancelled,
-    process_error_io, process_error_no_command, process_error_spawn, process_error_timed_out,
-    process_exit_status, process_stdio_inherit, process_stdio_null, process_stdio_pipe,
-    process_supervisor_event_failed, process_supervisor_wait_cancelled,
+    append_string_checked, append_text_checked, cancel_current_lightweight_task_boundary,
+    cast_numeric_value, claim_task_result_observations, clear_current_task_native_slot,
+    clone_json_codec_source, collect_queue_values, concat_text_checked,
+    current_lightweight_task_cancellation, current_lightweight_task_id, current_task_native_slot,
+    decode_process_restart_policy, decode_process_stdio, divmod_numeric_values,
+    embedded_nominal_runtime_type_name, fail_current_lightweight_task, float_floor_divmod,
+    float_power, flush_buffered_files, format_runtime_value_with, host_builtins, io_error,
+    io_read_line, is_clone_leaf, json_array_metadata_is_exact, json_dump_error_to_diagnostic,
+    json_int_metadata_is_exact, json_object_metadata_is_exact, json_parse_inline,
+    json_parse_owned_to_runtime, lookup_found, lookup_missing, nominal_runtime_base_name,
+    optional_absent, optional_bytes_value, optional_named, optional_present, optional_str_value,
+    optional_value, poll_cancellation, poll_ready, poll_unavailable, prepare_json_codec_source,
+    process_error_cancelled, process_error_io, process_error_no_command, process_error_spawn,
+    process_error_timed_out, process_exit_status, process_stdio_inherit, process_stdio_null,
+    process_stdio_pipe, process_supervisor_event_failed, process_supervisor_wait_cancelled,
     process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
     process_wait_exited, process_wait_failed, process_wait_timed_out, queue_receive_cancelled,
     queue_receive_closed, queue_receive_item, queue_receive_timed_out, read_file_limited,
@@ -60,8 +60,8 @@ use crate::runtime_value::{
     render_float32, result_err, result_ok, round_float_to_int64, round_numeric_value,
     run_blocking_io, run_lightweight_root_task_with_forced_exit_cleanup, runtime_value_to_json,
     select_runtime_values, send_error_cancelled, send_error_closed, send_error_full,
-    send_error_timed_out, set_current_task_native_slot, sleep_with_runtime_scheduler,
-    slice_string_owned, slice_vec_owned, spawn_lightweight_task_with_cancellation,
+    send_error_timed_out, set_current_task_native_slot, sleep_with_runtime_scheduler, slice_text,
+    slice_vec_owned, spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability_registered,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
     task_result_timed_out, try_array_buffer, try_clone_array_containing_value, wait_all_cancelled,
@@ -2191,7 +2191,7 @@ fn embedded_runtime_type_name(value: &Value) -> Option<String> {
                 .fields
                 .get(DIRECT_RUNTIME_TYPE_FIELD)
                 .and_then(|value| match &*value {
-                    Value::String(runtime_type_name) => Some(runtime_type_name.clone()),
+                    Value::String(runtime_type_name) => Some(runtime_type_name.to_string()),
                     _ => None,
                 })
         }
@@ -2800,7 +2800,7 @@ fn retag_value(value: &mut Value, tag: &RuntimeTypeTag) {
             if !already_tagged {
                 instance.fields.map_mut().insert(
                     DIRECT_RUNTIME_TYPE_FIELD.to_string(),
-                    Value::String(runtime_type_name.to_string()),
+                    Value::String(runtime_type_name.to_string().into()),
                 );
             }
         }
@@ -3703,7 +3703,7 @@ fn direct_json_dumps(args: &DirectHostArgBuffer) -> std::result::Result<Value, D
     args.with_borrow(name, 0, |value| {
         let value = runtime_value_to_json(value)?;
         json_codec::dumps(&value, indent)
-            .map(Value::String)
+            .map(Value::string)
             .map_err(json_dump_error_to_diagnostic)
     })
 }
@@ -4195,7 +4195,7 @@ fn direct_value_to_ffi(value: &Value, ty: &DirectFfiType) -> std::result::Result
         ),
         (FfiType::F32, Value::Float(value)) => FfiValue::F32(*value as f32),
         (FfiType::F64, Value::Float(value)) => FfiValue::F64(*value),
-        (FfiType::StringView, Value::String(value)) => FfiValue::String(value.clone()),
+        (FfiType::StringView, Value::String(value)) => FfiValue::String(value.to_string()),
         (FfiType::BytesView | FfiType::BytesViewMut, Value::Vec(_)) => {
             FfiValue::Bytes(expect_bytes_value(value, "FFI byte view"))
         }
@@ -4428,14 +4428,14 @@ fn headers_map_value(headers: Vec<(String, String)>) -> Value {
         value_type: Type::named("str"),
         entries: headers
             .into_iter()
-            .map(|(key, value)| (Value::String(key), Value::String(value)))
+            .map(|(key, value)| (Value::String(key.into()), Value::String(value.into())))
             .collect(),
     })
 }
 
 fn expect_string_value(value: &Value, label: &str) -> String {
     match value {
-        Value::String(text) => text.clone(),
+        Value::String(text) => text.to_string(),
         other => runtime_error(format!(
             "`{}` expects `str`, found `{}`",
             label,
@@ -5272,7 +5272,7 @@ fn eval_binary_value_with_float_width(
             },
             (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left + right)),
             (Value::String(left), Value::String(right)) => {
-                Ok(Value::String(concat_strings_checked(left, &right)?))
+                Ok(Value::String(concat_text_checked(left, &right)?))
             }
             (left, right) => Err(Diagnostic::new(format!(
                 "unsupported `+` operands `{}` and `{}`",
@@ -6471,7 +6471,7 @@ pub extern "C-unwind" fn aura_direct_string_literal(
     ptr: *const u8,
     len: usize,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| boxed_value(Value::String(decode_bytes(ptr, len))))
+    task_runtime_boundary(|| boxed_value(Value::String(decode_bytes(ptr, len).into())))
 }
 
 /// Runtime nominal type names mapped to the native thunks of their
@@ -6575,7 +6575,7 @@ fn call_direct_display_thunk(thunk: usize, value: &Value) -> String {
     let result = unsafe { thunk(arguments.as_mut_ptr(), arguments.len()) };
     let rendered = unsafe {
         with_value(result, |value| match value {
-            Value::String(text) => text.clone(),
+            Value::String(text) => text.to_string(),
             other => runtime_error(format!(
                 "`Display.display` returned `{}` instead of `str`",
                 value_type_name(other)
@@ -6591,7 +6591,7 @@ fn call_direct_display_thunk(thunk: usize, value: &Value) -> String {
 pub extern "C-unwind" fn aura_direct_stringify_value(value: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let rendered = render_direct_value(value);
-        boxed_value(Value::String(rendered))
+        boxed_value(Value::String(rendered.into()))
     })
 }
 
@@ -6610,7 +6610,7 @@ pub extern "C-unwind" fn aura_direct_format_value(
         match format_runtime_value_with(&value, &value_type, &spec, &mut |value| {
             Ok(render_direct_display(value))
         }) {
-            Ok(rendered) => boxed_value(Value::String(rendered)),
+            Ok(rendered) => boxed_value(Value::String(rendered.into())),
             Err(error) => runtime_diagnostic_error(error),
         }
     })
@@ -6621,13 +6621,13 @@ pub extern "C-unwind" fn aura_direct_format_value(
 /// parts append in place instead of through one concatenation per part.
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_format_begin(ptr: *const u8, len: usize) -> *mut OpaqueValue {
-    task_runtime_boundary(|| boxed_value(Value::String(decode_bytes(ptr, len))))
+    task_runtime_boundary(|| boxed_value(Value::String(decode_bytes(ptr, len).into())))
 }
 
 fn push_format_text(builder: *mut OpaqueValue, text: &str) {
     let appended = unsafe {
         value_mut(builder, |value| match value {
-            Value::String(output) => append_string_checked(output, text),
+            Value::String(output) => append_text_checked(output, text),
             other => runtime_error(format!(
                 "f-string builder holds `{}` instead of `str`",
                 value_type_name(&*other)
@@ -6711,7 +6711,7 @@ pub extern "C-unwind" fn aura_direct_format_begin_i64(
         } else if let Err(error) = append_string_checked(&mut output, digits) {
             runtime_diagnostic_error(error);
         }
-        boxed_value(Value::String(output))
+        boxed_value(Value::String(output.into()))
     })
 }
 
@@ -6801,29 +6801,35 @@ pub extern "C-unwind" fn aura_direct_duration_to_float(
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_string_len(value: *mut OpaqueValue) -> i64 {
-    task_runtime_boundary(|| match unsafe { value_ref(value) } {
-        Value::String(text) => match i64::try_from(text.chars().count()) {
-            Ok(length) => length,
-            Err(_) => runtime_error("string length does not fit in the direct runtime range"),
-        },
-        other => runtime_error(format!(
-            "expected `str`, found `{}`",
-            value_type_name(other)
-        )),
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| match value {
+            Value::String(text) => match i64::try_from(text.char_len()) {
+                Ok(length) => length,
+                Err(_) => runtime_error("string length does not fit in the direct runtime range"),
+            },
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        })
     })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_string_byte_len(value: *mut OpaqueValue) -> i64 {
-    task_runtime_boundary(|| match unsafe { value_ref(value) } {
-        Value::String(text) => match i64::try_from(text.len()) {
-            Ok(length) => length,
-            Err(_) => runtime_error("string byte length does not fit in the direct runtime range"),
-        },
-        other => runtime_error(format!(
-            "expected `str`, found `{}`",
-            value_type_name(other)
-        )),
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| match value {
+            Value::String(text) => match i64::try_from(text.len()) {
+                Ok(length) => length,
+                Err(_) => {
+                    runtime_error("string byte length does not fit in the direct runtime range")
+                }
+            },
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        })
     })
 }
 
@@ -6838,9 +6844,23 @@ pub extern "C-unwind" fn aura_direct_string_slice(
     column: i64,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        // Bounds in order inside ASCII text select bytes as they are.
+        let fast = (has_start != 0 && has_end != 0 && 0 <= start && start <= end)
+            .then(|| unsafe {
+                with_value(value, |value| match value {
+                    Value::String(text) if text.is_ascii() && end as u64 <= text.len() as u64 => {
+                        Some(text.slice(start as usize..end as usize))
+                    }
+                    _ => None,
+                })
+            })
+            .flatten();
+        if let Some(slice) = fast {
+            return boxed_value(Value::String(slice));
+        }
         let result = unsafe {
             with_value(value, |value| match value {
-                Value::String(text) => slice_string_owned(
+                Value::String(text) => slice_text(
                     text,
                     (has_start != 0).then_some(i128::from(start)),
                     (has_end != 0).then_some(i128::from(end)),
@@ -6870,12 +6890,14 @@ pub extern "C-unwind" fn aura_direct_string_contains(
         let Value::String(needle) = (unsafe { take_value(needle) }) else {
             runtime_error("`contains` requires a `str` argument");
         };
-        match unsafe { value_ref(value) } {
-            Value::String(text) => i64::from(text.contains(&needle)),
-            other => runtime_error(format!(
-                "expected `str`, found `{}`",
-                value_type_name(other)
-            )),
+        unsafe {
+            with_value(value, |value| match value {
+                Value::String(text) => i64::from(text.contains(needle.as_str())),
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            })
         }
     })
 }
@@ -6889,12 +6911,14 @@ pub extern "C-unwind" fn aura_direct_string_starts_with(
         let Value::String(prefix) = (unsafe { take_value(prefix) }) else {
             runtime_error("`starts_with` requires a `str` argument");
         };
-        match unsafe { value_ref(value) } {
-            Value::String(text) => i64::from(text.starts_with(&prefix)),
-            other => runtime_error(format!(
-                "expected `str`, found `{}`",
-                value_type_name(other)
-            )),
+        unsafe {
+            with_value(value, |value| match value {
+                Value::String(text) => i64::from(text.starts_with(prefix.as_str())),
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            })
         }
     })
 }
@@ -6908,12 +6932,14 @@ pub extern "C-unwind" fn aura_direct_string_ends_with(
         let Value::String(suffix) = (unsafe { take_value(suffix) }) else {
             runtime_error("`ends_with` requires a `str` argument");
         };
-        match unsafe { value_ref(value) } {
-            Value::String(text) => i64::from(text.ends_with(&suffix)),
-            other => runtime_error(format!(
-                "expected `str`, found `{}`",
-                value_type_name(other)
-            )),
+        unsafe {
+            with_value(value, |value| match value {
+                Value::String(text) => i64::from(text.ends_with(suffix.as_str())),
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            })
         }
     })
 }
@@ -6927,19 +6953,18 @@ pub extern "C-unwind" fn aura_direct_string_split(
         let Value::String(separator) = (unsafe { take_value(separator) }) else {
             runtime_error("`split` requires a `str` argument");
         };
-        match unsafe { value_ref(value) } {
-            Value::String(text) => boxed_value(Value::Vec(VecValue {
-                element_type: Type::named("str"),
-                elements: text
-                    .split(&separator)
-                    .map(|part| Value::String(part.to_string()))
-                    .collect(),
-                str_view: Default::default(),
-            })),
-            other => runtime_error(format!(
-                "expected `str`, found `{}`",
-                value_type_name(other)
-            )),
+        unsafe {
+            with_value(value, |value| match value {
+                Value::String(text) => boxed_value(Value::Vec(VecValue {
+                    element_type: Type::named("str"),
+                    elements: text.split(separator.as_str()).map(Value::string).collect(),
+                    str_view: Default::default(),
+                })),
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            })
         }
     })
 }
@@ -6957,35 +6982,43 @@ pub extern "C-unwind" fn aura_direct_string_replace(
         let Value::String(to) = (unsafe { take_value(to) }) else {
             runtime_error("`replace` requires `str` for `to`");
         };
-        match unsafe { value_ref(value) } {
-            Value::String(text) => boxed_value(Value::String(text.replace(&from, &to))),
-            other => runtime_error(format!(
-                "expected `str`, found `{}`",
-                value_type_name(other)
-            )),
+        unsafe {
+            with_value(value, |value| match value {
+                Value::String(text) => boxed_value(Value::String(
+                    text.replace(from.as_str(), to.as_str()).into(),
+                )),
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            })
         }
     })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_string_to_lower(value: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(value) } {
-        Value::String(text) => boxed_value(Value::String(text.to_lowercase())),
-        other => runtime_error(format!(
-            "expected `str`, found `{}`",
-            value_type_name(other)
-        )),
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| match value {
+            Value::String(text) => boxed_value(Value::String(text.to_lowercase().into())),
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        })
     })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_string_to_upper(value: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(value) } {
-        Value::String(text) => boxed_value(Value::String(text.to_uppercase())),
-        other => runtime_error(format!(
-            "expected `str`, found `{}`",
-            value_type_name(other)
-        )),
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| match value {
+            Value::String(text) => boxed_value(Value::String(text.to_uppercase().into())),
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        })
     })
 }
 
@@ -6998,14 +7031,16 @@ pub extern "C-unwind" fn aura_direct_string_strip_prefix(
         let Value::String(prefix) = (unsafe { take_value(prefix) }) else {
             runtime_error("`strip_prefix` requires a `str` argument");
         };
-        match unsafe { value_ref(value) } {
-            Value::String(text) => boxed_value(optional_str_value(
-                text.strip_prefix(&prefix).map(str::to_string),
-            )),
-            other => runtime_error(format!(
-                "expected `str`, found `{}`",
-                value_type_name(other)
-            )),
+        unsafe {
+            with_value(value, |value| match value {
+                Value::String(text) => boxed_value(optional_str_value(
+                    text.strip_prefix(prefix.as_str()).map(str::to_string),
+                )),
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            })
         }
     })
 }
@@ -7019,26 +7054,30 @@ pub extern "C-unwind" fn aura_direct_string_strip_suffix(
         let Value::String(suffix) = (unsafe { take_value(suffix) }) else {
             runtime_error("`strip_suffix` requires a `str` argument");
         };
-        match unsafe { value_ref(value) } {
-            Value::String(text) => boxed_value(optional_str_value(
-                text.strip_suffix(&suffix).map(str::to_string),
-            )),
-            other => runtime_error(format!(
-                "expected `str`, found `{}`",
-                value_type_name(other)
-            )),
+        unsafe {
+            with_value(value, |value| match value {
+                Value::String(text) => boxed_value(optional_str_value(
+                    text.strip_suffix(suffix.as_str()).map(str::to_string),
+                )),
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            })
         }
     })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_string_trim(value: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(value) } {
-        Value::String(text) => boxed_value(Value::String(text.trim().to_string())),
-        other => runtime_error(format!(
-            "expected `str`, found `{}`",
-            value_type_name(other)
-        )),
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| match value {
+            Value::String(text) => boxed_value(Value::String(crate::text::Text::from(text.trim()))),
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        })
     })
 }
 
@@ -7067,9 +7106,12 @@ pub extern "C-unwind" fn aura_direct_string_text_method(
         };
         let result = unsafe {
             with_value(value, |value| match value {
-                Value::String(text) => {
-                    text_methods::evaluate_text_method(method, text, argument.as_deref(), count)
-                }
+                Value::String(text) => text_methods::evaluate_text_method(
+                    method,
+                    text,
+                    argument.as_ref().map(|a| a.as_str()),
+                    count,
+                ),
                 other => Err(Diagnostic::new(format!(
                     "expected `str`, found `{}`",
                     value_type_name(other)
@@ -7092,21 +7134,23 @@ pub extern "C-unwind" fn aura_direct_string_join(
         let Value::Vec(parts) = (unsafe { take_value(parts) }) else {
             runtime_error("`join` requires `list[str]`");
         };
-        match unsafe { value_ref(separator) } {
-            Value::String(separator) => {
-                let mut rendered_parts = Vec::new();
-                for value in parts.elements {
-                    let Value::String(part) = value else {
-                        runtime_error("`join` requires `list[str]`");
-                    };
-                    rendered_parts.push(part);
+        unsafe {
+            with_value(separator, |value| match value {
+                Value::String(separator) => {
+                    let mut rendered_parts = Vec::new();
+                    for value in parts.elements {
+                        let Value::String(part) = value else {
+                            runtime_error("`join` requires `list[str]`");
+                        };
+                        rendered_parts.push(part);
+                    }
+                    boxed_value(Value::String(rendered_parts.join(separator).into()))
                 }
-                boxed_value(Value::String(rendered_parts.join(&separator)))
-            }
-            other => runtime_error(format!(
-                "expected `str`, found `{}`",
-                value_type_name(other)
-            )),
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            })
         }
     })
 }
@@ -7248,7 +7292,7 @@ pub extern "C-unwind" fn aura_direct_parse_int32(value: *mut OpaqueValue) -> *mu
                 Ok(value) => boxed_value(result_ok(Value::Int(IntegerValue::from_signed(
                     value as i128,
                 )))),
-                Err(error) => boxed_value(result_err(Value::String(error.to_string()))),
+                Err(error) => boxed_value(result_err(Value::String(error.to_string().into()))),
             },
             other => runtime_error(format!(
                 "`parse_int32(...)` expects `str`, found `{}`",
@@ -7267,7 +7311,7 @@ pub extern "C-unwind" fn aura_direct_parse_int64(value: *mut OpaqueValue) -> *mu
                 Ok(value) => boxed_value(result_ok(Value::Int(IntegerValue::from_signed(
                     value as i128,
                 )))),
-                Err(error) => boxed_value(result_err(Value::String(error.to_string()))),
+                Err(error) => boxed_value(result_err(Value::String(error.to_string().into()))),
             },
             other => runtime_error(format!(
                 "`parse_int64(...)` expects `str`, found `{}`",
@@ -7285,9 +7329,9 @@ pub extern "C-unwind" fn aura_direct_parse_float64(value: *mut OpaqueValue) -> *
             Value::String(text) => match text.parse::<f64>() {
                 Ok(value) if value.is_finite() => boxed_value(result_ok(Value::Float(value))),
                 Ok(_) => boxed_value(result_err(Value::String(
-                    "float must be finite".to_string(),
+                    "float must be finite".to_string().into(),
                 ))),
-                Err(error) => boxed_value(result_err(Value::String(error.to_string()))),
+                Err(error) => boxed_value(result_err(Value::String(error.to_string().into()))),
             },
             other => runtime_error(format!(
                 "`parse_float64(...)` expects `str`, found `{}`",
@@ -10144,26 +10188,63 @@ fn direct_value_at_path_mut<'a>(
 /// selects a list position and `[k]` a dictionary entry, each consuming
 /// the next selector word; any other segment projects inside the value
 /// reached so far (a field, tuple position, or payload).
+#[derive(Clone, Copy)]
 enum DirectElementPathStep<'p> {
     Index,
     Key,
     Projection(&'p str),
 }
 
+/// The steps of an element path. Paths of up to eight steps, which are
+/// nearly all of them, are kept on the stack, since a path is parsed on
+/// every access.
+struct DirectElementPathSteps<'p> {
+    inline: [DirectElementPathStep<'p>; 8],
+    len: usize,
+    spilled: Vec<DirectElementPathStep<'p>>,
+}
+
+impl<'p> std::ops::Deref for DirectElementPathSteps<'p> {
+    type Target = [DirectElementPathStep<'p>];
+
+    fn deref(&self) -> &Self::Target {
+        if self.spilled.is_empty() {
+            &self.inline[..self.len]
+        } else {
+            &self.spilled
+        }
+    }
+}
+
 fn direct_element_path_steps(
     path: &str,
-) -> std::result::Result<Vec<DirectElementPathStep<'_>>, String> {
+) -> std::result::Result<DirectElementPathSteps<'_>, String> {
     if path.is_empty() {
         return Err("direct runtime received an empty element path".to_string());
     }
-    path.split('.')
-        .map(|segment| match segment {
-            "" => Err(format!("invalid element path `{path}`")),
-            "[i]" => Ok(DirectElementPathStep::Index),
-            "[k]" => Ok(DirectElementPathStep::Key),
-            projection => Ok(DirectElementPathStep::Projection(projection)),
-        })
-        .collect()
+    let mut steps = DirectElementPathSteps {
+        inline: [DirectElementPathStep::Index; 8],
+        len: 0,
+        spilled: Vec::new(),
+    };
+    for segment in path.split('.') {
+        let step = match segment {
+            "" => return Err(format!("invalid element path `{path}`")),
+            "[i]" => DirectElementPathStep::Index,
+            "[k]" => DirectElementPathStep::Key,
+            projection => DirectElementPathStep::Projection(projection),
+        };
+        if steps.len < steps.inline.len() {
+            steps.inline[steps.len] = step;
+            steps.len += 1;
+        } else {
+            if steps.spilled.is_empty() {
+                steps.spilled.extend_from_slice(&steps.inline);
+            }
+            steps.spilled.push(step);
+        }
+    }
+    Ok(steps)
 }
 
 enum DirectElementPathError {
@@ -10383,13 +10464,13 @@ pub extern "C-unwind" fn aura_direct_element_path_load(
     column: i64,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let path = decode_bytes(path_ptr, path_len);
+        let path = literal_str(path_ptr, path_len);
         let steps =
-            direct_element_path_steps(&path).unwrap_or_else(|message| runtime_error(message));
+            direct_element_path_steps(path).unwrap_or_else(|message| runtime_error(message));
         let mut selectors = DirectElementSelectors {
             words: direct_element_selector_words(selectors_ptr, selector_count),
             cursor: 0,
-            path: &path,
+            path,
         };
         let result = unsafe {
             with_value(collection, |value| {
@@ -10430,9 +10511,7 @@ fn promote_element_path(value: &mut Value, steps: &[DirectElementPathStep<'_>], 
                 return;
             };
             let converts = match &vector.elements {
-                ListElements::Values(values) => {
-                    matches!(values[position], Value::Vec(_) | Value::Instance(_))
-                }
+                ListElements::Values(values) => lends_element(&values[position]),
                 ListElements::Boxes(_) => vector.elements.is_shared(),
                 _ => return,
             };
@@ -10479,6 +10558,16 @@ fn promote_element_path(value: &mut Value, steps: &[DirectElementPathStep<'_>], 
 /// selects from: the probe edits the collection only then, so a loan that
 /// misses for another reason, such as one of a list of strings, costs no
 /// edit.
+/// Whether an element a missed loan reads gains from a box of its own:
+/// a collection, an instance, or an enum value, which a read copies whole.
+/// A string keeps its copying read, which its list view makes cheap.
+fn lends_element(value: &Value) -> bool {
+    matches!(
+        value,
+        Value::Vec(_) | Value::Instance(_) | Value::EnumVariant(_) | Value::Map(_) | Value::Set(_)
+    )
+}
+
 fn path_promotes(value: &Value, steps: &[DirectElementPathStep<'_>], selectors: &[i64]) -> bool {
     let Some((step, rest)) = steps.split_first() else {
         return false;
@@ -10495,9 +10584,7 @@ fn path_promotes(value: &Value, steps: &[DirectElementPathStep<'_>], selectors: 
                 return false;
             };
             match &vector.elements {
-                ListElements::Values(values) => {
-                    matches!(values[position], Value::Vec(_) | Value::Instance(_))
-                }
+                ListElements::Values(values) => lends_element(&values[position]),
                 ListElements::Boxes(boxes) => {
                     vector.elements.is_shared()
                         || (!rest.is_empty()
@@ -10537,9 +10624,9 @@ pub extern "C-unwind" fn aura_direct_element_path_probe(
     column: i64,
 ) {
     task_runtime_boundary(|| {
-        let path = decode_bytes(path_ptr, path_len);
+        let path = literal_str(path_ptr, path_len);
         let selectors = (selectors_ptr, selector_count);
-        probe_element_path(collection, &path, selectors, (line, column), false)
+        probe_element_path(collection, path, selectors, (line, column), false)
     })
 }
 
@@ -10559,9 +10646,9 @@ pub extern "C-unwind" fn aura_direct_element_path_promote(
     column: i64,
 ) {
     task_runtime_boundary(|| {
-        let path = decode_bytes(path_ptr, path_len);
+        let path = literal_str(path_ptr, path_len);
         let selectors = (selectors_ptr, selector_count);
-        probe_element_path(collection, &path, selectors, (line, column), true)
+        probe_element_path(collection, path, selectors, (line, column), true)
     })
 }
 
@@ -10619,13 +10706,13 @@ pub extern "C-unwind" fn aura_direct_element_path_take(
     column: i64,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let path = decode_bytes(path_ptr, path_len);
+        let path = literal_str(path_ptr, path_len);
         let steps =
-            direct_element_path_steps(&path).unwrap_or_else(|message| runtime_error(message));
+            direct_element_path_steps(path).unwrap_or_else(|message| runtime_error(message));
         let mut selectors = DirectElementSelectors {
             words: direct_element_selector_words(selectors_ptr, selector_count),
             cursor: 0,
-            path: &path,
+            path,
         };
         let result = unsafe {
             value_mut(collection, |value| {
@@ -10658,13 +10745,13 @@ pub extern "C-unwind" fn aura_direct_element_path_store(
     column: i64,
 ) {
     task_runtime_boundary(|| {
-        let path = decode_bytes(path_ptr, path_len);
+        let path = literal_str(path_ptr, path_len);
         let steps =
-            direct_element_path_steps(&path).unwrap_or_else(|message| runtime_error(message));
+            direct_element_path_steps(path).unwrap_or_else(|message| runtime_error(message));
         let mut selectors = DirectElementSelectors {
             words: direct_element_selector_words(selectors_ptr, selector_count),
             cursor: 0,
-            path: &path,
+            path,
         };
         let stored = unsafe { consume_owned_value(value) };
         let result = unsafe {
@@ -11308,7 +11395,7 @@ fn compare_with_str_literal(
             })
         }
         other => {
-            let literal = Value::String(decode_bytes(literal_ptr, literal_len));
+            let literal = Value::String(decode_bytes(literal_ptr, literal_len).into());
             let compared = if literal_on_left != 0 {
                 compare_value_refs(&literal, other, op)
             } else {
@@ -14785,7 +14872,7 @@ pub extern "C-unwind" fn aura_direct_fs_read_to_string(path: *mut OpaqueValue) -
                 },
                 Some(&current_cancellation()),
             ) {
-                Ok(text) => boxed_value(result_ok(Value::String(text))),
+                Ok(text) => boxed_value(result_ok(Value::String(text.into()))),
                 Err(error) => boxed_value(result_err(io_error(error))),
             },
             other => runtime_error(format!(
@@ -14966,7 +15053,7 @@ pub extern "C-unwind" fn aura_direct_fs_read_dir(path: *mut OpaqueValue) -> *mut
             ) {
                 Ok(names) => boxed_value(result_ok(Value::Vec(VecValue {
                     element_type: Type::named("str"),
-                    elements: names.into_iter().map(Value::String).collect(),
+                    elements: names.into_iter().map(Value::string).collect(),
                     str_view: Default::default(),
                 }))),
                 Err(error) => boxed_value(result_err(io_error(error))),
@@ -15076,7 +15163,7 @@ pub extern "C-unwind" fn aura_direct_fs_append(path: *mut OpaqueValue) -> *mut O
 pub extern "C-unwind" fn aura_direct_file_read_all(file: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(file) } {
         Value::File(file) => match file.read_all() {
-            Ok(text) => boxed_value(result_ok(Value::String(text))),
+            Ok(text) => boxed_value(result_ok(Value::String(text.into()))),
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
@@ -15523,7 +15610,7 @@ pub extern "C-unwind" fn aura_direct_process_pipe_read_all(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(pipe) } {
         Value::ProcessPipe(pipe) => match pipe.read_all(Some(&current_cancellation())) {
-            Ok(text) => boxed_value(result_ok(Value::String(text))),
+            Ok(text) => boxed_value(result_ok(Value::String(text.into()))),
             Err(error) => boxed_value(result_err(process_error_from_io(error))),
         },
         other => runtime_error(format!(
@@ -15696,7 +15783,7 @@ pub extern "C-unwind" fn aura_direct_process_completed_stdout(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(completed) } {
         Value::ProcessCompleted(completed) => match completed.stdout() {
-            Ok(stdout) => boxed_value(Value::String(stdout)),
+            Ok(stdout) => boxed_value(Value::String(stdout.into())),
             Err(error) => runtime_diagnostic_error(Diagnostic::coded("AU4005", error.to_string())),
         },
         other => runtime_error(format!(
@@ -15712,7 +15799,7 @@ pub extern "C-unwind" fn aura_direct_process_completed_stderr(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(completed) } {
         Value::ProcessCompleted(completed) => match completed.stderr() {
-            Ok(stderr) => boxed_value(Value::String(stderr)),
+            Ok(stderr) => boxed_value(Value::String(stderr.into())),
             Err(error) => runtime_diagnostic_error(Diagnostic::coded("AU4005", error.to_string())),
         },
         other => runtime_error(format!(
@@ -16378,7 +16465,7 @@ pub extern "C-unwind" fn aura_direct_tcp_listener_local_addr(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(listener) } {
         Value::TcpListener(listener) => match listener.local_addr() {
-            Ok(address) => boxed_value(result_ok(Value::String(address))),
+            Ok(address) => boxed_value(result_ok(Value::String(address.into()))),
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
@@ -16414,7 +16501,7 @@ pub extern "C-unwind" fn aura_direct_tcp_stream_read_all(
         match unsafe { value_ref(stream) } {
             Value::TcpStream(stream) => {
                 match stream.read_all(timeout, Some(&current_cancellation())) {
-                    Ok(text) => boxed_value(result_ok(Value::String(text))),
+                    Ok(text) => boxed_value(result_ok(Value::String(text.into()))),
                     Err(error) => boxed_value(result_err(io_error(error))),
                 }
             }
@@ -16629,7 +16716,7 @@ pub extern "C-unwind" fn aura_direct_tcp_stream_local_addr(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(stream) } {
         Value::TcpStream(stream) => match stream.local_addr() {
-            Ok(address) => boxed_value(result_ok(Value::String(address))),
+            Ok(address) => boxed_value(result_ok(Value::String(address.into()))),
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
@@ -16645,7 +16732,7 @@ pub extern "C-unwind" fn aura_direct_tcp_stream_peer_addr(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(stream) } {
         Value::TcpStream(stream) => match stream.peer_addr() {
-            Ok(address) => boxed_value(result_ok(Value::String(address))),
+            Ok(address) => boxed_value(result_ok(Value::String(address.into()))),
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
@@ -16792,7 +16879,7 @@ pub extern "C-unwind" fn aura_direct_udp_socket_local_addr(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(socket) } {
         Value::UdpSocket(socket) => match socket.local_addr() {
-            Ok(address) => boxed_value(result_ok(Value::String(address))),
+            Ok(address) => boxed_value(result_ok(Value::String(address.into()))),
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
@@ -16808,7 +16895,7 @@ pub extern "C-unwind" fn aura_direct_udp_socket_peer_addr(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(socket) } {
         Value::UdpSocket(socket) => match socket.peer_addr() {
-            Ok(address) => boxed_value(result_ok(Value::String(address))),
+            Ok(address) => boxed_value(result_ok(Value::String(address.into()))),
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
@@ -16839,7 +16926,7 @@ pub extern "C-unwind" fn aura_direct_udp_datagram_address(
     datagram: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(datagram) } {
-        Value::UdpDatagram(datagram) => boxed_value(Value::String(datagram.address())),
+        Value::UdpDatagram(datagram) => boxed_value(Value::String(datagram.address().into())),
         other => runtime_error(format!(
             "expected `net.UdpDatagram`, found `{}`",
             value_type_name(other)
@@ -16866,7 +16953,7 @@ pub extern "C-unwind" fn aura_direct_udp_datagram_text(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(datagram) } {
         Value::UdpDatagram(datagram) => match datagram.text() {
-            Ok(text) => boxed_value(result_ok(Value::String(text))),
+            Ok(text) => boxed_value(result_ok(Value::String(text.into()))),
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
@@ -16904,7 +16991,7 @@ pub extern "C-unwind" fn aura_direct_http_listener_local_addr(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(listener) } {
         Value::HttpListener(listener) => match listener.local_addr() {
-            Ok(address) => boxed_value(result_ok(Value::String(address))),
+            Ok(address) => boxed_value(result_ok(Value::String(address.into()))),
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
@@ -16935,7 +17022,7 @@ pub extern "C-unwind" fn aura_direct_http_exchange_method(
     exchange: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(exchange) } {
-        Value::HttpExchange(exchange) => boxed_value(Value::String(exchange.method())),
+        Value::HttpExchange(exchange) => boxed_value(Value::String(exchange.method().into())),
         other => runtime_error(format!(
             "expected `net.HttpExchange`, found `{}`",
             value_type_name(other)
@@ -16948,7 +17035,7 @@ pub extern "C-unwind" fn aura_direct_http_exchange_path(
     exchange: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(exchange) } {
-        Value::HttpExchange(exchange) => boxed_value(Value::String(exchange.path())),
+        Value::HttpExchange(exchange) => boxed_value(Value::String(exchange.path().into())),
         other => runtime_error(format!(
             "expected `net.HttpExchange`, found `{}`",
             value_type_name(other)
@@ -16975,7 +17062,7 @@ pub extern "C-unwind" fn aura_direct_http_exchange_body_text(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(exchange) } {
         Value::HttpExchange(exchange) => match exchange.body_text() {
-            Ok(text) => boxed_value(result_ok(Value::String(text))),
+            Ok(text) => boxed_value(result_ok(Value::String(text.into()))),
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
@@ -17068,7 +17155,7 @@ pub extern "C-unwind" fn aura_direct_http_response_reason(
     response: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(response) } {
-        Value::HttpResponse(response) => boxed_value(Value::String(response.reason())),
+        Value::HttpResponse(response) => boxed_value(Value::String(response.reason().into())),
         other => runtime_error(format!(
             "expected `net.HttpResponse`, found `{}`",
             value_type_name(other)
@@ -17095,7 +17182,7 @@ pub extern "C-unwind" fn aura_direct_http_response_text(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(response) } {
         Value::HttpResponse(response) => match response.text() {
-            Ok(text) => boxed_value(result_ok(Value::String(text))),
+            Ok(text) => boxed_value(result_ok(Value::String(text.into()))),
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
@@ -17144,7 +17231,7 @@ pub extern "C-unwind" fn aura_direct_websocket_listener_local_addr(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(listener) } {
         Value::WebSocketListener(listener) => match listener.local_addr() {
-            Ok(address) => boxed_value(result_ok(Value::String(address))),
+            Ok(address) => boxed_value(result_ok(Value::String(address.into()))),
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
@@ -17411,7 +17498,7 @@ pub extern "C-unwind" fn aura_direct_tls_listener_local_addr(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(listener) } {
         Value::TlsListener(listener) => match listener.local_addr() {
-            Ok(address) => boxed_value(result_ok(Value::String(address))),
+            Ok(address) => boxed_value(result_ok(Value::String(address.into()))),
             Err(error) => boxed_value(result_err(io_error(error))),
         },
         other => runtime_error(format!(
@@ -18325,7 +18412,7 @@ fn direct_assert_string(value: i64, field: &str) -> String {
     }
     let value = unsafe {
         with_value(value as *mut OpaqueValue, |value| match value {
-            Value::String(value) => Ok(value.clone()),
+            Value::String(value) => Ok(value.to_string()),
             other => Err(format!(
                 "direct assertion {field} must be `str`, found `{}`",
                 value_type_name(other)

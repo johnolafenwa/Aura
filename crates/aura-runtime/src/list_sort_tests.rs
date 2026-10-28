@@ -13,7 +13,7 @@ fn int32(value: i32) -> Value {
 }
 
 fn text(value: &str) -> Value {
-    Value::String(value.to_string())
+    Value::String(value.to_string().into())
 }
 
 fn list(values: Vec<Value>) -> ListElements {
@@ -26,7 +26,7 @@ fn rendered(elements: &ListElements) -> Vec<String> {
         .map(|value| match value.as_ref() {
             Value::Int(value) => value.to_string(),
             Value::Float(value) => format!("{value:?}"),
-            Value::String(value) => value.clone(),
+            Value::String(value) => value.to_string(),
             Value::Duration(value) => format!("{value}ns"),
             Value::Bool(value) => value.to_string(),
             other => format!("{other:?}"),

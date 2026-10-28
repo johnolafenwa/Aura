@@ -262,12 +262,14 @@ enum HttpBodyFraming {
     UntilClose,
 }
 
+pub use crate::text::Text;
+
 #[derive(Debug)]
 pub enum Value {
     Int(IntegerValue),
     Float(f64),
     Bool(bool),
-    String(String),
+    String(crate::text::Text),
     Tuple(TupleValue),
     Vec(VecValue),
     Array(ArrayValue),
@@ -304,6 +306,13 @@ pub enum Value {
     UnixStream(UnixStreamValue),
     TlsListener(TlsListenerValue),
     TlsStream(TlsStreamValue),
+}
+
+impl Value {
+    /// A `str` value holding `text`.
+    pub fn string(text: impl Into<crate::text::Text>) -> Value {
+        Value::String(text.into())
+    }
 }
 
 /// Interpreter and opaque boundary transport for a selected union payload.
@@ -2710,6 +2719,12 @@ pub fn normalize_slice_bounds(
     end: Option<i128>,
     len: usize,
 ) -> Result<(usize, usize)> {
+    // Endpoints already in order inside the sequence need no adjusting.
+    if let (Some(start @ 0..), Some(end @ 0..)) = (start, end) {
+        if start <= end && end <= len as i128 {
+            return Ok((start as usize, end as usize));
+        }
+    }
     // Every supported Rust pointer width fits losslessly in i128.
     let len = len as i128;
     let start = normalize_slice_endpoint(start, 0, "start", len)?;
@@ -2901,6 +2916,17 @@ pub fn span_fill(vector: &mut VecValue, start: i128, len: i128, value: &Value) -
         vector.elements.replace(index, value.clone());
     }
     Ok(())
+}
+
+/// The `str` slice `text[start:end]`. ASCII text, whose endpoints are
+/// byte positions, is sliced without reading its bytes.
+pub fn slice_text(text: &Text, start: Option<i128>, end: Option<i128>) -> Result<Text> {
+    if text.is_ascii() {
+        let (start, end) = normalize_slice_bounds(start, end, text.len())?;
+        return Ok(text.slice(start..end));
+    }
+    let range = string_slice_byte_range(text, start, end)?;
+    Ok(text.slice(range))
 }
 
 pub fn slice_string_owned(text: &str, start: Option<i128>, end: Option<i128>) -> Result<String> {
@@ -8922,6 +8948,32 @@ fn append_string_with_limit(output: &mut String, text: &str, limit: usize) -> Re
 
 pub fn append_string_checked(output: &mut String, text: &str) -> Result<()> {
     append_string_with_limit(output, text, MAX_STRING_BYTES)
+}
+
+/// [`append_string_checked`] for the text of a `str` value.
+pub fn append_text_checked(output: &mut Text, text: &str) -> Result<()> {
+    let required = output
+        .len()
+        .checked_add(text.len())
+        .ok_or_else(|| Diagnostic::coded("AU4005", "string allocation size overflow"))?;
+    if required > MAX_STRING_BYTES {
+        return Err(Diagnostic::coded(
+            "AU4005",
+            format!(
+                "string output exceeds the maintained {MAX_STRING_BYTES}-byte allocation limit"
+            ),
+        ));
+    }
+    output
+        .try_reserve(text.len())
+        .map_err(|_| Diagnostic::coded("AU4005", "string allocation failed"))?;
+    output.push_str(text);
+    Ok(())
+}
+
+pub fn concat_text_checked(mut left: Text, right: &str) -> Result<Text> {
+    append_text_checked(&mut left, right)?;
+    Ok(left)
 }
 
 pub fn concat_strings_checked(mut left: String, right: &str) -> Result<String> {
@@ -16001,7 +16053,7 @@ pub fn optional_kept(
 
 /// `str | None` from an optional Rust string.
 pub fn optional_str_value(value: Option<String>) -> Value {
-    optional_named("str", value.map(Value::String))
+    optional_named("str", value.map(Value::string))
 }
 
 /// `list[uint8] | None` from an optional already-built byte list value.
@@ -16471,18 +16523,18 @@ fn bytes_runtime_single_payload(value: Value) -> Result<Vec<Value>> {
 }
 
 fn bytes_runtime_enum_value(
-    enum_name: &str,
-    variant_name: &str,
+    enum_name: &'static str,
+    variant_name: &'static str,
     payloads: Vec<Value>,
 ) -> Result<Value> {
     Ok(Value::EnumVariant(EnumVariantValue {
-        enum_name: bytes_runtime_owned_string(enum_name)?.into(),
-        variant_name: bytes_runtime_owned_string(variant_name)?.into(),
+        enum_name: RuntimeName::from_static(enum_name),
+        variant_name: RuntimeName::from_static(variant_name),
         payloads: payloads.into(),
     }))
 }
 
-fn bytes_runtime_result(variant_name: &str, value: Value) -> Result<Value> {
+fn bytes_runtime_result(variant_name: &'static str, value: Value) -> Result<Value> {
     bytes_runtime_enum_value("Result", variant_name, bytes_runtime_single_payload(value)?)
 }
 
@@ -16632,7 +16684,7 @@ fn host_string_map_arg(
     map.entries
         .iter()
         .map(|(key, value)| match (key, value) {
-            (Value::String(key), Value::String(value)) => Ok((key.clone(), value.clone())),
+            (Value::String(key), Value::String(value)) => Ok((key.to_string(), value.to_string())),
             _ => Err(Diagnostic::new(format!(
                 "`{call}` expects `dict[str, str]`"
             ))),
@@ -16646,7 +16698,7 @@ fn host_string_map_value(entries: BTreeMap<String, String>) -> Value {
         value_type: Type::named("str"),
         entries: entries
             .into_iter()
-            .map(|(key, value)| (Value::String(key), Value::String(value)))
+            .map(|(key, value)| (Value::String(key.into()), Value::String(value.into())))
             .collect(),
     })
 }
@@ -17075,7 +17127,7 @@ pub fn json_value_to_runtime(value: JsonValue) -> Result<Value> {
                 JsonValue::String(value) => Some(json_runtime_enum_value(
                     "json.Value",
                     "String",
-                    json_runtime_single_payload(Value::String(value))?,
+                    json_runtime_single_payload(Value::String(value.into()))?,
                 )?),
                 JsonValue::Array(values) => {
                     let capacity = json_runtime_container_capacity(values.len(), remaining, limit)?;
@@ -17142,7 +17194,8 @@ pub fn json_value_to_runtime(value: JsonValue) -> Result<Value> {
                             Value::String(
                                 pending_key
                                     .take()
-                                    .expect("completed JSON object values always have a key"),
+                                    .expect("completed JSON object values always have a key")
+                                    .into(),
                             ),
                             value,
                         ));
@@ -17552,7 +17605,7 @@ fn json_parse_error_value(error: JsonCodecError) -> Result<Value> {
         } => {
             let mut payloads = Vec::new();
             json_parse_try_reserve(&mut payloads, 3)?;
-            payloads.push(Value::String(message));
+            payloads.push(Value::String(message.into()));
             payloads.extend(json_location_payload(line, column)?);
             json_error_variant("Syntax", payloads)
         }
@@ -17834,7 +17887,7 @@ pub fn task_result_error(message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("TaskResult"),
         variant_name: RuntimeName::from_static("Error"),
-        payloads: vec![Value::String(message)].into(),
+        payloads: vec![Value::String(message.into())].into(),
     })
 }
 
@@ -17900,7 +17953,7 @@ pub fn wait_any_error(index: i64, message: String) -> Value {
         variant_name: RuntimeName::from_static("Error"),
         payloads: vec![
             Value::Int(IntegerValue::from_i64(index)),
-            Value::String(message),
+            Value::String(message.into()),
         ]
         .into(),
     })
@@ -17941,7 +17994,7 @@ pub fn wait_all_error(index: i64, message: String) -> Value {
         variant_name: RuntimeName::from_static("Error"),
         payloads: vec![
             Value::Int(IntegerValue::from_i64(index)),
-            Value::String(message),
+            Value::String(message.into()),
         ]
         .into(),
     })
@@ -18072,7 +18125,7 @@ pub fn process_supervisor_event_exited(
         enum_name: RuntimeName::from_static("SupervisorEvent"),
         variant_name: RuntimeName::from_static("Exited"),
         payloads: vec![
-            Value::String(name),
+            Value::String(name.into()),
             process_exit_status(status),
             Value::Int(restart_count),
         ]
@@ -18089,7 +18142,7 @@ pub fn process_supervisor_event_restarted(
         enum_name: RuntimeName::from_static("SupervisorEvent"),
         variant_name: RuntimeName::from_static("Restarted"),
         payloads: vec![
-            Value::String(name),
+            Value::String(name.into()),
             process_exit_status(status),
             Value::Int(restart_count),
         ]
@@ -18105,7 +18158,7 @@ pub fn process_supervisor_event_failed(
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("SupervisorEvent"),
         variant_name: RuntimeName::from_static("Failed"),
-        payloads: vec![Value::String(name), error, Value::Int(restart_count)].into(),
+        payloads: vec![Value::String(name.into()), error, Value::Int(restart_count)].into(),
     })
 }
 
@@ -18145,7 +18198,7 @@ pub fn process_error_spawn(message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("Error"),
         variant_name: RuntimeName::from_static("Spawn"),
-        payloads: vec![Value::String(message)].into(),
+        payloads: vec![Value::String(message.into())].into(),
     })
 }
 
@@ -18153,7 +18206,7 @@ pub fn process_error_other(message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("Error"),
         variant_name: RuntimeName::from_static("Other"),
-        payloads: vec![Value::String(message)].into(),
+        payloads: vec![Value::String(message.into())].into(),
     })
 }
 
@@ -18230,7 +18283,7 @@ pub fn io_error(error: io::Error) -> Value {
         io::ErrorKind::UnexpectedEof => ("UnexpectedEof", Vec::new()),
         io::ErrorKind::InvalidInput => ("InvalidInput", Vec::new()),
         io::ErrorKind::InvalidData => ("InvalidData", Vec::new()),
-        _ => ("Other", vec![Value::String(error.to_string())]),
+        _ => ("Other", vec![Value::String(error.to_string().into())]),
     };
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("io.Error"),

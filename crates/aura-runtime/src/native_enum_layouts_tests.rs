@@ -43,7 +43,7 @@ fn int32(value: i64) -> Value {
 }
 
 fn text(value: &str) -> Value {
-    Value::String(value.to_string())
+    Value::String(value.to_string().into())
 }
 
 fn scalar(ty: &Type) -> bool {
