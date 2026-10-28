@@ -328,10 +328,7 @@ pub fn host_json_dumps(args: Vec<Value>, _program_args: Option<&[String]>) -> Re
     let name = "json::dumps";
     host_expect_arity(name, &args, 2)?;
     let indent = host_json_indent_arg(&args[1])?;
-    let value = runtime_value_to_json(&args[0])?;
-    json_codec::dumps(&value, indent)
-        .map(Value::string)
-        .map_err(json_dump_error_to_diagnostic)
+    json_dumps_runtime(&args[0], indent).map(Value::string)
 }
 
 pub fn host_json_is_null(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
