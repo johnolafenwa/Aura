@@ -1474,7 +1474,16 @@ impl<'a> NativeCodegen<'a> {
             function,
             &mut lent_element_reads,
             owns_its_word,
-            |place| owns_its_word(place) && explicit_locals.tracked.contains(place),
+            // An inline union holds its member's box in its payload words.
+            |place| {
+                let holds = owns_its_word(place)
+                    || (matches!(variable_types.get(place), Some(DirectType::Union(_)))
+                        && !explicit_locals.loans.contains(place)
+                        && !writeback_locals
+                            .iter()
+                            .any(|(writeback, _)| writeback == place));
+                holds && explicit_locals.tracked.contains(place)
+            },
             |instruction| {
                 crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
                     self.borrowing.get(name)
@@ -3396,6 +3405,40 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
+    /// Reads a loan of a union member's payload into lent local `target`:
+    /// the box the union holds, with the lent flag, when the read leaves the
+    /// box where it lies. A read that made a value of its own stores it as
+    /// any read does.
+    fn read_lent_union_payload(
+        &mut self,
+        target: &str,
+        loan: &str,
+    ) -> std::result::Result<(), String> {
+        let target_ty = self.type_of_place(target)?;
+        let loaded = self.load_place(loan)?;
+        let loaded = self.coerce_value(loaded, &target_ty)?;
+        let flag_var = self.lent_elements[target];
+        if loaded.values.len() != 1
+            || !self.is_opaque_value(&loaded)
+            || self.temporary_owns_opaque(&loaded)
+        {
+            self.store_place(target, loaded)?;
+            let zero = self.builder.iconst(types::I64, 0);
+            self.builder.def_var(flag_var, zero);
+            return Ok(());
+        }
+        if self.emptied_store_root.as_deref() == Some(target) {
+            self.emptied_store_root = None;
+        } else {
+            self.release_root_words(target)?;
+        }
+        let vars = self.local_vars(target)?;
+        self.builder.def_var(vars[0], loaded.values[0]);
+        let one = self.builder.iconst(types::I64, 1);
+        self.builder.def_var(flag_var, one);
+        Ok(())
+    }
+
     /// The box a lent lookup result owns: the word itself, or null for a
     /// value's address, which has its low bit set.
     fn owned_lent_word(&mut self, word: Val) -> Val {
@@ -4161,7 +4204,9 @@ impl<'a> FunctionCompiler<'a> {
             }
             Instruction::ReadLoan { target, loan } => {
                 self.mark_emptied_store_root(target);
-                if !self.read_native_loan(target, loan)? {
+                if self.lent_payloads.contains(target.as_str()) {
+                    self.read_lent_union_payload(target, loan)?;
+                } else if !self.read_native_loan(target, loan)? {
                     let loaded = self.load_place(loan)?;
                     let target_ty = self.type_of_place(target)?;
                     let loaded = self.coerce_value(loaded, &target_ty)?;

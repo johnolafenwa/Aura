@@ -792,3 +792,61 @@ fn a_payload_whose_scrutinee_a_task_reaches_is_not_lent() {
         "{found:?}"
     );
 }
+
+#[test]
+fn a_read_of_a_union_member_s_payload_is_lent_from_the_union() {
+    let module = lower_source_to_mir(
+        r#"def digits_of(reply: str) -> int64:
+    match reply.strip_prefix("INT "):
+        case str as digits:
+            match parse_int64(digits):
+                case Result.Ok(value):
+                    return value + digits.len()
+                case Result.Err(_):
+                    return -1
+        case None:
+            return -2
+
+def main():
+    print(digits_of("INT 42"))
+"#,
+    )
+    .expect("the source should lower");
+    let borrowing = crate::mir::ownership::kept_arguments(&module);
+    let lent = |name: &str| {
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("the function should exist");
+        let mut found = lent_element_reads(function, |_| true);
+        lent_payload_reads(
+            function,
+            &mut found,
+            |_| true,
+            |place| place.starts_with("%t"),
+            |instruction| {
+                crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
+                    borrowing.get(name)
+                })
+            },
+        );
+        let reads = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter_map(|instruction| match instruction {
+                Instruction::ReadLoan { target, .. } => Some(target.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        (reads, found)
+    };
+    // `parse_int64` and `len` only read the string, so each read of the
+    // loan holds the union's box.
+    let (reads, found) = lent("digits_of");
+    assert!(!reads.is_empty());
+    for read in &reads {
+        assert!(found.payloads.contains_key(read), "{read}: {found:?}");
+    }
+}
