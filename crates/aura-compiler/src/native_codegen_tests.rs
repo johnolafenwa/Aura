@@ -15209,3 +15209,51 @@ def main():
         "constant reads should not tag their value, referenced: {referenced:?}"
     );
 }
+
+#[test]
+fn direct_write_backs_keep_their_parameters_tags() {
+    let source = r#"
+def bump(xs: mut list[int64], names: mut list[str]):
+    xs[0] += 1
+    names = ["a"]
+
+def one() -> Result[int64, str]:
+    return Result.Ok(1)
+
+def bump_parsed(xs: mut list[int64]) -> Result[int64, str]:
+    value = try one()
+    xs[0] += value
+    return Result.Ok(value)
+
+def main():
+    mut xs = [1, 2]
+    mut names = ["b"]
+    for _ in range(3):
+        bump(xs, names)
+    match bump_parsed(xs):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(_):
+            print(0)
+    print(xs[0])
+    print(names[0])
+"#;
+    let mir = lower_source_to_mir(source).expect("write-back source should lower");
+    let program = super::shapes::ProgramShapes::new(&mir, std::iter::empty());
+    // `bump` stores only tagged boxes in its parameters, so what it writes
+    // back carries their tags; `bump_parsed` runs a `try`, so it does not.
+    assert!(program.writes_back_tagged("bump"));
+    assert!(!program.writes_back_tagged("bump_parsed"));
+    let function = |name: &str| {
+        mir.functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap_or_else(|| panic!("`{name}` should lower"))
+    };
+    // A local passed for write-back and a mutable parameter stay shaped.
+    let main = super::shapes::shaped_locals(function("main"), &program, |_| false);
+    assert!(main.contains("xs") && main.contains("names"), "{main:?}");
+    let bump = super::shapes::shaped_locals(function("bump"), &program, |_| false);
+    assert!(bump.contains("xs") && bump.contains("names"), "{bump:?}");
+    emit_host_object(&mir).expect("write-back source should compile directly");
+}

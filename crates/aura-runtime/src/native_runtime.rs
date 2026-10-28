@@ -7713,18 +7713,51 @@ fn narrow_for_scalar_write(vector: &mut VecValue, kind: i64) {
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_push_scalar(vec: *mut OpaqueValue, bits: i64, kind: i64) {
     task_runtime_boundary(|| {
-        let value = scalar_list_value(bits, kind);
+        let kind = DirectScalarKind::of_code(kind);
         with_vector_mut(vec, |vector| {
+            if kind == DirectScalarKind::Float32 {
+                vector.elements.narrow_to_float32();
+            }
+            if push_scalar_bits(&mut vector.elements, kind, bits) {
+                return;
+            }
+            let value = kind.value(bits);
             if is_unknown_runtime_type(&vector.element_type) {
                 let inferred = inferred_collection_type(&value);
                 if !is_unknown_runtime_type(&inferred) {
                     vector.element_type = inferred;
                 }
             }
-            narrow_for_scalar_write(vector, kind);
             vector.elements.push(value);
         });
     })
+}
+
+/// Appends `bits` to `elements` the way generated code's inline append
+/// stores them, when the list keeps scalars of `kind` unboxed, so the
+/// slow path of a scalar push builds no runtime value. Any other form
+/// takes the value path and gets `false`.
+fn push_scalar_bits(elements: &mut ListElements, kind: DirectScalarKind, bits: i64) -> bool {
+    use DirectScalarKind as K;
+    // Generated code passes an integer already in its type's range, so
+    // the narrowing casts keep its value.
+    match (elements, kind) {
+        (ListElements::Int64(values), K::Int64) => values.push(bits),
+        (ListElements::Float64(values), K::Float64) => values.push(f64::from_bits(bits as u64)),
+        (ListElements::Bool(values), K::Bool) => values.push(bits != 0),
+        (ListElements::Int8(values), K::Int8) => values.push(bits as i8),
+        (ListElements::Int16(values), K::Int16) => values.push(bits as i16),
+        (ListElements::Int32(values), K::Int32) => values.push(bits as i32),
+        (ListElements::Uint8(values), K::Uint8) => values.push(bits as u8),
+        (ListElements::Uint16(values), K::Uint16) => values.push(bits as u16),
+        (ListElements::Uint32(values), K::Uint32) => values.push(bits as u32),
+        (ListElements::Uint64(values), K::Uint64) => values.push(bits as u64),
+        (ListElements::Float32(values), K::Float32) => {
+            values.push(f64::from_bits(bits as u64) as f32)
+        }
+        _ => return false,
+    }
+    true
 }
 
 #[cfg_attr(not(coverage), no_mangle)]

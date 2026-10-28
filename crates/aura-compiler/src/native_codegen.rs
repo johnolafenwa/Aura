@@ -7210,6 +7210,7 @@ impl<'a> FunctionCompiler<'a> {
             .map(|(name, ty)| (name.clone(), ty.clone()))
             .collect::<HashMap<_, _>>();
         let mut writeback_places = Vec::new();
+        let mut writeback_tagged = Vec::new();
         let mut mutable_sink_places = vec![None; expected.len()];
         // The arguments the callee borrows stay the caller's.
         let kept = self
@@ -7233,13 +7234,20 @@ impl<'a> FunctionCompiler<'a> {
                             .moved_operands
                             .contains(&std::ptr::from_ref(&argument.value)) =>
                 {
-                    self.take_place(place)?
+                    let taken = self.take_place(place)?;
+                    self.mark_shaped_place(place, &taken);
+                    taken
                 }
                 operand => self.load_operand_for_target(operand, &semantic_expected)?,
             };
             let semantic_coerced = self.coerce_value(loaded, &semantic_expected)?;
             let coerced = self.coerce_value(semantic_coerced, abi_expected)?;
             if let Some(place) = &argument.writeback_place {
+                writeback_tagged.push(
+                    type_args.is_empty()
+                        && &semantic_expected == abi_expected
+                        && self.program_shapes.writes_back_tagged(name),
+                );
                 writeback_places.push(place.clone());
                 if let Some(slot) = mutable_sink_places.get_mut(index) {
                     *slot = Some(place.clone());
@@ -7271,6 +7279,13 @@ impl<'a> FunctionCompiler<'a> {
         let results = inst.results;
         self.release_mutable_sinks(mutable_sinks);
         let (result, writebacks) = self.split_call_results(name, results)?;
+        for (writeback, tagged) in writebacks.iter().zip(&writeback_tagged) {
+            if let (true, DirectType::Opaque(_), [word]) =
+                (*tagged, &writeback.ty, writeback.values.as_slice())
+            {
+                self.shaped_boxes.insert(*word);
+            }
+        }
         self.apply_writeback_places(&writeback_places, writebacks)?;
         let result = self.align_erased_union_result(result, &substitutions)?;
         if self.program_shapes.returns_tagged(name) {
@@ -8339,13 +8354,19 @@ impl<'a> FunctionCompiler<'a> {
     fn load_operand(&mut self, operand: &Operand) -> std::result::Result<ValueRef, String> {
         let loaded = self.load_operand_value(operand)?;
         if let Operand::Place(place) | Operand::MovePlace(place) = operand {
-            if self.shaped_locals.contains(place.as_str()) {
-                if let (DirectType::Opaque(_), [word]) = (&loaded.ty, loaded.values.as_slice()) {
-                    self.shaped_boxes.insert(*word);
-                }
-            }
+            self.mark_shaped_place(place, &loaded);
         }
         Ok(loaded)
+    }
+
+    /// Records that `loaded`, read out of `place`, carries its type's tag
+    /// when `place` is a shaped local.
+    fn mark_shaped_place(&mut self, place: &str, loaded: &ValueRef) {
+        if self.shaped_locals.contains(place) {
+            if let (DirectType::Opaque(_), [word]) = (&loaded.ty, loaded.values.as_slice()) {
+                self.shaped_boxes.insert(*word);
+            }
+        }
     }
 
     fn load_operand_value(&mut self, operand: &Operand) -> std::result::Result<ValueRef, String> {
