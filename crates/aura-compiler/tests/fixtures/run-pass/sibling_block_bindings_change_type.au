@@ -1,0 +1,109 @@
+# A name bound inside a block is out of scope after the block, so a sibling
+# block, or code after the block, may bind the name again with another type.
+copy class Point:
+    x: int64
+    y: int64
+
+
+class Order:
+    id: int64
+    points: list[Point]
+
+
+enum Shape:
+    Dot(int64)
+    Named(str)
+
+
+def branches(flag: int64):
+    if flag == 0:
+        value = 1.5
+        print(value * 2.0)
+    elif flag == 1:
+        value = [1, 2, 3]
+        print(value.len())
+    else:
+        value = "else"
+        print(value)
+
+
+def arms(shape: Shape):
+    match shape:
+        case Shape.Dot(n):
+            label = n * 10
+            print(label)
+        case Shape.Named(_):
+            label = "named"
+            print(label.len())
+
+
+def main():
+    if true:
+        item = 1
+        print(item + 1)
+    if true:
+        item = "two"
+        print(item.len())
+    if true:
+        item = Point(x=1, y=2)
+        print(item.x)
+    if true:
+        item = Order(id=5, points=[Point(x=3, y=4)])
+        print(item.id + item.points[0].y)
+
+    branches(0)
+    branches(1)
+    branches(2)
+    arms(Shape.Dot(4))
+    arms(Shape.Named("n"))
+
+    for i in range(2):
+        step = i * 3
+        print(step)
+    for name in ["a", "bb"]:
+        step = name + "!"
+        print(step)
+
+    numbers = [1, 2]
+    mut i = 0
+    while i < 1:
+        view seen = numbers
+        print(seen.len())
+        i += 1
+    while i < 2:
+        words = ["x", "yy", "zzz"]
+        view seen = words
+        print(seen[2].len())
+        i += 1
+
+    if true:
+        (left, right) = (1, 2)
+        print(left + right)
+    if true:
+        (left, right) = ("left", 2.5)
+        print(left.len())
+        print(right)
+
+    if true:
+        if true:
+            nested = 7
+            print(nested)
+        if true:
+            nested = "seven"
+            print(nested)
+        nested = [7.5]
+        print(nested[0])
+
+    # After the blocks, the name starts a new function-level binding.
+    mut step = [0.5]
+    for k in range(3):
+        step.append(0.25)
+    if step.len() > 2:
+        step = [9.0]
+    print(step)
+
+    # A reassignment inside a block still targets the visible binding.
+    mut total: float64 = 0.5
+    if true:
+        total = 2
+    print(total)

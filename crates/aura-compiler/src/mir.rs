@@ -11501,6 +11501,12 @@ struct Lowerer<'a> {
     specialized_bound_roots: BTreeMap<String, String>,
     non_owning_roots: BTreeSet<String>,
     scoped_names: Vec<std::collections::HashMap<String, String>>,
+    /// The source bindings of each open statement block, innermost last,
+    /// above one for bindings made outside any statement block.
+    binding_blocks: Vec<BindingBlock>,
+    /// Source names declared under their own spelling in a block that has
+    /// ended. They are out of scope, so assigning one declares a new binding.
+    ended_bindings: BTreeSet<String>,
     generated_functions: Vec<MirFunction>,
     view_sources: BTreeMap<String, String>,
     /// The hidden ranges of `Span[T]` views and parameters, by base place.
@@ -11521,6 +11527,18 @@ struct Lowerer<'a> {
     /// Lowering a class initializer: `self` is the owned object under
     /// construction and a bare `return` returns it.
     initializer_self: bool,
+}
+
+/// The source bindings one statement block declares. A block's bindings go
+/// out of scope when it ends, so a sibling block may bind the same name again,
+/// even with another type.
+#[derive(Default)]
+struct BindingBlock {
+    /// Names declared here under their own spelling.
+    declared: Vec<String>,
+    /// Names declared here with another type than an ended binding of the
+    /// same spelling, each with the fresh local it binds instead.
+    rebound: std::collections::HashMap<String, String>,
 }
 
 #[derive(Clone, Debug)]
@@ -11705,6 +11723,8 @@ impl<'a> Lowerer<'a> {
             specialized_bound_roots: BTreeMap::new(),
             non_owning_roots: BTreeSet::new(),
             scoped_names: Vec::new(),
+            binding_blocks: vec![BindingBlock::default()],
+            ended_bindings: BTreeSet::new(),
             generated_functions: Vec::new(),
             view_sources: BTreeMap::new(),
             span_ranges: BTreeMap::new(),
@@ -13053,6 +13073,7 @@ impl<'a> Lowerer<'a> {
         statements: &[Stmt],
         mut inherited_endings: BTreeSet<String>,
     ) {
+        self.binding_blocks.push(BindingBlock::default());
         self.loan_scopes.push(Vec::new());
         // A loan that was active when an enclosing loop began is read again
         // by that loop's next iteration, so it cannot end in this body.
@@ -13159,6 +13180,52 @@ impl<'a> Lowerer<'a> {
             }
         }
         self.loan_scopes.pop();
+        self.end_binding_block();
+    }
+
+    fn current_binding_block(&mut self) -> &mut BindingBlock {
+        self.binding_blocks
+            .last_mut()
+            .expect("the lowerer always has a binding block")
+    }
+
+    fn end_binding_block(&mut self) {
+        let block = self
+            .binding_blocks
+            .pop()
+            .expect("statement block should have a binding block");
+        self.ended_bindings.extend(block.declared);
+    }
+
+    /// Whether source `name` is in scope here, so assigning it reassigns
+    /// that binding rather than declaring a new one.
+    fn binding_is_visible(&self, name: &str) -> bool {
+        self.scoped_local_name(name).is_some()
+            || (self.local_types.contains_key(name) && !self.ended_bindings.contains(name))
+    }
+
+    /// The MIR local a new binding of source `name` in the current block
+    /// uses. It keeps the name's spelling unless an earlier binding of that
+    /// spelling, now out of scope, gave the local another type: then the
+    /// new binding gets a fresh local of its own type.
+    fn declare_binding(&mut self, name: &str, ty: Option<&Type>) -> String {
+        if let (Some(ty), Some(existing)) = (ty, self.local_types.get(name)) {
+            if existing != ty {
+                let slot = self.new_typed_temp(ty.clone());
+                self.current_binding_block()
+                    .rebound
+                    .insert(name.to_string(), slot.clone());
+                return slot;
+            }
+        }
+        self.ended_bindings.remove(name);
+        self.current_binding_block().declared.push(name.to_string());
+        if let Some(ty) = ty {
+            self.local_types
+                .entry(name.to_string())
+                .or_insert_with(|| ty.clone());
+        }
+        name.to_string()
     }
 
     /// Begins an element loan of `source`, or reborrows the element through
@@ -13363,7 +13430,7 @@ impl<'a> Lowerer<'a> {
                         slot
                     }
                 } else {
-                    view.name.clone()
+                    self.declare_binding(&view.name, ty.as_ref())
                 };
                 if let Some(ty) = ty.clone() {
                     self.local_types.entry(loan_name.clone()).or_insert(ty);
@@ -13958,6 +14025,7 @@ impl<'a> Lowerer<'a> {
             _ => None,
         };
         if let Some((name, ty)) = named_target_type {
+            let declares = assign.op.is_none() && !self.binding_is_visible(name);
             // A mutable binding declared inside a scoped construct is a new
             // source binding, even when a sibling scope uses the same source
             // spelling. Give it its own MIR place so direct lowering cannot
@@ -13973,6 +14041,9 @@ impl<'a> Lowerer<'a> {
                     .last_mut()
                     .expect("checked scoped local declaration")
                     .insert(name.clone(), slot);
+            } else if declares {
+                // A sibling block may have bound the name with another type.
+                self.declare_binding(name, Some(&ty));
             }
             let target = self.render_local_name(name);
             self.local_types.entry(target).or_insert(ty);
@@ -14516,8 +14587,9 @@ impl<'a> Lowerer<'a> {
                         .expect("scoped binding target should have a registered slot")
                         .to_string()
                 } else {
-                    self.local_types.insert(name.clone(), source_ty.clone());
-                    name.clone()
+                    let target = self.declare_binding(name, Some(source_ty));
+                    self.local_types.insert(target.clone(), source_ty.clone());
+                    target
                 };
                 let source =
                     if consume_non_copy && !type_is_copy_in_program(source_ty, self.program) {
@@ -15620,6 +15692,12 @@ impl<'a> Lowerer<'a> {
             .iter()
             .rev()
             .find_map(|scope| scope.get(name).map(String::as_str))
+            .or_else(|| {
+                self.binding_blocks
+                    .iter()
+                    .rev()
+                    .find_map(|block| block.rebound.get(name).map(String::as_str))
+            })
     }
 
     fn render_local_name(&self, name: &str) -> String {
@@ -26982,6 +27060,8 @@ impl<'a> Lowerer<'a> {
             };
             crate::sema::classify_manager(ty, class_info).ok()
         });
+        // The `as` name is bound in the body's scope.
+        self.binding_blocks.push(BindingBlock::default());
         // A view-returning `__enter__` keeps the manager in a hidden managed
         // place, a fresh temporary that source code cannot name (F4).
         let place = if matches!(
@@ -26993,12 +27073,7 @@ impl<'a> Lowerer<'a> {
                 None => self.new_temp(),
             }
         } else {
-            if let Some(inferred) = manager_ty.clone() {
-                self.local_types
-                    .entry(with_stmt.binding.clone())
-                    .or_insert(inferred);
-            }
-            with_stmt.binding.clone()
+            self.declare_binding(&with_stmt.binding, manager_ty.as_ref())
         };
         let value = self.lower_expr_for_owned_value(&with_stmt.value, manager_ty.as_ref());
         self.emit(Instruction::Assign {
@@ -27076,6 +27151,7 @@ impl<'a> Lowerer<'a> {
             self.emit_with_exit(place.clone(), false);
         }
         self.manager_exits.remove(&place);
+        self.end_binding_block();
         !self.current_terminated()
     }
 
