@@ -7761,17 +7761,6 @@ fn push_scalar_bits(elements: &mut ListElements, kind: DirectScalarKind, bits: i
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_vec_pop_in_place(vec: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let value = with_vector_mut(vec, |vector| vector.elements.pop());
-        match value {
-            Some(value) => boxed_value(lookup_found(value)),
-            None => boxed_value(lookup_missing()),
-        }
-    })
-}
-
-#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_get(
     vec: *mut OpaqueValue,
     index: i64,
@@ -7816,29 +7805,6 @@ pub extern "C-unwind" fn aura_direct_vec_set_in_place(
             ))
         });
         boxed_value(previous)
-    })
-}
-
-#[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_vec_remove_in_place(
-    vec: *mut OpaqueValue,
-    index: i64,
-) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let previous = with_vector_mut(vec, |vector| {
-            let Some(normalized) = normalize_vec_index(index, vector.elements.len())
-                .filter(|normalized| *normalized < vector.elements.len())
-            else {
-                return Err(vector.elements.len());
-            };
-            Ok(vector.elements.remove(normalized))
-        });
-        let previous = previous.unwrap_or_else(|len| {
-            runtime_error(format!(
-                "list remove index `{index}` is out of bounds for length `{len}`"
-            ))
-        });
-        boxed_value(lookup_found(previous))
     })
 }
 
@@ -10826,19 +10792,6 @@ pub extern "C-unwind" fn aura_direct_set_insert_in_place(
             set.elements.insert(value)
         });
         i64::from(inserted)
-    })
-}
-
-#[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_set_remove_in_place(
-    set: *mut OpaqueValue,
-    value: *mut OpaqueValue,
-) -> i64 {
-    task_runtime_boundary(|| {
-        let removed = with_set_mut(set, |set| unsafe {
-            with_value(value, |value| set.elements.shift_remove(value).is_some())
-        });
-        i64::from(removed)
     })
 }
 

@@ -15343,7 +15343,10 @@ def main():
         referenced.contains("aura_direct_vec_pop_plain"),
         "a record pop should call the plain pop: {referenced:?}"
     );
-    for forbidden in ["aura_direct_unbox_plain", "aura_direct_vec_pop_in_place"] {
+    for forbidden in [
+        "aura_direct_unbox_plain",
+        "aura_direct_collection_operation",
+    ] {
         assert!(
             !referenced.contains(forbidden),
             "a record pop must not reference `{forbidden}`: {referenced:?}"

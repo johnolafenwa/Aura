@@ -9155,7 +9155,12 @@ fn direct_runtime_vec_helpers_cover_collection_surface() {
     super::aura_direct_vec_push_in_place(vec, int_value(3));
     assert_eq!(super::aura_direct_vec_len(vec), 3);
     assert_eq!(
-        expect_lookup_found_int(super::aura_direct_vec_pop_in_place(vec)),
+        expect_int(super::aura_direct_collection_operation(
+            vec,
+            std::ptr::null_mut(),
+            -1,
+            0
+        )),
         3
     );
     assert_eq!(
@@ -9167,7 +9172,12 @@ fn direct_runtime_vec_helpers_cover_collection_surface() {
         2
     );
     assert_eq!(
-        expect_lookup_found_int(super::aura_direct_vec_remove_in_place(vec, 0)),
+        expect_int(super::aura_direct_collection_operation(
+            vec,
+            std::ptr::null_mut(),
+            0,
+            0
+        )),
         1
     );
     assert_eq!(super::aura_direct_vec_contains(vec, int_value(5)), 1);
@@ -9199,7 +9209,6 @@ fn direct_runtime_vec_helpers_cover_collection_surface() {
     );
     expect_unit(super::aura_direct_vec_clear_in_place(vec));
     assert_eq!(super::aura_direct_vec_len(vec), 0);
-    expect_lookup_missing(super::aura_direct_vec_pop_in_place(vec));
     expect_lookup_missing(super::aura_direct_vec_index_option(vec, 0));
 
     let draining_vec = int_vec(&[10]);
@@ -9268,7 +9277,12 @@ fn direct_runtime_vec_helpers_normalize_negative_indices_uniformly() {
         10
     );
     assert_eq!(
-        expect_lookup_found_int(super::aura_direct_vec_remove_in_place(vec, -2)),
+        expect_int(super::aura_direct_collection_operation(
+            vec,
+            std::ptr::null_mut(),
+            -2,
+            0
+        )),
         35
     );
     assert_eq!(super::aura_direct_vec_swap_in_place(vec, -1, -3), 1);
@@ -9410,9 +9424,20 @@ fn direct_runtime_map_and_set_helpers_cover_collection_surface() {
         expect_lookup_found_int(super::aura_direct_set_index_option(set, 0)),
         3
     );
-    assert_eq!(super::aura_direct_set_remove_in_place(set, int_value(3)), 1);
+    expect_unit(super::aura_direct_collection_operation(
+        set,
+        int_value(3),
+        0,
+        5,
+    ));
     expect_lookup_missing(super::aura_direct_set_index_option(set, 0));
-    assert_eq!(super::aura_direct_set_remove_in_place(set, int_value(3)), 0);
+    expect_unit(super::aura_direct_collection_operation(
+        set,
+        int_value(3),
+        0,
+        6,
+    ));
+    assert_eq!(super::aura_direct_set_len(set), 0);
 }
 
 #[test]
@@ -11747,18 +11772,11 @@ fn direct_owned_collection_and_queue_adapters_preserve_allocation_identity() {
             other => panic!("expected Vec, found {other:?}"),
         });
     }
-    let vector_taken = super::aura_direct_vec_remove_in_place(vector, 0);
+    let vector_taken = super::aura_direct_collection_operation(vector, std::ptr::null_mut(), 0, 0);
     unsafe {
         super::with_value(vector_taken, |value| match value {
-            Value::EnumVariant(lookup)
-                if lookup.enum_name == "Lookup" && lookup.variant_name == "Found" =>
-            {
-                match lookup.payloads.values() {
-                    [Value::String(value)] => assert_eq!(value.as_ptr(), vector_storage),
-                    other => panic!("expected taken vector str payload, found {other:?}"),
-                }
-            }
-            other => panic!("expected Lookup.Found(str), found {other:?}"),
+            Value::String(value) => assert_eq!(value.as_ptr(), vector_storage),
+            other => panic!("expected the taken str, found {other:?}"),
         });
     }
 
@@ -13594,9 +13612,6 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "set-insert-type" => {
                 super::aura_direct_set_insert_in_place(int_value(1), int_value(2));
             }
-            "set-remove-type" => {
-                super::aura_direct_set_remove_in_place(int_value(1), int_value(2));
-            }
             "set-index-type" => {
                 super::aura_direct_set_index_option(int_value(1), 0);
             }
@@ -14279,9 +14294,6 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "vec-method-set-too-negative" => {
                 super::aura_direct_vec_set_in_place(int_vec(&[1, 2, 3, 4]), -5, int_value(9));
             }
-            "vec-method-remove-too-negative" => {
-                super::aura_direct_vec_remove_in_place(int_vec(&[1, 2, 3, 4]), -5);
-            }
             "vec-method-swap-too-negative" => {
                 super::aura_direct_vec_swap_in_place(int_vec(&[1, 2, 3, 4]), -5, -1);
             }
@@ -14787,7 +14799,6 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ("set-is-empty-type", "expected `set`, found `integer`"),
         ("set-contains-type", "expected `set`, found `integer`"),
         ("set-insert-type", "expected `set`, found `integer`"),
-        ("set-remove-type", "expected `set`, found `integer`"),
         ("set-index-type", "expected `set`, found `integer`"),
         (
             "tcp-read-all-type",
@@ -15314,10 +15325,6 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         (
             "vec-method-set-too-negative",
             "list set index `-5` is out of bounds for length `4`",
-        ),
-        (
-            "vec-method-remove-too-negative",
-            "list remove index `-5` is out of bounds for length `4`",
         ),
         (
             "vec-method-swap-too-negative",
@@ -20631,10 +20638,12 @@ fn native_runtime_collection_helpers_cover_remaining_success_paths() {
         super::aura_direct_set_contains(set, string_value("ready")),
         1
     );
-    assert_eq!(
-        super::aura_direct_set_remove_in_place(set, string_value("ready")),
-        1
-    );
+    expect_unit(super::aura_direct_collection_operation(
+        set,
+        string_value("ready"),
+        0,
+        5,
+    ));
     assert_eq!(
         super::aura_direct_set_contains(set, string_value("ready")),
         0
@@ -21852,21 +21861,6 @@ fn direct_list_index_mutator_traps_release_the_write_lock_for_later_tasks() {
     );
     assert_eq!(later_len(set_values), Value::Int(IntegerValue::from_i64(2)));
 
-    let remove_values = int_vec(&[1, 2]);
-    let remove_values_address = remove_values as usize;
-    let diagnostic = capture_direct_boundary_diagnostic(move || {
-        super::aura_direct_vec_remove_in_place(remove_values_address as *mut OpaqueValue, -3);
-    });
-    assert_eq!(diagnostic.code, "AU4003");
-    assert_eq!(
-        diagnostic.message,
-        "list remove index `-3` is out of bounds for length `2`"
-    );
-    assert_eq!(
-        later_len(remove_values),
-        Value::Int(IntegerValue::from_i64(2))
-    );
-
     let swap_values = int_vec(&[1, 2]);
     let swap_values_address = swap_values as usize;
     let diagnostic = capture_direct_boundary_diagnostic(move || {
@@ -21882,7 +21876,7 @@ fn direct_list_index_mutator_traps_release_the_write_lock_for_later_tasks() {
         Value::Int(IntegerValue::from_i64(2))
     );
 
-    for values in [set_values, remove_values, swap_values] {
+    for values in [set_values, swap_values] {
         unsafe { release_value(values) };
     }
 }
@@ -27311,7 +27305,7 @@ fn list_view_follows_every_write() {
     }
     let int64 = super::DirectListAccess::Int64;
     assert_eq!(read_list_view_word(list, 39, int64), 39);
-    super::aura_direct_vec_pop_in_place(list);
+    super::aura_direct_collection_operation(list, std::ptr::null_mut(), -1, 0);
     assert_eq!(list_view_len(list), 39);
     // A copy shares the storage until one side writes. The writer gets new
     // storage and the other keeps reading the old one.

@@ -865,8 +865,6 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         assert_eq!(cloned_value(vec_slice).render(), "[4, 2]");
         release(vec_slice);
         release(aura_direct_vec_reverse_in_place(vec));
-        release(aura_direct_vec_remove_in_place(vec, 1));
-        release(aura_direct_vec_pop_in_place(vec));
         let other_vec = aura_direct_vec_empty();
         aura_direct_vec_push_in_place(other_vec, int_value(9));
         release(aura_direct_vec_extend_in_place(vec, other_vec));
@@ -949,10 +947,6 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
             1
         );
         release(aura_direct_set_index_option(set, 0));
-        assert_eq!(
-            aura_direct_set_remove_in_place(set, ScopedValue::new(int_value(1)).as_ptr()),
-            1
-        );
         assert_eq!(aura_direct_set_is_empty(set), 1);
         release(set);
 

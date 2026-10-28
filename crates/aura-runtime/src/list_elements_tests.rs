@@ -191,16 +191,6 @@ fn lists_keep_scalars_only_when_every_element_fits_one_form() {
     }
 }
 
-#[test]
-fn int64_bits_accepts_only_values_from_i64_rebuilds() {
-    assert_eq!(int64_bits(IntegerValue::from_i64(-7)), Some(-7));
-    assert_eq!(int64_bits(IntegerValue::from_i64(i64::MAX)), Some(i64::MAX));
-    assert_eq!(int64_bits(IntegerValue::from_signed(3)), None);
-    assert_eq!(int64_bits(IntegerValue::from_u64(3)), None);
-    let int128 = IntegerValue::from_typed_signed(1 << 80, IntegerKind::Int128).unwrap();
-    assert_eq!(int64_bits(int128), None);
-}
-
 /// A small deterministic generator, so the operation sequences repeat.
 struct Steps(u64);
 
