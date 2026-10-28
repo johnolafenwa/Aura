@@ -198,6 +198,15 @@ Last updated: 2026-10-27
   lru_cache -36%. Gate (word_freq, lru_cache at most 2x Rust) not yet
   met: 4.4x and 3.9x by instructions at 50,000. Details are in
   `2026-10-28-rust-speed-3c-entry-loans.md`.
+- Step 3d part 1: string operations read in place (`Text::concat` for
+  `str + str`, `aura_direct_string_affix_literal` for literal
+  `starts_with`/`ends_with`/`contains` arguments, `replace` through
+  `memmem` without copying its operands, `aura_direct_string_from_view` and
+  `aura_direct_vec_str_element` for `list[str]` element copies with the
+  following `clone()` dropped, inline texts from literals, `format_begin`,
+  `split_whitespace`, `lines`, and ASCII case maps). word_freq -26%,
+  sort_records -15%, template_render -13%. Details are in
+  `2026-10-28-rust-speed-3d-strings-in-place.md`.
 
 ## Aura 0.7.1 preview release (complete)
 

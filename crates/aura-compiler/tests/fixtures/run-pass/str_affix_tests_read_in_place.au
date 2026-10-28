@@ -1,0 +1,25 @@
+def describe(word: str) -> str:
+    mut parts: list[str] = []
+    if word.starts_with("pre"):
+        parts.append("prefix")
+    if word.ends_with("é"):
+        parts.append("accent")
+    if word.contains("mid"):
+        parts.append("middle")
+    if word.contains(word) and word.ends_with(word) and word.starts_with(word):
+        parts.append("self")
+    tail = "fix"
+    if word.ends_with(tail) or word.contains(tail + "es"):
+        parts.append("tail")
+    return ",".join(parts)
+
+
+def main():
+    for word in ["prefix", "café", "amidst", "", "prefixes-mid-é"]:
+        print(f"{word}: {describe(word)}")
+    shout = "Mixed Case, Ünïcode"
+    print(shout.to_lower() + "|" + shout.to_upper())
+    print("a b  c".split_whitespace())
+    print("one\ntwo\n\nthree".lines())
+    joined = "x" + "y"
+    print(joined + joined)

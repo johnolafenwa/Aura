@@ -8976,6 +8976,15 @@ pub fn concat_text_checked(mut left: Text, right: &str) -> Result<Text> {
     Ok(left)
 }
 
+/// `left + right` read in place, or the error for a result over the
+/// string limit.
+pub fn concat_texts_checked(left: &Text, right: &Text) -> Result<Text> {
+    if left.len().saturating_add(right.len()) > MAX_STRING_BYTES {
+        return concat_text_checked(left.clone(), right);
+    }
+    Ok(Text::concat(left, right))
+}
+
 pub fn concat_strings_checked(mut left: String, right: &str) -> Result<String> {
     append_string_checked(&mut left, right)?;
     Ok(left)

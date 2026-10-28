@@ -40,7 +40,7 @@ use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
     append_string_checked, append_text_checked, cancel_current_lightweight_task_boundary,
     cast_numeric_value, claim_task_result_observations, clear_current_task_native_slot,
-    clone_json_codec_source, collect_queue_values, concat_text_checked,
+    clone_json_codec_source, collect_queue_values, concat_text_checked, concat_texts_checked,
     current_lightweight_task_cancellation, current_lightweight_task_id, current_task_native_slot,
     decode_process_restart_policy, decode_process_stdio, divmod_numeric_values,
     embedded_nominal_runtime_type_name, fail_current_lightweight_task, float_floor_divmod,
@@ -6471,7 +6471,7 @@ pub extern "C-unwind" fn aura_direct_string_literal(
     ptr: *const u8,
     len: usize,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| boxed_value(Value::String(decode_bytes(ptr, len).into())))
+    task_runtime_boundary(|| boxed_value(Value::String(literal_str(ptr, len).into())))
 }
 
 /// Runtime nominal type names mapped to the native thunks of their
@@ -6621,7 +6621,7 @@ pub extern "C-unwind" fn aura_direct_format_value(
 /// parts append in place instead of through one concatenation per part.
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_format_begin(ptr: *const u8, len: usize) -> *mut OpaqueValue {
-    task_runtime_boundary(|| boxed_value(Value::String(decode_bytes(ptr, len).into())))
+    task_runtime_boundary(|| boxed_value(Value::String(literal_str(ptr, len).into())))
 }
 
 fn push_format_text(builder: *mut OpaqueValue, text: &str) {
@@ -6881,24 +6881,62 @@ pub extern "C-unwind" fn aura_direct_string_slice(
     })
 }
 
+/// `test(text, part)` on the text of `value`, read in place.
+fn string_affix(
+    value: *mut OpaqueValue,
+    part: &str,
+    test: impl FnOnce(&str, &str) -> bool,
+) -> bool {
+    // SAFETY: generated code passes a live box.
+    unsafe {
+        with_value(value, |value| match value {
+            Value::String(text) => test(text, part),
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        })
+    }
+}
+
+/// `str.contains`, `str.starts_with` (`kind` 1), or `str.ends_with`
+/// (`kind` 2) with a literal argument, which needs no box.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_string_affix_literal(
+    value: *mut OpaqueValue,
+    part_ptr: *const u8,
+    part_len: usize,
+    kind: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let part = literal_str(part_ptr, part_len);
+        i64::from(string_affix(value, part, |text, part| match kind {
+            1 => text.starts_with(part),
+            2 => text.ends_with(part),
+            _ => text.contains(part),
+        }))
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_string_contains(
     value: *mut OpaqueValue,
     needle: *mut OpaqueValue,
 ) -> i64 {
     task_runtime_boundary(|| {
-        let Value::String(needle) = (unsafe { take_value(needle) }) else {
-            runtime_error("`contains` requires a `str` argument");
-        };
-        unsafe {
-            with_value(value, |value| match value {
-                Value::String(text) => i64::from(text.contains(needle.as_str())),
-                other => runtime_error(format!(
-                    "expected `str`, found `{}`",
-                    value_type_name(other)
-                )),
-            })
+        if value == needle {
+            // A text contains, starts, and ends with itself.
+            return 1;
         }
+        let found = unsafe {
+            with_value(needle, |needle| match needle {
+                Value::String(needle) => {
+                    string_affix(value, needle, |text, part| text.contains(part))
+                }
+                _ => runtime_error("`contains` requires a `str` argument"),
+            })
+        };
+        i64::from(found)
     })
 }
 
@@ -6908,18 +6946,19 @@ pub extern "C-unwind" fn aura_direct_string_starts_with(
     prefix: *mut OpaqueValue,
 ) -> i64 {
     task_runtime_boundary(|| {
-        let Value::String(prefix) = (unsafe { take_value(prefix) }) else {
-            runtime_error("`starts_with` requires a `str` argument");
-        };
-        unsafe {
-            with_value(value, |value| match value {
-                Value::String(text) => i64::from(text.starts_with(prefix.as_str())),
-                other => runtime_error(format!(
-                    "expected `str`, found `{}`",
-                    value_type_name(other)
-                )),
-            })
+        if value == prefix {
+            // A text contains, starts, and ends with itself.
+            return 1;
         }
+        let found = unsafe {
+            with_value(prefix, |prefix| match prefix {
+                Value::String(prefix) => {
+                    string_affix(value, prefix, |text, part| text.starts_with(part))
+                }
+                _ => runtime_error("`starts_with` requires a `str` argument"),
+            })
+        };
+        i64::from(found)
     })
 }
 
@@ -6929,18 +6968,19 @@ pub extern "C-unwind" fn aura_direct_string_ends_with(
     suffix: *mut OpaqueValue,
 ) -> i64 {
     task_runtime_boundary(|| {
-        let Value::String(suffix) = (unsafe { take_value(suffix) }) else {
-            runtime_error("`ends_with` requires a `str` argument");
-        };
-        unsafe {
-            with_value(value, |value| match value {
-                Value::String(text) => i64::from(text.ends_with(suffix.as_str())),
-                other => runtime_error(format!(
-                    "expected `str`, found `{}`",
-                    value_type_name(other)
-                )),
-            })
+        if value == suffix {
+            // A text contains, starts, and ends with itself.
+            return 1;
         }
+        let found = unsafe {
+            with_value(suffix, |suffix| match suffix {
+                Value::String(suffix) => {
+                    string_affix(value, suffix, |text, part| text.ends_with(part))
+                }
+                _ => runtime_error("`ends_with` requires a `str` argument"),
+            })
+        };
+        i64::from(found)
     })
 }
 
@@ -6969,6 +7009,32 @@ pub extern "C-unwind" fn aura_direct_string_split(
     })
 }
 
+/// `text` with every occurrence of `from` replaced by `to`, as
+/// `str::replace` gives it. Text without `from` is copied as it is.
+fn replace_text(text: &crate::text::Text, from: &str, to: &str) -> crate::text::Text {
+    if from.is_empty() {
+        return text.replace(from, to).into();
+    }
+    let mut found = memchr::memmem::find_iter(text.as_bytes(), from.as_bytes());
+    let Some(first) = found.next() else {
+        return text.clone();
+    };
+    let mut output = String::with_capacity(text.len() + to.len().saturating_sub(from.len()) * 4);
+    output.push_str(&text[..first]);
+    output.push_str(to);
+    let mut rest = first + from.len();
+    for position in found {
+        output.push_str(&text[rest..position]);
+        output.push_str(to);
+        rest = position + from.len();
+    }
+    output.push_str(&text[rest..]);
+    if output.len() <= crate::text::INLINE_CAPACITY {
+        return output.as_str().into();
+    }
+    output.into()
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_string_replace(
     value: *mut OpaqueValue,
@@ -6976,17 +7042,22 @@ pub extern "C-unwind" fn aura_direct_string_replace(
     to: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let Value::String(from) = (unsafe { take_value(from) }) else {
-            runtime_error("`replace` requires `str` for `from`");
+        let text_of = |value: &Value, message: &str| match value {
+            Value::String(text) => text.clone(),
+            _ => runtime_error(message),
         };
-        let Value::String(to) = (unsafe { take_value(to) }) else {
-            runtime_error("`replace` requires `str` for `to`");
+        // The pattern and the replacement are short in practice, so they
+        // are copied (into the value itself) rather than read under a
+        // second and third access.
+        let from = unsafe {
+            with_value(from, |from| {
+                text_of(from, "`replace` requires `str` for `from`")
+            })
         };
+        let to = unsafe { with_value(to, |to| text_of(to, "`replace` requires `str` for `to`")) };
         unsafe {
             with_value(value, |value| match value {
-                Value::String(text) => boxed_value(Value::String(
-                    text.replace(from.as_str(), to.as_str()).into(),
-                )),
+                Value::String(text) => boxed_value(Value::String(replace_text(text, &from, &to))),
                 other => runtime_error(format!(
                     "expected `str`, found `{}`",
                     value_type_name(other)
@@ -7000,7 +7071,10 @@ pub extern "C-unwind" fn aura_direct_string_replace(
 pub extern "C-unwind" fn aura_direct_string_to_lower(value: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| unsafe {
         with_value(value, |value| match value {
-            Value::String(text) => boxed_value(Value::String(text.to_lowercase().into())),
+            Value::String(text) => boxed_value(Value::String(
+                text.map_ascii(u8::to_ascii_lowercase)
+                    .unwrap_or_else(|| text.to_lowercase().into()),
+            )),
             other => runtime_error(format!(
                 "expected `str`, found `{}`",
                 value_type_name(other)
@@ -7013,7 +7087,10 @@ pub extern "C-unwind" fn aura_direct_string_to_lower(value: *mut OpaqueValue) ->
 pub extern "C-unwind" fn aura_direct_string_to_upper(value: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| unsafe {
         with_value(value, |value| match value {
-            Value::String(text) => boxed_value(Value::String(text.to_uppercase().into())),
+            Value::String(text) => boxed_value(Value::String(
+                text.map_ascii(u8::to_ascii_uppercase)
+                    .unwrap_or_else(|| text.to_uppercase().into()),
+            )),
             other => runtime_error(format!(
                 "expected `str`, found `{}`",
                 value_type_name(other)
@@ -8405,6 +8482,44 @@ fn with_vec_element<T>(
             Some(value) => read(value),
             None => read(&vector.elements.at(position)),
         }
+    })
+}
+
+/// A new `str` box holding the `len` bytes at `ptr`, which generated code
+/// read out of a list's [`DirectListAccess::Str`] view.
+///
+/// # Safety
+///
+/// The bytes are the text of a live `str` element.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_string_from_view(
+    ptr: *const u8,
+    len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        crate::runtime_value::representation_stats::note_clone();
+        // SAFETY: the caller's contract; a `str` element's bytes are UTF-8.
+        let text = unsafe { str::from_utf8_unchecked(slice::from_raw_parts(ptr, len)) };
+        boxed_value(Value::String(text.into()))
+    })
+}
+
+/// A copy of element `index` of a `list[str]`, for a read that missed the
+/// list's view. It counts the miss, so a list read this way often enough
+/// gets a view generated code reads in place.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_str_element(
+    list: *mut OpaqueValue,
+    index: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        crate::runtime_value::representation_stats::note_clone();
+        let element = with_vec_element(list, index, line, column, Value::clone);
+        // SAFETY: `with_vec_element` checked the handle.
+        unsafe { &*list }.note_str_view_miss();
+        boxed_value(element)
     })
 }
 
@@ -11479,7 +11594,7 @@ fn compare_with_str_literal(
             })
         }
         other => {
-            let literal = Value::String(decode_bytes(literal_ptr, literal_len).into());
+            let literal = Value::String(literal_str(literal_ptr, literal_len).into());
             let compared = if literal_on_left != 0 {
                 compare_value_refs(&literal, other, op)
             } else {
@@ -11550,6 +11665,30 @@ pub extern "C-unwind" fn aura_direct_binary_value_at(
                 Ok(value) => boxed_value(value),
                 Err(error) => runtime_diagnostic_error_at(error, runtime_span(line, column)),
             };
+        }
+        if matches!(op, BinaryOp::Add) {
+            // `str + str` reads both texts where they lie.
+            let joined = unsafe {
+                with_value(left, |left_value| {
+                    let Value::String(left_text) = left_value else {
+                        return None;
+                    };
+                    if left == right {
+                        return Some(concat_texts_checked(left_text, left_text));
+                    }
+                    with_value(right, |right_value| match right_value {
+                        Value::String(right_text) => {
+                            Some(concat_texts_checked(left_text, right_text))
+                        }
+                        _ => None,
+                    })
+                })
+            };
+            match joined {
+                Some(Ok(text)) => return boxed_value(Value::String(text)),
+                Some(Err(error)) => runtime_diagnostic_error_at(error, runtime_span(line, column)),
+                None => {}
+            }
         }
         match eval_binary_value_with_float_width(
             unsafe { take_value(left) },

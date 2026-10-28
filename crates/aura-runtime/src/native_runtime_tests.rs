@@ -9699,7 +9699,8 @@ fn native_runtime_task_result_handoff_clones_copy_values_and_moves_noncopy_value
             .expect("external Queue alias should receive the returned alias's value");
             assert_eq!(received, Some(Value::Int(IntegerValue::from_signed(9))));
 
-            let owned_string = string_value("allocation identity");
+            // Longer than an inline text, so it has an allocation to keep.
+            let owned_string = string_value("allocation identity of a heap string");
             let allocation = unsafe {
                 super::with_value(owned_string, |value| match value {
                     Value::String(value) => value.as_ptr(),
@@ -28718,4 +28719,94 @@ fn entry_loans_read_and_write_values_where_the_map_keeps_them() {
             release_value(value);
         }
     }
+}
+
+#[test]
+fn string_concatenation_reads_both_texts_in_place() {
+    let twice = string_value("ab");
+    assert_eq!(
+        expect_string(super::aura_direct_binary_value_at(0, twice, twice, 0, 1, 1)),
+        "abab"
+    );
+    let message = capture_direct_boundary_error_message(|| {
+        super::aura_direct_binary_value_at(0, string_value("n="), int_value(1), 0, 1, 1);
+    });
+    assert!(message.contains("unsupported `+` operands"), "{message}");
+    let message = capture_direct_boundary_error_message(|| {
+        let half = string_value(&"x".repeat(crate::runtime_value::MAX_STRING_BYTES / 2 + 1));
+        super::aura_direct_binary_value_at(0, half, half, 0, 1, 1);
+    });
+    assert!(message.contains("allocation limit"), "{message}");
+}
+
+#[test]
+fn replace_copies_text_without_the_pattern_and_rewrites_every_match() {
+    let replaced = |text: &str, from: &str, to: &str| {
+        expect_string(super::aura_direct_string_replace(
+            string_value(text),
+            string_value(from),
+            string_value(to),
+        ))
+    };
+    assert_eq!(replaced("plain", "&", "&amp;"), "plain");
+    assert_eq!(replaced("a & b & c", "&", "&amp;"), "a &amp; b &amp; c");
+    assert_eq!(replaced("aaaa", "aa", "b"), "bb");
+    assert_eq!(replaced("ab", "", "-"), "-a-b-");
+    let long = "x<".repeat(20);
+    assert_eq!(replaced(&long, "<", "&lt;"), "x&lt;".repeat(20));
+}
+
+#[test]
+fn literal_affix_tests_and_str_element_copies_read_text_in_place() {
+    let word = string_value("hello,");
+    for (part, kind, expected) in [
+        ("he", 1, 1),
+        ("lo", 1, 0),
+        (",", 2, 1),
+        ("ll", 0, 1),
+        ("zz", 0, 0),
+    ] {
+        assert_eq!(
+            super::aura_direct_string_affix_literal(word, part.as_ptr(), part.len(), kind),
+            expected,
+            "{part} {kind}"
+        );
+    }
+    unsafe { release_value(word) };
+    let number = int_value(3);
+    let address = number as usize;
+    let message = capture_direct_boundary_error_message(move || {
+        super::aura_direct_string_affix_literal(address as *mut OpaqueValue, "a".as_ptr(), 1, 0);
+    });
+    assert_eq!(message, "expected `str`, found `integer`");
+    unsafe { release_value(number) };
+
+    // A text contains, starts, and ends with itself.
+    let same = string_value("ab");
+    assert_eq!(super::aura_direct_string_contains(same, same), 1);
+    assert_eq!(super::aura_direct_string_starts_with(same, same), 1);
+    assert_eq!(super::aura_direct_string_ends_with(same, same), 1);
+    unsafe { release_value(same) };
+
+    let text = "élan";
+    let copy = unsafe { super::aura_direct_string_from_view(text.as_ptr(), text.len()) };
+    assert_eq!(expect_string(copy), "élan");
+    let list = string_vec(&["a", "bc"]);
+    assert_eq!(
+        expect_string(super::aura_direct_vec_str_element(list, 1, 1, 1)),
+        "bc"
+    );
+    assert_eq!(
+        expect_string(super::aura_direct_vec_str_element(list, -2, 1, 1)),
+        "a"
+    );
+    unsafe { release_value(list) };
+
+    let limit = crate::runtime_value::MAX_STRING_BYTES;
+    let left = crate::text::Text::from("x".repeat(limit));
+    let right = crate::text::Text::from("y");
+    let error = crate::runtime_value::concat_texts_checked(&left, &right).unwrap_err();
+    assert_eq!(error.code, "AU4005");
+    let joined = crate::runtime_value::concat_texts_checked(&right, &right).unwrap();
+    assert_eq!(joined.as_str(), "yy");
 }

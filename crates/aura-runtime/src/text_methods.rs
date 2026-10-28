@@ -67,7 +67,7 @@ fn int64_value(value: usize) -> Value {
     ))
 }
 
-fn string_list(parts: impl IntoIterator<Item = String>) -> Value {
+fn string_list<T: Into<crate::text::Text>>(parts: impl IntoIterator<Item = T>) -> Value {
     Value::Vec(VecValue {
         element_type: str_type(),
         elements: parts.into_iter().map(Value::string).collect(),
@@ -134,11 +134,11 @@ pub fn lines(text: &str) -> Value {
     while !rest.is_empty() {
         match rest.split_once('\n') {
             Some((line, after)) => {
-                parts.push(line.strip_suffix('\r').unwrap_or(line).to_string());
+                parts.push(line.strip_suffix('\r').unwrap_or(line));
                 rest = after;
             }
             None => {
-                parts.push(rest.to_string());
+                parts.push(rest);
                 break;
             }
         }
@@ -149,7 +149,7 @@ pub fn lines(text: &str) -> Value {
 /// `str.split_whitespace()`: splits on runs of Unicode whitespace and drops
 /// empty parts.
 pub fn split_whitespace(text: &str) -> Value {
-    string_list(text.split_whitespace().map(str::to_string))
+    string_list(text.split_whitespace())
 }
 
 /// `str.find(text)`: the index of the first occurrence, counted in Unicode
