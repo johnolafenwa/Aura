@@ -25,7 +25,7 @@ fn instance(class_name: &str) -> *mut OpaqueValue {
 
 fn take_string(value: *mut OpaqueValue) -> String {
     let text = match unsafe { aura_direct_coverage_clone_value(value) } {
-        Value::String(text) => text,
+        Value::String(text) => text.into_string(),
         other => panic!("expected a string, found {other:?}"),
     };
     unsafe { aura_direct_release_value(value) };

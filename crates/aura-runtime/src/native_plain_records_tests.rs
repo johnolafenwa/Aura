@@ -380,7 +380,7 @@ fn record_helpers_report_bad_cells_shapes_and_positions() {
         (
             "a `str` value does not fit the layout of `PlainTestErrors`",
             Box::new(move || unsafe {
-                let text = boxed_value(Value::String("x".to_string()));
+                let text = boxed_value(Value::String("x".to_string().into()));
                 aura_direct_unbox_plain(
                     text,
                     vec![0u64; stride].as_mut_ptr().cast(),
@@ -420,7 +420,7 @@ fn record_helpers_report_bad_cells_shapes_and_positions() {
             Box::new(move || unsafe {
                 let list = boxed_value(Value::Vec(VecValue {
                     element_type: Type::named(name),
-                    elements: vec![Value::String("x".to_string())].into(),
+                    elements: vec![Value::String("x".to_string().into())].into(),
                     str_view: Default::default(),
                 }));
                 aura_direct_vec_read_plain(
@@ -438,7 +438,7 @@ fn record_helpers_report_bad_cells_shapes_and_positions() {
             Box::new(move || unsafe {
                 let holder = boxed_value(Value::Instance(InstanceValue {
                     class_name: "Holder".to_string(),
-                    fields: [("best".to_string(), Value::String("x".to_string()))].into(),
+                    fields: [("best".to_string(), Value::String("x".to_string().into()))].into(),
                 }));
                 let field = b"best";
                 aura_direct_instance_read_plain(

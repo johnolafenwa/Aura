@@ -70,7 +70,7 @@ fn int64_value(value: usize) -> Value {
 fn string_list(parts: impl IntoIterator<Item = String>) -> Value {
     Value::Vec(VecValue {
         element_type: str_type(),
-        elements: parts.into_iter().map(Value::String).collect(),
+        elements: parts.into_iter().map(Value::string).collect(),
         str_view: Default::default(),
     })
 }
@@ -81,12 +81,12 @@ fn optional_index(index: Option<usize>) -> Value {
 
 /// `str.trim_start()`: removes leading Unicode whitespace.
 pub fn trim_start(text: &str) -> Value {
-    Value::String(text.trim_start().to_string())
+    Value::String(crate::text::Text::from(text.trim_start()))
 }
 
 /// `str.trim_end()`: removes trailing Unicode whitespace.
 pub fn trim_end(text: &str) -> Value {
-    Value::String(text.trim_end().to_string())
+    Value::String(crate::text::Text::from(text.trim_end()))
 }
 
 /// `str.split_once(separator)` and `str.rsplit_once(separator)`.
@@ -117,8 +117,8 @@ pub fn split_once(text: &str, separator: &str, from_end: bool) -> Result<Value> 
             Value::Tuple(TupleValue {
                 element_types: vec![str_type(), str_type()],
                 elements: vec![
-                    Value::String(before.to_string()),
-                    Value::String(after.to_string()),
+                    Value::String(crate::text::Text::from(before)),
+                    Value::String(crate::text::Text::from(after)),
                 ],
             })
         }),
@@ -199,7 +199,7 @@ pub fn repeat(text: &str, count: i64) -> Result<Value> {
             output.push_str(text);
         }
     }
-    Ok(Value::String(output))
+    Ok(Value::String(output.into()))
 }
 
 /// Byte search helpers for `bytes.starts_with`, `bytes.ends_with`, and

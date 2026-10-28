@@ -203,7 +203,7 @@ pub fn host_sys_args(args: Vec<Value>, program_args: Option<&[String]>) -> Resul
             .map(<[String]>::to_vec)
             .unwrap_or_else(host_process_args)
             .into_iter()
-            .map(Value::String)
+            .map(Value::string)
             .collect(),
         str_view: Default::default(),
     }))
@@ -215,7 +215,7 @@ pub fn host_sys_env(args: Vec<Value>, _program_args: Option<&[String]>) -> Resul
     let name = host_string_arg(&args, 0, name)?;
     Ok(std::env::var(name)
         .ok()
-        .map(Value::String)
+        .map(Value::string)
         .map(|text| optional_present(aura_core::types::Type::named("str"), text))
         .unwrap_or_else(|| optional_absent(aura_core::types::Type::named("str"))))
 }
@@ -224,7 +224,7 @@ pub fn host_sys_current_dir(args: Vec<Value>, _program_args: Option<&[String]>) 
     let name = "sys::current_dir";
     host_expect_arity(name, &args, 0)?;
     Ok(match std::env::current_dir() {
-        Ok(path) => result_ok(Value::String(path.to_string_lossy().to_string())),
+        Ok(path) => result_ok(Value::String(path.to_string_lossy().to_string().into())),
         Err(error) => result_err(io_error(error)),
     })
 }
@@ -262,7 +262,11 @@ pub fn host_path_join(args: Vec<Value>, _program_args: Option<&[String]>) -> Res
     let base = host_string_arg(&args, 0, name)?;
     let child = host_string_arg(&args, 1, name)?;
     Ok(Value::String(
-        Path::new(&base).join(child).to_string_lossy().to_string(),
+        Path::new(&base)
+            .join(child)
+            .to_string_lossy()
+            .to_string()
+            .into(),
     ))
 }
 
@@ -283,7 +287,7 @@ fn host_path_component(name: &str, args: Vec<Value>) -> Result<Value> {
         _ => unreachable!(),
     };
     Ok(value
-        .map(Value::String)
+        .map(Value::string)
         .map(|text| optional_present(aura_core::types::Type::named("str"), text))
         .unwrap_or_else(|| optional_absent(aura_core::types::Type::named("str"))))
 }
@@ -326,7 +330,7 @@ pub fn host_json_dumps(args: Vec<Value>, _program_args: Option<&[String]>) -> Re
     let indent = host_json_indent_arg(&args[1])?;
     let value = runtime_value_to_json(&args[0])?;
     json_codec::dumps(&value, indent)
-        .map(Value::String)
+        .map(Value::string)
         .map_err(json_dump_error_to_diagnostic)
 }
 
@@ -474,8 +478,8 @@ pub fn host_json_stringify_map(
     host_expect_arity(name, &args, 1)?;
     let value = host_string_map_arg(&args, 0, name)?;
     Ok(match serde_json::to_string(&value) {
-        Ok(text) => result_ok(Value::String(text)),
-        Err(error) => result_err(Value::String(error.to_string())),
+        Ok(text) => result_ok(Value::String(text.into())),
+        Err(error) => result_err(Value::String(error.to_string().into())),
     })
 }
 
@@ -489,7 +493,7 @@ pub fn host_json_parse_string_map(
     Ok(
         match serde_json::from_str::<BTreeMap<String, String>>(&text) {
             Ok(value) => result_ok(host_string_map_value(value)),
-            Err(error) => result_err(Value::String(error.to_string())),
+            Err(error) => result_err(Value::String(error.to_string().into())),
         },
     )
 }
@@ -510,8 +514,8 @@ pub fn host_toml_stringify_map(
     host_expect_arity(name, &args, 1)?;
     let value = host_string_map_arg(&args, 0, name)?;
     Ok(match toml::to_string(&value) {
-        Ok(text) => result_ok(Value::String(text)),
-        Err(error) => result_err(Value::String(error.to_string())),
+        Ok(text) => result_ok(Value::String(text.into())),
+        Err(error) => result_err(Value::String(error.to_string().into())),
     })
 }
 
@@ -524,7 +528,7 @@ pub fn host_toml_parse_string_map(
     let text = host_string_arg(&args, 0, name)?;
     Ok(match toml::from_str::<BTreeMap<String, String>>(&text) {
         Ok(value) => result_ok(host_string_map_value(value)),
-        Err(error) => result_err(Value::String(error.to_string())),
+        Err(error) => result_err(Value::String(error.to_string().into())),
     })
 }
 
@@ -661,7 +665,7 @@ pub fn host_bytes_hex_encode_ref(value: &Value) -> Result<Value> {
     preflight_runtime_bytes_encoder(value, name, bytes_codec::hex_encoded_len)
         .and_then(host_bytes_from_runtime_elements)
         .and_then(|bytes| {
-            bytes_resource_only(bytes_codec::hex_encode(&bytes), name).map(Value::String)
+            bytes_resource_only(bytes_codec::hex_encode(&bytes), name).map(Value::string)
         })
 }
 
@@ -680,7 +684,7 @@ pub fn host_bytes_base64_encode_ref(value: &Value) -> Result<Value> {
     preflight_runtime_bytes_encoder(value, name, bytes_codec::base64_encoded_len)
         .and_then(host_bytes_from_runtime_elements)
         .and_then(|bytes| {
-            bytes_resource_only(bytes_codec::base64_encode(&bytes), name).map(Value::String)
+            bytes_resource_only(bytes_codec::base64_encode(&bytes), name).map(Value::string)
         })
 }
 
@@ -731,7 +735,7 @@ pub fn host_str_from_bytes_ref(value: &Value) -> Result<Value> {
     }
     let bytes = host_bytes_from_runtime_elements(elements)?;
     match bytes_codec::string_from_bytes(&bytes) {
-        Ok(text) => bytes_runtime_result("Ok", Value::String(text)),
+        Ok(text) => bytes_runtime_result("Ok", Value::String(text.into())),
         Err(error) => bytes_codec_error_to_result(error),
     }
 }

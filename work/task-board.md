@@ -180,6 +180,15 @@ Last updated: 2026-10-27
   median 16x -> 8.2x Rust. Gate missed: only `hashing` is within its final
   target. Details are in `2026-10-28-rust-speed-2k-remeasure.md`.
 - Phase 2 complete. Next: Phase 3 (strings, dicts, and JSON).
+- Step 3a: `str` text is `aura_runtime::text::Text` (ASCII flag, up to 29
+  bytes inline); element paths parse without allocating; string helpers
+  read in place; read-only element views passed to borrowing parameters,
+  and nested selections inside them, hand over the element's box
+  (`native_codegen_element_loans.rs`); byte-codec results use static
+  names; `str` gets no type tag. sql_engine -40%, word_freq -19%,
+  template_render -19%, csv_aggregate -17%, mini_browser -16%. Gate
+  missed: `str_slice` probe 457 instructions (target 300). Details are in
+  `2026-10-28-rust-speed-3a-strings.md`.
 
 ## Aura 0.7.1 preview release (complete)
 

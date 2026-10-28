@@ -85,7 +85,7 @@ fn direct_union_injection_copy_leaves_the_borrowed_payload_intact() {
     let encoded = canonical_runtime_type_name(&union);
     let str_index = union_member_index(&union, &Type::named("str"));
     let (source, injected_payload) = with_direct_task_runtime_scope(|| {
-        let payload = boxed_value(Value::String("kept".to_string()));
+        let payload = boxed_value(Value::String("kept".to_string().into()));
         let retained = unsafe { aura_direct_retain_value(payload) };
         let injected =
             aura_direct_union_inject_copy(encoded.as_ptr(), encoded.len(), str_index, retained);
@@ -98,6 +98,6 @@ fn direct_union_injection_copy_leaves_the_borrowed_payload_intact() {
         unsafe { aura_direct_release_value(payload) };
         (source, injected_payload)
     });
-    assert_eq!(source, Value::String("kept".to_string()));
-    assert_eq!(injected_payload, Value::String("kept".to_string()));
+    assert_eq!(source, Value::String("kept".to_string().into()));
+    assert_eq!(injected_payload, Value::String("kept".to_string().into()));
 }

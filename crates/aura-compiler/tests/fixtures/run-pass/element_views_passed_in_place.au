@@ -1,0 +1,61 @@
+# A read-only view of a list element passed to a function that borrows the
+# parameter, and a selection inside such a view, read the element where the
+# list keeps it. A callee that keeps the element keeps its own copy.
+
+enum Cell:
+    Num(value: int64)
+    Word(value: str)
+
+
+class Keeper:
+    kept: list[list[Cell]]
+
+
+class Table:
+    rows: list[list[Cell]]
+
+    def total(self, column: int64) -> int64:
+        mut sum = 0
+        for slot in range(self.rows.len()):
+            view row = self.rows[slot]
+            if wide(row):
+                sum += number(row[column])
+        return sum
+
+    def keep_all(self, keeper: mut Keeper):
+        for slot in range(self.rows.len()):
+            view row = self.rows[slot]
+            remember(keeper, row)
+
+
+def wide(row: list[Cell]) -> bool:
+    return row.len() > 2
+
+
+def number(cell: Cell) -> int64:
+    match cell:
+        case Cell.Num(value):
+            return value
+        case Cell.Word(value):
+            return value.len()
+
+
+def remember(keeper: mut Keeper, row: list[Cell]):
+    keeper.kept.append(row.copy())
+
+
+def main():
+    mut table = Table(rows=[])
+    for i in range(40):
+        table.rows.append([Cell.Num(value=i), Cell.Word(value=f"w{i % 4}"), Cell.Num(value=i * 2)])
+    table.rows.append([Cell.Num(value=1)])
+    mut seen = 0
+    for _ in range(30):
+        seen += table.total(1) + table.total(2)
+    print(seen)
+    mut keeper = Keeper(kept=[])
+    table.keep_all(keeper)
+    table.rows[0][2] = Cell.Num(value=1000)
+    table.rows[1] = [Cell.Num(value=7), Cell.Word(value="seven"), Cell.Num(value=7)]
+    print(table.total(2))
+    print(f"{number(keeper.kept[0][2])} {number(keeper.kept[1][1])} {keeper.kept.len()}")

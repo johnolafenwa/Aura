@@ -9,7 +9,7 @@ fn int(value: i64) -> Value {
 }
 
 fn text(value: &str) -> Value {
-    Value::String(value.to_string())
+    Value::String(value.to_string().into())
 }
 
 fn keys(entries: &DictEntries) -> Vec<Value> {
@@ -393,7 +393,7 @@ fn shared_vecs_copy_on_the_first_write() {
 
 #[test]
 fn string_keys_hash_the_same_bare_and_inside_a_union() {
-    let text = Value::String("ready".to_string());
+    let text = Value::String("ready".to_string().into());
     let union_type = Type::normalize_union(
         vec![Type::named("str"), Type::named("int64")],
         "main",
@@ -416,7 +416,7 @@ fn string_keys_hash_the_same_bare_and_inside_a_union() {
     assert_eq!(hash_value(&union), hash_value(&text));
     assert_ne!(
         hash_value(&text),
-        hash_value(&Value::String("readz".to_string()))
+        hash_value(&Value::String("readz".to_string().into()))
     );
 }
 
@@ -425,11 +425,14 @@ fn str_lookups_agree_with_value_lookups_in_small_and_large_maps() {
     for count in [3_usize, 40] {
         let mut entries = DictEntries::new();
         for index in 0..count {
-            entries.insert(Value::String(format!("key-{index}")), int(index as i64));
+            entries.insert(
+                Value::String(format!("key-{index}").into()),
+                int(index as i64),
+            );
         }
         entries.insert(int(1), int(-1));
         for probe in ["key-0", "key-2", "key-39", "key-40", "", "1"] {
-            let needle = Value::String(probe.to_string());
+            let needle = Value::String(probe.to_string().into());
             assert_eq!(hash_str(probe), hash_value(&needle));
             assert_eq!(entries.position_str(probe), entries.position(&needle));
             assert_eq!(entries.value_of_str(probe), entries.value_of(&needle));

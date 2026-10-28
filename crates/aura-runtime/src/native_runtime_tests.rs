@@ -928,7 +928,7 @@ fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
 
     let malformed_shape = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("int64"),
-        elements: vec![Value::String("one".to_string())].into(),
+        elements: vec![Value::String("one".to_string().into())].into(),
         str_view: Default::default(),
     }));
     let malformed_shape_address = malformed_shape as usize;
@@ -1134,7 +1134,7 @@ fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
 
     let malformed_coordinates = boxed_value(Value::Vec(VecValue {
         element_type: Type::named("int64"),
-        elements: vec![Value::String("zero".to_string())].into(),
+        elements: vec![Value::String("zero".to_string().into())].into(),
         str_view: Default::default(),
     }));
     let malformed_coordinates_address = malformed_coordinates as usize;
@@ -1504,7 +1504,7 @@ fn direct_nested_array_collection_reads_and_clones_use_fallible_copy() {
     let map = boxed_value(Value::Map(MapValue {
         key_type: Type::named("str"),
         value_type: Type::Named("Array".to_string(), vec![Type::named("int32")]),
-        entries: vec![(Value::String("item".to_string()), array_value(11))].into(),
+        entries: vec![(Value::String("item".to_string().into()), array_value(11))].into(),
     }));
     let map_address = map as usize;
     let key = string_value("item");
@@ -1977,7 +1977,7 @@ fn direct_ffi_value_conversion_preserves_every_exact_scalar_kind() {
 
     assert_eq!(
         super::direct_value_to_ffi(
-            &Value::String("aura".to_string()),
+            &Value::String("aura".to_string().into()),
             &super::DirectFfiType::scalar(FfiType::StringView),
         ),
         Ok(FfiValue::String("aura".to_string()))
@@ -2061,7 +2061,7 @@ fn direct_ffi_value_conversion_reports_range_type_and_nominal_mismatches() {
     }
     assert_eq!(
         super::direct_value_to_ffi(
-            &Value::String("not-a-bool".to_string()),
+            &Value::String("not-a-bool".to_string().into()),
             &super::DirectFfiType::scalar(FfiType::Bool),
         ),
         Err("FFI argument expected bool, but received `str`".to_string())
@@ -2643,7 +2643,7 @@ fn direct_runtime_tuple_type_names_parse_and_match_structurally() {
         element_types: vec![Type::named("int64"), Type::named("str")],
         elements: vec![
             Value::Int(IntegerValue::from_signed(1)),
-            Value::String("one".to_string()),
+            Value::String("one".to_string().into()),
         ],
     });
     assert_eq!(value_type_name(&value), "tuple");
@@ -2740,7 +2740,7 @@ fn expect_unit(ptr: *mut OpaqueValue) {
 
 fn expect_string(ptr: *mut OpaqueValue) -> String {
     match unsafe { take_value(ptr) } {
-        Value::String(text) => text,
+        Value::String(text) => text.into_string(),
         other => panic!("expected string, found {:?}", other),
     }
 }
@@ -2778,7 +2778,7 @@ fn expect_task_result_error_message(ptr: *mut OpaqueValue) -> String {
                 .single_payload()
                 .expect("expected task result payload")
             {
-                Value::String(text) => text.clone(),
+                Value::String(text) => text.to_string(),
                 other => panic!("expected string payload, found {:?}", other),
             }
         }
@@ -2837,7 +2837,7 @@ fn int_payload(value: Value, label: &str) -> i128 {
 
 fn string_payload(value: Value, label: &str) -> String {
     match value {
-        Value::String(text) => text,
+        Value::String(text) => text.into_string(),
         other => panic!("expected {label} string payload, found {:?}", other),
     }
 }
@@ -3017,14 +3017,14 @@ fn direct_host_builtin_ffi_covers_success_and_diagnostic_boundaries() {
     let joined = super::aura_host_path_join(join_args, 2);
     assert_eq!(
         unsafe { take_value(joined) },
-        Value::String(format!("root{}leaf", std::path::MAIN_SEPARATOR))
+        Value::String(format!("root{}leaf", std::path::MAIN_SEPARATOR).into())
     );
     unsafe {
         super::with_value(base, |value| {
-            assert_eq!(value, &Value::String("root".to_string()))
+            assert_eq!(value, &Value::String("root".to_string().into()))
         });
         super::with_value(child, |value| {
-            assert_eq!(value, &Value::String("leaf".to_string()))
+            assert_eq!(value, &Value::String("leaf".to_string().into()))
         });
         release_value(base);
         release_value(child);
@@ -3176,7 +3176,7 @@ fn direct_host_arg_buffer_reports_metadata_and_storage_contract_violations() {
     );
 
     let passing_mismatch = super::DirectHostArgBuffer {
-        handles: vec![boxed_value(Value::String("{}".to_string())) as i64],
+        handles: vec![boxed_value(Value::String("{}".to_string().into())) as i64],
     };
     assert_au4001(
         passing_mismatch
@@ -3246,7 +3246,7 @@ fn direct_json_host_abi_rejects_malformed_values_with_precise_diagnostics() {
     assert_au4001(
         direct_json_host_builtin_error(
             "json::as_bool",
-            vec![Some(Value::String("not-json".to_string()))],
+            vec![Some(Value::String("not-json".to_string().into()))],
         ),
         "`json::as_bool` expected a runtime `json.Value`, found `not-json`",
     );
@@ -3285,7 +3285,7 @@ fn direct_json_host_abi_rejects_malformed_values_with_precise_diagnostics() {
             vec![Some(Value::EnumVariant(EnumVariantValue {
                 enum_name: "Other".into(),
                 variant_name: "str".into(),
-                payloads: vec![Value::String("value".to_string())].into(),
+                payloads: vec![Value::String("value".to_string().into())].into(),
             }))],
         ),
         "`json::into_string` expected enum `json.Value`, found `Other`",
@@ -3352,7 +3352,7 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
     use crate::json_codec::JsonValue;
 
     let parse_source = boxed_value(Value::String(
-        r#"{"z":1.0,"items":[true,null,"x"]}"#.to_string(),
+        r#"{"z":1.0,"items":[true,null,"x"]}"#.to_string().into(),
     ));
     let parse_source_allocation = unsafe {
         super::with_value(parse_source, |value| match value {
@@ -3397,7 +3397,7 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
     let dumped = direct_json_host_builtin_call("json::dumps", &[dump_source, indent]);
     assert_eq!(
         unsafe { take_value(dumped) },
-        Value::String(r#"{"items":[true,null],"z":1}"#.to_string())
+        Value::String(r#"{"items":[true,null],"z":1}"#.to_string().into())
     );
     unsafe {
         super::with_value(dump_source, |value| match value {
@@ -3563,7 +3563,7 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
 
 #[test]
 fn direct_json_parse_materialization_allocation_failure_is_au4005_and_preserves_source() {
-    let source = boxed_value(Value::String("[null]".to_string()));
+    let source = boxed_value(Value::String("[null]".to_string().into()));
     let source_address = source as usize;
     let source_ptr = unsafe {
         super::with_value(source, |value| match value {
@@ -3601,7 +3601,7 @@ fn direct_json_parse_materialization_allocation_failure_is_au4005_and_preserves_
 fn direct_json_parse_reserves_capacity_before_borrowing_and_copying_the_source() {
     // Nested past `JSON_INLINE_PARSE_MAX_DEPTH`, so the parse takes the codec
     // path instead of parsing on the calling task.
-    let source = boxed_value(Value::String("[[[[[[[[[null]]]]]]]]]".to_string()));
+    let source = boxed_value(Value::String("[[[[[[[[[null]]]]]]]]]".to_string().into()));
     // The source crosses to the parse task the way a task argument does.
     unsafe { super::share_direct_value(source) };
     let source_address = source as usize;
@@ -3645,7 +3645,7 @@ fn direct_json_parse_reserves_capacity_before_borrowing_and_copying_the_source()
         };
         // SAFETY: the shared write guard excludes every other access.
         match unsafe { &mut *source.value.get() } {
-            Value::String(source) => *source = "true".to_string(),
+            Value::String(source) => *source = "true".into(),
             other => panic!("expected direct JSON source str, found {other:?}"),
         }
         drop(source_guard);
@@ -3688,7 +3688,7 @@ fn direct_json_parse_reserves_capacity_before_borrowing_and_copying_the_source()
     );
     unsafe {
         super::with_value(source, |value| {
-            assert_eq!(value, &Value::String("true".to_string()))
+            assert_eq!(value, &Value::String("true".to_string().into()))
         });
         release_value(source);
     }
@@ -3762,7 +3762,7 @@ fn direct_bytes_host_ffi_dispatches_without_consuming_borrowed_input() {
     let encoded = direct_host_builtin_call("bytes::hex_encode", &[source]);
     assert_eq!(
         unsafe { take_value(encoded) },
-        Value::String("00abff".to_string())
+        Value::String("00abff".to_string().into())
     );
     unsafe {
         super::with_value(source, |value| match value {
@@ -3815,11 +3815,11 @@ fn direct_text_list(value: Value) -> Vec<String> {
 fn direct_text_methods_dispatch_every_opcode_with_mir_semantics() {
     assert_eq!(
         direct_text_method("trim_start", " \tA b ", None, 0),
-        Value::String("A b ".to_string())
+        Value::String("A b ".to_string().into())
     );
     assert_eq!(
         direct_text_method("trim_end", " A b\n", None, 0),
-        Value::String(" A b".to_string())
+        Value::String(" A b".to_string().into())
     );
     let pair = expect_optional_payload(direct_text_method("split_once", "a=b=c", Some("="), 0));
     assert_eq!(pair.render(), "(a, b=c)");
@@ -3848,14 +3848,14 @@ fn direct_text_methods_dispatch_every_opcode_with_mir_semantics() {
     );
     assert_eq!(
         direct_text_method("repeat", "ab", None, 3),
-        Value::String("ababab".to_string())
+        Value::String("ababab".to_string().into())
     );
 
     let split = crate::text_methods::text_method_opcode("split_once").unwrap();
     let error = direct_text_method_trap(
         split,
         Value::String("a".into()),
-        Some(Value::String(String::new())),
+        Some(Value::String(String::new().into())),
         0,
     );
     assert_eq!(error.code, "AU4003");
@@ -3864,7 +3864,7 @@ fn direct_text_methods_dispatch_every_opcode_with_mir_semantics() {
     let error = direct_text_method_trap(
         count,
         Value::String("a".into()),
-        Some(Value::String(String::new())),
+        Some(Value::String(String::new().into())),
         0,
     );
     assert_eq!(error.code, "AU4003");
@@ -4742,8 +4742,8 @@ fn native_runtime_operator_helpers_cover_comparison_binary_and_unary_error_edges
     );
     assert_eq!(
         super::compare_values(
-            Value::String("ada".to_string()),
-            Value::String("grace".to_string()),
+            Value::String("ada".to_string().into()),
+            Value::String("grace".to_string().into()),
             BinaryOp::Less,
         )
         .expect("string ordering should succeed"),
@@ -4769,8 +4769,8 @@ fn native_runtime_operator_helpers_cover_comparison_binary_and_unary_error_edges
             .contains("unsupported comparison operator")
     );
     assert!(super::compare_values(
-        Value::String("a".to_string()),
-        Value::String("b".to_string()),
+        Value::String("a".to_string().into()),
+        Value::String("b".to_string().into()),
         BinaryOp::Add,
     )
     .expect_err("non-comparison string ops should fail in compare_values")
@@ -4778,7 +4778,7 @@ fn native_runtime_operator_helpers_cover_comparison_binary_and_unary_error_edges
     .contains("unsupported comparison operator"));
     assert!(super::compare_values(
         Value::Bool(true),
-        Value::String("b".to_string()),
+        Value::String("b".to_string().into()),
         BinaryOp::Less,
     )
     .expect_err("mismatched comparisons should fail")
@@ -4813,12 +4813,12 @@ fn native_runtime_operator_helpers_cover_comparison_binary_and_unary_error_edges
     .contains("logical `or` expects bool operands"));
     assert_eq!(
         super::eval_binary_value(
-            Value::String("aura".to_string()),
-            Value::String(" repo".to_string()),
+            Value::String("aura".to_string().into()),
+            Value::String(" repo".to_string().into()),
             BinaryOp::Add,
         )
         .expect("string concat should succeed"),
-        Value::String("aura repo".to_string())
+        Value::String("aura repo".to_string().into())
     );
     assert_eq!(
         super::eval_binary_value(Value::Float(9.0), Value::Float(4.0), BinaryOp::Div,)
@@ -4904,7 +4904,7 @@ fn native_runtime_operator_helpers_cover_comparison_binary_and_unary_error_edges
     .contains("division by zero"));
     assert!(super::eval_binary_value(
         Value::Bool(true),
-        Value::String("x".to_string()),
+        Value::String("x".to_string().into()),
         BinaryOp::Add,
     )
     .expect_err("unsupported add operands should fail")
@@ -4912,7 +4912,7 @@ fn native_runtime_operator_helpers_cover_comparison_binary_and_unary_error_edges
     .contains("unsupported `+` operands"));
     assert!(super::eval_binary_value(
         Value::Bool(true),
-        Value::String("x".to_string()),
+        Value::String("x".to_string().into()),
         BinaryOp::Sub,
     )
     .expect_err("unsupported sub operands should fail")
@@ -4920,7 +4920,7 @@ fn native_runtime_operator_helpers_cover_comparison_binary_and_unary_error_edges
     .contains("unsupported `-` operands"));
     assert!(super::eval_binary_value(
         Value::Bool(true),
-        Value::String("x".to_string()),
+        Value::String("x".to_string().into()),
         BinaryOp::Mul,
     )
     .expect_err("unsupported mul operands should fail")
@@ -4928,7 +4928,7 @@ fn native_runtime_operator_helpers_cover_comparison_binary_and_unary_error_edges
     .contains("unsupported `*` operands"));
     assert!(super::eval_binary_value(
         Value::Bool(true),
-        Value::String("x".to_string()),
+        Value::String("x".to_string().into()),
         BinaryOp::Div,
     )
     .expect_err("unsupported div operands should fail")
@@ -4936,7 +4936,7 @@ fn native_runtime_operator_helpers_cover_comparison_binary_and_unary_error_edges
     .contains("unsupported `/` operands"));
     assert!(super::eval_binary_value(
         Value::Bool(true),
-        Value::String("x".to_string()),
+        Value::String("x".to_string().into()),
         BinaryOp::Mod,
     )
     .expect_err("unsupported mod operands should fail")
@@ -4960,13 +4960,13 @@ fn native_runtime_operator_helpers_cover_comparison_binary_and_unary_error_edges
     .message
     .contains("integer overflow"));
     assert!(
-        super::eval_unary_value(Value::String("x".to_string()), UnaryOp::Not)
+        super::eval_unary_value(Value::String("x".to_string().into()), UnaryOp::Not)
             .expect_err("logical not should reject non-bools")
             .message
             .contains("expects `bool`")
     );
     assert!(
-        super::eval_unary_value(Value::String("x".to_string()), UnaryOp::Neg)
+        super::eval_unary_value(Value::String("x".to_string().into()), UnaryOp::Neg)
             .expect_err("unary minus should reject non-numerics")
             .message
             .contains("expects a numeric value")
@@ -4983,7 +4983,7 @@ fn native_runtime_timeout_and_option_decoders_cover_error_edges() {
     });
     assert!(message.contains("outside signed timer range"));
     let message = capture_runtime_error_message(|| {
-        let _ = super::extract_duration_nanoseconds(Value::String("soon".to_string()));
+        let _ = super::extract_duration_nanoseconds(Value::String("soon".to_string().into()));
     });
     assert!(message.contains("expected `Duration`"));
 
@@ -5070,14 +5070,14 @@ fn native_runtime_timeout_and_option_decoders_cover_error_edges() {
     assert!(message.contains("host timer range") || message.contains("host deadline range"));
     unsafe { release_value(huge_timeout) };
 
-    let wrong_timeout = boxed_value(Value::String("soon".to_string()));
+    let wrong_timeout = boxed_value(Value::String("soon".to_string().into()));
     let message = capture_runtime_error_message(|| {
         let _ = super::optional_timeout_from_ptr(wrong_timeout, "timeout");
     });
     assert!(message.contains("expects `Duration`"));
     unsafe { release_value(wrong_timeout) };
 
-    let wrong_duration = boxed_value(Value::String("soon".to_string()));
+    let wrong_duration = boxed_value(Value::String("soon".to_string().into()));
     let message = capture_runtime_error_message(|| {
         let _ = super::duration_from_ptr(wrong_duration, "sleep");
     });
@@ -5095,7 +5095,7 @@ fn native_runtime_timeout_and_option_decoders_cover_error_edges() {
         super::expect_command_vec(
             &Value::Vec(VecValue {
                 element_type: aura_core::types::Type::named("Unknown"),
-                elements: vec![Value::String("echo".to_string())].into(),
+                elements: vec![Value::String("echo".to_string().into())].into(),
                 str_view: Default::default(),
             }),
             "command",
@@ -5133,7 +5133,7 @@ fn native_runtime_timeout_and_option_decoders_cover_error_edges() {
         Some("log".to_string())
     );
     assert_eq!(
-        super::expect_optional_string_value(&Value::String("bare".to_string()), "stderr"),
+        super::expect_optional_string_value(&Value::String("bare".to_string().into()), "stderr"),
         Some("bare".to_string()),
         "a bare `str` is accepted where `str | None` is expected"
     );
@@ -5225,7 +5225,7 @@ fn invalid_direct_host_timers_use_typed_io_and_process_errors() {
     assert_eq!(failed_payloads.len(), 3);
     assert_eq!(
         failed_payloads.remove(0),
-        Value::String("<supervisor>".to_string())
+        Value::String("<supervisor>".to_string().into())
     );
     let mut process_io_payloads = expect_variant_value(failed_payloads.remove(0), "Error", "Io");
     assert_eq!(process_io_payloads.len(), 1);
@@ -6566,7 +6566,7 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
     let wrong_payload = TaskValue::from_handle(thread::spawn(|| {
         Ok(Value::Vec(VecValue {
             element_type: aura_core::types::Type::named("uint8"),
-            elements: vec![Value::String("bad".to_string())].into(),
+            elements: vec![Value::String("bad".to_string().into())].into(),
             str_view: Default::default(),
         }))
     }));
@@ -6578,7 +6578,7 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
     let wrong_result_type = TaskValue::from_handle(thread::spawn(|| {
         Ok(Value::Vec(VecValue {
             element_type: aura_core::types::Type::named("str"),
-            elements: vec![Value::String("bad".to_string())].into(),
+            elements: vec![Value::String("bad".to_string().into())].into(),
             str_view: Default::default(),
         }))
     }));
@@ -6910,7 +6910,7 @@ fn native_runtime_single_consumer_task_observation_is_defended_across_aliases() 
     let nonrepeatable = TaskValue::from_handle_with_result_repeatability(
         thread::spawn(move || {
             let _ = timeout_unblocker.recv_with_cancellation(None, None);
-            Ok(Value::String("late".to_string()))
+            Ok(Value::String("late".to_string().into()))
         }),
         false,
     );
@@ -6930,7 +6930,7 @@ fn native_runtime_single_consumer_task_observation_is_defended_across_aliases() 
     let default_task = TaskValue::from_handle_with_result_repeatability(
         thread::spawn(move || {
             let _ = default_unblocker.recv_with_cancellation(None, None);
-            Ok(Value::String("late".to_string()))
+            Ok(Value::String("late".to_string().into()))
         }),
         false,
     );
@@ -6973,7 +6973,7 @@ fn native_runtime_single_consumer_task_observation_is_defended_across_aliases() 
     assert_eq!(repeated_join_error(cancelled_task).code, "AU4001");
 
     let duplicate = TaskValue::from_handle_with_result_repeatability(
-        thread::spawn(|| Ok(Value::String("ready".to_string()))),
+        thread::spawn(|| Ok(Value::String("ready".to_string().into()))),
         false,
     );
     let duplicate_error = super::wait_any_tasks(
@@ -6986,7 +6986,7 @@ fn native_runtime_single_consumer_task_observation_is_defended_across_aliases() 
     assert_eq!(repeated.code, "AU4001");
 
     let duplicate_all = TaskValue::from_handle_with_result_repeatability(
-        thread::spawn(|| Ok(Value::String("once".to_string()))),
+        thread::spawn(|| Ok(Value::String("once".to_string().into()))),
         false,
     );
     let duplicate_all_error = super::wait_all_tasks(
@@ -6997,7 +6997,7 @@ fn native_runtime_single_consumer_task_observation_is_defended_across_aliases() 
     assert_eq!(duplicate_all_error.code, "AU4001");
 
     let selected = TaskValue::from_handle_with_result_repeatability(
-        thread::spawn(|| Ok(Value::String("selected".to_string()))),
+        thread::spawn(|| Ok(Value::String("selected".to_string().into()))),
         false,
     );
     let selected_payloads = expect_variant_ptr(
@@ -7009,7 +7009,7 @@ fn native_runtime_single_consumer_task_observation_is_defended_across_aliases() 
     assert_eq!(repeated_join_error(selected).code, "AU4001");
 
     let first = TaskValue::from_handle_with_result_repeatability(
-        thread::spawn(|| Ok(Value::String("first".to_string()))),
+        thread::spawn(|| Ok(Value::String("first".to_string().into()))),
         false,
     );
     let second = TaskValue::from_handle_with_result_repeatability(
@@ -7039,7 +7039,7 @@ fn native_runtime_single_consumer_task_observation_is_defended_across_aliases() 
         let task = TaskValue::from_handle_with_result_repeatability(
             thread::spawn(move || {
                 let _ = unblocker.recv_with_cancellation(None, None);
-                Ok(Value::String("late".to_string()))
+                Ok(Value::String("late".to_string().into()))
             }),
             false,
         );
@@ -7251,7 +7251,7 @@ fn native_runtime_direct_process_wrappers_cover_streaming_and_signal_paths() {
 
     fn string_from_option(value: Value, label: &str) -> String {
         match expect_optional_payload(value) {
-            Value::String(text) => text,
+            Value::String(text) => text.into_string(),
             other => panic!("expected {label} string payload, found {:?}", other),
         }
     }
@@ -8164,7 +8164,7 @@ fn native_runtime_direct_network_wrappers_cover_tcp_udp_http_success_paths() {
         let line = expect_optional_payload(expect_result_ok_payload(
             super::aura_direct_tcp_stream_read_line(accepted_ptr, duration_value(5_000)),
         ));
-        assert_eq!(line, Value::String("ping".to_string()));
+        assert_eq!(line, Value::String("ping".to_string().into()));
         expect_result_ok_unit(super::aura_direct_tcp_stream_write_bytes(
             accepted_ptr,
             int_vec(&[112, 111, 110, 103]),
@@ -8515,7 +8515,7 @@ fn native_runtime_direct_network_wrappers_cover_tcp_udp_http_success_paths() {
         let text = expect_optional_payload(expect_result_ok_payload(
             super::aura_direct_websocket_recv_text(server_ptr, duration_value(5_000)),
         ));
-        assert_eq!(text, Value::String("hello websocket".to_string()));
+        assert_eq!(text, Value::String("hello websocket".to_string().into()));
         expect_result_ok_unit(super::aura_direct_websocket_send_bytes(
             server_ptr,
             int_vec(&[111, 107]),
@@ -8561,7 +8561,7 @@ fn native_runtime_direct_network_wrappers_cover_tcp_udp_http_success_paths() {
     let websocket_done = expect_optional_payload(expect_result_ok_payload(
         super::aura_direct_websocket_recv_text(websocket_client_ptr, timeout),
     ));
-    assert_eq!(websocket_done, Value::String("done".to_string()));
+    assert_eq!(websocket_done, Value::String("done".to_string().into()));
     expect_unit(super::aura_direct_websocket_close(websocket_client_ptr));
     websocket_server
         .join()
@@ -8599,7 +8599,7 @@ fn native_runtime_direct_network_wrappers_cover_tcp_udp_http_success_paths() {
             let line = expect_optional_payload(expect_result_ok_payload(
                 super::aura_direct_unix_stream_read_line(server_ptr, duration_value(5_000)),
             ));
-            assert_eq!(line, Value::String("hello unix".to_string()));
+            assert_eq!(line, Value::String("hello unix".to_string().into()));
             expect_result_ok_unit(super::aura_direct_unix_stream_write_all(
                 server_ptr,
                 string_value("unix-ok"),
@@ -9363,7 +9363,7 @@ fn direct_runtime_map_and_set_helpers_cover_collection_surface() {
             };
             assert_eq!(
                 entry.elements.first(),
-                Some(&Value::String("name".to_string()))
+                Some(&Value::String("name".to_string().into()))
             );
             assert_eq!(
                 entry.elements.get(1),
@@ -11242,14 +11242,18 @@ fn direct_enum_owned_payload_buffer_moves_string_vec_and_map_allocations() {
     let text = "owned enum payload".repeat(32);
     let text_ptr = text.as_ptr();
     let elements = vec![
-        Value::String("a".to_string()),
-        Value::String("b".to_string()),
+        Value::String("a".to_string().into()),
+        Value::String("b".to_string().into()),
     ];
     let elements_ptr = elements.as_ptr();
-    let entries = vec![(Value::String("key".to_string()), Value::Bool(true))];
+    let entries = vec![(Value::String("key".to_string().into()), Value::Bool(true))];
     let entries_ptr = entries.as_ptr();
     let cases = [
-        ("str", Value::String(text), Allocation::String(text_ptr)),
+        (
+            "str",
+            Value::String(text.into()),
+            Allocation::String(text_ptr),
+        ),
         (
             "Array",
             Value::Vec(VecValue {
@@ -11319,7 +11323,7 @@ fn direct_instance_take_field_moves_nested_value_and_preserves_container() {
             "inner".to_string(),
             Value::Instance(InstanceValue {
                 class_name: "Inner".to_string(),
-                fields: BTreeMap::from([("value".to_string(), Value::String(text))]).into(),
+                fields: BTreeMap::from([("value".to_string(), Value::String(text.into()))]).into(),
             }),
         )])
         .into(),
@@ -11358,13 +11362,13 @@ fn direct_projected_instance_helpers_report_paths_precisely_without_mutating_on_
         })
     }
 
-    let mut non_instance = Value::String("text".to_string());
+    let mut non_instance = Value::String("text".to_string().into());
     assert_eq!(
         super::take_direct_instance_field(&mut non_instance, &["value"], "value")
             .expect_err("moving a field from a non-instance must fail"),
         "cannot move field `value` from non-instance `str`"
     );
-    assert_eq!(non_instance, Value::String("text".to_string()));
+    assert_eq!(non_instance, Value::String("text".to_string().into()));
 
     let mut empty_move = instance("Holder", BTreeMap::new());
     assert_eq!(
@@ -11399,7 +11403,10 @@ fn direct_projected_instance_helpers_report_paths_precisely_without_mutating_on_
 
     let mut non_instance_nested = instance(
         "Holder",
-        BTreeMap::from([("inner".to_string(), Value::String("text".to_string()))]),
+        BTreeMap::from([(
+            "inner".to_string(),
+            Value::String("text".to_string().into()),
+        )]),
     );
     let non_instance_nested_before = non_instance_nested.clone();
     assert_eq!(
@@ -11419,7 +11426,7 @@ fn direct_projected_instance_helpers_report_paths_precisely_without_mutating_on_
             &mut non_instance_assignment,
             &["value"],
             "value",
-            Value::String("new".to_string()),
+            Value::String("new".to_string().into()),
         )
         .expect_err("owned assignment on a non-instance must fail"),
         "cannot assign field `value` on non-instance `bool`"
@@ -11432,7 +11439,7 @@ fn direct_projected_instance_helpers_report_paths_precisely_without_mutating_on_
             &mut empty_assignment,
             &[],
             "",
-            Value::String("new".to_string()),
+            Value::String("new".to_string().into()),
         )
         .expect_err("an empty internal assignment path must fail"),
         "direct runtime received an empty instance assignment path"
@@ -11448,7 +11455,7 @@ fn direct_projected_instance_helpers_report_paths_precisely_without_mutating_on_
             &mut missing_assignment,
             &["inner", "value"],
             "inner.value",
-            Value::String("new".to_string()),
+            Value::String("new".to_string().into()),
         )
         .expect_err("a missing assignment intermediate must fail"),
         "class `Holder` has no field `inner` in assignment path `inner.value`"
@@ -11474,7 +11481,7 @@ fn direct_projected_instance_helpers_report_paths_precisely_without_mutating_on_
         &mut nested_assignment,
         &["inner", "value"],
         "inner.value",
-        Value::String(assigned),
+        Value::String(assigned.into()),
     )
     .expect("an existing instance path should accept a new leaf");
     let Value::Instance(holder) = &nested_assignment else {
@@ -11514,7 +11521,7 @@ fn direct_projected_instance_wrappers_preserve_targets_and_obey_owned_consumptio
 
     for (target, path, expected) in [
         (
-            Value::String("text".to_string()),
+            Value::String("text".to_string().into()),
             "value",
             "cannot move field `value` from non-instance `str`",
         ),
@@ -11543,7 +11550,10 @@ fn direct_projected_instance_wrappers_preserve_targets_and_obey_owned_consumptio
                     "inner".to_string(),
                     instance(
                         "Inner",
-                        BTreeMap::from([("value".to_string(), Value::String("kept".to_string()))]),
+                        BTreeMap::from([(
+                            "value".to_string(),
+                            Value::String("kept".to_string().into()),
+                        )]),
                     ),
                 )]),
             ),
@@ -11576,7 +11586,7 @@ fn direct_projected_instance_wrappers_preserve_targets_and_obey_owned_consumptio
 
     for (target, path, expected) in [
         (
-            Value::String("text".to_string()),
+            Value::String("text".to_string().into()),
             "value",
             "cannot assign field `value` on non-instance `str`",
         ),
@@ -11596,7 +11606,7 @@ fn direct_projected_instance_wrappers_preserve_targets_and_obey_owned_consumptio
     ] {
         let before = target.clone();
         let target = boxed_value(target);
-        let owned = boxed_value(Value::String("consumed".to_string()));
+        let owned = boxed_value(Value::String("consumed".to_string().into()));
         unsafe {
             retain_value(owned);
         }
@@ -11627,7 +11637,7 @@ fn direct_projected_instance_wrappers_preserve_targets_and_obey_owned_consumptio
                 "an owned assignment argument must be consumed after path validation"
             );
             super::with_value(owned, |value| {
-                assert_eq!(value, &Value::String("consumed".to_string()))
+                assert_eq!(value, &Value::String("consumed".to_string().into()))
             });
             release_value(target);
             release_value(owned);
@@ -11635,7 +11645,7 @@ fn direct_projected_instance_wrappers_preserve_targets_and_obey_owned_consumptio
     }
 
     let invalid_target = boxed_value(instance("Holder", BTreeMap::new()));
-    let invalid_owned = boxed_value(Value::String("still-owned".to_string()));
+    let invalid_owned = boxed_value(Value::String("still-owned".to_string().into()));
     unsafe {
         retain_value(invalid_owned);
     }
@@ -11662,7 +11672,7 @@ fn direct_projected_instance_wrappers_preserve_targets_and_obey_owned_consumptio
         super::with_value(invalid_owned, |value| {
             assert_eq!(
                 value,
-                &Value::String("still-owned".to_string()),
+                &Value::String("still-owned".to_string().into()),
                 "the wrapper must reject malformed paths before consuming the owned argument"
             )
         });
@@ -11672,7 +11682,7 @@ fn direct_projected_instance_wrappers_preserve_targets_and_obey_owned_consumptio
     }
 
     let plain_target = boxed_value(Value::Bool(false));
-    let plain_new_value = boxed_value(Value::String("preserved".to_string()));
+    let plain_new_value = boxed_value(Value::String("preserved".to_string().into()));
     let plain_path = "value";
     let plain_target_address = plain_target as usize;
     let plain_new_value_address = plain_new_value as usize;
@@ -11692,7 +11702,7 @@ fn direct_projected_instance_wrappers_preserve_targets_and_obey_owned_consumptio
     unsafe {
         super::with_value(plain_target, |value| assert_eq!(value, &Value::Bool(false)));
         super::with_value(plain_new_value, |value| {
-            assert_eq!(value, &Value::String("preserved".to_string()))
+            assert_eq!(value, &Value::String("preserved".to_string().into()))
         });
         release_value(plain_target);
         release_value(plain_new_value);
@@ -11708,7 +11718,7 @@ fn direct_instance_owned_field_set_preserves_payload_allocation_identity() {
         instance,
         b"value".as_ptr(),
         "value".len(),
-        boxed_value(Value::String(text)),
+        boxed_value(Value::String(text.into())),
     );
 
     unsafe {
@@ -11730,7 +11740,7 @@ fn direct_variant_take_payload_preserves_allocation_and_consumes_slot() {
     let packet = boxed_value(Value::EnumVariant(EnumVariantValue {
         enum_name: "Packet".into(),
         variant_name: "Text".into(),
-        payloads: vec![Value::String(text)].into(),
+        payloads: vec![Value::String(text.into())].into(),
     }));
     let moved = super::aura_direct_variant_take_payload(packet, 0);
 
@@ -12417,7 +12427,7 @@ fn metrics_state_and_diagnostics_are_observable_from_each_fresh_entry_path() {
     const HELPER_ENV: &str = "AURA_RUNTIME_METRICS_BEHAVIOR_HELPER";
     if let Ok(helper) = std::env::var(HELPER_ENV) {
         let call = |name, args| crate::runtime_value::evaluate_host_builtin(name, args);
-        let metric = |name: &str| Value::String(name.to_string());
+        let metric = |name: &str| Value::String(name.to_string().into());
         let int = |value| Value::Int(IntegerValue::from_signed(value));
 
         match helper.as_str() {
@@ -12727,7 +12737,7 @@ fn direct_root_entrypoint_helper_exits_for_invalid_thunks_and_return_types() {
 #[test]
 fn native_runtime_private_value_decoders_cover_success_paths() {
     assert_eq!(
-        super::expect_string_value(&Value::String("aura".to_string()), "text"),
+        super::expect_string_value(&Value::String("aura".to_string().into()), "text"),
         "aura"
     );
     assert_eq!(
@@ -12756,8 +12766,8 @@ fn native_runtime_private_value_decoders_cover_success_paths() {
                 key_type: aura_core::types::Type::named("Unknown"),
                 value_type: aura_core::types::Type::named("Unknown"),
                 entries: vec![(
-                    Value::String("content-type".to_string()),
-                    Value::String("text/plain".to_string()),
+                    Value::String("content-type".to_string().into()),
+                    Value::String("text/plain".to_string().into()),
                 )]
                 .into(),
             }),
@@ -12832,8 +12842,8 @@ fn native_runtime_private_value_decoders_cover_success_paths() {
             &Value::Vec(VecValue {
                 element_type: aura_core::types::Type::named("Unknown"),
                 elements: vec![
-                    Value::String("/bin/echo".to_string()),
-                    Value::String("ok".to_string()),
+                    Value::String("/bin/echo".to_string().into()),
+                    Value::String("ok".to_string().into()),
                 ]
                 .into(),
                 str_view: Default::default(),
@@ -12865,7 +12875,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
     if let Ok(case) = std::env::var("AURA_DIRECT_RUNTIME_CASE") {
         match case.as_str() {
             "bytes-value-type" => {
-                super::expect_bytes_value(&Value::String("bytes".to_string()), "bytes");
+                super::expect_bytes_value(&Value::String("bytes".to_string().into()), "bytes");
             }
             "bytes-element-range" => {
                 super::expect_bytes_value(
@@ -12878,7 +12888,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                 );
             }
             "bool-value-type" => {
-                super::expect_bool_value(&Value::String("flag".to_string()), "flag");
+                super::expect_bool_value(&Value::String("flag".to_string().into()), "flag");
             }
             "i32-overflow" => {
                 super::expect_i32_value(
@@ -12887,10 +12897,10 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                 );
             }
             "i32-value-type" => {
-                super::expect_i32_value(&Value::String("count".to_string()), "count");
+                super::expect_i32_value(&Value::String("count".to_string().into()), "count");
             }
             "headers-map-type" => {
-                super::expect_headers_map(&Value::String("headers".to_string()), "headers");
+                super::expect_headers_map(&Value::String("headers".to_string().into()), "headers");
             }
             "headers-key-type" => {
                 super::expect_headers_map(
@@ -12899,7 +12909,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                         value_type: aura_core::types::Type::named("Unknown"),
                         entries: vec![(
                             Value::Int(IntegerValue::from_signed(1)),
-                            Value::String("value".to_string()),
+                            Value::String("value".to_string().into()),
                         )]
                         .into(),
                     }),
@@ -12925,7 +12935,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                 super::supervisor_max_restarts_from_ptr(int_value(-2), "max_restarts");
             }
             "command-vec-type" => {
-                super::expect_command_vec(&Value::String("command".to_string()), "command");
+                super::expect_command_vec(&Value::String("command".to_string().into()), "command");
             }
             "command-element-type" => {
                 super::expect_command_vec(
@@ -13160,7 +13170,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "select-source-type" => {
                 super::aura_direct_select(select_sources(
                     vec![Type::named("str")],
-                    vec![Value::String("not a source".to_string())],
+                    vec![Value::String("not a source".to_string().into())],
                 ));
             }
             "select-metadata-arity" => {
@@ -15574,7 +15584,7 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
         aura_core::types::Type::named("Unknown")
     );
     assert_eq!(
-        inferred_collection_type(&Value::String("text".to_string())),
+        inferred_collection_type(&Value::String("text".to_string().into())),
         aura_core::types::Type::named("str")
     );
     assert_eq!(
@@ -15681,8 +15691,8 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         compare_values(
-            Value::String("b".to_string()),
-            Value::String("a".to_string()),
+            Value::String("b".to_string().into()),
+            Value::String("a".to_string().into()),
             BinaryOp::Greater,
         )
         .expect("string comparison should work"),
@@ -15695,8 +15705,8 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         compare_values(
-            Value::String("a".to_string()),
-            Value::String("b".to_string()),
+            Value::String("a".to_string().into()),
+            Value::String("b".to_string().into()),
             BinaryOp::Less,
         )
         .expect("string less-than should work"),
@@ -15704,7 +15714,7 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     let compare_error = compare_values(
         Value::Bool(true),
-        Value::String("x".to_string()),
+        Value::String("x".to_string().into()),
         BinaryOp::Less,
     )
     .expect_err("unsupported comparison should fail");
@@ -15770,8 +15780,8 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         compare_values(
-            Value::String("a".to_string()),
-            Value::String("a".to_string()),
+            Value::String("a".to_string().into()),
+            Value::String("a".to_string().into()),
             BinaryOp::LessEq,
         )
         .expect("string less-equal should work"),
@@ -15779,8 +15789,8 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         compare_values(
-            Value::String("b".to_string()),
-            Value::String("a".to_string()),
+            Value::String("b".to_string().into()),
+            Value::String("a".to_string().into()),
             BinaryOp::GreaterEq,
         )
         .expect("string greater-equal should work"),
@@ -15801,8 +15811,8 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
         .message
         .contains("unsupported comparison operator"));
     let string_operator_error = compare_values(
-        Value::String("a".to_string()),
-        Value::String("b".to_string()),
+        Value::String("a".to_string().into()),
+        Value::String("b".to_string().into()),
         BinaryOp::Add,
     )
     .expect_err("unsupported string comparison operators should fail");
@@ -15897,15 +15907,15 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         eval_binary_value(
-            Value::String("au".to_string()),
-            Value::String("ra".to_string()),
+            Value::String("au".to_string().into()),
+            Value::String("ra".to_string().into()),
             BinaryOp::Add,
         )
         .expect("string concatenation should work"),
-        Value::String("aura".to_string())
+        Value::String("aura".to_string().into())
     );
     let add_error = eval_binary_value(
-        Value::String("a".to_string()),
+        Value::String("a".to_string().into()),
         Value::Bool(true),
         BinaryOp::Add,
     )
@@ -15988,7 +15998,7 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     let not_error = eval_unary_value(Value::Int(IntegerValue::from_signed(1)), UnaryOp::Not)
         .expect_err("invalid unary not should fail");
     assert!(not_error.message.contains("expects `bool`"));
-    let unary_error = eval_unary_value(Value::String("x".to_string()), UnaryOp::Neg)
+    let unary_error = eval_unary_value(Value::String("x".to_string().into()), UnaryOp::Neg)
         .expect_err("invalid unary neg should fail");
     assert!(unary_error.message.contains("expects a numeric value"));
 
@@ -16258,7 +16268,7 @@ fn native_runtime_resource_metadata_reports_maintained_type_names() {
     let tls_line = expect_optional_payload(expect_result_ok_payload(
         super::aura_direct_tls_stream_read_line(tls_server_ptr, duration_value(5_000)),
     ));
-    assert_eq!(tls_line, Value::String("hello tls".to_string()));
+    assert_eq!(tls_line, Value::String("hello tls".to_string().into()));
     expect_unit(super::aura_direct_tls_stream_close(tls_client_ptr));
     expect_unit(super::aura_direct_tls_stream_close(tls_server_ptr));
     unsafe {
@@ -16565,7 +16575,7 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
     super::aura_direct_vec_push_in_place(vec, string_value("x"));
     assert_eq!(super::with_vector(vec, |vector| vector.elements.len()), 1);
     super::with_vector_mut(vec, |vector| {
-        vector.elements.push(Value::String("y".to_string()));
+        vector.elements.push(Value::String("y".to_string().into()));
     });
     assert_eq!(
         expect_vec_strings(super::aura_direct_clone_value(vec)),
@@ -16581,7 +16591,7 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
     assert_eq!(super::with_map(map, |map| map.entries.len()), 1);
     super::with_map_mut(map, |map| {
         map.entries.push_new((
-            Value::String("other".to_string()),
+            Value::String("other".to_string().into()),
             Value::Int(IntegerValue::from_signed(2)),
         ));
     });
@@ -16597,7 +16607,8 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
     );
     assert_eq!(super::with_set(set, |set| set.elements.len()), 1);
     super::with_set_mut(set, |set| {
-        set.elements.push_new(Value::String("go".to_string()));
+        set.elements
+            .push_new(Value::String("go".to_string().into()));
     });
     assert_eq!(super::aura_direct_set_len(set), 2);
 
@@ -18172,7 +18183,7 @@ fn native_runtime_detached_closure_task_surfaces_unobserved_trap_and_cleans_capt
                             vec![ClosureCaptureValue {
                                 name: "payload".to_string(),
                                 ty: Type::named("str"),
-                                value: Value::String("owned by detached task".to_string()),
+                                value: Value::String("owned by detached task".to_string().into()),
                                 source_place: None,
                                 mutable: false,
                             }],
@@ -19065,7 +19076,7 @@ fn native_runtime_trapping_closure_call_releases_combined_buffer_without_mut_wri
             vec![ClosureCaptureValue {
                 name: "captured".to_string(),
                 ty: Type::named("str"),
-                value: Value::String("owned capture".to_string()),
+                value: Value::String("owned capture".to_string().into()),
                 source_place: None,
                 mutable: false,
             }],
@@ -20243,7 +20254,7 @@ fn native_runtime_max_depth_skips_saturated_cleanup_and_releases_its_snapshot() 
         let value = unsafe { *args as *mut OpaqueValue };
         unsafe {
             value_mut(value, |value| match value {
-                Value::String(text) => *text = "cleanup invoked".to_string(),
+                Value::String(text) => *text = "cleanup invoked".into(),
                 other => panic!("expected str cleanup witness, found {other:?}"),
             });
         }
@@ -20286,7 +20297,7 @@ fn native_runtime_max_depth_skips_saturated_cleanup_and_releases_its_snapshot() 
     );
     assert_eq!(
         unsafe { value_ref(witness) },
-        Value::String("cleanup skipped".to_string()),
+        Value::String("cleanup skipped".to_string().into()),
         "a cleanup registered at the saturated depth must not enter its callback"
     );
     assert_eq!(
@@ -20307,7 +20318,7 @@ fn native_runtime_retain_and_release_keep_values_alive_until_last_handle() {
     unsafe { release_value(boxed) };
     assert_eq!(
         unsafe { value_ref(retained) },
-        Value::String("aura".to_string())
+        Value::String("aura".to_string().into())
     );
 
     unsafe { release_value(retained) };
@@ -20322,7 +20333,10 @@ fn native_runtime_arg_buffer_store_retains_opaque_values() {
     unsafe {
         release_value(value);
         let stored = *buffer as *mut OpaqueValue;
-        assert_eq!(value_ref(stored), Value::String("buffered".to_string()));
+        assert_eq!(
+            value_ref(stored),
+            Value::String("buffered".to_string().into())
+        );
         release_value(stored);
         free_arg_buffer(buffer, 1);
     }
@@ -20699,7 +20713,7 @@ fn duration_integer_outside_signed_range_helper_exits_with_error() {
 #[test]
 fn duration_type_mismatch_helper_exits_with_error() {
     if std::env::var("AURA_DIRECT_RUNTIME_HELPER").as_deref() == Ok("duration-type") {
-        extract_duration_nanoseconds(&Value::String("oops".to_string()));
+        extract_duration_nanoseconds(&Value::String("oops".to_string().into()));
     }
 
     let output = Command::new(std::env::current_exe().expect("test binary should exist"))
@@ -20732,16 +20746,16 @@ fn native_runtime_operator_and_io_helpers_cover_additional_paths() {
 
     assert_eq!(
         compare_values(
-            Value::String("a".to_string()),
-            Value::String("b".to_string()),
+            Value::String("a".to_string().into()),
+            Value::String("b".to_string().into()),
             BinaryOp::Less
         )
         .expect("string ordering should work"),
         Value::Bool(true)
     );
     let string_compare_error = compare_values(
-        Value::String("a".to_string()),
-        Value::String("b".to_string()),
+        Value::String("a".to_string().into()),
+        Value::String("b".to_string().into()),
         BinaryOp::Add,
     )
     .expect_err("unsupported string comparison operators should fail");
@@ -20767,7 +20781,7 @@ fn native_runtime_operator_and_io_helpers_cover_additional_paths() {
 
     let mismatch_compare_error = compare_values(
         Value::Bool(true),
-        Value::String("no".to_string()),
+        Value::String("no".to_string().into()),
         BinaryOp::Less,
     )
     .expect_err("mismatched comparisons should fail");
@@ -20792,7 +20806,7 @@ fn native_runtime_operator_and_io_helpers_cover_additional_paths() {
 
     let or_error = eval_binary_value(
         Value::Bool(true),
-        Value::String("x".to_string()),
+        Value::String("x".to_string().into()),
         BinaryOp::Or,
     )
     .expect_err("logical or should require bools");
@@ -20805,8 +20819,8 @@ fn native_runtime_operator_and_io_helpers_cover_additional_paths() {
     assert!(add_error.message.contains("unsupported `+` operands"));
 
     let sub_error = eval_binary_value(
-        Value::String("a".to_string()),
-        Value::String("b".to_string()),
+        Value::String("a".to_string().into()),
+        Value::String("b".to_string().into()),
         BinaryOp::Sub,
     )
     .expect_err("sub should reject strings");
@@ -20821,8 +20835,8 @@ fn native_runtime_operator_and_io_helpers_cover_additional_paths() {
     assert!(div_error.message.contains("unsupported `/` operands"));
 
     let mod_error = eval_binary_value(
-        Value::String("a".to_string()),
-        Value::String("b".to_string()),
+        Value::String("a".to_string().into()),
+        Value::String("b".to_string().into()),
         BinaryOp::Mod,
     )
     .expect_err("mod should reject strings");
@@ -21394,7 +21408,7 @@ fn direct_tuple_abi_constructs_projects_matches_and_compares_opaque_values() {
 
     let owned_text = "destructured without cloning".repeat(8);
     let owned_text_allocation = owned_text.as_ptr();
-    let captured = tuple(vec![boxed_value(Value::String(owned_text))]);
+    let captured = tuple(vec![boxed_value(Value::String(owned_text.into()))]);
     let taken = super::aura_direct_tuple_take_element(captured, 0);
     unsafe {
         super::with_value(taken, |value| match value {
@@ -22675,7 +22689,7 @@ fn coverage_native_runtime_decodes_closure_patterns_and_uses_type_fallbacks() {
         class_name: "Marker".to_string(),
         fields: BTreeMap::from([(
             super::DIRECT_RUNTIME_TYPE_FIELD.to_string(),
-            Value::String(embedded_type.to_string()),
+            Value::String(embedded_type.to_string().into()),
         )])
         .into(),
     }));
@@ -23661,10 +23675,10 @@ fn direct_owned_field_assignment_writes_through_enum_and_union_payloads() {
     assign(
         some,
         "__variant_payload_Found_0",
-        Value::String("flat".to_string()),
+        Value::String("flat".to_string().into()),
     );
     let flat = expect_variant_ptr(super::aura_direct_clone_value(some), "Lookup", "Found");
-    assert_eq!(flat[0], Value::String("flat".to_string()));
+    assert_eq!(flat[0], Value::String("flat".to_string().into()));
     unsafe {
         release_value(some);
     }
@@ -23699,7 +23713,7 @@ fn direct_owned_field_assignment_writes_through_enum_and_union_payloads() {
     let address = union as usize;
     assert_eq!(
         capture_direct_boundary_error_message(move || {
-            let owned = boxed_value(Value::String("moved".to_string()));
+            let owned = boxed_value(Value::String("moved".to_string().into()));
             super::aura_direct_instance_set_field_owned(
                 address as *mut OpaqueValue,
                 wrong_member.as_ptr(),
@@ -24714,7 +24728,7 @@ fn direct_unix_stream_wrappers_cover_end_of_stream_and_closed_resources() {
     let line = expect_optional_payload(expect_result_ok_payload(
         super::aura_direct_unix_stream_read_line(client_ptr, duration_value(5_000)),
     ));
-    assert_eq!(line, Value::String("x".to_string()));
+    assert_eq!(line, Value::String("x".to_string().into()));
     server.join().expect("unix server thread should join");
     assert!(coverage_is_none(expect_result_ok_payload(
         super::aura_direct_unix_stream_read_line(client_ptr, duration_value(5_000)),
@@ -25008,7 +25022,7 @@ fn direct_union_payload_takes_move_from_owned_boxes_and_copy_from_shared_ones() 
     let target = coverage_union(vec![Type::named("str"), Type::Unit]);
     let text_index = coverage_union_member_index(&target, &Type::named("str"));
     let none_index = coverage_union_member_index(&target, &Type::Unit);
-    let text = |value: &str| Value::String(value.to_string());
+    let text = |value: &str| Value::String(value.to_string().into());
 
     // The only reference gives up its payload, and the box goes.
     let owned = boxed_value(coverage_union_value(&target, text_index, text("moved")));
@@ -25250,7 +25264,7 @@ fn direct_element_path_take_and_probe_lend_entries_without_cloning() {
     let table = boxed_value(Value::Map(MapValue {
         key_type: Type::named("str"),
         value_type: Type::Named("list".to_string(), vec![Type::named("int64")]),
-        entries: vec![(Value::String("a".to_string()), bucket(&[1, 2, 3]))].into(),
+        entries: vec![(Value::String("a".to_string().into()), bucket(&[1, 2, 3]))].into(),
     })) as usize;
     let key = string_value("a") as usize;
     let path = "[k]";
@@ -25419,8 +25433,8 @@ fn element_path_probes_move_loaned_lists_into_boxes_of_their_own() {
     // A list of strings keeps its form: the probe leaves it alone.
     let names = list_of(
         vec![
-            Value::String("a".to_string()),
-            Value::String("b".to_string()),
+            Value::String("a".to_string().into()),
+            Value::String("b".to_string().into()),
         ],
         Type::named("str"),
     );
@@ -25446,7 +25460,7 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
         Value::Instance(InstanceValue {
             class_name: "Profile".to_string(),
             fields: BTreeMap::from([
-                ("name".to_string(), Value::String(name.to_string())),
+                ("name".to_string(), Value::String(name.to_string().into())),
                 (
                     "visits".to_string(),
                     Value::Int(IntegerValue::from_i64(visits)),
@@ -25539,7 +25553,7 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
             element_types: vec![Type::named("int64"), Type::named("str")],
             elements: vec![
                 Value::Int(IntegerValue::from_i64(1)),
-                Value::String("one".to_string()),
+                Value::String("one".to_string().into()),
             ],
         })]
         .into(),
@@ -25580,7 +25594,7 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
         key_type: Type::named("str"),
         value_type: Type::Named("list".to_string(), vec![Type::named("int64")]),
         entries: vec![(
-            Value::String("a".to_string()),
+            Value::String("a".to_string().into()),
             Value::Vec(VecValue {
                 element_type: Type::named("int64"),
                 elements: vec![
@@ -25731,7 +25745,7 @@ fn adr0061_direct_entry_paths_borrow_keys_and_check_selector_counts() {
         key_type: Type::named("str"),
         value_type: Type::named("int64"),
         entries: vec![(
-            Value::String("ready".to_string()),
+            Value::String("ready".to_string().into()),
             Value::Int(IntegerValue::from_i64(1)),
         )]
         .into(),
@@ -26057,7 +26071,7 @@ fn native_runtime_records_only_failing_manager_exits_for_the_trap() {
         let err = boxed_value(Value::EnumVariant(EnumVariantValue {
             enum_name: "Result".into(),
             variant_name: "Err".into(),
-            payloads: vec![Value::String("flush failed".to_string())].into(),
+            payloads: vec![Value::String("flush failed".to_string().into())].into(),
         }));
         super::aura_direct_record_manager_exit_failure(err, class.as_ptr(), class.len());
         let unit = boxed_value(Value::Unit);
@@ -26138,7 +26152,7 @@ fn leaf_values_clone_without_frames() {
         Value::Float(1.5),
         Value::Bool(true),
         Value::Unit,
-        Value::String("leaf".to_string()),
+        Value::String("leaf".to_string().into()),
         Value::Duration(3),
     ] {
         assert_eq!(
@@ -26247,7 +26261,7 @@ fn values_take_the_lock_only_once_shared() {
     }
     assert_eq!(
         unsafe { super::value_ref(value) },
-        Value::String("confined".to_string())
+        Value::String("confined".to_string().into())
     );
     unsafe { release_value(value) };
 }
@@ -26352,7 +26366,7 @@ fn list_element_reads_borrow_the_element_in_place() {
         Value::EnumVariant(variant) if variant.variant_name == "Found" => {
             assert_eq!(
                 variant.single_payload(),
-                Some(&Value::String("41".to_string()))
+                Some(&Value::String("41".to_string().into()))
             );
         }
         other => panic!("expected Lookup.Found, found {other:?}"),
@@ -26923,7 +26937,7 @@ fn lending_map() -> *mut OpaqueValue {
             json_value("Int", vec![Value::Int(IntegerValue::from_i64(41))]),
         ),
         ("ok", json_value("Bool", vec![Value::Bool(true)])),
-        ("name", Value::String("Ada".to_string())),
+        ("name", Value::String("Ada".to_string().into())),
         (
             "tags",
             json_value(
@@ -27277,7 +27291,7 @@ fn lists_that_share_storage_have_no_room() {
     // A list of other values never has room, and neither does its `str`
     // view.
     let names = super::aura_direct_vec_empty();
-    super::aura_direct_vec_push_in_place(names, boxed_value(Value::String("a".to_string())));
+    super::aura_direct_vec_push_in_place(names, boxed_value(Value::String("a".to_string().into())));
     assert_eq!(list_view_access(names), DirectListAccess::Values as u32);
     assert_eq!(list_view_capacity(names), 0);
     for value in [original, copy, names] {
@@ -27435,7 +27449,7 @@ fn consuming_a_shared_box_copies_its_value_and_keeps_the_other_reference() {
     // The push took one reference. The other still reads the string.
     assert_eq!(
         unsafe { take_value(text) },
-        Value::String("shared".to_string())
+        Value::String("shared".to_string().into())
     );
     let Value::Vec(stored) = (unsafe { take_value(vec) }) else {
         panic!("the list should stay a list");
@@ -27530,7 +27544,7 @@ fn direct_lookup_payload_gets_agree_with_lookup_gets() {
     let payload = super::aura_direct_map_get_str_payload(map, b"age".as_ptr(), 3);
     unsafe {
         value_mut(payload, |value| {
-            *value = Value::String("changed".to_string())
+            *value = Value::String("changed".to_string().into())
         });
         release_value(payload);
     }
@@ -27540,7 +27554,7 @@ fn direct_lookup_payload_gets_agree_with_lookup_gets() {
             b"age".as_ptr(),
             3
         )),
-        Some(format!("{:?}", Value::String("41".to_string())))
+        Some(format!("{:?}", Value::String("41".to_string().into())))
     );
 
     for value in [map, groups] {
@@ -27696,7 +27710,7 @@ fn direct_scalar_variant_payloads_read_in_place_with_the_boxed_messages() {
         boxed_value(Value::EnumVariant(EnumVariantValue {
             enum_name: "json.Value".into(),
             variant_name: "String".into(),
-            payloads: vec![Value::String("x".to_string())].into(),
+            payloads: vec![Value::String("x".to_string().into())].into(),
         }))
     }
     fn wide_variant() -> *mut OpaqueValue {
@@ -28523,7 +28537,7 @@ fn element_comparisons_with_a_str_operand_match_the_value_comparison() {
             // The generic comparison reports the same mismatch.
             super::compare_value_refs(
                 &Value::Int(IntegerValue::from_i32(3)),
-                &Value::String("a".to_string()),
+                &Value::String("a".to_string().into()),
                 aura_core::ops::BinaryOp::Less,
             )
             .expect_err("an integer and a `str` do not order")

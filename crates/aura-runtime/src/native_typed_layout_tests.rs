@@ -81,7 +81,7 @@ fn int64(value: i64) -> Value {
 }
 
 fn string(text: &str) -> Value {
-    Value::String(text.to_string())
+    Value::String(text.to_string().into())
 }
 
 fn instance(class: &str, fields: Vec<(&str, Value)>) -> Value {
@@ -477,7 +477,7 @@ fn generic_values_read_back_with_their_type_arguments() {
     assert_eq!(read.fields.map().get("value"), Some(&int64(5)));
     assert_eq!(
         read.fields.map().get(DIRECT_RUNTIME_TYPE_FIELD),
-        Some(&Value::String(descriptor.clone()))
+        Some(&Value::String(descriptor.clone().into()))
     );
     // A value that already names its type arguments writes the same way.
     assert_round_trip(&cell, Value::Instance(read));

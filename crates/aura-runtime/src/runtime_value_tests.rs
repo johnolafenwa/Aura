@@ -151,7 +151,7 @@ fn practical_format_specifications_are_unicode_aware_and_width_exact() {
     );
     assert_eq!(
         format_runtime_value(
-            &Value::String("aura✨".to_string()),
+            &Value::String("aura✨".to_string().into()),
             &Type::named("str"),
             "·^9.4s",
         )
@@ -199,7 +199,7 @@ fn format_spec_variants_preserve_exact_output_and_teaching_diagnostics() {
     );
     assert_eq!(
         format_runtime_value(
-            &Value::String("Aura".to_string()),
+            &Value::String("Aura".to_string().into()),
             &Type::named("str"),
             "<8s",
         )
@@ -211,7 +211,7 @@ fn format_spec_variants_preserve_exact_output_and_teaching_diagnostics() {
         element_types: vec![Type::named("int64"), Type::named("str")],
         elements: vec![
             Value::Int(crate::integer::IntegerValue::from_i64(1)),
-            Value::String("one".to_string()),
+            Value::String("one".to_string().into()),
         ],
     });
     assert_eq!(
@@ -253,7 +253,7 @@ fn format_spec_variants_preserve_exact_output_and_teaching_diagnostics() {
             "numeric format code requires an integer or floating value, found value",
         ),
         (
-            &Value::String("Aura".to_string()),
+            &Value::String("Aura".to_string().into()),
             Type::named("str"),
             "+s",
             "a format sign is valid only for numeric values",
@@ -351,7 +351,7 @@ fn format_width_and_precision_enforce_the_ratified_boundaries() {
     assert!(parse_format_spec("{width}d").is_err());
 
     let widest = format_runtime_value(
-        &Value::String("x".to_string()),
+        &Value::String("x".to_string().into()),
         &Type::named("str"),
         "1000000s",
     )
@@ -423,7 +423,7 @@ fn integer_float_style_formats_do_not_round_through_binary64() {
 #[test]
 fn impossible_runtime_format_contract_mismatches_are_diagnostics() {
     let error = format_runtime_value(
-        &Value::String("not an integer".to_string()),
+        &Value::String("not an integer".to_string().into()),
         &Type::named("int64"),
         "d",
     )
@@ -434,7 +434,7 @@ fn impossible_runtime_format_contract_mismatches_are_diagnostics() {
 
 #[test]
 fn format_matrix_pins_alignment_sign_radix_scientific_and_default_rendering() {
-    let string = Value::String("Aura".to_string());
+    let string = Value::String("Aura".to_string().into());
     for (spec, expected) in [
         ("8s", "Aura    "),
         (">8s", "    Aura"),
@@ -591,7 +591,7 @@ fn math_host_dispatch_rejects_wrong_runtime_types_and_arities_exactly() {
 
     let power_type = super::evaluate_host_builtin(
         "math::pow",
-        vec![Value::Float(2.0), Value::String("3".to_string())],
+        vec![Value::Float(2.0), Value::String("3".to_string().into())],
     )
     .expect_err("math.pow requires two float64 arguments");
     assert_eq!(power_type.code, "AU4001");
@@ -1052,7 +1052,7 @@ fn array_from_vec_validates_shape_and_count_before_allocation_or_conversion() {
 fn array_construction_rejects_unsupported_types_and_inexact_scalar_metadata() {
     let unsupported = VecValue {
         element_type: Type::named("str"),
-        elements: vec![Value::String("one".to_string())].into(),
+        elements: vec![Value::String("one".to_string().into())].into(),
         str_view: Default::default(),
     };
     let from_vec_error = ArrayValue::from_vec(&unsupported, None)
@@ -1100,7 +1100,7 @@ fn array_construction_rejects_unsupported_types_and_inexact_scalar_metadata() {
         ),
         (
             Type::named("float64"),
-            Value::String("3.0".to_string()),
+            Value::String("3.0".to_string().into()),
             "array float64 storage requires float64 scalar at flat index 0, found 3.0",
         ),
     ] {
@@ -1113,7 +1113,7 @@ fn array_construction_rejects_unsupported_types_and_inexact_scalar_metadata() {
     let mut int64_array = ArrayValue::zeros(ArrayDType::Int64, vec![1].into_boxed_slice())
         .expect("the dynamic-result diagnostic probe should construct its destination Array");
     let callback_result_error = int64_array
-        .fill(Value::String("not an int64".to_string()))
+        .fill(Value::String("not an int64".to_string().into()))
         .expect_err("a dynamically produced non-integer cannot enter int64 Array storage");
     assert_eq!(callback_result_error.code, "AU4007");
     assert_eq!(
@@ -1168,7 +1168,7 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
         Value::Tuple(TupleValue {
             element_types: vec![Type::named("str"), array_type.clone(), Type::named("int32")],
             elements: vec![
-                Value::String("before".to_string()),
+                Value::String("before".to_string().into()),
                 source_array(&[2, 5]),
                 Value::Int(IntegerValue::from_i32(8)),
             ],
@@ -1177,8 +1177,14 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
             key_type: Type::named("str"),
             value_type: array_type.clone(),
             entries: vec![
-                (Value::String("second".to_string()), source_array(&[6, 3])),
-                (Value::String("first".to_string()), source_array(&[5, 2])),
+                (
+                    Value::String("second".to_string().into()),
+                    source_array(&[6, 3]),
+                ),
+                (
+                    Value::String("first".to_string().into()),
+                    source_array(&[5, 2]),
+                ),
             ]
             .into(),
         }),
@@ -1200,7 +1206,7 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
             enum_name: "TaggedArray".into(),
             variant_name: "Tagged".into(),
             payloads: vec![
-                Value::String("before".to_string()),
+                Value::String("before".to_string().into()),
                 source_array(&[41, 43]),
                 Value::Int(IntegerValue::from_i32(47)),
             ]
@@ -1299,9 +1305,9 @@ fn array_aware_language_copy_preserves_reachable_scalar_set_order() {
     let source = Value::Set(SetValue {
         element_type: Type::named("str"),
         elements: vec![
-            Value::String("third".to_string()),
-            Value::String("first".to_string()),
-            Value::String("second".to_string()),
+            Value::String("third".to_string().into()),
+            Value::String("first".to_string().into()),
+            Value::String("second".to_string().into()),
         ]
         .into(),
     });
@@ -1315,9 +1321,9 @@ fn array_aware_language_copy_preserves_reachable_scalar_set_order() {
     assert_eq!(
         copy.elements,
         vec![
-            Value::String("third".to_string()),
-            Value::String("first".to_string()),
-            Value::String("second".to_string()),
+            Value::String("third".to_string().into()),
+            Value::String("first".to_string().into()),
+            Value::String("second".to_string().into()),
         ],
         "Set storage order must remain stable while rebuilding a copy"
     );
@@ -1427,8 +1433,11 @@ fn adr0038_partial_capture_copies_release_every_projected_value_after_failure() 
                 Value::Map(MapValue {
                     key_type: Type::named("str"),
                     value_type: Type::named("Queue"),
-                    entries: vec![(Value::String("queue".to_string()), channel_value(channel))]
-                        .into(),
+                    entries: vec![(
+                        Value::String("queue".to_string().into()),
+                        channel_value(channel),
+                    )]
+                    .into(),
                 }),
             ],
         })
@@ -1557,8 +1566,8 @@ fn adr0038_partial_capture_copies_release_every_projected_value_after_failure() 
             key_type: Type::named("str"),
             value_type: Type::Tuple(vec![Type::named("Queue")]),
             entries: vec![
-                (Value::String("first".to_string()), queue_tuple()),
-                (Value::String("second".to_string()), queue_tuple()),
+                (Value::String("first".to_string().into()), queue_tuple()),
+                (Value::String("second".to_string().into()), queue_tuple()),
             ]
             .into(),
         }),
@@ -2432,7 +2441,7 @@ fn owned_slice_helpers_normalize_once_reject_without_clamping_and_copy_values() 
         element_type: Type::named("str"),
         elements: ["zero", "one", "two", "three"]
             .into_iter()
-            .map(|value| Value::String(value.to_string()))
+            .map(|value| Value::String(value.to_string().into()))
             .collect(),
         str_view: Default::default(),
     };
@@ -2443,8 +2452,8 @@ fn owned_slice_helpers_normalize_once_reject_without_clamping_and_copy_values() 
     assert_eq!(
         middle.elements,
         vec![
-            Value::String("one".to_string()),
-            Value::String("two".to_string())
+            Value::String("one".to_string().into()),
+            Value::String("two".to_string().into())
         ]
     );
     assert_ne!(
@@ -2508,7 +2517,7 @@ fn list_slices_copy_only_the_slice_and_keep_the_scalar_form() {
         (0..10).map(|value| Value::Float(value as f64)).collect(),
         (0..10).map(|value| Value::Bool(value % 3 == 0)).collect(),
         (0..10)
-            .map(|value| Value::String(value.to_string()))
+            .map(|value| Value::String(value.to_string().into()))
             .collect(),
     ];
     for kind in [
@@ -2687,7 +2696,7 @@ fn retry_host_dispatch_rejects_inexact_runtime_argument_types() {
         ),
         (
             "control::__retry_next_backoff",
-            vec![Value::String("1s".to_string())],
+            vec![Value::String("1s".to_string().into())],
             "control.retry backoff must be a Duration",
         ),
     ] {
@@ -3116,7 +3125,7 @@ fn adr0038_closure_environment_mutable_capture_helpers_cover_success_and_errors(
             ClosureCaptureValue {
                 name: "label".to_string(),
                 ty: Type::named("str"),
-                value: Value::String("fixed".to_string()),
+                value: Value::String("fixed".to_string().into()),
                 source_place: Some("label".to_string()),
                 mutable: false,
             },
@@ -3153,7 +3162,7 @@ fn adr0038_closure_environment_mutable_capture_helpers_cover_success_and_errors(
     );
 
     let immutable = environment
-        .write_back_mutable(1, Value::String("changed".to_string()))
+        .write_back_mutable(1, Value::String("changed".to_string().into()))
         .expect_err("shared captures reject mutable writeback");
     assert_eq!(immutable.message, "closure capture `label` is not mutable");
     assert_eq!(
@@ -3286,7 +3295,7 @@ fn p63_embedded_nominal_types_preserve_base_value_identity_and_rendering() {
             fields: BTreeMap::from([
                 (
                     super::DIRECT_RUNTIME_TYPE_FIELD.to_string(),
-                    Value::String(runtime_type.to_string()),
+                    Value::String(runtime_type.to_string().into()),
                 ),
                 (
                     "value".to_string(),
@@ -3324,7 +3333,7 @@ fn tuple_values_preserve_type_metadata_equality_and_rendering() {
         element_types: vec![Type::named("int64"), Type::named("str")],
         elements: vec![
             Value::Int(IntegerValue::from_signed(7)),
-            Value::String("seven".to_string()),
+            Value::String("seven".to_string().into()),
         ],
     });
     assert_value_equals_clone(pair.clone());
@@ -3447,7 +3456,7 @@ fn bytes_runtime_materialization_is_fallible_exact_and_non_consuming() {
 
 #[test]
 fn bytes_runtime_conversion_rejects_malformed_vec_uint8_values() {
-    let not_a_vector = Value::String("not bytes".to_string());
+    let not_a_vector = Value::String("not bytes".to_string().into());
     let wrong_type = Value::Vec(VecValue {
         element_type: Type::named("int32"),
         elements: Vec::new().into(),
@@ -3612,16 +3621,16 @@ fn bytes_host_builtin_adapter_covers_codecs_hashes_and_strict_utf8() {
     let binary_snapshot = binary.clone();
     assert_eq!(
         call("bytes::hex_encode", &[&binary]),
-        Value::String("0001feff".to_string())
+        Value::String("0001feff".to_string().into())
     );
     assert_eq!(
         call("bytes::base64_encode", &[&binary]),
-        Value::String("AAH+/w==".to_string())
+        Value::String("AAH+/w==".to_string().into())
     );
     assert_eq!(binary, binary_snapshot);
 
-    let hex = Value::String("00AaFf".to_string());
-    let base64 = Value::String("AAH+/w==".to_string());
+    let hex = Value::String("00AaFf".to_string().into());
+    let base64 = Value::String("AAH+/w==".to_string().into());
     for (name, input, expected) in [
         ("bytes::hex_decode", &hex, vec![0, 0xaa, 0xff]),
         ("bytes::base64_decode", &base64, vec![0, 1, 0xfe, 0xff]),
@@ -3636,7 +3645,7 @@ fn bytes_host_builtin_adapter_covers_codecs_hashes_and_strict_utf8() {
     let abc = runtime_bytes(b"abc");
     let digest = call("bytes::sha256", &[&abc]);
     assert_eq!(expect_runtime_bytes(&digest).len(), 32);
-    let text = Value::String("abc".to_string());
+    let text = Value::String("abc".to_string().into());
     assert_eq!(call("bytes::sha256_string", &[&text]), digest);
     let encoded = call("str.to_bytes", &[&text]);
     assert_eq!(expect_runtime_bytes(&encoded), b"abc");
@@ -3646,14 +3655,14 @@ fn bytes_host_builtin_adapter_covers_codecs_hashes_and_strict_utf8() {
     assert_eq!(decoded.variant_name, "Ok");
     assert_eq!(
         decoded.payloads,
-        vec![Value::String("abc".to_string())].into()
+        vec![Value::String("abc".to_string().into())].into()
     );
-    assert_eq!(text, Value::String("abc".to_string()));
+    assert_eq!(text, Value::String("abc".to_string().into()));
 
     assert_eq!(
         super::evaluate_host_builtin("bytes::hex_encode", vec![binary])
             .expect("the owned host dispatcher should delegate to the shared byte adapter"),
-        Value::String("0001feff".to_string())
+        Value::String("0001feff".to_string().into())
     );
     let arity = super::evaluate_host_builtin("bytes::sha256", Vec::new())
         .expect_err("the owned host dispatcher should retain ordinary arity diagnostics");
@@ -3686,11 +3695,14 @@ fn bytes_host_builtin_adapter_returns_typed_data_errors_and_au4005_resources() {
         "InvalidUtf8"
     );
     assert_eq!(
-        error_variant("bytes::hex_decode", &Value::String("0".to_string())),
+        error_variant("bytes::hex_decode", &Value::String("0".to_string().into())),
         "InvalidHexLength"
     );
     assert_eq!(
-        error_variant("bytes::base64_decode", &Value::String("YQ".to_string())),
+        error_variant(
+            "bytes::base64_decode",
+            &Value::String("YQ".to_string().into())
+        ),
         "InvalidBase64"
     );
 
@@ -3723,11 +3735,11 @@ fn bytes_host_builtin_adapter_returns_typed_data_errors_and_au4005_resources() {
 fn bytes_string_from_bytes_classifies_invalid_utf8_before_runtime_materialization() {
     let malformed = runtime_bytes(&[b'a', 0xf0, 0x9f, 0x8c]);
 
-    // InvalidUtf8 needs exactly six runtime allocations: one payload and two
-    // names for bytes.Error, then one payload and two names for Result.Err.
-    // Any eager copy of the Vec[uint8] would consume a seventh checkpoint and
+    // InvalidUtf8 needs exactly two runtime allocations: one payload for
+    // bytes.Error, then one for Result.Err; the names are static. Any eager
+    // copy of the Vec[uint8] would consume a third checkpoint and
     // incorrectly replace this typed data error with AU4005.
-    let value = super::with_bytes_runtime_allocation_budget(6, || {
+    let value = super::with_bytes_runtime_allocation_budget(2, || {
         super::evaluate_bytes_host_builtin_ref("str.from_bytes", &malformed)
             .expect("str.from_bytes should be recognized")
     })
@@ -4265,7 +4277,10 @@ fn injected_supervisor_backoff_overflow_becomes_a_failed_event() {
     };
     assert_eq!(event.enum_name, "SupervisorEvent");
     assert_eq!(event.variant_name, "Failed");
-    assert_eq!(event.payloads[0], Value::String("worker".to_string()));
+    assert_eq!(
+        event.payloads[0],
+        Value::String("worker".to_string().into())
+    );
     assert_eq!(
         event.payloads[1].render(),
         "Error.Io(io.Error.InvalidInput)"
@@ -4294,7 +4309,10 @@ fn supervisor_wait_or_none_deadline_overflow_is_a_typed_error() {
     };
     assert_eq!(event.enum_name, "SupervisorEvent");
     assert_eq!(event.variant_name, "Failed");
-    assert_eq!(event.payloads[0], Value::String("<supervisor>".to_string()));
+    assert_eq!(
+        event.payloads[0],
+        Value::String("<supervisor>".to_string().into())
+    );
     assert_eq!(
         event.payloads[1].render(),
         "Error.Io(io.Error.InvalidInput)"
@@ -5356,14 +5374,14 @@ fn explicit_stack_tasks_preserve_single_consumer_results_through_forced_cleanup(
         let completed = super::spawn_lightweight_task_with_stack_and_result_repeatability(
             512 * 1024,
             false,
-            || Ok(Value::String("owned result".to_string())),
+            || Ok(Value::String("owned result".to_string().into())),
         )?;
         completed
             .claim_result_observation()
             .expect("a stacked task should expose one owned-result observation");
         assert_eq!(
             wait_task_ready(&completed)?,
-            Value::String("owned result".to_string())
+            Value::String("owned result".to_string().into())
         );
         let error = completed
             .claim_result_observation()
@@ -5857,7 +5875,7 @@ fn numeric_round_preserves_integers_and_uses_checked_ties_to_even_int64_results(
         assert!(error.message.contains("`round(...)`"));
     }
 
-    let unsupported = round_numeric_value(&Value::String("1".to_string()))
+    let unsupported = round_numeric_value(&Value::String("1".to_string().into()))
         .expect_err("round's private runtime helper must validate its domain");
     assert_eq!(unsupported.code, "AU4001");
 }
@@ -6042,7 +6060,7 @@ fn optional_and_result_helpers_render_expected_variants() {
     assert_eq!(poll_unavailable().render(), "Poll.Unavailable");
     assert_eq!(result_ok(Value::Bool(true)).render(), "Result.Ok(true)");
     assert_eq!(
-        result_err(Value::String("oops".to_string())).render(),
+        result_err(Value::String("oops".to_string().into())).render(),
         "Result.Err(oops)"
     );
     assert_eq!(
@@ -6105,7 +6123,7 @@ fn async_and_process_result_helpers_render_expected_variants() {
         Vec::new(),
     );
 
-    let ready = Value::String("done".to_string());
+    let ready = Value::String("done".to_string().into());
     assert_variant(
         task_result_ready(ready.clone()),
         "TaskResult",
@@ -6116,7 +6134,7 @@ fn async_and_process_result_helpers_render_expected_variants() {
         task_result_error("boom".to_string()),
         "TaskResult",
         "Error",
-        vec![Value::String("boom".to_string())],
+        vec![Value::String("boom".to_string().into())],
     );
     assert_variant(
         task_result_timed_out(),
@@ -6143,7 +6161,7 @@ fn async_and_process_result_helpers_render_expected_variants() {
         "Error",
         vec![
             Value::Int(IntegerValue::from_i64(3)),
-            Value::String("failed".to_string()),
+            Value::String("failed".to_string().into()),
         ],
     );
     assert_variant(wait_any_timed_out(), "WaitAny", "TimedOut", Vec::new());
@@ -6166,7 +6184,7 @@ fn async_and_process_result_helpers_render_expected_variants() {
         "Error",
         vec![
             Value::Int(IntegerValue::from_i64(4)),
-            Value::String("bad".to_string()),
+            Value::String("bad".to_string().into()),
         ],
     );
     assert_variant(wait_all_timed_out(), "WaitAll", "TimedOut", Vec::new());
@@ -6197,7 +6215,7 @@ fn async_and_process_result_helpers_render_expected_variants() {
         spawn_error.clone(),
         "Error",
         "Spawn",
-        vec![Value::String("missing executable".to_string())],
+        vec![Value::String("missing executable".to_string().into())],
     );
     assert_variant(
         process_wait_failed(spawn_error.clone()),
@@ -6217,7 +6235,7 @@ fn async_and_process_result_helpers_render_expected_variants() {
         "SupervisorEvent",
         "Failed",
         vec![
-            Value::String("worker".to_string()),
+            Value::String("worker".to_string().into()),
             event_error,
             Value::Int(IntegerValue::from_signed(2)),
         ],
@@ -6309,7 +6327,7 @@ fn process_config_decoders_report_unknown_and_wrong_variants() {
             .contains("unknown `process.RestartPolicy` variant")
     );
     assert!(
-        decode_process_restart_policy(&Value::String("Always".to_string()), "restart")
+        decode_process_restart_policy(&Value::String("Always".to_string().into()), "restart")
             .expect_err("wrong restart values should fail")
             .message
             .contains("expects `process.RestartPolicy`")
@@ -6353,7 +6371,7 @@ fn cast_numeric_value_covers_success_and_failure_paths() {
     assert!(overflow.message.contains("does not fit in `int8`"));
 
     let non_numeric = cast_numeric_value(
-        Value::String("Aura".to_string()),
+        Value::String("Aura".to_string().into()),
         &Type::named("int32"),
         Some(Span::new(2, 3)),
     )
@@ -6469,7 +6487,7 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
     }
 
     assert_source_type(Value::Bool(true), "bool");
-    assert_source_type(Value::String("Aura".to_string()), "str");
+    assert_source_type(Value::String("Aura".to_string().into()), "str");
     assert_source_type(
         Value::Vec(VecValue {
             element_type: Type::named("int32"),
@@ -7128,11 +7146,11 @@ fn flat_tuples_clone_like_their_elements() {
     let pair = Value::Tuple(TupleValue {
         element_types: vec![Type::named("str"), Type::named("json.Value")],
         elements: vec![
-            Value::String("city".to_string()),
+            Value::String("city".to_string().into()),
             Value::EnumVariant(EnumVariantValue {
                 enum_name: "json.Value".into(),
                 variant_name: "String".into(),
-                payloads: vec![Value::String("Lagos".to_string())].into(),
+                payloads: vec![Value::String("Lagos".to_string().into())].into(),
             }),
         ],
     });
@@ -7158,8 +7176,11 @@ fn flat_tuples_clone_like_their_elements() {
 #[test]
 fn dynamic_json_parse_keeps_short_shallow_sources_on_the_caller() {
     fn parse(source: &str) -> Value {
-        super::evaluate_host_builtin("json::parse", vec![Value::String(source.to_string())])
-            .unwrap_or_else(|error| panic!("json::parse should return a Result: {error}"))
+        super::evaluate_host_builtin(
+            "json::parse",
+            vec![Value::String(source.to_string().into())],
+        )
+        .unwrap_or_else(|error| panic!("json::parse should return a Result: {error}"))
     }
     fn on_service(source: &str) -> Value {
         let (owned, reservation) =
@@ -7228,7 +7249,10 @@ fn dynamic_json_inline_parse_fits_in_half_the_smallest_task_stack() {
 #[test]
 fn dynamic_json_parse_runtime_materialization_allocation_failure_is_au4005() {
     let error = super::with_json_runtime_allocation_budget(0, || {
-        super::evaluate_host_builtin("json::parse", vec![Value::String("[null]".to_string())])
+        super::evaluate_host_builtin(
+            "json::parse",
+            vec![Value::String("[null]".to_string().into())],
+        )
     })
     .expect_err("runtime-tree allocation failure must trap instead of aborting or returning Err");
 
@@ -7266,7 +7290,7 @@ fn dynamic_json_parse_maps_the_public_node_limit_to_au4005() {
 fn dynamic_json_shared_parse_adapter_borrows_the_source_allocation() {
     let source = "[null]".repeat(64);
     let source_ptr = source.as_ptr();
-    let args = vec![Value::String(source)];
+    let args = vec![Value::String(source.into())];
 
     let borrowed = super::host_string_ref_arg(&args, 0, "json::parse")
         .expect("json.parse should borrow a str argument");
@@ -7279,7 +7303,7 @@ fn dynamic_json_parse_materializes_a_structurally_dense_valid_input() {
     const ELEMENTS: usize = 16_384;
     let source = format!("[{}]", vec!["null"; ELEMENTS].join(","));
 
-    let parsed = super::evaluate_host_builtin("json::parse", vec![Value::String(source)])
+    let parsed = super::evaluate_host_builtin("json::parse", vec![Value::String(source.into())])
         .expect("a structurally dense input below the byte limit should parse");
     let Value::EnumVariant(result) = parsed else {
         panic!("json.parse should return Result");
@@ -7891,7 +7915,7 @@ fn dynamic_json_host_boundary_rejects_malformed_runtime_shapes() {
                 vec![runtime_json(crate::json_codec::JsonValue::Null), indent],
             )
             .expect("json.dumps accepts a bare payload, `None`, or an `int64 | None` union"),
-            Value::String("null".to_string())
+            Value::String("null".to_string().into())
         );
     }
 }
@@ -7955,7 +7979,7 @@ fn dynamic_json_dumps_rejects_noncanonical_indent_integer_metadata() {
             ],
         )
         .expect("canonical int64 indent metadata should remain valid"),
-        Value::String("null".to_string())
+        Value::String("null".to_string().into())
     );
 }
 
@@ -8018,11 +8042,14 @@ fn dynamic_json_runtime_conversion_fits_a_forced_512_kib_task_stack_at_the_depth
             .expect("the exact JSON depth limit should fit a 512 KiB task stack");
             assert_eq!(
                 dumped,
-                Value::String(format!(
-                    "{}null{}",
-                    "[".repeat(crate::json_codec::MAX_JSON_DEPTH),
-                    "]".repeat(crate::json_codec::MAX_JSON_DEPTH)
-                ))
+                Value::String(
+                    format!(
+                        "{}null{}",
+                        "[".repeat(crate::json_codec::MAX_JSON_DEPTH),
+                        "]".repeat(crate::json_codec::MAX_JSON_DEPTH)
+                    )
+                    .into()
+                )
             );
             let error = super::evaluate_host_builtin(
                 "json::dumps",
@@ -8322,7 +8349,7 @@ fn dynamic_json_host_builtins_parse_dump_and_expose_exact_typed_accessors() {
     let parsed = call(
         "json::parse",
         vec![Value::String(
-            r#"{"z":1.0,"items":[true,null,"x"],"f":1.5}"#.to_string(),
+            r#"{"z":1.0,"items":[true,null,"x"],"f":1.5}"#.to_string().into(),
         )],
     );
     let Value::EnumVariant(result) = parsed else {
@@ -8355,7 +8382,7 @@ fn dynamic_json_host_builtins_parse_dump_and_expose_exact_typed_accessors() {
             "json::dumps",
             vec![value.clone(), optional_absent(Type::named("int64"))]
         ),
-        Value::String(r#"{"f":1.5,"items":[true,null,"x"],"z":1}"#.to_string())
+        Value::String(r#"{"f":1.5,"items":[true,null,"x"],"z":1}"#.to_string().into())
     );
     assert_eq!(
         call(
@@ -8368,7 +8395,7 @@ fn dynamic_json_host_builtins_parse_dump_and_expose_exact_typed_accessors() {
         Value::String(
             "{\n  \"f\": 1.5,\n  \"items\": [\n    true,\n    null,\n    \"x\"\n  ],\n  \"z\": 1\n}"
                 .to_string()
-        )
+        .into())
     );
 
     let null = runtime_json(JsonValue::Null);
@@ -8456,7 +8483,10 @@ fn dynamic_json_host_builtins_parse_dump_and_expose_exact_typed_accessors() {
         panic!("json.into_object should return a present `dict[str, json.Value] | None`");
     };
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries.first().unwrap().0, Value::String("k".to_string()));
+    assert_eq!(
+        entries.first().unwrap().0,
+        Value::String("k".to_string().into())
+    );
     assert_eq!(entries.as_ptr(), object_payload_ptr);
     for (name, expected_variant) in [
         ("json::into_string", JsonValue::Null),
@@ -8493,7 +8523,7 @@ fn dynamic_json_runtime_maps_typed_parse_errors_and_dump_trap_categories() {
             vec![MAX_JSON_DEPTH as i128, 1, (MAX_JSON_DEPTH + 1) as i128],
         ),
     ] {
-        let parsed = call("json::parse", vec![Value::String(source)])
+        let parsed = call("json::parse", vec![Value::String(source.into())])
             .expect("parse data failures should return typed Result.Err values");
         let Value::EnumVariant(result) = parsed else {
             panic!("json.parse should return Result");
@@ -8609,8 +8639,11 @@ fn legacy_json_validity_walks_nested_arrays_and_objects() {
         r#"[{"left":1},{"right":[2,3]}]"#,
     ] {
         assert_eq!(
-            super::evaluate_host_builtin("json::is_valid", vec![Value::String(source.to_string())])
-                .expect("json.is_valid should accept a str"),
+            super::evaluate_host_builtin(
+                "json::is_valid",
+                vec![Value::String(source.to_string().into())]
+            )
+            .expect("json.is_valid should accept a str"),
             Value::Bool(true),
             "valid nested JSON should remain valid: {source}"
         );
@@ -8619,7 +8652,9 @@ fn legacy_json_validity_walks_nested_arrays_and_objects() {
     assert_eq!(
         super::evaluate_host_builtin(
             "json::is_valid",
-            vec![Value::String(r#"{"outer":{"number":1e400}}"#.to_string())],
+            vec![Value::String(
+                r#"{"outer":{"number":1e400}}"#.to_string().into()
+            )],
         )
         .expect("json.is_valid should report invalid data as false"),
         Value::Bool(false)
@@ -8640,8 +8675,8 @@ fn host_control_plane_builtins_cover_success_and_error_boundaries() {
                 .iter()
                 .map(|(key, value)| {
                     (
-                        Value::String((*key).to_string()),
-                        Value::String((*value).to_string()),
+                        Value::String((*key).to_string().into()),
+                        Value::String((*value).to_string().into()),
                     )
                 })
                 .collect(),
@@ -8657,7 +8692,7 @@ fn host_control_plane_builtins_cover_success_and_error_boundaries() {
         actual_args.elements,
         super::host_process_args()
             .into_iter()
-            .map(Value::String)
+            .map(Value::string)
             .collect::<Vec<_>>(),
         "the retired environment transport must not override real host argv"
     );
@@ -8671,8 +8706,8 @@ fn host_control_plane_builtins_cover_success_and_error_boundaries() {
     assert_eq!(
         explicit.elements,
         vec![
-            Value::String("alpha".to_string()),
-            Value::String("beta".to_string())
+            Value::String("alpha".to_string().into()),
+            Value::String("beta".to_string().into())
         ]
     );
     match previous_program_args {
@@ -8683,7 +8718,7 @@ fn host_control_plane_builtins_cover_success_and_error_boundaries() {
         call(
             "sys::env",
             vec![Value::String(
-                "AURA_TEST_ENV_THAT_DOES_NOT_EXIST_52D3".to_string()
+                "AURA_TEST_ENV_THAT_DOES_NOT_EXIST_52D3".to_string().into()
             )]
         )
         .render(),
@@ -8709,6 +8744,7 @@ fn host_control_plane_builtins_cover_success_and_error_boundaries() {
                 .join("b")
                 .to_string_lossy()
                 .to_string()
+                .into()
         )
     );
     assert_eq!(
@@ -9584,9 +9620,12 @@ fn cross_worker_task_completion_error_cancellation_and_claim_races_are_atomic() 
         let race = race.clone();
         move || {
             let owned = super::spawn_lightweight_task_with_result_repeatability(false, || {
-                Ok(Value::String("owned".to_string()))
+                Ok(Value::String("owned".to_string().into()))
             })?;
-            assert_eq!(wait_task_ready(&owned)?, Value::String("owned".to_string()));
+            assert_eq!(
+                wait_task_ready(&owned)?,
+                Value::String("owned".to_string().into())
+            );
 
             let first_task = owned.clone();
             let first_race = race.clone();
@@ -9803,7 +9842,7 @@ fn task_result_observation_claim_is_shared_by_aliases_and_repeatable_when_allowe
         .expect("repeatable result should allow repeated observation");
 
     let single_consumer = TaskValue::from_handle_with_result_repeatability(
-        thread::spawn(|| Ok(Value::String("owned".to_string()))),
+        thread::spawn(|| Ok(Value::String("owned".to_string().into()))),
         false,
     );
     let alias = single_consumer.clone();
@@ -9823,7 +9862,7 @@ fn task_result_observation_claim_is_shared_by_aliases_and_repeatable_when_allowe
 #[test]
 fn task_result_observation_claim_has_exactly_one_race_winner() {
     let task = TaskValue::from_handle_with_result_repeatability(
-        thread::spawn(|| Ok(Value::String("owned".to_string()))),
+        thread::spawn(|| Ok(Value::String("owned".to_string().into()))),
         false,
     );
     let barrier = Arc::new(Barrier::new(3));
@@ -9853,13 +9892,13 @@ fn task_result_observation_claim_has_exactly_one_race_winner() {
 #[test]
 fn task_result_batch_claim_rejects_duplicate_aliases_and_cleanup_does_not_consume() {
     let task = TaskValue::from_handle_with_result_repeatability(
-        thread::spawn(|| Ok(Value::String("owned".to_string()))),
+        thread::spawn(|| Ok(Value::String("owned".to_string().into()))),
         false,
     );
     let alias = task.clone();
     assert_eq!(
         wait_task_ready(&task).expect("task should complete before cleanup probe"),
-        Value::String("owned".to_string())
+        Value::String("owned".to_string().into())
     );
     let cancellation = CancellationContext::default();
     assert!(!task_group_cleanup_should_cancel(
@@ -9880,11 +9919,11 @@ fn phase58_select_uses_cancellation_first_then_original_source_index() {
     let first = ChannelValue::new();
     let second = ChannelValue::new();
     assert_eq!(
-        first.try_send(Value::String("first".to_string())),
+        first.try_send(Value::String("first".to_string().into())),
         super::TrySendResult::Sent
     );
     assert_eq!(
-        second.try_send(Value::String("second".to_string())),
+        second.try_send(Value::String("second".to_string().into())),
         super::TrySendResult::Sent
     );
 
@@ -9904,13 +9943,13 @@ fn phase58_select_uses_cancellation_first_then_original_source_index() {
     assert_eq!(first.try_recv(), TryRecvResult::Empty);
     assert_eq!(
         second.try_recv(),
-        TryRecvResult::Value(Value::String("second".to_string())),
+        TryRecvResult::Value(Value::String("second".to_string().into())),
         "a losing queue must remain unchanged"
     );
 
     let duplicate = ChannelValue::new();
     assert_eq!(
-        duplicate.try_send(Value::String("once".to_string())),
+        duplicate.try_send(Value::String("once".to_string().into())),
         super::TrySendResult::Sent
     );
     let selected = select_runtime_values(
@@ -9956,7 +9995,7 @@ fn phase58_select_uses_cancellation_first_then_original_source_index() {
 fn phase58_select_preserves_queue_task_and_deadline_outcome_shapes() {
     let buffered_then_closed = ChannelValue::new();
     assert_eq!(
-        buffered_then_closed.try_send(Value::String("buffered".to_string())),
+        buffered_then_closed.try_send(Value::String("buffered".to_string().into())),
         super::TrySendResult::Sent
     );
     buffered_then_closed.close();
@@ -9982,11 +10021,12 @@ fn phase58_select_preserves_queue_task_and_deadline_outcome_shapes() {
         "SelectOutcome.Queue(0, QueueReceive.Closed)"
     );
 
-    let ready_task =
-        TaskValue::from_handle(thread::spawn(|| Ok(Value::String("finished".to_string()))));
+    let ready_task = TaskValue::from_handle(thread::spawn(|| {
+        Ok(Value::String("finished".to_string().into()))
+    }));
     assert_eq!(
         wait_task_ready(&ready_task).expect("the task should complete"),
-        Value::String("finished".to_string())
+        Value::String("finished".to_string().into())
     );
     let selected = select_runtime_values(
         vec![Value::Duration(1_000_000_000), Value::Task(ready_task)],
@@ -10035,7 +10075,7 @@ fn phase58_select_claims_nonrepeatable_tasks_before_waiting() {
         super::TrySendResult::Sent
     );
     let losing_task = TaskValue::from_handle_with_result_repeatability(
-        thread::spawn(|| Ok(Value::String("owned".to_string()))),
+        thread::spawn(|| Ok(Value::String("owned".to_string().into()))),
         false,
     );
 
@@ -10062,7 +10102,7 @@ fn phase58_select_claims_nonrepeatable_tasks_before_waiting() {
         super::TrySendResult::Sent
     );
     let repeatable_task = TaskValue::from_handle(thread::spawn(|| {
-        Ok(Value::String("repeatable".to_string()))
+        Ok(Value::String("repeatable".to_string().into()))
     }));
     let selected = select_runtime_values(
         vec![
@@ -10078,11 +10118,11 @@ fn phase58_select_claims_nonrepeatable_tasks_before_waiting() {
     );
     assert_eq!(
         wait_task_ready(&repeatable_task).expect("a losing repeatable task remains observable"),
-        Value::String("repeatable".to_string())
+        Value::String("repeatable".to_string().into())
     );
 
     let selected_nonrepeatable = TaskValue::from_handle_with_result_repeatability(
-        thread::spawn(|| Ok(Value::String("selected-owned".to_string()))),
+        thread::spawn(|| Ok(Value::String("selected-owned".to_string().into()))),
         false,
     );
     let selected = select_runtime_values(
@@ -10123,7 +10163,7 @@ fn phase58_select_validates_every_source_and_deadline_before_observing_readiness
     let invalid_source = select_runtime_values(
         vec![
             Value::Channel(ready.clone()),
-            Value::String("not a select source".to_string()),
+            Value::String("not a select source".to_string().into()),
         ],
         None,
     )
@@ -10216,11 +10256,11 @@ fn phase58_select_captures_one_deadline_base_after_all_sources_validate() {
 #[test]
 fn phase58_select_repeatable_task_winner_remains_reusable() {
     let task = TaskValue::from_handle(thread::spawn(|| {
-        Ok(Value::String("repeatable-winner".to_string()))
+        Ok(Value::String("repeatable-winner".to_string().into()))
     }));
     assert_eq!(
         wait_task_ready(&task).expect("the repeatable task should complete"),
-        Value::String("repeatable-winner".to_string())
+        Value::String("repeatable-winner".to_string().into())
     );
 
     for attempt in 0..2 {
@@ -10237,7 +10277,7 @@ fn phase58_select_repeatable_task_winner_remains_reusable() {
     }
     assert_eq!(
         wait_task_ready(&task).expect("select must not consume a repeatable task result"),
-        Value::String("repeatable-winner".to_string())
+        Value::String("repeatable-winner".to_string().into())
     );
 }
 
@@ -10245,18 +10285,18 @@ fn phase58_select_repeatable_task_winner_remains_reusable() {
 fn phase58_select_uses_original_index_across_queue_task_deadline_permutations() {
     fn ready_task() -> TaskValue {
         let task = TaskValue::from_handle(thread::spawn(|| {
-            Ok(Value::String("ready-task".to_string()))
+            Ok(Value::String("ready-task".to_string().into()))
         }));
         assert_eq!(
             wait_task_ready(&task).expect("the task should be ready before arbitration"),
-            Value::String("ready-task".to_string())
+            Value::String("ready-task".to_string().into())
         );
         task
     }
 
     let queue_first = ChannelValue::new();
     assert_eq!(
-        queue_first.try_send(Value::String("queue-first".to_string())),
+        queue_first.try_send(Value::String("queue-first".to_string().into())),
         super::TrySendResult::Sent
     );
     let selected = select_runtime_values(
@@ -10276,7 +10316,7 @@ fn phase58_select_uses_original_index_across_queue_task_deadline_permutations() 
 
     let queue_last = ChannelValue::new();
     assert_eq!(
-        queue_last.try_send(Value::String("queue-loser".to_string())),
+        queue_last.try_send(Value::String("queue-loser".to_string().into())),
         super::TrySendResult::Sent
     );
     let task_first = ready_task();
@@ -10295,11 +10335,11 @@ fn phase58_select_uses_original_index_across_queue_task_deadline_permutations() 
     );
     assert_eq!(
         queue_last.try_recv(),
-        TryRecvResult::Value(Value::String("queue-loser".to_string()))
+        TryRecvResult::Value(Value::String("queue-loser".to_string().into()))
     );
     assert_eq!(
         wait_task_ready(&task_first).expect("a repeatable winning Task remains reusable"),
-        Value::String("ready-task".to_string())
+        Value::String("ready-task".to_string().into())
     );
 
     let deadline_loser_queue = ChannelValue::new();
@@ -10328,7 +10368,7 @@ fn phase58_select_uses_original_index_across_queue_task_deadline_permutations() 
 fn phase58_select_committed_queue_winner_is_not_replaced_by_later_cancellation() {
     let queue = ChannelValue::new();
     assert_eq!(
-        queue.try_send(Value::String("committed".to_string())),
+        queue.try_send(Value::String("committed".to_string().into())),
         super::TrySendResult::Sent
     );
     let group = TaskGroupValue::new(&CancellationContext::default());
@@ -10417,13 +10457,13 @@ fn phase58_select_unwind_during_subscription_cleans_every_loser_registration() {
         "cancellation subscription must be rolled back during unwind"
     );
     assert_eq!(
-        inspected_queue.try_send(Value::String("late-after-unwind".to_string())),
+        inspected_queue.try_send(Value::String("late-after-unwind".to_string().into())),
         super::TrySendResult::Sent,
         "late publication after unwind must remain harmless"
     );
     assert_eq!(
         inspected_queue.try_recv(),
-        TryRecvResult::Value(Value::String("late-after-unwind".to_string()))
+        TryRecvResult::Value(Value::String("late-after-unwind".to_string().into()))
     );
 }
 
@@ -10442,7 +10482,7 @@ fn phase58_select_check_subscribe_recheck_and_loser_cleanup_are_race_safe() {
     let selected = run_lightweight_root_task(move || {
         super::install_after_task_wait_subscribe_hook(move || {
             assert_eq!(
-                injected_winner.try_send(Value::String("published".to_string())),
+                injected_winner.try_send(Value::String("published".to_string().into())),
                 super::TrySendResult::Sent
             );
         });
@@ -10471,13 +10511,13 @@ fn phase58_select_check_subscribe_recheck_and_loser_cleanup_are_race_safe() {
             "the losing cancellation registration must be removed before select returns"
         );
         assert_eq!(
-            losing_queue.try_send(Value::String("late".to_string())),
+            losing_queue.try_send(Value::String("late".to_string().into())),
             super::TrySendResult::Sent,
             "a late losing notification should be harmless"
         );
         assert_eq!(
             losing_queue.try_recv(),
-            TryRecvResult::Value(Value::String("late".to_string())),
+            TryRecvResult::Value(Value::String("late".to_string().into())),
             "a late loser wake must not consume the losing source"
         );
         Ok(outcome)
@@ -10496,7 +10536,7 @@ fn phase58_select_concurrent_queue_and_task_publication_enqueues_waiter_once() {
     let task_barrier = publication_barrier.clone();
     let task = TaskValue::from_handle(thread::spawn(move || {
         task_barrier.wait();
-        Ok(Value::String("task-ready".to_string()))
+        Ok(Value::String("task-ready".to_string().into()))
     }));
     let inspected_queue = queue.clone();
     let inspected_task = task.clone();
@@ -10525,7 +10565,7 @@ fn phase58_select_concurrent_queue_and_task_publication_enqueues_waiter_once() {
             let queue_publisher = thread::spawn(move || {
                 queue_barrier.wait();
                 assert_eq!(
-                    published_queue.try_send(Value::String("queue-ready".to_string())),
+                    published_queue.try_send(Value::String("queue-ready".to_string().into())),
                     super::TrySendResult::Sent
                 );
             });
@@ -10557,7 +10597,7 @@ fn phase58_select_concurrent_queue_and_task_publication_enqueues_waiter_once() {
         );
         assert_eq!(
             wait_task_ready(&inspected_task).expect("the losing repeatable Task remains reusable"),
-            Value::String("task-ready".to_string())
+            Value::String("task-ready".to_string().into())
         );
 
         let sleep_started = Instant::now();
@@ -10601,7 +10641,7 @@ fn phase58_select_rechecks_task_deadline_and_cancellation_registration_races() {
         release_rx
             .recv()
             .expect("the registration hook should release the task");
-        Ok(Value::String("task-race".to_string()))
+        Ok(Value::String("task-race".to_string().into()))
     }));
     let hook_task = task.clone();
     let task_loser_queue = ChannelValue::new();
@@ -10726,19 +10766,19 @@ fn phase58_select_rearms_when_a_queue_wake_loses_the_atomic_receive_race() {
     let selected = run_lightweight_root_task(move || {
         super::install_after_task_wait_subscribe_hook(move || {
             assert_eq!(
-                hook_queue.try_send(Value::String("stolen".to_string())),
+                hook_queue.try_send(Value::String("stolen".to_string().into())),
                 super::TrySendResult::Sent
             );
             assert_eq!(
                 hook_queue.try_recv(),
-                TryRecvResult::Value(Value::String("stolen".to_string())),
+                TryRecvResult::Value(Value::String("stolen".to_string().into())),
                 "an external consumer should be able to win before arbitration"
             );
             let final_queue = hook_queue.clone();
             thread::spawn(move || {
                 thread::sleep(StdDuration::from_millis(3));
                 assert_eq!(
-                    final_queue.try_send(Value::String("final".to_string())),
+                    final_queue.try_send(Value::String("final".to_string().into())),
                     super::TrySendResult::Sent
                 );
             });
@@ -10763,7 +10803,7 @@ fn phase58_select_cross_worker_publication_wakes_the_pinned_waiter() {
         let producer_queue = queue.clone();
         let _producer = spawn_lightweight_task(move || {
             assert_eq!(
-                producer_queue.try_send(Value::String("cross-worker".to_string())),
+                producer_queue.try_send(Value::String("cross-worker".to_string().into())),
                 super::TrySendResult::Sent
             );
             Ok(Value::Unit)
@@ -11076,20 +11116,20 @@ fn phase73_observable_runtime_task_group_distinguishes_values_and_normal_complet
     let group = TaskGroupValue::new(&cancellation);
     let channel = ChannelValue::new();
     channel
-        .send(Value::String("first".to_string()))
+        .send(Value::String("first".to_string().into()))
         .expect("the first produced value should be admitted");
     channel
-        .send(Value::String("second".to_string()))
+        .send(Value::String("second".to_string().into()))
         .expect("the second produced value should be admitted");
 
     assert_eq!(
         recv_for_task_group_iteration(&channel, &cancellation, &group),
-        RecvValueResult::Value(Value::String("first".to_string())),
+        RecvValueResult::Value(Value::String("first".to_string().into())),
         "iteration must preserve producer ordering when more values remain queued",
     );
     assert_eq!(
         recv_for_task_group_iteration(&channel, &cancellation, &group),
-        RecvValueResult::Value(Value::String("second".to_string())),
+        RecvValueResult::Value(Value::String("second".to_string().into())),
     );
     channel.close();
     assert_eq!(
@@ -11609,11 +11649,11 @@ fn value_equality_and_render_cover_collection_shapes() {
         value_type: Type::named("int32"),
         entries: vec![
             (
-                Value::String("a".to_string()),
+                Value::String("a".to_string().into()),
                 Value::Int(IntegerValue::from_signed(1)),
             ),
             (
-                Value::String("b".to_string()),
+                Value::String("b".to_string().into()),
                 Value::Int(IntegerValue::from_signed(2)),
             ),
         ]
@@ -11624,11 +11664,11 @@ fn value_equality_and_render_cover_collection_shapes() {
         value_type: Type::named("int32"),
         entries: vec![
             (
-                Value::String("b".to_string()),
+                Value::String("b".to_string().into()),
                 Value::Int(IntegerValue::from_signed(2)),
             ),
             (
-                Value::String("a".to_string()),
+                Value::String("a".to_string().into()),
                 Value::Int(IntegerValue::from_signed(1)),
             ),
         ]
@@ -11641,7 +11681,7 @@ fn value_equality_and_render_cover_collection_shapes() {
             key_type: Type::named("str"),
             value_type: Type::named("int32"),
             entries: vec![(
-                Value::String("a".to_string()),
+                Value::String("a".to_string().into()),
                 Value::Int(IntegerValue::from_signed(1)),
             )]
             .into(),
@@ -11654,11 +11694,11 @@ fn value_equality_and_render_cover_collection_shapes() {
             value_type: Type::named("int32"),
             entries: vec![
                 (
-                    Value::String("a".to_string()),
+                    Value::String("a".to_string().into()),
                     Value::Int(IntegerValue::from_signed(1)),
                 ),
                 (
-                    Value::String("b".to_string()),
+                    Value::String("b".to_string().into()),
                     Value::Int(IntegerValue::from_signed(3)),
                 ),
             ]
@@ -12417,7 +12457,7 @@ fn process_supervisor_wait_or_none_and_stop_cover_public_outcomes() {
     };
     assert_eq!(event.enum_name, "SupervisorEvent");
     assert_eq!(event.variant_name, "Exited");
-    assert_eq!(event.payloads[0], Value::String("quick".to_string()));
+    assert_eq!(event.payloads[0], Value::String("quick".to_string().into()));
     assert!(completed.is_empty());
 
     let running = ProcessSupervisorValue::new();
@@ -12808,7 +12848,10 @@ fn supervisor_delays_restarts_and_reports_restart_counts() {
     };
     assert_eq!(restarted.enum_name, "SupervisorEvent");
     assert_eq!(restarted.variant_name, "Restarted");
-    assert_eq!(restarted.payloads[0], Value::String("flaky".to_string()));
+    assert_eq!(
+        restarted.payloads[0],
+        Value::String("flaky".to_string().into())
+    );
     assert_eq!(
         restarted.payloads[2],
         Value::Int(IntegerValue::from_signed(1))
@@ -12824,7 +12867,10 @@ fn supervisor_delays_restarts_and_reports_restart_counts() {
     };
     assert_eq!(exited.enum_name, "SupervisorEvent");
     assert_eq!(exited.variant_name, "Exited");
-    assert_eq!(exited.payloads[0], Value::String("flaky".to_string()));
+    assert_eq!(
+        exited.payloads[0],
+        Value::String("flaky".to_string().into())
+    );
     assert_eq!(exited.payloads[2], Value::Int(IntegerValue::from_signed(1)));
     assert!(supervisor.is_empty());
 }
@@ -12880,7 +12926,10 @@ fn supervisor_reports_restart_spawn_failure_after_executable_disappears() {
     };
     assert_eq!(failed.enum_name, "SupervisorEvent");
     assert_eq!(failed.variant_name, "Failed");
-    assert_eq!(failed.payloads[0], Value::String("vanishing".to_string()));
+    assert_eq!(
+        failed.payloads[0],
+        Value::String("vanishing".to_string().into())
+    );
     assert_eq!(
         failed.payloads[1].render().split('(').next(),
         Some("Error.Spawn")
@@ -18496,7 +18545,7 @@ fn runtime_value_helpers_report_backoff_capture_and_array_bounds_errors() {
             ClosureCaptureValue {
                 name: "label".to_string(),
                 ty: Type::named("str"),
-                value: Value::String("aura".to_string()),
+                value: Value::String("aura".to_string().into()),
                 source_place: None,
                 mutable: false,
             },
@@ -18511,7 +18560,7 @@ fn runtime_value_helpers_report_backoff_capture_and_array_bounds_errors() {
         Value::Int(IntegerValue::from_signed(2))
     );
     let immutable = environment
-        .write_back_mutable(1, Value::String("x".to_string()))
+        .write_back_mutable(1, Value::String("x".to_string().into()))
         .expect_err("immutable captures reject writebacks");
     assert!(
         immutable.message.contains("not mutable"),
@@ -18605,7 +18654,7 @@ fn format_runtime_value_covers_signed_magnitudes_zero_exponents_and_oversized_ou
     );
     assert_eq!(format_runtime_value(&zero, &int64, ".0e").unwrap(), "0e+00");
 
-    let oversized = Value::String("x".repeat(super::MAX_STRING_BYTES + 1));
+    let oversized = Value::String("x".repeat(super::MAX_STRING_BYTES + 1).into());
     let str_type = Type::named("str");
     let error = format_runtime_value(&oversized, &str_type, "s")
         .expect_err("oversized string output is rejected before allocation");
@@ -18682,7 +18731,7 @@ fn malformed_json_runtime_trees_fall_back_to_structural_clones() {
         object(vec![(Value::Int(IntegerValue::from_literal(1)), null())]),
         coverage_json("Bogus", Vec::new()),
         object(vec![
-            (Value::String("a".to_string()), null()),
+            (Value::String("a".to_string().into()), null()),
             (Value::Int(IntegerValue::from_literal(2)), null()),
         ]),
     ];
@@ -18692,7 +18741,7 @@ fn malformed_json_runtime_trees_fall_back_to_structural_clones() {
     let well_formed = array(vec![
         null(),
         object(vec![(
-            Value::String("k".to_string()),
+            Value::String("k".to_string().into()),
             coverage_json("Int", vec![Value::Int(IntegerValue::from_literal(3))]),
         )]),
         array(Vec::new()),
@@ -18713,7 +18762,7 @@ fn host_builtins_cover_retry_cancellation_probes_and_malformed_string_maps() {
         key_type: Type::named("str"),
         value_type: Type::named("int64"),
         entries: vec![(
-            Value::String("a".to_string()),
+            Value::String("a".to_string().into()),
             Value::Int(IntegerValue::from_literal(1)),
         )]
         .into(),
@@ -18731,14 +18780,14 @@ fn bytes_host_builtins_route_resource_only_codecs() {
     let encoded = super::evaluate_bytes_host_builtin_ref("bytes::hex_encode", &source)
         .expect("bytes builtins are recognized")
         .expect("hex encoding succeeds");
-    assert_eq!(encoded, Value::String("ab".to_string()));
+    assert_eq!(encoded, Value::String("ab".to_string().into()));
     assert_eq!(
         super::evaluate_string_to_bytes_host_ref("hi").expect("str.to_bytes succeeds"),
         super::runtime_bytes_from_host(b"hi").expect("host bytes materialize")
     );
     let digest = super::evaluate_bytes_host_builtin_ref(
         "bytes::sha256_string",
-        &Value::String("hi".to_string()),
+        &Value::String("hi".to_string().into()),
     )
     .expect("bytes builtins are recognized")
     .expect("hashing succeeds");
@@ -19098,8 +19147,8 @@ fn array_free_dicts_and_sets_clone_by_sharing() {
         key_type: Type::named("str"),
         value_type: Type::named("json.Value"),
         entries: vec![(
-            Value::String("age".to_string()),
-            Value::String("40".to_string()),
+            Value::String("age".to_string().into()),
+            Value::String("40".to_string().into()),
         )]
         .into(),
     });
@@ -19128,7 +19177,7 @@ fn array_free_dicts_and_sets_clone_by_sharing() {
         let map = Value::Map(MapValue {
             key_type: Type::named("str"),
             value_type: unknown,
-            entries: vec![(Value::String("k".to_string()), Value::Unit)].into(),
+            entries: vec![(Value::String("k".to_string().into()), Value::Unit)].into(),
         });
         let copy = super::try_clone_array_containing_value(&map).expect("clone");
         let (Value::Map(original), Value::Map(walked)) = (&map, &copy) else {
@@ -19356,7 +19405,7 @@ fn array_aware_copy_keeps_enum_variants_with_leaf_and_nested_payloads() {
         enum_name: "Pair".into(),
         variant_name: "Both".into(),
         payloads: (vec![
-            Value::String("left".to_string()),
+            Value::String("left".to_string().into()),
             Value::Vec(VecValue {
                 element_type: Type::named("int64"),
                 elements: vec![Value::Int(crate::integer::IntegerValue::from_i64(1))].into(),
@@ -19373,7 +19422,7 @@ fn array_aware_copy_keeps_enum_variants_with_leaf_and_nested_payloads() {
     let text = Value::EnumVariant(EnumVariantValue {
         enum_name: "json.Value".into(),
         variant_name: "String".into(),
-        payloads: vec![Value::String("Lagos".to_string())].into(),
+        payloads: vec![Value::String("Lagos".to_string().into())].into(),
     });
     for source in [leaf, nested, empty, text] {
         let copy = super::try_clone_array_containing_value(&source)

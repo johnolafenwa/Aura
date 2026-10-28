@@ -1519,7 +1519,12 @@ impl<'a> NativeCodegen<'a> {
                     Some(DirectType::Opaque(ty)) if !matches!(ty, Type::Named(name, _) if name == "str")
                 )
         });
-        let (native_loan_uses, element_lend_temps) = element_loans::native_element_loans(function);
+        let (native_loan_uses, element_lend_temps) =
+            element_loans::native_element_loans(function, |instruction| {
+                crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
+                    self.borrowing.get(name)
+                })
+            });
         let field_lend_temps = classes::field_lend_temps(function);
         // A local of a Copy type the MIR never releases holds a box all the
         // same, which `release_boxed_copy_roots` releases by its flag.
@@ -7227,7 +7232,17 @@ impl<'a> FunctionCompiler<'a> {
                 &self.classes,
                 &format!("specialized argument {} for `{name}`", index + 1),
             )?;
+            let passed = match &argument.value {
+                Operand::Place(place)
+                    if kept.get(index) == Some(&MirReceiverKind::Borrow)
+                        && argument.writeback_place.is_none() =>
+                {
+                    self.pass_native_element(place)?
+                }
+                _ => None,
+            };
             let loaded = match &argument.value {
+                _ if passed.is_some() => passed.expect("checked above"),
                 Operand::Place(place)
                     if self.moves_lent_temp(place, argument.writeback_place.as_deref())
                         || self
@@ -9591,6 +9606,10 @@ impl<'a> FunctionCompiler<'a> {
     /// same tag earlier in this block and no call ran since, because only a
     /// call can change a box.
     fn emit_runtime_type_tag(&mut self, raw: Val, ty: &Type) -> std::result::Result<(), String> {
+        // A string's own kind names its type, so its tag would add nothing.
+        if matches!(ty, Type::Named(name, args) if name == "str" && args.is_empty()) {
+            return Ok(());
+        }
         let encoded = crate::native_runtime::canonical_runtime_type_name(ty);
         if let Some((inst, tagged, tagged_type)) = &self.last_runtime_type_tag {
             // A retained handle names the box it retained.

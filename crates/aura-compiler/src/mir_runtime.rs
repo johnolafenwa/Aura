@@ -33,7 +33,7 @@ use crate::runtime_ops::{
 };
 use crate::runtime_value::{
     append_string_checked, cast_numeric_value, catch_lightweight_task_failure,
-    claim_task_result_observations, clone_json_codec_source, concat_strings_checked,
+    claim_task_result_observations, clone_json_codec_source, concat_text_checked,
     decode_process_restart_policy, decode_process_stdio, divmod_numeric_values,
     duration_to_host_timer, duration_to_milliseconds, duration_to_seconds,
     evaluate_bytes_host_builtin_ref, evaluate_host_builtin_with_program_args,
@@ -1744,7 +1744,7 @@ fn parse_entry_key_segment(segment: &str, place: &str) -> Result<EntryKeySelecto
     }
     if let Some(hex) = body.strip_prefix("s:") {
         return String::from_utf8(parse_hex_bytes(hex).ok_or_else(invalid)?)
-            .map(|text| EntryKeySelector::Key(Value::String(text)))
+            .map(|text| EntryKeySelector::Key(Value::String(text.into())))
             .map_err(|_| invalid());
     }
     if let Some(bits) = body.strip_prefix("f:") {
@@ -2089,7 +2089,7 @@ fn borrow_mir_operand<'a>(operand: &'a Operand, env: &'a Env) -> Result<MirBorro
         Operand::String(value) => {
             #[cfg(test)]
             MIR_VALUE_CLONE_COUNT.with(|count| count.set(count.get() + 1));
-            MirBorrowedOperand::Immediate(Value::String(value.clone()))
+            MirBorrowedOperand::Immediate(Value::String(value.clone().into()))
         }
         Operand::Unit => MirBorrowedOperand::Immediate(Value::Unit),
         Operand::Default(default) => MirBorrowedOperand::Immediate(arg_default_value(*default)?),
@@ -2162,7 +2162,7 @@ fn take_mir_operand(operand: &Operand, env: &mut Env) -> Result<Value> {
         Operand::Duration(value) => Ok(Value::Duration(*value)),
         Operand::Float(value) => Ok(Value::Float(*value)),
         Operand::Bool(value) => Ok(Value::Bool(*value)),
-        Operand::String(value) => Ok(Value::String(value.clone())),
+        Operand::String(value) => Ok(Value::String(value.clone().into())),
         Operand::Unit => Ok(Value::Unit),
         Operand::Default(default) => arg_default_value(*default),
     }
@@ -2388,7 +2388,7 @@ fn evaluate_json_mir_host_call(
                 Err(error) => return Some(Err(error)),
             };
             json_codec::dumps(&converted, indent)
-                .map(Value::String)
+                .map(Value::string)
                 .map_err(json_dump_error_to_diagnostic)
         }
         "json::is_null" => {
@@ -2698,7 +2698,7 @@ impl MirRuntime {
             }],
         )?;
         match outcome.value.into_result()? {
-            Value::String(text) => Ok(text),
+            Value::String(text) => Ok(text.into_string()),
             other => Err(Diagnostic::new(format!(
                 "`Display.display` returned `{}` instead of `str`",
                 other.render()
@@ -4087,7 +4087,7 @@ impl MirRuntime {
                 }
                 let message = match message {
                     Some(message) => match self.evaluate_owned_operand(message, env)? {
-                        Value::String(message) => message,
+                        Value::String(message) => message.into_string(),
                         other => {
                             return Err(Diagnostic::coded_at(
                                 "AU4001",
@@ -4456,7 +4456,7 @@ impl MirRuntime {
                         }
                     }
                 }
-                Ok(RvalueOutcome::Value(Value::String(rendered)))
+                Ok(RvalueOutcome::Value(Value::String(rendered.into())))
             }
             Rvalue::Unary {
                 op, value, span, ..
@@ -5296,7 +5296,7 @@ impl MirRuntime {
                     Ok(value) => Ok(result_ok(Value::Int(IntegerValue::from_signed(
                         value as i128,
                     )))),
-                    Err(error) => Ok(result_err(Value::String(error.to_string()))),
+                    Err(error) => Ok(result_err(Value::String(error.to_string().into()))),
                 },
                 other => Err(Diagnostic::new(format!(
                     "`parse_int32(...)` expects `str`, found `{}`",
@@ -5313,7 +5313,7 @@ impl MirRuntime {
                     Ok(value) => Ok(result_ok(Value::Int(IntegerValue::from_signed(
                         value as i128,
                     )))),
-                    Err(error) => Ok(result_err(Value::String(error.to_string()))),
+                    Err(error) => Ok(result_err(Value::String(error.to_string().into()))),
                 },
                 other => Err(Diagnostic::new(format!(
                     "`parse_int64(...)` expects `str`, found `{}`",
@@ -5329,9 +5329,9 @@ impl MirRuntime {
                 Value::String(text) => match text.parse::<f64>() {
                     Ok(value) if value.is_finite() => Ok(result_ok(Value::Float(value))),
                     Ok(_) => Ok(result_err(Value::String(
-                        "float must be finite".to_string(),
+                        "float must be finite".to_string().into(),
                     ))),
-                    Err(error) => Ok(result_err(Value::String(error.to_string()))),
+                    Err(error) => Ok(result_err(Value::String(error.to_string().into()))),
                 },
                 other => Err(Diagnostic::new(format!(
                     "`parse_float64(...)` expects `str`, found `{}`",
@@ -5693,7 +5693,7 @@ impl MirRuntime {
                 let result = match &*env.place_ref(place)? {
                     Value::Vec(vector) => slice_vec_owned(vector, start, end).map(Value::Vec),
                     Value::Array(array) => array.slice_first_axis(start, end).map(Value::Array),
-                    Value::String(text) => slice_string_owned(text, start, end).map(Value::String),
+                    Value::String(text) => slice_string_owned(text, start, end).map(Value::string),
                     other => {
                         return Err(Diagnostic::new(format!(
                             "unsupported MIR member call `__slice` on `{}`",
@@ -5761,7 +5761,9 @@ impl MirRuntime {
             let receiver = std::mem::replace(&mut receiver, Value::Unit);
             return match receiver {
                 Value::Vec(vector) => self.evaluate_vec_method(vector, field, None, args, env),
-                Value::String(text) => self.evaluate_string_method(text, field, args, env),
+                Value::String(text) => {
+                    self.evaluate_string_method(text.into_string(), field, args, env)
+                }
                 other => Err(Diagnostic::new(format!(
                     "unsupported MIR member call `__slice` on `{}`",
                     other.render()
@@ -5845,7 +5847,7 @@ impl MirRuntime {
                 if !args.is_empty() {
                     return Err(Diagnostic::new("`to_string` does not take arguments"));
                 }
-                Ok(Value::String(value.to_string()))
+                Ok(Value::String(value.to_string().into()))
             }
             Value::Int(value) if field == "to_float" => {
                 if !args.is_empty() {
@@ -5973,13 +5975,13 @@ impl MirRuntime {
                 if !args.is_empty() {
                     return Err(Diagnostic::new("`to_string` does not take arguments"));
                 }
-                Ok(Value::String(Value::Float(*value).render()))
+                Ok(Value::String(Value::Float(*value).render().into()))
             }
             Value::Bool(value) if field == "to_string" => {
                 if !args.is_empty() {
                     return Err(Diagnostic::new("`to_string` does not take arguments"));
                 }
-                Ok(Value::String(value.to_string()))
+                Ok(Value::String(value.to_string().into()))
             }
             Value::Duration(value) if field == "to_ms" => {
                 if !args.is_empty() {
@@ -5994,7 +5996,9 @@ impl MirRuntime {
                 Ok(Value::Float(duration_to_seconds(*value)))
             }
             Value::Rng(rng) => self.evaluate_rng_method(rng.clone(), field, args, env),
-            Value::String(value) => self.evaluate_string_method(value.clone(), field, args, env),
+            Value::String(value) => {
+                self.evaluate_string_method(value.to_string(), field, args, env)
+            }
             Value::Channel(channel) => {
                 self.evaluate_channel_method(channel.clone(), field, args, env)
             }
@@ -7608,7 +7612,7 @@ impl MirRuntime {
                 let values = evaluate_named_args(args, env)?;
                 let (start, end, span) = self.mir_slice_args(values)?;
                 slice_string_owned(&text, start, end)
-                    .map(Value::String)
+                    .map(Value::string)
                     .map_err(|mut error| {
                         error.span = Some(span);
                         error
@@ -7620,7 +7624,7 @@ impl MirRuntime {
                 let Value::String(needle) = bound[0].value.clone() else {
                     return Err(Diagnostic::new("`contains` requires a `str` argument"));
                 };
-                Ok(Value::Bool(text.contains(&needle)))
+                Ok(Value::Bool(text.contains(needle.as_str())))
             }
             "starts_with" => {
                 let values = evaluate_named_args(args, env)?;
@@ -7628,7 +7632,7 @@ impl MirRuntime {
                 let Value::String(prefix) = bound[0].value.clone() else {
                     return Err(Diagnostic::new("`starts_with` requires a `str` argument"));
                 };
-                Ok(Value::Bool(text.starts_with(&prefix)))
+                Ok(Value::Bool(text.starts_with(prefix.as_str())))
             }
             "ends_with" => {
                 let values = evaluate_named_args(args, env)?;
@@ -7636,7 +7640,7 @@ impl MirRuntime {
                 let Value::String(suffix) = bound[0].value.clone() else {
                     return Err(Diagnostic::new("`ends_with` requires a `str` argument"));
                 };
-                Ok(Value::Bool(text.ends_with(&suffix)))
+                Ok(Value::Bool(text.ends_with(suffix.as_str())))
             }
             "split" => {
                 let values = evaluate_named_args(args, env)?;
@@ -7646,10 +7650,7 @@ impl MirRuntime {
                 };
                 Ok(Value::Vec(VecValue {
                     element_type: Type::named("str"),
-                    elements: text
-                        .split(&separator)
-                        .map(|part| Value::String(part.to_string()))
-                        .collect(),
+                    elements: text.split(separator.as_str()).map(Value::string).collect(),
                     str_view: Default::default(),
                 }))
             }
@@ -7662,19 +7663,21 @@ impl MirRuntime {
                 let Value::String(to) = bound[1].value.clone() else {
                     return Err(Diagnostic::new("`replace` requires `str` for `to`"));
                 };
-                Ok(Value::String(text.replace(&from, &to)))
+                Ok(Value::String(
+                    text.replace(from.as_str(), to.as_str()).into(),
+                ))
             }
             "to_lower" => {
                 if !args.is_empty() {
                     return Err(Diagnostic::new("`to_lower` does not take arguments"));
                 }
-                Ok(Value::String(text.to_lowercase()))
+                Ok(Value::String(text.to_lowercase().into()))
             }
             "to_upper" => {
                 if !args.is_empty() {
                     return Err(Diagnostic::new("`to_upper` does not take arguments"));
                 }
-                Ok(Value::String(text.to_uppercase()))
+                Ok(Value::String(text.to_uppercase().into()))
             }
             "join" => {
                 let values = evaluate_named_args(args, env)?;
@@ -7689,7 +7692,7 @@ impl MirRuntime {
                     };
                     rendered_parts.push(part);
                 }
-                Ok(Value::String(rendered_parts.join(&text)))
+                Ok(Value::String(rendered_parts.join(text.as_str()).into()))
             }
             "add" => {
                 let values = evaluate_named_args(args, env)?;
@@ -7697,7 +7700,7 @@ impl MirRuntime {
                 let Value::String(other) = bound[0].value.clone() else {
                     return Err(Diagnostic::new("`add` requires a `str` argument"));
                 };
-                Ok(Value::String(text + &other))
+                Ok(Value::string(text + &other))
             }
             "strip_prefix" => {
                 let values = evaluate_named_args(args, env)?;
@@ -7706,7 +7709,7 @@ impl MirRuntime {
                     return Err(Diagnostic::new("`strip_prefix` requires a `str` argument"));
                 };
                 Ok(optional_str_value(
-                    text.strip_prefix(&prefix).map(str::to_string),
+                    text.strip_prefix(prefix.as_str()).map(str::to_string),
                 ))
             }
             "strip_suffix" => {
@@ -7716,14 +7719,14 @@ impl MirRuntime {
                     return Err(Diagnostic::new("`strip_suffix` requires a `str` argument"));
                 };
                 Ok(optional_str_value(
-                    text.strip_suffix(&suffix).map(str::to_string),
+                    text.strip_suffix(suffix.as_str()).map(str::to_string),
                 ))
             }
             "trim" => {
                 if !args.is_empty() {
                     return Err(Diagnostic::new("`trim` does not take arguments"));
                 }
-                Ok(Value::String(text.trim().to_string()))
+                Ok(Value::String(text.trim().to_string().into()))
             }
             "trim_start" | "trim_end" | "split_once" | "rsplit_once" | "lines"
             | "split_whitespace" | "find" | "count" | "repeat" => {
@@ -7755,7 +7758,7 @@ impl MirRuntime {
                 if !args.is_empty() {
                     return Err(Diagnostic::new("`clone` does not take arguments"));
                 }
-                Ok(Value::String(text))
+                Ok(Value::String(text.into()))
             }
             _ => Err(Diagnostic::new(format!(
                 "unsupported string method `{}`",
@@ -8349,7 +8352,7 @@ impl MirRuntime {
                     },
                     Some(&self.cancellation),
                 ) {
-                    Ok(text) => Ok(result_ok(Value::String(text))),
+                    Ok(text) => Ok(result_ok(Value::String(text.into()))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
@@ -8457,7 +8460,7 @@ impl MirRuntime {
                 ) {
                     Ok(names) => Ok(result_ok(Value::Vec(VecValue {
                         element_type: Type::named("str"),
-                        elements: names.into_iter().map(Value::String).collect(),
+                        elements: names.into_iter().map(Value::string).collect(),
                         str_view: Default::default(),
                     }))),
                     Err(error) => Ok(result_err(io_error(error))),
@@ -8789,7 +8792,7 @@ impl MirRuntime {
             "read_all" => {
                 bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
                 match file.read_all() {
-                    Ok(text) => Ok(result_ok(Value::String(text))),
+                    Ok(text) => Ok(result_ok(Value::String(text.into()))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
@@ -8966,7 +8969,7 @@ impl MirRuntime {
             "read_all" => {
                 bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
                 match pipe.read_all(Some(&self.cancellation)) {
-                    Ok(text) => Ok(result_ok(Value::String(text))),
+                    Ok(text) => Ok(result_ok(Value::String(text.into()))),
                     Err(error) => Ok(result_err(process_error_from_io(error))),
                 }
             }
@@ -9078,14 +9081,14 @@ impl MirRuntime {
                 bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
                 completed
                     .stdout()
-                    .map(Value::String)
+                    .map(Value::string)
                     .map_err(|error| Diagnostic::coded("AU4005", error.to_string()))
             }
             "stderr" => {
                 bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
                 completed
                     .stderr()
-                    .map(Value::String)
+                    .map(Value::string)
                     .map_err(|error| Diagnostic::coded("AU4005", error.to_string()))
             }
             "stdout_bytes" => {
@@ -9259,7 +9262,7 @@ impl MirRuntime {
             "local_addr" => {
                 bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
                 match listener.local_addr() {
-                    Ok(address) => Ok(result_ok(Value::String(address))),
+                    Ok(address) => Ok(result_ok(Value::String(address.into()))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
@@ -9290,7 +9293,7 @@ impl MirRuntime {
                     "read_all(timeout=...)"
                 );
                 match stream.read_all(timeout, Some(&self.cancellation)) {
-                    Ok(text) => Ok(result_ok(Value::String(text))),
+                    Ok(text) => Ok(result_ok(Value::String(text.into()))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
@@ -9377,14 +9380,14 @@ impl MirRuntime {
             "local_addr" => {
                 bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
                 match stream.local_addr() {
-                    Ok(address) => Ok(result_ok(Value::String(address))),
+                    Ok(address) => Ok(result_ok(Value::String(address.into()))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
             "peer_addr" => {
                 bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
                 match stream.peer_addr() {
-                    Ok(address) => Ok(result_ok(Value::String(address))),
+                    Ok(address) => Ok(result_ok(Value::String(address.into()))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
@@ -9492,11 +9495,11 @@ impl MirRuntime {
                 }
             }
             "local_addr" => match socket.local_addr() {
-                Ok(address) => Ok(result_ok(Value::String(address))),
+                Ok(address) => Ok(result_ok(Value::String(address.into()))),
                 Err(error) => Ok(result_err(io_error(error))),
             },
             "peer_addr" => match socket.peer_addr() {
-                Ok(address) => Ok(result_ok(Value::String(address))),
+                Ok(address) => Ok(result_ok(Value::String(address.into()))),
                 Err(error) => Ok(result_err(io_error(error))),
             },
             "close" => {
@@ -9519,10 +9522,10 @@ impl MirRuntime {
     ) -> Result<Value> {
         bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
         match field {
-            "address" => Ok(Value::String(datagram.address())),
+            "address" => Ok(Value::String(datagram.address().into())),
             "bytes" => Ok(bytes_vec_value(datagram.bytes())),
             "text" => match datagram.text() {
-                Ok(text) => Ok(result_ok(Value::String(text))),
+                Ok(text) => Ok(result_ok(Value::String(text.into()))),
                 Err(error) => Ok(result_err(io_error(error))),
             },
             _ => Err(Diagnostic::new(format!(
@@ -9549,7 +9552,7 @@ impl MirRuntime {
                 }
             }
             "local_addr" => match listener.local_addr() {
-                Ok(address) => Ok(result_ok(Value::String(address))),
+                Ok(address) => Ok(result_ok(Value::String(address.into()))),
                 Err(error) => Ok(result_err(io_error(error))),
             },
             "close" => {
@@ -9573,11 +9576,11 @@ impl MirRuntime {
         match field {
             "method" => {
                 bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
-                Ok(Value::String(exchange.method()))
+                Ok(Value::String(exchange.method().into()))
             }
             "path" => {
                 bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
-                Ok(Value::String(exchange.path()))
+                Ok(Value::String(exchange.path().into()))
             }
             "headers" => {
                 bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
@@ -9586,7 +9589,7 @@ impl MirRuntime {
             "body_text" => {
                 bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
                 match exchange.body_text() {
-                    Ok(text) => Ok(result_ok(Value::String(text))),
+                    Ok(text) => Ok(result_ok(Value::String(text.into()))),
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
@@ -9664,10 +9667,10 @@ impl MirRuntime {
             "status" => Ok(Value::Int(IntegerValue::from_signed(
                 response.status() as i128
             ))),
-            "reason" => Ok(Value::String(response.reason())),
+            "reason" => Ok(Value::String(response.reason().into())),
             "headers" => Ok(headers_map_value(response.headers())),
             "text" => match response.text() {
-                Ok(text) => Ok(result_ok(Value::String(text))),
+                Ok(text) => Ok(result_ok(Value::String(text.into()))),
                 Err(error) => Ok(result_err(io_error(error))),
             },
             "bytes" => Ok(bytes_vec_value(response.bytes())),
@@ -9695,7 +9698,7 @@ impl MirRuntime {
                 }
             }
             "local_addr" => match listener.local_addr() {
-                Ok(address) => Ok(result_ok(Value::String(address))),
+                Ok(address) => Ok(result_ok(Value::String(address.into()))),
                 Err(error) => Ok(result_err(io_error(error))),
             },
             _ => Err(Diagnostic::new(format!(
@@ -9866,7 +9869,7 @@ impl MirRuntime {
                 }
             }
             "local_addr" => match listener.local_addr() {
-                Ok(address) => Ok(result_ok(Value::String(address))),
+                Ok(address) => Ok(result_ok(Value::String(address.into()))),
                 Err(error) => Ok(result_err(io_error(error))),
             },
             "close" => {
@@ -10082,7 +10085,7 @@ impl MirRuntime {
             Operand::Duration(value) => Ok(Value::Duration(*value)),
             Operand::Float(value) => Ok(Value::Float(*value)),
             Operand::Bool(value) => Ok(Value::Bool(*value)),
-            Operand::String(value) => Ok(Value::String(value.clone())),
+            Operand::String(value) => Ok(Value::String(value.clone().into())),
             Operand::Unit => Ok(Value::Unit),
             Operand::Default(default) => arg_default_value(*default),
         }
@@ -10171,7 +10174,7 @@ impl MirRuntime {
                 },
                 (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left + right)),
                 (Value::String(left), Value::String(right)) => {
-                    Ok(Value::String(concat_strings_checked(left, &right)?))
+                    Ok(Value::String(concat_text_checked(left, &right)?))
                 }
                 (Value::Duration(left), Value::Duration(right)) => left
                     .checked_add(right)
@@ -10532,7 +10535,7 @@ fn ffi_value_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
                 _ => Err(mismatch()),
             },
             "str" => match value {
-                Value::String(value) => Ok(FfiValue::String(value.clone())),
+                Value::String(value) => Ok(FfiValue::String(value.to_string())),
                 _ => Err(mismatch()),
             },
             _ => opaque_handle_from_runtime(value).ok_or_else(mismatch),
@@ -10794,7 +10797,7 @@ fn evaluate_named_args(args: &[MirArg], env: &mut Env) -> Result<Vec<EvaluatedMi
                 Operand::Duration(value) => Value::Duration(*value),
                 Operand::Float(value) => Value::Float(*value),
                 Operand::Bool(value) => Value::Bool(*value),
-                Operand::String(value) => Value::String(value.clone()),
+                Operand::String(value) => Value::String(value.clone().into()),
                 Operand::Unit => Value::Unit,
                 Operand::Default(default) => arg_default_value(*default)?,
             };
@@ -11131,7 +11134,7 @@ fn bind_builtin_args(
 
 fn expect_string_value(value: &Value, label: &str) -> Result<String> {
     match value {
-        Value::String(text) => Ok(text.clone()),
+        Value::String(text) => Ok(text.to_string()),
         other => Err(Diagnostic::new(format!(
             "`{}` expects `str`, found `{}`",
             label,
@@ -11142,7 +11145,7 @@ fn expect_string_value(value: &Value, label: &str) -> Result<String> {
 
 fn expect_owned_string_value(value: Value, label: &str) -> Result<String> {
     match value {
-        Value::String(text) => Ok(text),
+        Value::String(text) => Ok(text.into_string()),
         other => Err(Diagnostic::new(format!(
             "`{}` expects `str`, found `{}`",
             label,
@@ -11492,7 +11495,7 @@ fn headers_map_value(headers: Vec<(String, String)>) -> Value {
         value_type: Type::named("str"),
         entries: headers
             .into_iter()
-            .map(|(key, value)| (Value::String(key), Value::String(value)))
+            .map(|(key, value)| (Value::String(key.into()), Value::String(value.into())))
             .collect(),
     })
 }
