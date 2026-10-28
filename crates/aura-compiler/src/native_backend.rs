@@ -138,15 +138,43 @@ pub(crate) enum FloatCC {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct MemFlags {
     pub(crate) trusted: bool,
+    pub(crate) alias: AliasClass,
+}
+
+/// The memory an access touches, when the emitter knows it. Accesses of two
+/// different known classes never touch the same bytes, which lets the code
+/// generator keep a value in a register across the other class's accesses.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AliasClass {
+    /// Any memory.
+    Any,
+    /// The header of a task's frame stack.
+    FrameHeader,
+    /// An entry of a task's frame stack.
+    FrameEntry,
 }
 
 impl MemFlags {
     pub(crate) const fn new() -> Self {
-        Self { trusted: false }
+        Self {
+            trusted: false,
+            alias: AliasClass::Any,
+        }
     }
 
     pub(crate) const fn trusted() -> Self {
-        Self { trusted: true }
+        Self {
+            trusted: true,
+            alias: AliasClass::Any,
+        }
+    }
+
+    /// A trusted access of `alias` memory.
+    pub(crate) const fn trusted_in(alias: AliasClass) -> Self {
+        Self {
+            trusted: true,
+            alias,
+        }
     }
 }
 

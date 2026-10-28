@@ -5,8 +5,8 @@ use object::{Object, ObjectSection, ObjectSymbol};
 use super::units::{Partition, Placement};
 use super::{host_target_machine, target_machine, LlvmModule};
 use crate::native_backend::{
-    types, CallConv, DataDescription, DefineError, FuncHandle, FunctionBackend, IntCC, Linkage,
-    MemFlags, ModuleBackend, ScalarType, Signature, TrapCode, Var,
+    types, AliasClass, CallConv, DataDescription, DefineError, FuncHandle, FunctionBackend, IntCC,
+    Linkage, MemFlags, ModuleBackend, ScalarType, Signature, TrapCode, Var,
 };
 
 fn signature(call_conv: CallConv, params: &[ScalarType], returns: &[ScalarType]) -> Signature {
@@ -629,6 +629,55 @@ fn task_invariant_imports_let_llvm_merge_their_calls() {
 }
 
 #[test]
+fn frame_stack_accesses_of_different_classes_never_overlap() {
+    let mut module = module();
+    let sig = signature(CallConv::C, &[types::I64, types::I64], &[types::I64]);
+    for (name, header, entry) in [
+        (
+            "tagged",
+            MemFlags::trusted_in(AliasClass::FrameHeader),
+            MemFlags::trusted_in(AliasClass::FrameEntry),
+        ),
+        ("untagged", MemFlags::trusted(), MemFlags::trusted()),
+    ] {
+        define(&mut module, name, Linkage::Export, &sig, move |builder| {
+            let entry_block = builder.create_block();
+            builder.append_block_params_for_function_params(entry_block);
+            builder.switch_to_block(entry_block);
+            let stack = builder.block_params(entry_block)[0];
+            let slot = builder.block_params(entry_block)[1];
+            let len = builder.iconst(types::I64, 7);
+            builder.store(header, len, stack, 0);
+            let word = builder.iconst(types::I64, 9);
+            builder.store(entry, word, slot, 0);
+            let reloaded = builder.load(types::I64, header, stack, 0);
+            builder.return_(&[reloaded]);
+        });
+    }
+
+    let ir = ir(&module);
+    assert!(ir.contains("!tbaa"), "{ir}");
+    assert!(ir.contains("aura frame stack header"), "{ir}");
+    assert!(ir.contains("aura frame stack entry"), "{ir}");
+    let optimized = optimized_ir(&module);
+    let body = |name: &str| {
+        let start = optimized
+            .find(&format!("@{name}("))
+            .expect("the function is defined");
+        let end = optimized[start..].find("\n}").expect("the body ends") + start;
+        optimized[start..end].to_string()
+    };
+    assert!(
+        body("tagged").contains("ret i64 7"),
+        "the entry store cannot change the header: {optimized}"
+    );
+    assert!(
+        body("untagged").contains("load i64"),
+        "an untagged store may change the header: {optimized}"
+    );
+}
+
+#[test]
 fn branches_to_cold_blocks_carry_branch_weights() {
     let mut module = module();
     let effect = signature(CallConv::C, &[], &[]);
@@ -960,6 +1009,44 @@ fn units_reach_each_other_through_hidden_symbols_and_copy_small_code() {
     );
     assert_eq!(
         partition.data(last, data_index(&module, "counter")),
+        Placement::Elsewhere
+    );
+}
+
+#[test]
+fn an_import_without_a_call_ties_no_units_together() {
+    let LargeModule { mut module, count } = large_module(40, 250);
+    let unary = signature(CallConv::C, &[types::I64], &[types::I64]);
+    let steps = (0..count)
+        .map(|index| FuncHandle(function_index(&module, &format!("step_{index}")) as u32))
+        .collect::<Vec<_>>();
+    // The emitter imports every function into every body, called or not.
+    define(
+        &mut module,
+        "importer",
+        Linkage::Export,
+        &unary,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            for step in &steps {
+                builder.import_function(*step);
+            }
+            let value = builder.block_params(entry)[0];
+            builder.return_(&[value]);
+        },
+    );
+    let partition = Partition::split(&module);
+    let importer_unit = defining_unit(&partition, &module, "importer");
+    assert_ne!(defining_unit(&partition, &module, "step_1"), importer_unit);
+    assert_eq!(
+        partition.function(0, function_index(&module, "step_1")),
+        Placement::Private,
+        "only step_0 calls step_1"
+    );
+    assert_eq!(
+        partition.function(importer_unit, function_index(&module, "step_1")),
         Placement::Elsewhere
     );
 }

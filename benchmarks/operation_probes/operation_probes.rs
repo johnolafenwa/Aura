@@ -249,6 +249,24 @@ fn enum_match(n: i64, run: bool) -> i64 {
     total as i64
 }
 
+fn add_scaled(total: i64, i: i64) -> i64 {
+    total + i * 3
+}
+
+fn call(n: i64, run: bool) -> i64 {
+    let mut total: i64 = 0;
+    if run {
+        for i in 0..n {
+            total = add_scaled(total, std::hint::black_box(i));
+        }
+    } else {
+        for i in 0..n {
+            total = total + std::hint::black_box(i) * 3;
+        }
+    }
+    total
+}
+
 fn probe(operation: &str, n: i64, run: bool) -> i64 {
     match operation {
         "while_step" => while_step(n, run),
@@ -265,6 +283,7 @@ fn probe(operation: &str, n: i64, run: bool) -> i64 {
         "class_field_read" => class_field_read(n, run),
         "field_write" => field_write(n, run),
         "enum_match" => enum_match(n, run),
+        "call" => call(n, run),
         _ => -1,
     }
 }

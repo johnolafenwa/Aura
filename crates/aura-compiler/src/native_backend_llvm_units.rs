@@ -162,8 +162,7 @@ impl Partition {
                 let Some(body) = &object.functions[function].body else {
                     continue;
                 };
-                for callee in &body.func_refs {
-                    let callee = callee.0 as usize;
+                for callee in called_functions(body) {
                     if self.refer_to_function(unit, callee)
                         && (object.functions[callee].inline || self.weights[callee] <= COPY_WEIGHT)
                         && self.function_copies[unit].insert(callee)
@@ -287,6 +286,21 @@ fn placement(owner: Option<usize>, shared: bool, copied: bool, unit: usize) -> P
 }
 
 /// A function's recorded instructions, which stand for its LLVM work.
+/// The functions `body` calls or takes the address of. The emitter imports
+/// every function of the module into every body, so the imports alone
+/// would tie each unit to all the others.
+fn called_functions(body: &super::FunctionIr) -> BTreeSet<usize> {
+    body.insts
+        .iter()
+        .filter_map(|inst| match &inst.op {
+            super::Op::Call(callee, _) | super::Op::FuncAddr(callee) => {
+                Some(body.func_refs[callee.0 as usize].0 as usize)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 fn function_weight(decl: &super::FunctionDecl) -> usize {
     decl.body.as_ref().map_or(0, |body| body.insts.len())
 }

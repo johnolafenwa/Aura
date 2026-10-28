@@ -68,5 +68,10 @@
     "count": 100000,
     "plan_step": "2f",
     "measures": "passing one enum value from a list to a function that matches on it"
+  },
+  "call": {
+    "count": 100000,
+    "plan_step": "4a",
+    "measures": "calling a two-argument `int64` function that LLVM inlines, against the same arithmetic written in the loop"
   }
 }

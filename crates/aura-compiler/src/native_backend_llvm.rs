@@ -40,9 +40,9 @@ use inkwell::{AddressSpace, FloatPredicate, GlobalVisibility, IntPredicate, Opti
 use units::{Partition, Placement};
 
 use super::{
-    Blk, Call, CallConv, DataAddress, DataDescription, DataHandle, DataRef, DefineError, FloatCC,
-    FuncHandle, FuncRef, FunctionBackend, FunctionBody, Inst, IntCC, Linkage, MemFlags,
-    ModuleBackend, ScalarType, SigRef, Signature, Slot, TrapCode, Val, Var,
+    AliasClass, Blk, Call, CallConv, DataAddress, DataDescription, DataHandle, DataRef,
+    DefineError, FloatCC, FuncHandle, FuncRef, FunctionBackend, FunctionBody, Inst, IntCC, Linkage,
+    MemFlags, ModuleBackend, ScalarType, SigRef, Signature, Slot, TrapCode, Val, Var,
 };
 
 /// The pass pipeline every object runs. Step 9c measured `O1`, `O2`, and
@@ -1944,6 +1944,7 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                 ))?;
                 if let Some(instruction) = loaded.as_instruction_value() {
                     let _ = instruction.set_alignment(access_alignment(loaded_ty, *flags));
+                    self.tag_alias(instruction, flags.alias);
                 }
                 let value = match kind {
                     LoadKind::Plain => loaded,
@@ -1970,6 +1971,7 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                 let pointer = self.address(*address, *offset)?;
                 let stored = built(self.builder.build_store(pointer, self.value(*value)?))?;
                 let _ = stored.set_alignment(access_alignment(self.ir.ty(*value), *flags));
+                self.tag_alias(stored, flags.alias);
             }
             Op::StackAddr(slot, offset) => {
                 let base = self
@@ -2091,6 +2093,34 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
             Op::Trap => self.build_trap()?,
         }
         Ok(())
+    }
+
+    /// Marks an access of known memory with type-based alias metadata, so
+    /// LLVM knows that accesses of two different classes never overlap. An
+    /// access of any memory carries none, so it may overlap every class.
+    fn tag_alias(&self, access: InstructionValue<'ctx>, alias: AliasClass) {
+        let name = match alias {
+            AliasClass::Any => return,
+            AliasClass::FrameHeader => "aura frame stack header",
+            AliasClass::FrameEntry => "aura frame stack entry",
+        };
+        let zero = self.context.i64_type().const_zero().into();
+        let root = self
+            .context
+            .metadata_node(&[self.context.metadata_string("aura memory").into()]);
+        let class = self.context.metadata_node(&[
+            self.context.metadata_string(name).into(),
+            root.into(),
+            zero,
+        ]);
+        let tag = self
+            .context
+            .metadata_node(&[class.into(), class.into(), zero]);
+        // Only metadata that is not a node fails to attach.
+        let attached = access
+            .set_metadata(tag, self.context.get_kind_id("tbaa"))
+            .is_ok();
+        debug_assert!(attached, "alias tags are metadata nodes");
     }
 
     /// Weighs a branch against the edge to a cold block. A branch whose
