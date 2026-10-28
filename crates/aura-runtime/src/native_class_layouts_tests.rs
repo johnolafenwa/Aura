@@ -788,7 +788,7 @@ fn runtime_field_helpers_reach_typed_instances() {
         assert_eq!(unsafe { value_ref(count) }, int64(1));
         unsafe { aura_direct_release_value(count) };
         let path = "items.[i]";
-        let stored = aura_direct_element_path_store(
+        aura_direct_element_path_store(
             book,
             path.as_ptr(),
             path.len(),
@@ -798,10 +798,9 @@ fn runtime_field_helpers_reach_typed_instances() {
             0,
             0,
         );
-        unsafe { aura_direct_release_value(stored) };
         assert_eq!(field_of(book, "items"), ints(&[1, 20]));
         let path = "meta.count";
-        let stored = aura_direct_element_path_store(
+        aura_direct_element_path_store(
             book,
             path.as_ptr(),
             path.len(),
@@ -811,7 +810,6 @@ fn runtime_field_helpers_reach_typed_instances() {
             0,
             0,
         );
-        unsafe { aura_direct_release_value(stored) };
         assert_eq!(field_of(book, "meta"), meta(prefix, "m", 30));
         for value in [book, updated] {
             unsafe { aura_direct_release_value(value) };

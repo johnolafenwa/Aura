@@ -18,7 +18,8 @@ PROGRAMS = ('union_scalar_local', 'union_class_field', 'union_string_local', 'ca
             'callable_pack_overflow', 'callable_move')
 BACKENDS = ('mir', 'direct')
 COUNTERS = ('union_payload_boxes', 'closure_environments', 'opaque_boxes',
-            'callable_overflow_allocations', 'cloned_elements', 'retains', 'releases', 'clones')
+            'callable_overflow_allocations', 'cloned_elements', 'retains', 'releases', 'clones',
+            'freed_boxes')
 REPORT_SCHEMA_VERSION = 1
 
 

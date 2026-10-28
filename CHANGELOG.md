@@ -19,6 +19,10 @@ in this file.
   printed directly does: `P(v=0.1)` rather than
   `P(v=0.10000000149011612)`. A field or payload whose declared type is a
   type parameter still prints the digits of its `float64` widening.
+- The `AURA_RUNTIME_STATS=1` line of a native program reports
+  `freed_boxes`, the boxes the program freed, and is printed after the
+  module constants are freed. A program that frees everything it allocated
+  reports as many `freed_boxes` as `opaque_boxes`.
 
 ### Performance
 
@@ -128,6 +132,14 @@ in this file.
   bank_ledger 2.6%. With the three changes above, generated code now
   retains values 92% less often across the 30 benchmark programs
   (1,062,951 to 87,876).
+- `abs`, `min`, `max`, `sqrt`, and `round` on number locals and literals
+  now compute in machine words in native builds instead of boxing each
+  argument and the result. `abs` of the smallest signed value still
+  stops the program with the same message. The helpers that check or
+  replace a value inside a collection for an element loan no longer
+  allocate a result. Native builds of the 30 benchmark programs allocate
+  19% fewer boxes; image_filters runs 93% fewer instructions, nbody 49%,
+  raytracer 34%, astar_pathfinding 33%, and spreadsheet 17%.
 
 ### Fixed
 

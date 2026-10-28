@@ -952,6 +952,29 @@ before, and a payload the pattern ignores with `_` is not read at all.
 | `sql_engine` | 26,017 | 13,422 | 1,412.9M | 1,412.2M |
 | All 30 programs | 326,693 | 87,876 | | |
 
+### Math Built-ins Compute In Words
+
+`abs`, `min`, `max`, `sqrt`, and `round` compute in machine words in a
+native build when each argument is a number local or a number literal.
+`min` and `max` compare the two values and keep the first when they are
+equal, `abs` negates a negative integer or clears a float's sign, and
+`sqrt` and `round` of a float call small runtime routines that take and
+return words. The results are the ones the runtime gives: `abs` of the
+smallest `int8`, `int16`, `int32`, or `int64` still stops the program,
+and `round` of a float that does not fit `int64` still does. The
+runtime routines that check or replace a value inside a collection for
+an element loan no longer allocate a result either.
+
+| Program | Boxes before | Boxes after | Instructions before | Instructions after |
+| --- | ---: | ---: | ---: | ---: |
+| `image_filters` | 31,101 | 33 | 18.4M | 1.3M |
+| `nbody` | 20,092 | 52 | 14.4M | 7.3M |
+| `raytracer` | 38,758 | 4,109 | 36.6M | 24.0M |
+| `astar_pathfinding` | 8,782 | 34 | 13.3M | 8.9M |
+| `spreadsheet` | 15,766 | 8,858 | 22.2M | 18.5M |
+| `sql_engine` | 683,934 | 552,398 | 1,412.2M | 1,375.5M |
+| All 30 programs | 1,886,045 | 1,523,899 | | |
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and
@@ -1040,9 +1063,14 @@ process run with `AURA_RUNTIME_STATS=1` prints the totals on standard error
 when its program ends.
 
 The same line reports how often the direct backend retains, releases, and
-copies a boxed value, as `retains`, `releases`, and `clones`. The direct
-runtime counts these only when the report is requested. The interpreter
-reports zero for them.
+copies a boxed value, as `retains`, `releases`, and `clones`, and how many
+of its boxes it freed, as `freed_boxes`. The direct runtime counts these
+only when the report is requested. The interpreter reports zero for them.
+A native program prints the line after its module constants are gone, so a
+program that freed everything it allocated reports as many `freed_boxes`
+as `opaque_boxes`. The cleanup tests in `crates/aura/tests/cleanup_leaks.rs`
+check this for programs that finish, stop at a failed check deep in their
+calls, and fail or cancel tasks that hold values.
 
 `benchmarks/representation` holds the programs.
 `scripts/bench-representation.py` records the counters, the direct binary's

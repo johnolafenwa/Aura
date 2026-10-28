@@ -8801,6 +8801,24 @@ fn sqrt_helper_matches_standard_library() {
 }
 
 #[test]
+fn round_helper_rounds_ties_to_even_and_traps_outside_int64() {
+    assert_eq!(super::aura_direct_round_f64(2.5), 2);
+    assert_eq!(super::aura_direct_round_f64(-3.5), -4);
+    assert_eq!(super::aura_direct_round_f64(-0.4), 0);
+    let too_large = element_trap(|| {
+        super::aura_direct_round_f64(1.0e300);
+    });
+    assert_eq!(too_large.code, "AU4002");
+    assert!(
+        too_large
+            .message
+            .contains("cannot represent `1e300` as `int64`"),
+        "{}",
+        too_large.message
+    );
+}
+
+#[test]
 fn direct_runtime_string_and_numeric_helpers_cover_builtin_surface() {
     assert_eq!(
         super::aura_direct_string_len(string_value("é🎉e\u{301}")),
@@ -25050,7 +25068,7 @@ fn element_path_load(collection: usize, path: &'static str, selectors: &[i64]) -
 }
 
 fn element_path_store(collection: usize, path: &'static str, selectors: &[i64], value: Value) {
-    expect_unit(super::aura_direct_element_path_store(
+    super::aura_direct_element_path_store(
         collection as *mut OpaqueValue,
         path.as_ptr(),
         path.len(),
@@ -25059,7 +25077,7 @@ fn element_path_store(collection: usize, path: &'static str, selectors: &[i64], 
         boxed_value(value),
         3,
         9,
-    ));
+    );
 }
 
 fn element_load_trap(collection: usize, path: &'static str, selectors: Vec<i64>) -> Diagnostic {
@@ -25078,7 +25096,7 @@ fn element_load_trap(collection: usize, path: &'static str, selectors: Vec<i64>)
 
 fn element_store_trap(collection: usize, path: &'static str, selectors: Vec<i64>) -> Diagnostic {
     element_trap(move || {
-        let _ = super::aura_direct_element_path_store(
+        super::aura_direct_element_path_store(
             collection as *mut OpaqueValue,
             path.as_ptr(),
             path.len(),
@@ -25123,7 +25141,7 @@ fn direct_element_path_take_and_probe_lend_entries_without_cloning() {
     };
 
     // A probe only checks that the entry exists.
-    expect_unit(probe(vec![key as i64]));
+    probe(vec![key as i64]);
 
     // Taking moves the entry out and leaves `Unit` until a store puts it
     // back.
@@ -25151,7 +25169,7 @@ fn direct_element_path_take_and_probe_lend_entries_without_cloning() {
     let missing = string_value("missing") as usize;
     let missing_probe = element_trap(move || {
         let selectors = [missing as i64];
-        let _ = super::aura_direct_element_path_probe(
+        super::aura_direct_element_path_probe(
             table as *mut OpaqueValue,
             "[k]".as_ptr(),
             3,
@@ -25189,7 +25207,7 @@ fn direct_element_path_take_and_probe_lend_entries_without_cloning() {
     });
     assert!(bad_path.contains("empty element path"), "{bad_path}");
     let bad_probe = element_trap_message(move || {
-        let _ = super::aura_direct_element_path_probe(
+        super::aura_direct_element_path_probe(
             table as *mut OpaqueValue,
             "".as_ptr(),
             0,
@@ -25224,7 +25242,7 @@ fn element_path_probes_move_loaned_lists_into_boxes_of_their_own() {
         })
     }
     let probe = |list: *mut OpaqueValue, position: i64| {
-        expect_unit(super::aura_direct_element_path_promote(
+        super::aura_direct_element_path_promote(
             list,
             "[i]".as_ptr(),
             3,
@@ -25232,7 +25250,7 @@ fn element_path_probes_move_loaned_lists_into_boxes_of_their_own() {
             1,
             3,
             9,
-        ))
+        )
     };
     let header = |list: *mut OpaqueValue| unsafe { &*list };
     let access = |list: *mut OpaqueValue| header(list).list_access.load(Ordering::Relaxed);
@@ -25255,15 +25273,7 @@ fn element_path_probes_move_loaned_lists_into_boxes_of_their_own() {
         (0..8).map(|row| ints(&[row])).collect(),
         Type::Named("list".to_string(), vec![Type::named("int64")]),
     );
-    expect_unit(super::aura_direct_element_path_probe(
-        rows,
-        "[i]".as_ptr(),
-        3,
-        [0i64].as_ptr(),
-        1,
-        3,
-        9,
-    ));
+    super::aura_direct_element_path_probe(rows, "[i]".as_ptr(), 3, [0i64].as_ptr(), 1, 3, 9);
     assert_eq!(access(rows), DirectListAccess::Values as u32);
     probe(rows, -1);
     assert_eq!(access(rows), DirectListAccess::Boxes as u32);
@@ -25501,7 +25511,7 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
         .message
         .contains("list index `9` is out of bounds for length `2`"));
     let unspanned_key = element_trap(move || {
-        let _ = super::aura_direct_element_path_store(
+        super::aura_direct_element_path_store(
             table as *mut OpaqueValue,
             "[k]".as_ptr(),
             3,

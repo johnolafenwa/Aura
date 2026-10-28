@@ -113,8 +113,21 @@ Last updated: 2026-10-27
   across the 30 programs: 87,876; `interpreter` -11% instructions,
   `binary_trees` -9.5%. Details are in
   `2026-10-27-rust-speed-2h-payload-bindings.md`.
-- Next: 2h part 5, unit results and scalar math without boxes, then the
-  leak, failure, and cancellation tests and the gate report.
+- Step 2h part 5: `abs`, `min`, `max`, `sqrt`, and `round` on number
+  locals and literals compute in words (`native_codegen_math.rs`, new
+  word helper `aura_direct_round_f64`), and the element-path probe and
+  store return nothing. Boxes across the 30 programs: 1,886,045 to
+  1,523,899; `image_filters` -93% instructions, `nbody` -49%,
+  `raytracer` -34%, `astar_pathfinding` -33%. Details are in
+  `2026-10-27-rust-speed-2h-scalar-math.md`.
+- Step 2h part 6: leak, failure, and cancellation cleanup tests
+  (`crates/aura/tests/cleanup_leaks.rs`). The `AURA_RUNTIME_STATS=1`
+  line reports `freed_boxes` and comes after the module constants are
+  freed. Every one of the 30 programs and the 705 run-pass fixtures ends
+  with no box left. Details are in
+  `2026-10-27-rust-speed-2h-cleanup-tests.md`.
+- Next: the remaining 2h retains (dictionary lookup keys, scalar `get`
+  results) and the gate report.
 
 ## Aura 0.7.1 preview release (complete)
 

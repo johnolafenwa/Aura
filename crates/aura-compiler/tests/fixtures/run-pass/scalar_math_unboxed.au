@@ -1,0 +1,71 @@
+# `abs`, `min`, `max`, `sqrt`, and `round` on scalar locals and literals
+# compute in words. Each result matches the runtime helpers they replace.
+
+
+def clamp(value: int64, low: int64, high: int64) -> int64:
+    return min(high, max(low, value))
+
+
+def blur_total(pixels: list[int64], n: int64) -> int64:
+    mut total = 0
+    for y in range(n):
+        for dy in range(-1, 2):
+            row = min(n - 1, max(0, y + dy))
+            total += pixels[row]
+    return total
+
+
+def main() -> int32:
+    # Integers of each width, and literals as the first argument.
+    small: int8 = -100
+    other: int8 = 27
+    print(abs(small))
+    print(min(small, other))
+    print(max(small, other))
+    wide: int32 = -2147483647
+    print(abs(wide))
+    print(max(wide, 5))
+    print(clamp(-4, 0, 10))
+    print(clamp(42, 0, 10))
+    print(max(6, clamp(3, 0, 10)))
+
+    # `uint64` compares unsigned.
+    big: uint64 = 18446744073709551615
+    three: uint64 = 3
+    print(min(big, three))
+    print(max(big, three))
+    print(abs(big))
+    byte: uint8 = 200
+    print(abs(byte))
+
+    # Floats: a tie keeps the first argument, so the sign of zero shows
+    # which one came back.
+    zero = 0.0
+    negative_zero = -0.0
+    print(min(zero, negative_zero))
+    print(min(negative_zero, zero))
+    print(max(negative_zero, zero))
+    print(abs(negative_zero))
+    print(abs(-2.5))
+    print(max(0.0, -1.5))
+    print(min(1.0, max(0.0, 0.75)))
+
+    # `sqrt` and `round`, with ties to the even neighbour.
+    x = 2.0
+    print(sqrt(x))
+    print(sqrt(x * 8.0))
+    halves = [0.5, 1.5, 2.5, -2.5, -0.5]
+    for half in halves:
+        print(round(half))
+    count = 12
+    print(round(count))
+
+    # `float32` results are rounded to `float32`.
+    narrow: float32 = 2.0
+    print(sqrt(narrow))
+    print(round(narrow * 1.25))
+    print(abs(narrow - 3.0))
+
+    pixels = [1, 2, 3, 4, 5]
+    print(blur_total(pixels, 5))
+    return 0

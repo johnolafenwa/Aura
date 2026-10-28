@@ -55,6 +55,7 @@ struct Stats {
     retains: u64,
     releases: u64,
     clones: u64,
+    freed_boxes: u64,
 }
 
 fn parse_stats(stderr: &str, backend: &str) -> Stats {
@@ -76,6 +77,7 @@ fn parse_stats(stderr: &str, backend: &str) -> Stats {
             "retains" => stats.retains = value,
             "releases" => stats.releases = value,
             "clones" => stats.clones = value,
+            "freed_boxes" => stats.freed_boxes = value,
             other => panic!("unexpected stats field `{other}`"),
         }
     }
