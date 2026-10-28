@@ -492,7 +492,7 @@ fn generated_code_builds_tests_and_reads_typed_variants() {
         let other_block = unsafe { &*other }.list_elements.get();
         let held = boxed_value(text("h"));
         unsafe { aura_direct_instance_put_field(other_block as *mut Option<ElementBox>, held) };
-        let read = unsafe { super::aura_direct_retain_value(held) };
+        let read = unsafe { crate::native_runtime::aura_direct_retain_value(held) };
         let copied = aura_direct_variant_take_payload(other, 0);
         assert_ne!(copied, held);
         assert_eq!(unsafe { value_ref(copied) }, text("h"));
