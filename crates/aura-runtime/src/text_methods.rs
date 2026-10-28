@@ -232,3 +232,7 @@ pub fn text_method_opcode(field: &str) -> Option<i64> {
         .position(|name| *name == field)
         .map(|index| index as i64)
 }
+
+#[cfg(test)]
+#[path = "text_methods_tests.rs"]
+mod tests;

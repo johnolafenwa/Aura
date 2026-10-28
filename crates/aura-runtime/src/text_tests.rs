@@ -61,3 +61,37 @@ fn a_short_text_stays_inline_until_it_outgrows_the_value() {
     assert_eq!(Text::from('é').char_len(), 1);
     assert_eq!(Text::default(), "");
 }
+
+#[test]
+fn a_text_converts_compares_and_formats_as_its_bytes() {
+    use std::collections::HashSet;
+    let owned = String::from("path/name");
+    let text = Text::from(&owned);
+    assert!(text == owned && text == "path/name" && text == *"path/name");
+    let path: &std::path::Path = text.as_ref();
+    assert_eq!(path, std::path::Path::new("path/name"));
+    let os: &std::ffi::OsStr = text.as_ref();
+    assert_eq!(os, "path/name");
+    let bytes: &[u8] = text.as_ref();
+    assert_eq!(bytes, b"path/name");
+    assert_eq!(AsRef::<str>::as_ref(&text), "path/name");
+    let borrowed: &str = std::borrow::Borrow::borrow(&text);
+    assert_eq!(borrowed, "path/name");
+    assert_eq!(format!("{text:?} {text}"), "\"path/name\" path/name");
+    assert!(Text::from("a") < Text::from("b"));
+    assert_eq!(
+        Text::from("b").partial_cmp(&Text::from("a")),
+        Some(std::cmp::Ordering::Greater)
+    );
+    let set: HashSet<Text> = ["x", "x", "y"].into_iter().map(Text::from).collect();
+    assert!(set.contains("x") && set.len() == 2);
+    let collected: Text = "héllo".chars().collect();
+    assert_eq!((collected.char_len(), collected.is_ascii()), (5, false));
+    assert_eq!(String::from(Text::from("é")), "é");
+    let mut pushed = Text::from("a");
+    pushed.push('é');
+    pushed.push_text(&Text::from("b"));
+    pushed.reserve(64);
+    assert_eq!(pushed.as_str(), "aéb");
+    assert!(!pushed.is_ascii() && pushed.capacity() >= 64);
+}

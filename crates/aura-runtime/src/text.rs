@@ -108,48 +108,35 @@ impl Text {
         }
     }
 
-    /// The `String` an inline text moves to once `additional` more bytes
-    /// would not fit, reserved for them.
+    /// Moves an inline text, whose flag is `ascii`, to a `String` with room
+    /// for `additional` more bytes.
     fn spill(
         &mut self,
+        ascii: bool,
         additional: usize,
-    ) -> Result<&mut String, std::collections::TryReserveError> {
-        if let Repr::Inline { ascii, .. } = self.0 {
-            let mut text = String::new();
-            text.try_reserve((self.len() + additional).max(2 * INLINE_CAPACITY))?;
-            text.push_str(self.as_str());
-            self.0 = Repr::Heap { ascii, text };
-        }
-        match &mut self.0 {
-            Repr::Heap { text, .. } => Ok(text),
-            Repr::Inline { .. } => unreachable!("the text just moved to the heap"),
-        }
+    ) -> Result<(), std::collections::TryReserveError> {
+        let mut text = String::new();
+        text.try_reserve((self.len() + additional).max(2 * INLINE_CAPACITY))?;
+        text.push_str(self.as_str());
+        self.0 = Repr::Heap { ascii, text };
+        Ok(())
     }
 
     /// Appends `other`, whose flag the caller knows.
     fn push_with(&mut self, other: &str, other_ascii: bool) {
-        match &mut self.0 {
-            Repr::Inline { ascii, len, bytes } => {
-                let start = usize::from(*len);
-                let end = start + other.len();
-                if end <= INLINE_CAPACITY {
-                    bytes[start..end].copy_from_slice(other.as_bytes());
-                    *len = end as u8;
-                    *ascii &= other_ascii;
-                    return;
-                }
-            }
-            Repr::Heap { ascii, text } => {
-                text.push_str(other);
+        if let Repr::Inline { ascii, len, bytes } = &mut self.0 {
+            let start = usize::from(*len);
+            let end = start + other.len();
+            if end <= INLINE_CAPACITY {
+                bytes[start..end].copy_from_slice(other.as_bytes());
+                *len = end as u8;
                 *ascii &= other_ascii;
                 return;
             }
         }
-        let text = self
-            .spill(other.len())
-            .unwrap_or_else(|_| std::alloc::handle_alloc_error(std::alloc::Layout::new::<u8>()));
-        text.push_str(other);
-        if let Repr::Heap { ascii, .. } = &mut self.0 {
+        self.reserve(other.len());
+        if let Repr::Heap { ascii, text } = &mut self.0 {
+            text.push_str(other);
             *ascii &= other_ascii;
         }
     }
@@ -182,15 +169,18 @@ impl Text {
     ) -> Result<(), std::collections::TryReserveError> {
         match &mut self.0 {
             Repr::Inline { len, .. } if usize::from(*len) + additional <= INLINE_CAPACITY => Ok(()),
-            Repr::Inline { .. } => self.spill(additional).map(|_| ()),
+            Repr::Inline { ascii, .. } => {
+                let ascii = *ascii;
+                self.spill(ascii, additional)
+            }
             Repr::Heap { text, .. } => text.try_reserve(additional),
         }
     }
 
     pub fn reserve(&mut self, additional: usize) {
-        if self.try_reserve(additional).is_err() {
-            std::alloc::handle_alloc_error(std::alloc::Layout::new::<u8>());
-        }
+        let reserved = self.try_reserve(additional);
+        reserved
+            .unwrap_or_else(|_| std::alloc::handle_alloc_error(std::alloc::Layout::new::<u8>()));
     }
 
     pub fn clear(&mut self) {
