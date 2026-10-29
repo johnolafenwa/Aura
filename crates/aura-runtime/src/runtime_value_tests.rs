@@ -3886,6 +3886,169 @@ fn bounded_read_helpers_reject_zero_and_oversized_requests_without_allocation() 
 
 #[cfg(unix)]
 #[test]
+fn read_ahead_lines_keep_the_bytes_past_each_line_for_the_next_read() {
+    use super::{read_line_with_fd_read_ahead, ReadAhead, ReadAheadBuffer};
+
+    // A cursor has no descriptor, so a wait after a short read polls a
+    // socket whose peer is gone, which is always readable.
+    let (always_readable, _) = std::os::unix::net::UnixStream::pair().expect("socket pair");
+    let fd = std::os::fd::AsRawFd::as_raw_fd(&always_readable);
+    let mut stream = io::Cursor::new(b"one\r\ntwo\nthr\xffee\nfour\nfive".to_vec());
+    let mut pending = ReadAheadBuffer::default();
+    let line = |stream: &mut io::Cursor<Vec<u8>>, pending: &mut ReadAheadBuffer| {
+        read_line_with_fd_read_ahead(stream, fd, pending, None, None)
+    };
+    assert_eq!(
+        line(&mut stream, &mut pending).expect("first line"),
+        Some("one".to_string())
+    );
+    assert!(pending.drained, "a short read marks the stream drained");
+    assert_eq!(pending.bytes, b"two\nthr\xffee\nfour\nfive");
+    assert_eq!(
+        line(&mut stream, &mut pending).expect("second line from read-ahead"),
+        Some("two".to_string())
+    );
+    let error = line(&mut stream, &mut pending).expect_err("invalid UTF-8 fails");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(
+        pending.bytes, b"four\nfive",
+        "a line that fails to decode is consumed"
+    );
+
+    let mut reader = ReadAhead {
+        stream: &mut stream,
+        pending: &mut pending.bytes,
+    };
+    let mut start = [0u8; 2];
+    assert_eq!(reader.read(&mut start).expect("read-ahead first"), 2);
+    assert_eq!(&start, b"fo");
+    let mut rest = Vec::new();
+    reader.read_to_end(&mut rest).expect("then the stream");
+    assert_eq!(rest, b"ur\nfive");
+    assert!(pending.bytes.is_empty());
+
+    let mut tail = io::Cursor::new(b"six".to_vec());
+    assert_eq!(
+        line(&mut tail, &mut pending).expect("a last line without a newline"),
+        Some("six".to_string())
+    );
+    assert_eq!(line(&mut tail, &mut pending).expect("then EOF"), None);
+
+    let expired = Instant::now() - StdDuration::from_millis(1);
+    let mut ready = io::Cursor::new(b"ready\n".to_vec());
+    let error = read_line_with_fd_read_ahead(&mut ready, -1, &mut pending, Some(expired), None)
+        .expect_err("an expired deadline fails before reading");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+
+    let mut long_line = vec![b'a'; MAX_STREAM_READ_BYTES];
+    long_line.push(b'\n');
+    let error = line(&mut io::Cursor::new(long_line), &mut pending)
+        .expect_err("a line at the limit fails once its newline arrives");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    pending.bytes.clear();
+    let error = line(
+        &mut io::Cursor::new(vec![b'a'; MAX_STREAM_READ_BYTES]),
+        &mut pending,
+    )
+    .expect_err("a line at the limit fails before reading past it");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+
+    struct FailingReader;
+
+    impl Read for FailingReader {
+        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "test read failure",
+            ))
+        }
+    }
+
+    pending.bytes.clear();
+    pending.drained = false;
+    let error = read_line_with_fd_read_ahead(&mut FailingReader, fd, &mut pending, None, None)
+        .expect_err("non-retryable failures are returned");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_drained_socket_waits_for_readiness_before_reading_again() {
+    use super::{read_line_with_fd_read_ahead, ReadAheadBuffer};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixStream;
+
+    let (mut socket, mut peer) = UnixStream::pair().expect("socket pair");
+    socket.set_nonblocking(true).expect("nonblocking");
+    let fd = socket.as_raw_fd();
+    peer.write_all(b"ab").expect("first half");
+    let writer = thread::spawn(move || {
+        thread::sleep(StdDuration::from_millis(50));
+        peer.write_all(b"c\n").expect("second half");
+        peer
+    });
+    let mut buffer = ReadAheadBuffer::default();
+    assert_eq!(
+        read_line_with_fd_read_ahead(&mut socket, fd, &mut buffer, None, None)
+            .expect("the line arrives in two reads"),
+        Some("abc".to_string())
+    );
+    let _peer = writer.join().expect("writer joins");
+}
+
+#[test]
+fn tcp_stream_reads_serve_the_bytes_read_line_read_ahead_in_order() {
+    let timeout = StdDuration::from_secs(2);
+    let cancellation = CancellationContext::default();
+    let listener = TcpListenerValue::bind("127.0.0.1:0").expect("tcp bind should succeed");
+    let address = listener.local_addr().expect("listener address");
+    let server_thread = thread::spawn(move || {
+        let stream = listener
+            .accept(Some(timeout), Some(&CancellationContext::default()))
+            .expect("tcp accept should succeed");
+        stream
+            .write_all(
+                "one\ntwo\nthree\nfour\nfive",
+                Some(timeout),
+                Some(&CancellationContext::default()),
+            )
+            .expect("tcp write should succeed");
+        stream.close();
+    });
+    let client = TcpStreamValue::connect(&address, Some(timeout), Some(&cancellation))
+        .expect("tcp connect should succeed");
+    server_thread.join().expect("tcp server thread should join");
+    let line = || {
+        client
+            .read_line(Some(timeout), Some(&cancellation))
+            .expect("line read should succeed")
+    };
+    assert_eq!(line(), Some("one".to_string()));
+    assert_eq!(line(), Some("two".to_string()));
+    assert_eq!(
+        client
+            .read_bytes(3, Some(timeout), Some(&cancellation))
+            .expect("bounded read should succeed"),
+        Some(b"thr".to_vec())
+    );
+    assert_eq!(
+        client
+            .read_exact(3, Some(timeout), Some(&cancellation))
+            .expect("exact read should succeed"),
+        b"ee\n"
+    );
+    assert_eq!(line(), Some("four".to_string()));
+    assert_eq!(
+        client
+            .read_all(Some(timeout), Some(&cancellation))
+            .expect("read_all should succeed"),
+        "five"
+    );
+    client.close();
+}
+
+#[cfg(unix)]
+#[test]
 fn fd_reads_check_deadline_and_size_before_ready_reads() {
     let expired = Instant::now() - StdDuration::from_millis(1);
     let mut line_reader = io::Cursor::new(b"ready\n".to_vec());

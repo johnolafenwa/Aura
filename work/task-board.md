@@ -235,6 +235,14 @@ Last updated: 2026-10-27
   internal and inline. `call` probe 37 -> 12 instructions; raytracer -5%.
   Gate missed (8 instructions; binary_trees and interpreter targets). Details are in
   `2026-10-28-rust-speed-4a-call-path.md`.
+- Step 4b: TCP and Unix stream `read_line` reads 4 KB chunks into a
+  per-socket `ReadAheadBuffer` that every other read drains first, and
+  waits before reading after a short read; the reactor keeps descriptors
+  registered while idle and re-arms them with `reregister`, registering
+  afresh when that reports the descriptor gone. kv_server 1.6x -> 1.2x
+  Rust (gate met), pubsub_broker 2.4x -> about 1.45x (gate missed: the
+  rest is the broker's string and list work). Details are in
+  `2026-10-29-rust-speed-4b-socket-reads.md`.
 
 ## Aura 0.7.1 preview release (complete)
 

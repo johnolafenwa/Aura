@@ -176,6 +176,9 @@ struct TimerEntry {
     key: WaitKey,
 }
 
+/// One descriptor's registration. An entry with no waiters is idle: the
+/// descriptor stays registered after its last wait, so the next wait on it
+/// re-arms the registration with one `epoll_ctl` instead of adding it again.
 #[cfg(unix)]
 struct FdEntry {
     token: Token,
@@ -527,6 +530,42 @@ impl RuntimeReactor {
             ));
         }
 
+        if self
+            .fds
+            .get(&fd)
+            .is_some_and(|entry| entry.waiters.is_empty())
+        {
+            // Re-arming checks the descriptor's readiness now, as a new
+            // registration would. It always takes a fresh token, so an event
+            // queued for the descriptor's earlier use can never wake this
+            // waiter: the descriptor may have been closed while idle and its
+            // number reused (kqueue then accepts the re-arm for the new file,
+            // while epoll reports the registration gone).
+            let token = self.allocate_fd_token()?;
+            let mut source = SourceFd(&fd);
+            let rearmed = retry_on_interrupt(|| {
+                self.poll
+                    .registry()
+                    .reregister(&mut source, token, interest.as_mio())
+            });
+            match rearmed {
+                Ok(()) => {
+                    let entry = self.fds.get_mut(&fd).expect("checked above");
+                    let stale = std::mem::replace(&mut entry.token, token);
+                    entry.waiters.insert(key, interest);
+                    entry.interest = interest;
+                    self.token_fds.remove(&stale);
+                    self.token_fds.insert(token, fd);
+                    self.key_fds.entry(key).or_default().insert(fd);
+                    return Ok(());
+                }
+                Err(error) if fd_registration_is_gone(&error) => {
+                    self.retire_fd_registration(fd);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
         if let Some(entry) = self.fds.get(&fd) {
             let mut waiters = entry.waiters.clone();
             waiters
@@ -586,13 +625,10 @@ impl RuntimeReactor {
         waiters.remove(&key);
         let mut source = SourceFd(&fd);
         if waiters.is_empty() {
-            let result = retry_on_interrupt(|| self.poll.registry().deregister(&mut source));
-            self.retire_fd_registration(fd);
-            return match result {
-                Ok(()) => Ok(()),
-                Err(error) if fd_registration_is_gone(&error) => Ok(()),
-                Err(error) => Err(error),
-            };
+            // The last waiter leaves the descriptor registered and idle.
+            // Events that arrive meanwhile find no waiter to wake.
+            let entry = self.fds.get_mut(&fd).expect("checked above");
+            entry.waiters = waiters;
         } else {
             let interest = combined_interest(&waiters);
             if interest != old_interest {
@@ -1142,7 +1178,26 @@ mod tests {
             assert_eq!(reactor.fd_interest(fd), Some(IoInterest::READABLE));
             assert_eq!(reactor.fd_token(fd), Some(token));
             reactor.cancel_wait(reader).unwrap();
-            assert_eq!(reactor.fd_token(fd), None);
+            assert_eq!(
+                reactor.fd_token(fd),
+                Some(token),
+                "the last wait leaves it idle"
+            );
+            assert!(!reactor.key_fds.contains_key(&reader));
+
+            let next = WaitKey(1, 2);
+            reactor.begin_wait(next).unwrap();
+            reactor.add_fd(next, fd, IoInterest::WRITABLE).unwrap();
+            let rearmed = reactor.fd_token(fd).unwrap();
+            assert_ne!(rearmed, token, "an idle fd is re-armed under a fresh token");
+            assert!(!reactor.token_fds.contains_key(&token));
+            assert_eq!(reactor.token_fds.get(&rearmed), Some(&fd));
+            assert_eq!(reactor.fd_interest(fd), Some(IoInterest::WRITABLE));
+            assert_eq!(
+                reactor.poll(Some(Duration::from_secs(1))).unwrap(),
+                vec![next],
+                "re-arming reports readiness the socket already had"
+            );
         }
 
         #[test]
@@ -1189,28 +1244,6 @@ mod tests {
         }
 
         #[test]
-        fn stale_tokens_cannot_wake_a_waiter_after_fd_reuse() {
-            let mut reactor = RuntimeReactor::new().unwrap();
-            let (stream, _peer) = UnixStream::pair().unwrap();
-            let fd = stream.as_raw_fd();
-            let old = WaitKey(1, 1);
-            reactor.begin_wait(old).unwrap();
-            reactor.add_fd(old, fd, IoInterest::READABLE).unwrap();
-            let stale_token = reactor.fd_token(fd).unwrap();
-            reactor.cancel_wait(old).unwrap();
-
-            let current = WaitKey(2, 1);
-            reactor.begin_wait(current).unwrap();
-            reactor.add_fd(current, fd, IoInterest::READABLE).unwrap();
-            let current_token = reactor.fd_token(fd).unwrap();
-            assert_ne!(stale_token, current_token);
-
-            reactor.dispatch_fd_event(stale_token, true, false, false);
-            assert!(reactor.take_ready().is_empty());
-            assert!(reactor.is_waiting(current));
-        }
-
-        #[test]
         fn error_readiness_wakes_every_waiter_on_the_source_and_deduplicates() {
             let mut reactor = RuntimeReactor::new().unwrap();
             let (stream, _peer) = UnixStream::pair().unwrap();
@@ -1246,7 +1279,7 @@ mod tests {
                 reactor.poll(Some(Duration::from_secs(1))).unwrap(),
                 vec![first, second]
             );
-            assert_eq!(reactor.fd_token(fd), None);
+            assert!(reactor.fds[&fd].waiters.is_empty());
         }
 
         #[test]
@@ -1267,22 +1300,40 @@ mod tests {
         }
 
         #[test]
-        fn cancelling_a_closed_last_descriptor_retires_every_internal_registration() {
+        fn a_descriptor_closed_while_idle_registers_afresh_when_its_number_is_reused() {
             let _closed_fd_guard = lock_unpoisoned(&CLOSED_FD_TEST_LOCK);
             let mut reactor = RuntimeReactor::new().unwrap();
             let (stream, _peer) = UnixStream::pair().unwrap();
             let fd = duplicate_high_fd(stream.as_raw_fd());
-            let key = WaitKey(1, 1);
-            reactor.begin_wait(key).unwrap();
-            reactor.add_fd(key, fd, IoInterest::READABLE).unwrap();
-            let token = reactor.fd_token(fd).unwrap();
+            let old = WaitKey(1, 1);
+            reactor.begin_wait(old).unwrap();
+            reactor.add_fd(old, fd, IoInterest::READABLE).unwrap();
+            let stale_token = reactor.fd_token(fd).unwrap();
             assert_eq!(unsafe { libc::close(fd) }, 0);
 
-            reactor.cancel_wait(key).unwrap();
+            reactor.cancel_wait(old).unwrap();
+            assert!(!reactor.key_fds.contains_key(&old));
+            assert_eq!(reactor.fd_token(fd), Some(stale_token));
 
-            assert!(!reactor.fds.contains_key(&fd));
-            assert!(!reactor.token_fds.contains_key(&token));
-            assert!(!reactor.key_fds.contains_key(&key));
+            let (reused, mut reused_peer) = UnixStream::pair().unwrap();
+            assert_eq!(unsafe { libc::dup2(reused.as_raw_fd(), fd) }, fd);
+            let current = WaitKey(2, 1);
+            reactor.begin_wait(current).unwrap();
+            reactor.add_fd(current, fd, IoInterest::READABLE).unwrap();
+            let current_token = reactor.fd_token(fd).unwrap();
+            assert_ne!(stale_token, current_token);
+            assert!(!reactor.token_fds.contains_key(&stale_token));
+
+            reactor.dispatch_fd_event(stale_token, true, false, false);
+            assert!(reactor.take_ready().is_empty());
+            assert!(reactor.is_waiting(current));
+
+            reused_peer.write_all(b"ready").unwrap();
+            assert_eq!(
+                reactor.poll(Some(Duration::from_secs(1))).unwrap(),
+                vec![current]
+            );
+            assert_eq!(unsafe { libc::close(fd) }, 0);
         }
 
         #[test]

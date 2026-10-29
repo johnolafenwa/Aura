@@ -4096,6 +4096,9 @@ struct TcpListenerState {
 
 struct TcpStreamState {
     stream: Mutex<Option<StdTcpStream>>,
+    /// Bytes `read_line` received past its line. Locked only while
+    /// `stream` is held.
+    read_ahead: Mutex<ReadAheadBuffer>,
 }
 
 struct UdpSocketState {
@@ -4233,6 +4236,9 @@ struct UnixListenerState;
 #[cfg(unix)]
 struct UnixStreamState {
     stream: Mutex<Option<StdUnixStream>>,
+    /// Bytes `read_line` received past its line. Locked only while
+    /// `stream` is held.
+    read_ahead: Mutex<ReadAheadBuffer>,
 }
 
 #[cfg(not(unix))]
@@ -10716,6 +10722,142 @@ where
     Ok(Some(trim_line_endings(io_decode_utf8(&buffer)?)))
 }
 
+/// What a socket's buffered `read_line` received past its line, and whether
+/// its last read came back short, which on a stream socket means the read
+/// took everything the socket had.
+#[derive(Default)]
+struct ReadAheadBuffer {
+    bytes: Vec<u8>,
+    drained: bool,
+    /// Where reads land before they join `bytes`, zeroed once per socket.
+    chunk: Vec<u8>,
+}
+
+/// A socket together with the bytes a buffered `read_line` received past
+/// its line. Reads serve those bytes first, so reading ahead never reorders
+/// what the socket received.
+struct ReadAhead<'a, R> {
+    stream: &'a mut R,
+    pending: &'a mut Vec<u8>,
+}
+
+impl<R: Read> Read for ReadAhead<'_, R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if self.pending.is_empty() {
+            return self.stream.read(buffer);
+        }
+        let count = buffer.len().min(self.pending.len());
+        buffer[..count].copy_from_slice(&self.pending[..count]);
+        self.pending.drain(..count);
+        Ok(count)
+    }
+}
+
+#[cfg(unix)]
+impl<R: AsRawFd> AsRawFd for ReadAhead<'_, R> {
+    fn as_raw_fd(&self) -> std::os::fd::RawFd {
+        self.stream.as_raw_fd()
+    }
+}
+
+#[cfg(not(unix))]
+impl<R: ReadTimeoutStream> ReadTimeoutStream for ReadAhead<'_, R> {
+    fn set_read_timeout_value(&mut self, timeout: Option<StdDuration>) -> io::Result<()> {
+        self.stream.set_read_timeout_value(timeout)
+    }
+}
+
+/// Reads one line a chunk at a time, keeping the bytes past it in `pending`
+/// for the socket's next read. It returns the same lines and enforces the
+/// same length limit as `read_line_with_deadline`, which reads a byte per
+/// call.
+#[cfg(unix)]
+fn read_line_with_read_ahead<R>(
+    stream: &mut R,
+    pending: &mut ReadAheadBuffer,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<Option<String>>
+where
+    R: Read + AsRawFd,
+{
+    let fd = stream.as_raw_fd();
+    read_line_with_fd_read_ahead(stream, fd, pending, deadline, cancellation)
+}
+
+#[cfg(unix)]
+fn read_line_with_fd_read_ahead<R>(
+    stream: &mut R,
+    fd: i32,
+    buffer: &mut ReadAheadBuffer,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<Option<String>>
+where
+    R: Read,
+{
+    fn take_line(pending: &mut Vec<u8>, end: usize) -> io::Result<Option<String>> {
+        let text = io_decode_utf8(&pending[..end]);
+        pending.drain(..end);
+        Ok(Some(trim_line_endings(text?)))
+    }
+
+    let mut searched = 0;
+    loop {
+        check_deadline_and_cancellation(deadline, cancellation)?;
+        let pending = &mut buffer.bytes;
+        if let Some(offset) = memchr::memchr(b'\n', &pending[searched..]) {
+            let newline = searched + offset;
+            validate_read_line_capacity(newline)?;
+            return take_line(pending, newline + 1);
+        }
+        searched = pending.len();
+        validate_read_line_capacity(searched)?;
+        if std::mem::take(&mut buffer.drained) {
+            // The last read took all the socket had, so a read now would
+            // only report that it would block. Waiting first is safe: the
+            // reactor checks readiness when the wait registers.
+            wait_for_fd_event(fd, libc::POLLIN, deadline, cancellation)?;
+            continue;
+        }
+        if buffer.chunk.is_empty() {
+            buffer.chunk = vec![0u8; 4096];
+        }
+        match stream.read(&mut buffer.chunk) {
+            Ok(0) if buffer.bytes.is_empty() => return Ok(None),
+            Ok(0) => return take_line(&mut buffer.bytes, searched),
+            Ok(bytes) => {
+                buffer.bytes.extend_from_slice(&buffer.chunk[..bytes]);
+                buffer.drained = bytes < buffer.chunk.len();
+            }
+            Err(error) if is_retryable_network_error(&error) => {
+                wait_for_fd_event(fd, libc::POLLIN, deadline, cancellation)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn read_line_with_read_ahead<R>(
+    stream: &mut R,
+    pending: &mut ReadAheadBuffer,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<Option<String>>
+where
+    R: ReadTimeoutStream,
+{
+    read_line_with_deadline(
+        &mut ReadAhead {
+            stream,
+            pending: &mut pending.bytes,
+        },
+        deadline,
+        cancellation,
+    )
+}
+
 #[cfg(unix)]
 fn read_exact_with_fd_deadline<R>(
     reader: &mut R,
@@ -13204,6 +13346,7 @@ impl TcpStreamValue {
         Ok(Self {
             inner: Arc::new(TcpStreamState {
                 stream: Mutex::new(Some(stream)),
+                read_ahead: Mutex::new(ReadAheadBuffer::default()),
             }),
         })
     }
@@ -13356,7 +13499,12 @@ impl TcpStreamValue {
         };
         #[cfg(unix)]
         {
-            read_all_with_deadline(stream, deadline_from_timeout(timeout)?, cancellation)
+            let mut pending = lock_mutex(&self.inner.read_ahead);
+            let mut stream = ReadAhead {
+                stream,
+                pending: &mut pending.bytes,
+            };
+            read_all_with_deadline(&mut stream, deadline_from_timeout(timeout)?, cancellation)
         }
         #[cfg(not(unix))]
         {
@@ -13399,7 +13547,13 @@ impl TcpStreamValue {
         let Some(stream) = stream.as_mut() else {
             return Err(closed_resource_error());
         };
-        read_line_with_deadline(stream, deadline_from_timeout(timeout)?, cancellation)
+        let mut pending = lock_mutex(&self.inner.read_ahead);
+        read_line_with_read_ahead(
+            stream,
+            &mut pending,
+            deadline_from_timeout(timeout)?,
+            cancellation,
+        )
     }
 
     pub fn read_bytes(
@@ -13412,8 +13566,12 @@ impl TcpStreamValue {
         let Some(stream) = stream.as_mut() else {
             return Err(closed_resource_error());
         };
+        let mut pending = lock_mutex(&self.inner.read_ahead);
         read_some_with_deadline(
-            stream,
+            &mut ReadAhead {
+                stream,
+                pending: &mut pending.bytes,
+            },
             max_bytes,
             deadline_from_timeout(timeout)?,
             cancellation,
@@ -13430,7 +13588,16 @@ impl TcpStreamValue {
         let Some(stream) = stream.as_mut() else {
             return Err(closed_resource_error());
         };
-        read_exact_with_deadline(stream, count, deadline_from_timeout(timeout)?, cancellation)
+        let mut pending = lock_mutex(&self.inner.read_ahead);
+        read_exact_with_deadline(
+            &mut ReadAhead {
+                stream,
+                pending: &mut pending.bytes,
+            },
+            count,
+            deadline_from_timeout(timeout)?,
+            cancellation,
+        )
     }
 
     pub fn write_all(
@@ -13495,6 +13662,7 @@ impl TcpStreamValue {
         if let Some(stream) = stream.take() {
             let _ = stream.shutdown(Shutdown::Both);
         }
+        lock_mutex(&self.inner.read_ahead).bytes.clear();
     }
 
     pub fn shutdown_read(&self) -> io::Result<()> {
@@ -13851,6 +14019,7 @@ impl UnixStreamValue {
         Ok(Self {
             inner: Arc::new(UnixStreamState {
                 stream: Mutex::new(Some(stream)),
+                read_ahead: Mutex::new(ReadAheadBuffer::default()),
             }),
         })
     }
@@ -13909,7 +14078,13 @@ impl UnixStreamValue {
         let Some(stream) = stream.as_mut() else {
             return Err(closed_resource_error());
         };
-        read_line_with_deadline(stream, deadline_from_timeout(timeout)?, cancellation)
+        let mut pending = lock_mutex(&self.inner.read_ahead);
+        read_line_with_read_ahead(
+            stream,
+            &mut pending,
+            deadline_from_timeout(timeout)?,
+            cancellation,
+        )
     }
 
     pub fn read_exact(
@@ -13922,7 +14097,16 @@ impl UnixStreamValue {
         let Some(stream) = stream.as_mut() else {
             return Err(closed_resource_error());
         };
-        read_exact_with_deadline(stream, count, deadline_from_timeout(timeout)?, cancellation)
+        let mut pending = lock_mutex(&self.inner.read_ahead);
+        read_exact_with_deadline(
+            &mut ReadAhead {
+                stream,
+                pending: &mut pending.bytes,
+            },
+            count,
+            deadline_from_timeout(timeout)?,
+            cancellation,
+        )
     }
 
     pub fn write_all(
@@ -13946,6 +14130,7 @@ impl UnixStreamValue {
     pub fn close(&self) {
         let mut stream = lock_mutex(&self.inner.stream);
         *stream = None;
+        lock_mutex(&self.inner.read_ahead).bytes.clear();
     }
 }
 
