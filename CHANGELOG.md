@@ -242,6 +242,13 @@ in this file.
   its own unit is inlined again, as it is in a small program: a call that
   cost 37 instructions now costs 12. `raytracer` runs 5% fewer
   instructions and `hashing` 2%.
+- `read_line` on a TCP or Unix stream reads up to 4 KB at a time instead
+  of one byte per system call, and keeps the bytes past the line for the
+  stream's next read of any kind. After a read that took everything the
+  socket had, it waits for the socket to become readable instead of
+  reading again first. A socket stays registered with the runtime's
+  poller between waits. `kv_server` runs in 1.2x Rust's time, down from
+  1.6x, and `pubsub_broker` in about 1.45x, down from 2.4x.
 
 ### Fixed
 

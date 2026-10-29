@@ -18770,6 +18770,17 @@ units inlines a small function called only from its own unit, as a small
 program does. A call of a small `int64` function costs 12 instructions
 instead of 37.
 
+### Socket Lines Are Read A Chunk At A Time
+
+`read_line` on a `net` TCP or Unix stream reads up to 4 KB per system call
+and keeps whatever follows the line for the stream's next read, so
+`read_bytes`, `read_exact`, and `read_all` see the same bytes in the same
+order. When a read comes back short, the socket had nothing more, and the
+next `read_line` waits for readiness before reading. A socket stays
+registered with the runtime's poller between waits, so each wait re-arms
+it with one call. A request and reply over loopback costs a send, a
+receive, and one poller call on each side.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and
