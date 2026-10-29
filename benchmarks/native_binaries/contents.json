@@ -165,11 +165,11 @@
       "websocket": 3791576
     },
     "darwin-arm64": {
-      "hello_world": 961496,
-      "reference_agent": 1792816,
-      "json": 1431448,
-      "tls": 2860000,
-      "websocket": 3137448
+      "hello_world": 962520,
+      "reference_agent": 1907760,
+      "json": 1577192,
+      "tls": 2986176,
+      "websocket": 3313032
     }
   }
 }
