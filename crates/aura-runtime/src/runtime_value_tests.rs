@@ -16345,6 +16345,52 @@ fn tcp_connect_candidates_share_one_timeout_budget() {
     );
 }
 
+#[test]
+fn tcp_connect_candidates_stop_at_the_deadline_after_a_failed_candidate() {
+    let started = Instant::now();
+    let deadline = started + StdDuration::from_millis(100);
+    let first: std::net::SocketAddr = "127.0.0.1:1".parse().expect("address should parse");
+    let second: std::net::SocketAddr = "127.0.0.1:2".parse().expect("address should parse");
+    let mut clock = [started, deadline].into_iter();
+    let mut attempts = 0;
+
+    let error = super::connect_resolved_tcp_candidates_with_clock::<(), _, _>(
+        "injected.test:443",
+        vec![first, second],
+        Some(deadline),
+        || {
+            clock
+                .next()
+                .expect("test clock should cover every observation")
+        },
+        |_candidate, _timeout| {
+            attempts += 1;
+            Err(io::Error::new(
+                io::ErrorKind::ConnectionRefused,
+                "candidate refused",
+            ))
+        },
+    )
+    .expect_err("the deadline passes before the second candidate");
+
+    assert_eq!(attempts, 1, "no candidate starts after the deadline");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+}
+
+#[test]
+fn tcp_connect_to_a_name_without_a_timeout_connects_on_the_pool() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener bind");
+    let port = listener.local_addr().expect("listener address").port();
+    let stream = TcpStreamValue::connect(
+        &format!("localhost:{port}"),
+        None,
+        Some(&CancellationContext::default()),
+    );
+    // `localhost` may resolve to `::1` first; the IPv4 candidate follows.
+    stream.expect("a name connects through the resolver");
+    listener.accept().expect("the connect reached the listener");
+}
+
 #[cfg(unix)]
 #[test]
 fn unix_connect_offloads_a_slow_connect_without_starving_a_sibling_timer() {
