@@ -530,12 +530,18 @@ impl RuntimeReactor {
             ));
         }
 
-        if let Some(entry) = self.fds.get(&fd).filter(|entry| entry.waiters.is_empty()) {
+        if self
+            .fds
+            .get(&fd)
+            .is_some_and(|entry| entry.waiters.is_empty())
+        {
             // Re-arming checks the descriptor's readiness now, as a new
-            // registration would. A descriptor closed while idle is no longer
-            // registered (or its number now names another file), so it is
-            // registered afresh under a new token.
-            let token = entry.token;
+            // registration would. It always takes a fresh token, so an event
+            // queued for the descriptor's earlier use can never wake this
+            // waiter: the descriptor may have been closed while idle and its
+            // number reused (kqueue then accepts the re-arm for the new file,
+            // while epoll reports the registration gone).
+            let token = self.allocate_fd_token()?;
             let mut source = SourceFd(&fd);
             let rearmed = retry_on_interrupt(|| {
                 self.poll
@@ -545,8 +551,11 @@ impl RuntimeReactor {
             match rearmed {
                 Ok(()) => {
                     let entry = self.fds.get_mut(&fd).expect("checked above");
+                    let stale = std::mem::replace(&mut entry.token, token);
                     entry.waiters.insert(key, interest);
                     entry.interest = interest;
+                    self.token_fds.remove(&stale);
+                    self.token_fds.insert(token, fd);
                     self.key_fds.entry(key).or_default().insert(fd);
                     return Ok(());
                 }
@@ -1179,7 +1188,10 @@ mod tests {
             let next = WaitKey(1, 2);
             reactor.begin_wait(next).unwrap();
             reactor.add_fd(next, fd, IoInterest::WRITABLE).unwrap();
-            assert_eq!(reactor.fd_token(fd), Some(token), "an idle fd is re-armed");
+            let rearmed = reactor.fd_token(fd).unwrap();
+            assert_ne!(rearmed, token, "an idle fd is re-armed under a fresh token");
+            assert!(!reactor.token_fds.contains_key(&token));
+            assert_eq!(reactor.token_fds.get(&rearmed), Some(&fd));
             assert_eq!(reactor.fd_interest(fd), Some(IoInterest::WRITABLE));
             assert_eq!(
                 reactor.poll(Some(Duration::from_secs(1))).unwrap(),
