@@ -146,19 +146,100 @@ pub fn check_output_len(current: usize, added: usize) -> Result<(), JsonCodecErr
 }
 
 pub fn parse(source: &str) -> Result<JsonValue, JsonCodecError> {
+    parse_into(source)
+}
+
+/// A tree a parse builds: [`JsonValue`], or a value of the runtime's
+/// `json.Value`, which a parse then builds without a second pass.
+pub trait JsonTree: Sized {
+    type Object;
+
+    fn null() -> Self;
+    fn boolean(value: bool) -> Self;
+    fn int(value: i64) -> Self;
+    fn float(value: f64) -> Self;
+    fn string(value: &str) -> Result<Self, TryReserveError>;
+    fn array(values: Vec<Self>) -> Self;
+    fn object_with_capacity(capacity: usize) -> Result<Self::Object, TryReserveError>;
+    /// Adds an entry. A repeated key keeps its first place and takes the
+    /// later value.
+    fn object_insert(
+        object: &mut Self::Object,
+        key: String,
+        value: Self,
+    ) -> Result<(), TryReserveError>;
+    fn object(object: Self::Object) -> Self;
+}
+
+impl JsonTree for JsonValue {
+    type Object = ObjectBuilder;
+
+    fn null() -> Self {
+        Self::Null
+    }
+
+    fn boolean(value: bool) -> Self {
+        Self::Bool(value)
+    }
+
+    fn int(value: i64) -> Self {
+        Self::Int(value)
+    }
+
+    fn float(value: f64) -> Self {
+        Self::Float(value)
+    }
+
+    fn string(value: &str) -> Result<Self, TryReserveError> {
+        try_owned_string(value).map(Self::String)
+    }
+
+    fn array(values: Vec<Self>) -> Self {
+        Self::Array(values)
+    }
+
+    fn object_with_capacity(capacity: usize) -> Result<ObjectBuilder, TryReserveError> {
+        ObjectBuilder::try_with_capacity(capacity)
+    }
+
+    fn object_insert(
+        object: &mut ObjectBuilder,
+        key: String,
+        value: Self,
+    ) -> Result<(), TryReserveError> {
+        object.insert(key, value)
+    }
+
+    fn object(object: ObjectBuilder) -> Self {
+        Self::Object(object.finish())
+    }
+}
+
+/// Parses `source` into a `T`. A source that fails is checked again in the
+/// order the errors rank: nesting, then syntax, then number ranges, then
+/// what building the tree reported. A source that parses needs no check
+/// but the nesting one, which bounds the parser's recursion.
+pub fn parse_into<T: JsonTree>(source: &str) -> Result<T, JsonCodecError> {
     check_input_len(source.len())?;
     validate_source_depth(source)?;
-    validate_syntax(source)?;
-    validate_number_ranges(source)?;
 
     let mut deserializer = serde_json::Deserializer::from_str(source);
     deserializer.disable_recursion_limit();
-    JsonValue::deserialize(&mut deserializer)
-        .and_then(|value| {
-            deserializer.end()?;
-            Ok(value)
-        })
-        .map_err(|error| deserialize_error(source, error))
+    let mut budget = JsonMaterializationBudget::new();
+    JsonValueSeed::<T> {
+        budget: &mut budget,
+        tree: std::marker::PhantomData,
+    }
+    .deserialize(&mut deserializer)
+    .and_then(|value| {
+        deserializer.end()?;
+        Ok(value)
+    })
+    .map_err(|error| {
+        validate_syntax(source)
+            .and_then(|()| validate_number_ranges(source))
+            .map_or_else(|ranked| ranked, |()| deserialize_error(source, error))
+    })
 }
 
 pub fn dumps(value: &JsonValue, indent: Option<i64>) -> Result<String, JsonCodecError> {
@@ -298,7 +379,7 @@ fn validate_number_ranges(source: &str) -> Result<(), JsonCodecError> {
                     index += 1;
                 }
                 let lexeme = &source[start..index];
-                if classify_number(lexeme).is_none() {
+                if classify_number::<JsonValue>(lexeme).is_none() {
                     let (line, column) = line_column_for_offset(source, start);
                     return Err(JsonCodecError::NumberOutOfRange {
                         line,
@@ -322,15 +403,15 @@ fn advance_byte_position(byte: u8, line: &mut usize, column: &mut usize) {
     }
 }
 
-fn classify_number(lexeme: &str) -> Option<JsonValue> {
+fn classify_number<T: JsonTree>(lexeme: &str) -> Option<T> {
     if let Some(value) = exact_integral_i64(lexeme) {
-        return Some(JsonValue::Int(value));
+        return Some(T::int(value));
     }
     lexeme
         .parse::<f64>()
         .ok()
         .filter(|value| value.is_finite())
-        .map(JsonValue::Float)
+        .map(T::float)
 }
 
 fn exact_integral_i64(lexeme: &str) -> Option<i64> {
@@ -518,12 +599,13 @@ impl JsonMaterializationBudget {
     }
 }
 
-struct JsonValueSeed<'a> {
+struct JsonValueSeed<'a, T> {
     budget: &'a mut JsonMaterializationBudget,
+    tree: std::marker::PhantomData<T>,
 }
 
-impl<'de> DeserializeSeed<'de> for JsonValueSeed<'_> {
-    type Value = JsonValue;
+impl<'de, T: JsonTree> DeserializeSeed<'de> for JsonValueSeed<'_, T> {
+    type Value = T;
 
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
@@ -532,6 +614,7 @@ impl<'de> DeserializeSeed<'de> for JsonValueSeed<'_> {
         self.budget.claim::<D::Error>()?;
         deserializer.deserialize_any(JsonValueVisitor {
             budget: self.budget,
+            tree: self.tree,
         })
     }
 }
@@ -544,17 +627,19 @@ impl<'de> Deserialize<'de> for JsonValue {
         let mut budget = JsonMaterializationBudget::new();
         JsonValueSeed {
             budget: &mut budget,
+            tree: std::marker::PhantomData,
         }
         .deserialize(deserializer)
     }
 }
 
-struct JsonValueVisitor<'a> {
+struct JsonValueVisitor<'a, T> {
     budget: &'a mut JsonMaterializationBudget,
+    tree: std::marker::PhantomData<T>,
 }
 
-impl<'de> Visitor<'de> for JsonValueVisitor<'_> {
-    type Value = JsonValue;
+impl<'de, T: JsonTree> Visitor<'de> for JsonValueVisitor<'_, T> {
+    type Value = T;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("a JSON value")
@@ -567,33 +652,29 @@ impl<'de> Visitor<'de> for JsonValueVisitor<'_> {
     // therefore are intentionally not part of this visitor's surface.
 
     fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
-        Ok(JsonValue::Bool(value))
+        Ok(T::boolean(value))
     }
 
     fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
-        Ok(JsonValue::Int(value))
+        Ok(T::int(value))
     }
 
     fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        i64::try_from(value)
-            .map(JsonValue::Int)
-            .or_else(|_| Ok(JsonValue::Float(value as f64)))
+        Ok(i64::try_from(value).map_or_else(|_| T::float(value as f64), T::int))
     }
 
     fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        Ok(JsonValue::String(try_serde_allocation!(try_owned_string(
-            value
-        ))))
+        Ok(try_serde_allocation!(T::string(value)))
     }
 
     fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(JsonValue::Null)
+        Ok(T::null())
     }
 
     fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
@@ -604,10 +685,11 @@ impl<'de> Visitor<'de> for JsonValueVisitor<'_> {
         let mut values = try_serde_allocation!(try_vec_with_capacity(initial_capacity));
         while let Some(value) = sequence.next_element_seed(JsonValueSeed {
             budget: &mut *self.budget,
+            tree: self.tree,
         })? {
             try_serde_allocation!(try_push(&mut values, value));
         }
-        Ok(JsonValue::Array(values))
+        Ok(T::array(values))
     }
 
     fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
@@ -615,13 +697,13 @@ impl<'de> Visitor<'de> for JsonValueVisitor<'_> {
         A: MapAccess<'de>,
     {
         let Some(first_key) = map.next_key::<JsonMapKey>()? else {
-            return Ok(JsonValue::Object(Vec::new()));
+            return Ok(T::object(try_serde_allocation!(T::object_with_capacity(0))));
         };
 
         match first_key {
             JsonMapKey::ArbitraryPrecisionNumber => {
                 let lexeme = map.next_value::<FallibleString>()?;
-                match classify_number(&lexeme.0) {
+                match classify_number::<T>(&lexeme.0) {
                     Some(value) => Ok(value),
                     None => Err(de::Error::custom("JSON number is outside float64 range")),
                 }
@@ -632,22 +714,20 @@ impl<'de> Visitor<'de> for JsonValueVisitor<'_> {
                     .unwrap_or(0)
                     .saturating_add(1)
                     .min(self.budget.remaining);
-                let mut entries = try_serde_allocation!(ObjectBuilder::try_with_capacity(capacity));
-                try_serde_allocation!(entries.insert(
-                    first_key,
-                    map.next_value_seed(JsonValueSeed {
-                        budget: &mut *self.budget,
-                    })?,
-                ));
+                let mut entries = try_serde_allocation!(T::object_with_capacity(capacity));
+                let value = map.next_value_seed(JsonValueSeed {
+                    budget: &mut *self.budget,
+                    tree: self.tree,
+                })?;
+                try_serde_allocation!(T::object_insert(&mut entries, first_key, value));
                 while let Some(key) = map.next_key::<FallibleString>()? {
-                    try_serde_allocation!(entries.insert(
-                        key.0,
-                        map.next_value_seed(JsonValueSeed {
-                            budget: &mut *self.budget,
-                        })?,
-                    ));
+                    let value = map.next_value_seed(JsonValueSeed {
+                        budget: &mut *self.budget,
+                        tree: self.tree,
+                    })?;
+                    try_serde_allocation!(T::object_insert(&mut entries, key.0, value));
                 }
-                Ok(JsonValue::Object(entries.finish()))
+                Ok(T::object(entries))
             }
         }
     }
@@ -753,7 +833,7 @@ impl<'de> Visitor<'de> for JsonMapKeyVisitor {
     }
 }
 
-struct ObjectBuilder {
+pub struct ObjectBuilder {
     entries: Vec<(String, JsonValue)>,
     entry_indexes: HashMap<String, usize>,
 }
@@ -815,12 +895,12 @@ fn object_key_probe_count() -> usize {
 }
 
 #[derive(Default)]
-struct BoundedOutput {
-    text: String,
+pub(crate) struct BoundedOutput {
+    pub(crate) text: String,
 }
 
 impl BoundedOutput {
-    fn push_str(&mut self, text: &str) -> Result<(), JsonCodecError> {
+    pub(crate) fn push_str(&mut self, text: &str) -> Result<(), JsonCodecError> {
         check_output_len(self.text.len(), text.len())?;
         self.text
             .try_reserve(text.len())
@@ -857,7 +937,7 @@ impl io::Write for BoundedIoWriter<'_> {
     }
 }
 
-fn write_int(output: &mut BoundedOutput, value: i64) -> Result<(), JsonCodecError> {
+pub(crate) fn write_int(output: &mut BoundedOutput, value: i64) -> Result<(), JsonCodecError> {
     let mut writer = BoundedIoWriter {
         output,
         failure: None,
@@ -866,7 +946,7 @@ fn write_int(output: &mut BoundedOutput, value: i64) -> Result<(), JsonCodecErro
     finish_number_write(writer, result)
 }
 
-fn write_float(output: &mut BoundedOutput, value: f64) -> Result<(), JsonCodecError> {
+pub(crate) fn write_float(output: &mut BoundedOutput, value: f64) -> Result<(), JsonCodecError> {
     let mut writer = BoundedIoWriter {
         output,
         failure: None,
@@ -1070,7 +1150,7 @@ fn checked_dump_depth(depth: usize) -> Result<usize, JsonCodecError> {
     }
 }
 
-fn write_item_prefix(
+pub(crate) fn write_item_prefix(
     output: &mut BoundedOutput,
     indent: Option<usize>,
     depth: usize,
@@ -1082,7 +1162,7 @@ fn write_item_prefix(
     Ok(())
 }
 
-fn write_container_suffix(
+pub(crate) fn write_container_suffix(
     output: &mut BoundedOutput,
     indent: Option<usize>,
     depth: usize,
@@ -1108,7 +1188,7 @@ fn write_spaces(output: &mut BoundedOutput, count: usize) -> Result<(), JsonCode
     Ok(())
 }
 
-fn write_string(output: &mut BoundedOutput, value: &str) -> Result<(), JsonCodecError> {
+pub(crate) fn write_string(output: &mut BoundedOutput, value: &str) -> Result<(), JsonCodecError> {
     output.push_str("\"")?;
     let mut unescaped_start = 0usize;
     for (offset, character) in value.char_indices() {

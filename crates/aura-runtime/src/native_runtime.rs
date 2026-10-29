@@ -34,7 +34,6 @@ use crate::ffi::{FfiError, FfiSignature, FfiType, FfiValue, OpaqueHandle};
 use crate::integer::{
     IntegerKind, IntegerPowerError, IntegerRepresentation, IntegerShiftError, IntegerValue,
 };
-use crate::json_codec;
 use crate::list_elements::{ElementRefMut, ListElements};
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
@@ -45,7 +44,7 @@ use crate::runtime_value::{
     decode_process_restart_policy, decode_process_stdio, divmod_numeric_values,
     embedded_nominal_runtime_type_name, fail_current_lightweight_task, float_floor_divmod,
     float_power, flush_buffered_files, format_runtime_value_with, host_builtins, io_error,
-    io_read_line, is_clone_leaf, json_array_metadata_is_exact, json_dump_error_to_diagnostic,
+    io_read_line, is_clone_leaf, json_array_metadata_is_exact, json_dumps_runtime,
     json_int_metadata_is_exact, json_object_metadata_is_exact, json_parse_inline,
     json_parse_owned_to_runtime, lookup_found, lookup_missing, nominal_runtime_base_name,
     optional_absent, optional_bytes_value, optional_named, optional_present, optional_str_value,
@@ -58,10 +57,10 @@ use crate::runtime_value::{
     queue_receive_closed, queue_receive_item, queue_receive_timed_out, read_file_limited,
     recv_for_registered_producers_iteration, recv_for_task_group_iteration, render_float,
     render_float32, result_err, result_ok, round_float_to_int64, round_numeric_value,
-    run_blocking_io, run_lightweight_root_task_with_forced_exit_cleanup, runtime_value_to_json,
-    select_runtime_values, send_error_cancelled, send_error_closed, send_error_full,
-    send_error_timed_out, set_current_task_native_slot, sleep_with_runtime_scheduler, slice_text,
-    slice_vec_owned, spawn_lightweight_task_with_cancellation,
+    run_blocking_io, run_lightweight_root_task_with_forced_exit_cleanup, select_runtime_values,
+    send_error_cancelled, send_error_closed, send_error_full, send_error_timed_out,
+    set_current_task_native_slot, sleep_with_runtime_scheduler, slice_text, slice_vec_owned,
+    spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability_registered,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
     task_result_timed_out, try_array_buffer, try_clone_array_containing_value, wait_all_cancelled,
@@ -3701,10 +3700,7 @@ fn direct_json_dumps(args: &DirectHostArgBuffer) -> std::result::Result<Value, D
     let name = "json::dumps";
     let indent = args.with_copy(name, 1, direct_json_indent)?;
     args.with_borrow(name, 0, |value| {
-        let value = runtime_value_to_json(value)?;
-        json_codec::dumps(&value, indent)
-            .map(Value::string)
-            .map_err(json_dump_error_to_diagnostic)
+        json_dumps_runtime(value, indent).map(Value::string)
     })
 }
 

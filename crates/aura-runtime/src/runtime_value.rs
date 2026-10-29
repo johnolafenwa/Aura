@@ -3124,15 +3124,19 @@ fn type_cannot_hold_array(ty: &Type) -> bool {
 /// must be copied, so a collection whose types cannot hold one is shared
 /// instead of walked. The clone is constant time and never recurses.
 fn shared_collection_clone(value: &Value) -> Option<Value> {
-    let shareable = match value {
+    shares_collection_storage(value).then(|| value.clone())
+}
+
+/// Whether `value` is a collection that [`shared_collection_clone`] shares.
+fn shares_collection_storage(value: &Value) -> bool {
+    match value {
         Value::Map(map) => {
             type_cannot_hold_array(&map.key_type) && type_cannot_hold_array(&map.value_type)
         }
         Value::Set(set) => type_cannot_hold_array(&set.element_type),
         Value::Vec(vector) => type_cannot_hold_array(&vector.element_type),
         _ => false,
-    };
-    shareable.then(|| value.clone())
+    }
 }
 
 pub(crate) fn is_clone_leaf(value: &Value) -> bool {
@@ -3188,6 +3192,18 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
     match value {
         Value::Tuple(tuple) if tuple.elements.iter().all(is_flat_clone) => return Ok(value.clone()),
         value if is_flat_clone(value) => return Ok(value.clone()),
+        // A variant that carries only leaves and shared collections, such
+        // as `json.Value.Object(fields)`, copies its payload list and shares
+        // the collections' storage.
+        Value::EnumVariant(EnumVariantValue {
+            payloads: VariantPayloads::Values(payloads),
+            ..
+        }) if payloads
+            .iter()
+            .all(|payload| is_clone_leaf(payload) || shares_collection_storage(payload)) =>
+        {
+            return Ok(value.clone());
+        }
         // An instance kept in its layout copies its block, and its field
         // boxes copy their values.
         Value::Instance(instance) if instance.fields.typed().is_some() => {
@@ -8239,179 +8255,6 @@ impl PartialEq for MapValue {
     }
 }
 
-fn clone_json_runtime_tree(root: &Value) -> Option<Value> {
-    enum CloneFrame<'a> {
-        Array {
-            variant: &'a EnumVariantValue,
-            vector: &'a VecValue,
-            next_index: usize,
-            elements: Vec<Value>,
-        },
-        Object {
-            variant: &'a EnumVariantValue,
-            map: &'a MapValue,
-            remaining: crate::collection_index::Iter<'a, (Value, Value)>,
-            entries: Vec<(Value, Value)>,
-            pending_key: Value,
-        },
-    }
-
-    fn enum_value(variant: &EnumVariantValue, payloads: Vec<Value>) -> Value {
-        Value::EnumVariant(EnumVariantValue {
-            enum_name: variant.enum_name.clone(),
-            variant_name: variant.variant_name.clone(),
-            payloads: payloads.into(),
-        })
-    }
-
-    let mut frames = Vec::new();
-    let mut next = Some(root);
-    let mut completed = None;
-    loop {
-        if let Some(value) = next.take() {
-            let Value::EnumVariant(variant) = value else {
-                return None;
-            };
-            if nominal_runtime_base_name(&variant.enum_name) != "json.Value" {
-                return None;
-            }
-            completed = match (variant.variant_name.as_str(), variant.payloads.values()) {
-                ("Null", []) => Some(enum_value(variant, Vec::new())),
-                ("Bool", [Value::Bool(value)]) => {
-                    Some(enum_value(variant, vec![Value::Bool(*value)]))
-                }
-                ("Int", [Value::Int(value)]) => Some(enum_value(variant, vec![Value::Int(*value)])),
-                ("Float", [Value::Float(value)]) => {
-                    Some(enum_value(variant, vec![Value::Float(*value)]))
-                }
-                ("String", [Value::String(value)]) => {
-                    Some(enum_value(variant, vec![Value::String(value.clone())]))
-                }
-                ("Array", [Value::Vec(vector)]) => {
-                    // A `json.Value` array holds variants, never scalars.
-                    let first = vector.elements.value_refs()?.next();
-                    representation_stats::note_cloned_elements(vector.elements.len());
-                    let elements = Vec::with_capacity(vector.elements.len());
-                    if vector.elements.is_empty() {
-                        Some(enum_value(
-                            variant,
-                            vec![Value::Vec(VecValue {
-                                element_type: vector.element_type.clone(),
-                                elements: elements.into(),
-                                str_view: Default::default(),
-                            })],
-                        ))
-                    } else {
-                        frames.push(CloneFrame::Array {
-                            variant,
-                            vector,
-                            next_index: 1,
-                            elements,
-                        });
-                        next = first;
-                        None
-                    }
-                }
-                ("Object", [Value::Map(map)]) => {
-                    representation_stats::note_cloned_elements(map.entries.len());
-                    let entries = Vec::with_capacity(map.entries.len());
-                    if map.entries.is_empty() {
-                        Some(enum_value(
-                            variant,
-                            vec![Value::Map(MapValue {
-                                key_type: map.key_type.clone(),
-                                value_type: map.value_type.clone(),
-                                entries: entries.into(),
-                            })],
-                        ))
-                    } else {
-                        let mut remaining = map.entries.iter();
-                        let (Value::String(key), value) = remaining.next()? else {
-                            return None;
-                        };
-                        frames.push(CloneFrame::Object {
-                            variant,
-                            map,
-                            remaining,
-                            entries,
-                            pending_key: Value::String(key.clone()),
-                        });
-                        next = Some(value);
-                        None
-                    }
-                }
-                _ => return None,
-            };
-        } else {
-            let frame = frames.pop()?;
-            match frame {
-                CloneFrame::Array {
-                    variant,
-                    vector,
-                    mut next_index,
-                    mut elements,
-                } => {
-                    elements.push(completed.take()?);
-                    if let Some(value) = vector.elements.value_at(next_index) {
-                        next_index += 1;
-                        frames.push(CloneFrame::Array {
-                            variant,
-                            vector,
-                            next_index,
-                            elements,
-                        });
-                        next = Some(value);
-                    } else {
-                        completed = Some(enum_value(
-                            variant,
-                            vec![Value::Vec(VecValue {
-                                element_type: vector.element_type.clone(),
-                                elements: elements.into(),
-                                str_view: Default::default(),
-                            })],
-                        ));
-                    }
-                }
-                CloneFrame::Object {
-                    variant,
-                    map,
-                    mut remaining,
-                    mut entries,
-                    pending_key,
-                } => {
-                    entries.push((pending_key, completed.take()?));
-                    if let Some((key, value)) = remaining.next() {
-                        let Value::String(key) = key else {
-                            return None;
-                        };
-                        frames.push(CloneFrame::Object {
-                            variant,
-                            map,
-                            remaining,
-                            entries,
-                            pending_key: Value::String(key.clone()),
-                        });
-                        next = Some(value);
-                    } else {
-                        completed = Some(enum_value(
-                            variant,
-                            vec![Value::Map(MapValue {
-                                key_type: map.key_type.clone(),
-                                value_type: map.value_type.clone(),
-                                entries: DictEntries::cloned_from(entries, &map.entries),
-                            })],
-                        ));
-                    }
-                }
-            }
-        }
-
-        if next.is_none() && frames.is_empty() {
-            return completed;
-        }
-    }
-}
-
 impl Clone for Value {
     fn clone(&self) -> Self {
         // A variant whose payloads are all leaves, such as `Lookup.Found(3)`
@@ -8425,13 +8268,23 @@ impl Clone for Value {
                 });
             }
         }
-        if matches!(
-            self,
-            Value::EnumVariant(variant)
-                if nominal_runtime_base_name(&variant.enum_name) == "json.Value"
-        ) {
-            if let Some(cloned) = clone_json_runtime_tree(self) {
-                return cloned;
+        // A variant whose collections share their storage on clone, such as
+        // `json.Value.Object(fields)`, copies only its payload list.
+        if let Value::EnumVariant(EnumVariantValue {
+            enum_name,
+            variant_name,
+            payloads: VariantPayloads::Values(payloads),
+        }) = self
+        {
+            if payloads
+                .iter()
+                .all(|payload| is_clone_leaf(payload) || shares_collection_storage(payload))
+            {
+                return Value::EnumVariant(EnumVariantValue {
+                    enum_name: enum_name.clone(),
+                    variant_name: variant_name.clone(),
+                    payloads: VariantPayloads::Values(payloads.clone()),
+                });
             }
         }
 
@@ -16961,11 +16814,21 @@ where
     }
 }
 
+/// Parses `source` on the codec service. The worker builds the runtime
+/// value and hands it over beside the job's own result.
 fn run_json_codec_parse_on_pool(
     source: String,
     reservation: JsonCodecReservation,
-) -> std::result::Result<JsonValue, JsonCodecServiceError> {
-    run_json_codec_operation_on_pool_with(reservation, move || json_codec::parse(&source))
+) -> std::result::Result<ParsedJson, JsonCodecServiceError> {
+    let hooked = json_runtime_conversion_hooked();
+    let parsed = Arc::new(Mutex::new(None));
+    let output = parsed.clone();
+    run_json_codec_operation_on_pool_with(reservation, move || {
+        *lock_mutex(&output) = Some(json_parse_runtime(&source, hooked)?);
+        Ok(JsonValue::Null)
+    })?;
+    let parsed = lock_mutex(&parsed).take();
+    Ok(parsed.expect("a successful codec parse leaves its value"))
 }
 
 fn json_runtime_node_limit_error(limit: usize) -> Diagnostic {
@@ -17238,8 +17101,132 @@ pub fn json_value_to_runtime(value: JsonValue) -> Result<Value> {
     }
 }
 
-fn json_parse_success_value(value: JsonValue) -> Result<Value> {
-    let value = json_value_to_runtime(value)?;
+/// A runtime `json.Value` a parse builds directly, with no [`JsonValue`]
+/// tree between the text and the value.
+struct RuntimeJson(Value);
+
+impl RuntimeJson {
+    fn variant(variant_name: &'static str, payload: Value) -> Self {
+        Self(Value::EnumVariant(EnumVariantValue {
+            enum_name: RuntimeName::from_static("json.Value"),
+            variant_name: RuntimeName::from_static(variant_name),
+            payloads: vec![payload].into(),
+        }))
+    }
+}
+
+impl json_codec::JsonTree for RuntimeJson {
+    type Object = DictEntries;
+
+    fn null() -> Self {
+        Self(Value::EnumVariant(EnumVariantValue {
+            enum_name: RuntimeName::from_static("json.Value"),
+            variant_name: RuntimeName::from_static("Null"),
+            payloads: Vec::new().into(),
+        }))
+    }
+
+    fn boolean(value: bool) -> Self {
+        Self::variant("Bool", Value::Bool(value))
+    }
+
+    fn int(value: i64) -> Self {
+        Self::variant("Int", Value::Int(IntegerValue::from_i64(value)))
+    }
+
+    fn float(value: f64) -> Self {
+        Self::variant("Float", Value::Float(value))
+    }
+
+    fn string(value: &str) -> std::result::Result<Self, std::collections::TryReserveError> {
+        Ok(Self::variant("String", Value::String(value.into())))
+    }
+
+    fn array(values: Vec<Self>) -> Self {
+        let elements: Vec<Value> = values.into_iter().map(|value| value.0).collect();
+        Self::variant(
+            "Array",
+            Value::Vec(VecValue {
+                element_type: Type::named("json.Value"),
+                elements: elements.into(),
+                str_view: Default::default(),
+            }),
+        )
+    }
+
+    fn object_with_capacity(
+        capacity: usize,
+    ) -> std::result::Result<DictEntries, std::collections::TryReserveError> {
+        let mut entries = DictEntries::new();
+        entries.try_reserve(capacity)?;
+        Ok(entries)
+    }
+
+    fn object_insert(
+        object: &mut DictEntries,
+        key: String,
+        value: Self,
+    ) -> std::result::Result<(), std::collections::TryReserveError> {
+        object.insert(Value::String(key.into()), value.0);
+        Ok(())
+    }
+
+    fn object(object: DictEntries) -> Self {
+        Self::variant(
+            "Object",
+            Value::Map(MapValue {
+                key_type: Type::named("str"),
+                value_type: Type::named("json.Value"),
+                entries: object,
+            }),
+        )
+    }
+}
+
+/// Whether a test hook that the conversion from a [`JsonValue`] observes
+/// is set, so a parse takes that path instead of building the runtime
+/// value directly.
+fn json_runtime_conversion_hooked() -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    {
+        JSON_RUNTIME_NODE_LIMIT.with(Cell::get).is_some()
+            || JSON_RUNTIME_ALLOCATION_BUDGET.with(Cell::get).is_some()
+    }
+    #[cfg(not(any(test, feature = "test-support")))]
+    false
+}
+
+/// What a parse built: the runtime `json.Value` itself, or, while a test
+/// hook watches the conversion, the [`JsonValue`] tree to convert.
+enum ParsedJson {
+    Runtime(Value),
+    Tree(JsonValue),
+}
+
+impl ParsedJson {
+    fn into_runtime(self) -> Result<Value> {
+        match self {
+            Self::Runtime(value) => Ok(value),
+            Self::Tree(value) => json_value_to_runtime(value),
+        }
+    }
+}
+
+/// Parses `source` into a runtime `json.Value`, or into a tree when
+/// `hooked` (see [`json_runtime_conversion_hooked`]), which the caller
+/// reads on its own thread.
+fn json_parse_runtime(
+    source: &str,
+    hooked: bool,
+) -> std::result::Result<ParsedJson, JsonCodecError> {
+    if hooked {
+        return json_codec::parse(source).map(ParsedJson::Tree);
+    }
+    json_codec::parse_into::<RuntimeJson>(source).map(|value| ParsedJson::Runtime(value.0))
+}
+
+fn json_parse_success_value(value: ParsedJson) -> Result<Value> {
+    let value = value.into_runtime()?;
     json_runtime_enum_value("Result", "Ok", json_runtime_single_payload(value)?)
 }
 
@@ -17273,14 +17260,15 @@ pub fn json_parse_inline(source: &str) -> Option<JsonInlineParse> {
     {
         return None;
     }
-    let outcome = panic::catch_unwind(AssertUnwindSafe(|| json_codec::parse(source)))
+    let hooked = json_runtime_conversion_hooked();
+    let outcome = panic::catch_unwind(AssertUnwindSafe(|| json_parse_runtime(source, hooked)))
         .map_err(|payload| JsonCodecServiceError::Panicked(task_panic_message(&*payload)))
         .and_then(|parsed| parsed.map_err(JsonCodecServiceError::Codec));
     Some(JsonInlineParse(outcome))
 }
 
 /// A source [`json_parse_inline`] parsed on the calling task.
-pub struct JsonInlineParse(std::result::Result<JsonValue, JsonCodecServiceError>);
+pub struct JsonInlineParse(std::result::Result<ParsedJson, JsonCodecServiceError>);
 
 impl JsonInlineParse {
     /// The `Result[json.Value, json.Error]` the parse produced. Call it
@@ -17292,7 +17280,7 @@ impl JsonInlineParse {
 }
 
 fn json_parse_outcome_to_runtime(
-    outcome: std::result::Result<JsonValue, JsonCodecServiceError>,
+    outcome: std::result::Result<ParsedJson, JsonCodecServiceError>,
 ) -> Result<Value> {
     match outcome {
         Ok(value) => json_parse_success_value(value),
@@ -17317,6 +17305,219 @@ pub fn json_parse_to_runtime(source: &str) -> Result<Value> {
     }
     let (source, reservation) = prepare_json_codec_source(|| clone_json_codec_source(source))?;
     json_parse_owned_to_runtime(source, reservation)
+}
+
+/// `json.dumps(value, indent)`: the text of a runtime `json.Value`.
+pub fn json_dumps_runtime(value: &Value, indent: Option<i64>) -> Result<String> {
+    if let Some(text) = json_dumps_runtime_direct(value, indent) {
+        return Ok(text);
+    }
+    let value = runtime_value_to_json(value)?;
+    json_codec::dumps(&value, indent).map_err(json_dump_error_to_diagnostic)
+}
+
+/// A node of a runtime `json.Value` that [`json_dumps_runtime_direct`]
+/// writes.
+enum RuntimeJsonNode<'a> {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    String(&'a str),
+    Array(&'a ListElements),
+    Object(&'a DictEntries),
+}
+
+/// `value` as a node [`runtime_value_to_json`] would convert without
+/// error, or `None`.
+fn runtime_json_node(value: &Value) -> Option<RuntimeJsonNode<'_>> {
+    let Value::EnumVariant(EnumVariantValue {
+        enum_name,
+        variant_name,
+        payloads: VariantPayloads::Values(payloads),
+    }) = value
+    else {
+        return None;
+    };
+    if nominal_runtime_base_name(enum_name) != "json.Value" {
+        return None;
+    }
+    Some(match (variant_name.as_str(), payloads.as_slice()) {
+        ("Null", []) => RuntimeJsonNode::Null,
+        ("Bool", [Value::Bool(value)]) => RuntimeJsonNode::Bool(*value),
+        ("Int", [Value::Int(value)]) if json_int_metadata_is_exact(value) => {
+            RuntimeJsonNode::Int(i64::try_from(value.as_i128()?).ok()?)
+        }
+        ("Float", [Value::Float(value)]) if value.is_finite() => RuntimeJsonNode::Float(*value),
+        ("String", [Value::String(value)]) => RuntimeJsonNode::String(value),
+        ("Array", [Value::Vec(values)]) if json_array_metadata_is_exact(values) => {
+            RuntimeJsonNode::Array(&values.elements)
+        }
+        ("Object", [Value::Map(entries)]) if json_object_metadata_is_exact(entries) => {
+            RuntimeJsonNode::Object(&entries.entries)
+        }
+        _ => return None,
+    })
+}
+
+/// Writes `value` as [`json_codec::dumps`] writes the tree
+/// [`runtime_value_to_json`] makes of it, without making the tree. Returns
+/// `None` when either would fail, or a test hook watches them, so the
+/// caller takes that path and reports what it reports.
+fn json_dumps_runtime_direct(value: &Value, indent: Option<i64>) -> Option<String> {
+    use json_codec::{
+        write_container_suffix, write_float, write_int, write_item_prefix, write_string,
+        BoundedOutput,
+    };
+
+    enum Frame<'a> {
+        Array {
+            values: &'a ListElements,
+            next_index: usize,
+            depth: usize,
+        },
+        Object {
+            sorted: Vec<(&'a str, &'a Value)>,
+            next_index: usize,
+            depth: usize,
+        },
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    if json_runtime_conversion_hooked()
+        || JSON_RUNTIME_CONVERSION_ALLOCATION_BUDGET
+            .with(Cell::get)
+            .is_some()
+    {
+        return None;
+    }
+    let indent = match indent {
+        Some(indent) if (0..=json_codec::MAX_JSON_INDENT).contains(&indent) => {
+            Some(indent as usize)
+        }
+        Some(_) => return None,
+        None => None,
+    };
+    let separator = if indent.is_some() { ": " } else { ":" };
+    let mut remaining = json_runtime_node_limit();
+    let mut output = BoundedOutput::default();
+    let mut frames: Vec<Frame<'_>> = Vec::new();
+    let mut spare: Vec<Vec<(&str, &Value)>> = Vec::new();
+    let mut next = Some((value, 0usize));
+
+    loop {
+        if let Some((value, depth)) = next.take() {
+            remaining = remaining.checked_sub(1)?;
+            match runtime_json_node(value)? {
+                RuntimeJsonNode::Null => output.push_str("null").ok()?,
+                RuntimeJsonNode::Bool(value) => {
+                    output.push_str(if value { "true" } else { "false" }).ok()?
+                }
+                RuntimeJsonNode::Int(value) => write_int(&mut output, value).ok()?,
+                RuntimeJsonNode::Float(value) => write_float(&mut output, value).ok()?,
+                RuntimeJsonNode::String(value) => write_string(&mut output, value).ok()?,
+                RuntimeJsonNode::Array(values) => {
+                    let child_depth = depth + 1;
+                    if child_depth > json_codec::MAX_JSON_DEPTH {
+                        return None;
+                    }
+                    output.push_str("[").ok()?;
+                    if values.is_empty() {
+                        output.push_str("]").ok()?;
+                    } else {
+                        // A `json.Value` list keeps its elements as values.
+                        let first = values.value_at(0)?;
+                        write_item_prefix(&mut output, indent, child_depth).ok()?;
+                        frames.push(Frame::Array {
+                            values,
+                            next_index: 1,
+                            depth,
+                        });
+                        next = Some((first, child_depth));
+                    }
+                }
+                RuntimeJsonNode::Object(entries) => {
+                    let child_depth = depth + 1;
+                    if child_depth > json_codec::MAX_JSON_DEPTH {
+                        return None;
+                    }
+                    let mut sorted = spare.pop().unwrap_or_default();
+                    for (key, value) in entries.iter() {
+                        let Value::String(key) = key else {
+                            return None;
+                        };
+                        sorted.push((key, value));
+                    }
+                    sorted.sort_unstable_by(|left, right| left.0.cmp(right.0));
+                    output.push_str("{").ok()?;
+                    if let Some(&(key, first)) = sorted.first() {
+                        write_item_prefix(&mut output, indent, child_depth).ok()?;
+                        write_string(&mut output, key).ok()?;
+                        output.push_str(separator).ok()?;
+                        frames.push(Frame::Object {
+                            sorted,
+                            next_index: 1,
+                            depth,
+                        });
+                        next = Some((first, child_depth));
+                    } else {
+                        spare.push(sorted);
+                        output.push_str("}").ok()?;
+                    }
+                }
+            }
+        } else {
+            match frames.pop()? {
+                Frame::Array {
+                    values,
+                    next_index,
+                    depth,
+                } => {
+                    if next_index == values.len() {
+                        write_container_suffix(&mut output, indent, depth, true).ok()?;
+                        output.push_str("]").ok()?;
+                    } else {
+                        let value = values.value_at(next_index)?;
+                        output.push_str(",").ok()?;
+                        write_item_prefix(&mut output, indent, depth + 1).ok()?;
+                        frames.push(Frame::Array {
+                            values,
+                            next_index: next_index + 1,
+                            depth,
+                        });
+                        next = Some((value, depth + 1));
+                    }
+                }
+                Frame::Object {
+                    mut sorted,
+                    next_index,
+                    depth,
+                } => {
+                    if let Some(&(key, value)) = sorted.get(next_index) {
+                        output.push_str(",").ok()?;
+                        write_item_prefix(&mut output, indent, depth + 1).ok()?;
+                        write_string(&mut output, key).ok()?;
+                        output.push_str(separator).ok()?;
+                        frames.push(Frame::Object {
+                            sorted,
+                            next_index: next_index + 1,
+                            depth,
+                        });
+                        next = Some((value, depth + 1));
+                    } else {
+                        write_container_suffix(&mut output, indent, depth, true).ok()?;
+                        output.push_str("}").ok()?;
+                        sorted.clear();
+                        spare.push(sorted);
+                    }
+                }
+            }
+        }
+
+        if next.is_none() && frames.is_empty() {
+            return Some(output.text);
+        }
+    }
 }
 
 pub fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {

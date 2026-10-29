@@ -228,6 +228,13 @@ in this file.
   `d[key] = n` stores an `int64` value without boxing it. `lru_cache`
   runs 8% fewer instructions, `interpreter` 7%, `lzw_compress` 7%,
   `bank_ledger` 7%, and `word_freq` 4%.
+- `json.parse` builds the `json.Value` directly from the text, and
+  `json.dumps` writes the text straight from the value, with no second
+  tree in between. A text that parses is no longer scanned again for
+  syntax and number ranges. Copying a `json.Value` shares the storage of
+  its lists and dicts, as copying any other list or dict does, instead of
+  rebuilding the whole tree. `json_roundtrip` runs 26% fewer
+  instructions, `pubsub_broker` 13%, `docdb` 10%, and `http_api` 6%.
 
 ### Fixed
 

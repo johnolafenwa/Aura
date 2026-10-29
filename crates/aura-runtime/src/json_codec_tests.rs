@@ -485,9 +485,10 @@ fn decoder_adapter_diagnostics_remain_specific_and_source_anchored() {
     impl std::fmt::Display for JsonValueExpectation {
         fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             let mut budget = JsonMaterializationBudget::new();
-            <JsonValueVisitor<'_> as serde::de::Visitor<'_>>::expecting(
+            <JsonValueVisitor<'_, JsonValue> as serde::de::Visitor<'_>>::expecting(
                 &JsonValueVisitor {
                     budget: &mut budget,
+                    tree: std::marker::PhantomData,
                 },
                 formatter,
             )

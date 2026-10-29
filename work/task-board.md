@@ -220,6 +220,13 @@ Last updated: 2026-10-27
   values are stored from their word (`aura_direct_map_set_index_int64`).
   lru_cache -8%, interpreter -7%. Details are in
   `2026-10-28-rust-speed-3c-probe-once.md`.
+- Step 3e: `json.parse` builds the runtime `json.Value` directly
+  (`json_codec::JsonTree`, `RuntimeJson`), `json.dumps` writes from the
+  runtime value (`json_dumps_runtime_direct`, which leaves every failure
+  to the tree path), a parse that succeeds skips the syntax and number
+  passes, and copying a `json.Value` shares its collections instead of
+  rebuilding the tree. json_roundtrip -26%, pubsub_broker -13%, docdb
+  -10%. Gate missed. Details are in `2026-10-28-rust-speed-3e-json.md`.
 
 ## Aura 0.7.1 preview release (complete)
 

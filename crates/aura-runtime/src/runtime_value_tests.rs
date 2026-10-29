@@ -7028,7 +7028,7 @@ fn runtime_json(value: crate::json_codec::JsonValue) -> Value {
 }
 
 #[test]
-fn phase73_observable_runtime_json_clone_preserves_empty_containers_and_nested_buffers() {
+fn runtime_json_clone_preserves_empty_containers_and_shares_buffers_until_a_write() {
     use crate::json_codec::JsonValue;
 
     fn container_buffers(value: &Value, output: &mut Vec<usize>) {
@@ -7086,13 +7086,30 @@ fn phase73_observable_runtime_json_clone_preserves_empty_containers_and_nested_b
     let mut cloned_buffers = Vec::new();
     container_buffers(&original, &mut original_buffers);
     container_buffers(&cloned, &mut cloned_buffers);
-    assert_eq!(original_buffers.len(), cloned_buffers.len());
-    assert!(
-        original_buffers
-            .iter()
-            .zip(&cloned_buffers)
-            .all(|(original, cloned)| original != cloned),
-        "copying json.Value must rebuild every non-empty Array and Object buffer",
+    assert_eq!(
+        original_buffers, cloned_buffers,
+        "copying json.Value shares every Array and Object buffer",
+    );
+
+    // A write to the copy copies the buffer it changes, and the original
+    // keeps what it held.
+    let mut edited = cloned;
+    let Value::EnumVariant(variant) = &mut edited else {
+        panic!("a runtime json.Value is a variant");
+    };
+    let Some(Value::Map(fields)) = variant.payloads.values_mut().first_mut() else {
+        panic!("the copied object keeps its fields");
+    };
+    fields
+        .entries
+        .insert(Value::String("added".into()), runtime_json(JsonValue::Null));
+    assert_eq!(
+        super::runtime_value_to_json(&original).expect("the original stays serializable"),
+        expected,
+    );
+    assert_ne!(
+        super::runtime_value_to_json(&edited).expect("the copy stays serializable"),
+        expected,
     );
 }
 
@@ -19522,4 +19539,155 @@ fn optional_results_name_the_unions_of_their_member_types() {
             true,
         );
     }
+}
+
+#[test]
+fn runtime_json_dumps_write_what_the_tree_writes_and_defer_every_failure_to_it() {
+    use crate::json_codec::{self, JsonValue};
+
+    fn tree_dumps(value: &Value, indent: Option<i64>) -> super::Result<String> {
+        let tree = super::runtime_value_to_json(value)?;
+        json_codec::dumps(&tree, indent).map_err(super::json_dump_error_to_diagnostic)
+    }
+
+    let document = runtime_json(JsonValue::object(vec![
+        ("zeta".to_string(), JsonValue::Array(Vec::new())),
+        ("alpha".to_string(), JsonValue::Object(Vec::new())),
+        (
+            "mid".to_string(),
+            JsonValue::Array(vec![
+                JsonValue::Null,
+                JsonValue::Bool(true),
+                JsonValue::Bool(false),
+                JsonValue::Int(i64::MIN),
+                JsonValue::Float(0.1),
+                JsonValue::String("tab\t\"quote\" \u{1} é".to_string()),
+                JsonValue::object(vec![
+                    ("b".to_string(), JsonValue::Int(2)),
+                    ("a".to_string(), JsonValue::Int(1)),
+                ]),
+            ]),
+        ),
+    ]));
+    for indent in [None, Some(0), Some(2), Some(json_codec::MAX_JSON_INDENT)] {
+        let direct = super::json_dumps_runtime_direct(&document, indent)
+            .expect("a well-formed json.Value is written directly");
+        assert_eq!(
+            direct,
+            tree_dumps(&document, indent).expect("the tree writes it")
+        );
+        assert_eq!(
+            super::json_dumps_runtime(&document, indent).expect("dumps writes it"),
+            direct
+        );
+    }
+
+    // Each value the tree path refuses is left to it, so the error is its.
+    let float = |value: f64| {
+        super::json_runtime_enum_value(
+            "json.Value",
+            "Float",
+            super::json_runtime_single_payload(Value::Float(value)).expect("payload"),
+        )
+        .expect("variant")
+    };
+    let mut deep = runtime_json(JsonValue::Null);
+    for _ in 0..=json_codec::MAX_JSON_DEPTH {
+        deep = super::json_runtime_enum_value(
+            "json.Value",
+            "Array",
+            vec![Value::Vec(VecValue {
+                element_type: Type::named("json.Value"),
+                elements: vec![deep].into(),
+                str_view: Default::default(),
+            })],
+        )
+        .expect("variant");
+    }
+    let mut deep_object = runtime_json(JsonValue::Null);
+    for _ in 0..=json_codec::MAX_JSON_DEPTH {
+        deep_object = super::json_runtime_enum_value(
+            "json.Value",
+            "Object",
+            vec![Value::Map(MapValue {
+                key_type: Type::named("str"),
+                value_type: Type::named("json.Value"),
+                entries: vec![(Value::String("k".into()), deep_object)].into(),
+            })],
+        )
+        .expect("variant");
+    }
+    let wrong_key = super::json_runtime_enum_value(
+        "json.Value",
+        "Object",
+        vec![Value::Map(MapValue {
+            key_type: Type::named("str"),
+            value_type: Type::named("json.Value"),
+            entries: vec![(
+                Value::Int(IntegerValue::from_i64(1)),
+                runtime_json(JsonValue::Null),
+            )]
+            .into(),
+        })],
+    )
+    .expect("variant");
+    let refused = [
+        (float(f64::NAN), None),
+        (deep, None),
+        (deep_object, None),
+        (wrong_key, None),
+        (Value::Bool(true), None),
+        (
+            runtime_json(JsonValue::Null),
+            Some(json_codec::MAX_JSON_INDENT + 1),
+        ),
+    ];
+    for (value, indent) in refused {
+        assert_eq!(super::json_dumps_runtime_direct(&value, indent), None);
+        let expected = tree_dumps(&value, indent).expect_err("the tree path refuses it");
+        assert_eq!(
+            super::json_dumps_runtime(&value, indent).expect_err("dumps refuses it"),
+            expected
+        );
+    }
+    let mut finite_in_nan_array = runtime_json(JsonValue::Array(vec![JsonValue::Int(1)]));
+    if let Value::EnumVariant(variant) = &mut finite_in_nan_array {
+        if let Some(Value::Vec(values)) = variant.payloads.values_mut().first_mut() {
+            values.elements.push(float(f64::INFINITY));
+        }
+    }
+    assert_eq!(
+        super::json_dumps_runtime_direct(&finite_in_nan_array, None),
+        None
+    );
+
+    // A watched conversion takes the tree path, which the hook observes.
+    let hooked =
+        super::with_json_runtime_node_limit(1, || super::json_dumps_runtime(&document, None));
+    assert!(
+        hooked.is_err(),
+        "the node limit hook sees the tree conversion"
+    );
+}
+
+#[test]
+fn runtime_json_parse_builds_the_value_the_tree_converts_to() {
+    use crate::json_codec;
+
+    let source = r#"{"b": [1, 2.5, "x", null, true, {}], "a": {"k": false}, "b": "last"}"#;
+    let direct = match super::json_parse_runtime(source, false).expect("the source parses") {
+        super::ParsedJson::Runtime(value) => value,
+        super::ParsedJson::Tree(_) => panic!("an unhooked parse builds the value directly"),
+    };
+    let tree = match super::json_parse_runtime(source, true).expect("the source parses") {
+        super::ParsedJson::Tree(tree) => tree,
+        super::ParsedJson::Runtime(_) => panic!("a hooked parse keeps the tree"),
+    };
+    assert_eq!(tree, json_codec::parse(source).expect("the source parses"));
+    assert_eq!(
+        super::runtime_value_to_json(&direct).expect("the value converts"),
+        tree
+    );
+    assert_eq!(direct, runtime_json(tree));
+    assert!(super::json_parse_runtime("[1,", false).is_err());
 }
