@@ -118,7 +118,7 @@ def copy_bytes(path: str) -> Result[list[uint8], io.Error]:
 
 Whole-file reads have a size cap. The one-shot helpers and `fs.File`
 whole-file reads accept at most 256 MiB of remaining content, in both
-`aura run` and built binaries. Aura 0.8 has no incremental file-read member.
+`aura run` and built binaries. Aura 0.9 has no incremental file-read member.
 For a larger file, use a host helper or split the file first.
 
 Conversion between raw data and UTF-8 text is always explicit. Use

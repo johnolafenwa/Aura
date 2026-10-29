@@ -476,7 +476,7 @@ MIR execution and direct native generation both implement nominal classes, gener
 
 ## Limits And Implementation-Defined Behavior
 
-- Aura 0.8 has no class inheritance, overloads, property setters, or general destructor hook. A class has at most one initializer.
+- Aura 0.9 has no class inheritance, overloads, property setters, or general destructor hook. A class has at most one initializer.
 - An initializer cannot move a field out of `self` or return a `Result`.
 - A class field default cannot call a user-defined function in the current compiler. Compute the value before construction and pass it as an explicit field argument.
 - `indirect` is only a recursive field-layout marker. Its storage representation is not an observable language contract.

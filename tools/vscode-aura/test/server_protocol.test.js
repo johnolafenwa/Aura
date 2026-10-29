@@ -315,7 +315,7 @@ test("bundled language server completes safely while a function header is incomp
   assert.equal(initialize.error, undefined, JSON.stringify(initialize.error));
   assert.deepEqual(initialize.result.serverInfo, {
     name: "aura-language-server",
-    version: "0.8.0"
+    version: "0.9.0"
   });
   client.notify("initialized", {});
 

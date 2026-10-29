@@ -7,6 +7,27 @@ in this file.
 
 ## Unreleased
 
+## VS Code extension 0.9.0 — 2026-10-29
+
+- Bundles language server 0.9.0. The semantic interface version stays 20.
+  The extension and the language server have no other changes.
+
+## 0.9.0 — 2026-10-29 (technical preview)
+
+Aura 0.9.0 ships phases 2, 3, and 4 of the plan to bring Aura to Rust
+speed on the 30 [cross-language programs](benchmarks/cross_language/README.md).
+Classes, records, tuples, enums, and unions stay in typed native layouts
+and are lent instead of copied when a program reads them; strings,
+dictionaries, and JSON work on their data in place; and calls, socket
+reads, HTTP, and queue hand-offs cost less. On the Linux measurement host,
+the 30 Aura programs take 23.5 seconds instead of 147, the median program
+is 4.6 times Rust's time instead of 16 times and 0.53 times Python's
+instead of 2.7 times, and Aura is faster than Python on 22 programs instead
+of nine. `task_pool`, which 0.8.0 made slower, runs in 0.5 seconds instead
+of 2.8. A `float32` in a list, a class field, or an enum payload now prints
+its `float32` digits. The semantic interface stays 20, and the native cache
+format stays `v10`.
+
 ### Changed
 
 - A `list[float32]` prints its elements with `float32` digits, as `print`
