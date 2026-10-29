@@ -315,8 +315,8 @@ M2 Pro host feed later performance decisions.
 | `set_insert_contains` | 1.89 times Rust in instructions on Linux in 0.7.0 |
 | `int_list_sum` | 1.21 times Rust in instructions on Linux in 0.7.0 |
 | AuraDB `update` by id | about 3 times Python 3.13 |
-| 30 cross-language programs | median 16 times Rust and 2.7 times Python 3.13 by wall time on Linux in 0.8.0 |
-| `task_pool` cross-language program | 11 times Rust; 2.8 s in 0.8.0 against 1.5 s in 0.7.1 |
+| 30 cross-language programs | median 4.6 times Rust and 0.53 times Python 3.13 by wall time on Linux in 0.9.0 |
+| `task_pool` cross-language program | 2.4 times Rust with four workers and 1.4 times with one in 0.9.0 |
 
 These gaps are specific to these workloads. Scheduling, runtime
 implementation, allocation, and optimizer-barrier choices affect how to read
@@ -432,6 +432,28 @@ runtime calls on every function call, reads of elements of nested
 lists, which stay boxed, and strings, dicts, and JSON, which the third
 phase covers. Wall times on the container vary by up to a quarter from
 run to run, so the per-step sections below give instruction counts.
+
+Aura 0.9.0 ships phases 2, 3, and 4. The third phase reads strings in
+place, keeps short text inline, builds an f-string as one text, probes a
+dictionary once, and parses and writes JSON without a second tree. The
+fourth makes calls cheaper, reads socket lines a chunk at a time, parses
+HTTP on the calling task, and hands queue values over without boxes. On
+the same kind of container, median of five runs:
+
+| Measure | Aura 0.8.0 | End of phase 3 | Aura 0.9.0 |
+| --- | ---: | ---: | ---: |
+| All 30 programs, wall time | 147 s | 27.9 s | 23.5 s |
+| Median Aura / Rust, wall time | 16x | 4.8x | 4.6x |
+| Median Aura / Python 3.13, wall time | 2.7x | 0.51x | 0.53x |
+| Programs faster than Python | 9 | 20 | 22 |
+
+`http_api` (1.0x), `kv_server` (1.2x), `hashing`, `bytecode_vm`,
+and `image_filters` (1.4x) are closest to Rust. `task_pool` is 2.4x with
+four workers and 1.4x with one: tasks stay on the worker they start on,
+so pipeline stages on different workers pass each value between cores.
+`sql_engine` (22x), `binary_trees` (10x), and `regex_match` (10x) are
+furthest; they spend most of their time allocating boxes for strings,
+enums, and class instances, which the next phase takes out of boxes.
 
 ### Per-Call Attribution
 

@@ -1,6 +1,18 @@
 # Task Board
 
-Last updated: 2026-10-27
+Last updated: 2026-10-29
+
+## Aura 0.9.0 preview release (in progress)
+
+- Target: release 0.9.0 after phases 2 to 4 of the Rust-speed plan. John
+  accepted `task_pool` at 2.4x Rust and asked to release without the Mac
+  re-timing on 2026-10-29. Details are in
+  `2026-10-29-v0.9.0-preview-release.md`.
+- The 30 cross-language programs take 23.5 s instead of 147 s; the median
+  is 4.6 times Rust instead of 16 and 0.53 times Python instead of 2.7.
+- Remaining: green hosted CI on the release pull request, merge, and the
+  `v0.9.0-preview` tag, which John approves.
+- `VSCE_PAT` must be an org-scoped token before 2026-12-01.
 
 ## Aura 0.8.0 preview release (complete)
 

@@ -91,8 +91,8 @@ cargo run -p aura -- --version
 ```
 
 `--version` prints the build channel and a 12-hex-digit source commit. A
-source checkout prints something like `aura 0.8.0-dev (0123456789ab)`. A
-release archive prints `aura 0.8.0-preview (0123456789ab)`.
+source checkout prints something like `aura 0.9.0-dev (0123456789ab)`. A
+release archive prints `aura 0.9.0-preview (0123456789ab)`.
 
 Use `deps update` to refresh git dependencies. You do not need to delete
 `Aura.lock` by hand:

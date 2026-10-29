@@ -28,7 +28,7 @@ Every filesystem API returns `Result[..., io.Error]`, except `fs.exists(...)`, w
 | `fs.create` | `create(path: str) -> Result[fs.File, io.Error]` | Creates or truncates a file for writing. |
 | `fs.append` | `append(path: str) -> Result[fs.File, io.Error]` | Opens a file for appending. Creates it if needed. |
 
-The 256 MiB read cap is part of the API contract. It also applies to `fs.File.read_all()` and `fs.File.read_bytes()`. Aura 0.8 has no chunked file-read API. To process a larger file, use a host-side helper or split the data before Aura reads it.
+The 256 MiB read cap is part of the API contract. It also applies to `fs.File.read_all()` and `fs.File.read_bytes()`. Aura 0.9 has no chunked file-read API. To process a larger file, use a host-side helper or split the data before Aura reads it.
 
 `fs.read_dir` has a known defect. It reports a failure to open the directory. After the directory is open, it silently skips any entry whose metadata or read operation fails. If you need a complete, audited directory listing, check the result with a host helper until the defect is fixed.
 
@@ -202,7 +202,7 @@ Host filesystem results can differ by operating system and environment. Those di
 
 Each one-shot read, and each whole-file read on `fs.File`, is capped at 256 MiB of remaining content.
 
-Aura 0.8 has none of these:
+Aura 0.9 has none of these:
 
 - chunked file reading
 - recursive directory operations
@@ -220,8 +220,8 @@ After a directory is open, an entry that fails during enumeration is skipped. On
 
 ## Status
 
-Aura 0.8 implements the one-shot functions, the `fs.File` methods, typed errors, deterministic cleanup, the strict split between text and bytes, and the limits on this page. The fixed 256 MiB whole-read limit is an accepted design decision.
+Aura 0.9 implements the one-shot functions, the `fs.File` methods, typed errors, deterministic cleanup, the strict split between text and bytes, and the limits on this page. The fixed 256 MiB whole-read limit is an accepted design decision.
 
-The skipped-entry behavior in `fs.read_dir` is a known defect. Do not rely on it. Aura 0.8 has no chunked or asynchronous file access, transactional operations, richer metadata, or cross-platform path abstraction API.
+The skipped-entry behavior in `fs.read_dir` is a known defect. Do not rely on it. Aura 0.9 has no chunked or asynchronous file access, transactional operations, richer metadata, or cross-platform path abstraction API.
 
 Design record: [ADR-0018: Fixed resource read limits](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0018-fixed-resource-read-limits.md).
