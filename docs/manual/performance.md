@@ -1268,6 +1268,16 @@ registered with the runtime's poller between waits, so each wait re-arms
 it with one call. A request and reply over loopback costs a send, a
 receive, and one poller call on each side.
 
+### HTTP Stays On The Calling Task
+
+An HTTP request or response is parsed, decoded, and rendered on the task
+that reads or writes it. These steps are iterative and use little stack,
+so they no longer go to the protocol-step service, which keeps its
+larger stacks for TLS and WebSocket work. A connect to a literal socket
+address starts nonblocking and waits on the reactor, and only a host name
+still resolves and connects on the blocking-I/O pool. Over loopback, an
+HTTP request and its response make no thread hand-offs.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

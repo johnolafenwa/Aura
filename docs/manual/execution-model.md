@@ -515,13 +515,13 @@ The runtime also protects a non-repeatable stored result with an atomic one-winn
 
 The runtime has three process-global service pools besides the scheduler workers.
 
-**Protocol-step service.** Deep HTTP parsing and construction, TLS operations, and maintained Unix WebSocket protocol steps run on this distinct, bounded service. Its two named workers have 2 MiB native stacks and share a 64-job queue.
+**Protocol-step service.** TLS operations and maintained Unix WebSocket protocol steps run on this distinct, bounded service. Its two named workers have 2 MiB native stacks and share a 64-job queue. HTTP/1.1 head parsing, chunked-body decoding, and request and response rendering run on the calling task instead: they are iterative, use a few KB of stack, and still check the deadline and cancellation before and after each step.
 
 A job owns its protocol state for one bounded, nonblocking library step. The coroutine waits for the state to return before it observes cancellation or waits for descriptor readiness again. So a protocol state is never abandoned with two owners, and no resource mutex stays held across the worker wait. Reactor readiness, absolute deadlines, and cancellation stay scheduler-side concerns.
 
 The protocol-step pool is lazily initialized and shared by every lightweight scheduler. Its workers intentionally live until process exit. Aura 0.8 has no protocol-pool shutdown or join surface. The non-Unix WebSocket fallback keeps its compatibility path.
 
-**Generic blocking-I/O pool.** Resolver, listener-bind, and file reads use this pool. TLS asset bytes are read here before PEM parsing and rustls construction run on protocol workers. PEM is the text encoding used for certificates and keys.
+**Generic blocking-I/O pool.** Resolver, listener-bind, and file reads use this pool. A TCP connect to a literal socket address such as `127.0.0.1:8080` skips it: the connect starts nonblocking and the task waits on the reactor. TLS asset bytes are read here before PEM parsing and rustls construction run on protocol workers. PEM is the text encoding used for certificates and keys.
 
 | Variable | Effect |
 | --- | --- |
