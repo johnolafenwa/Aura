@@ -10,9 +10,9 @@ use crate::mir::{
     Terminator, NATIVE_LOOP_SAFEPOINT_INTERVAL,
 };
 use crate::native_backend::{
-    types, Blk, CallConv, DataDescription, DataHandle, DefineError, FloatCC, FuncHandle, FuncRef,
-    FunctionBackend, Inst, IntCC, Linkage, MemFlags, ModuleBackend, ScalarType, Signature,
-    TrapCode, Val, Var,
+    types, AliasClass, Blk, CallConv, DataDescription, DataHandle, DefineError, FloatCC,
+    FuncHandle, FuncRef, FunctionBackend, Inst, IntCC, Linkage, MemFlags, ModuleBackend,
+    ScalarType, Signature, TrapCode, Val, Var,
 };
 use crate::native_runtime::{
     encode_direct_ffi_call_spec, DirectFfiCallSpec, DirectFfiParam, DirectFfiType,
@@ -14569,24 +14569,27 @@ fn emit_frame_push(
     descriptor: Val,
 ) -> (Blk, Val) {
     let layout = frame_stack_layout();
-    let trusted = MemFlags::trusted();
+    let header = MemFlags::trusted_in(AliasClass::FrameHeader);
     let stack = builder.call(runtime[RuntimeFn::FrameStack], &[]).results[0];
-    let len = builder.load(types::I64, trusted, stack, layout.len_offset);
-    let limit = builder.load(types::I64, trusted, stack, layout.limit_offset);
-    let flags = builder.load(types::I64, trusted, stack, layout.flags_offset);
-    let runtime_work = builder.icmp_imm(IntCC::NotEqual, flags, 0);
-    let full = builder.icmp(IntCC::UnsignedGreaterThanOrEqual, len, limit);
-    let slow = builder.bor(full, runtime_work);
+    let len = builder.load(types::I64, header, stack, layout.len_offset);
+    // The limit is 0 while the stack's flags ask for the runtime.
+    let limit = builder.load(types::I64, header, stack, layout.limit_offset);
+    let slow = builder.icmp(IntCC::UnsignedGreaterThanOrEqual, len, limit);
     let (fast_block, slow_block, done) = emit_frame_branch(builder, slow);
     builder.append_block_param(done, types::I64);
 
     builder.switch_to_block(fast_block);
-    let entries = builder.load(types::I64, trusted, stack, layout.entries_offset);
+    let entries = builder.load(types::I64, header, stack, layout.entries_offset);
     let offset = builder.imul_imm(len, FRAME_STACK_ENTRY_BYTES);
     let slot = builder.iadd(entries, offset);
-    builder.store(trusted, descriptor, slot, 0);
+    builder.store(
+        MemFlags::trusted_in(AliasClass::FrameEntry),
+        descriptor,
+        slot,
+        0,
+    );
     let pushed = builder.iadd_imm(len, 1);
-    builder.store(trusted, pushed, stack, layout.len_offset);
+    builder.store(header, pushed, stack, layout.len_offset);
     let inline = builder.iconst(types::I64, 0);
     builder.jump(done, &[inline]);
 
@@ -14784,21 +14787,19 @@ fn emit_release_fast_path(
 /// Then `aura_direct_exit_call` does the whole pop.
 fn emit_frame_pop(builder: &mut dyn FunctionBackend, runtime: &RuntimeTable<FuncRef>) {
     let layout = frame_stack_layout();
-    let trusted = MemFlags::trusted();
+    let header = MemFlags::trusted_in(AliasClass::FrameHeader);
     // Calls since the push may have yielded, but the task's stack keeps its
     // address, so the code generator may reuse the push's address here.
     let stack = builder.call(runtime[RuntimeFn::FrameStack], &[]).results[0];
-    let len = builder.load(types::I64, trusted, stack, layout.len_offset);
-    let floor = builder.load(types::I64, trusted, stack, layout.floor_offset);
-    let flags = builder.load(types::I64, trusted, stack, layout.flags_offset);
-    let runtime_work = builder.icmp_imm(IntCC::NotEqual, flags, 0);
-    let bottom = builder.icmp(IntCC::UnsignedLessThanOrEqual, len, floor);
-    let slow = builder.bor(bottom, runtime_work);
+    let len = builder.load(types::I64, header, stack, layout.len_offset);
+    // The floor is `usize::MAX` while the stack's flags ask for the runtime.
+    let floor = builder.load(types::I64, header, stack, layout.floor_offset);
+    let slow = builder.icmp(IntCC::UnsignedLessThanOrEqual, len, floor);
     let (fast_block, slow_block, done) = emit_frame_branch(builder, slow);
 
     builder.switch_to_block(fast_block);
     let popped = builder.iadd_imm(len, -1);
-    builder.store(trusted, popped, stack, layout.len_offset);
+    builder.store(header, popped, stack, layout.len_offset);
     builder.jump(done, &[]);
 
     builder.switch_to_block(slow_block);

@@ -37,22 +37,24 @@ const DIRECT_FRAME_FLAG_OWNED_FRAMES: u64 = 1 << 2;
 
 /// The active calls of one task.
 ///
-/// Generated code reads the first five fields. It pushes a call by storing
-/// the descriptor address at `entries[len]` and adding one to `len`, when
-/// `len < limit` and `flags == 0`. It pops a call by subtracting one from
-/// `len`, when `len > floor` and `flags == 0`. Every other push and pop
-/// goes through the runtime, which keeps the header true for both rules.
+/// Generated code reads the first three fields and `entries`. It pushes a
+/// call by storing the descriptor address at `entries[len]` and adding one
+/// to `len`, when `len < limit`. It pops a call by subtracting one from
+/// `len`, when `len > pop_floor`. While `flags` is nonzero, `limit` is 0
+/// and `pop_floor` is `usize::MAX`, so each check sends the call to the
+/// runtime with one compare. Every other push and pop goes through the
+/// runtime, which keeps the header true for both rules.
 /// The program validates every descriptor at startup, so an inline push
 /// stores only validated ones.
 #[repr(C)]
 pub struct DirectFrameStack {
     /// The number of entries in use.
     len: usize,
-    /// The smaller of the capacity and the depth limit above `floor`.
+    /// The smaller of the capacity and the depth limit above `floor`, or
+    /// 0 while `flags` is nonzero.
     limit: usize,
-    /// The entries that belong to a body that cleanup interrupted. Call
-    /// depth counts from here, and a pop never goes below it.
-    floor: usize,
+    /// `floor`, or `usize::MAX` while `flags` is nonzero.
+    pop_floor: usize,
     /// Nonzero while a push or pop has runtime work to do.
     flags: u64,
     /// The first entry: `inline`, or a heap block once the stack grows.
@@ -60,6 +62,9 @@ pub struct DirectFrameStack {
     capacity: usize,
     runtime_flags: u64,
     owned_frames: usize,
+    /// The entries that belong to a body that cleanup interrupted. Call
+    /// depth counts from here, and a pop never goes below it.
+    floor: usize,
     /// The heap block, which holds `capacity` entries when not null.
     spill: *mut usize,
     inline: [usize; DIRECT_FRAME_STACK_INLINE_ENTRIES],
@@ -76,12 +81,13 @@ impl DirectFrameStack {
         let stack = NonNull::from(Box::leak(Box::new(Self {
             len: 0,
             limit: 0,
-            floor: 0,
+            pop_floor: 0,
             flags: 0,
             entries: ptr::null_mut(),
             capacity: DIRECT_FRAME_STACK_INLINE_ENTRIES,
             runtime_flags: 0,
             owned_frames: 0,
+            floor: 0,
             spill: ptr::null_mut(),
             inline: [0; DIRECT_FRAME_STACK_INLINE_ENTRIES],
             owned_values: DirectOwnedValues::new(),
@@ -103,6 +109,7 @@ impl DirectFrameStack {
         // SAFETY: the caller hands over the only use of the allocation.
         let mut stack = unsafe { Box::from_raw(stack.as_ptr()) };
         stack.floor = 0;
+        stack.update_limit();
         while let Some(word) = stack.pop() {
             release_frame_word(word);
         }
@@ -203,12 +210,21 @@ impl DirectFrameStack {
             DIRECT_FRAME_FLAG_OWNED_FRAMES
         };
         self.flags = self.runtime_flags | owned;
+        self.update_limit();
     }
 
+    /// Brings `limit` and `pop_floor` up to date with the fields they
+    /// follow.
     fn update_limit(&mut self) {
-        self.limit = self
-            .capacity
-            .min(self.floor.saturating_add(DIRECT_MAX_CALL_DEPTH));
+        if self.flags == 0 {
+            self.limit = self
+                .capacity
+                .min(self.floor.saturating_add(DIRECT_MAX_CALL_DEPTH));
+            self.pop_floor = self.floor;
+        } else {
+            self.limit = 0;
+            self.pop_floor = usize::MAX;
+        }
     }
 
     fn block(&self) -> *const usize {
@@ -293,7 +309,7 @@ impl DirectFrameStack {
         unsafe {
             let read = |offset: i32| base.offset(offset as isize).cast::<usize>().read();
             let len = read(layout.len_offset);
-            if len >= read(layout.limit_offset) || read(layout.flags_offset) != 0 {
+            if len >= read(layout.limit_offset) {
                 return false;
             }
             let entries = read(layout.entries_offset) as *mut usize;
@@ -315,7 +331,7 @@ impl DirectFrameStack {
         unsafe {
             let read = |offset: i32| base.offset(offset as isize).cast::<usize>().read();
             let len = read(layout.len_offset);
-            if len <= read(layout.floor_offset) || read(layout.flags_offset) != 0 {
+            if len <= read(layout.floor_offset) {
                 return false;
             }
             base.offset(layout.len_offset as isize)
@@ -360,8 +376,6 @@ pub struct DirectFrameStackLayout {
     pub limit_offset: i32,
     /// The offset of the count above which generated code may pop.
     pub floor_offset: i32,
-    /// The offset of the flags, which must be zero for either.
-    pub flags_offset: i32,
     /// The offset of the address of the first entry.
     pub entries_offset: i32,
 }
@@ -376,7 +390,6 @@ impl DirectFrameStackLayout {
             i64::from(self.len_offset),
             i64::from(self.limit_offset),
             i64::from(self.floor_offset),
-            i64::from(self.flags_offset),
             i64::from(self.entries_offset),
             Self::ENTRY_BYTES,
         ];
@@ -391,8 +404,7 @@ pub fn direct_frame_stack_layout() -> DirectFrameStackLayout {
     DirectFrameStackLayout {
         len_offset: std::mem::offset_of!(DirectFrameStack, len) as i32,
         limit_offset: std::mem::offset_of!(DirectFrameStack, limit) as i32,
-        floor_offset: std::mem::offset_of!(DirectFrameStack, floor) as i32,
-        flags_offset: std::mem::offset_of!(DirectFrameStack, flags) as i32,
+        floor_offset: std::mem::offset_of!(DirectFrameStack, pop_floor) as i32,
         entries_offset: std::mem::offset_of!(DirectFrameStack, entries) as i32,
     }
 }

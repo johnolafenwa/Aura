@@ -83,10 +83,9 @@ fn the_layout_names_the_header_fields_generated_code_reads() {
             layout.len_offset,
             layout.limit_offset,
             layout.floor_offset,
-            layout.flags_offset,
             layout.entries_offset,
         ],
-        [0, 8, 16, 24, 32],
+        [0, 8, 16, 32],
         "generated code relies on the header coming first"
     );
     assert_eq!(DirectFrameStackLayout::ENTRY_BYTES, 8);
@@ -104,10 +103,6 @@ fn the_layout_names_the_header_fields_generated_code_reads() {
         },
         DirectFrameStackLayout {
             floor_offset: 1,
-            ..layout
-        },
-        DirectFrameStackLayout {
-            flags_offset: 1,
             ..layout
         },
         DirectFrameStackLayout {

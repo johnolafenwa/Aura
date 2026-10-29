@@ -235,6 +235,13 @@ in this file.
   its lists and dicts, as copying any other list or dict does, instead of
   rebuilding the whole tree. `json_roundtrip` runs 26% fewer
   instructions, `pubsub_broker` 13%, `docdb` 10%, and `http_api` 6%.
+- A call keeps its frame record for less. The push and the pop of the
+  record each check one word of the frame stack, and the record's stores
+  no longer force the stack's header to be read again. In a program large
+  enough to compile in parallel units, a small function called only from
+  its own unit is inlined again, as it is in a small program: a call that
+  cost 37 instructions now costs 12. `raytracer` runs 5% fewer
+  instructions and `hashing` 2%.
 
 ### Fixed
 

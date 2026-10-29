@@ -206,6 +206,21 @@ def enum_match(n: int64, run: bool) -> int64:
     return total as int64
 
 
+def add_scaled(total: int64, i: int64) -> int64:
+    return total + i * 3
+
+
+def call(n: int64, run: bool) -> int64:
+    mut total = 0
+    if run:
+        for i in range(n):
+            total = add_scaled(total, i)
+    else:
+        for i in range(n):
+            total = total + i * 3
+    return total
+
+
 def probe(operation: str, n: int64, run: bool) -> int64:
     if operation == "while_step":
         return while_step(n, run)
@@ -235,6 +250,8 @@ def probe(operation: str, n: int64, run: bool) -> int64:
         return field_write(n, run)
     elif operation == "enum_match":
         return enum_match(n, run)
+    elif operation == "call":
+        return call(n, run)
     return -1
 
 
