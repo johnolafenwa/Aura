@@ -1,0 +1,51 @@
+# `str.from_bytes(bytes[a:b])` reads the bytes where the list keeps them,
+# and a match that binds nothing from `Err` keeps only the text in native
+# code. This checks both still behave as the slice and the `Result` would.
+
+
+def text_of(data: list[uint8], start: int64, end: int64) -> str:
+    match own str.from_bytes(data[start:end]):
+        case Result.Ok(text):
+            return text
+        case Result.Err(_):
+            return "?"
+
+
+def whole(data: list[uint8]) -> str:
+    match str.from_bytes(data):
+        case Result.Ok(text):
+            return f"[{text}]"
+        case Result.Err(_):
+            return "not text"
+
+
+def error_of(data: list[uint8]) -> str:
+    match own str.from_bytes(data[0:]):
+        case Result.Ok(text):
+            return text
+        case Result.Err(error):
+            return f"error: {error}"
+
+
+def main() -> int32:
+    data = "hello wörld".to_bytes()
+    print(text_of(data, 0, 5))
+    print(text_of(data, 6, 12))
+    print(text_of(data, 7, 8))
+    print(text_of(data, -3, 12))
+    print(text_of(data, 4, 4).len())
+    print(whole(data))
+    bad: list[uint8] = [255, 65]
+    print(whole(bad))
+    print(text_of(bad, 1, 2))
+    print(text_of(bad, 0, 2))
+    print(error_of(bad))
+    print(str.from_bytes(data[0:2]))
+    mut words: list[str] = []
+    mut start = 0
+    for i in range(data.len() + 1):
+        if i == data.len() or data[i] == 32:
+            words.append(text_of(data, start, i))
+            start = i + 1
+    print(words)
+    return 0

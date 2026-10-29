@@ -13,6 +13,14 @@ Plan approved 2026-10-29 (all defaults; the release after this phase is
   `self` untagged. regex_match -9.9% instructions (gate -20% missed),
   interpreter -13.7%, binary_trees +2.1% (box 192 -> 208 bytes). Details
   are in `2026-10-29-rust-speed-5a-tags.md`.
+- Step 5b: `str.from_bytes(bytes[a:b])` makes no slice when the call
+  right after the slice is its only reader (`lookups::text_byte_slices`,
+  `aura_direct_str_from_byte_slice`), and a `Result` slot keeps the text
+  or null when the `Err` arm binds nothing; a slot moved by `match own`
+  stays a slot. sql_engine tokenizer -55% (gate 50% met), sql_engine
+  -26.7%, mini_browser -8.4%, no program +1%. The two-word `str` the plan
+  named was not needed for the gate and is not done. Details are in
+  `2026-10-29-rust-speed-5b-text-from-bytes.md`.
 
 ## Aura 0.9.0 preview release (complete)
 

@@ -15,6 +15,12 @@ in this file.
   clears it. Methods reached only by direct calls keep `self` untagged, as
   functions already did. `regex_match` runs 9.9% fewer instructions and
   `interpreter` 13.7% fewer. A boxed value grows from 192 to 208 bytes.
+- `str.from_bytes(bytes[a:b])` reads the bytes where the list keeps them
+  instead of copying the slice into a new list, and a `match` on its
+  result whose `Err` arm binds nothing keeps only the text in native code,
+  with no `Result` built, tagged, or matched by name. The SQL tokenizer in
+  `sql_engine` runs 55% fewer instructions and the whole program 26.7%
+  fewer; `mini_browser` runs 8.4% fewer.
 
 ## VS Code extension 0.9.0 — 2026-10-29
 

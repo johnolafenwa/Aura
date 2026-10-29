@@ -1,0 +1,12 @@
+hello
+wörld
+?
+rld
+0
+[hello wörld]
+not text
+A
+?
+error: bytes.Error.InvalidUtf8(0)
+Result.Ok(he)
+[hello, wörld]

@@ -1335,6 +1335,27 @@ as functions do. `regex_match` runs 9.9% fewer instructions and
 `interpreter` 13.7% fewer. The remembered tag adds 8 bytes to a box, and
 alignment adds 8 more, so a box takes 208 bytes.
 
+### Text From Bytes
+
+`str.from_bytes(bytes[a:b])` checks the slice's bounds as the slice
+would, then reads the bytes where the list keeps them, so no slice is
+copied into a new list. When the result is matched with an `Err` arm
+that binds nothing, as in
+
+```aura
+def text_of(data: list[uint8], start: int64, end: int64) -> str:
+    match own str.from_bytes(data[start:end]):
+        case Result.Ok(text):
+            return text
+        case Result.Err(_):
+            return ""
+```
+
+native code keeps only the text, or nothing for bytes that are not
+UTF-8, and builds no `Result`. A tokenizer that cuts each token out of a
+byte list this way runs 55% fewer instructions. `sql_engine` runs 26.7%
+fewer and `mini_browser` 8.4% fewer.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

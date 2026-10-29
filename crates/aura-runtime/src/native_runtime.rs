@@ -7811,6 +7811,53 @@ pub extern "C-unwind" fn aura_direct_vec_slice(
     })
 }
 
+/// `str.from_bytes(bytes[start:end])` without the slice: the bounds and
+/// the trap are the slice's, and the text is read where the list keeps its
+/// bytes. With `slot` set the result is the text's own box, or null when
+/// the bytes are not UTF-8, for a `Result` slot that tests only `Ok`;
+/// otherwise it is the `Result` itself.
+#[cfg_attr(not(coverage), no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "C-unwind" fn aura_direct_str_from_byte_slice(
+    vec: *mut OpaqueValue,
+    start: i64,
+    has_start: i64,
+    end: i64,
+    has_end: i64,
+    line: i64,
+    column: i64,
+    slot: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let start = (has_start != 0).then_some(i128::from(start));
+        let end = (has_end != 0).then_some(i128::from(end));
+        // The text, or `None` for bytes that are not UTF-8, when the slot
+        // form could read the bytes in place; otherwise the `Result`.
+        let result = with_vector(vec, |vector| match (&vector.elements, slot != 0) {
+            (ListElements::Uint8(bytes), true) => {
+                let (start, end) =
+                    crate::runtime_value::normalize_slice_bounds(start, end, bytes.len())?;
+                let text = std::str::from_utf8(&bytes[start..end]).ok();
+                Ok(Ok(text.map(|text| Value::String(text.into()))))
+            }
+            _ => slice_vec_owned(vector, start, end)
+                .map(|slice| Err(host_builtins::host_str_from_bytes_ref(&Value::Vec(slice)))),
+        });
+        match result {
+            Ok(Ok(Some(text))) => boxed_value(text),
+            Ok(Ok(None)) => std::ptr::null_mut(),
+            Ok(Err(Ok(result))) if slot != 0 => aura_direct_lookup_payload(boxed_value(result)),
+            Ok(Err(Ok(result))) => boxed_value(result),
+            Ok(Err(Err(error))) => runtime_diagnostic_error(error),
+            // The slice's own trap, at the slice.
+            Err(mut error) => {
+                error.span = runtime_span(line, column);
+                runtime_diagnostic_error(error)
+            }
+        }
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_push_in_place(
     vec: *mut OpaqueValue,
@@ -10024,6 +10071,19 @@ pub extern "C-unwind" fn aura_direct_lookup_payload(lookup: *mut OpaqueValue) ->
                 ("Found", Some(payload)) => boxed_value(payload),
                 ("Missing", None) => std::ptr::null_mut(),
                 _ => runtime_error("direct runtime received a malformed `Lookup`"),
+            }
+        }
+        // A `Result` slot assigned from a path that built the `Result`.
+        Value::EnumVariant(variant)
+            if nominal_runtime_base_name(&variant.enum_name) == "Result" =>
+        {
+            match (
+                variant.variant_name.as_str(),
+                variant.payloads.into_vec().into_iter().next(),
+            ) {
+                ("Ok", Some(payload)) => boxed_value(payload),
+                ("Err", Some(_)) => std::ptr::null_mut(),
+                _ => runtime_error("direct runtime received a malformed `Result`"),
             }
         }
         // A receive slot assigned from a path that built the variant.
