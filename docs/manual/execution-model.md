@@ -420,6 +420,8 @@ Aura lightweight tasks run on cooperative scheduler workers, and each task is pi
 
 Each child receives a stable worker assignment when it is spawned. Its coroutine stack never migrates, and the runtime does not steal tasks between workers.
 
+A worker with no ready task spins for up to 50 microseconds, watching for a notification from another worker, before it blocks in its poller. It skips the spin while one of its tasks waits on a descriptor. A notification wakes a blocked poller with a system call; a worker that is still running drains its notifications before it blocks, so notifying it needs no system call.
+
 Queue waits, task waits, sleep, nonblocking sockets, and scheduler-integrated I/O yield. They do not create one OS thread per Aura task. A task can also yield explicitly with `yield_now()`. The generic blocking-I/O pool may execute host calls concurrently, but its service workers do not run Aura code.
 
 ### Ordering And Cross-Worker Data
