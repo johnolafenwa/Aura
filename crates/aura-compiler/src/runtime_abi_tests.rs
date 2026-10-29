@@ -190,7 +190,9 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
     // boxes, and a `str` element copied out of a
     // list that keeps no view is read by index. A `get` whose `Lookup` is kept as its
     // found value calls the `_payload` form of the op's helper, and one
-    // whose found value is only read calls the `_lent` form.
+    // whose found value is only read calls the `_lent` form. A `contains_key`
+    // test that an entry loan follows probes the entry for both, and an
+    // `int64` dict value is stored from its word.
     let uncovered = RuntimeFn::ALL
         .iter()
         .copied()
@@ -237,7 +239,10 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::MapGetStrLent,
             RuntimeFn::MapValueSlot,
             RuntimeFn::MapValueSlotInt64,
+            RuntimeFn::MapProbeSlot,
+            RuntimeFn::MapProbeSlotInt64,
             RuntimeFn::MapGetInt64Lent,
+            RuntimeFn::MapSetIndexInt64,
         ]
     );
 }

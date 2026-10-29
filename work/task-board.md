@@ -214,6 +214,12 @@ Last updated: 2026-10-27
   and `list[str]` literals push their texts directly
   (`aura_direct_vec_push_str_literal`). template_render -30%, text_diff
   -24%. Details are in `2026-10-28-rust-speed-3b-format-buffers.md`.
+- Step 3c part 2: a `contains_key` test whose `true` branch starts an
+  entry loan of the same key shares one probe with it
+  (`fused_entry_probes`, `aura_direct_map_probe_slot`), and `int64` dict
+  values are stored from their word (`aura_direct_map_set_index_int64`).
+  lru_cache -8%, interpreter -7%. Details are in
+  `2026-10-28-rust-speed-3c-probe-once.md`.
 
 ## Aura 0.7.1 preview release (complete)
 

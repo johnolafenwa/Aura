@@ -1628,6 +1628,8 @@ impl<'a> NativeCodegen<'a> {
             native_loan_uses,
             element_lend_temps,
             native_loans: HashMap::new(),
+            fused_entry_probes: element_loans::fused_entry_probes(function),
+            fused_entry_slots: HashMap::new(),
             retain_calls: HashMap::new(),
             retain_releases: HashMap::new(),
             consumed_retains: HashSet::new(),
@@ -2944,6 +2946,10 @@ struct FunctionCompiler<'a> {
     element_lend_temps: HashSet<String>,
     /// The element loans generated code followed when they began.
     native_loans: HashMap<String, element_loans::NativeLoan>,
+    /// The `contains_key` tests whose entry loan shares their probe, and
+    /// the probes those tests made, by loan.
+    fused_entry_probes: HashMap<String, element_loans::FusedEntryProbe>,
+    fused_entry_slots: HashMap<String, Var>,
     /// Each retained handle with the retain that made it and the handle it
     /// retained. A consumer that copies the value into its slot turns the
     /// retain into the copy.
@@ -4453,6 +4459,8 @@ impl<'a> FunctionCompiler<'a> {
                     self.compile_lent_element_assign(target, value)?;
                 } else if let Some(scalar) = self.compile_scalar_variant_payload(target, value)? {
                     self.store_place(target, scalar)?;
+                } else if let Some(found) = self.compile_fused_entry_probe(target, value)? {
+                    self.store_place(target, found)?;
                 } else {
                     let target_ty = self.type_of_place(target)?;
                     let compiled = self.compile_rvalue_for_target(value, &target_ty)?;
@@ -13537,6 +13545,20 @@ impl<'a> FunctionCompiler<'a> {
                     self.runtime_call_results(function, &[map, key.values[0], line, column]);
                 let indexed = self.owned_opaque_result(results, value_ty);
                 self.coerce_value(indexed, &value_direct_ty)
+            }
+            DictOp::SetIndex if value_direct_ty == DirectType::Scalar(ScalarKind::Int64) => {
+                // An `int64` value goes in as its word, with no box.
+                let key = self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
+                let loaded =
+                    self.load_operand_with_integer_hint(&args[1].value, Some(ScalarKind::Int64))?;
+                let value = self.coerce_value(loaded, &value_direct_ty)?.values[0];
+                let key = self.transfer_owned_opaque_value(&key);
+                self.builder.call(
+                    self.runtime[RuntimeFn::MapSetIndexInt64],
+                    &[map, key, value],
+                );
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut *self.builder))
             }
             DictOp::Set | DictOp::SetIndex => {
                 let key = self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;

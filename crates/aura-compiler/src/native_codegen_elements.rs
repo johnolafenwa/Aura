@@ -837,7 +837,7 @@ fn live_blocks<'f>(
     live_in
 }
 
-fn successors(terminator: &Terminator) -> Vec<&str> {
+pub(super) fn successors(terminator: &Terminator) -> Vec<&str> {
     match terminator {
         Terminator::Goto(label) => vec![label],
         Terminator::Branch {

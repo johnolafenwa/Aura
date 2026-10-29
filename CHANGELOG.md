@@ -223,6 +223,11 @@ in this file.
   list literal of `str` literals builds its elements without a box each.
   `template_render` runs 30% fewer instructions, `text_diff` 24%,
   `spreadsheet` 13%, and `sort_records` 11%.
+- `match mut d.lookup(key)` finds the entry once. The presence test and
+  the update of a found `int64` value share one probe, and
+  `d[key] = n` stores an `int64` value without boxing it. `lru_cache`
+  runs 8% fewer instructions, `interpreter` 7%, `lzw_compress` 7%,
+  `bank_ledger` 7%, and `word_freq` 4%.
 
 ### Fixed
 

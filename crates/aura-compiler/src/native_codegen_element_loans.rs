@@ -507,6 +507,66 @@ impl FunctionCompiler<'_> {
     /// to it directly instead of walking the path again. A dict shared with
     /// another thread, or a missing key, takes the runtime walk as before,
     /// which reports the key.
+    /// A `contains_key` test in [`fused_entry_probes`]: one probe finds the
+    /// entry for the test and for the loan that follows it. The probe is
+    /// the entry's slot, 1 for an entry generated code cannot follow, or 0
+    /// for none.
+    pub(super) fn compile_fused_entry_probe(
+        &mut self,
+        target: &str,
+        value: &Rvalue,
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        let Some(probe) = self.fused_entry_probes.get(target) else {
+            return Ok(None);
+        };
+        let (loan, mutable) = (probe.loan.clone(), probe.mutable);
+        let Rvalue::Call {
+            callee:
+                CallTarget::Runtime {
+                    op: RuntimeOp::Dict(op),
+                    receiver: Some(Operand::Place(map)),
+                    ..
+                },
+            args,
+            ..
+        } = value
+        else {
+            return Ok(None);
+        };
+        if self.local_type(&loan)? != DirectType::Scalar(ScalarKind::Int64)
+            || !matches!(self.loan_list(map, "dict")?, Some(LoanList::Local(_)))
+        {
+            return Ok(None);
+        }
+        let map_box = self.load_root(map)?.values[0];
+        let (probe_fn, key) = if *op == DictOp::ContainsKeyInt64 {
+            let key = self.load_operand(&args[0].value)?;
+            (RuntimeFn::MapProbeSlotInt64, key.values[0])
+        } else {
+            let Some(DirectType::Opaque(Type::Named(_, types))) =
+                self.variable_types.get(map.as_str())
+            else {
+                return Ok(None);
+            };
+            let key_ty = ensure_direct_type(&types[0], &self.classes, "dict key")?;
+            let key = self.load_operand_as_opaque_direct(&args[0].value, &key_ty)?;
+            (RuntimeFn::MapProbeSlot, key.values[0])
+        };
+        let mutable = self.builder.iconst(types::I64, i64::from(mutable));
+        let slot = self
+            .builder
+            .call(self.runtime[probe_fn], &[map_box, key, mutable])
+            .results[0];
+        let variable = self.declare_word_var();
+        self.builder.def_var(variable, slot);
+        self.fused_entry_slots.insert(loan, variable);
+        let found = self.builder.icmp_imm(IntCC::NotEqual, slot, 0);
+        Ok(Some(ValueRef {
+            values: vec![self.builder.uextend(types::I64, found)],
+            ty: DirectType::Scalar(ScalarKind::Bool),
+        }))
+    }
+
     fn begin_native_entry_loan(
         &mut self,
         loan: &str,
@@ -514,6 +574,7 @@ impl FunctionCompiler<'_> {
         place: &str,
         selector: &DirectElementSelector,
     ) -> std::result::Result<bool, String> {
+        let fused = self.fused_entry_slots.remove(loan);
         if usage.lends
             || !selector.projection.is_empty()
             || self.local_type(loan)? != DirectType::Scalar(ScalarKind::Int64)
@@ -532,14 +593,27 @@ impl FunctionCompiler<'_> {
         let slow_block = self.builder.create_block();
         let found_block = self.builder.create_block();
         let join_block = self.builder.create_block();
-        let map_box = self.load_loan_list(&map, slow_block)?;
-        let key = self.builder.use_var(selector.variable);
-        let mutable = self.builder.iconst(types::I64, i64::from(usage.mutable));
-        let slot = self
-            .builder
-            .call(self.runtime[find], &[map_box, key, mutable])
-            .results[0];
-        self.builder.brif(slot, found_block, &[], slow_block, &[]);
+        let slot = match fused {
+            // An entry the test's probe could not follow takes the walk.
+            Some(probe) => {
+                let slot = self.builder.use_var(probe);
+                let followed = self.builder.icmp_imm(IntCC::UnsignedGreaterThan, slot, 1);
+                self.builder
+                    .brif(followed, found_block, &[], slow_block, &[]);
+                slot
+            }
+            None => {
+                let map_box = self.load_loan_list(&map, slow_block)?;
+                let key = self.builder.use_var(selector.variable);
+                let mutable = self.builder.iconst(types::I64, i64::from(usage.mutable));
+                let slot = self
+                    .builder
+                    .call(self.runtime[find], &[map_box, key, mutable])
+                    .results[0];
+                self.builder.brif(slot, found_block, &[], slow_block, &[]);
+                slot
+            }
+        };
 
         self.builder.switch_to_block(found_block);
         self.builder.seal_block(found_block);
@@ -1018,4 +1092,108 @@ impl FunctionCompiler<'_> {
             ty: loan_ty,
         }))
     }
+}
+
+/// A `contains_key` test whose only use is the branch after it, where the
+/// branch's `true` side begins with a loan of the same entry: `match mut
+/// counts.lookup(key)` lowers to this. Generated code finds the entry once
+/// for both, see [`fused_entry_probes`].
+pub(super) struct FusedEntryProbe {
+    pub(super) loan: String,
+    pub(super) mutable: bool,
+}
+
+/// The `contains_key` temporaries of `function` whose test and following
+/// entry loan share one probe, by temporary. The loan's block has the test's
+/// block as its only predecessor, so the probe is still current when the
+/// loan begins.
+pub(super) fn fused_entry_probes(function: &MirFunction) -> HashMap<String, FusedEntryProbe> {
+    let mut predecessors = HashMap::<&str, usize>::new();
+    predecessors.insert(function.entry.as_str(), 1);
+    let mut mentions = HashMap::<&str, usize>::new();
+    for block in &function.blocks {
+        for successor in super::elements::successors(&block.terminator) {
+            *predecessors.entry(successor).or_default() += 1;
+        }
+        let mut places = Vec::new();
+        for instruction in &block.instructions {
+            instruction_place_mentions(instruction, &mut places);
+        }
+        places.extend(terminator_place_mentions(&block.terminator));
+        for place in places {
+            *mentions.entry(root(place)).or_default() += 1;
+        }
+    }
+    let blocks = function
+        .blocks
+        .iter()
+        .map(|block| (block.label.as_str(), block))
+        .collect::<HashMap<_, _>>();
+    let mut probes = HashMap::new();
+    for block in &function.blocks {
+        let Terminator::Branch {
+            condition: Operand::Place(test),
+            then_label,
+            ..
+        } = &block.terminator
+        else {
+            continue;
+        };
+        let Some(Instruction::Assign {
+            target,
+            value:
+                Rvalue::Call {
+                    callee:
+                        CallTarget::Runtime {
+                            op: RuntimeOp::Dict(DictOp::ContainsKey | DictOp::ContainsKeyInt64),
+                            receiver: Some(Operand::Place(map)),
+                            ..
+                        },
+                    args,
+                    ..
+                },
+        }) = block.instructions.last()
+        else {
+            continue;
+        };
+        let [MirArg {
+            value: Operand::Place(key),
+            ..
+        }] = args.as_slice()
+        else {
+            continue;
+        };
+        if target != test
+            || map.contains('.')
+            || then_label == &block.label
+            || predecessors.get(then_label.as_str()) != Some(&1)
+            // The branch is the test's only read.
+            || mentions.get(test.as_str()) != Some(&1)
+        {
+            continue;
+        }
+        let Some(Instruction::BeginElementLoan {
+            loan,
+            source,
+            selector: Operand::Place(selected),
+            projection,
+            mutable,
+            ..
+        }) = blocks
+            .get(then_label.as_str())
+            .and_then(|then| then.instructions.first())
+        else {
+            continue;
+        };
+        if source == map && selected == key && projection.is_empty() {
+            probes.insert(
+                test.clone(),
+                FusedEntryProbe {
+                    loan: loan.clone(),
+                    mutable: *mutable,
+                },
+            );
+        }
+    }
+    probes
 }
