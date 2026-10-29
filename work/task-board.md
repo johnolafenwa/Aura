@@ -2,7 +2,7 @@
 
 Last updated: 2026-10-29
 
-## Aura 0.9.0 preview release (in progress)
+## Aura 0.9.0 preview release (complete)
 
 - Target: release 0.9.0 after phases 2 to 4 of the Rust-speed plan. John
   accepted `task_pool` at 2.4x Rust and asked to release without the Mac
@@ -10,8 +10,11 @@ Last updated: 2026-10-29
   `2026-10-29-v0.9.0-preview-release.md`.
 - The 30 cross-language programs take 23.5 s instead of 147 s; the median
   is 4.6 times Rust instead of 16 and 0.53 times Python instead of 2.7.
-- Remaining: green hosted CI on the release pull request, merge, and the
-  `v0.9.0-preview` tag, which John approves.
+- Merged as PR #186 (`b53a7ee9`) after hosted CI passed on Linux and
+  macOS. The annotated `v0.9.0-preview` tag (`16282942`) was pushed on
+  2026-10-29, and Release run `40952894283` published the three archives,
+  docs, VSIX, and `SHA256SUMS`, and extension 0.9.0 to the Marketplace and
+  Open VSX.
 - `VSCE_PAT` must be an org-scoped token before 2026-12-01.
 
 ## Aura 0.8.0 preview release (complete)
