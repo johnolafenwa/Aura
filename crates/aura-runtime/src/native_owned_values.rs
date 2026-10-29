@@ -307,6 +307,9 @@ pub struct DirectOwnershipLayout {
     pub owner_offset: i32,
     /// The offset of the `u32` count of references that ledger holds.
     pub owned_offset: i32,
+    /// The offset of the address of the tag whose shape the value has, or
+    /// zero (Rust-speed step 5a).
+    pub shape_tag_offset: i32,
 }
 
 impl DirectOwnershipLayout {
@@ -317,6 +320,7 @@ impl DirectOwnershipLayout {
             i64::from(self.shared_lock_offset),
             i64::from(self.owner_offset),
             i64::from(self.owned_offset),
+            i64::from(self.shape_tag_offset),
             // The count widths: a 4-byte total and a 4-byte owned count.
             0x0404,
         ];
@@ -333,6 +337,7 @@ pub fn direct_ownership_layout() -> DirectOwnershipLayout {
         shared_lock_offset: std::mem::offset_of!(OpaqueValue, shared_lock) as i32,
         owner_offset: std::mem::offset_of!(OpaqueValue, owner) as i32,
         owned_offset: std::mem::offset_of!(OpaqueValue, owned) as i32,
+        shape_tag_offset: std::mem::offset_of!(OpaqueValue, shape_tag) as i32,
     }
 }
 
