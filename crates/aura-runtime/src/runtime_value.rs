@@ -11522,17 +11522,28 @@ fn parse_http_response_head(buffer: &[u8]) -> io::Result<Option<HttpResponseHead
     }
 }
 
+/// Runs an HTTP/1.1 parsing or rendering step on the calling task. These
+/// steps are iterative and use a few KB of stack (`httparse` keeps at most
+/// `MAX_HTTP_HEADERS` header slices), so unlike TLS and WebSocket steps
+/// they do not need the protocol-step service's larger stacks, and skipping
+/// its hand-off saves two thread wakes per step.
+fn run_http_step_before<T>(
+    operation: impl FnOnce() -> io::Result<T>,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<T> {
+    check_deadline_and_cancellation(deadline, cancellation)?;
+    let result = operation()?;
+    check_deadline_and_cancellation(deadline, cancellation)?;
+    Ok(result)
+}
+
 fn parse_http_request_head_step(
     buffer: &[u8],
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
 ) -> io::Result<Option<HttpRequestHead>> {
-    let owned = buffer.to_vec();
-    run_protocol_step_before(
-        move || parse_http_request_head(&owned),
-        deadline,
-        cancellation,
-    )
+    run_http_step_before(|| parse_http_request_head(buffer), deadline, cancellation)
 }
 
 fn parse_http_response_head_step(
@@ -11540,12 +11551,7 @@ fn parse_http_response_head_step(
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
 ) -> io::Result<Option<HttpResponseHead>> {
-    let owned = buffer.to_vec();
-    run_protocol_step_before(
-        move || parse_http_response_head(&owned),
-        deadline,
-        cancellation,
-    )
+    run_http_step_before(|| parse_http_response_head(buffer), deadline, cancellation)
 }
 
 fn decode_chunked_http_body_step(
@@ -11555,9 +11561,8 @@ fn decode_chunked_http_body_step(
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
 ) -> io::Result<Option<Vec<u8>>> {
-    let owned = buffer.to_vec();
-    run_protocol_step_before(
-        move || try_decode_chunked_http_body_with_limit(&owned, start, limit),
+    run_http_step_before(
+        || try_decode_chunked_http_body_with_limit(buffer, start, limit),
         deadline,
         cancellation,
     )
@@ -11837,9 +11842,8 @@ fn write_http_response_to_stream(
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
 ) -> io::Result<()> {
-    let body = body.to_vec();
-    let rendered = run_protocol_step_before(
-        move || build_http_response_bytes(status, headers, &body),
+    let rendered = run_http_step_before(
+        || build_http_response_bytes(status, headers, body),
         deadline,
         cancellation,
     )?;
@@ -13364,6 +13368,10 @@ impl TcpStreamValue {
         deadline: Option<Instant>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<Self> {
+        #[cfg(unix)]
+        if let Ok(candidate) = address.parse::<SocketAddr>() {
+            return Self::connect_address_before(candidate, deadline, cancellation);
+        }
         Self::connect_with_deadline_and_operations(
             address,
             deadline,
@@ -13378,6 +13386,34 @@ impl TcpStreamValue {
                 None => StdTcpStream::connect(candidate),
             },
         )
+    }
+
+    /// Connects to a literal socket address without the blocking-I/O pool:
+    /// the connect starts nonblocking and the task waits on the reactor for
+    /// it to finish. Names still resolve and connect on the pool.
+    #[cfg(unix)]
+    fn connect_address_before(
+        address: SocketAddr,
+        deadline: Option<Instant>,
+        cancellation: Option<&CancellationContext>,
+    ) -> io::Result<Self> {
+        use std::os::fd::{FromRawFd, IntoRawFd};
+
+        check_deadline_and_cancellation(deadline, cancellation)?;
+        let stream = mio::net::TcpStream::connect(address)?;
+        loop {
+            wait_for_fd_event(stream.as_raw_fd(), libc::POLLOUT, deadline, cancellation)?;
+            if let Some(error) = stream.take_error()? {
+                return Err(error);
+            }
+            // A wake before the connect finishes leaves the socket without
+            // a peer; wait again.
+            if stream.peer_addr().is_ok() {
+                break;
+            }
+        }
+        // SAFETY: `into_raw_fd` hands over the only owner of the socket.
+        Self::from_std(unsafe { StdTcpStream::from_raw_fd(stream.into_raw_fd()) })
     }
 
     #[cfg(test)]
@@ -15084,9 +15120,8 @@ impl HttpResponseValue {
         let deadline = deadline_from_timeout(timeout)?;
         let method = method.to_string();
         let url_text = url.to_string();
-        let body = body.to_vec();
-        let (url, host, request) = run_protocol_step_before(
-            move || {
+        let (url, host, request) = run_http_step_before(
+            || {
                 let url = Url::parse(&url_text).map_err(|error| {
                     io::Error::new(
                         io::ErrorKind::InvalidInput,
@@ -15118,7 +15153,7 @@ impl HttpResponseValue {
                         ))
                     }
                 };
-                let request = build_http_request_bytes(&method, &url, &body, headers)?;
+                let request = build_http_request_bytes(&method, &url, body, headers)?;
                 Ok((url, host, request))
             },
             deadline,

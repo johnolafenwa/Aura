@@ -3997,6 +3997,22 @@ fn a_drained_socket_waits_for_readiness_before_reading_again() {
 }
 
 #[test]
+fn tcp_connect_to_a_literal_address_reports_refusal_from_the_reactor_wait() {
+    let port = {
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("probe bind");
+        probe.local_addr().expect("probe address").port()
+    };
+    let error = TcpStreamValue::connect(
+        &format!("127.0.0.1:{port}"),
+        Some(StdDuration::from_secs(2)),
+        Some(&CancellationContext::default()),
+    )
+    .err()
+    .expect("nothing listens on a port just released");
+    assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused);
+}
+
+#[test]
 fn tcp_stream_reads_serve_the_bytes_read_line_read_ahead_in_order() {
     let timeout = StdDuration::from_secs(2);
     let cancellation = CancellationContext::default();
