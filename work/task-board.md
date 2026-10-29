@@ -243,6 +243,12 @@ Last updated: 2026-10-27
   Rust (gate met), pubsub_broker 2.4x -> about 1.45x (gate missed: the
   rest is the broker's string and list work). Details are in
   `2026-10-29-rust-speed-4b-socket-reads.md`.
+- Step 4c: HTTP head parsing, chunked decoding, and request/response
+  rendering run on the calling task (`run_http_step_before`) instead of
+  the protocol-step service, without copying the buffer; TCP connects to
+  a literal `SocketAddr` use a nonblocking mio connect and a reactor wait
+  (`connect_address_before`). http_api 3.2x -> 1.1x Rust (gate met).
+  Details are in `2026-10-29-rust-speed-4c-http.md`.
 
 ## Aura 0.7.1 preview release (complete)
 

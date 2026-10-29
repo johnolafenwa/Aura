@@ -249,6 +249,12 @@ in this file.
   reading again first. A socket stays registered with the runtime's
   poller between waits. `kv_server` runs in 1.2x Rust's time, down from
   1.6x, and `pubsub_broker` in about 1.45x, down from 2.4x.
+- HTTP requests and responses are parsed and rendered on the calling task
+  instead of being handed to the protocol-step service and back, and
+  `net.connect` or an HTTP request to a literal address such as
+  `127.0.0.1:8080` connects on the reactor instead of the blocking-I/O
+  pool. A loopback HTTP request no longer wakes another thread.
+  `http_api` runs in 1.1x Rust's time, down from 3.2x.
 
 ### Fixed
 
