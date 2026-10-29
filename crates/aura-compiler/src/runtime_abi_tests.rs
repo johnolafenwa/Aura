@@ -160,8 +160,9 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
     }
     // Every `str`, queue, and task helper a member call makes has an op.
     // Slicing, `with` cleanup of a task group, and task start stay in the
-    // backend, as do the tests and replacements with literal arguments and
-    // copies read out of a list's `str` view.
+    // backend, as do the tests and replacements with literal arguments,
+    // copies read out of a list's `str` view, and the forms of `get` and
+    // `put` a receive slot or a discarded `put` calls.
     for helper in RuntimeFn::ALL.iter().copied().filter(|helper| {
         let symbol = helper.symbol();
         (symbol.starts_with("aura_direct_string_")
@@ -177,6 +178,10 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
                     | RuntimeFn::TaskGroupClose
                     | RuntimeFn::TaskArgBufferGuard
                     | RuntimeFn::TaskArgBufferDisarm
+                    | RuntimeFn::ChannelSendDiscarded
+                    | RuntimeFn::ChannelRecvItem
+                    | RuntimeFn::ChannelRecvInTaskGroupItem
+                    | RuntimeFn::ChannelRecvWithRegisteredProducersItem
             )
     }) {
         assert!(covered.contains(&helper), "{helper:?} has no runtime op");

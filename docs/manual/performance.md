@@ -1278,6 +1278,28 @@ address starts nonblocking and waits on the reactor, and only a host name
 still resolves and connects on the blocking-I/O pool. Over loopback, an
 HTTP request and its response make no thread hand-offs.
 
+### Queue Hand-Offs
+
+A `for` loop over a queue, and a `match` on `queue.get()` that tests only
+`QueueReceive.Item`, receive the item itself: no `QueueReceive` value is
+built, tagged, or matched. A `put` whose result is not used builds no
+`Result`. A task registers with each queue it uses once.
+
+While several tasks take values from one queue, each receive that leaves
+values behind yields, so they take the values in turn. Once one task has
+made the last 32 receives from a queue alone, it yields every 32 receives
+instead, so a pipeline stage drains its queue without a task switch per
+value.
+
+A worker with nothing to run spins for up to 50 microseconds before it
+blocks in its poller, unless one of its tasks waits on a descriptor. A
+hand-off from a task on another worker usually lands within that time,
+and a sender wakes a worker with a system call only when the worker is
+blocked. Tasks stay on the worker they start on, so a queue pipeline whose
+stages run on different workers still pays for moving each value between
+cores: `task_pool` runs in about 0.31 s with `AURA_WORKERS=1` and about
+0.54 s with four workers.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

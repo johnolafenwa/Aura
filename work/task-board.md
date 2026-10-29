@@ -249,6 +249,15 @@ Last updated: 2026-10-27
   a literal `SocketAddr` use a nonblocking mio connect and a reactor wait
   (`connect_address_before`). http_api 3.2x -> 1.1x Rust (gate met).
   Details are in `2026-10-29-rust-speed-4c-http.md`.
+- Step 4d: queue receives matched only on `Item` keep the item's box or
+  null (receive slots in `native_codegen_lookups.rs`, `_item` helpers),
+  discarded `put` results build no `Result`
+  (`aura_direct_channel_send_discarded`), tasks remember the queues they
+  registered with, a queue's only receiver yields every 32 receives, the
+  reactor inbox wakes a poller only while it is blocked, and idle workers
+  spin up to 50 us. task_pool 9.9x -> 2.5x Rust (gate 1.5x missed with
+  four workers; 1.4x with one). Details are in
+  `2026-10-29-rust-speed-4d-queues.md`.
 
 ## Aura 0.7.1 preview release (complete)
 

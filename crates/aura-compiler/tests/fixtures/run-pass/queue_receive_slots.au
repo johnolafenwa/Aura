@@ -1,0 +1,45 @@
+# Receives matched only on `Item` and `put` calls whose result is dropped
+# keep no `QueueReceive` or `Result` in native code. This checks they still
+# behave as the variants would.
+
+
+def produce(out: Queue[str], n: int64):
+    for i in range(n):
+        out.put(f"line-{i}")
+    out.close()
+
+
+def main() -> int32:
+    mut seen = 0
+    with TaskGroup() as group:
+        lines = Queue[str](capacity=2)
+        group.start_soon(produce, lines, 4)
+        for line in lines:
+            print(line)
+            seen += 1
+    print(seen)
+
+    numbers = Queue[int64]()
+    numbers.put(10)
+    numbers.put(20)
+    numbers.close()
+    # A put to a closed queue drops its value.
+    numbers.put(30)
+    mut total = 0
+    for _ in range(4):
+        match numbers.get():
+            case QueueReceive.Item(value):
+                total += value
+            case _:
+                print("no item")
+    print(total)
+
+    words = Queue[str]()
+    words.put("kept")
+    match words.get():
+        case QueueReceive.Item(word):
+            print(word)
+            print(word.len())
+        case _:
+            pass
+    return 0

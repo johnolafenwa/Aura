@@ -8859,6 +8859,8 @@ Aura lightweight tasks run on cooperative scheduler workers, and each task is pi
 
 Each child receives a stable worker assignment when it is spawned. Its coroutine stack never migrates, and the runtime does not steal tasks between workers.
 
+A worker with no ready task spins for up to 50 microseconds, watching for a notification from another worker, before it blocks in its poller. It skips the spin while one of its tasks waits on a descriptor. A notification wakes a blocked poller with a system call; a worker that is still running drains its notifications before it blocks, so notifying it needs no system call.
+
 Queue waits, task waits, sleep, nonblocking sockets, and scheduler-integrated I/O yield. They do not create one OS thread per Aura task. A task can also yield explicitly with `yield_now()`. The generic blocking-I/O pool may execute host calls concurrently, but its service workers do not run Aura code.
 
 ### Ordering And Cross-Worker Data
@@ -18790,6 +18792,28 @@ larger stacks for TLS and WebSocket work. A connect to a literal socket
 address starts nonblocking and waits on the reactor, and only a host name
 still resolves and connects on the blocking-I/O pool. Over loopback, an
 HTTP request and its response make no thread hand-offs.
+
+### Queue Hand-Offs
+
+A `for` loop over a queue, and a `match` on `queue.get()` that tests only
+`QueueReceive.Item`, receive the item itself: no `QueueReceive` value is
+built, tagged, or matched. A `put` whose result is not used builds no
+`Result`. A task registers with each queue it uses once.
+
+While several tasks take values from one queue, each receive that leaves
+values behind yields, so they take the values in turn. Once one task has
+made the last 32 receives from a queue alone, it yields every 32 receives
+instead, so a pipeline stage drains its queue without a task switch per
+value.
+
+A worker with nothing to run spins for up to 50 microseconds before it
+blocks in its poller, unless one of its tasks waits on a descriptor. A
+hand-off from a task on another worker usually lands within that time,
+and a sender wakes a worker with a system call only when the worker is
+blocked. Tasks stay on the worker they start on, so a queue pipeline whose
+stages run on different workers still pays for moving each value between
+cores: `task_pool` runs in about 0.31 s with `AURA_WORKERS=1` and about
+0.54 s with four workers.
 
 ## Performance Direction
 

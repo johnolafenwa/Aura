@@ -22,7 +22,7 @@ use crate::runtime_abi::{
 };
 use crate::runtime_ops::{
     first_type_arg, ArgDefault, ArrayOp, DictOp, FunctionOp, HostBuiltin, ListOp, PrintKind,
-    RuntimeOp, RuntimeTarget, ScalarElement, ScalarOp, SetOp, SpanOp, StrOp, ValueOp,
+    QueueOp, RuntimeOp, RuntimeTarget, ScalarElement, ScalarOp, SetOp, SpanOp, StrOp, ValueOp,
 };
 use crate::sema::optional_type;
 use crate::sema::{substitute_type, FunctionParamContract, Type};
@@ -1492,7 +1492,8 @@ impl<'a> NativeCodegen<'a> {
             .filter(|name| {
                 matches!(
                     variable_types.get(name),
-                    Some(DirectType::Opaque(Type::Named(lookup, _))) if lookup == "Lookup"
+                    Some(DirectType::Opaque(Type::Named(slot, _)))
+                        if slot == "Lookup" || slot == "QueueReceive" || slot == "Result"
                 )
             })
             .collect::<HashSet<_>>();
@@ -2314,6 +2315,21 @@ fn runtime_op_arg_layout(op: RuntimeOp, name: &str) -> RuntimeOpArgLayout {
         }
         (RuntimeOp::Queue(_), "value") => RuntimeOpArgLayout::BoxedPayload,
         _ => RuntimeOpArgLayout::Boxed,
+    }
+}
+
+/// The helper that receives straight into a receive slot: the item's box,
+/// or null for any other `QueueReceive`. A `put` into a discarded slot
+/// sends and returns nothing.
+fn receive_item_function(op: RuntimeOp) -> Option<RuntimeFn> {
+    match op {
+        RuntimeOp::Queue(QueueOp::Put) => Some(RuntimeFn::ChannelSendDiscarded),
+        RuntimeOp::Queue(QueueOp::Get) => Some(RuntimeFn::ChannelRecvItem),
+        RuntimeOp::Queue(QueueOp::GetInTaskGroup) => Some(RuntimeFn::ChannelRecvInTaskGroupItem),
+        RuntimeOp::Queue(QueueOp::GetWithRegisteredProducers) => {
+            Some(RuntimeFn::ChannelRecvWithRegisteredProducersItem)
+        }
+        _ => None,
     }
 }
 
@@ -4590,9 +4606,9 @@ impl<'a> FunctionCompiler<'a> {
                     }
                     let next_block = self.builder.create_block();
                     let matched = if lookup_slot {
-                        // A lookup slot is null exactly when the key was
-                        // missing.
-                        let found = arm.variant_name.as_deref() == Some("Found");
+                        // A slot is null exactly when the key was missing or
+                        // the receive got no item.
+                        let found = lookups::is_payload_variant(arm.variant_name.as_deref());
                         let cc = if found { IntCC::NotEqual } else { IntCC::Equal };
                         self.builder.icmp_imm(cc, scrutinee.values[0], 0)
                     } else {
@@ -12770,6 +12786,21 @@ impl<'a> FunctionCompiler<'a> {
             });
         }
         self.push_runtime_call_words(call, &mut words);
+        if let Some(item) = receive_item_function(op).filter(|_| self.lookup_payload == Some(false))
+        {
+            // A receive slot holds the item's box, or null. A discarded
+            // `put` result holds null.
+            self.lookup_payload = Some(true);
+            let results = self.runtime_call_results(self.runtime[item], &words);
+            if results.is_empty() {
+                let null = self.builder.iconst(types::I64, 0);
+                return Ok(ValueRef {
+                    values: vec![null],
+                    ty: DirectType::Opaque(Type::named("Unknown")),
+                });
+            }
+            return Ok(self.owned_opaque_result(results, Type::named("Unknown")));
+        }
         let results = self.runtime_call_results(self.runtime[call.function], &words);
         if let Some((value, argument)) = writeback {
             let Some(place) = &argument.writeback_place else {

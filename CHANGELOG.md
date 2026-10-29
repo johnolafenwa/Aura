@@ -255,6 +255,16 @@ in this file.
   `127.0.0.1:8080` connects on the reactor instead of the blocking-I/O
   pool. A loopback HTTP request no longer wakes another thread.
   `http_api` runs in 1.1x Rust's time, down from 3.2x.
+- A queue receive that is matched only on `QueueReceive.Item`, as a `for`
+  loop over a queue is, takes the item without building a
+  `QueueReceive`, and a `put` whose result is discarded builds no
+  `Result`. A task registers with a queue once instead of on every
+  operation, and a queue's only receiver yields every 32 receives instead
+  of after each one; receivers that take turns still alternate. A
+  scheduler worker's poller gets a wake system call only while it is
+  blocked, and an idle worker with no descriptor wait spins for up to 50
+  microseconds before it blocks. `task_pool` runs in 2.5x Rust's time,
+  down from 9.9x.
 
 ### Fixed
 

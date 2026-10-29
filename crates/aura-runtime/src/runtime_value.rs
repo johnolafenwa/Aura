@@ -19,7 +19,7 @@ use std::process::{
     Stdio as StdProcessStdio,
 };
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once, OnceLock, Weak};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant};
@@ -3798,6 +3798,10 @@ struct ChannelState {
     task_handles: Mutex<WeakTaskRegistry>,
     sender_tasks: Mutex<WeakTaskRegistry>,
     receiver_tasks: Mutex<WeakTaskRegistry>,
+    /// The task that made the last receive, and how many receives in a
+    /// row it made. See [`yield_after_receive`].
+    last_receiver: AtomicU64,
+    receiver_streak: AtomicU32,
     recv_reactor_subscribers: Mutex<HashMap<ReactorSubscriptionKey, ReactorRecvSubscription>>,
     send_reactor_subscribers: Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
     runtime_type_name: Mutex<Option<String>>,
@@ -4402,7 +4406,16 @@ struct LightweightTaskContext {
     yielder: Cell<*const Yielder<RuntimeSchedulerWakeReason, TaskYield>>,
     cancellation: Option<CancellationContext>,
     task_state: Weak<TaskState>,
+    /// The queues this task already registered with, as a sender (`true`)
+    /// or a receiver. A registration lasts while the task lives, so each
+    /// queue operation after the first skips the registry's lock. The weak
+    /// reference keeps the queue's address from being reused.
+    registered_queue_roles: RefCell<Vec<(Weak<ChannelState>, bool)>>,
 }
+
+/// How many queue roles a task remembers. A task that uses more queues
+/// registers again for the rest, which is what it did before.
+const REGISTERED_QUEUE_ROLE_MEMO: usize = 8;
 
 struct LightweightTaskRecord {
     state: Arc<TaskState>,
@@ -4672,6 +4685,11 @@ const MAX_WEBSOCKET_WRITE_BUFFER_BYTES: usize = 16 << 20;
 const DEFAULT_TLS_HANDSHAKE_TIMEOUT: StdDuration = StdDuration::from_secs(10);
 const MIN_SUPERVISOR_RESTART_BACKOFF: StdDuration = StdDuration::from_millis(10);
 const TASK_GROUP_CLEANUP_PROBE_TIMEOUT: StdDuration = StdDuration::from_millis(1);
+/// How long an idle worker spins before it blocks in its poller. A queue
+/// hand-off from another worker usually lands within it, so the worker
+/// skips a sleep and its sender the wake syscall.
+const WORKER_IDLE_SPIN: StdDuration = StdDuration::from_micros(50);
+
 const READY_TURNS_PER_LOCAL_REACTOR_POLL: u32 = 64;
 const READY_TURNS_PER_IO_REACTOR_POLL: u32 = 256;
 
@@ -4706,6 +4724,9 @@ struct RuntimeScheduler {
     state: Mutex<RuntimeSchedulerState>,
     ready: Condvar,
     next_id: AtomicU64,
+    /// `state.registrations.len()`, readable without the lock, so a queue
+    /// operation with no thread waiting skips the lock and the wake.
+    registered: AtomicUsize,
 }
 
 static RUNTIME_SCHEDULER: OnceLock<Arc<RuntimeScheduler>> = OnceLock::new();
@@ -5312,6 +5333,7 @@ impl RuntimeScheduler {
             }),
             ready: Condvar::new(),
             next_id: AtomicU64::new(1),
+            registered: AtomicUsize::new(0),
         });
         let worker = scheduler.clone();
         std::thread::spawn(move || worker.run());
@@ -5341,9 +5363,11 @@ impl RuntimeScheduler {
             cancellation,
             waiter: waiter.clone(),
         };
-        lock_mutex(&self.state)
-            .registrations
-            .insert(id, registration);
+        let mut state = lock_mutex(&self.state);
+        state.registrations.insert(id, registration);
+        self.registered
+            .store(state.registrations.len(), Ordering::SeqCst);
+        drop(state);
         self.ready.notify_all();
         RuntimeSchedulerHandle {
             id,
@@ -5355,11 +5379,19 @@ impl RuntimeScheduler {
     fn unregister(&self, id: u64) {
         let mut state = lock_mutex(&self.state);
         if state.registrations.remove(&id).is_some() {
+            self.registered
+                .store(state.registrations.len(), Ordering::SeqCst);
             self.ready.notify_all();
         }
     }
 
     fn notify(&self) {
+        // A registration's first readiness check runs after it is counted,
+        // under locks the notifying change also takes, so a change the
+        // count misses is one that check sees.
+        if self.registered.load(Ordering::SeqCst) == 0 {
+            return;
+        }
         let state = lock_mutex(&self.state);
         self.ready.notify_all();
         drop(state);
@@ -5424,6 +5456,8 @@ impl RuntimeScheduler {
             for id in finished {
                 state.registrations.remove(&id);
             }
+            self.registered
+                .store(state.registrations.len(), Ordering::SeqCst);
 
             if state.registrations.is_empty() {
                 continue;
@@ -6824,6 +6858,39 @@ fn yield_now_current_lightweight_task() -> Option<RuntimeSchedulerWakeReason> {
     yield_current_lightweight_task(TaskYield::YieldNow)
 }
 
+/// Receives a worker thread makes from queues that still hold values
+/// before it yields to other tasks.
+const RECEIVE_YIELD_BUDGET: u32 = 32;
+
+thread_local! {
+    static RECEIVES_SINCE_YIELD: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Yields after a receive from `channel` that left values behind, so
+/// tasks receiving from one queue take its values in turn. Once one task
+/// has made the last `RECEIVE_YIELD_BUDGET` receives from the queue alone,
+/// it yields after every `RECEIVE_YIELD_BUDGET`-th receive instead: a
+/// queue's only receiver drains it without a task switch per value, and
+/// still lets its producers and other tasks run.
+fn yield_after_receive(channel: &ChannelValue) {
+    if channel.note_receiver() < RECEIVE_YIELD_BUDGET {
+        let _ = yield_now_current_lightweight_task();
+        return;
+    }
+    let due = RECEIVES_SINCE_YIELD.with(|count| {
+        let next = count.get() + 1;
+        count.set(if next >= RECEIVE_YIELD_BUDGET {
+            0
+        } else {
+            next
+        });
+        next >= RECEIVE_YIELD_BUDGET
+    });
+    if due {
+        let _ = yield_now_current_lightweight_task();
+    }
+}
+
 pub fn yield_now_with_runtime_scheduler() {
     let _ = yield_now_current_lightweight_task();
 }
@@ -7325,6 +7392,7 @@ impl LightweightTaskScheduler {
             yielder: Cell::new(std::ptr::null()),
             cancellation: request.cancellation,
             task_state: Arc::downgrade(&request.state),
+            registered_queue_roles: RefCell::new(Vec::new()),
         });
         let stack_bounds = task_stack_bounds(&request.stack);
         let coroutine = Coroutine::with_stack(request.stack, move |yielder, _| {
@@ -7676,6 +7744,9 @@ impl LightweightTaskScheduler {
 
             self.ready_turns_since_local_reactor_poll = 0;
             self.ready_turns_since_io_reactor_poll = 0;
+            // A task on another worker often hands this one work within
+            // microseconds, as each stage of a queue pipeline does.
+            self.reactor.spin_for_notification(WORKER_IDLE_SPIN);
             match self.reactor.poll(None) {
                 Ok(keys) => self.admit_reactor_keys(keys),
                 Err(error) => workers.fail(reactor_failure_diagnostic("waiting", error)),
@@ -9622,6 +9693,8 @@ impl ChannelValue {
                 task_handles: Mutex::new(WeakTaskRegistry::new()),
                 sender_tasks: Mutex::new(WeakTaskRegistry::new()),
                 receiver_tasks: Mutex::new(WeakTaskRegistry::new()),
+                last_receiver: AtomicU64::new(u64::MAX),
+                receiver_streak: AtomicU32::new(0),
                 recv_reactor_subscribers: Mutex::new(HashMap::new()),
                 send_reactor_subscribers: Mutex::new(HashMap::new()),
                 runtime_type_name: Mutex::new(None),
@@ -9790,14 +9863,49 @@ impl ChannelValue {
     }
 
     fn register_current_sender(&self) {
-        if let Some(task) = current_lightweight_task() {
-            Self::register_task(&self.inner.sender_tasks, &task);
-        }
+        self.register_current_task(&self.inner.sender_tasks, true);
     }
 
     fn register_current_receiver(&self) {
-        if let Some(task) = current_lightweight_task() {
-            Self::register_task(&self.inner.receiver_tasks, &task);
+        self.register_current_task(&self.inner.receiver_tasks, false);
+    }
+
+    /// Registers the running task in `tasks` unless it already did so for
+    /// this queue and role.
+    fn register_current_task(&self, tasks: &Mutex<WeakTaskRegistry>, sender: bool) {
+        let task = with_current_lightweight_task_context(|context| {
+            let mut roles = context.registered_queue_roles.borrow_mut();
+            let queue = Arc::as_ptr(&self.inner);
+            if roles
+                .iter()
+                .any(|(known, role)| *role == sender && std::ptr::eq(known.as_ptr(), queue))
+            {
+                return None;
+            }
+            let task = context.task_state.upgrade()?;
+            if roles.len() < REGISTERED_QUEUE_ROLE_MEMO {
+                roles.push((Arc::downgrade(&self.inner), sender));
+            }
+            Some(TaskValue { inner: task })
+        })
+        .flatten();
+        if let Some(task) = task {
+            Self::register_task(tasks, &task);
+        }
+    }
+
+    /// Notes a receive by the running task and returns how many receives
+    /// in a row before it the same task made from this queue.
+    fn note_receiver(&self) -> u32 {
+        let task = current_lightweight_task_id().unwrap_or(u64::MAX);
+        if self.inner.last_receiver.swap(task, Ordering::Relaxed) == task {
+            self.inner
+                .receiver_streak
+                .fetch_add(1, Ordering::Relaxed)
+                .saturating_add(1)
+        } else {
+            self.inner.receiver_streak.store(0, Ordering::Relaxed);
+            0
         }
     }
 
@@ -10048,7 +10156,7 @@ impl ChannelValue {
             match self.try_recv() {
                 TryRecvResult::Value(value) => {
                     if self.has_pending_values() {
-                        let _ = yield_now_current_lightweight_task();
+                        yield_after_receive(self);
                     }
                     return RecvValueResult::Value(value);
                 }
@@ -16204,7 +16312,7 @@ pub fn recv_for_task_group_iteration(
         match channel.try_recv() {
             TryRecvResult::Value(value) => {
                 if channel.has_pending_values() {
-                    let _ = yield_now_current_lightweight_task();
+                    yield_after_receive(channel);
                 }
                 return RecvValueResult::Value(value);
             }
@@ -16255,7 +16363,7 @@ pub fn recv_for_registered_producers_iteration(
         match channel.try_recv() {
             TryRecvResult::Value(value) => {
                 if channel.has_pending_values() {
-                    let _ = yield_now_current_lightweight_task();
+                    yield_after_receive(channel);
                 }
                 return RecvValueResult::Value(value);
             }
