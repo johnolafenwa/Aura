@@ -10017,6 +10017,19 @@ pub extern "C-unwind" fn aura_direct_lookup_payload(lookup: *mut OpaqueValue) ->
                 _ => runtime_error("direct runtime received a malformed `Lookup`"),
             }
         }
+        // A receive slot assigned from a path that built the variant.
+        Value::EnumVariant(variant)
+            if nominal_runtime_base_name(&variant.enum_name) == "QueueReceive" =>
+        {
+            match (
+                variant.variant_name.as_str(),
+                variant.payloads.into_vec().into_iter().next(),
+            ) {
+                ("Item", Some(payload)) => boxed_value(payload),
+                ("Closed" | "TimedOut" | "Cancelled", None) => std::ptr::null_mut(),
+                _ => runtime_error("direct runtime received a malformed `QueueReceive`"),
+            }
+        }
         other => runtime_error(format!(
             "expected `Lookup`, found `{}`",
             value_type_name(other)
@@ -14216,6 +14229,29 @@ pub extern "C-unwind" fn aura_direct_channel_send(
     })
 }
 
+/// [`aura_direct_channel_send`] for a `put` whose result is discarded: it
+/// sends the same way and builds no `Result`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_channel_send_discarded(
+    channel: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+) {
+    task_runtime_boundary(|| {
+        let value = unsafe { consume_owned_value(value) };
+        match unsafe { value_ref(channel) } {
+            Value::Channel(channel) => {
+                // An unsent value is dropped, as the discarded `Result`
+                // that held it would have been.
+                let _ = channel.send_with_cancellation(value, Some(&current_cancellation()));
+            }
+            other => runtime_error(format!(
+                "expected `Queue`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_channel_send_timeout_value(
     channel: *mut OpaqueValue,
@@ -14346,6 +14382,77 @@ pub extern "C-unwind" fn aura_direct_channel_recv_with_registered_producers(
                 RecvValueResult::Cancelled => queue_receive_cancelled(),
             },
         ),
+        other => runtime_error(format!(
+            "expected `Queue`, found `{}`",
+            value_type_name(other)
+        )),
+    })
+}
+
+/// A receive's item, boxed, or null for any other outcome. Generated code
+/// calls the `_item` helpers for a receive whose match tests only
+/// `QueueReceive.Item`, so no `QueueReceive` is built.
+fn received_item_box(result: RecvValueResult) -> *mut OpaqueValue {
+    match result {
+        RecvValueResult::Value(value) => boxed_value(value),
+        RecvValueResult::Closed | RecvValueResult::TimedOut | RecvValueResult::Cancelled => {
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// [`aura_direct_channel_recv`] for a receive slot.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_channel_recv_item(
+    channel: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(channel) } {
+        Value::Channel(channel) => received_item_box(direct_timer_result_or_trap(
+            channel.recv_result_with_cancellation(None, Some(&current_cancellation())),
+        )),
+        other => runtime_error(format!(
+            "expected `Queue`, found `{}`",
+            value_type_name(other)
+        )),
+    })
+}
+
+/// [`aura_direct_channel_recv_in_task_group`] for a receive slot.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_channel_recv_in_task_group_item(
+    channel: *mut OpaqueValue,
+    task_group: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let channel_value = unsafe { value_ref(channel) };
+        let task_group_value = unsafe { value_ref(task_group) };
+        match (channel_value, task_group_value) {
+            (Value::Channel(channel), Value::TaskGroup(group)) => received_item_box(
+                recv_for_task_group_iteration(&channel, &current_cancellation(), &group),
+            ),
+            (Value::Channel(_), other) => runtime_error(format!(
+                "expected `TaskGroup`, found `{}`",
+                value_type_name(other)
+            )),
+            (other, _) => runtime_error(format!(
+                "expected `Queue`, found `{}`",
+                value_type_name(other)
+            )),
+        }
+    })
+}
+
+/// [`aura_direct_channel_recv_with_registered_producers`] for a receive
+/// slot.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_channel_recv_with_registered_producers_item(
+    channel: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { value_ref(channel) } {
+        Value::Channel(channel) => received_item_box(recv_for_registered_producers_iteration(
+            &channel,
+            &current_cancellation(),
+        )),
         other => runtime_error(format!(
             "expected `Queue`, found `{}`",
             value_type_name(other)

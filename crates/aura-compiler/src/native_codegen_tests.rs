@@ -14872,6 +14872,198 @@ fn direct_lookup_slots_reject_every_other_use() {
     .is_empty());
 }
 
+const QUEUE_SLOT_SOURCE: &str = r#"
+def produce(jobs: Queue[int64], n: int64):
+    for i in range(n):
+        jobs.put(i)
+    jobs.close()
+
+
+def main() -> int32:
+    mut total = 0
+    with TaskGroup() as group:
+        jobs = Queue[int64](capacity=4)
+        group.start_soon(produce, jobs, 5)
+        for job in jobs:
+            total += job
+    others = Queue[int64]()
+    others.put(3)
+    match others.get():
+        case QueueReceive.Item(value):
+            total += value
+        case _:
+            pass
+    print(total)
+    return 0
+"#;
+
+#[test]
+fn direct_queue_receives_and_discarded_puts_build_no_variant() {
+    let mir = lower_source_to_mir(QUEUE_SLOT_SOURCE).expect("the queue program should lower");
+    let object = emit_host_object(&mir).expect("the queue program should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    for required in [
+        "aura_direct_channel_send_discarded",
+        "aura_direct_channel_recv_item",
+        "aura_direct_channel_recv_in_task_group_item",
+    ] {
+        assert!(
+            referenced.contains(required),
+            "queue slots must reference `{required}`: {referenced:?}"
+        );
+    }
+    for forbidden in [
+        "aura_direct_channel_send",
+        "aura_direct_channel_recv",
+        "aura_direct_channel_recv_in_task_group",
+        "aura_direct_variant_matches",
+        "aura_direct_variant_take_payload",
+        "aura_direct_lookup_payload",
+    ] {
+        assert!(
+            !referenced.contains(forbidden),
+            "queue slots must not reference `{forbidden}`: {referenced:?}"
+        );
+    }
+}
+
+#[test]
+fn direct_queue_receives_that_tell_other_variants_apart_keep_the_variant() {
+    let source = r#"
+def main() -> int32:
+    jobs = Queue[int32]()
+    jobs.close()
+    match jobs.get():
+        case QueueReceive.Item(value):
+            print(value)
+        case QueueReceive.Closed:
+            print("closed")
+        case _:
+            print("other")
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("the queue match should lower");
+    let main = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main");
+    assert!(super::lookups::lookup_payload_slots(main).is_empty());
+    let object = emit_host_object(&mir).expect("the queue match should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    assert!(
+        referenced.contains("aura_direct_channel_recv"),
+        "{referenced:?}"
+    );
+    assert!(
+        !referenced.contains("aura_direct_channel_recv_item"),
+        "{referenced:?}"
+    );
+}
+
+/// The queue slots of `QUEUE_SLOT_SOURCE`'s `main` after `change`, which
+/// gets the receive slot and the discarded `put` slot.
+fn queue_slots_after(change: impl FnOnce(&mut MirFunction, &str, &str)) -> BTreeSet<String> {
+    let mir = lower_source_to_mir(QUEUE_SLOT_SOURCE).expect("the queue program should lower");
+    let mut main = mir
+        .functions
+        .into_iter()
+        .find(|function| function.name == "main")
+        .expect("main");
+    let slots = super::lookups::lookup_payload_slots(&main);
+    let assigned_from = |slots: &std::collections::HashSet<String>, wanted: &str| {
+        main.blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .find_map(|instruction| match instruction {
+                Instruction::Assign {
+                    target,
+                    value: Rvalue::Call { callee, .. },
+                } if slots.contains(target) && format!("{callee:?}").contains(wanted) => {
+                    Some(target.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("a slot assigned from `{wanted}`: {slots:?}"))
+    };
+    let receive = assigned_from(&slots, "Queue(Get)");
+    let put = assigned_from(&slots, "Queue(Put)");
+    change(&mut main, &receive, &put);
+    super::lookups::lookup_payload_slots(&main)
+        .into_iter()
+        .collect()
+}
+
+#[test]
+fn direct_queue_slots_reject_every_other_use() {
+    let all = queue_slots_after(|_, _, _| {});
+    assert_eq!(all.len(), 3, "{all:?}");
+
+    // A discarded `put` result that is unpacked needs its `Result`.
+    let unpacked = queue_slots_after(|main, _, put| {
+        main.blocks[0].instructions.push(Instruction::Assign {
+            target: "%payload".to_string(),
+            value: Rvalue::VariantPayload {
+                scrutinee: Operand::Place(put.to_string()),
+                variant_name: "Ok".to_string(),
+                index: 0,
+            },
+        });
+    });
+    assert_eq!(unpacked.len(), 2, "{unpacked:?}");
+
+    // So does one that is matched on a variant.
+    let matched = queue_slots_after(|main, receive, put| {
+        let block = main
+            .blocks
+            .iter_mut()
+            .find(|block| {
+                matches!(&block.terminator, Terminator::Match { scrutinee: Operand::Place(place), .. } if place == receive)
+            })
+            .expect("the receive's match");
+        if let Terminator::Match { scrutinee, .. } = &mut block.terminator {
+            *scrutinee = Operand::Place(put.to_string());
+        }
+    });
+    assert_eq!(matched.len(), 2, "{matched:?}");
+
+    // A temporary assigned from a receive and from a `put` is neither.
+    let mixed = queue_slots_after(|main, receive, put| {
+        let put_value = main
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .find_map(|instruction| match instruction {
+                Instruction::Assign { target, value } if target == put => Some(value.clone()),
+                _ => None,
+            })
+            .expect("the put");
+        main.blocks[0].instructions.push(Instruction::Assign {
+            target: receive.to_string(),
+            value: put_value,
+        });
+    });
+    assert_eq!(mixed.len(), 2, "{mixed:?}");
+
+    // A receive arm for another variant that goes elsewhere tells it apart.
+    let told_apart = queue_slots_after(|main, receive, _| {
+        let block = main
+            .blocks
+            .iter_mut()
+            .find(|block| {
+                matches!(&block.terminator, Terminator::Match { scrutinee: Operand::Place(place), .. } if place == receive)
+            })
+            .expect("the receive's match");
+        if let Terminator::Match { arms, .. } = &mut block.terminator {
+            let mut closed = arms[0].clone();
+            closed.variant_name = Some("Closed".to_string());
+            closed.wildcard = false;
+            arms.insert(0, closed);
+        }
+    });
+    assert_eq!(told_apart.len(), 2, "{told_apart:?}");
+}
+
 #[test]
 fn str_literal_equality_reads_the_str_view_in_place() {
     let equality = r#"

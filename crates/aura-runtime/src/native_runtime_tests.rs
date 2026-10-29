@@ -13109,6 +13109,36 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "queue-send-type" => {
                 super::aura_direct_channel_send(bool_value(true), int_value(1));
             }
+            "queue-send-discarded-type" => {
+                super::aura_direct_channel_send_discarded(bool_value(true), int_value(1));
+            }
+            "queue-recv-item-type" => {
+                super::aura_direct_channel_recv_item(bool_value(true));
+            }
+            "queue-recv-in-task-group-item-queue-type" => {
+                super::aura_direct_channel_recv_in_task_group_item(
+                    bool_value(true),
+                    super::aura_direct_task_group_new(),
+                );
+            }
+            "queue-recv-in-task-group-item-group-type" => {
+                super::aura_direct_channel_recv_in_task_group_item(
+                    super::aura_direct_channel_new(std::ptr::null_mut()),
+                    bool_value(true),
+                );
+            }
+            "queue-recv-registered-producers-item-type" => {
+                super::aura_direct_channel_recv_with_registered_producers_item(bool_value(true));
+            }
+            "queue-receive-payload-malformed" => {
+                super::aura_direct_lookup_payload(boxed_value(Value::EnumVariant(
+                    EnumVariantValue {
+                        enum_name: crate::runtime_value::RuntimeName::from_static("QueueReceive"),
+                        variant_name: crate::runtime_value::RuntimeName::from_static("Closed"),
+                        payloads: vec![Value::Unit].into(),
+                    },
+                )));
+            }
             "queue-send-timeout-negative" => {
                 super::aura_direct_channel_send_timeout_value(
                     super::aura_direct_channel_new(std::ptr::null_mut()),
@@ -14545,6 +14575,27 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "`Queue(capacity=...)` expects a positive `int32`",
         ),
         ("queue-send-type", "expected `Queue`, found `bool`"),
+        (
+            "queue-send-discarded-type",
+            "expected `Queue`, found `bool`",
+        ),
+        ("queue-recv-item-type", "expected `Queue`, found `bool`"),
+        (
+            "queue-recv-in-task-group-item-queue-type",
+            "expected `Queue`, found `bool`",
+        ),
+        (
+            "queue-recv-in-task-group-item-group-type",
+            "expected `TaskGroup`, found `bool`",
+        ),
+        (
+            "queue-recv-registered-producers-item-type",
+            "expected `Queue`, found `bool`",
+        ),
+        (
+            "queue-receive-payload-malformed",
+            "direct runtime received a malformed `QueueReceive`",
+        ),
         (
             "queue-send-timeout-negative",
             "put(timeout=...) must be non-negative",
@@ -23029,6 +23080,76 @@ fn coverage_native_runtime_dynamic_json_and_process_stdio_errors_stay_structured
                 "stdio argument {invalid_index} must be decoded before any process is spawned"
             );
         }
+    }
+}
+
+#[test]
+fn queue_item_helpers_return_the_item_box_or_null_and_discarded_sends_build_no_result() {
+    unsafe fn take_int(value: *mut OpaqueValue) -> i128 {
+        match unsafe { take_value(value) } {
+            Value::Int(value) => value.as_i128().expect("a signed item"),
+            other => panic!("expected an int item, found {other:?}"),
+        }
+    }
+    use crate::runtime_value::{
+        queue_receive_cancelled, queue_receive_closed, queue_receive_item, queue_receive_timed_out,
+    };
+
+    let channel = super::aura_direct_channel_new(std::ptr::null_mut());
+    super::aura_direct_channel_send_discarded(channel, int_value(5));
+    super::aura_direct_channel_send_discarded(channel, int_value(6));
+    let group = super::aura_direct_task_group_new();
+    assert_eq!(
+        unsafe { take_int(super::aura_direct_channel_recv_item(channel)) },
+        5
+    );
+    assert_eq!(
+        unsafe {
+            take_int(super::aura_direct_channel_recv_in_task_group_item(
+                channel, group,
+            ))
+        },
+        6
+    );
+    super::aura_direct_channel_send_discarded(channel, int_value(7));
+    assert_eq!(
+        unsafe {
+            take_int(super::aura_direct_channel_recv_with_registered_producers_item(channel))
+        },
+        7
+    );
+    expect_unit(super::aura_direct_channel_close(channel));
+    // A send to a closed queue drops its value, as its discarded `Result`
+    // would have.
+    super::aura_direct_channel_send_discarded(channel, int_value(8));
+    assert!(super::aura_direct_channel_recv_item(channel).is_null());
+    assert!(super::aura_direct_channel_recv_in_task_group_item(channel, group).is_null());
+    assert!(super::aura_direct_channel_recv_with_registered_producers_item(channel).is_null());
+
+    let cancelled_channel = super::aura_direct_channel_new(std::ptr::null_mut());
+    let cancelled_group = super::aura_direct_task_group_new();
+    unsafe { release_value(super::aura_direct_task_group_cancel(cancelled_group)) };
+    assert!(
+        super::aura_direct_channel_recv_in_task_group_item(cancelled_channel, cancelled_group)
+            .is_null()
+    );
+
+    // A receive slot assigned from a `QueueReceive` takes its item the
+    // same way.
+    let item = super::aura_direct_lookup_payload(boxed_value(queue_receive_item(Value::Int(
+        IntegerValue::from_signed(9),
+    ))));
+    assert_eq!(unsafe { take_int(item) }, 9);
+    for missing in [
+        queue_receive_closed(),
+        queue_receive_timed_out(),
+        queue_receive_cancelled(),
+    ] {
+        assert!(super::aura_direct_lookup_payload(boxed_value(missing)).is_null());
+    }
+
+    for value in [channel, group, cancelled_channel, cancelled_group] {
+        unsafe { release_value(value) };
     }
 }
 

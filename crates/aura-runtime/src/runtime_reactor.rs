@@ -9,7 +9,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::io;
 use std::ops::BitOr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -72,12 +72,19 @@ struct ReactorInbox {
     id: u64,
     state: Mutex<ReactorInboxState>,
     waker: Waker,
+    /// Set while a command or control notification waits in `state`, so a
+    /// scheduler about to block can see one arrive without the lock.
+    signaled: AtomicBool,
 }
 
 struct ReactorInboxState {
     commands: VecDeque<InboxCommand>,
     control_pending: bool,
     wake_armed: bool,
+    /// Whether the owning reactor is blocked in the platform poller, or
+    /// about to be. Only then does a notification need the wake syscall: a
+    /// reactor that is not blocked drains the inbox before it blocks.
+    blocked: bool,
 }
 
 /// Cloneable, thread-safe completion path. Commands enter the durable queue
@@ -106,6 +113,7 @@ impl ReactorHandle {
     pub fn notify_control(&self) -> io::Result<()> {
         let mut state = lock_unpoisoned(&self.inbox.state);
         state.control_pending = true;
+        self.inbox.signaled.store(true, Ordering::Release);
         self.wake_if_needed(&mut state)
     }
 
@@ -116,11 +124,12 @@ impl ReactorHandle {
     fn submit(&self, command: InboxCommand) -> io::Result<()> {
         let mut state = lock_unpoisoned(&self.inbox.state);
         state.commands.push_back(command);
+        self.inbox.signaled.store(true, Ordering::Release);
         self.wake_if_needed(&mut state)
     }
 
     fn wake_if_needed(&self, state: &mut ReactorInboxState) -> io::Result<()> {
-        if state.wake_armed {
+        if state.wake_armed || !state.blocked {
             return Ok(());
         }
         // Leave `wake_armed` false on failure. The command or control flag is
@@ -217,8 +226,10 @@ impl RuntimeReactor {
                 commands: VecDeque::new(),
                 control_pending: false,
                 wake_armed: false,
+                blocked: false,
             }),
             waker: Waker::new(poll.registry(), WAKER_TOKEN)?,
+            signaled: AtomicBool::new(false),
         });
         Ok(Self {
             poll,
@@ -315,7 +326,12 @@ impl RuntimeReactor {
             }
 
             let timeout = self.poll_timeout(caller_deadline);
-            self.poll_mio_once(timeout)?;
+            if !self.begin_blocking_poll() {
+                continue;
+            }
+            let polled = self.poll_mio_once(timeout);
+            lock_unpoisoned(&self.inbox.state).blocked = false;
+            polled?;
 
             let control_notified = self.drain_inbox()?;
             self.mark_expired_timers(Instant::now());
@@ -397,10 +413,51 @@ impl RuntimeReactor {
         deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()))
     }
 
+    /// Marks the inbox blocked unless a notification already waits in it,
+    /// which the caller drains instead. Under the inbox lock, so a
+    /// notification either lands before and is seen here, or after and
+    /// sees `blocked` and wakes the poller.
+    fn begin_blocking_poll(&self) -> bool {
+        let mut state = lock_unpoisoned(&self.inbox.state);
+        if !state.commands.is_empty() || state.control_pending {
+            return false;
+        }
+        state.blocked = true;
+        true
+    }
+
+    /// Spins for up to `budget` while the inbox stays empty, so a
+    /// notification that arrives within it is drained without a sleep in
+    /// the poller and a wake syscall from its sender. A wait on a
+    /// descriptor learns of readiness only from the poller, so while one is
+    /// armed this returns at once.
+    pub fn spin_for_notification(&self, budget: Duration) {
+        #[cfg(unix)]
+        if !self.key_fds.is_empty() {
+            return;
+        }
+        if budget.is_zero() {
+            return;
+        }
+        let start = Instant::now();
+        loop {
+            for _ in 0..64 {
+                if self.inbox.signaled.load(Ordering::Acquire) {
+                    return;
+                }
+                std::hint::spin_loop();
+            }
+            if start.elapsed() >= budget {
+                return;
+            }
+        }
+    }
+
     fn drain_inbox(&mut self) -> io::Result<bool> {
         let (commands, control_notified) = {
             let mut state = lock_unpoisoned(&self.inbox.state);
             state.wake_armed = false;
+            self.inbox.signaled.store(false, Ordering::Release);
             let commands: Vec<_> = state.commands.drain(..).collect();
             let control_notified = std::mem::take(&mut state.control_pending);
             (commands, control_notified)
@@ -838,6 +895,51 @@ mod tests {
     }
 
     #[test]
+    fn only_a_blocked_reactor_gets_the_wake_syscall() {
+        let mut reactor = RuntimeReactor::new().unwrap();
+        let key = WaitKey(4, 1);
+        reactor.begin_wait(key).unwrap();
+        let handle = reactor.handle();
+
+        // A running reactor drains the inbox before it blocks, so a
+        // notification for it only queues.
+        handle.wake(key).unwrap();
+        assert!(!lock_unpoisoned(&reactor.inbox.state).wake_armed);
+        assert!(
+            !reactor.begin_blocking_poll(),
+            "a queued wake must be drained first"
+        );
+        assert_eq!(reactor.poll(Some(Duration::ZERO)).unwrap(), vec![key]);
+
+        // Once it is marked blocked, a notification wakes the poller.
+        reactor.begin_wait(key).unwrap();
+        assert!(reactor.begin_blocking_poll());
+        handle.notify_control().unwrap();
+        assert!(lock_unpoisoned(&reactor.inbox.state).wake_armed);
+        lock_unpoisoned(&reactor.inbox.state).blocked = false;
+        assert!(reactor.poll(None).unwrap().is_empty());
+        assert!(!lock_unpoisoned(&reactor.inbox.state).wake_armed);
+    }
+
+    #[test]
+    fn an_idle_spin_ends_at_a_notification_or_its_budget() {
+        let mut reactor = RuntimeReactor::new().unwrap();
+        reactor.spin_for_notification(Duration::ZERO);
+
+        let start = Instant::now();
+        reactor.spin_for_notification(Duration::from_millis(2));
+        assert!(start.elapsed() >= Duration::from_millis(2));
+
+        let handle = reactor.handle();
+        handle.notify_control().unwrap();
+        let start = Instant::now();
+        reactor.spin_for_notification(Duration::from_secs(10));
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert!(reactor.poll(Some(Duration::ZERO)).unwrap().is_empty());
+        assert!(!reactor.inbox.signaled.load(Ordering::Acquire));
+    }
+
+    #[test]
     fn a_superseded_epoch_makes_its_old_timer_stale() {
         let mut reactor = RuntimeReactor::new().unwrap();
         let now = Instant::now();
@@ -1241,6 +1343,20 @@ mod tests {
 
             reactor.dispatch_fd_event(token, false, true, false);
             assert_eq!(reactor.take_ready(), vec![writer]);
+        }
+
+        #[test]
+        fn an_idle_spin_returns_at_once_while_a_descriptor_wait_is_armed() {
+            let mut reactor = RuntimeReactor::new().unwrap();
+            let (stream, _peer) = UnixStream::pair().unwrap();
+            let reader = WaitKey(1, 1);
+            reactor.begin_wait(reader).unwrap();
+            reactor
+                .add_fd(reader, stream.as_raw_fd(), IoInterest::READABLE)
+                .unwrap();
+            let start = Instant::now();
+            reactor.spin_for_notification(Duration::from_secs(10));
+            assert!(start.elapsed() < Duration::from_secs(5));
         }
 
         #[test]

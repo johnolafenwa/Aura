@@ -1,5 +1,5 @@
-//! Finds the `Lookup` temporaries that native code keeps as the found
-//! value's box alone.
+//! Finds the `Lookup` and `QueueReceive` temporaries that native code
+//! keeps as the payload's box alone.
 //!
 //! `match table.get(key)` lowers to a temporary that holds a boxed
 //! `Lookup`, a match on its variant, and a copy of its payload. When the
@@ -7,45 +7,109 @@
 //! payload's box in it instead, or null for `Lookup.Missing`. The match
 //! then tests the word for null, and the payload is a new reference to the
 //! same box. No `Lookup` is built, tagged, matched by name, or copied.
+//!
+//! A queue receive (`queue.get()` or a `for` loop over a queue) is kept the
+//! same way when its match tests only `QueueReceive.Item`: the slot holds
+//! the item's box, or null for every other variant. A `put` whose result is
+//! only discarded keeps null, and no `Result` is built.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::mir::{
     instruction_place_mentions, terminator_place_mentions, BasicBlock, CallTarget, Instruction,
-    MirFunction, Operand, Rvalue, Terminator,
+    MirFunction, MirMatchArm, Operand, Rvalue, Terminator,
 };
-use crate::runtime_ops::{DictOp, RuntimeOp};
+use crate::runtime_ops::{DictOp, QueueOp, RuntimeOp};
 
 /// Whether `value` looks a key up in a `dict` with `get`.
 pub(super) fn is_dict_get(value: &Rvalue) -> bool {
-    matches!(
-        value,
-        Rvalue::Call {
-            callee: CallTarget::Runtime {
-                op: RuntimeOp::Dict(DictOp::Get | DictOp::GetStr | DictOp::GetInt64),
-                ..
-            },
-            ..
-        }
-    )
+    slot_kind(value) == Some(SlotKind::Lookup)
 }
 
-/// The temporaries of `function` that may hold a lookup's payload in place
-/// of the `Lookup`. Each one is a compiler temporary that is assigned only
-/// from `get` and is otherwise only matched on its `Lookup` variant,
-/// unpacked in one place at most once per lookup, and released.
+/// What a slot's temporary would otherwise hold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SlotKind {
+    /// A `Lookup` from a `dict` `get`.
+    Lookup,
+    /// A `QueueReceive` from a queue receive that waits for an item.
+    Receive,
+    /// The `Result` of a queue `put`, which nothing reads.
+    Discarded,
+}
+
+impl SlotKind {
+    /// Whether `arm` reads only what the slot keeps: whether there is a
+    /// payload. `otherwise` is where the match goes when no arm matches.
+    fn tests(self, arm: &MirMatchArm, otherwise: &str) -> bool {
+        let enum_name = arm.enum_name.as_deref();
+        let variant_name = arm.variant_name.as_deref();
+        match self {
+            SlotKind::Lookup => {
+                matches!(enum_name, None | Some("Lookup"))
+                    && matches!(variant_name, Some("Found" | "Missing"))
+            }
+            // A null slot stands for every variant but `Item`, so an arm
+            // for another variant must go where the match does without it,
+            // as a `for` loop's `Closed` and `Cancelled` arms do.
+            SlotKind::Receive => {
+                matches!(enum_name, None | Some("QueueReceive"))
+                    && (variant_name == Some("Item")
+                        || (matches!(variant_name, Some("Closed" | "TimedOut" | "Cancelled"))
+                            && arm.label == otherwise))
+            }
+            SlotKind::Discarded => false,
+        }
+    }
+}
+
+fn slot_kind(value: &Rvalue) -> Option<SlotKind> {
+    match value {
+        Rvalue::Call {
+            callee: CallTarget::Runtime { op, .. },
+            ..
+        } => match op {
+            RuntimeOp::Dict(DictOp::Get | DictOp::GetStr | DictOp::GetInt64) => {
+                Some(SlotKind::Lookup)
+            }
+            RuntimeOp::Queue(
+                QueueOp::Get | QueueOp::GetInTaskGroup | QueueOp::GetWithRegisteredProducers,
+            ) => Some(SlotKind::Receive),
+            RuntimeOp::Queue(QueueOp::Put) => Some(SlotKind::Discarded),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The variant a slot holds a payload for: the one whose test is "not
+/// null".
+pub(super) fn is_payload_variant(variant_name: Option<&str>) -> bool {
+    matches!(variant_name, Some("Found" | "Item"))
+}
+
+/// The temporaries of `function` that may hold a lookup's or a receive's
+/// payload in place of the `Lookup` or `QueueReceive`. Each one is a
+/// compiler temporary that is assigned only from one kind of `get` and is
+/// otherwise only matched on the variants its slot tells apart, unpacked
+/// in one place at most once per lookup, and released.
 pub(super) fn lookup_payload_slots(function: &MirFunction) -> HashSet<String> {
     let mut candidates = HashMap::<&str, Candidate>::new();
     let mut rejected = HashSet::<&str>::new();
     for block in &function.blocks {
         for instruction in &block.instructions {
             if let Instruction::Assign { target, value } = instruction {
-                if target.starts_with("%t") && !target.contains('.') && is_dict_get(value) {
-                    candidates
-                        .entry(target)
-                        .or_default()
-                        .assigned
-                        .insert(&block.label);
+                let kind =
+                    slot_kind(value).filter(|_| target.starts_with("%t") && !target.contains('.'));
+                if let Some(kind) = kind {
+                    let candidate = candidates.entry(target).or_default();
+                    if candidate
+                        .kind
+                        .replace(kind)
+                        .is_some_and(|other| other != kind)
+                    {
+                        rejected.insert(target);
+                    }
+                    candidate.assigned.insert(&block.label);
                 } else {
                     rejected.insert(target);
                 }
@@ -64,6 +128,10 @@ pub(super) fn lookup_payload_slots(function: &MirFunction) -> HashSet<String> {
         for instruction in &block.instructions {
             match instruction {
                 Instruction::Release { .. } => continue,
+                // A discarded value is loaded and dropped.
+                Instruction::Eval {
+                    value: Operand::Place(place) | Operand::MovePlace(place),
+                } if candidates.contains_key(place.as_str()) => continue,
                 Instruction::Assign {
                     value:
                         Rvalue::VariantPayload {
@@ -74,7 +142,7 @@ pub(super) fn lookup_payload_slots(function: &MirFunction) -> HashSet<String> {
                     ..
                 } if candidates.contains_key(place.as_str()) => {
                     let candidate = candidates.get_mut(place.as_str()).expect("a candidate");
-                    if *index == 0 {
+                    if *index == 0 && candidate.kind != Some(SlotKind::Discarded) {
                         candidate.unpacked_in.push(&block.label);
                     } else {
                         rejected.insert(place);
@@ -98,14 +166,15 @@ pub(super) fn lookup_payload_slots(function: &MirFunction) -> HashSet<String> {
             Terminator::Match {
                 scrutinee: Operand::Place(place),
                 arms,
-                ..
+                otherwise,
             } if candidates.contains_key(place.as_str()) => {
-                let tests_lookup = arms.iter().all(|arm| {
-                    arm.wildcard
-                        || (matches!(arm.enum_name.as_deref(), None | Some("Lookup"))
-                            && matches!(arm.variant_name.as_deref(), Some("Found" | "Missing")))
-                });
-                if !tests_lookup {
+                let kind = candidates[place.as_str()]
+                    .kind
+                    .expect("an assigned candidate");
+                let tests_slot = arms
+                    .iter()
+                    .all(|arm| arm.wildcard || kind.tests(arm, otherwise));
+                if !tests_slot {
                     rejected.insert(place);
                 }
             }
@@ -137,6 +206,8 @@ pub(super) fn lookup_payload_slots(function: &MirFunction) -> HashSet<String> {
 
 #[derive(Default)]
 struct Candidate<'a> {
+    /// What the temporary would otherwise hold.
+    kind: Option<SlotKind>,
     /// The blocks that assign the temporary.
     assigned: HashSet<&'a str>,
     /// The blocks that copy its payload.
