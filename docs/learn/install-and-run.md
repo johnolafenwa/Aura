@@ -7,7 +7,7 @@ Aura release archives ship a command-line tool called `aura` and its private
 native runtime under `lib/aura`. The tool parses, type-checks, runs, and
 builds Aura source files. It is also the entry point for editor tooling.
 
-Aura 0.9 is a technical preview.
+Aura 0.10 is a technical preview.
 
 ## Install A Release Archive
 
@@ -33,7 +33,7 @@ To install by hand, download the archive for a supported host and extract it.
 Keep its directory layout intact:
 
 ```text
-aura-v0.9.0-preview-<target>/
+aura-v0.10.0-preview-<target>/
 ├── bin/aura
 ├── lib/aura/
 │   ├── libaura_runtime.a
@@ -112,8 +112,8 @@ aura --version
 On Unix shells, consider adding that export to your shell profile.
 
 Preview builds print their channel and source commit, for example
-`aura 0.9.0-preview (0123456789ab)`. Source-checkout builds print the channel
-as `aura 0.9.0-dev (0123456789ab)`.
+`aura 0.10.0-preview (0123456789ab)`. Source-checkout builds print the channel
+as `aura 0.10.0-dev (0123456789ab)`.
 
 ## Install The VS Code Extension
 

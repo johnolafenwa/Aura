@@ -235,7 +235,7 @@ Bare builtin constructor names such as `Found(...)`, `Missing`, `Ok(...)`, and `
 
 A user enum is copyable when every payload type of every variant is statically copyable. Otherwise the enum is a move type. The classification is structural across all variants. It does not depend on the variant held at runtime.
 
-`Lookup[T]`, `Poll[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` follow the same payload-copy rule. `TaskResult[T]`, `SelectOutcome[Q, T]`, `WaitAny[T]`, and `WaitAll[T]` are move outcome types in Aura 0.9, even with copy payloads. An unconstrained generic payload is not assumed copyable. See [Types](/manual/types#copy-and-move-categories).
+`Lookup[T]`, `Poll[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` follow the same payload-copy rule. `TaskResult[T]`, `SelectOutcome[Q, T]`, `WaitAny[T]`, and `WaitAll[T]` are move outcome types in Aura 0.10, even with copy payloads. An unconstrained generic payload is not assumed copyable. See [Types](/manual/types#copy-and-move-categories).
 
 ## Statement Matches
 
@@ -289,7 +289,7 @@ Expression arms may also use the inline form `case Pattern: expression`. Stateme
 
 ## Pattern Forms
 
-At the top level of a match arm, Aura 0.9 supports:
+At the top level of a match arm, Aura 0.10 supports:
 
 - an enum variant pattern for an enum scrutinee
 - a recursively nested tuple pattern for a tuple scrutinee, with at most one rest element

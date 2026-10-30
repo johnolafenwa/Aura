@@ -7,6 +7,27 @@ in this file.
 
 ## Unreleased
 
+## VS Code extension 0.10.0 — 2026-10-30
+
+- Bundles language server 0.10.0. The semantic interface version stays 20.
+  The extension and the language server have no other changes.
+
+## 0.10.0 — 2026-10-30 (technical preview)
+
+Aura 0.10.0 ships phase 5 of the plan to bring Aura to Rust speed on the
+30 [cross-language programs](benchmarks/cross_language/README.md): fewer
+values in boxes and cheaper boxes for the rest. Payload-free variants are
+shared, a repeated type tag costs one compare, text is made from a byte
+slice without the slice, instance fields and element views are read in
+place, and small blocks come from per-thread lists. Measured the same day
+on the Linux measurement host, the 30 Aura programs take 21.5 seconds
+instead of 0.9.0's 26.1, the median program is 3.9 times Rust's time
+instead of 4.6 times and 0.41 times Python's instead of 0.53 times, and
+Aura is faster than Python on 24 programs instead of 22. `sql_engine`, at
+21 times Rust, is the one program above 8 times. Two 0.9.0 traps on
+read-only uses of a module constant's fields are fixed. The semantic
+interface stays 20, and the native cache format stays `v10`.
+
 ### Performance
 
 - A boxed value remembers the runtime type tag it was last given through a

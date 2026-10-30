@@ -315,8 +315,9 @@ M2 Pro host feed later performance decisions.
 | `set_insert_contains` | 1.89 times Rust in instructions on Linux in 0.7.0 |
 | `int_list_sum` | 1.21 times Rust in instructions on Linux in 0.7.0 |
 | AuraDB `update` by id | about 3 times Python 3.13 |
-| 30 cross-language programs | median 4.6 times Rust and 0.53 times Python 3.13 by wall time on Linux in 0.9.0 |
-| `task_pool` cross-language program | 2.4 times Rust with four workers and 1.4 times with one in 0.9.0 |
+| 30 cross-language programs | median 3.9 times Rust and 0.41 times Python 3.13 by wall time on Linux in 0.10.0 |
+| `sql_engine` cross-language program | 21 times Rust by wall time on Linux in 0.10.0, the one program above 8 times |
+| `task_pool` cross-language program | 2.3 times Rust with four workers in 0.10.0 |
 
 These gaps are specific to these workloads. Scheduling, runtime
 implementation, allocation, and optimizer-barrier choices affect how to read
@@ -454,6 +455,28 @@ so pipeline stages on different workers pass each value between cores.
 `sql_engine` (22x), `binary_trees` (10x), and `regex_match` (10x) are
 furthest; they spend most of their time allocating boxes for strings,
 enums, and class instances, which the next phase takes out of boxes.
+
+Aura 0.10.0 ships phase 5. It shares payload-free variants, skips repeated
+type tags, makes text from a byte slice without the slice, reads instance
+fields and element views in place, and allocates small blocks from
+per-thread lists and chunks (Repeated Type Tags through Small Allocations below give each step). Both
+compilers measured on the same container on 30 October 2026, median of
+five runs:
+
+| Measure | Aura 0.9.0 | Aura 0.10.0 |
+| --- | ---: | ---: |
+| All 30 programs, wall time | 26.1 s | 21.5 s |
+| Median Aura / Rust, wall time | 4.6x | 3.9x |
+| Median Aura / Python 3.13, wall time | 0.53x | 0.41x |
+| Programs faster than Python | 22 | 24 |
+| Programs above 8x Rust | 3 | 1 |
+
+The phase's own targets, a median of 3x Rust and no program above 8x, are
+not met. `sql_engine` is 21x: its time is spread over its tokenizer, the
+row lists it builds and copies, and the values in each row, with no single
+cost above 5%. `regex_match` (7.7x), `json_roundtrip`, and `spreadsheet`
+(6.8x) come next. `binary_trees` went from 10.5x to 3.7x and
+`graph_paths` from 8.9x to 4.7x.
 
 ### Per-Call Attribution
 

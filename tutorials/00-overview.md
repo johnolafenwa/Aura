@@ -12,7 +12,7 @@ functions use `def`, classes use `class`, and lines need no semicolons. Before
 a program runs, the compiler gives every expression a type and checks how
 values and resources are owned.
 
-Aura 0.9 focuses on reliable applications, agents, and ML infrastructure. The
+Aura 0.10 focuses on reliable applications, agents, and ML infrastructure. The
 long-term goal is a general-purpose systems language that can build the full
 software stack, including operating systems and device drivers.
 

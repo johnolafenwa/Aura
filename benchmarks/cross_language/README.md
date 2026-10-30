@@ -91,83 +91,84 @@ every sample with the commit.
 
 ## Recorded results
 
-Measured on 29 October 2026 at the 0.9.0 release candidate, after phases 2,
-3, and 4 of the plan to bring Aura to Rust speed, in a Linux x86-64 container
-with 4 vCPUs (Intel Xeon, 2.1 GHz), Python 3.13.17, and Rust 1.95.0. Each
-time is the median of five whole-process runs at the bench size, so it
-includes process startup and, for Aura, the runtime's task scheduler. Lower
-ratios are better for Aura. The Aura 0.8.0 column is the same program built
-by the 0.8.0 compiler, measured on 27 October 2026 on the same machine.
-`file_io` syncs a file to disk in all three versions, and the threaded
-programs (`http_api`, `kv_server`, `pubsub_broker`, `task_pool`) move by 10
-to 20% from run to run.
+Measured on 30 October 2026 at the 0.10.0 release candidate, after phase 5
+of the plan to bring Aura to Rust speed, in a Linux x86-64 container with 4
+vCPUs (Intel Xeon, 2.1 GHz), Python 3.13.17, and Rust 1.95.0. Each time is
+the median of five whole-process runs at the bench size, so it includes
+process startup and, for Aura, the runtime's task scheduler. Lower ratios
+are better for Aura. The Aura 0.9.0 column is the same program built by the
+0.9.0 compiler, measured the same day on the same machine. The container
+ran slower that day than when 0.9.0 was released: 0.9.0 took 26.1 seconds
+for all 30 programs instead of 23.5. `file_io` syncs a file to disk in all
+three versions, and the threaded programs (`http_api`, `kv_server`,
+`pubsub_broker`, `task_pool`) and the shortest ones move by 10 to 20% from
+run to run.
 
-| Program | Size | Python ms | Rust ms | Aura ms | Aura 0.8.0 ms | Aura / Python | Aura / Rust |
+| Program | Size | Python ms | Rust ms | Aura ms | Aura 0.9.0 ms | Aura / Python | Aura / Rust |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `astar_pathfinding` | 500 | 2,244 | 83 | 264 | 875 | 0.12x | 3.2x |
-| `bank_ledger` | 200000 | 327 | 36 | 190 | 892 | 0.58x | 5.2x |
-| `binary_trees` | 14 | 326 | 54 | 566 | 2,715 | 1.74x | 10.5x |
-| `bytecode_vm` | 200000 | 2,173 | 39 | 57 | 1,057 | 0.03x | 1.4x |
-| `csv_aggregate` | 200000 | 478 | 132 | 600 | 1,398 | 1.25x | 4.6x |
-| `docdb` | 50000 | 607 | 394 | 2,117 | 3,360 | 3.49x | 5.4x |
-| `file_io` | 300000 | 947 | 649 | 2,044 | 2,799 | 2.16x | 3.2x |
-| `graph_paths` | 200000 | 5,046 | 268 | 2,396 | 37,183 | 0.47x | 8.9x |
-| `hashing` | 2000000 | 1,399 | 42 | 58 | 67 | 0.04x | 1.4x |
-| `http_api` | 3000 | 1,160 | 314 | 317 | 1,179 | 0.27x | 1.0x |
-| `image_filters` | 1000 | 2,621 | 48 | 66 | 4,657 | 0.03x | 1.4x |
-| `interpreter` | 20000 | 3,228 | 309 | 1,277 | 29,407 | 0.40x | 4.1x |
-| `json_roundtrip` | 50 | 418 | 140 | 928 | 1,823 | 2.22x | 6.6x |
-| `kv_server` | 50000 | 3,672 | 1,782 | 2,171 | 3,280 | 0.59x | 1.2x |
-| `lru_cache` | 200000 | 248 | 24 | 140 | 844 | 0.56x | 6.0x |
-| `lzw_compress` | 1000000 | 579 | 38 | 250 | 376 | 0.43x | 6.6x |
-| `markdown_render` | 20000 | 834 | 63 | 451 | 655 | 0.54x | 7.2x |
-| `mini_browser` | 500 | 985 | 194 | 1,451 | 4,694 | 1.47x | 7.5x |
-| `nbody` | 300000 | 1,407 | 16 | 74 | 422 | 0.05x | 4.7x |
-| `order_book` | 100000 | 144 | 6 | 23 | 626 | 0.16x | 4.1x |
-| `pubsub_broker` | 50000 | 4,135 | 1,908 | 2,700 | 6,464 | 0.65x | 1.4x |
-| `raytracer` | 500 | 2,736 | 26 | 111 | 13,479 | 0.04x | 4.4x |
-| `regex_match` | 5000 | 1,582 | 77 | 803 | 9,323 | 0.51x | 10.5x |
-| `sort_records` | 100000 | 926 | 90 | 476 | 1,407 | 0.51x | 5.3x |
-| `spreadsheet` | 1200 | 785 | 30 | 226 | 1,583 | 0.29x | 7.6x |
-| `sql_engine` | 10000 | 575 | 47 | 1,045 | 7,497 | 1.82x | 22.2x |
-| `task_pool` | 100000 | 738 | 211 | 501 | 2,812 | 0.68x | 2.4x |
-| `template_render` | 10000 | 626 | 252 | 1,575 | 4,251 | 2.52x | 6.3x |
-| `text_diff` | 20000 | 1,736 | 79 | 155 | 223 | 0.09x | 2.0x |
-| `word_freq` | 500000 | 617 | 149 | 496 | 1,823 | 0.80x | 3.3x |
+| `astar_pathfinding` | 500 | 2,444 | 96 | 281 | 285 | 0.12x | 2.9x |
+| `bank_ledger` | 200000 | 361 | 30 | 167 | 248 | 0.46x | 5.6x |
+| `binary_trees` | 14 | 334 | 64 | 235 | 595 | 0.70x | 3.7x |
+| `bytecode_vm` | 200000 | 2,371 | 48 | 65 | 98 | 0.03x | 1.4x |
+| `csv_aggregate` | 200000 | 499 | 133 | 598 | 824 | 1.20x | 4.5x |
+| `docdb` | 50000 {workdir} | 668 | 472 | 2,132 | 2,223 | 3.19x | 4.5x |
+| `file_io` | 300000 {workdir} | 1,105 | 808 | 2,323 | 2,303 | 2.10x | 2.9x |
+| `graph_paths` | 200000 | 5,624 | 286 | 1,344 | 2,204 | 0.24x | 4.7x |
+| `hashing` | 2000000 | 1,569 | 46 | 63 | 63 | 0.04x | 1.4x |
+| `http_api` | 3000 | 1,295 | 330 | 321 | 338 | 0.25x | 1.0x |
+| `image_filters` | 1000 | 2,806 | 56 | 84 | 73 | 0.03x | 1.5x |
+| `interpreter` | 20000 | 4,198 | 336 | 1,222 | 1,476 | 0.29x | 3.6x |
+| `json_roundtrip` | 50 | 462 | 143 | 976 | 1,042 | 2.11x | 6.8x |
+| `kv_server` | 50000 | 4,062 | 1,958 | 2,237 | 2,493 | 0.55x | 1.1x |
+| `lru_cache` | 200000 | 243 | 32 | 101 | 122 | 0.42x | 3.1x |
+| `lzw_compress` | 1000000 | 541 | 44 | 282 | 292 | 0.52x | 6.4x |
+| `markdown_render` | 20000 | 861 | 70 | 339 | 355 | 0.39x | 4.9x |
+| `mini_browser` | 500 | 1,007 | 205 | 887 | 1,600 | 0.88x | 4.3x |
+| `nbody` | 300000 | 1,459 | 16 | 80 | 76 | 0.05x | 4.9x |
+| `order_book` | 100000 | 153 | 7 | 23 | 23 | 0.15x | 3.5x |
+| `pubsub_broker` | 50000 | 4,426 | 2,073 | 2,771 | 3,169 | 0.63x | 1.3x |
+| `raytracer` | 500 | 2,962 | 27 | 115 | 155 | 0.04x | 4.2x |
+| `regex_match` | 5000 | 1,786 | 89 | 682 | 890 | 0.38x | 7.7x |
+| `sort_records` | 100000 | 1,093 | 92 | 431 | 561 | 0.39x | 4.7x |
+| `spreadsheet` | 1200 | 925 | 33 | 223 | 260 | 0.24x | 6.8x |
+| `sql_engine` | 10000 | 649 | 45 | 928 | 1,119 | 1.43x | 20.7x |
+| `task_pool` | 100000 | 797 | 260 | 602 | 556 | 0.76x | 2.3x |
+| `template_render` | 10000 | 704 | 286 | 1,203 | 1,831 | 1.71x | 4.2x |
+| `text_diff` | 20000 | 1,944 | 85 | 181 | 182 | 0.09x | 2.1x |
+| `word_freq` | 500000 | 690 | 173 | 591 | 612 | 0.86x | 3.4x |
 
-All 30 Aura programs take 23.5 seconds, down from 147 seconds with 0.8.0 and
-227 seconds with 0.7.1. Python takes 43 seconds and Rust 7.5 seconds. The
-median program takes 0.53 times Python's time, down from 2.7 times, and 4.6
-times Rust's, down from 16 times. Aura is now faster than Python on 22
-programs. It is slower on `binary_trees`, `csv_aggregate`, `docdb`,
-`file_io`, `json_roundtrip`, `mini_browser`, `sql_engine`, and
-`template_render`.
+All 30 Aura programs take 21.5 seconds, down from 26.1 seconds with 0.9.0
+on the same day. Python takes 48 seconds and Rust 8.3 seconds. The median
+program takes 0.41 times Python's time, down from 0.53 times, and 3.9 times
+Rust's, down from 4.6 times. Aura is faster than Python on 24 programs. It
+is slower on `csv_aggregate`, `docdb`, `file_io`, `json_roundtrip`,
+`sql_engine`, and `template_render`.
 
-These changes removed the largest costs that 0.8.0 had:
+Phase 5 took more values out of boxes and cut the cost of the boxes left:
 
-- Class instances, records, tuples, enum payloads, and unions stay in typed
-  native layouts, and a read from a list, a field, or a `match` lends the
-  value instead of copying it into a new box (`graph_paths`, `raytracer`,
-  `interpreter`, `order_book`).
-- Strings keep short text in place, string operations read their text where
-  it is, and an f-string builds one text (`template_render`,
-  `markdown_render`, `regex_match`).
-- A dictionary lookup probes once and lends the entry it finds, and JSON
-  parses and writes without building a second tree (`docdb`,
-  `json_roundtrip`, `word_freq`).
-- A call pushes and pops its frame record with one compare each.
-- Socket lines are read a 4 KiB chunk at a time, HTTP is parsed on the
-  calling task, and queue hand-offs build no variant box and wake a worker
-  only when it sleeps (`kv_server`, `http_api`, `pubsub_broker`,
-  `task_pool`).
+- A payload-free variant such as `Tree.Leaf` is one shared box, and a new
+  variant's box carries its type's tag, so `binary_trees` builds only its
+  inner nodes (10.5x Rust at the 0.9.0 release, 3.7x now).
+- A box remembers its last type tag, so generated code skips a repeated
+  tag call (`regex_match`, `interpreter`).
+- `str.from_bytes(bytes[a:b])` reads the bytes in place, and a parse
+  matched on `Ok` keeps only the value (`sql_engine`, `csv_aggregate`).
+- Comparisons and tests on instance fields, and fields reached through a
+  `view` of a list element, read the field where it lies, and appends to
+  an element of a list change it in place (`mini_browser`,
+  `template_render`, `graph_paths`).
+- A new allocator keeps freed small blocks on per-thread lists and cuts
+  new ones from per-thread chunks, so allocation takes under 3% of the
+  instructions of 29 programs instead of up to 35% (`sql_engine`,
+  `graph_paths`, `sort_records`).
 
-`task_pool` runs in 2.4 times Rust's time with four workers and 1.4 times
-with one. The rest is moving each value between cores: tasks stay on the
-worker they start on, so pipeline stages on different workers hand off
-each value across cores. `sql_engine` (22x Rust) and `binary_trees` (10x)
-still spend most of their time allocating and freeing boxes for strings,
-enums, and class instances; taking those out of boxes is the next phase of
-the plan.
+`sql_engine` (21x Rust) is the one program above 8x. Its time is spread
+across the tokenizer, the row lists it builds and copies, and the boxed
+values in each row, with no single cost above 5%. `regex_match` (7.7x),
+`json_roundtrip`, and `spreadsheet` (6.8x) come next. `task_pool` runs in
+2.3 times Rust's time with four workers: tasks stay on the worker they
+start on, so pipeline stages on different workers hand off each value
+across cores.
 
 ### Instruction counts
 
