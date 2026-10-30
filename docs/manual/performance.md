@@ -1486,6 +1486,23 @@ that write stays in generated code too. `sql_engine` runs 25% fewer
 instructions and in about 60% less time at its bench size, and
 `graph_paths` runs 20% fewer instructions.
 
+### File Calls
+
+In a native build, every file-system call, `fs.exists` included, runs
+on the blocking-I/O pool, never on the worker thread that runs Aura
+tasks, so a slow disk or a network file system holds up only the task
+that made the call. Closing a file opened for writing, and writing out
+buffered bytes before another call, run there too.
+
+The hand-off is cheap when calls come one after another. A pool worker
+that finishes a job checks the queue for 50 microseconds before it
+sleeps, and a new job wakes one sleeping worker, not all of them. The
+calling task checks for its result for 50 microseconds before it parks,
+and runs its worker's other ready tasks between checks. On a RAM disk, a
+`fs.write_string` or `fs.read_to_string` call takes about 8 microseconds
+instead of 38, as in Python, and `file_io` runs in about 0.45 s instead
+of 0.76 s (Python 0.45 s).
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and
