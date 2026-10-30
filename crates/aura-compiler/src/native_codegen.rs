@@ -4868,7 +4868,14 @@ impl<'a> FunctionCompiler<'a> {
         let caller_owned = self.layout_scratch.clone();
         // A frozen instance keeps no fields in place, so the runtime reads
         // the field.
-        let value = self.load_static_place_slowly(place)?;
+        let value = if self
+            .view_places
+            .contains_key(place.split('.').next().unwrap_or_default())
+        {
+            self.load_view_place(place)?
+        } else {
+            self.load_static_place_slowly(place)?
+        };
         let value = if self.temporary_owns_opaque(&value) {
             value
         } else {
@@ -4940,9 +4947,10 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    /// Whether the local instance a read-only lend of `place` lends a field
-    /// of is frozen, as a word, or `None` for a lend that is not one of
-    /// these and takes its place out as before.
+    /// Whether the local instance, or the value a one-element view selects
+    /// from, that a read-only lend of `place` lends a field of is frozen, as
+    /// a word, or `None` for a lend that is not one of these and takes its
+    /// place out as before.
     fn frozen_lend_root(
         &mut self,
         place: &str,
@@ -4951,13 +4959,27 @@ impl<'a> FunctionCompiler<'a> {
         let Some((root, _)) = place.split_once('.') else {
             return Ok(None);
         };
+        // A view of one element checks the value it selects from: freezing
+        // a module constant freezes everything it holds.
+        let base = match self.view_places.get(root) {
+            Some(view) => match view.alternatives.as_slice() {
+                [alternative] => alternative
+                    .place
+                    .split(['.', '['])
+                    .next()
+                    .unwrap_or_default()
+                    .to_string(),
+                _ => return Ok(None),
+            },
+            None => root.to_string(),
+        };
         if mutable
-            || self.view_places.contains_key(root)
-            || !matches!(self.variable_types.get(root), Some(DirectType::Opaque(_)))
+            || self.view_places.contains_key(&base)
+            || !matches!(self.variable_types.get(&base), Some(DirectType::Opaque(_)))
         {
             return Ok(None);
         }
-        let object = self.load_root(root)?.values[0];
+        let object = self.load_root(&base)?.values[0];
         let frozen = self
             .builder
             .call(self.runtime[RuntimeFn::ValueIsFrozen], &[object]);
@@ -8208,6 +8230,13 @@ impl<'a> FunctionCompiler<'a> {
         if let Some(result) = self.compile_borrowed_element_member_call(object, callee, args)? {
             return Ok(result);
         }
+        if let (Operand::Place(place), MemberCallee::Runtime(op)) = (object, callee) {
+            if receiver_place == Some(place.as_str()) {
+                if let Some(result) = self.add_to_native_element(place, op, args)? {
+                    return Ok(result);
+                }
+            }
+        }
         let field_box_receiver = matches!(callee, MemberCallee::Runtime(_))
             && matches!(object, Operand::Place(place) if self.field_lends.contains_key(place));
         let object = match (object, callee) {
@@ -8216,6 +8245,18 @@ impl<'a> FunctionCompiler<'a> {
                     || self.moved_operands.contains(&std::ptr::from_ref(object)) =>
             {
                 self.take_place(place)?
+            }
+            // An element a view selects, such as `rows[i]` in
+            // `rows[i].append(x)`, is taken out of its collection and put
+            // back after the change, instead of copied and stored over the
+            // original: a copy shares the element's storage, so the change
+            // would copy the whole element.
+            (Operand::Place(place), MemberCallee::Runtime(op))
+                if receiver_place == Some(place.as_str())
+                    && adds_to_receiver(op)
+                    && self.selects_one_element(place)? =>
+            {
+                self.take_lent_place(place)?
             }
             (object, _) => self.load_operand(object)?,
         };
@@ -8226,6 +8267,21 @@ impl<'a> FunctionCompiler<'a> {
         let result = self.compile_member_callee_on_receiver(object, callee, receiver_place, args);
         self.field_box_receiver = outer;
         result
+    }
+
+    /// Whether `place` is a view of one element of a collection, with no
+    /// condition on which collection.
+    fn selects_one_element(&mut self, place: &str) -> std::result::Result<bool, String> {
+        if !self.view_places.contains_key(place) {
+            return Ok(false);
+        }
+        let resolved = self.resolve_view_place(place)?;
+        Ok(matches!(
+            resolved.alternatives.as_slice(),
+            [alternative] if alternative.conditions.is_empty()
+                && alternative.union_payloads.is_empty()
+                && !alternative.elements.is_empty()
+        ))
     }
 
     /// Whether a call operand reading `place` with `writeback` moves the
@@ -8799,6 +8855,15 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn load_place(&mut self, place: &str) -> std::result::Result<ValueRef, String> {
+        if let Some(value) = self.load_native_loan_projection(place)? {
+            return Ok(value);
+        }
+        self.load_view_place(place)
+    }
+
+    /// Reads `place` through the view places it may name, with a runtime
+    /// walk for each selection a view applies.
+    fn load_view_place(&mut self, place: &str) -> std::result::Result<ValueRef, String> {
         let resolved = self.resolve_view_place(place)?;
         if resolved.alternatives.len() == 1 && resolved.alternatives[0].conditions.is_empty() {
             return self.load_alternative(&resolved.alternatives[0]);
@@ -8898,6 +8963,9 @@ impl<'a> FunctionCompiler<'a> {
         let resolved = self.resolve_view_place(loan)?;
         if let [alternative] = resolved.alternatives.as_slice() {
             if alternative.conditions.is_empty() && !alternative.elements.is_empty() {
+                if checked && self.check_field_list_index(loan, alternative)? {
+                    return Ok(());
+                }
                 return self.emit_element_path_probe(loan, false);
             }
         }
@@ -8906,6 +8974,62 @@ impl<'a> FunctionCompiler<'a> {
         drop(probe);
         self.release_temporary_owned_since(&baseline);
         Ok(())
+    }
+
+    /// Checks the one position a loan selects from a list field, such as
+    /// `template.texts[i]`, against the field's list where the instance
+    /// keeps it, when the instance is kept in place; any other instance
+    /// takes the runtime probe. Returns false for any other selection.
+    fn check_field_list_index(
+        &mut self,
+        loan: &str,
+        alternative: &DirectViewAlternative,
+    ) -> std::result::Result<bool, String> {
+        let [selector] = alternative.elements.as_slice() else {
+            return Ok(false);
+        };
+        if !matches!(selector.kind, DirectElementKind::List) {
+            return Ok(false);
+        }
+        let Some((root, slot, _)) = self.class_place(&alternative.place)? else {
+            return Ok(false);
+        };
+        if !matches!(slot.kind, classes::SlotKind::Handle) {
+            return Ok(false);
+        }
+        let object = self.load_root(&root)?.values[0];
+        let index = self.builder.use_var(selector.variable);
+        let slow_block = self.builder.create_block();
+        let fast_block = self.builder.create_block();
+        let field_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.emit_class_check(object, slot.access, slow_block, fast_block);
+
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let block = self.class_block(object);
+        let field = self
+            .builder
+            .load(types::I64, MemFlags::trusted(), block, slot.offset);
+        self.builder.brif(field, field_block, &[], slow_block, &[]);
+
+        self.builder.switch_to_block(field_block);
+        self.builder.seal_block(field_block);
+        let (line, column) = self.span_operands(selector.span);
+        self.builder.call(
+            self.runtime[RuntimeFn::VecCheckIndex],
+            &[field, index, line, column],
+        );
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        self.emit_element_path_probe(loan, false)?;
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        Ok(true)
     }
 
     /// A span as the line and column words the runtime's indexing helpers
@@ -8927,6 +9051,10 @@ impl<'a> FunctionCompiler<'a> {
             return self.load_static_place(&alternative.place);
         };
         let element_type = last.element_type.clone();
+        if let Some(copy) = self.load_field_str_element(alternative)? {
+            self.fresh_str_copies.insert(copy);
+            return Ok(self.owned_opaque_result(vec![copy], element_type));
+        }
         let (collection, projection) = self.load_element_path_root(&alternative.place)?;
         if let [selector] = alternative.elements.as_slice() {
             if projection.is_empty()
@@ -8940,11 +9068,26 @@ impl<'a> FunctionCompiler<'a> {
                 return Ok(self.owned_opaque_result(vec![copy], element_type));
             }
         }
-        let path = self.element_path_operands(&projection, &alternative.elements)?;
+        let loaded = self.element_path_load(collection.values[0], &projection, alternative)?;
+        if element_type == Type::named("str") {
+            self.fresh_str_copies.insert(loaded);
+        }
+        Ok(self.owned_opaque_result(vec![loaded], element_type))
+    }
+
+    /// The runtime walk of one view alternative's selections from
+    /// `collection`, which clones only the value reached.
+    fn element_path_load(
+        &mut self,
+        collection: Val,
+        projection: &str,
+        alternative: &DirectViewAlternative,
+    ) -> std::result::Result<Val, String> {
+        let path = self.element_path_operands(projection, &alternative.elements)?;
         let inst = self.builder.call(
             self.runtime[RuntimeFn::ElementPathLoad],
             &[
-                collection.values[0],
+                collection,
                 path.path_ptr,
                 path.path_len,
                 path.selectors_ptr,
@@ -8953,10 +9096,64 @@ impl<'a> FunctionCompiler<'a> {
                 path.column,
             ],
         );
-        if element_type == Type::named("str") {
-            self.fresh_str_copies.insert(inst.results[0]);
+        Ok(inst.results[0])
+    }
+
+    /// Copies a `str` element of a `list[str]` field, such as
+    /// `template.texts[i]`, out of the field's box where the instance keeps
+    /// it, as an element of a local list is copied, when the instance is
+    /// kept in place. Any other instance, or a moved-out field, takes the
+    /// runtime walk. `None` for any other alternative.
+    fn load_field_str_element(
+        &mut self,
+        alternative: &DirectViewAlternative,
+    ) -> std::result::Result<Option<Val>, String> {
+        let [selector] = alternative.elements.as_slice() else {
+            return Ok(None);
+        };
+        if !selector.projection.is_empty()
+            || !matches!(selector.kind, DirectElementKind::List)
+            || selector.element_type != Type::named("str")
+        {
+            return Ok(None);
         }
-        Ok(self.owned_opaque_result(inst.results, element_type))
+        let Some((root, slot, _)) = self.class_place(&alternative.place)? else {
+            return Ok(None);
+        };
+        if !matches!(slot.kind, classes::SlotKind::Handle) {
+            return Ok(None);
+        }
+        let object = self.load_root(&root)?.values[0];
+        let index = self.builder.use_var(selector.variable);
+        let slow_block = self.builder.create_block();
+        let fast_block = self.builder.create_block();
+        let field_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        self.emit_class_check(object, slot.access, slow_block, fast_block);
+
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let block = self.class_block(object);
+        let field = self
+            .builder
+            .load(types::I64, MemFlags::trusted(), block, slot.offset);
+        self.builder.brif(field, field_block, &[], slow_block, &[]);
+
+        self.builder.switch_to_block(field_block);
+        self.builder.seal_block(field_block);
+        let copy = self.emit_str_element_copy(field, index, selector.span);
+        self.builder.jump(join_block, &[copy]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let (collection, projection) = self.load_element_path_root(&alternative.place)?;
+        let copy = self.element_path_load(collection.values[0], &projection, alternative)?;
+        self.builder.jump(join_block, &[copy]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        Ok(Some(self.builder.block_params(join_block)[0]))
     }
 
     /// Stores through one view alternative: a static place directly, or the
@@ -13561,15 +13758,19 @@ impl<'a> FunctionCompiler<'a> {
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
-            ListOp::Push
-                if self.plain_record(&element_direct_ty)?.is_some() && !self.holds_field_box() =>
-            {
+            ListOp::Push if self.plain_record(&element_direct_ty)?.is_some() => {
                 let record = self
                     .plain_record(&element_direct_ty)?
                     .expect("checked above");
                 let value = self.load_operand_for_target(&args[0].value, &element_direct_ty)?;
                 let value = self.coerce_value(value, &element_direct_ty)?;
-                self.emit_plain_list_push(&record, list, &value);
+                // A field's or an element's own box takes the record by
+                // call, which keeps the list's records in place.
+                if self.holds_field_box() {
+                    self.push_plain_record_by_call(&record, list, &value);
+                } else {
+                    self.emit_plain_list_push(&record, list, &value);
+                }
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
@@ -15113,6 +15314,30 @@ fn emit_retain_fast_path(
 /// holds the last reference it links, `aura_direct_release_last_owned_value`
 /// unlinks the value and frees it at zero without a lookup. A shared value,
 /// or one another task's ledger links, goes to `aura_direct_release_value`.
+/// Whether `op` adds to its receiver in place and gives back nothing: an
+/// append, insert, or extend of a list, an add to a set, or an index
+/// write of a dict entry.
+pub(super) fn adds_to_receiver_in_place(op: RuntimeOp) -> bool {
+    matches!(
+        op,
+        RuntimeOp::List(ListOp::Push | ListOp::PushScalar(_) | ListOp::Insert | ListOp::Extend)
+            | RuntimeOp::Set(SetOp::Add | SetOp::AddInt64)
+            | RuntimeOp::Dict(DictOp::SetIndex)
+    )
+}
+
+/// Whether `op` adds to its receiver and stores the receiver back: an
+/// append, insert, or extend of a list, an add to a set, or a set of a
+/// dict entry.
+fn adds_to_receiver(op: RuntimeOp) -> bool {
+    matches!(
+        op,
+        RuntimeOp::List(ListOp::Push | ListOp::PushScalar(_) | ListOp::Insert | ListOp::Extend)
+            | RuntimeOp::Set(SetOp::Add | SetOp::AddInt64)
+            | RuntimeOp::Dict(DictOp::Set | DictOp::SetIndex)
+    )
+}
+
 /// The box field reads one rvalue reads in place; a comparison reads two,
 /// and a membership test its receiver and its argument.
 const FIELD_READS_PER_RVALUE: usize = 4;

@@ -1,0 +1,71 @@
+class Node:
+    tag: str
+    classes: list[str]
+    children: list[int64]
+
+
+class Template:
+    kinds: list[int64]
+    texts: list[str]
+
+
+copy class Arc:
+    target: int64
+    weight: int64
+
+
+def describe(nodes: list[Node], index: int64) -> int64:
+    view node = nodes[index]
+    mut total = 0
+    if node.tag == "p":
+        total += 1
+    if "x" in node.classes:
+        total += 10
+    for child in node.children:
+        total += child * 100
+    return total + node.tag.len() * 10000
+
+
+def render(template: Template) -> str:
+    mut out: list[str] = []
+    mut i = 0
+    while i < template.kinds.len():
+        if template.kinds[i] == 1:
+            out.append(template.texts[i].clone())
+        else:
+            out.append(template.texts[i].to_upper())
+        i += 1
+    return "".join(out)
+
+
+SHARED_NODES = [Node(tag="div", classes=["x"], children=[3])]
+SHARED_TEMPLATE = Template(kinds=[1, 2], texts=["a", "b"])
+
+
+def main():
+    nodes = [
+        Node(tag="p", classes=["x", "y"], children=[1, 2]),
+        Node(tag="span", classes=[], children=[]),
+    ]
+    for i in range(nodes.len()):
+        print(describe(nodes, i))
+    print(describe(SHARED_NODES, 0))
+    template = Template(kinds=[1, 2, 1], texts=["one ", "two ", "three"])
+    print(render(template))
+    print(render(SHARED_TEMPLATE))
+    mut adjacency: list[list[Arc]] = []
+    mut sets: list[set[int64]] = []
+    mut counts: list[dict[str, int64]] = []
+    for _ in range(3):
+        adjacency.append(list[Arc]())
+        sets.append({})
+        counts.append({})
+    for i in range(12):
+        adjacency[i % 3].append(Arc(target=i, weight=i * 2))
+        sets[i % 3].add(i % 4)
+        counts[i % 3][f"k{i % 2}"] = i
+    for u in range(3):
+        mut total = 0
+        for arc in adjacency[u]:
+            total += arc.target + arc.weight
+        print(f"{u}: {adjacency[u].len()} {total} {sets[u].len()} {counts[u].len()}")

@@ -49,6 +49,19 @@ Plan approved 2026-10-29 (all defaults; the release after this phase is
   template_render unchanged (gate -15% missed: its field reads are
   element paths, 5f). Details are in
   `2026-10-30-rust-speed-5e-field-reads.md`.
+- Step 5f: element loans followed for field reads and read-only lends of
+  a read-only class-element view (`native_loan_projection`), `str`
+  elements of list fields copied from the field box with an inline index
+  check (`load_field_str_element`, `check_field_list_index`), and
+  runtime add ops on an element receiver done on the element's box
+  (`added_receiver_loan`, `add_to_native_element`; other view receivers
+  take the element out instead of copying it). graph_paths -47%,
+  template_render -25% (so the 5e template_render gate of -15% is met
+  here), mini_browser -20%, sql_engine -5.5%, lru_cache -5.1%. Path walks
+  now: mini_browser 0%, template_render 4%, graph_paths 0%, docdb 30%
+  (gate under 2% MISSED for docdb and template_render: their walks are
+  payload views of `json.Value` and dict lookups). Details are in
+  `2026-10-30-rust-speed-5f-element-paths.md`.
 
 ## Aura 0.9.0 preview release (complete)
 

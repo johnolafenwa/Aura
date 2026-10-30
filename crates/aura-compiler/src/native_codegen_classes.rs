@@ -368,6 +368,24 @@ impl FunctionCompiler<'_> {
         };
         let object = self.load_root(&root)?.values[0];
         let slow_block = self.builder.create_block();
+        self.load_class_slot(place, object, slow_block, &slot, ty, false)
+            .map(Some)
+    }
+
+    /// Reads the field at `slot` of the instance box `object` where it lies
+    /// when the box keeps its fields in place, and `place` the slow way,
+    /// branching to `slow_block`, otherwise. The slow way is the view walk
+    /// when `through_view`, and the runtime read of a static place when not.
+    /// Other code may already branch to `slow_block`.
+    pub(super) fn load_class_slot(
+        &mut self,
+        place: &str,
+        object: Val,
+        slow_block: Blk,
+        slot: &ClassSlot,
+        ty: DirectType,
+        through_view: bool,
+    ) -> std::result::Result<ValueRef, String> {
         let fast_block = self.builder.create_block();
         let join_block = self.builder.create_block();
         for abi in ty.abi_types() {
@@ -418,7 +436,11 @@ impl FunctionCompiler<'_> {
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
         let caller_owned = self.layout_scratch.clone();
-        let loaded = self.load_static_place_slowly(place)?;
+        let loaded = if through_view {
+            self.load_view_place(place)?
+        } else {
+            self.load_static_place_slowly(place)?
+        };
         let loaded = self.coerce_value(loaded, &ty)?;
         let loaded =
             if matches!(slot.kind, SlotKind::Handle) && !self.temporary_owns_opaque(&loaded) {
@@ -446,13 +468,13 @@ impl FunctionCompiler<'_> {
         if let Some(variable) = borrowed {
             let copy = values.pop().expect("a borrowed read passes its copy");
             self.builder.def_var(variable, copy);
-            return Ok(Some(ValueRef { values, ty }));
+            return Ok(ValueRef { values, ty });
         }
         let value = ValueRef { values, ty };
         if matches!(slot.kind, SlotKind::Handle) {
             self.mark_temporary_opaque_owned(&value);
         }
-        Ok(Some(value))
+        Ok(value)
     }
 
     /// Writes a static field place of an instance kept in place where it
@@ -551,18 +573,29 @@ impl FunctionCompiler<'_> {
         if !self.field_lend_temps.contains(temp) {
             return Ok(false);
         }
-        let Some((root, slot, _)) = self.class_place(place)? else {
+        let slow_block;
+        let (object, slot) = if let Some((root, slot, _)) = self.class_place(place)? {
+            if !matches!(slot.kind, SlotKind::Handle) {
+                return Ok(false);
+            }
+            slow_block = self.builder.create_block();
+            (self.load_root(&root)?.values[0], slot)
+        } else if mutable {
             return Ok(false);
+        } else {
+            match self.native_loan_projection(place)? {
+                Some((slot, _)) if matches!(slot.kind, SlotKind::Handle) => {
+                    slow_block = self.builder.create_block();
+                    let element = self.native_loan_element(place, slow_block)?;
+                    (element, slot)
+                }
+                _ => return Ok(false),
+            }
         };
-        if !matches!(slot.kind, SlotKind::Handle) {
-            return Ok(false);
-        }
         let lent = self.declare_word_var();
         let slot_var = self.declare_word_var();
         let temp_var = self.local_vars(temp)?[0];
         self.lent_temps.insert(temp.to_string(), mutable);
-        let object = self.load_root(&root)?.values[0];
-        let slow_block = self.builder.create_block();
         let fast_block = self.builder.create_block();
         let lent_block = self.builder.create_block();
         let join_block = self.builder.create_block();

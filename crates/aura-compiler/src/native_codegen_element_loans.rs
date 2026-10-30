@@ -127,18 +127,48 @@ pub(super) fn native_element_loans<'f>(
                 }
                 _ => None,
             };
-            let passed = passed_loan(instruction, &borrowed, &sources);
+            let passed = passed_loan(instruction, &borrowed, &sources)
+                .or_else(|| added_receiver_loan(instruction, &sources));
             let reborrowed = match instruction {
                 Instruction::ReborrowElement { parent, .. } => Some(parent.as_str()),
                 _ => None,
             };
             let allowed = allowed.or(passed).or(reborrowed);
+            let assigned = match instruction {
+                Instruction::Assign { target, .. } => Some(target.as_str()),
+                _ => None,
+            };
             let mut allowed_seen = false;
             for mention in mentions {
                 let loan = root(mention);
-                let Some((source, _)) = sources.get(loan) else {
+                let Some((source, mutable)) = sources.get(loan) else {
                     continue;
                 };
+                // A read of a field of a read-only loan's element reads it
+                // in the element's box, and a read-only lend of one lends
+                // the field's box there.
+                let read = allowed.is_none()
+                    && assigned != Some(mention)
+                    && matches!(instruction, Instruction::Assign { .. });
+                let lent = allowed == Some(mention)
+                    && matches!(
+                        instruction,
+                        Instruction::Lend { mutable: false, .. }
+                            | Instruction::EndLend { mutable: false, .. }
+                    );
+                if mention != loan && !mutable && (read || lent) {
+                    lends.insert(loan.to_string());
+                    reads.insert(loan.to_string());
+                    continue;
+                }
+                // An added-to receiver names its loan as the receiver and as
+                // the receiver's place.
+                if allowed_seen
+                    && mention == loan
+                    && added_receiver_loan(instruction, &sources) == Some(loan)
+                {
+                    continue;
+                }
                 if allowed_seen || allowed != Some(mention) || mention != loan {
                     rejected.insert(loan.to_string());
                     continue;
@@ -163,7 +193,9 @@ pub(super) fn native_element_loans<'f>(
                     }
                     Instruction::Assign { .. } => {
                         lends.insert(loan.to_string());
-                        reads.insert(loan.to_string());
+                        if added_receiver_loan(instruction, &sources).is_none() {
+                            reads.insert(loan.to_string());
+                        }
                     }
                     _ => {}
                 }
@@ -257,6 +289,46 @@ fn passed_loan<'f>(
         .iter()
         .all(|mention| root(mention) != source)
         .then_some(loan.as_str())
+}
+
+/// The loan `instruction` adds to as the receiver of a runtime operation,
+/// as `rows[i].append(x)` adds to the loan of `rows[i]`, when the call
+/// names the loan nowhere else: the operation changes the element's box
+/// where its list keeps it.
+fn added_receiver_loan<'f>(
+    instruction: &'f Instruction,
+    sources: &HashMap<String, (String, bool)>,
+) -> Option<&'f str> {
+    let Instruction::Assign {
+        target,
+        value:
+            Rvalue::Call {
+                callee:
+                    CallTarget::Runtime {
+                        op,
+                        receiver: Some(Operand::Place(receiver)),
+                        receiver_place: Some(place),
+                    },
+                args,
+                ..
+            },
+    } = instruction
+    else {
+        return None;
+    };
+    let (source, _) = sources.get(receiver.as_str())?;
+    let names_loan = |place: &str| [receiver.as_str(), source.as_str()].contains(&root(place));
+    (receiver == place
+        && super::adds_to_receiver_in_place(*op)
+        && !names_loan(target)
+        && args.iter().all(|arg| {
+            arg.writeback_place.is_none()
+                && !matches!(
+                    &arg.value,
+                    Operand::Place(place) | Operand::MovePlace(place) if names_loan(place)
+                )
+        }))
+    .then_some(receiver.as_str())
 }
 
 /// Whether the `Lend` at `index` lends `loan`'s place to one runtime
@@ -811,6 +883,153 @@ impl FunctionCompiler<'_> {
             ],
         );
         Ok(())
+    }
+
+    /// Compiles a runtime operation that adds to `place`, a followed loan
+    /// of an element box, on the box where its list keeps it. A loan that
+    /// missed, or a moved-out slot, takes the element out and puts it back
+    /// as before. Returns `None` for any other receiver.
+    pub(super) fn add_to_native_element(
+        &mut self,
+        place: &str,
+        op: RuntimeOp,
+        args: &[MirArg],
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        let address = match self.native_loans.get(place) {
+            Some(NativeLoan {
+                address,
+                target: LoanTarget::Slot,
+            }) => *address,
+            _ => return Ok(None),
+        };
+        if !super::adds_to_receiver_in_place(op) {
+            return Ok(None);
+        }
+        let loan_ty = self.local_type(place)?;
+        let fast_block = self.builder.create_block();
+        let slow_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        let address = self.builder.use_var(address);
+        self.builder.brif(address, fast_block, &[], slow_block, &[]);
+
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let boxed = self
+            .builder
+            .load(types::I64, MemFlags::trusted(), address, 0);
+        let element_block = self.builder.create_block();
+        self.builder
+            .brif(boxed, element_block, &[], slow_block, &[]);
+        self.builder.switch_to_block(element_block);
+        self.builder.seal_block(element_block);
+        let caller_owned = self.layout_scratch.clone();
+        let object = ValueRef {
+            values: vec![boxed],
+            ty: loan_ty,
+        };
+        // The element's box belongs to its list, which never lets a box's
+        // list view run ahead of its list, as a field box's list.
+        let outer = std::mem::replace(&mut self.field_box_receiver, true);
+        let added =
+            self.compile_member_callee_on_receiver(object, MemberCallee::Runtime(op), None, args);
+        self.field_box_receiver = outer;
+        added?;
+        self.release_temporary_owned_since(&caller_owned);
+        self.layout_scratch = caller_owned.clone();
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let object = self.take_lent_place(place)?;
+        let added = self.compile_member_callee_on_receiver(
+            object,
+            MemberCallee::Runtime(op),
+            Some(place),
+            args,
+        )?;
+        drop(added);
+        self.release_temporary_owned_since(&caller_owned);
+        self.layout_scratch = caller_owned;
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        Ok(Some(unit_value(&mut *self.builder)))
+    }
+
+    /// Reads `place`, a field of the element a followed read-only loan of a
+    /// class element lends, in the element's box where the list keeps it.
+    /// A loan that missed, a moved-out element, or an element kept out of
+    /// place takes the view walk as before. Returns `None` for any other
+    /// place.
+    pub(super) fn load_native_loan_projection(
+        &mut self,
+        place: &str,
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        let Some((slot, ty)) = self.native_loan_projection(place)? else {
+            return Ok(None);
+        };
+        let slow_block = self.builder.create_block();
+        let element = self.native_loan_element(place, slow_block)?;
+        self.load_class_slot(place, element, slow_block, &slot, ty, true)
+            .map(Some)
+    }
+
+    /// The slot and type of `place`, a field of the element a followed loan
+    /// of a class element lends, when generated code reaches the field in
+    /// the element's block.
+    pub(super) fn native_loan_projection(
+        &mut self,
+        place: &str,
+    ) -> std::result::Result<Option<(ClassSlot, DirectType)>, String> {
+        let Some((loan, path)) = place.split_once('.') else {
+            return Ok(None);
+        };
+        if !matches!(
+            self.native_loans.get(loan),
+            Some(NativeLoan {
+                target: LoanTarget::Slot,
+                ..
+            })
+        ) {
+            return Ok(None);
+        }
+        let loan_ty = self.local_type(loan)?;
+        let Ok(ty) = self.type_of_place(place) else {
+            return Ok(None);
+        };
+        let segments = path.split('.').collect::<Vec<_>>();
+        Ok(self
+            .class_slot(&loan_ty, &segments, &ty)?
+            .map(|(_, slot)| (slot, ty)))
+    }
+
+    /// The element box the followed loan `place` is rooted at keeps in its
+    /// slot, branching to `slow_block` when the loan missed or the slot is
+    /// empty.
+    pub(super) fn native_loan_element(
+        &mut self,
+        place: &str,
+        slow_block: Blk,
+    ) -> std::result::Result<Val, String> {
+        let loan = root(place);
+        let Some(NativeLoan { address, .. }) = self.native_loans.get(loan).cloned() else {
+            return Err(format!("direct backend did not follow loan `{loan}`"));
+        };
+        let slot_block = self.builder.create_block();
+        let element_block = self.builder.create_block();
+        let address = self.builder.use_var(address);
+        self.builder.brif(address, slot_block, &[], slow_block, &[]);
+        self.builder.switch_to_block(slot_block);
+        self.builder.seal_block(slot_block);
+        let element = self
+            .builder
+            .load(types::I64, MemFlags::trusted(), address, 0);
+        self.builder
+            .brif(element, element_block, &[], slow_block, &[]);
+        self.builder.switch_to_block(element_block);
+        self.builder.seal_block(element_block);
+        Ok(element)
     }
 
     /// Lowers `ReadLoan` of a followed loan of a scalar or plain-record
