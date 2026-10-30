@@ -108,6 +108,10 @@ interface stays 20, and the native cache format stays `v10`.
   generated code. `sql_engine` runs 25% fewer instructions at the check
   size and in about 60% less time at the bench size, `graph_paths` 20%
   fewer, `task_pool` 11%, and `spreadsheet` 8%.
+- Fixed: `view row = rows[i]` followed by `match row[k]` failed to
+  compile with AU4001 "ends parent loan before its child" when no arm or
+  later statement named `row` again. The view now lasts until the match
+  ends.
 
 ## VS Code extension 0.9.0 — 2026-10-29
 
