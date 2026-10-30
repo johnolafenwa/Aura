@@ -18892,6 +18892,29 @@ drops a tree of thousands of nodes reuses the same memory for the next
 tree. `binary_trees` at depth 14 runs in about 3.8x Rust's time, down
 from 8.7x.
 
+### Field Reads In Place
+
+A comparison, an `in` test, or a length test reads a `str`, list, set,
+or dict field of an instance where it lies, without copying the field,
+when the instance is kept in its typed layout. The test gives back a
+`bool` or a number and keeps nothing it read, so the field stays the
+instance's for the whole test:
+
+```aura
+class Rule:
+    tag: str
+    class_name: str
+
+def applies(rule: Rule, tag: str, classes: list[str]) -> bool:
+    if rule.tag != "" and rule.tag != tag:
+        return false
+    return rule.class_name == "" or rule.class_name in classes
+```
+
+A field passed to a function or stored somewhere else is still copied.
+`mini_browser`, which runs a test like `applies` for every rule and
+node, runs 16.9% fewer instructions.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

@@ -1,0 +1,36 @@
+class Rule:
+    tag: str
+    class_name: str
+    names: list[str]
+    seen: set[str]
+    counts: dict[str, int64]
+
+
+def score(rule: Rule, node: Rule) -> int64:
+    mut total = 0
+    if rule.tag != "" and rule.tag == node.tag:
+        total += 1
+    if rule.class_name in node.names:
+        total += 10
+    if rule.tag in node.seen:
+        total += 100
+    if node.class_name in rule.counts:
+        total += 1000
+    if rule.tag.starts_with("d") and node.names.len() == 2:
+        total += 10000
+    return total
+
+
+SHARED = Rule(tag="div", class_name="z", names=["x"], seen={"div"}, counts={"z": 2})
+
+
+def main():
+    mut rule = Rule(tag="div", class_name="x", names=["a"], seen={"div"}, counts={"y": 1})
+    node = Rule(tag="div", class_name="y", names=["x", "z"], seen={"p"}, counts={})
+    print(score(rule, node))
+    print(score(node, rule))
+    rule.tag = "p"
+    print(score(rule, node))
+    # A module constant is shared, so its fields are read through the runtime.
+    print(score(SHARED, node))
+    print(score(node, SHARED))

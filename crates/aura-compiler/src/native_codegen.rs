@@ -1616,6 +1616,9 @@ impl<'a> NativeCodegen<'a> {
             text_byte_slices: lookups::text_byte_slices(function),
             byte_slice_words: HashMap::new(),
             deferred_byte_slice: None,
+            borrow_field_reads: false,
+            field_read_copies: Vec::new(),
+            field_read_count: 0,
             lent_places,
             lend_lookup: false,
             lent_elements,
@@ -2924,6 +2927,17 @@ struct FunctionCompiler<'a> {
     byte_slice_words: HashMap<String, Vec<Val>>,
     /// Set while the slice of one of `text_byte_slices` compiles.
     deferred_byte_slice: Option<String>,
+    /// Set while an rvalue that only reads its operands compiles, so a box
+    /// field of an instance kept in place is read where it lies. See
+    /// `reads_operands_only`.
+    borrow_field_reads: bool,
+    /// The variables that hold the copies those field reads made for
+    /// instances read through the runtime, null for a read in place, each
+    /// released once the rvalue is done. They hold null when the rvalue
+    /// begins, so a branch that made no read releases nothing.
+    field_read_copies: Vec<Var>,
+    /// How many of `field_read_copies` the rvalue's reads have taken.
+    field_read_count: usize,
     /// The lookup slots whose found value is lent, and the locals that hold
     /// that value. See `lookups::lent_lookup_places`. Each holds null, a
     /// box, or a value's address with its low bit set, so a retain or a
@@ -4112,15 +4126,16 @@ impl<'a> FunctionCompiler<'a> {
                     && !self.lend_native_element(place, temp, *mutable)?
                 {
                     self.lent_temps.insert(temp.clone(), *mutable);
-                    let value = self.take_lent_place(place)?;
-                    self.mark_emptied_store_root(temp);
-                    self.store_root(temp, value)?;
+                    self.lend_on_runtime_path(place, temp, *mutable)?;
                 }
             }
-            Instruction::EndLend { place, temp, .. } => {
-                if !self.end_class_field_lend(place, temp)? {
-                    let value = self.take_place(temp)?;
-                    self.store_place(place, value)?;
+            Instruction::EndLend {
+                place,
+                temp,
+                mutable,
+            } => {
+                if !self.end_class_field_lend(place, temp, *mutable)? {
+                    self.end_lend_on_runtime_path(place, temp, *mutable)?;
                 }
             }
             Instruction::Safepoint => {
@@ -4788,6 +4803,168 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn compile_rvalue_for_target(
+        &mut self,
+        rvalue: &Rvalue,
+        target: &DirectType,
+    ) -> std::result::Result<ValueRef, String> {
+        if self.borrow_field_reads || !reads_operands_only(rvalue) {
+            return self.compile_rvalue_for_target_directly(rvalue, target);
+        }
+        // The rvalue gives back a scalar and keeps none of its operands, so
+        // a field box it reads stays the instance's for the whole read.
+        if self.field_read_copies.is_empty() {
+            self.field_read_copies = (0..FIELD_READS_PER_RVALUE)
+                .map(|_| self.declare_word_var())
+                .collect();
+        }
+        let null = self.builder.iconst(types::I64, 0);
+        for copy in self.field_read_copies.clone() {
+            self.builder.def_var(copy, null);
+        }
+        self.field_read_count = 0;
+        self.borrow_field_reads = true;
+        let compiled = self.compile_rvalue_for_target_directly(rvalue, target);
+        self.borrow_field_reads = false;
+        let read = std::mem::take(&mut self.field_read_count);
+        for index in 0..read {
+            let copy = self.builder.use_var(self.field_read_copies[index]);
+            self.release_opaque_handle(copy);
+        }
+        compiled
+    }
+
+    /// Takes the next variable for the copy a borrowed field read makes on
+    /// its runtime path, or `None` when the rvalue's reads took them all
+    /// and the read copies the field as before.
+    pub(super) fn next_field_read_copy(&mut self) -> Option<Var> {
+        if !self.borrow_field_reads {
+            return None;
+        }
+        let copy = *self.field_read_copies.get(self.field_read_count)?;
+        self.field_read_count += 1;
+        Some(copy)
+    }
+
+    /// Lends `place` to `temp` on the runtime path: takes the place out,
+    /// as the lend's end puts it back. A read-only lend of a field of a
+    /// frozen instance, a module constant, copies the field instead, since
+    /// taking it out would change the constant.
+    pub(super) fn lend_on_runtime_path(
+        &mut self,
+        place: &str,
+        temp: &str,
+        mutable: bool,
+    ) -> std::result::Result<(), String> {
+        let Some(frozen) = self.frozen_lend_root(place, mutable)? else {
+            return self.take_lent_place_into(place, temp);
+        };
+        let copy_block = self.builder.create_block();
+        let take_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.brif(frozen, copy_block, &[], take_block, &[]);
+
+        self.builder.switch_to_block(copy_block);
+        self.builder.seal_block(copy_block);
+        let caller_owned = self.layout_scratch.clone();
+        // A frozen instance keeps no fields in place, so the runtime reads
+        // the field.
+        let value = self.load_static_place_slowly(place)?;
+        let value = if self.temporary_owns_opaque(&value) {
+            value
+        } else {
+            let retained = self.retain_opaque_handle(value.values[0]);
+            let retained = ValueRef {
+                values: vec![retained],
+                ty: value.ty,
+            };
+            self.mark_temporary_opaque_owned(&retained);
+            retained
+        };
+        self.mark_emptied_store_root(temp);
+        self.store_root(temp, value)?;
+        self.release_temporary_owned_since(&caller_owned);
+        self.layout_scratch = caller_owned.clone();
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(take_block);
+        self.builder.seal_block(take_block);
+        self.take_lent_place_into(place, temp)?;
+        self.release_temporary_owned_since(&caller_owned);
+        self.layout_scratch = caller_owned;
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        Ok(())
+    }
+
+    fn take_lent_place_into(&mut self, place: &str, temp: &str) -> std::result::Result<(), String> {
+        let value = self.take_lent_place(place)?;
+        self.mark_emptied_store_root(temp);
+        self.store_root(temp, value)
+    }
+
+    /// Ends a lend [`Self::lend_on_runtime_path`] made: puts the place
+    /// back, or releases the copy of a frozen instance's field.
+    pub(super) fn end_lend_on_runtime_path(
+        &mut self,
+        place: &str,
+        temp: &str,
+        mutable: bool,
+    ) -> std::result::Result<(), String> {
+        let Some(frozen) = self.frozen_lend_root(place, mutable)? else {
+            let value = self.take_place(temp)?;
+            return self.store_place(place, value);
+        };
+        let copy_block = self.builder.create_block();
+        let put_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.brif(frozen, copy_block, &[], put_block, &[]);
+
+        self.builder.switch_to_block(copy_block);
+        self.builder.seal_block(copy_block);
+        self.release_root(temp)?;
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(put_block);
+        self.builder.seal_block(put_block);
+        let caller_owned = self.layout_scratch.clone();
+        let value = self.take_place(temp)?;
+        self.store_place(place, value)?;
+        self.release_temporary_owned_since(&caller_owned);
+        self.layout_scratch = caller_owned;
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        Ok(())
+    }
+
+    /// Whether the local instance a read-only lend of `place` lends a field
+    /// of is frozen, as a word, or `None` for a lend that is not one of
+    /// these and takes its place out as before.
+    fn frozen_lend_root(
+        &mut self,
+        place: &str,
+        mutable: bool,
+    ) -> std::result::Result<Option<Val>, String> {
+        let Some((root, _)) = place.split_once('.') else {
+            return Ok(None);
+        };
+        if mutable
+            || self.view_places.contains_key(root)
+            || !matches!(self.variable_types.get(root), Some(DirectType::Opaque(_)))
+        {
+            return Ok(None);
+        }
+        let object = self.load_root(root)?.values[0];
+        let frozen = self
+            .builder
+            .call(self.runtime[RuntimeFn::ValueIsFrozen], &[object]);
+        Ok(Some(frozen.results[0]))
+    }
+
+    fn compile_rvalue_for_target_directly(
         &mut self,
         rvalue: &Rvalue,
         target: &DirectType,
@@ -14936,6 +15113,39 @@ fn emit_retain_fast_path(
 /// holds the last reference it links, `aura_direct_release_last_owned_value`
 /// unlinks the value and frees it at zero without a lookup. A shared value,
 /// or one another task's ledger links, goes to `aura_direct_release_value`.
+/// The box field reads one rvalue reads in place; a comparison reads two,
+/// and a membership test its receiver and its argument.
+const FIELD_READS_PER_RVALUE: usize = 4;
+
+/// Whether `rvalue` only reads its operands and gives back a scalar that
+/// holds none of them: a comparison, or a length or membership test.
+fn reads_operands_only(rvalue: &Rvalue) -> bool {
+    match rvalue {
+        Rvalue::Binary { op, .. } => is_comparison_op(*op),
+        Rvalue::Call {
+            callee: CallTarget::Runtime { op, .. },
+            ..
+        } => matches!(
+            op,
+            RuntimeOp::Str(StrOp::Contains | StrOp::StartsWith | StrOp::EndsWith | StrOp::Len)
+                | RuntimeOp::List(
+                    ListOp::Len
+                        | ListOp::IsEmpty
+                        | ListOp::Contains
+                        | ListOp::IndexOf
+                        | ListOp::Count
+                )
+                | RuntimeOp::Dict(
+                    DictOp::Len | DictOp::IsEmpty | DictOp::ContainsKey | DictOp::ContainsKeyInt64
+                )
+                | RuntimeOp::Set(
+                    SetOp::Len | SetOp::IsEmpty | SetOp::Contains | SetOp::ContainsInt64
+                )
+        ),
+        _ => false,
+    }
+}
+
 fn emit_release_fast_path(
     builder: &mut dyn FunctionBackend,
     frame_stack: FuncHandle,

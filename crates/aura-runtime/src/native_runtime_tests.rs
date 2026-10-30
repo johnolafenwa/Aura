@@ -28813,6 +28813,11 @@ fn direct_frozen_values_read_without_a_lock_and_refuse_writes() {
     unsafe { super::freeze_direct_value(value) };
     let header = unsafe { &*value };
     assert!(header.is_frozen());
+    assert_eq!(super::aura_direct_value_is_frozen(value), 1);
+    let thawed = boxed_value(Value::Bool(true));
+    assert_eq!(super::aura_direct_value_is_frozen(thawed), 0);
+    assert_eq!(super::aura_direct_value_is_frozen(std::ptr::null_mut()), 0);
+    unsafe { super::release_direct_value(thawed) };
     assert!(matches!(
         header.access(false),
         super::DirectValueAccess::Confined

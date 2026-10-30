@@ -34,6 +34,16 @@ in this file.
   blocks, and each thread keeps up to 1,024 freed boxes instead of 256.
   `binary_trees` runs 48% fewer instructions and in about 3.8x Rust's
   time, down from 8.7x.
+- A comparison, `in` test, or length test that reads a `str`, list, set,
+  or dict field of an instance reads the field where it lies in native
+  code instead of copying it first. `mini_browser`, whose style rules
+  compare tag and class fields for every node, runs 16.9% fewer
+  instructions.
+- Fixed: in native code, a length, membership, or other read-only call on
+  a list, set, or dict field of a module constant, such as
+  `DEFAULTS.names.len()`, stopped the program with "a module constant
+  cannot change". The read now uses a copy of the field instead of taking
+  it out of the constant.
 
 ## VS Code extension 0.9.0 — 2026-10-29
 
