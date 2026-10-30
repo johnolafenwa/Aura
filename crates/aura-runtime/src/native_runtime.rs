@@ -15533,7 +15533,13 @@ pub extern "C-unwind" fn aura_direct_io_read_line() -> *mut OpaqueValue {
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_fs_exists(path: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(path) } {
-        Value::String(path) => boxed_value(Value::Bool(std::path::Path::new(&path).exists())),
+        // A stat can wait as long as the file system does, so it runs on
+        // the blocking pool like the other file calls. It takes no
+        // cancellation, so the answer is always the stat's.
+        Value::String(path) => boxed_value(Value::Bool(
+            run_blocking_io(move || Ok(std::path::Path::new(&path).exists()), None)
+                .unwrap_or(false),
+        )),
         other => runtime_error(format!(
             "expected `str`, found `{}`",
             value_type_name(other)

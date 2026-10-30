@@ -4072,17 +4072,38 @@ pub fn flush_buffered_files() {
 }
 
 /// [`flush_buffered_files`], except for `skip`, a handle that is about to
-/// flush itself and report a failure.
+/// flush itself and report a failure. The writes run on the blocking pool,
+/// so a slow disk never holds up the worker thread's other tasks; with
+/// nothing buffered there is no trip to the pool.
 fn flush_other_buffered_files(skip: Option<&Arc<FileState>>) {
-    let files = {
-        let mut files = lock_mutex(&BUFFERED_FILES);
-        files.retain(|file| file.strong_count() > 0);
-        files
-            .iter()
-            .filter_map(Weak::upgrade)
-            .filter(|state| skip.is_none_or(|skip| !Arc::ptr_eq(state, skip)))
-            .collect::<Vec<_>>()
+    let files = buffered_files_with_pending(skip);
+    if files.is_empty() {
+        return;
+    }
+    let flush = move || {
+        write_pending_buffers(files);
+        Ok(())
     };
+    // No cancellation: the bytes were written by the program and must reach
+    // the host before the call that asked for the flush goes on.
+    let _ = run_blocking_io(flush, None);
+}
+
+fn buffered_files_with_pending(skip: Option<&Arc<FileState>>) -> Vec<Arc<FileState>> {
+    let mut files = lock_mutex(&BUFFERED_FILES);
+    files.retain(|file| file.strong_count() > 0);
+    files
+        .iter()
+        .filter_map(Weak::upgrade)
+        .filter(|state| skip.is_none_or(|skip| !Arc::ptr_eq(state, skip)))
+        .filter(|state| {
+            try_lock_mutex(&state.file)
+                .is_none_or(|file| file.as_ref().is_some_and(|open| !open.pending.is_empty()))
+        })
+        .collect()
+}
+
+fn write_pending_buffers(files: Vec<Arc<FileState>>) {
     for state in files {
         if let Some(open) = lock_mutex(&state.file).as_mut() {
             let _ = open.flush_pending();
@@ -4091,7 +4112,8 @@ fn flush_other_buffered_files(skip: Option<&Arc<FileState>>) {
 }
 
 extern "C" fn flush_buffered_files_at_exit() {
-    let _ = panic::catch_unwind(flush_buffered_files);
+    // The process is exiting, and the blocking pool may be gone already.
+    let _ = panic::catch_unwind(|| write_pending_buffers(buffered_files_with_pending(None)));
 }
 
 struct TcpListenerState {
@@ -4763,8 +4785,23 @@ struct BlockingIoPoolState {
     admission_waiters: VecDeque<BlockingIoAdmissionWaiter>,
     next_waiter_id: u64,
     active_jobs: usize,
+    /// Workers waiting on `ready`. A worker that has just finished a job
+    /// spins for [`BLOCKING_IO_WORKER_SPIN`] before it counts here, and a
+    /// job queued meanwhile needs no wake-up call.
+    sleeping_workers: usize,
     shutting_down: bool,
 }
+
+/// How long an idle blocking-I/O worker keeps checking the queue before it
+/// sleeps. A program that makes file calls one after another queues the
+/// next within a few microseconds, so the worker takes it without the
+/// sleep and wake-up system calls on both sides.
+const BLOCKING_IO_WORKER_SPIN: StdDuration = StdDuration::from_micros(50);
+
+/// How long a task that handed a call to the blocking pool checks for the
+/// result before it parks. Most local file calls finish within it. The
+/// task yields between checks, so other ready tasks on its worker run.
+const BLOCKING_IO_RESULT_POLL: StdDuration = StdDuration::from_micros(50);
 
 enum BlockingIoPoolInitialization {
     NotStarted,
@@ -5535,6 +5572,7 @@ impl BlockingIoPool {
                 admission_waiters: VecDeque::new(),
                 next_waiter_id: 0,
                 active_jobs: 0,
+                sleeping_workers: 0,
                 shutting_down: false,
             }),
             ready: Condvar::new(),
@@ -5657,22 +5695,37 @@ impl BlockingIoPool {
         loop {
             let (job, finished_waiters) = {
                 let mut state = lock_mutex(&self.state);
+                let mut spun = false;
                 loop {
                     if let Some(job) = state.queue.pop_front() {
                         state.active_jobs += 1;
                         let finished = self.fill_available_admission_slots_locked(&mut state);
+                        // Jobs left behind, or moved in from admission, need
+                        // a worker of their own.
+                        if !state.queue.is_empty() && state.sleeping_workers > 0 {
+                            self.ready.notify_one();
+                        }
                         break (job, finished);
                     }
                     if state.shutting_down {
                         return;
                     }
+                    if !spun {
+                        spun = true;
+                        drop(state);
+                        self.spin_until_queued();
+                        state = lock_mutex(&self.state);
+                        continue;
+                    }
+                    state.sleeping_workers += 1;
                     state = wait_condvar(&self.ready, state);
+                    state.sleeping_workers -= 1;
+                    spun = false;
                 }
             };
             for waiter in finished_waiters {
                 Self::signal_admission_waiter(waiter);
             }
-            self.ready.notify_all();
             let _ = panic::catch_unwind(AssertUnwindSafe(job));
             let mut state = lock_mutex(&self.state);
             state.active_jobs = state
@@ -5685,6 +5738,20 @@ impl BlockingIoPool {
             {
                 self.idle.notify_all();
             }
+        }
+    }
+
+    /// Waits up to [`BLOCKING_IO_WORKER_SPIN`] for a job or shutdown without
+    /// sleeping. Contended checks are skipped rather than waited for.
+    fn spin_until_queued(&self) {
+        let start = Instant::now();
+        while start.elapsed() < BLOCKING_IO_WORKER_SPIN {
+            if try_lock_mutex(&self.state)
+                .is_some_and(|state| !state.queue.is_empty() || state.shutting_down)
+            {
+                return;
+            }
+            std::hint::spin_loop();
         }
     }
 
@@ -5735,8 +5802,11 @@ impl BlockingIoPool {
                 ));
             }
             state.queue.push_back(job);
+            let wake = state.sleeping_workers > 0;
             drop(state);
-            self.ready.notify_one();
+            if wake {
+                self.ready.notify_one();
+            }
             return Ok(());
         };
 
@@ -5754,8 +5824,11 @@ impl BlockingIoPool {
             }
             if state.admission_waiters.is_empty() && state.queue.len() < capacity {
                 state.queue.push_back(job);
+                let wake = state.sleeping_workers > 0;
                 drop(state);
-                self.ready.notify_one();
+                if wake {
+                    self.ready.notify_one();
+                }
                 return Ok(());
             }
             waiter_id = state.next_waiter_id;
@@ -6749,6 +6822,31 @@ where
     run_blocking_io_with_deadline_on_pool(operation, deadline, cancellation, pool)
 }
 
+/// Checks for a blocking-I/O result for up to [`BLOCKING_IO_RESULT_POLL`],
+/// yielding to the worker's other ready tasks between checks, so a call
+/// that finishes quickly returns without parking the task. `None` when the
+/// call is still running, or the task was cancelled or ran out of time.
+fn poll_blocking_io_result<T>(
+    result: &Mutex<Option<io::Result<T>>>,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> Option<io::Result<T>> {
+    let start = Instant::now();
+    loop {
+        if let Some(outcome) = try_lock_mutex(result).and_then(|mut slot| slot.take()) {
+            return Some(outcome);
+        }
+        if start.elapsed() >= BLOCKING_IO_RESULT_POLL
+            || check_deadline_and_cancellation(deadline, cancellation).is_err()
+        {
+            return None;
+        }
+        if yield_now_current_lightweight_task().is_none() {
+            std::hint::spin_loop();
+        }
+    }
+}
+
 fn raise_blocking_io_pool_startup_failure(error: io::Error) -> ! {
     let message = error
         .get_ref()
@@ -6817,6 +6915,10 @@ where
         deadline,
         cancellation,
     ))?;
+
+    if let Some(outcome) = poll_blocking_io_result(&result, deadline, cancellation) {
+        return outcome;
+    }
 
     match completion.recv_result_with_deadline(deadline, cancellation) {
         RecvValueResult::Value(_) => lock_mutex(&result).take().unwrap_or_else(|| {
@@ -12379,12 +12481,26 @@ impl FileValue {
 
     /// Writes out the buffer and closes the handle. `close` returns no
     /// result, so a failed final write is dropped; a program that must know
-    /// calls `flush` or `sync` first.
+    /// calls `flush` or `sync` first. A handle opened for writing closes on
+    /// the blocking pool, since writing the buffer and closing it (which may
+    /// flush on a network file system) can take as long as the disk does.
     pub fn close(&self) {
         let open = lock_mutex(&self.inner.file).take();
-        if let Some(mut open) = open {
-            let _ = open.flush_pending();
+        let Some(mut open) = open else {
+            return;
+        };
+        if !open.buffered {
+            return;
         }
+        // No cancellation: the handle has to close whatever the task does next.
+        let _ = run_blocking_io(
+            move || {
+                let _ = open.flush_pending();
+                drop(open);
+                Ok(())
+            },
+            None,
+        );
     }
 }
 

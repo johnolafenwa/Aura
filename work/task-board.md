@@ -2,6 +2,13 @@
 
 Last updated: 2026-10-30
 
+## File I/O hand-off (in progress)
+
+- Target: make file calls as fast as Python's without ever running one on
+  a worker thread (John, 2026-10-30: no stalled workers, nothing
+  Linux-only). John chose the cheaper pool hand-off over running small
+  calls inline. Details are in `2026-10-30-file-io-handoff.md`.
+
 ## Rust speed Phase 5: values out of boxes (complete)
 
 Plan approved 2026-10-29 (all defaults; the release after this phase is

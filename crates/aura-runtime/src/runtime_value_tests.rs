@@ -19916,3 +19916,165 @@ fn runtime_json_parse_builds_the_value_the_tree_converts_to() {
     assert_eq!(direct, runtime_json(tree));
     assert!(super::json_parse_runtime("[1,", false).is_err());
 }
+
+#[cfg(unix)]
+fn make_fifo(path: &std::path::Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let name = std::ffi::CString::new(path.as_os_str().as_bytes()).expect("fifo path");
+    assert_eq!(
+        unsafe { libc::mkfifo(name.as_ptr(), 0o600) },
+        0,
+        "mkfifo failed"
+    );
+}
+
+/// Ticks a sibling task on the one worker and returns once it made them,
+/// failing if the worker stays stalled.
+#[cfg(unix)]
+fn sibling_ticks_on_the_same_worker(ticks: usize) -> Result<(), Diagnostic> {
+    let sibling = spawn_lightweight_task(move || {
+        for _ in 0..ticks {
+            sleep_with_runtime_scheduler(StdDuration::from_millis(1), None)
+                .map_err(|error| Diagnostic::new(error.to_string()))?;
+        }
+        Ok(Value::Unit)
+    })?;
+    let limit = crate::hosted_ci_timing_limit(StdDuration::from_secs(5));
+    match sibling
+        .wait_result_with_cancellation(Some(limit), None)
+        .map_err(|error| Diagnostic::new(error.to_string()))?
+    {
+        super::TaskWaitStatus::Ready(result) => result.map(|_| ()),
+        _ => Err(Diagnostic::new(
+            "the sibling task did not run while the file call waited",
+        )),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_file_read_that_never_gets_data_leaves_the_worker_to_other_tasks() {
+    let temp = TempDir::new("aura-runtime-slow-read");
+    let fifo = temp.path().join("never-written");
+    make_fifo(&fifo);
+    let fifo_path = fifo.to_str().expect("utf8 temp path").to_string();
+    let read_done = Arc::new(AtomicBool::new(false));
+    let read_done_in_task = read_done.clone();
+    let writer_path = fifo.clone();
+    // If the read stalled the worker, the sibling below could never run:
+    // write the pipe late so the test fails instead of hanging.
+    let watchdog_path = fifo.clone();
+    thread::spawn(move || {
+        use std::os::unix::fs::OpenOptionsExt;
+        thread::sleep(crate::hosted_ci_timing_limit(StdDuration::from_secs(10)));
+        if let Ok(mut pipe) = std::fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(watchdog_path)
+        {
+            let _ = pipe.write_all(b"watchdog");
+        }
+    });
+    let result = super::run_lightweight_root_task_with_worker_count(1, move || {
+        let reader = spawn_lightweight_task(move || {
+            // Opening a pipe with no writer blocks until one arrives, like a
+            // file on a disk that stopped answering.
+            let file =
+                FileValue::open(&fifo_path).map_err(|error| Diagnostic::new(error.to_string()))?;
+            let text = file
+                .read_all()
+                .map_err(|error| Diagnostic::new(error.to_string()))?;
+            read_done_in_task.store(true, Ordering::SeqCst);
+            Ok(Value::string(text))
+        })?;
+        sibling_ticks_on_the_same_worker(20)?;
+        assert!(
+            !read_done.load(Ordering::SeqCst),
+            "the read finished before anything was written"
+        );
+        thread::spawn(move || {
+            std::fs::write(writer_path, "late data").expect("write the pipe");
+        });
+        let value = wait_task_ready(&reader)?;
+        assert_eq!(value, Value::string("late data"));
+        Ok(Value::Unit)
+    });
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn closing_a_file_the_disk_cannot_take_yet_leaves_the_worker_to_other_tasks() {
+    use std::os::unix::fs::OpenOptionsExt;
+    let temp = TempDir::new("aura-runtime-slow-close");
+    let fifo = temp.path().join("full-pipe");
+    make_fifo(&fifo);
+    let fifo_path = fifo.to_str().expect("utf8 temp path").to_string();
+    let release = Arc::new(AtomicBool::new(false));
+    let release_reader = release.clone();
+    let reader_path = fifo.clone();
+    let reader = thread::spawn(move || {
+        let mut pipe = std::fs::File::open(reader_path).expect("open the pipe for reading");
+        while !release_reader.load(Ordering::SeqCst) {
+            thread::sleep(StdDuration::from_millis(1));
+        }
+        let mut received = Vec::new();
+        pipe.read_to_end(&mut received).expect("drain the pipe");
+        received.ends_with(b"last words")
+    });
+    // Fill the pipe until it refuses more, whatever its capacity, so the
+    // next write waits for the reader.
+    let mut filler = loop {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&fifo)
+        {
+            Ok(pipe) => break pipe,
+            Err(_) => thread::sleep(StdDuration::from_millis(1)),
+        }
+    };
+    let chunk = [b'x'; 4096];
+    loop {
+        match filler.write(&chunk) {
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("fill the pipe: {error}"),
+        }
+    }
+    // If the close stalled the worker, the sibling below could never run:
+    // let the reader drain the pipe late so the test fails instead of hanging.
+    let watchdog_release = release.clone();
+    thread::spawn(move || {
+        thread::sleep(crate::hosted_ci_timing_limit(StdDuration::from_secs(10)));
+        watchdog_release.store(true, Ordering::SeqCst);
+    });
+    let closed = Arc::new(AtomicBool::new(false));
+    let closed_in_task = closed.clone();
+    let result = super::run_lightweight_root_task_with_worker_count(1, move || {
+        let writer = spawn_lightweight_task(move || {
+            let file = FileValue::create(&fifo_path)
+                .map_err(|error| Diagnostic::new(error.to_string()))?;
+            // Buffered: nothing reaches the pipe until the close.
+            file.write_all("last words")
+                .map_err(|error| Diagnostic::new(error.to_string()))?;
+            file.close();
+            closed_in_task.store(true, Ordering::SeqCst);
+            Ok(Value::Unit)
+        })?;
+        sibling_ticks_on_the_same_worker(20)?;
+        assert!(
+            !closed.load(Ordering::SeqCst),
+            "the close finished before the pipe had room"
+        );
+        release.store(true, Ordering::SeqCst);
+        wait_task_ready(&writer)?;
+        Ok(Value::Unit)
+    });
+    drop(filler);
+    assert!(result.is_ok(), "{result:?}");
+    assert!(
+        reader.join().expect("reader thread"),
+        "the close wrote the buffer"
+    );
+}

@@ -7,6 +7,19 @@ in this file.
 
 ## Unreleased
 
+- File calls hand off to the blocking-I/O pool for less: a pool worker
+  that just finished a job checks for the next one for 50 microseconds
+  before it sleeps, a new job wakes one sleeping worker instead of all of
+  them, and the calling task checks for its result for 50 microseconds,
+  running its worker's other ready tasks meanwhile, before it parks. A
+  one-shot call such as `fs.write_string` or `fs.read_to_string` takes
+  about 8 microseconds instead of 38 on a RAM disk, about what Python
+  takes, and `file_io` runs in about 0.45 s instead of 0.76 s.
+- Closing an `fs.File` opened for writing, writing out other files'
+  buffers before a file-system call, and `fs.exists` now run on the
+  blocking-I/O pool instead of the worker thread in native builds, so a
+  slow disk no longer holds up the worker's other tasks.
+
 ## VS Code extension 0.10.0 — 2026-10-30
 
 - Bundles language server 0.10.0. The semantic interface version stays 20.

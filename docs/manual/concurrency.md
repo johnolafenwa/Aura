@@ -746,6 +746,12 @@ page-rounded and guard-protected. The MIR and direct entry thread reserves
   until process exit, and Aura has no shutdown or join surface for it.
 - Cancelling after a blocking job is accepted cannot retract an operating
   system side effect.
+- An idle pool worker checks the queue for 50 microseconds before it
+  sleeps, and the task that submitted a job checks for its result for 50
+  microseconds, yielding to its worker's other ready tasks, before it
+  parks. Every native file-system call, including `fs.exists` and closing
+  a file opened for writing, runs on the pool, so no file call holds up a
+  worker thread.
 
 **Scheduler teardown.** If the scheduler itself stops with tasks still
 suspended, it disarms their waits, publishes cancellation to their handles and
