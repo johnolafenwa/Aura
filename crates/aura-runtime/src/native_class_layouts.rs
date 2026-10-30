@@ -328,7 +328,7 @@ impl TypedFields {
     /// An instance whose every field is moved out: scalars are zero and
     /// every box is null.
     pub fn new(layout: &'static ClassLayout) -> Self {
-        let data = super::block_pool::allocate(layout.block_layout(), true);
+        let data = super::allocate_layout_block(layout.block_layout(), true);
         Self { layout, data }
     }
 
@@ -628,7 +628,7 @@ impl TypedFields {
         }
         // SAFETY: every field is moved out, so the block holds nothing to
         // drop, and it came from the pool with this layout.
-        unsafe { super::block_pool::free(this.data, layout.block_layout()) };
+        unsafe { super::free_layout_block(this.data, layout.block_layout()) };
         fields
     }
 
@@ -671,7 +671,7 @@ impl Drop for TypedFields {
                 self.layout.layout.root(),
                 self.data.as_ptr(),
             );
-            super::block_pool::free(self.data, self.layout.block_layout());
+            super::free_layout_block(self.data, self.layout.block_layout());
         }
     }
 }

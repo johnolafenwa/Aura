@@ -58,6 +58,20 @@ in this file.
   constant, such as `"x" in node.classes` for `view node = NODES[0]`,
   stopped the program with "a module constant cannot change". It reads a
   copy of the field now, as a field of the constant itself already did.
+- Programs, and the `aura` tools, allocate through a new allocator in
+  the runtime. Each thread keeps its freed blocks of up to 1 KiB on a
+  list for each 16-byte size and cuts new ones from a 64 KiB chunk, so a
+  small block costs a few instructions instead of a search of the system
+  allocator's bins. A thread with too many freed blocks of a size, or one
+  that ends, hands them to a shared list that other threads take from, so
+  memory stays bounded by the most a program had in use at once. Larger
+  blocks still go to the system allocator. Time in the allocator falls
+  from up to 35% of a program's instructions to under 3% in 29 of the 30
+  benchmark programs. `order_book` runs 30% fewer instructions,
+  `graph_paths` 17%, `spreadsheet` 18%, `json_roundtrip` 15%, and
+  `sql_engine` 9%; `sql_engine` and `graph_paths` run in 24% and 27% less
+  time. The per-thread box cache and layout block pool from the previous
+  entries are gone: the allocator does their work for every block.
 
 ## VS Code extension 0.9.0 — 2026-10-29
 

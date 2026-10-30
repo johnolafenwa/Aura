@@ -16,6 +16,7 @@ pub mod ffi;
 pub mod json_codec;
 pub mod list_elements;
 pub mod list_sort;
+mod native_allocator;
 pub mod native_runtime;
 pub mod randomness;
 pub mod runtime_config;
@@ -24,6 +25,9 @@ pub mod runtime_value;
 pub mod text;
 pub mod text_methods;
 pub mod union_runtime;
+
+#[global_allocator]
+static ALLOCATOR: native_allocator::AuraAllocator = native_allocator::AuraAllocator;
 
 #[doc(hidden)]
 pub const INTERNAL_DIAGNOSTIC_FD_ENV: &str = "AURA_INTERNAL_DIAGNOSTIC_FD";

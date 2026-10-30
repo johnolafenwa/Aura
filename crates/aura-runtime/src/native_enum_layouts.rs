@@ -367,7 +367,7 @@ impl TypedPayloads {
         let plan = &layout.variants[variant];
         let data = plan
             .block
-            .map(|block| super::block_pool::allocate(block, true));
+            .map(|block| super::allocate_layout_block(block, true));
         Self {
             layout,
             variant: variant as u32,
@@ -586,7 +586,7 @@ impl TypedPayloads {
         if let (Some(data), Some(block)) = (this.data, this.layout.variants[this.variant()].block) {
             // SAFETY: every payload is moved out, so the block holds nothing
             // to drop, and it came from the pool with this layout.
-            unsafe { super::block_pool::free(data, block) };
+            unsafe { super::free_layout_block(data, block) };
         }
         payloads
     }
@@ -607,7 +607,7 @@ impl Clone for TypedPayloads {
         let plan = &self.layout.variants[self.variant()];
         if plan.bytes_only {
             let data = self.data.zip(plan.block).map(|(data, block)| {
-                let copy = super::block_pool::allocate(block, false);
+                let copy = super::allocate_layout_block(block, false);
                 // SAFETY: both blocks have this layout's size, every byte of
                 // the source is initialized, and the blocks are distinct.
                 unsafe {
@@ -648,7 +648,7 @@ impl Drop for TypedPayloads {
         if plan.bytes_only {
             // SAFETY: the block holds nothing to drop and came from the pool
             // with this layout.
-            unsafe { super::block_pool::free(data, block) };
+            unsafe { super::free_layout_block(data, block) };
             return;
         }
         let table = self.layout.table();
@@ -658,7 +658,7 @@ impl Drop for TypedPayloads {
             for place in self.places() {
                 (self.layout.ops.drop)(table, place.layout, self.address(*place));
             }
-            super::block_pool::free(data, block);
+            super::free_layout_block(data, block);
         }
     }
 }

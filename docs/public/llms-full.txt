@@ -18885,12 +18885,10 @@ is, so a tree whose leaves are `Tree.Leaf` allocates only its inner
 nodes. A new variant's box also starts with its type's tag, so the first
 function that takes it does not tag it.
 
-The block that holds a variant's payloads or an instance's fields, when
-it is at most 128 bytes, comes from a per-thread cache of freed blocks,
-and each thread keeps up to 1,024 freed boxes. A program that builds and
-drops a tree of thousands of nodes reuses the same memory for the next
-tree. `binary_trees` at depth 14 runs in about 3.8x Rust's time, down
-from 8.7x.
+A program that builds and drops a tree of thousands of nodes reuses the
+same memory for the next tree (see Small Allocations below).
+`binary_trees` at depth 14 runs in about 3.8x Rust's time, down from
+8.7x.
 
 ### Field Reads In Place
 
@@ -18947,6 +18945,22 @@ was copied, which copied its storage, changed, and stored back. A `str`
 element of a list field, such as `template.texts[i]`, is checked and
 copied out of the field's box. `graph_paths`, which builds its adjacency
 lists this way, runs 47% fewer instructions.
+
+### Small Allocations
+
+Programs allocate through the runtime's own allocator. Each thread keeps
+the blocks of up to 1 KiB it frees on a list for each 16-byte size, and
+takes the last one freed when it needs a block of that size; a thread
+with no freed block cuts one from a 64 KiB chunk it holds. Either way a
+small block costs a few instructions. A thread that frees many more
+blocks of a size than it makes, or that ends, hands them to a list other
+threads take from, so a program holds no more small blocks than it had in
+use at once. Small blocks are not handed back to the operating system
+while the program runs. Blocks over 1 KiB go to the system allocator.
+
+Time spent allocating falls from up to 35% of a program's instructions
+to under 3% in 29 of the 30 benchmark programs. `sql_engine` runs in 24%
+less time and `graph_paths` in 27% less.
 
 ## Performance Direction
 

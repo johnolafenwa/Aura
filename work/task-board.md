@@ -62,6 +62,17 @@ Plan approved 2026-10-29 (all defaults; the release after this phase is
   (gate under 2% MISSED for docdb and template_render: their walks are
   payload views of `json.Value` and dict lookups). Details are in
   `2026-10-30-rust-speed-5f-element-paths.md`.
+- Step 5g: global allocator in the runtime (`native_allocator.rs`):
+  per-thread free lists per 16-byte class up to 1 KiB (1,024 each),
+  new blocks cut from 64 KiB chunks, half of a full list and all of an
+  ending thread's blocks go to spin-locked shared lists. The 5d block
+  pool and the box cache are removed (A/B neutral to -2.4%). Allocator
+  share of instructions (malloc.c plus the `__rust_alloc` shims) now
+  under 3% in 29 of 30 programs; file_io 5.8% (gate under 5% MISSED
+  there only: a 0.7M-instruction program whose remaining cost is libc's
+  own startup allocations). order_book -30%, spreadsheet -18%,
+  graph_paths -17%, json_roundtrip -15%, sql_engine -9.5%. Details are in
+  `2026-10-30-rust-speed-5g-allocator.md`.
 
 ## Aura 0.9.0 preview release (complete)
 
