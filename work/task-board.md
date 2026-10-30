@@ -90,6 +90,10 @@ Plan approved 2026-10-29 (all defaults; the release after this phase is
   `sql_engine` 21.8x -> 5.9x. Phase gates MISSED: median 3x (3.9x) and no
   program above 8x (`regex_match` 8.6x). Details are in
   `2026-10-30-v0.10.0-preview-release.md`.
+- Released 0.10.0-preview: PR #196 merged as `b85dacdc`. The annotated
+  `v0.10.0-preview` tag (`dd81f4de`) was pushed on 2026-10-30, and Release
+  run `41086318039` published the three archives, docs, VSIX, and
+  `SHA256SUMS`, and extension 0.10.0 to the Marketplace and Open VSX.
 
 ## Aura 0.9.0 preview release (complete)
 
