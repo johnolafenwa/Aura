@@ -620,7 +620,7 @@ impl FunctionCompiler<'_> {
         let Some(probe) = self.fused_entry_probes.get(target) else {
             return Ok(None);
         };
-        let (loan, mutable) = (probe.loan.clone(), probe.mutable);
+        let (loan, mutable, lent) = (probe.loan.clone(), probe.mutable, probe.lent);
         let Rvalue::Call {
             callee:
                 CallTarget::Runtime {
@@ -634,6 +634,16 @@ impl FunctionCompiler<'_> {
         else {
             return Ok(None);
         };
+        if !mutable
+            && self.entry_copy_loans.contains_key(&loan)
+            && matches!(self.local_type(&loan)?, DirectType::Opaque(_))
+        {
+            return self.compile_fused_entry_copy(loan, *op, map, &args[0].value);
+        }
+        // The `int64` entry loans below follow only a local dict.
+        if lent || map.contains('.') {
+            return Ok(None);
+        }
         if self.local_type(&loan)? != DirectType::Scalar(ScalarKind::Int64)
             || !matches!(self.loan_list(map, "dict")?, Some(LoanList::Local(_)))
         {
@@ -666,6 +676,132 @@ impl FunctionCompiler<'_> {
             values: vec![self.builder.uextend(types::I64, found)],
             ty: DirectType::Scalar(ScalarKind::Bool),
         }))
+    }
+
+    /// A fused `contains_key` test whose loan is only read: the test copies
+    /// the entry's value into a box, or null when the key is missing, as
+    /// `get` does, and the loan's reads take that box (see
+    /// [`entry_copy_loans`]). The copy is the one each read's walk would
+    /// have made; the loan's `EndLoan` releases it.
+    fn compile_fused_entry_copy(
+        &mut self,
+        loan: String,
+        op: DictOp,
+        map: &str,
+        key: &Operand,
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        let dict_root = root(map);
+        // A lookup slot may hold a value's address rather than a box.
+        if self.view_places.contains_key(dict_root)
+            || self.lookup_slots.contains(dict_root)
+            || self.lent_places.contains(dict_root)
+        {
+            return Ok(None);
+        }
+        let field = if dict_root == map {
+            None
+        } else {
+            match self.loan_list(map, "dict")? {
+                Some(field @ LoanList::Field { .. }) => Some(field),
+                _ => return Ok(None),
+            }
+        };
+        let (find, key) = if op == DictOp::ContainsKeyInt64 {
+            (
+                RuntimeFn::MapGetInt64Payload,
+                self.load_operand(key)?.values[0],
+            )
+        } else {
+            let map_ty = direct_type_to_type(&self.type_of_place(map)?);
+            let Type::Named(_, types) = map_ty else {
+                return Err(format!("direct backend has no dict type for `{map}`"));
+            };
+            let key_ty = ensure_direct_type(&types[0], &self.classes, "dict key")?;
+            let key = self.load_operand_as_opaque_direct(key, &key_ty)?;
+            (RuntimeFn::MapGetPayload, key.values[0])
+        };
+        let copy = match field {
+            None => {
+                let map_box = self.load_root(map)?.values[0];
+                self.builder
+                    .call(self.runtime[find], &[map_box, key])
+                    .results[0]
+            }
+            // A field of an instance kept in place is read where it lies;
+            // any other instance gives the field's value to the lookup.
+            Some(field) => {
+                let slow_block = self.builder.create_block();
+                let join_block = self.builder.create_block();
+                self.builder.append_block_param(join_block, types::I64);
+                let map_box = self.load_loan_list(&field, slow_block)?;
+                let copy = self
+                    .builder
+                    .call(self.runtime[find], &[map_box, key])
+                    .results[0];
+                self.builder.jump(join_block, &[copy]);
+                self.builder.switch_to_block(slow_block);
+                self.builder.seal_block(slow_block);
+                let map_value = self.load_place(map)?;
+                let copy = self
+                    .builder
+                    .call(self.runtime[find], &[map_value.values[0], key])
+                    .results[0];
+                self.builder.jump(join_block, &[copy]);
+                self.builder.switch_to_block(join_block);
+                self.builder.seal_block(join_block);
+                self.builder.block_params(join_block)[0]
+            }
+        };
+        let variable = self.declare_word_var();
+        self.builder.def_var(variable, copy);
+        self.fused_entry_copies.insert(loan, variable);
+        let found = self.builder.icmp_imm(IntCC::NotEqual, copy, 0);
+        Ok(Some(ValueRef {
+            values: vec![self.builder.uextend(types::I64, found)],
+            ty: DirectType::Scalar(ScalarKind::Bool),
+        }))
+    }
+
+    /// A read of a loan [`compile_fused_entry_copy`] copied for: the copy
+    /// itself when it is the loan's one read, which owns it from then on,
+    /// or a new reference to it.
+    pub(super) fn take_fused_entry_copy(
+        &mut self,
+        place: &str,
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        let Some(&variable) = self.fused_entry_copies.get(place) else {
+            return Ok(None);
+        };
+        let copy = self.builder.use_var(variable);
+        let read = if self.entry_copy_loans.get(place) == Some(&true) {
+            let taken = self.builder.iconst(types::I64, 0);
+            self.builder.def_var(variable, taken);
+            copy
+        } else {
+            // The loan's other reads share the copy, as reads of a local do.
+            self.retain_opaque_handle(copy)
+        };
+        let ty = direct_type_to_type(&self.local_type(place)?);
+        Ok(Some(self.owned_opaque_result(vec![read], ty)))
+    }
+
+    /// Releases the copy a fused loan that ends unread still holds.
+    pub(super) fn end_fused_entry_copy(&mut self, loan: &str) {
+        let Some(&variable) = self.fused_entry_copies.get(loan) else {
+            return;
+        };
+        let copy = self.builder.use_var(variable);
+        let release_block = self.builder.create_block();
+        let done_block = self.builder.create_block();
+        self.builder.brif(copy, release_block, &[], done_block, &[]);
+        self.builder.switch_to_block(release_block);
+        self.builder.seal_block(release_block);
+        self.release_opaque_handle(copy);
+        self.builder.jump(done_block, &[]);
+        self.builder.switch_to_block(done_block);
+        self.builder.seal_block(done_block);
+        let released = self.builder.iconst(types::I64, 0);
+        self.builder.def_var(variable, released);
     }
 
     fn begin_native_entry_loan(
@@ -1349,6 +1485,9 @@ impl FunctionCompiler<'_> {
 pub(super) struct FusedEntryProbe {
     pub(super) loan: String,
     pub(super) mutable: bool,
+    /// Whether the test reads a field lent to its receiver temporary,
+    /// which only an entry copy follows.
+    pub(super) lent: bool,
 }
 
 /// The `contains_key` temporaries of `function` whose test and following
@@ -1387,6 +1526,19 @@ pub(super) fn fused_entry_probes(function: &MirFunction) -> HashMap<String, Fuse
         else {
             continue;
         };
+        // A test on a field lends the field to a temporary around the test.
+        let mut tail = block.instructions.iter().rev();
+        let mut last = tail.next();
+        let mut lent_field = None;
+        if let Some(Instruction::EndLend {
+            place,
+            temp,
+            mutable: false,
+        }) = last
+        {
+            lent_field = Some((temp.as_str(), place.as_str()));
+            last = tail.next();
+        }
         let Some(Instruction::Assign {
             target,
             value:
@@ -1400,9 +1552,14 @@ pub(super) fn fused_entry_probes(function: &MirFunction) -> HashMap<String, Fuse
                     args,
                     ..
                 },
-        }) = block.instructions.last()
+        }) = last
         else {
             continue;
+        };
+        let tested = match lent_field {
+            Some((temp, place)) if temp == map => place,
+            Some(_) => continue,
+            None => map.as_str(),
         };
         let [MirArg {
             value: Operand::Place(key),
@@ -1412,7 +1569,6 @@ pub(super) fn fused_entry_probes(function: &MirFunction) -> HashMap<String, Fuse
             continue;
         };
         if target != test
-            || map.contains('.')
             || then_label == &block.label
             || predecessors.get(then_label.as_str()) != Some(&1)
             // The branch is the test's only read.
@@ -1433,15 +1589,102 @@ pub(super) fn fused_entry_probes(function: &MirFunction) -> HashMap<String, Fuse
         else {
             continue;
         };
-        if source == map && selected == key && projection.is_empty() {
+        // `lookup(i)` with an `int64` key tests a copy of the key, made
+        // just before the test, and loans the entry with the key itself.
+        let copied_from = block
+            .instructions
+            .iter()
+            .find_map(|instruction| match instruction {
+                Instruction::Assign {
+                    target,
+                    value: Rvalue::Use(Operand::Place(from)),
+                } if target == key => Some(from.as_str()),
+                _ => None,
+            });
+        let same_key = selected == key || copied_from == Some(selected.as_str());
+        if source == tested && same_key && projection.is_empty() {
             probes.insert(
                 test.clone(),
                 FusedEntryProbe {
                     loan: loan.clone(),
                     mutable: *mutable,
+                    lent: lent_field.is_some(),
                 },
             );
         }
     }
     probes
+}
+
+/// The read-only entry loans of `function` that are named only as call
+/// arguments and `ReadLoan` sources, besides their `EndLoan`s, by loan,
+/// with whether the loan is read once, later in the block that begins it.
+/// `match fields.lookup(name)` whose `Found` arm passes the value to calls
+/// lowers to this. When its `contains_key` test is fused (see
+/// [`fused_entry_probes`]), the test copies the entry's value into a box
+/// once and the reads take that box, instead of a test, a probe, and a
+/// walk that copies for each read.
+pub(super) fn entry_copy_loans(function: &MirFunction) -> HashMap<String, bool> {
+    let mut mentions = HashMap::<&str, usize>::new();
+    let mut reads = HashMap::<&str, usize>::new();
+    for block in &function.blocks {
+        let mut places = Vec::new();
+        for instruction in &block.instructions {
+            match instruction {
+                Instruction::BeginElementLoan { .. } | Instruction::EndLoan { .. } => continue,
+                Instruction::ReadLoan { loan, .. } => {
+                    *reads.entry(loan.as_str()).or_default() += 1;
+                }
+                Instruction::Assign {
+                    value: Rvalue::Call { args, .. },
+                    ..
+                } => {
+                    for arg in args {
+                        if let Operand::Place(place) = &arg.value {
+                            *reads.entry(place.as_str()).or_default() += 1;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            instruction_place_mentions(instruction, &mut places);
+        }
+        places.extend(terminator_place_mentions(&block.terminator));
+        for place in places {
+            *mentions.entry(root(place)).or_default() += 1;
+        }
+    }
+    let mut loans = HashMap::new();
+    for block in &function.blocks {
+        for (position, instruction) in block.instructions.iter().enumerate() {
+            let Instruction::BeginElementLoan {
+                loan,
+                mutable: false,
+                projection,
+                ..
+            } = instruction
+            else {
+                continue;
+            };
+            let read = reads.get(loan.as_str()).copied().unwrap_or(0);
+            // Every mention is a read of the whole value.
+            if !projection.is_empty() || read == 0 || mentions.get(loan.as_str()) != Some(&read) {
+                continue;
+            }
+            let in_block = block.instructions[position + 1..]
+                .iter()
+                .any(|later| match later {
+                    Instruction::ReadLoan { loan: read, .. } => read == loan,
+                    Instruction::Assign {
+                        value: Rvalue::Call { args, .. },
+                        ..
+                    } => args
+                        .iter()
+                        .any(|arg| matches!(&arg.value, Operand::Place(place) if place == loan)),
+                    _ => false,
+                });
+            loans.insert(loan.clone(), read == 1 && in_block);
+        }
+    }
+    loans
 }

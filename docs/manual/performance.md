@@ -1503,6 +1503,20 @@ and runs its worker's other ready tasks between checks. On a RAM disk, a
 instead of 38, as in Python, and `file_io` runs in about 0.45 s instead
 of 0.76 s (Python 0.45 s).
 
+### Read-Only Lookups
+
+When the `Found` arm of `match d.lookup(key)` only reads the value, or
+passes it to functions, a native build finds the entry once. One probe
+both tests for the key and copies the value out, where before the
+program tested for the key, probed again, and then walked from the
+dictionary to the value to copy it. This holds for a dictionary in a
+local variable and for one in a class field, with `str` or `int64` keys.
+
+| Program | Before | After |
+| --- | ---: | ---: |
+| `docdb` | 1.88 s | 1.49 s |
+| `json_roundtrip` | 0.88 s | 0.69 s |
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

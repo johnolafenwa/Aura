@@ -1,0 +1,18 @@
+num 0
+text t1
+num 20
+text t3
+num 40
+text t5
+missing 6
+missing 7
+19
+[0, 2, 4, 100]
+[0, 2, 4]
+num 1
+text bee
+no c
+7
+-1
+-2
+-3

@@ -2,12 +2,21 @@
 
 Last updated: 2026-10-30
 
-## File I/O hand-off (in progress)
+## Beat Python on the last slow benchmarks (in progress)
+
+- Target: make `docdb`, `json_roundtrip`, `template_render` and
+  `csv_aggregate` faster than Python, then speed up `regex_match`.
+  Details are in `2026-10-30-beat-python.md`.
+- Step 1a: read-only lookups find the entry once (`docdb` 1.88 -> 1.49 s,
+  `json_roundtrip` 0.88 -> 0.69 s).
+
+## File I/O hand-off (complete)
 
 - Target: make file calls as fast as Python's without ever running one on
   a worker thread (John, 2026-10-30: no stalled workers, nothing
   Linux-only). John chose the cheaper pool hand-off over running small
-  calls inline. Details are in `2026-10-30-file-io-handoff.md`.
+  calls inline. Done in PR #198. Details are in
+  `2026-10-30-file-io-handoff.md`.
 
 ## Rust speed Phase 5: values out of boxes (complete)
 
