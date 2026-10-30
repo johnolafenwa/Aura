@@ -1361,6 +1361,22 @@ arm binds nothing keeps only the number in the same way, and builds no
 error text for input that does not parse. `csv_aggregate`, which parses
 three numbers per row, runs 6.6% fewer instructions.
 
+### Variants Without Payloads
+
+A variant with no payloads, such as `Tree.Leaf`, is built once per
+program as a frozen box that every thread shares. Building it again
+returns that box, and a payload, field, or list element holds it as it
+is, so a tree whose leaves are `Tree.Leaf` allocates only its inner
+nodes. A new variant's box also starts with its type's tag, so the first
+function that takes it does not tag it.
+
+The block that holds a variant's payloads or an instance's fields, when
+it is at most 128 bytes, comes from a per-thread cache of freed blocks,
+and each thread keeps up to 1,024 freed boxes. A program that builds and
+drops a tree of thousands of nodes reuses the same memory for the next
+tree. `binary_trees` at depth 14 runs in about 3.8x Rust's time, down
+from 8.7x.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

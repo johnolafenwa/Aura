@@ -136,6 +136,8 @@ pub struct DirectFfiCallSpec {
     pub result: DirectFfiType,
 }
 
+#[path = "native_block_pool.rs"]
+mod block_pool;
 #[path = "native_box_cache.rs"]
 mod box_cache;
 #[path = "native_class_layouts.rs"]
@@ -6212,7 +6214,24 @@ fn lock_direct_module_constants(
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// The layout slots that hold a shared variant box, which the program's
+/// end frees with the module constants.
+fn shared_unit_variant_slots() -> &'static Mutex<Vec<&'static std::sync::atomic::AtomicUsize>> {
+    static SLOTS: OnceLock<Mutex<Vec<&'static std::sync::atomic::AtomicUsize>>> = OnceLock::new();
+    SLOTS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
 fn clear_direct_module_constants() {
+    for slot in shared_unit_variant_slots()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .drain(..)
+    {
+        let shared = slot.swap(0, Ordering::AcqRel);
+        // SAFETY: the slot held a frozen box, and the program reads no
+        // value once it ends.
+        unsafe { free_frozen_direct_value(shared as *mut OpaqueValue) };
+    }
     let mut states = lock_direct_module_constants();
     let mut order = direct_module_constant_order()
         .lock()
@@ -12939,15 +12958,53 @@ pub unsafe extern "C-unwind" fn aura_direct_enum_new_typed(
         else {
             runtime_error("direct runtime received an invalid enum variant index");
         };
-        let payloads = TypedPayloads::new(layout, variant as usize);
-        boxed_value_with_type(
-            Value::EnumVariant(EnumVariantValue {
-                enum_name: layout.enum_name().clone(),
-                variant_name: variant_name.clone(),
-                payloads: VariantPayloads::Typed(payloads),
-            }),
-            Some(Arc::clone(layout.runtime_type())),
-        )
+        let index = variant as usize;
+        let build = || {
+            let payloads = TypedPayloads::new(layout, index);
+            let boxed = boxed_value_with_type(
+                Value::EnumVariant(EnumVariantValue {
+                    enum_name: layout.enum_name().clone(),
+                    variant_name: variant_name.clone(),
+                    payloads: VariantPayloads::Typed(payloads),
+                }),
+                Some(Arc::clone(layout.runtime_type())),
+            );
+            // The box already has the shape its type's tag records.
+            // SAFETY: `boxed_value_with_type` returns a live box.
+            let header = unsafe { &*boxed };
+            header
+                .shape_tag
+                .store(layout.shape_tag(), Ordering::Relaxed);
+            boxed
+        };
+        let shared = layout.unit_box(
+            index,
+            || {
+                let boxed = build();
+                // SAFETY: the box is new and confined to this thread, and
+                // the layout publishes it with a release store.
+                unsafe { freeze_direct_value(boxed) };
+                // Freezing drops a typed view, but a variant with no
+                // payloads has no box generated code could reach through it.
+                // SAFETY: as above.
+                unsafe { &*boxed }
+                    .list_access
+                    .store(layout.access(), Ordering::Release);
+                boxed as usize
+            },
+            // SAFETY: no other thread saw the box this thread lost with.
+            |lost| unsafe { free_frozen_direct_value(lost as *mut OpaqueValue) },
+            |slot| {
+                shared_unit_variant_slots()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(slot);
+            },
+        );
+        if let Some(shared) = shared {
+            return shared as *mut OpaqueValue;
+        }
+        build()
     })
 }
 
@@ -13027,6 +13084,10 @@ unsafe fn adopt_only_box(boxed: *mut OpaqueValue) -> Option<ElementBox> {
 /// linked by the task's ledger and recording its thread, or else a copy,
 /// and the holder's reference is released.
 fn owned_element_box(element: ElementBox) -> *mut OpaqueValue {
+    // A frozen box needs no count and no ledger.
+    if direct_value_is_frozen(element.as_ptr()) {
+        return std::mem::ManuallyDrop::new(element).as_ptr();
+    }
     if element.is_shared() {
         return boxed_value(element.into_value());
     }
@@ -13053,6 +13114,12 @@ unsafe fn adopt_field_box(boxed: *mut OpaqueValue) -> ElementBox {
     // SAFETY: the caller's contract.
     if let Some(adopted) = unsafe { adopt_only_box(boxed) } {
         return adopted;
+    }
+    // A frozen box takes no count and never changes, so the field holds it
+    // as it is. It counts as shared, so a change through the field copies.
+    if direct_value_is_frozen(boxed) {
+        // SAFETY: the caller's contract.
+        return unsafe { ElementBox::from_raw(boxed) };
     }
     // SAFETY: the box is live, and the caller owns a reference.
     let copy = unsafe {

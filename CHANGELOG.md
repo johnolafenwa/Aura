@@ -25,6 +25,15 @@ in this file.
   `Err` arm binds nothing keeps only the parsed number in native code: no
   `Result` and no error text is built, tagged, or matched by name.
   `csv_aggregate` runs 6.6% fewer instructions.
+- A variant with no payloads, such as `Tree.Leaf` or `Light.Red`, is one
+  shared, frozen box in native code: building it allocates nothing,
+  copying or dropping it counts nothing, and payloads, fields, and lists
+  hold it as it is. A new variant's box starts with its type's tag, so
+  passing it to a function tags nothing. The payload and field blocks of
+  values in their typed layouts come from a per-thread cache of small
+  blocks, and each thread keeps up to 1,024 freed boxes instead of 256.
+  `binary_trees` runs 48% fewer instructions and in about 3.8x Rust's
+  time, down from 8.7x.
 
 ## VS Code extension 0.9.0 — 2026-10-29
 

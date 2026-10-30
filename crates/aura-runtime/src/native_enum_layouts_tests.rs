@@ -501,10 +501,27 @@ fn generated_code_builds_tests_and_reads_typed_variants() {
         };
         assert_eq!(header.list_access.load(Ordering::Relaxed), 0);
         unsafe { aura_direct_release_value(built) };
-        let shared = unsafe { aura_direct_enum_new_typed(cell, 0) };
+        let shared = unsafe { aura_direct_enum_new_typed(cell, 1) };
         unsafe { share_direct_value(shared) };
         assert_eq!(unsafe { &*shared }.list_access.load(Ordering::Relaxed), 0);
         unsafe { aura_direct_release_value(shared) };
+        // Every build of a variant with no payloads is one frozen box,
+        // which keeps its view and its type's tag as its shape.
+        let point = unsafe { aura_direct_enum_new_typed(cell, 0) };
+        assert_eq!(unsafe { aura_direct_enum_new_typed(cell, 0) }, point);
+        let header = unsafe { &*point };
+        assert!(header.is_frozen());
+        assert_eq!(header.list_access.load(Ordering::Relaxed), layout.access());
+        assert_eq!(header.shape_tag.load(Ordering::Relaxed), layout.shape_tag());
+        // A payload holds the shared box as it is, and gives it back as it
+        // is when it moves out.
+        let pair = unsafe { aura_direct_enum_new_typed(cell, 3) };
+        let pair_block = unsafe { &*pair }.list_elements.get();
+        unsafe { aura_direct_instance_put_field(pair_block as *mut Option<ElementBox>, point) };
+        assert_eq!(aura_direct_variant_take_payload(pair, 0), point);
+        unsafe { aura_direct_release_value(pair) };
+        unsafe { aura_direct_release_value(point) };
+        assert!(header.is_frozen());
     });
     let failure = runtime_failure(|| {
         let cell: &'static EnumLayoutCell = Box::leak(Box::default());

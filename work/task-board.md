@@ -29,6 +29,17 @@ Plan approved 2026-10-29 (all defaults; the release after this phase is
   is splitting and formatting, and sql_engine's is list appends through
   instance fields, which always take the runtime path (5e). Details are
   in `2026-10-30-rust-speed-5c-number-parses.md`.
+- Step 5d: payload-free variants are one frozen box per layout and
+  variant (`EnumLayout::unit_box`, freed at program end with the module
+  constants), fields and payloads adopt frozen boxes without copying, a
+  new typed variant's box records its type's tag as its shape, layout
+  blocks of up to 128 bytes come from a per-thread pool
+  (`native_block_pool.rs`), and the box cache keeps 1,024 boxes.
+  binary_trees -48% instructions at depth 12, about 3.8x Rust wall time at
+  depth 14 (gate 4x met); interpreter unchanged (gate -20% missed: its
+  cost is `dict[str]` variable lookups, not enums). No thin-block value
+  representation and no cache-format bump. Details are in
+  `2026-10-30-rust-speed-5d-enums.md`.
 
 ## Aura 0.9.0 preview release (complete)
 

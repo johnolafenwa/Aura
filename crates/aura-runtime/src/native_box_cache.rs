@@ -13,7 +13,7 @@ use std::ptr;
 use super::OpaqueValue;
 
 /// The most boxes one thread keeps.
-const CAPACITY: usize = 256;
+const CAPACITY: usize = 1024;
 
 /// A cached box, linked through its first word.
 struct FreeBox {
