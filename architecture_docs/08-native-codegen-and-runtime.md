@@ -173,9 +173,14 @@ is cancelled, the runtime releases every reference in it, so no box leaks.
   `DirectOwnershipLayout`. The program checks its fingerprint at startup.
 - **Counters.** While the representation counters count ownership, no
   value links, so every retain and release reaches the runtime.
-- **Box cache.** Each thread keeps up to 256 freed boxes in
-  `native_box_cache.rs`, and boxing a value takes one before it calls the
-  allocator.
+- **Allocator.** `native_allocator.rs` is the global allocator of every
+  program and of the tools. Each thread keeps freed blocks of up to
+  1 KiB on a list for each 16-byte size class (at most 1,024 each) and
+  cuts new ones from 64 KiB chunks. A full list hands half its blocks,
+  and an ending thread all of its blocks and the rest of its chunk, to a
+  spin-locked shared list per class that threads with an empty list take
+  from. Small blocks never return to the system allocator, so a program
+  keeps its peak small-block use. Boxes and layout blocks use it directly.
 
 ### Lookups, Variants, And Tags
 

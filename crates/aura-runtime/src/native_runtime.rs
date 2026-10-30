@@ -136,10 +136,6 @@ pub struct DirectFfiCallSpec {
     pub result: DirectFfiType,
 }
 
-#[path = "native_block_pool.rs"]
-mod block_pool;
-#[path = "native_box_cache.rs"]
-mod box_cache;
 #[path = "native_class_layouts.rs"]
 mod class_layouts;
 #[path = "native_element_boxes.rs"]
@@ -2007,7 +2003,7 @@ fn untracked_boxed_value(value: Value, runtime_type_name: Option<Arc<str>>) -> *
 }
 
 fn allocate_box(value: OpaqueValue) -> *mut OpaqueValue {
-    let value = box_cache::allocate(value);
+    let value = Box::into_raw(Box::new(value));
     #[cfg(coverage)]
     DIRECT_VALUE_LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
     crate::runtime_value::representation_stats::note_opaque_box();
@@ -2116,8 +2112,34 @@ unsafe fn free_direct_value(value: *mut OpaqueValue) {
         let previous = DIRECT_VALUE_LIVE_COUNT.fetch_sub(1, Ordering::AcqRel);
         debug_assert!(previous > 0, "direct runtime live-value counter underflow");
     }
+    // SAFETY: the caller's contract: `value` came from `allocate_box`.
+    drop(unsafe { Box::from_raw(value) });
+}
+
+/// A heap block for `layout`, zeroed when `zeroed` is set: the payloads of
+/// an enum variant or the fields of a class instance kept in a typed
+/// layout. Free it with [`free_layout_block`] and the same layout.
+fn allocate_layout_block(layout: std::alloc::Layout, zeroed: bool) -> std::ptr::NonNull<u8> {
+    // SAFETY: a layout block is at least one byte.
+    let block = unsafe {
+        if zeroed {
+            std::alloc::alloc_zeroed(layout)
+        } else {
+            std::alloc::alloc(layout)
+        }
+    };
+    std::ptr::NonNull::new(block).unwrap_or_else(|| std::alloc::handle_alloc_error(layout))
+}
+
+/// Frees a block [`allocate_layout_block`] made.
+///
+/// # Safety
+///
+/// `block` came from [`allocate_layout_block`] with `layout`, and nothing
+/// uses it again.
+unsafe fn free_layout_block(block: std::ptr::NonNull<u8>, layout: std::alloc::Layout) {
     // SAFETY: the caller's contract.
-    unsafe { box_cache::free(value) };
+    unsafe { std::alloc::dealloc(block.as_ptr(), layout) };
 }
 
 unsafe fn with_value<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&Value) -> T) -> T {
