@@ -16,7 +16,9 @@
 //!   operation as it is, as a field lend lends a field's box;
 //! - the box in such a slot is passed as it is to a function that borrows
 //!   the parameter, as a local list's lent element is (see
-//!   `native_codegen_elements.rs`), when the loan only reads its place.
+//!   `native_codegen_elements.rs`), when the loan only reads its place;
+//! - a read-only loan matched on, as `match row[i]` is, tests its variant
+//!   and reads its payload in that box.
 //!
 //! A read-only loan that selects inside another one, such as `row[i]` for
 //! `view row = rows[slot]`, selects from the list in its parent's slot.
@@ -156,7 +158,20 @@ pub(super) fn native_element_loans<'f>(
                         Instruction::Lend { mutable: false, .. }
                             | Instruction::EndLend { mutable: false, .. }
                     );
-                if mention != loan && !mutable && (read || lent) {
+                // A read-only loan matched on, or whose payload is read,
+                // is read in its element's box.
+                let matched = mention == loan
+                    && matches!(
+                        instruction,
+                        Instruction::Assign {
+                            value: Rvalue::VariantPayload {
+                                scrutinee: Operand::Place(scrutinee),
+                                ..
+                            },
+                            ..
+                        } if scrutinee == loan
+                    );
+                if !mutable && ((mention != loan && (read || lent)) || matched) {
                     lends.insert(loan.to_string());
                     reads.insert(loan.to_string());
                     continue;
@@ -202,8 +217,22 @@ pub(super) fn native_element_loans<'f>(
             }
         }
         for mention in terminator_place_mentions(&block.terminator) {
-            if sources.contains_key(root(mention)) {
-                rejected.insert(root(mention).to_string());
+            let matched = matches!(
+                &block.terminator,
+                Terminator::Match {
+                    scrutinee: Operand::Place(scrutinee),
+                    ..
+                } if scrutinee == mention
+            );
+            match sources.get(root(mention)) {
+                Some((_, false)) if matched && mention == root(mention) => {
+                    lends.insert(mention.to_string());
+                    reads.insert(mention.to_string());
+                }
+                Some(_) => {
+                    rejected.insert(root(mention).to_string());
+                }
+                None => {}
             }
         }
     }
