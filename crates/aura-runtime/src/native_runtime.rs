@@ -1378,7 +1378,7 @@ fn int32_overflow_message(value: i64) -> String {
 /// Generated code reads the list view and the shared lock in place (see
 /// [`DirectListLayout`]), and the reference counts and ledger owner (see
 /// [`DirectOwnershipLayout`]), so the layout is `repr(C)`. The fields fill
-/// 192 bytes with no padding.
+/// 208 bytes, the last 8 of them padding.
 #[repr(C)]
 pub struct OpaqueValue {
     value: UnsafeCell<Value>,
@@ -1417,6 +1417,11 @@ pub struct OpaqueValue {
     prev: std::cell::Cell<*mut OpaqueValue>,
     next: std::cell::Cell<*mut OpaqueValue>,
     runtime_type_name: UnsafeCell<Option<Arc<str>>>,
+    /// The tag cell's tag this value last took the shape of, or null. A
+    /// tag through that cell then changes nothing, so generated code skips
+    /// the call when the cell holds this tag (Rust-speed step 5a). Every
+    /// write to the value, and every change of its type name, clears it.
+    shape_tag: AtomicPtr<RuntimeTypeTag>,
     #[cfg(all(debug_assertions, not(test)))]
     owner_thread: usize,
 }
@@ -1482,6 +1487,7 @@ impl OpaqueValue {
             owner_thread: direct_value_thread_identity(),
             value: UnsafeCell::new(value),
             runtime_type_name: UnsafeCell::new(runtime_type_name),
+            shape_tag: AtomicPtr::new(std::ptr::null_mut()),
         }
     }
 
@@ -1491,6 +1497,9 @@ impl OpaqueValue {
     /// inlined into every write, which a call would slow.
     #[inline(always)]
     fn refresh_list_view(&self) {
+        // A write may have changed the value's shape.
+        self.shape_tag
+            .store(std::ptr::null_mut(), Ordering::Relaxed);
         if !self.shared_lock.load(Ordering::Acquire).is_null() {
             return;
         }
@@ -11313,6 +11322,13 @@ pub extern "C-unwind" fn aura_direct_tag_value_type_cell(
         };
         let tag = celled_runtime_type_tag(cell, slice::from_raw_parts(type_ptr, type_len));
         set_explicit_runtime_type_tag(value, tag);
+        // The value now has the shape the tag records. The cell keeps the
+        // tag for the life of the process, so its address names it.
+        if let Some(value) = value.as_ref() {
+            value
+                .shape_tag
+                .store(std::ptr::from_ref(tag).cast_mut(), Ordering::Relaxed);
+        }
     })
 }
 
@@ -12275,6 +12291,9 @@ pub extern "C-unwind" fn aura_direct_union_payload_take(
                     *held = mem::replace(&mut union.payload, Value::Unit);
                     // The union's tag does not name the payload.
                     *(*value).runtime_type_name.get() = None;
+                    (*value)
+                        .shape_tag
+                        .store(std::ptr::null_mut(), Ordering::Relaxed);
                     true
                 }
                 _ => false,

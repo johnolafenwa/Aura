@@ -2,6 +2,18 @@
 
 Last updated: 2026-10-29
 
+## Rust speed Phase 5: values out of boxes (in progress)
+
+Plan approved 2026-10-29 (all defaults; the release after this phase is
+0.10.0-preview, with Linux timings only).
+
+- Step 5a: boxes remember the tag last applied through a tag cell
+  (`OpaqueValue::shape_tag`), generated code skips a repeated tag with a
+  load and compare, writes clear it, and directly dispatched methods keep
+  `self` untagged. regex_match -9.9% instructions (gate -20% missed),
+  interpreter -13.7%, binary_trees +2.1% (box 192 -> 208 bytes). Details
+  are in `2026-10-29-rust-speed-5a-tags.md`.
+
 ## Aura 0.9.0 preview release (complete)
 
 - Target: release 0.9.0 after phases 2 to 4 of the Rust-speed plan. John

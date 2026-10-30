@@ -7,9 +7,10 @@
 //! a fully known type tags the box it stores (see `coerce_value_at`), and so
 //! does every `return` and every argument passed to a named function. So a
 //! box read out of a local that only such assignments write, a parameter
-//! that only such calls fill, or the result of a function that only returns
-//! through `return`, already carries its type's tag, and coercing it to
-//! that type tags nothing.
+//! (or the receiver of a statically dispatched method) that only such calls
+//! fill, or the result of a function that only returns through `return`,
+//! already carries its type's tag, and coercing it to that type tags
+//! nothing.
 //!
 //! A local is left out when anything else may write it: a `try`, a loan
 //! it holds, a mutable lend, a closure capture, a `for` binding, or one of
@@ -26,8 +27,9 @@ use crate::mir::{Instruction, MirFunction, MirModule, Operand, Rvalue, Terminato
 /// pass and return.
 #[derive(Debug, Default)]
 pub(super) struct ProgramShapes {
-    /// The free functions only named calls reach, whose callers tag every
-    /// argument with its parameter's type.
+    /// The free functions only named calls reach, and the methods only
+    /// statically dispatched calls reach, whose callers tag every argument
+    /// and the receiver with its parameter's type.
     direct_only: HashSet<String>,
     /// The functions that return only through `return`, which tags the
     /// value with the return type.
@@ -48,7 +50,11 @@ impl ProgramShapes {
         let mut shapes = Self::default();
         for function in &module.functions {
             let name = function.name.as_str();
-            if function.receiver.is_none()
+            // A method qualifies when only named calls and statically
+            // dispatched method calls reach it, which the ownership pass
+            // records in `borrowing`.
+            let named_only = function.receiver.is_none() || module.borrowing.contains(name);
+            if named_only
                 && !value_functions.contains(name)
                 && !matches!(name, "main" | "__script")
                 && crate::mir::display_wrapper_type_name(name).is_none()
@@ -137,7 +143,13 @@ pub(super) fn shaped_locals(
         }
     }
     if function.receiver.is_some() {
-        excluded.insert("self");
+        // A statically dispatched call tags its receiver as it does every
+        // argument.
+        if direct_only {
+            written.insert("self");
+        } else {
+            excluded.insert("self");
+        }
     }
     for block in &function.blocks {
         for instruction in &block.instructions {

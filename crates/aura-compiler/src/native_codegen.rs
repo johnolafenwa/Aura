@@ -9695,11 +9695,40 @@ impl<'a> FunctionCompiler<'a> {
         }
         let (type_ptr, type_len) = self.string_constant(encoded.as_bytes())?;
         let cell = self.tag_cell(&encoded)?;
-        let call = self.builder.call(
+        // A box that already took this cell's tag has its shape, so the
+        // call would change nothing (Rust-speed step 5a). The cell is empty
+        // until the first tag through it, and a new box names no tag.
+        let trusted = MemFlags::trusted();
+        let cached = self.builder.load(types::I64, trusted, cell, 0);
+        let check = self.builder.create_block();
+        let tag = self.builder.create_block();
+        let done = self.builder.create_block();
+        let filled = self.builder.icmp_imm(IntCC::NotEqual, cached, 0);
+        let boxed = self.builder.icmp_imm(IntCC::NotEqual, raw, 0);
+        let both = self.builder.band(filled, boxed);
+        self.builder.brif(both, check, &[], tag, &[]);
+        self.builder.seal_block(check);
+        self.builder.switch_to_block(check);
+        let shape = self.builder.load(
+            types::I64,
+            trusted,
+            raw,
+            ownership_layout().shape_tag_offset,
+        );
+        let same = self.builder.icmp(IntCC::Equal, shape, cached);
+        self.builder.brif(same, done, &[], tag, &[]);
+        self.builder.seal_block(tag);
+        self.builder.switch_to_block(tag);
+        self.builder.call(
             self.runtime[RuntimeFn::TagValueType],
             &[raw, cell, type_ptr, type_len],
         );
-        self.last_runtime_type_tag = Some((call.inst, raw, encoded));
+        self.builder.jump(done, &[]);
+        self.builder.seal_block(done);
+        self.builder.switch_to_block(done);
+        // The call sits in a block of its own, so a later tag of the same
+        // box repeats the cheap check instead.
+        self.last_runtime_type_tag = None;
         Ok(())
     }
 

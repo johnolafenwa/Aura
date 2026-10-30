@@ -27464,13 +27464,40 @@ fn lists_that_share_storage_have_no_room() {
 }
 
 #[test]
+fn a_tag_through_a_cell_records_the_shape_until_the_next_write() {
+    let shape = |value: *mut OpaqueValue| {
+        unsafe { &*value }
+            .shape_tag
+            .load(std::sync::atomic::Ordering::Relaxed)
+    };
+    let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    let descriptor = super::canonical_runtime_type_name(&Type::Named(
+        "list".to_string(),
+        vec![Type::named("int64")],
+    ));
+    let list = super::aura_direct_vec_empty();
+    assert!(shape(list).is_null(), "a new box names no tag");
+    super::aura_direct_tag_value_type_cell(list, &cell, descriptor.as_ptr(), descriptor.len());
+    let tag = cell.load(std::sync::atomic::Ordering::Acquire);
+    assert!(!tag.is_null());
+    assert_eq!(shape(list).cast::<std::ffi::c_void>(), tag);
+    // A write may change the shape, so the next tag looks again.
+    super::aura_direct_vec_push_scalar(list, 7, super::DirectScalarKind::Int64 as i64);
+    assert!(shape(list).is_null());
+    super::aura_direct_tag_value_type_cell(list, &cell, descriptor.as_ptr(), descriptor.len());
+    assert_eq!(shape(list).cast::<std::ffi::c_void>(), tag);
+    unsafe { release_value(list) };
+}
+
+#[test]
 fn opaque_values_keep_their_box_size() {
     // Every boxed value pays for these bytes. The list view fits in the
     // space a confined value does not need for a lock. The ledger's owner
     // and links take 24, and its count shares 8 with the room for
-    // in-place appends.
+    // in-place appends. The shape tag that lets generated code skip a
+    // repeated tag takes 8, and the value's 16-byte alignment pads 8.
     #[cfg(target_pointer_width = "64")]
-    assert_eq!(std::mem::size_of::<OpaqueValue>(), 192);
+    assert_eq!(std::mem::size_of::<OpaqueValue>(), 208);
 }
 
 #[test]

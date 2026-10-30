@@ -18837,6 +18837,19 @@ stages run on different workers still pays for moving each value between
 cores: `task_pool` runs in about 0.31 s with `AURA_WORKERS=1` and about
 0.54 s with four workers.
 
+### Repeated Type Tags
+
+A value whose static type names a generic, such as `list[int64]` or
+`Option[str]`, gets a runtime type tag when it reaches code that reads the
+tag. Each box remembers the tag it was last given through a tag cell in
+generated code, so a repeated tag is one load and compare instead of a
+runtime call. A write that may change the value's shape, such as a push
+or an element store, clears the remembered tag, and the next tag looks
+again. Methods reached only by direct calls take `self` without a tag,
+as functions do. `regex_match` runs 9.9% fewer instructions and
+`interpreter` 13.7% fewer. The remembered tag adds 8 bytes to a box, and
+alignment adds 8 more, so a box takes 208 bytes.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

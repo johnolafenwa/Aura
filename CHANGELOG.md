@@ -7,6 +7,15 @@ in this file.
 
 ## Unreleased
 
+### Performance
+
+- A boxed value remembers the runtime type tag it was last given through a
+  generated tag cell, and generated code skips the tag call when the box
+  already carries the same tag. A write that may change the value's shape
+  clears it. Methods reached only by direct calls keep `self` untagged, as
+  functions already did. `regex_match` runs 9.9% fewer instructions and
+  `interpreter` 13.7% fewer. A boxed value grows from 192 to 208 bytes.
+
 ## VS Code extension 0.9.0 — 2026-10-29
 
 - Bundles language server 0.9.0. The semantic interface version stays 20.
