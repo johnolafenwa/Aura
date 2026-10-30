@@ -18871,6 +18871,11 @@ UTF-8, and builds no `Result`. A tokenizer that cuts each token out of a
 byte list this way runs 55% fewer instructions. `sql_engine` runs 26.7%
 fewer and `mini_browser` 8.4% fewer.
 
+A match on `parse_int32`, `parse_int64`, or `parse_float64` whose `Err`
+arm binds nothing keeps only the number in the same way, and builds no
+error text for input that does not parse. `csv_aggregate`, which parses
+three numbers per row, runs 6.6% fewer instructions.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

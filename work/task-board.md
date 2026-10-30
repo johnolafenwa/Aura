@@ -21,6 +21,14 @@ Plan approved 2026-10-29 (all defaults; the release after this phase is
   -26.7%, mini_browser -8.4%, no program +1%. The two-word `str` the plan
   named was not needed for the gate and is not done. Details are in
   `2026-10-29-rust-speed-5b-text-from-bytes.md`.
+- Step 5c: number parses (`parse_int32`, `parse_int64`, `parse_float64`)
+  matched with an `Err` arm that binds nothing keep the number's box or
+  null in a `Result` slot (`aura_direct_parse_number_ok`). csv_aggregate
+  -6.6% (gate 15% missed), sql_engine unchanged (gate 15% missed). Neither
+  program spends much on runtime results after 5b: csv_aggregate's cost
+  is splitting and formatting, and sql_engine's is list appends through
+  instance fields, which always take the runtime path (5e). Details are
+  in `2026-10-30-rust-speed-5c-number-parses.md`.
 
 ## Aura 0.9.0 preview release (complete)
 

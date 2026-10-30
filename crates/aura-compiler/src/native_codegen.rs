@@ -7489,8 +7489,34 @@ impl<'a> FunctionCompiler<'a> {
                 Some(value) => Ok(value),
                 None => self.compile_plain_function_op(op, args),
             },
+            FunctionOp::ParseInt32 | FunctionOp::ParseInt64 | FunctionOp::ParseFloat64
+                if self.lookup_payload == Some(false) =>
+            {
+                self.compile_parse_for_slot(op, args)
+            }
             _ => self.compile_plain_function_op(op, args),
         }
+    }
+
+    /// A number parse for a `Result` slot: the number's box, or null.
+    fn compile_parse_for_slot(
+        &mut self,
+        op: FunctionOp,
+        args: &[MirArg],
+    ) -> std::result::Result<ValueRef, String> {
+        let [argument] = args else {
+            return Err(format!("direct backend expected one argument for `{op:?}`"));
+        };
+        let text = self.load_operand(&argument.value)?;
+        let text = self.ensure_opaque(text)?;
+        let kind = lookups::parse_kind(op).expect("a number parse");
+        let kind = self.builder.iconst(types::I64, kind);
+        let results = self.runtime_call_results(
+            self.runtime[RuntimeFn::ParseNumberOk],
+            &[text.values[0], kind],
+        );
+        self.lookup_payload = Some(true);
+        Ok(self.owned_opaque_result(results, Type::named("Unknown")))
     }
 
     /// A named op whose arguments each pass as one word, in parameter order,

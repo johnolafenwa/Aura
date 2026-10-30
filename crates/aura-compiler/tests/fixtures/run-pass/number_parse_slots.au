@@ -1,0 +1,33 @@
+# A match on a number parse whose `Err` arm binds nothing keeps only the
+# number in native code. This checks it still behaves as the `Result` would.
+
+
+def to_int(text: str) -> int64:
+    match parse_int64(text):
+        case Result.Ok(value):
+            return value
+        case Result.Err(_):
+            return -1
+
+
+def to_float(text: str) -> float64:
+    match own parse_float64(text):
+        case Result.Ok(value):
+            return value
+        case Result.Err(_):
+            return -0.5
+
+
+def to_i32(text: str) -> int32:
+    match parse_int32(text):
+        case Result.Ok(value):
+            return value + 1
+        case Result.Err(_):
+            return -1
+
+
+def main() -> int32:
+    for text in ["12", "-7", "x", "", "99999999999", "9223372036854775807", " 3", "1.5", "inf", "nan", "1e3"]:
+        print(f"{to_int(text)} {to_float(text)} {to_i32(text)}")
+    print(parse_int64("44"))
+    return 0

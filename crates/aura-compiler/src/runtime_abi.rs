@@ -143,6 +143,7 @@ runtime_functions! {
     DivmodValue => ("aura_direct_divmod", [I64, I64], Some(I64)),
     ParseInt32 => ("aura_direct_parse_int32", [I64], Some(I64)),
     ParseInt64 => ("aura_direct_parse_int64", [I64], Some(I64)),
+    ParseNumberOk => ("aura_direct_parse_number_ok", [I64, I64], Some(I64)),
     ParseFloat64 => ("aura_direct_parse_float64", [I64], Some(I64)),
     DurationLiteral => ("aura_direct_duration_literal", [I64, I64], Some(I64)),
     DurationFromI64 => ("aura_direct_duration_from_i64", [I64, I64], Some(I64)),
