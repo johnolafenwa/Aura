@@ -9,6 +9,8 @@ Last updated: 2026-10-30
   Details are in `2026-10-30-beat-python.md`.
 - Step 1a: read-only lookups find the entry once (`docdb` 1.88 -> 1.49 s,
   `json_roundtrip` 0.88 -> 0.69 s).
+- Step 1b: `json.as_int` / `as_float` / `as_bool` results stay in words
+  (`docdb` about 8% fewer instructions).
 
 ## File I/O hand-off (complete)
 

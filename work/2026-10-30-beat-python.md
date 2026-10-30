@@ -25,7 +25,15 @@ dictionary to the value to copy it, and released the copy at the end.
   Release builds, best of five on Linux: `docdb` 1.88 -> 1.49 s,
   `json_roundtrip` 0.88 -> 0.69 s; `template_render` and `csv_aggregate`
   unchanged.
-- 1b: lend dictionary values instead of copying them.
+- 1b: after 1a, `docdb`'s field readers spent most of their time in
+  `json.as_int` / `json.as_bool`: an argument buffer, a boxed `T | None`
+  result, then a take and an unbox. `aura_direct_json_as_scalar` writes
+  the payload bits to a stack slot and returns whether the variant
+  matched, and the emitter builds the union's words from that. `docdb`
+  instructions at size 3000: 452M -> 426M (about 150M of each is the
+  blocking-pool poll that callgrind counts). Wall time is within noise.
+  Fixture: `json_scalar_accessors.au`.
+- Next: lend dictionary values instead of copying them.
 - 2: lend JSON array elements in loops.
 - 3: string work in `template_render` and `csv_aggregate`.
 - 4: `regex_match`.

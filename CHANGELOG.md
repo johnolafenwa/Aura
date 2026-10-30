@@ -7,6 +7,10 @@ in this file.
 
 ## Unreleased
 
+- `json.as_int`, `json.as_float`, and `json.as_bool` no longer make a
+  result box in native builds when the result is matched or kept as a
+  local: one runtime call reads the payload straight into the union's
+  words. This cuts about 8% of `docdb`'s instructions.
 - A read-only `match d.lookup(key)` whose `Found` arm only reads the
   value or passes it to calls now finds the entry once in native builds:
   the test for the key and the copy of its value come from one probe,

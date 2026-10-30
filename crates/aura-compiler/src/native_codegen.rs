@@ -8114,6 +8114,9 @@ impl<'a> FunctionCompiler<'a> {
                 return self.coerce_value(text, &target);
             }
         }
+        if let Some(scalar) = self.compile_json_scalar_accessor(builtin, args)? {
+            return Ok(scalar);
+        }
         // Checked MIR materializes builtin defaults before direct code generation, so
         // optional metadata parameters are present in this argument list too.
         let mut loaded_args = Vec::with_capacity(args.len());
@@ -8153,6 +8156,66 @@ impl<'a> FunctionCompiler<'a> {
             &format!("return value of `{name}`"),
         )?;
         self.coerce_value(result, &target)
+    }
+
+    /// `json.as_int`, `json.as_float`, or `json.as_bool` whose `T | None`
+    /// result lives in words: one call writes the payload to a stack slot
+    /// and returns whether the value held it, so no result box is made.
+    fn compile_json_scalar_accessor(
+        &mut self,
+        builtin: HostBuiltin,
+        args: &[MirArg],
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        let (kind, scalar) = match builtin.name() {
+            "json::as_int" => (0, ScalarKind::Int64),
+            "json::as_float" => (1, ScalarKind::Float64),
+            "json::as_bool" => (2, ScalarKind::Bool),
+            _ => return Ok(None),
+        };
+        let [argument] = args else {
+            return Ok(None);
+        };
+        let semantic_type = RuntimeOp::Host(builtin)
+            .result_type(None, &[])
+            .expect("a host builtin names its result type");
+        let target = ensure_direct_type(
+            &semantic_type,
+            &self.classes,
+            &format!("return value of `{}`", builtin.name()),
+        )?;
+        let DirectType::Union(union) = &target else {
+            return Ok(None);
+        };
+        let position = |ty: &DirectType| union.members.iter().position(|member| &member.ty == ty);
+        let (Some(found), Some(missing)) = (
+            position(&DirectType::Scalar(scalar)),
+            position(&DirectType::Scalar(ScalarKind::Unit)),
+        ) else {
+            return Ok(None);
+        };
+        let loaded = self.load_operand(&argument.value)?;
+        let loaded = self.ensure_opaque(loaded)?;
+        let slot = self.builder.create_sized_stack_slot(8, 3);
+        let out = self.builder.stack_addr(types::I64, slot, 0);
+        let zero = self.builder.iconst(types::I64, 0);
+        self.builder.store(MemFlags::new(), zero, out, 0);
+        let kind = self.builder.iconst(types::I64, kind);
+        let call = self.builder.call(
+            self.runtime[RuntimeFn::JsonAsScalar],
+            &[loaded.values[0], kind, out],
+        );
+        let held = self.builder.icmp_imm(IntCC::NotEqual, call.results[0], 0);
+        let bits = self.builder.load(types::I64, MemFlags::new(), out, 0);
+        let found = self.builder.iconst(types::I64, found as i64);
+        let missing = self.builder.iconst(types::I64, missing as i64);
+        let mut words = vec![self.builder.select(held, found, missing), bits];
+        while words.len() < union.payload_words + 1 {
+            words.push(self.builder.iconst(types::I64, 0));
+        }
+        Ok(Some(ValueRef {
+            values: words,
+            ty: target.clone(),
+        }))
     }
 
     /// The runtime entry for one host builtin, imported on first use.

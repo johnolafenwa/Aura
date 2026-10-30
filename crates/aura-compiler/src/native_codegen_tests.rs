@@ -2497,9 +2497,9 @@ def main() -> int32:
         "aura_host_json_parse",
         "aura_host_json_dumps",
         "aura_host_json_is_null",
-        "aura_host_json_as_bool",
-        "aura_host_json_as_int",
-        "aura_host_json_as_float",
+        // `as_bool`, `as_int`, and `as_float` read their payload into the
+        // result union's words through one runtime call.
+        "aura_direct_json_as_scalar",
         "aura_host_json_into_string",
         "aura_host_json_into_array",
         "aura_host_json_into_object",

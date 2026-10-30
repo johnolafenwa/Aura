@@ -1,0 +1,14 @@
+a: int 7 7
+b: int -9223372036854775807 -9223372036854775807
+c: float 2.5 -1
+d: yes -1
+e: no -1
+f: other -1
+g: other -1
+h: other -1
+zz: missing -1
+7
+None
+2.5
+None
+21

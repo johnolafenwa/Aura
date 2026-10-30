@@ -3793,6 +3793,51 @@ fn direct_json_as_int(args: &DirectHostArgBuffer) -> std::result::Result<Value, 
     })
 }
 
+/// `json.as_int`, `json.as_float`, or `json.as_bool` for a union that
+/// native code keeps in words: writes the payload's bits through `out` and
+/// returns 1 when `value` holds that variant, or returns 0. `kind` is 0 for
+/// `Int`, 1 for `Float`, 2 for `Bool`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_json_as_scalar(
+    value: *mut OpaqueValue,
+    kind: i64,
+    out: *mut i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let (name, variant) = match kind {
+            0 => ("json::as_int", "Int"),
+            1 => ("json::as_float", "Float"),
+            _ => ("json::as_bool", "Bool"),
+        };
+        let bits = unsafe {
+            with_lent_value(value, |value| {
+                match direct_json_exact_payload(value, variant, name) {
+                    Ok(None) => None,
+                    Ok(Some(payload @ Value::Int(number)))
+                        if kind == 0 && json_int_metadata_is_exact(number) =>
+                    {
+                        Some(unbox_int64_of(payload))
+                    }
+                    Ok(Some(Value::Float(number))) if kind == 1 => Some(number.to_bits() as i64),
+                    Ok(Some(Value::Bool(flag))) if kind == 2 => Some(i64::from(*flag)),
+                    Ok(Some(_)) => runtime_diagnostic_error(Diagnostic::coded(
+                        "AU4001",
+                        format!("malformed runtime `json.Value.{variant}` payload in `{name}`"),
+                    )),
+                    Err(diagnostic) => runtime_diagnostic_error(diagnostic),
+                }
+            })
+        };
+        match bits {
+            Some(bits) => {
+                unsafe { out.write(bits) };
+                1
+            }
+            None => 0,
+        }
+    })
+}
+
 fn direct_json_as_float(args: &DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic> {
     let name = "json::as_float";
     args.with_borrow(name, 0, |value| {
