@@ -1,0 +1,115 @@
+# Reads that generated code makes in place: an instance field passed to a
+# call that only borrows its arguments, a match on an element of a `view`,
+# and a nested element read before a write to the same element.
+enum Cell:
+    Num(value: int64)
+    Word(value: str)
+
+
+class Rule:
+    column: int64
+    weight: int64
+    cell: Cell
+    tags: list[str]
+
+
+class Table:
+    rows: list[list[Cell]]
+    hits: int64
+
+
+DEFAULT = Rule(column=0, weight=1, cell=Cell.Num(value=3), tags=["d"])
+
+
+def same(cell: Cell, weight: int64, wanted: Cell) -> bool:
+    match cell:
+        case Cell.Num(a):
+            match wanted:
+                case Cell.Num(b):
+                    return a * weight == b * weight
+                case Cell.Word(_):
+                    return false
+        case Cell.Word(a):
+            match wanted:
+                case Cell.Word(b):
+                    return a == b
+                case Cell.Num(_):
+                    return false
+
+
+def tag_count(rule: Rule, tags: list[str]) -> int64:
+    return tags.len() + rule.weight
+
+
+def accepts(row: list[Cell], rules: list[Rule]) -> bool:
+    for rule in rules:
+        if not same(row[rule.column], rule.weight, rule.cell):
+            return false
+    return true
+
+
+def label(cell: Cell) -> str:
+    match cell:
+        case Cell.Word(s):
+            return s.clone()
+        case Cell.Num(n):
+            return f"#{n}"
+
+
+def scan(table: mut Table, rules: list[Rule]) -> str:
+    mut names = ""
+    for slot in range(table.rows.len()):
+        view row = table.rows[slot]
+        if not accepts(row, rules):
+            continue
+        table.hits += 1
+        match row[1]:
+            case Cell.Word(s):
+                names = names + s
+            case Cell.Num(n):
+                names = names + f"{n}"
+        names = names + label(row[0])
+    return names
+
+
+def second_word(table: Table, slot: int64) -> str:
+    view row = table.rows[slot]
+    mut word = "num"
+    match row[1]:
+        case Cell.Word(s):
+            word = s.clone()
+        case Cell.Num(_):
+            word = "num"
+    return word + label(row[0])
+
+
+def main():
+    mut table = Table(rows=[], hits=0)
+    for i in range(12):
+        table.rows.append([Cell.Num(value=i % 4), Cell.Word(value=f"w{i}")])
+    table.rows.append([Cell.Num(value=1), Cell.Num(value=99)])
+    rules = [
+        Rule(column=0, weight=2, cell=Cell.Num(value=1), tags=["a", "b"]),
+        Rule(column=0, weight=1, cell=Cell.Num(value=1), tags=[]),
+    ]
+    for _ in range(3):
+        print(scan(table, rules))
+    print(table.hits)
+    first = Rule(column=1, weight=4, cell=Cell.Word(value="x"), tags=["p", "q", "r"])
+    print(tag_count(first, first.tags))
+    print(same(DEFAULT.cell, DEFAULT.weight, Cell.Num(value=3)))
+    print(label(DEFAULT.cell))
+    print(second_word(table, 3))
+
+    mut totals: list[list[int64]] = []
+    for _ in range(3):
+        mut state: list[int64] = []
+        for j in range(2):
+            state.append(j)
+        totals.append(state)
+    for k in range(30):
+        position = k % 3
+        for i in range(2):
+            best = max(totals[position][i], k * (i + 1))
+            totals[position][i] = best
+    print(totals)

@@ -4613,7 +4613,7 @@ impl<'a> FunctionCompiler<'a> {
                     scrutinee,
                     Operand::Place(place) if self.lent_places.contains(place.as_str())
                 );
-                let scrutinee = self.load_operand(scrutinee)?;
+                let scrutinee = self.load_scrutinee(scrutinee)?;
                 let DirectType::Opaque(scrutinee_ty) = &scrutinee.ty else {
                     return Err(
                         "direct backend expected enum matches to use opaque scrutinees".to_string(),
@@ -4831,6 +4831,45 @@ impl<'a> FunctionCompiler<'a> {
             self.release_opaque_handle(copy);
         }
         compiled
+    }
+
+    /// Loads the scrutinee of a match or a payload read: the box of a
+    /// followed read-only loan where its list keeps it, and any other
+    /// operand as usual.
+    fn load_scrutinee(&mut self, operand: &Operand) -> std::result::Result<ValueRef, String> {
+        if let Operand::Place(place) = operand {
+            if let Some(value) = self.pass_native_element(place)? {
+                return Ok(value);
+            }
+        }
+        self.load_operand(operand)
+    }
+
+    /// Loads `operand`, a field place passed to a parameter the callee
+    /// borrows, by a call that only borrows its arguments: a box field of an
+    /// instance kept in place is passed where it lies, since the callee can
+    /// change nothing it is passed while it holds the box. The copy the
+    /// runtime path makes, or null, is released with the call's other
+    /// temporaries.
+    fn load_borrowed_field_argument(
+        &mut self,
+        operand: &Operand,
+        expected: &DirectType,
+    ) -> std::result::Result<ValueRef, String> {
+        let copy = self.declare_word_var();
+        let null = self.builder.iconst(types::I64, 0);
+        self.builder.def_var(copy, null);
+        let copies = std::mem::replace(&mut self.field_read_copies, vec![copy]);
+        let count = std::mem::take(&mut self.field_read_count);
+        let borrowing = std::mem::replace(&mut self.borrow_field_reads, true);
+        let loaded = self.load_operand_for_target(operand, expected);
+        self.borrow_field_reads = borrowing;
+        self.field_read_count = count;
+        self.field_read_copies = copies;
+        let loaded = loaded?;
+        let copy = self.builder.use_var(copy);
+        self.layout_scratch.opaque.insert(copy);
+        Ok(loaded)
     }
 
     /// Takes the next variable for the copy a borrowed field read makes on
@@ -5288,7 +5327,7 @@ impl<'a> FunctionCompiler<'a> {
                     scrutinee,
                     Operand::Place(place) if self.lent_places.contains(place.as_str())
                 );
-                let scrutinee = self.load_operand(scrutinee)?;
+                let scrutinee = self.load_scrutinee(scrutinee)?;
                 if !lent {
                     let any = DirectType::Opaque(Type::named("Unknown"));
                     let read_as = if matches!(target, DirectType::Opaque(_)) {
@@ -7496,6 +7535,7 @@ impl<'a> FunctionCompiler<'a> {
             .unwrap_or_default();
         // The shared validator binds one argument to each parameter.
         debug_assert_eq!(args.len(), expected.len(), "arguments of `{name}`");
+        let reads_arguments_only = reads_arguments_only(args, &kept, &expected);
         for (index, (argument, abi_expected)) in args.iter().zip(&expected).enumerate() {
             let specialized = substitute_type(&direct_type_to_type(abi_expected), &substitutions);
             let semantic_expected = ensure_direct_type(
@@ -7523,6 +7563,9 @@ impl<'a> FunctionCompiler<'a> {
                     let taken = self.take_place(place)?;
                     self.mark_shaped_place(place, &taken);
                     taken
+                }
+                Operand::Place(place) if reads_arguments_only && place.contains('.') => {
+                    self.load_borrowed_field_argument(&argument.value, &semantic_expected)?
                 }
                 operand => self.load_operand_for_target(operand, &semantic_expected)?,
             };
@@ -15336,6 +15379,35 @@ fn adds_to_receiver(op: RuntimeOp) -> bool {
             | RuntimeOp::Set(SetOp::Add | SetOp::AddInt64)
             | RuntimeOp::Dict(DictOp::Set | DictOp::SetIndex)
     )
+}
+
+/// Whether a call to a function whose parameters `kept` names only borrows
+/// its arguments: each is a scalar or goes to a borrowed parameter, none
+/// is written back, and none can be a callable, whose captures could reach
+/// a place another argument names.
+fn reads_arguments_only(
+    args: &[MirArg],
+    kept: &[MirReceiverKind],
+    expected: &[DirectType],
+) -> bool {
+    args.iter().enumerate().all(|(index, argument)| {
+        (kept.get(index) == Some(&MirReceiverKind::Borrow)
+            || matches!(expected.get(index), Some(DirectType::Scalar(_))))
+            && argument.writeback_place.is_none()
+            && expected
+                .get(index)
+                .is_some_and(|ty| cannot_be_callable(&direct_type_to_type(ty)))
+    })
+}
+
+fn cannot_be_callable(ty: &Type) -> bool {
+    match ty {
+        Type::Named(_, args) => args.iter().all(cannot_be_callable),
+        Type::Tuple(items) => items.iter().all(cannot_be_callable),
+        Type::Union(union) => union.members.iter().all(cannot_be_callable),
+        Type::Unit => true,
+        _ => false,
+    }
 }
 
 /// The box field reads one rvalue reads in place; a comparison reads two,

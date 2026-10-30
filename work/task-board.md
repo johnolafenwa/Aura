@@ -73,6 +73,15 @@ Plan approved 2026-10-29 (all defaults; the release after this phase is
   own startup allocations). order_book -30%, spreadsheet -18%,
   graph_paths -17%, json_roundtrip -15%, sql_engine -9.5%. Details are in
   `2026-10-30-rust-speed-5g-allocator.md`.
+- Step 5i (added for 0.10 at John's request, 2026-10-30): borrowed reads
+  for `sql_engine`. Box fields passed to calls that only borrow or take
+  scalars go where they lie; a `match` on a read-only nested element loan
+  is followed in the element's box; a lent element read no longer gives
+  up because the function also loans the list mutably. sql_engine
+  377.9M -> 282.4M instructions at check size (-25%), 5.8G -> 2.2G at
+  bench size, wall 0.80 -> about 0.33 s; graph_paths -20%, task_pool
+  -11%, spreadsheet -8%; others within 1%. Details are in
+  `2026-10-30-rust-speed-5i-borrowed-reads.md`.
 
 ## Aura 0.9.0 preview release (complete)
 

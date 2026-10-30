@@ -72,6 +72,19 @@ in this file.
   `sql_engine` 9%; `sql_engine` and `graph_paths` run in 24% and 27% less
   time. The per-thread box cache and layout block pool from the previous
   entries are gone: the allocator does their work for every block.
+- Native code copies less when a function only reads what it is passed.
+  A box field of an instance, such as `condition.value` in
+  `compare(row[i], condition.op, condition.value)`, goes to a call whose
+  parameters all borrow or take scalars where the field lies, instead of
+  as a copy. A `match` on an element of a `view`, such as `match row[k]`
+  for `view row = rows[slot]`, tests the variant and reads the payload in
+  the element's box instead of walking the path in the runtime twice. A
+  read of a list element, such as `totals[p][i]` in
+  `max(totals[p][i], x)`, no longer copies `totals[p]` when the function
+  also writes `totals[p][i]`, so the write that follows stays in
+  generated code. `sql_engine` runs 25% fewer instructions at the check
+  size and in about 45% less time at the bench size, `graph_paths` 20%
+  fewer, `task_pool` 11%, and `spreadsheet` 8%.
 
 ## VS Code extension 0.9.0 — 2026-10-29
 

@@ -14,8 +14,10 @@
 //! such instruction that does more than read the list, a lent local that
 //! is still to be read copies the element into a box of its own, so the
 //! list's box is reached only while the list is unchanged (see
-//! `native_element_boxes.rs` in the runtime). A list that a closure, a
-//! task, or a mutable loan can reach is never lent from.
+//! `native_element_boxes.rs` in the runtime). A mutable loan of the list
+//! names it when it begins, so a lent local still to be read copies its
+//! element there, and nothing reads the list while the loan lives. A list
+//! that a closure or a task can reach is never lent from.
 //!
 //! A list read out of a field, such as `self.asks[level][head]`, is the
 //! temporary a `Lend` of the field fills, and its `EndLend` puts the same
@@ -318,7 +320,10 @@ pub(super) fn lent_element_reads(
                     Instruction::Assign { target, value }
                         if target == temp && element_read_list(value).is_some()
                 );
-                if shares_list(instruction, list)
+                // A mutable loan of the list names it when it begins, which
+                // copies a lent element still to be read, and nothing can
+                // read the list while the loan lives.
+                if captures(instruction, list)
                     || (roots.contains(temp) && !defines && !reads_lent(instruction, temp, &[]))
                 {
                     rejected.insert(temp);

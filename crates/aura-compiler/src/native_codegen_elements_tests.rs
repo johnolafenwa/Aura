@@ -207,7 +207,10 @@ fn an_element_read_that_is_kept_or_written_is_copied() {
 }
 
 #[test]
-fn a_list_another_place_can_change_is_never_lent_from() {
+fn a_list_another_place_can_change_copies_its_lent_element_or_never_lends() {
+    // A mutable loan of the list names it when it begins, so the element
+    // still to be read is copied there instead of the list never lending.
+    let unchanged = lent_after(|_, _| {}).promotions.len();
     let found = lent_after(|tail, _| {
         tail.insert(
             0,
@@ -218,7 +221,8 @@ fn a_list_another_place_can_change_is_never_lent_from() {
             },
         )
     });
-    assert!(found.lists.is_empty(), "{found:?}");
+    assert!(!found.lists.is_empty(), "{found:?}");
+    assert_eq!(found.promotions.len(), unchanged + 1, "{found:?}");
     // Reading a part of the element, even into a lend of it, keeps it lent.
     let found = lent_after(|tail, temp| {
         tail.insert(
