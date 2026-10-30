@@ -15904,6 +15904,24 @@ impl<'a> Lowerer<'a> {
         // every arm-local child has ended. Outer statement/scope cleanup
         // remains responsible for ending those ancestors afterwards.
         let mut retained_parents = BTreeSet::new();
+        // So does a match on an element of a view, such as `match row[k]`
+        // for `view row = rows[i]`: the element's loan is a child of the
+        // view's, so the view outlives the match even when no arm names it.
+        if lends_element {
+            if let Operand::Place(place) = &scrutinee {
+                let loan = place.split('.').next().unwrap_or(place);
+                let mut source = self.view_sources.get(loan).cloned();
+                while let Some(parent) = source {
+                    let root = parent.split('.').next().unwrap_or(&parent).to_string();
+                    if !self.view_sources.contains_key(&root)
+                        || !retained_parents.insert(root.clone())
+                    {
+                        break;
+                    }
+                    source = self.view_sources.get(&root).cloned();
+                }
+            }
+        }
         if match_stmt
             .arms
             .iter()

@@ -10,8 +10,8 @@ import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-VERSION = "0.9.0"
-EXTENSION_VERSION = "0.9.0"
+VERSION = "0.10.0"
+EXTENSION_VERSION = "0.10.0"
 
 
 class ReleaseMetadataTests(unittest.TestCase):

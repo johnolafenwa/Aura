@@ -7,6 +7,29 @@ in this file.
 
 ## Unreleased
 
+## VS Code extension 0.10.0 — 2026-10-30
+
+- Bundles language server 0.10.0. The semantic interface version stays 20.
+  The extension and the language server have no other changes.
+
+## 0.10.0 — 2026-10-30 (technical preview)
+
+Aura 0.10.0 ships phase 5 of the plan to bring Aura to Rust speed on the
+30 [cross-language programs](benchmarks/cross_language/README.md): fewer
+values in boxes and cheaper boxes for the rest. Payload-free variants are
+shared, a repeated type tag costs one compare, text is made from a byte
+slice without the slice, instance fields and element views are read in
+place, small blocks come from per-thread lists, and values a function
+only reads are passed where they lie. Measured in the same passes on the
+Linux measurement host, the 30 Aura programs take 20.9 seconds instead of
+0.9.0's 26.1, the median program is 3.9 times Rust's time instead of 4.6
+times and 0.40 times Python's instead of 0.50 times, and Aura is faster
+than Python on 25 programs instead of 22. `sql_engine` went from 21.8 to
+5.9 times Rust; `regex_match`, at 8.6 times, is the one program above 8
+times. Two 0.9.0 traps on
+read-only uses of a module constant's fields are fixed. The semantic
+interface stays 20, and the native cache format stays `v10`.
+
 ### Performance
 
 - A boxed value remembers the runtime type tag it was last given through a
@@ -83,8 +106,12 @@ in this file.
   `max(totals[p][i], x)`, no longer copies `totals[p]` when the function
   also writes `totals[p][i]`, so the write that follows stays in
   generated code. `sql_engine` runs 25% fewer instructions at the check
-  size and in about 45% less time at the bench size, `graph_paths` 20%
+  size and in about 60% less time at the bench size, `graph_paths` 20%
   fewer, `task_pool` 11%, and `spreadsheet` 8%.
+- Fixed: `view row = rows[i]` followed by `match row[k]` failed to
+  compile with AU4001 "ends parent loan before its child" when no arm or
+  later statement named `row` again. The view now lasts until the match
+  ends.
 
 ## VS Code extension 0.9.0 — 2026-10-29
 

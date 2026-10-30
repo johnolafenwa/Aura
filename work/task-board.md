@@ -1,8 +1,8 @@
 # Task Board
 
-Last updated: 2026-10-29
+Last updated: 2026-10-30
 
-## Rust speed Phase 5: values out of boxes (in progress)
+## Rust speed Phase 5: values out of boxes (complete)
 
 Plan approved 2026-10-29 (all defaults; the release after this phase is
 0.10.0-preview, with Linux timings only).
@@ -82,6 +82,14 @@ Plan approved 2026-10-29 (all defaults; the release after this phase is
   bench size, wall 0.80 -> about 0.33 s; graph_paths -20%, task_pool
   -11%, spreadsheet -8%; others within 1%. Details are in
   `2026-10-30-rust-speed-5i-borrowed-reads.md`.
+- Step 5h: re-measured and prepared the 0.10.0 preview release after 5i.
+  Both compilers on the same container on 2026-10-30, median of ten runs
+  pooled from two passes: all 30 programs 26.1 s (0.9.0) -> 20.9 s,
+  median 4.6x -> 3.9x Rust and 0.50x -> 0.40x Python, 25 programs faster
+  than Python (22), one program above 8x Rust (four): `regex_match` 8.6x.
+  `sql_engine` 21.8x -> 5.9x. Phase gates MISSED: median 3x (3.9x) and no
+  program above 8x (`regex_match` 8.6x). Details are in
+  `2026-10-30-v0.10.0-preview-release.md`.
 
 ## Aura 0.9.0 preview release (complete)
 

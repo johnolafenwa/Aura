@@ -127,7 +127,7 @@ bytes. This is a fixed resource and safety ceiling, separate from the public
 any allocation or entropy.
 
 These functions return plain values, so an invalid or unavailable request
-traps. Aura 0.9 has no `random.Error` type.
+traps. Aura 0.10 has no `random.Error` type.
 
 | Code | Cause |
 | --- | --- |
@@ -136,7 +136,7 @@ traps. Aura 0.9 has no `random.Error` type.
 
 ## Compatibility And The Full Contract
 
-Aura fixes the algorithm for the whole 0.3.x, 0.4.x, 0.5.x, 0.6.x, 0.7.x, 0.8.x, and 0.9.x series: xoshiro256**, its
+Aura fixes the algorithm for the whole 0.3.x, 0.4.x, 0.5.x, 0.6.x, 0.7.x, 0.8.x, 0.9.x, and 0.10.x series: xoshiro256**, its
 SplitMix64 seed expansion, the integer mapping, the floating mapping, and the
 shuffle order. That makes seeded tests portable across the MIR and direct
 backends. It does not make xoshiro secure.

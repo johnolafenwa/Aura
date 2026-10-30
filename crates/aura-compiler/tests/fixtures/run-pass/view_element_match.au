@@ -1,0 +1,43 @@
+# A match on an element of a `view` keeps the view alive until the match
+# ends, even when no arm names the view again.
+enum Cell:
+    Num(value: int64)
+    Word(value: str)
+
+
+def pick(rows: list[list[Cell]], slot: int64) -> str:
+    view row = rows[slot]
+    mut out = ""
+    match row[1]:
+        case Cell.Word(s):
+            out = s.clone()
+        case Cell.Num(_):
+            out = "num"
+    return out
+
+
+def first_word(rows: list[list[Cell]]) -> str:
+    for i in range(rows.len()):
+        view row = rows[i]
+        match row[1]:
+            case Cell.Word(s):
+                return s.clone()
+            case Cell.Num(_):
+                continue
+    return "none"
+
+
+def main():
+    rows = [
+        [Cell.Num(value=1), Cell.Num(value=2)],
+        [Cell.Num(value=1), Cell.Word(value="b")],
+    ]
+    print(pick(rows, 0))
+    print(pick(rows, 1))
+    print(first_word(rows))
+    view row = rows[0]
+    match row[1]:
+        case Cell.Word(s):
+            print(s)
+        case Cell.Num(n):
+            print(n)
