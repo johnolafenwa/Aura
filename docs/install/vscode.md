@@ -49,7 +49,7 @@ codium --install-extension JohnOlafenwa.vscode-aura-lang
 A VSIX file is a packaged VS Code extension.
 
 1. Download `aura-language.vsix` from the
-   [v0.9.0-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.9.0-preview).
+   [v0.10.0-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.10.0-preview).
 2. Open the Command Palette and choose **Extensions: Install from VSIX...**.
 
 To install from a terminal instead:

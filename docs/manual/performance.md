@@ -315,8 +315,9 @@ M2 Pro host feed later performance decisions.
 | `set_insert_contains` | 1.89 times Rust in instructions on Linux in 0.7.0 |
 | `int_list_sum` | 1.21 times Rust in instructions on Linux in 0.7.0 |
 | AuraDB `update` by id | about 3 times Python 3.13 |
-| 30 cross-language programs | median 4.6 times Rust and 0.53 times Python 3.13 by wall time on Linux in 0.9.0 |
-| `task_pool` cross-language program | 2.4 times Rust with four workers and 1.4 times with one in 0.9.0 |
+| 30 cross-language programs | median 3.9 times Rust and 0.40 times Python 3.13 by wall time on Linux in 0.10.0 |
+| `regex_match` cross-language program | 8.6 times Rust by wall time on Linux in 0.10.0, the one program above 8 times |
+| `task_pool` cross-language program | 2.1 times Rust with four workers in 0.10.0 |
 
 These gaps are specific to these workloads. Scheduling, runtime
 implementation, allocation, and optimizer-barrier choices affect how to read
@@ -454,6 +455,27 @@ so pipeline stages on different workers pass each value between cores.
 `sql_engine` (22x), `binary_trees` (10x), and `regex_match` (10x) are
 furthest; they spend most of their time allocating boxes for strings,
 enums, and class instances, which the next phase takes out of boxes.
+
+Aura 0.10.0 ships phase 5. It shares payload-free variants, skips repeated
+type tags, makes text from a byte slice without the slice, reads instance
+fields and element views in place, and allocates small blocks from
+per-thread lists and chunks, and passes values a function only reads
+where they lie instead of copying them (Repeated Type Tags through
+Borrowed Reads below give each step). Both compilers measured in the same
+two passes on 30 October 2026, median of ten runs:
+
+| Measure | Aura 0.9.0 | Aura 0.10.0 |
+| --- | ---: | ---: |
+| All 30 programs, wall time | 26.1 s | 20.9 s |
+| Median Aura / Rust, wall time | 4.6x | 3.9x |
+| Median Aura / Python 3.13, wall time | 0.50x | 0.40x |
+| Programs faster than Python | 22 | 25 |
+| Programs above 8x Rust | 4 | 1 |
+
+The phase's own targets, a median of 3x Rust and no program above 8x, are
+not met. `regex_match` is 8.6x: its matcher builds and compares small enum
+values for each step. `sql_engine` went from 21.8x to 5.9x, `graph_paths`
+from 10.5x to 3.8x, and `binary_trees` from 9.2x to 3.7x.
 
 ### Per-Call Attribution
 
@@ -1449,6 +1471,20 @@ while the program runs. Blocks over 1 KiB go to the system allocator.
 Time spent allocating falls from up to 35% of a program's instructions
 to under 3% in 29 of the 30 benchmark programs. `sql_engine` runs in 24%
 less time and `graph_paths` in 27% less.
+
+### Borrowed Reads
+
+Native code passes a value a function only reads where it lies, instead
+of copying it. A box field such as `condition.value` goes to a call as it
+is when every argument of the call goes to a parameter the callee
+borrows, or is a scalar, and none is written back. A `match` on an
+element of a `view`, such as `match row[k]` for `view row = rows[slot]`,
+tests the variant and reads the payload in the element's box. A read of
+an element, such as `totals[p][i]` in `max(totals[p][i], x)`, takes no
+copy of `totals[p]` when the same function also writes `totals[p][i]`, so
+that write stays in generated code too. `sql_engine` runs 25% fewer
+instructions and in about 60% less time at its bench size, and
+`graph_paths` runs 20% fewer instructions.
 
 ## Performance Direction
 
