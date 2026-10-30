@@ -15795,3 +15795,74 @@ fn direct_comparisons_and_membership_tests_read_box_fields_in_place() {
         "{referenced:?}"
     );
 }
+
+const ELEMENT_VIEW_SOURCE: &str = r#"
+class Node:
+    tag: str
+    classes: list[str]
+    children: list[int64]
+
+class Template:
+    texts: list[str]
+
+copy class Arc:
+    target: int64
+    weight: int64
+
+def describe(nodes: list[Node], index: int64) -> int64:
+    view node = nodes[index]
+    mut total = 0
+    if node.tag == "p":
+        total += 1
+    if "x" in node.classes:
+        total += 10
+    for child in node.children:
+        total += child
+    return total
+
+def first(template: Template) -> str:
+    return template.texts[0].clone()
+
+def link(adjacency: mut list[list[Arc]], source: int64, target: int64):
+    adjacency[source].append(Arc(target=target, weight=1))
+
+def main():
+    nodes = [Node(tag="p", classes=["x"], children=[1])]
+    print(describe(nodes, 0))
+    print(first(Template(texts=["a"])))
+    mut adjacency: list[list[Arc]] = [list[Arc]()]
+    link(adjacency, 0, 0)
+    print(adjacency.len())
+"#;
+
+#[test]
+fn direct_element_views_and_field_lists_read_in_place() {
+    let mir = lower_source_to_mir(ELEMENT_VIEW_SOURCE).expect("the element views should lower");
+    let followed = |name: &str| {
+        let function = mir
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("the function should lower");
+        let (uses, _) = super::element_loans::native_element_loans(function, |_| Vec::new());
+        uses.len()
+    };
+    // A read-only view of a class element whose fields are read, lent, and
+    // looped over, and the loan an append to an element list adds to, are
+    // followed to the element's box.
+    assert_eq!(followed("describe"), 1);
+    assert_eq!(followed("link"), 1);
+
+    let object = emit_host_object(&mir).expect("the element views should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    // A `str` element of a list field is checked and copied out of the
+    // field's box, with the runtime walk only for an instance kept out of
+    // place.
+    for helper in [
+        "aura_direct_vec_check_index",
+        "aura_direct_vec_str_element",
+        "aura_direct_element_path_promote",
+    ] {
+        assert!(referenced.contains(helper), "{helper}: {referenced:?}");
+    }
+}

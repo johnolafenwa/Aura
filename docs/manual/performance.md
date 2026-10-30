@@ -1401,6 +1401,41 @@ A field passed to a function or stored somewhere else is still copied.
 `mini_browser`, which runs a test like `applies` for every rule and
 node, runs 16.9% fewer instructions.
 
+### Element Views
+
+Native code reaches an element through its list without a runtime walk
+of the path in more cases:
+
+```aura
+class Node:
+    tag: str
+    children: list[int64]
+
+
+copy class Arc:
+    target: int64
+    weight: int64
+
+
+def weigh(nodes: list[Node], index: int64, adjacency: mut list[list[Arc]]) -> int64:
+    view node = nodes[index]
+    mut total = 0
+    if node.tag == "p":
+        total += 1
+    for child in node.children:
+        adjacency[child].append(Arc(target=index, weight=total))
+    return total
+```
+
+The fields of a read-only `view` of a class element, such as `node.tag`
+and `node.children`, are read in the element's box. An append to an
+element of a list of lists, such as `adjacency[child].append(...)`,
+changes the element where the outer list keeps it; before, the element
+was copied, which copied its storage, changed, and stored back. A `str`
+element of a list field, such as `template.texts[i]`, is checked and
+copied out of the field's box. `graph_paths`, which builds its adjacency
+lists this way, runs 47% fewer instructions.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

@@ -44,6 +44,20 @@ in this file.
   `DEFAULTS.names.len()`, stopped the program with "a module constant
   cannot change". The read now uses a copy of the field instead of taking
   it out of the constant.
+- Native code follows more element paths itself instead of walking them
+  in the runtime: fields of a read-only `view` of a class element, such
+  as `node.tag` for `view node = nodes[i]`, are read, lent, and looped over
+  in the element's box; a `str` element of a list field, such as
+  `template.texts[i]`, is checked and copied out of the field's box; and
+  an append, insert, extend, set add, or dict index write on an element,
+  such as `adjacency[u].append(arc)`, changes the element where its list
+  keeps it instead of copying it and storing the copy back.
+  `graph_paths` runs 47% fewer instructions, `template_render` 25%,
+  `mini_browser` 20%, and `sql_engine` and `lru_cache` 5%.
+- Reading a list field through a `view` of an element of a module
+  constant, such as `"x" in node.classes` for `view node = NODES[0]`,
+  stopped the program with "a module constant cannot change". It reads a
+  copy of the field now, as a field of the constant itself already did.
 
 ## VS Code extension 0.9.0 — 2026-10-29
 
