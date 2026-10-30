@@ -22,7 +22,7 @@
 //! never runs ahead of the list and a reader on another thread writes
 //! nothing.
 
-use std::alloc::{alloc_zeroed, dealloc, handle_alloc_error, Layout as AllocLayout};
+use std::alloc::Layout as AllocLayout;
 use std::any::Any;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -328,12 +328,7 @@ impl TypedFields {
     /// An instance whose every field is moved out: scalars are zero and
     /// every box is null.
     pub fn new(layout: &'static ClassLayout) -> Self {
-        let block = layout.block_layout();
-        // SAFETY: the size is at least one byte.
-        let data = unsafe { alloc_zeroed(block) };
-        let Some(data) = NonNull::new(data) else {
-            handle_alloc_error(block);
-        };
+        let data = super::block_pool::allocate(layout.block_layout(), true);
         Self { layout, data }
     }
 
@@ -632,8 +627,8 @@ impl TypedFields {
             }
         }
         // SAFETY: every field is moved out, so the block holds nothing to
-        // drop, and it came from `alloc_zeroed` with this layout.
-        unsafe { dealloc(this.data.as_ptr(), layout.block_layout()) };
+        // drop, and it came from the pool with this layout.
+        unsafe { super::block_pool::free(this.data, layout.block_layout()) };
         fields
     }
 
@@ -676,7 +671,7 @@ impl Drop for TypedFields {
                 self.layout.layout.root(),
                 self.data.as_ptr(),
             );
-            dealloc(self.data.as_ptr(), self.layout.block_layout());
+            super::block_pool::free(self.data, self.layout.block_layout());
         }
     }
 }

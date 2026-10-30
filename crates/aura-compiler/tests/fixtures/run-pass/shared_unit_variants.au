@@ -1,0 +1,87 @@
+# Every build of a variant with no payloads is one shared box in native
+# code. This checks that the shared box behaves as a value of its own in
+# payloads, fields, lists, moves, and other tasks.
+
+
+enum Tree:
+    Leaf
+    Node(left: indirect Tree, right: indirect Tree)
+
+
+enum Light:
+    Red
+    Amber
+    Green
+
+
+class Holder:
+    light: Light
+    tree: Tree
+
+
+def make(depth: int64) -> Tree:
+    if depth == 0:
+        return Tree.Leaf
+    return Tree.Node(left=make(depth - 1), right=make(depth - 1))
+
+
+def count(tree: Tree) -> int64:
+    match tree:
+        case Tree.Leaf:
+            return 1
+        case Tree.Node(left, right):
+            return 1 + count(left) + count(right)
+
+
+def leftmost(tree: own Tree) -> Tree:
+    match own tree:
+        case Tree.Node(left, _):
+            return leftmost(left)
+        case other:
+            return other
+
+
+def next_light(light: Light) -> Light:
+    match light:
+        case Light.Red:
+            return Light.Green
+        case Light.Green:
+            return Light.Amber
+        case Light.Amber:
+            return Light.Red
+
+
+def count_in_task(depth: int64, out: Queue[int64]):
+    out.put(count(make(depth)))
+
+
+def main() -> int32:
+    print(count(make(4)))
+    print(leftmost(make(3)) == Tree.Leaf)
+    mut holder = Holder(light=Light.Red, tree=Tree.Leaf)
+    for _ in range(4):
+        holder.light = next_light(holder.light)
+        holder.tree = Tree.Node(left=holder.tree, right=Tree.Leaf)
+    print(holder.light == Light.Green)
+    print(count(holder.tree))
+    mut lights: list[Light] = []
+    for i in range(6):
+        lights.append(Light.Amber if i % 2 == 0 else Light.Red)
+    lights[1] = Light.Green
+    print(lights)
+    copy = lights.copy()
+    lights[0] = Light.Red
+    print(f"{copy[0]} {lights[0]}")
+    counts = Queue[int64]()
+    with TaskGroup() as group:
+        group.start(count_in_task, 2, counts)
+        group.start(count_in_task, 3, counts)
+    mut total = 0
+    for _ in range(2):
+        match counts.get():
+            case QueueReceive.Item(value):
+                total += value
+            case _:
+                pass
+    print(total)
+    return 0

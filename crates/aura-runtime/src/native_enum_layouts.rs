@@ -23,19 +23,19 @@
 //! ([`ElementBox::value_mut`]), so a reference generated code took keeps
 //! the payload it read.
 
-use std::alloc::{alloc, alloc_zeroed, dealloc, handle_alloc_error, Layout as AllocLayout};
+use std::alloc::Layout as AllocLayout;
 use std::any::Any;
 use std::borrow::Cow;
 use std::fmt;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 
 use aura_core::layout::{LayoutId, LayoutKind, LayoutTable};
 use aura_core::types::Type;
 
 use super::typed_layout::{self, FieldOps, TypedLayout};
-use super::{canonical_runtime_type_name, shared_runtime_type_tag, ElementBox};
+use super::{canonical_runtime_type_name, shared_runtime_type_tag, ElementBox, RuntimeTypeTag};
 use crate::runtime_value::{RuntimeName, Value};
 
 /// The access code of the first enum layout a program registers. Class
@@ -55,7 +55,13 @@ pub struct EnumLayout {
     enum_name: RuntimeName,
     /// The type tag of a box that holds a variant of the layout.
     runtime_type: Arc<str>,
+    /// The same tag as the registry keeps it, which a new variant's box
+    /// records as its shape so generated code does not tag it again.
+    tag: Arc<RuntimeTypeTag>,
     variants: Vec<VariantPlan>,
+    /// The one frozen box each variant with no payloads is built as, made
+    /// on first use, by the variant's index. Zero while there is none.
+    unit_boxes: Vec<AtomicUsize>,
     /// How values move in and out of a variant's block.
     ops: &'static FieldOps,
 }
@@ -91,6 +97,12 @@ impl EnumLayout {
         &self.runtime_type
     }
 
+    /// The registry's tag for the layout's type: the shape a variant's box
+    /// has from the start.
+    pub(crate) fn shape_tag(&self) -> *mut RuntimeTypeTag {
+        Arc::as_ptr(&self.tag).cast_mut()
+    }
+
     /// The variant named `name`, by its index.
     pub fn variant_index(&self, name: &str) -> Option<usize> {
         self.variants
@@ -101,6 +113,43 @@ impl EnumLayout {
     /// The name of variant `index`.
     pub fn variant_name(&self, index: usize) -> Option<&RuntimeName> {
         self.variants.get(index).map(|variant| &variant.name)
+    }
+
+    /// The frozen box every build of variant `index` shares, when the
+    /// variant has no payloads: `make` builds it the first time. A variant
+    /// with no payloads holds nothing that could change, so one box serves
+    /// every thread, and retains and releases skip it.
+    ///
+    /// When another thread stores its box first, `discard` gets this
+    /// thread's. `keep` gets the slot of a box this call stored, for
+    /// freeing it when the program ends.
+    pub(crate) fn unit_box(
+        &'static self,
+        index: usize,
+        make: impl FnOnce() -> usize,
+        discard: impl FnOnce(usize),
+        keep: impl FnOnce(&'static AtomicUsize),
+    ) -> Option<usize> {
+        let plan = self.variants.get(index)?;
+        if !plan.payloads.is_empty() {
+            return None;
+        }
+        let slot = &self.unit_boxes[index];
+        let stored = slot.load(Ordering::Acquire);
+        if stored != 0 {
+            return Some(stored);
+        }
+        let made = make();
+        match slot.compare_exchange(0, made, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => {
+                keep(slot);
+                Some(made)
+            }
+            Err(winner) => {
+                discard(made);
+                Some(winner)
+            }
+        }
     }
 
     fn table(&self) -> &LayoutTable {
@@ -142,7 +191,7 @@ impl EnumLayout {
             (Type::Named(_, args), Some(tagged)) if !args.is_empty() => tagged.clone(),
             _ => RuntimeName::from(base.as_str()),
         };
-        let variants = variants
+        let variants: Vec<VariantPlan> = variants
             .iter()
             .map(|variant| {
                 let payloads = variant
@@ -177,7 +226,9 @@ impl EnumLayout {
             access,
             enum_name,
             runtime_type: Arc::clone(&tag.name),
+            tag,
             layout,
+            unit_boxes: variants.iter().map(|_| AtomicUsize::new(0)).collect(),
             variants,
             ops: &typed_layout::FIELD_OPS,
         })
@@ -314,11 +365,9 @@ impl TypedPayloads {
     /// every box is null.
     pub fn new(layout: &'static EnumLayout, variant: usize) -> Self {
         let plan = &layout.variants[variant];
-        let data = plan.block.map(|block| {
-            // SAFETY: a block is at least one byte.
-            let data = unsafe { alloc_zeroed(block) };
-            NonNull::new(data).unwrap_or_else(|| handle_alloc_error(block))
-        });
+        let data = plan
+            .block
+            .map(|block| super::block_pool::allocate(block, true));
         Self {
             layout,
             variant: variant as u32,
@@ -536,8 +585,8 @@ impl TypedPayloads {
             .collect();
         if let (Some(data), Some(block)) = (this.data, this.layout.variants[this.variant()].block) {
             // SAFETY: every payload is moved out, so the block holds nothing
-            // to drop, and it came from `alloc_zeroed` with this layout.
-            unsafe { dealloc(data.as_ptr(), block) };
+            // to drop, and it came from the pool with this layout.
+            unsafe { super::block_pool::free(data, block) };
         }
         payloads
     }
@@ -558,9 +607,7 @@ impl Clone for TypedPayloads {
         let plan = &self.layout.variants[self.variant()];
         if plan.bytes_only {
             let data = self.data.zip(plan.block).map(|(data, block)| {
-                // SAFETY: a block is at least one byte.
-                let copy = unsafe { alloc(block) };
-                let copy = NonNull::new(copy).unwrap_or_else(|| handle_alloc_error(block));
+                let copy = super::block_pool::allocate(block, false);
                 // SAFETY: both blocks have this layout's size, every byte of
                 // the source is initialized, and the blocks are distinct.
                 unsafe {
@@ -599,9 +646,9 @@ impl Drop for TypedPayloads {
             return;
         };
         if plan.bytes_only {
-            // SAFETY: the block holds nothing to drop and came from this
-            // layout.
-            unsafe { dealloc(data.as_ptr(), block) };
+            // SAFETY: the block holds nothing to drop and came from the pool
+            // with this layout.
+            unsafe { super::block_pool::free(data, block) };
             return;
         }
         let table = self.layout.table();
@@ -611,7 +658,7 @@ impl Drop for TypedPayloads {
             for place in self.places() {
                 (self.layout.ops.drop)(table, place.layout, self.address(*place));
             }
-            dealloc(data.as_ptr(), block);
+            super::block_pool::free(data, block);
         }
     }
 }
