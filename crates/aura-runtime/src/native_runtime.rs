@@ -7482,6 +7482,42 @@ pub extern "C-unwind" fn aura_direct_parse_float64(value: *mut OpaqueValue) -> *
     })
 }
 
+/// `parse_int32`, `parse_int64`, or `parse_float64` (`kind` 0, 1, or 2)
+/// for a `Result` slot that tests only `Ok`: the parsed number's box, or
+/// null where the parse would give `Err`. No `Result` and no error text
+/// is built.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_parse_number_ok(
+    value: *mut OpaqueValue,
+    kind: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let value = unsafe { take_value(value) };
+        let Value::String(text) = value else {
+            runtime_error(format!(
+                "a number parse expects `str`, found `{}`",
+                value_type_name(&value)
+            ))
+        };
+        let parsed = match kind {
+            0 => text
+                .parse::<i32>()
+                .ok()
+                .map(|value| Value::Int(IntegerValue::from_signed(i128::from(value)))),
+            1 => text
+                .parse::<i64>()
+                .ok()
+                .map(|value| Value::Int(IntegerValue::from_signed(i128::from(value)))),
+            _ => text
+                .parse::<f64>()
+                .ok()
+                .filter(|value| value.is_finite())
+                .map(Value::Float),
+        };
+        parsed.map_or(std::ptr::null_mut(), boxed_value)
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_range_new(start: i64, end: i64) -> *mut OpaqueValue {
     task_runtime_boundary(|| {

@@ -21,6 +21,10 @@ in this file.
   with no `Result` built, tagged, or matched by name. The SQL tokenizer in
   `sql_engine` runs 55% fewer instructions and the whole program 26.7%
   fewer; `mini_browser` runs 8.4% fewer.
+- A `match` on `parse_int32`, `parse_int64`, or `parse_float64` whose
+  `Err` arm binds nothing keeps only the parsed number in native code: no
+  `Result` and no error text is built, tagged, or matched by name.
+  `csv_aggregate` runs 6.6% fewer instructions.
 
 ## VS Code extension 0.9.0 — 2026-10-29
 

@@ -14,7 +14,9 @@
 //! only discarded keeps null, and no `Result` is built.
 //!
 //! `match own str.from_bytes(bytes)` with an `Err` arm that binds nothing
-//! keeps the text's box, or null when the bytes are not UTF-8. A slot may
+//! keeps the text's box, or null when the bytes are not UTF-8, and a match
+//! on `parse_int64(text)` (or `parse_int32`, `parse_float64`) keeps the
+//! number's box, or null when the text does not parse. A slot may
 //! move into another temporary, as `match own` does, and the other
 //! temporary is then a slot too.
 
@@ -24,7 +26,7 @@ use crate::mir::{
     instruction_place_mentions, terminator_place_mentions, BasicBlock, CallTarget, Instruction,
     MirArg, MirFunction, MirMatchArm, Operand, Rvalue, Terminator,
 };
-use crate::runtime_ops::{DictOp, HostBuiltin, ListOp, QueueOp, RuntimeOp};
+use crate::runtime_ops::{DictOp, FunctionOp, HostBuiltin, ListOp, QueueOp, RuntimeOp};
 
 /// Whether `value` looks a key up in a `dict` with `get`.
 pub(super) fn is_dict_get(value: &Rvalue) -> bool {
@@ -40,8 +42,9 @@ enum SlotKind {
     Receive,
     /// The `Result` of a queue `put`, which nothing reads.
     Discarded,
-    /// The `Result` of `str.from_bytes`, whose error nothing reads.
-    Text,
+    /// The `Result` of `str.from_bytes` or a number parse, whose error
+    /// nothing reads.
+    Result,
 }
 
 impl SlotKind {
@@ -64,7 +67,7 @@ impl SlotKind {
                         || (matches!(variant_name, Some("Closed" | "TimedOut" | "Cancelled"))
                             && arm.label == otherwise))
             }
-            SlotKind::Text => {
+            SlotKind::Result => {
                 matches!(enum_name, None | Some("Result"))
                     && matches!(variant_name, Some("Ok" | "Err"))
             }
@@ -77,7 +80,7 @@ impl SlotKind {
     fn keeps_payload_of(self, variant_name: &str) -> bool {
         match self {
             SlotKind::Lookup | SlotKind::Receive => true,
-            SlotKind::Text => variant_name == "Ok",
+            SlotKind::Result => variant_name == "Ok",
             SlotKind::Discarded => false,
         }
     }
@@ -96,9 +99,20 @@ fn slot_kind(value: &Rvalue) -> Option<SlotKind> {
                 QueueOp::Get | QueueOp::GetInTaskGroup | QueueOp::GetWithRegisteredProducers,
             ) => Some(SlotKind::Receive),
             RuntimeOp::Queue(QueueOp::Put) => Some(SlotKind::Discarded),
-            RuntimeOp::Host(builtin) if is_str_from_bytes(*builtin) => Some(SlotKind::Text),
+            RuntimeOp::Host(builtin) if is_str_from_bytes(*builtin) => Some(SlotKind::Result),
+            RuntimeOp::Function(op) if parse_kind(*op).is_some() => Some(SlotKind::Result),
             _ => None,
         },
+        _ => None,
+    }
+}
+
+/// The kind code `aura_direct_parse_number_ok` takes for a number parse.
+pub(super) fn parse_kind(op: FunctionOp) -> Option<i64> {
+    match op {
+        FunctionOp::ParseInt32 => Some(0),
+        FunctionOp::ParseInt64 => Some(1),
+        FunctionOp::ParseFloat64 => Some(2),
         _ => None,
     }
 }

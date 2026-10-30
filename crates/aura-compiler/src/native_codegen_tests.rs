@@ -15710,3 +15710,55 @@ fn direct_text_slots_and_slices_reject_every_other_use() {
         1
     );
 }
+
+#[test]
+fn direct_number_parses_matched_on_ok_keep_only_the_number() {
+    let source = r#"
+def to_int(text: str) -> int64:
+    match parse_int64(text):
+        case Result.Ok(value):
+            return value
+        case Result.Err(_):
+            return -1
+
+
+def why(text: str) -> str:
+    match own parse_float64(text):
+        case Result.Ok(_):
+            return ""
+        case Result.Err(error):
+            return error
+
+
+def main() -> int32:
+    print(to_int("4"))
+    print(why("x"))
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("the parses should lower");
+    let slots = |name: &str| {
+        let function = mir
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("the function");
+        super::lookups::lookup_payload_slots(function)
+    };
+    assert_eq!(slots("to_int").len(), 1);
+    // A match that reads the error keeps the `Result`.
+    assert!(slots("why").is_empty());
+    let object = emit_host_object(&mir).expect("the parses should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    assert!(
+        referenced.contains("aura_direct_parse_number_ok"),
+        "{referenced:?}"
+    );
+    assert!(
+        referenced.contains("aura_direct_parse_float64"),
+        "{referenced:?}"
+    );
+    assert!(
+        !referenced.contains("aura_direct_parse_int64"),
+        "{referenced:?}"
+    );
+}

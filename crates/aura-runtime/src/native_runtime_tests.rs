@@ -29137,3 +29137,24 @@ fn a_result_slot_keeps_the_ok_payload_or_null() {
         "direct runtime received a malformed `Result`"
     );
 }
+
+#[test]
+fn a_number_parse_for_a_slot_keeps_the_number_or_null() {
+    let parse = |text: &str, kind| {
+        let parsed = super::aura_direct_parse_number_ok(string_value(text), kind);
+        (!parsed.is_null()).then(|| unsafe { take_value(parsed) })
+    };
+    let int = |value: i128| Some(Value::Int(IntegerValue::from_signed(value)));
+    assert_eq!(parse("-12", 0), int(-12));
+    assert_eq!(parse("99999999999", 0), None);
+    assert_eq!(parse("99999999999", 1), int(99_999_999_999));
+    assert_eq!(parse("x", 1), None);
+    assert_eq!(parse("1.5", 2), Some(Value::Float(1.5)));
+    assert_eq!(parse("inf", 2), None);
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_parse_number_ok(int_value(3), 1);
+        }),
+        "a number parse expects `str`, found `integer`"
+    );
+}
