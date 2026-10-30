@@ -175,6 +175,7 @@ runtime_functions! {
     VecIndex => ("aura_direct_vec_index", [I64, I64, I64, I64], Some(I64)),
     VecLend => ("aura_direct_vec_lend", [I64, I64, I64, I64], Some(I64)),
     VecSlice => ("aura_direct_vec_slice", [I64, I64, I64, I64, I64, I64, I64], Some(I64)),
+    StrFromByteSlice => ("aura_direct_str_from_byte_slice", [I64, I64, I64, I64, I64, I64, I64, I64], Some(I64)),
     VecIndexOption => ("aura_direct_vec_index_option", [I64, I64], Some(I64)),
     VecIndexScalar => ("aura_direct_vec_index_scalar", [I64, I64, I64], Some(I64)),
     VecPopScalar => ("aura_direct_vec_pop_scalar", [I64, I64], Some(I64)),

@@ -1613,6 +1613,9 @@ impl<'a> NativeCodegen<'a> {
             loan_locals: explicit_locals.loans,
             closed_matches: explicit_locals.closed_matches,
             lookup_slots,
+            text_byte_slices: lookups::text_byte_slices(function),
+            byte_slice_words: HashMap::new(),
+            deferred_byte_slice: None,
             lent_places,
             lend_lookup: false,
             lent_elements,
@@ -2912,6 +2915,15 @@ struct FunctionCompiler<'a> {
     /// The `Lookup` temporaries kept as the found value's box or null. See
     /// `lookups::lookup_payload_slots`.
     lookup_slots: HashSet<String>,
+    /// The slices of a list of bytes that only the `str.from_bytes` right
+    /// after each reads, which native code does not make. See
+    /// `lookups::text_byte_slices`.
+    text_byte_slices: HashSet<String>,
+    /// The list and slice words of each of `text_byte_slices` whose
+    /// `str.from_bytes` is still to compile.
+    byte_slice_words: HashMap<String, Vec<Val>>,
+    /// Set while the slice of one of `text_byte_slices` compiles.
+    deferred_byte_slice: Option<String>,
     /// The lookup slots whose found value is lent, and the locals that hold
     /// that value. See `lookups::lent_lookup_places`. Each holds null, a
     /// box, or a value's address with its low bit set, so a retain or a
@@ -4058,6 +4070,8 @@ impl<'a> FunctionCompiler<'a> {
             // that only borrows, such as a call dispatched on a boxed
             // generic receiver, adds none.
             Instruction::IndexInRange { .. } | Instruction::Retain { .. } => {}
+            // A slice native code did not make holds nothing.
+            Instruction::Release { place } if self.text_byte_slices.contains(place) => {}
             Instruction::Release { place } => self.release_root(place)?,
             // A part of a lent element is copied, since the element's box
             // belongs to its list, and the copy is released at the end.
@@ -4471,6 +4485,8 @@ impl<'a> FunctionCompiler<'a> {
                     self.compile_lent_assign(target, value)?;
                 } else if self.lookup_slots.contains(target.as_str()) {
                     self.compile_lookup_slot_assign(target, value)?;
+                } else if self.text_byte_slices.contains(target.as_str()) {
+                    self.compile_text_byte_slice(target, value)?;
                 } else if self.lent_elements.contains_key(target.as_str()) {
                     self.compile_lent_element_assign(target, value)?;
                 } else if let Some(scalar) = self.compile_scalar_variant_payload(target, value)? {
@@ -7807,6 +7823,22 @@ impl<'a> FunctionCompiler<'a> {
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
         let name = builtin.name();
+        if lookups::is_str_from_bytes(builtin) {
+            let slot = self.lookup_payload == Some(false);
+            if let Some(text) = self.compile_text_from_byte_slice(args)? {
+                if slot {
+                    // The slot keeps the text's box, which `Result` must not
+                    // tag.
+                    return Ok(text);
+                }
+                let target = ensure_direct_type(
+                    &direct_type_to_type(&text.ty),
+                    &self.classes,
+                    &format!("return value of `{name}`"),
+                )?;
+                return self.coerce_value(text, &target);
+            }
+        }
         // Checked MIR materializes builtin defaults before direct code generation, so
         // optional metadata parameters are present in this argument list too.
         let mut loaded_args = Vec::with_capacity(args.len());
@@ -11594,6 +11626,19 @@ impl<'a> FunctionCompiler<'a> {
         value: &Rvalue,
     ) -> std::result::Result<(), String> {
         let target_ty = self.type_of_place(target)?;
+        if let Rvalue::Use(Operand::MovePlace(source)) = value {
+            if self.lookup_slots.contains(source.as_str()) {
+                // A move between slots moves the payload's box.
+                let payload = self.take_place(source)?;
+                return self.store_place(
+                    target,
+                    ValueRef {
+                        values: payload.values,
+                        ty: target_ty,
+                    },
+                );
+            }
+        }
         self.lookup_payload = Some(false);
         self.lend_lookup = self.lent_places.contains(target);
         let compiled = self.compile_rvalue_for_target(value, &target_ty);
@@ -11616,6 +11661,64 @@ impl<'a> FunctionCompiler<'a> {
                 ty: target_ty,
             },
         )
+    }
+
+    /// Compiles the slice of one of `text_byte_slices` to its words alone,
+    /// for the `str.from_bytes` that follows.
+    fn compile_text_byte_slice(
+        &mut self,
+        target: &str,
+        value: &Rvalue,
+    ) -> std::result::Result<(), String> {
+        let target_ty = self.type_of_place(target)?;
+        self.deferred_byte_slice = Some(target.to_string());
+        let compiled = self.compile_rvalue_for_target(value, &target_ty);
+        let deferred = self.deferred_byte_slice.take().is_none();
+        compiled?;
+        if !deferred || !self.byte_slice_words.contains_key(target) {
+            return Err(format!(
+                "direct backend expected `{target}` to compile as a slice of bytes"
+            ));
+        }
+        Ok(())
+    }
+
+    /// `str.from_bytes` over a slice native code did not make, or, for a
+    /// `Result` slot, over a whole list: the text read where the list keeps
+    /// its bytes. `None` when neither applies.
+    fn compile_text_from_byte_slice(
+        &mut self,
+        args: &[MirArg],
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        let slot = self.lookup_payload == Some(false);
+        let [MirArg {
+            value: operand @ (Operand::Place(place) | Operand::MovePlace(place)),
+            ..
+        }] = args
+        else {
+            return Ok(None);
+        };
+        let mut words = match self.byte_slice_words.remove(place.as_str()) {
+            Some(words) => words,
+            None if slot => {
+                let list = self.load_operand(operand)?;
+                let list = self.ensure_opaque(list)?;
+                let zero = self.builder.iconst(types::I64, 0);
+                vec![list.values[0], zero, zero, zero, zero, zero, zero]
+            }
+            None => return Ok(None),
+        };
+        words.push(self.builder.iconst(types::I64, i64::from(slot)));
+        let results = self.runtime_call_results(self.runtime[RuntimeFn::StrFromByteSlice], &words);
+        if slot {
+            self.lookup_payload = Some(true);
+            return Ok(Some(self.owned_opaque_result(results, Type::named("str"))));
+        }
+        let result_ty = Type::Named(
+            "Result".to_string(),
+            vec![Type::named("str"), Type::named("bytes.Error")],
+        );
+        Ok(Some(self.owned_opaque_result(results, result_ty)))
     }
 
     /// The payload of a lookup slot: a new reference to the found value's
@@ -13165,6 +13268,14 @@ impl<'a> FunctionCompiler<'a> {
         let mut words = vec![object.values[0]];
         for (argument, kind) in args.iter().zip(SLICE_WORD_KINDS) {
             words.push(self.load_word(argument, *kind, true)?);
+        }
+        if let Some(slice) = self.deferred_byte_slice.take() {
+            // The `str.from_bytes` that reads the slice takes these words.
+            self.byte_slice_words.insert(slice, words);
+            return Ok(ValueRef {
+                values: vec![self.builder.iconst(types::I64, 0)],
+                ty: object.ty,
+            });
         }
         let results = self.runtime_call_results(self.runtime[call.function], &words);
         let result_ty = op

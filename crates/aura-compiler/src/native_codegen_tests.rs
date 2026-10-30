@@ -15545,3 +15545,168 @@ def main():
         );
     }
 }
+
+const TEXT_SLICE_SOURCE: &str = r#"
+def text_of(data: list[uint8], start: int64, end: int64) -> str:
+    match own str.from_bytes(data[start:end]):
+        case Result.Ok(text):
+            return text
+        case Result.Err(_):
+            return ""
+
+
+def error_of(data: list[uint8]) -> str:
+    match own str.from_bytes(data[0:]):
+        case Result.Ok(text):
+            return text
+        case Result.Err(error):
+            return f"{error}"
+
+
+def whole(data: list[uint8]) -> str:
+    match str.from_bytes(data):
+        case Result.Ok(text):
+            return f"{text}"
+        case Result.Err(_):
+            return ""
+
+
+def main() -> int32:
+    data = "hello".to_bytes()
+    print(text_of(data, 1, 3))
+    print(error_of(data))
+    print(whole(data))
+    print(str.from_bytes(data[0:2]))
+    return 0
+"#;
+
+fn text_slice_function(name: &str) -> MirFunction {
+    lower_source_to_mir(TEXT_SLICE_SOURCE)
+        .expect("the text slices should lower")
+        .functions
+        .into_iter()
+        .find(|function| function.name == name)
+        .expect("the function")
+}
+
+/// The temporary `function` assigns from a call whose callee mentions
+/// `wanted`.
+fn assigned_from_call(function: &MirFunction, wanted: &str) -> String {
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                target,
+                value: Rvalue::Call { callee, .. },
+            } if format!("{callee:?}").contains(wanted) => Some(target.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("a call to `{wanted}`"))
+}
+
+#[test]
+fn direct_text_from_a_byte_slice_makes_no_slice_and_no_result() {
+    let text_of = text_slice_function("text_of");
+    let slice = assigned_from_call(&text_of, "Slice");
+    let result = assigned_from_call(&text_of, "Host");
+    assert_eq!(
+        super::lookups::text_byte_slices(&text_of)
+            .into_iter()
+            .collect::<Vec<_>>(),
+        vec![slice]
+    );
+    // `match own` moves the `Result` into a second temporary, which is a
+    // slot too.
+    let slots = super::lookups::lookup_payload_slots(&text_of);
+    assert_eq!(slots.len(), 2, "{slots:?}");
+    assert!(slots.contains(&result), "{slots:?}");
+    // A match that reads the error keeps the `Result`, and one that does
+    // not move out keeps its slot.
+    assert!(super::lookups::lookup_payload_slots(&text_slice_function("error_of")).is_empty());
+    assert_eq!(
+        super::lookups::lookup_payload_slots(&text_slice_function("whole")).len(),
+        1
+    );
+
+    let mir = lower_source_to_mir(TEXT_SLICE_SOURCE).expect("the text slices should lower");
+    let object = emit_host_object(&mir).expect("the text slices should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    assert!(
+        referenced.contains("aura_direct_str_from_byte_slice"),
+        "{referenced:?}"
+    );
+    // `main` releases the list between its slice and the call, so it
+    // makes the slice and calls the builtin.
+    assert!(
+        referenced.contains("aura_direct_vec_slice"),
+        "{referenced:?}"
+    );
+    assert!(
+        referenced.contains("aura_host_str_from_bytes"),
+        "{referenced:?}"
+    );
+}
+
+#[test]
+fn direct_text_slots_and_slices_reject_every_other_use() {
+    let text_of = text_slice_function("text_of");
+    let slice = assigned_from_call(&text_of, "Slice");
+    let result = assigned_from_call(&text_of, "Host");
+    let moved = text_of
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                target,
+                value: Rvalue::Use(Operand::MovePlace(source)),
+            } if *source == result => Some(target.clone()),
+            _ => None,
+        })
+        .expect("the move of the result");
+    let with = |extra: Instruction| {
+        let mut function = text_of.clone();
+        let entry = function
+            .blocks
+            .iter_mut()
+            .find(|block| block.label == function.entry)
+            .expect("the entry block");
+        entry.instructions.push(extra);
+        function
+    };
+
+    // Another read of the moved slot rejects both ends of the move.
+    let read = with(Instruction::Assign {
+        target: "%t90".to_string(),
+        value: Rvalue::Use(Operand::Place(moved.clone())),
+    });
+    assert!(super::lookups::lookup_payload_slots(&read).is_empty());
+    // A move from a temporary that is no slot makes its target none.
+    let other = with(Instruction::Assign {
+        target: "%t91".to_string(),
+        value: Rvalue::Use(Operand::MovePlace("%t2".to_string())),
+    });
+    assert!(!super::lookups::lookup_payload_slots(&other).contains("%t91"));
+
+    // A slice read again, or kept, is made.
+    let retained = with(Instruction::Retain {
+        place: slice.clone(),
+    });
+    assert!(super::lookups::text_byte_slices(&retained).is_empty());
+    let mut returned = text_of.clone();
+    for block in &mut returned.blocks {
+        if let Terminator::Return(value) = &mut block.terminator {
+            *value = Operand::Place(slice.clone());
+        }
+    }
+    assert!(super::lookups::text_byte_slices(&returned).is_empty());
+    // A slice no `str.from_bytes` reads right after is made.
+    assert!(super::lookups::text_byte_slices(&text_slice_function("main")).is_empty());
+    assert!(super::lookups::text_byte_slices(&text_slice_function("whole")).is_empty());
+    assert_eq!(
+        super::lookups::text_byte_slices(&text_slice_function("error_of")).len(),
+        1
+    );
+}

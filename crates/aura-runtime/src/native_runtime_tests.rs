@@ -29040,3 +29040,100 @@ fn literal_affix_tests_and_str_element_copies_read_text_in_place() {
     let joined = crate::runtime_value::concat_texts_checked(&right, &right).unwrap();
     assert_eq!(joined.as_str(), "yy");
 }
+
+fn byte_list(text: &str) -> *mut OpaqueValue {
+    boxed_value(
+        super::host_builtins::host_str_to_bytes_ref(&Value::String(text.into()))
+            .expect("text has bytes"),
+    )
+}
+
+#[test]
+fn text_from_a_byte_slice_reads_the_bytes_in_place() {
+    let text = |list, start, end, slot| {
+        payload_debug(super::aura_direct_str_from_byte_slice(
+            list, start, 1, end, 1, 3, 4, slot,
+        ))
+    };
+    let bytes = byte_list("héllo");
+    // A `Result` slot takes the text alone, or null for bytes that are not
+    // UTF-8.
+    assert_eq!(text(bytes, 0, 3, 1).as_deref(), Some("String(\"hé\")"));
+    assert_eq!(text(bytes, 0, 2, 1), None);
+    assert_eq!(
+        payload_debug(super::aura_direct_str_from_byte_slice(
+            bytes, 0, 0, 0, 0, 0, 0, 1
+        ))
+        .as_deref(),
+        Some("String(\"héllo\")")
+    );
+    // Otherwise it is the `Result`.
+    let ok = super::aura_direct_str_from_byte_slice(bytes, 3, 1, 6, 1, 3, 4, 0);
+    assert_eq!(
+        expect_variant_value(unsafe { take_value(ok) }, "Result", "Ok"),
+        vec![Value::String("llo".into())]
+    );
+    let err = super::aura_direct_str_from_byte_slice(bytes, 0, 1, 2, 1, 3, 4, 0);
+    expect_variant_value(unsafe { take_value(err) }, "Result", "Err");
+    // A list that keeps its bytes as values goes through the `Result`.
+    let values = boxed_value(Value::Vec(VecValue {
+        element_type: Type::named("uint8"),
+        elements: [104, 105, 255]
+            .into_iter()
+            .map(|byte| {
+                Value::Int(
+                    IntegerValue::from_typed_unsigned(byte, IntegerKind::Uint8).expect("a byte"),
+                )
+            })
+            .collect(),
+        str_view: Default::default(),
+    }));
+    assert_eq!(text(values, 0, 2, 1).as_deref(), Some("String(\"hi\")"));
+    assert_eq!(text(values, 1, 3, 1), None);
+    unsafe {
+        release_value(values);
+    }
+    // The slice's bounds trap at the slice.
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        let bytes = byte_list("ab");
+        super::aura_direct_str_from_byte_slice(bytes, 0, 1, 9, 1, 3, 4, 1);
+    });
+    assert_eq!(diagnostic.code, "AU4003");
+    assert_eq!(
+        diagnostic.span.map(|span| (span.line, span.column)),
+        Some((3, 4))
+    );
+    unsafe {
+        release_value(bytes);
+    }
+}
+
+#[test]
+fn a_result_slot_keeps_the_ok_payload_or_null() {
+    let result = |variant: &str, payload: Value| {
+        boxed_value(Value::EnumVariant(EnumVariantValue {
+            enum_name: "Result".into(),
+            variant_name: variant.into(),
+            payloads: vec![payload].into(),
+        }))
+    };
+    assert_eq!(
+        payload_debug(super::aura_direct_lookup_payload(result(
+            "Ok",
+            Value::String("x".into())
+        )))
+        .as_deref(),
+        Some("String(\"x\")")
+    );
+    assert!(super::aura_direct_lookup_payload(result("Err", Value::Unit)).is_null());
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            super::aura_direct_lookup_payload(boxed_value(Value::EnumVariant(EnumVariantValue {
+                enum_name: "Result".into(),
+                variant_name: "Ok".into(),
+                payloads: Vec::new().into(),
+            })));
+        }),
+        "direct runtime received a malformed `Result`"
+    );
+}

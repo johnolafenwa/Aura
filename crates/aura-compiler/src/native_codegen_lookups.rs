@@ -12,14 +12,19 @@
 //! same way when its match tests only `QueueReceive.Item`: the slot holds
 //! the item's box, or null for every other variant. A `put` whose result is
 //! only discarded keeps null, and no `Result` is built.
+//!
+//! `match own str.from_bytes(bytes)` with an `Err` arm that binds nothing
+//! keeps the text's box, or null when the bytes are not UTF-8. A slot may
+//! move into another temporary, as `match own` does, and the other
+//! temporary is then a slot too.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::mir::{
     instruction_place_mentions, terminator_place_mentions, BasicBlock, CallTarget, Instruction,
-    MirFunction, MirMatchArm, Operand, Rvalue, Terminator,
+    MirArg, MirFunction, MirMatchArm, Operand, Rvalue, Terminator,
 };
-use crate::runtime_ops::{DictOp, QueueOp, RuntimeOp};
+use crate::runtime_ops::{DictOp, HostBuiltin, ListOp, QueueOp, RuntimeOp};
 
 /// Whether `value` looks a key up in a `dict` with `get`.
 pub(super) fn is_dict_get(value: &Rvalue) -> bool {
@@ -35,6 +40,8 @@ enum SlotKind {
     Receive,
     /// The `Result` of a queue `put`, which nothing reads.
     Discarded,
+    /// The `Result` of `str.from_bytes`, whose error nothing reads.
+    Text,
 }
 
 impl SlotKind {
@@ -57,6 +64,20 @@ impl SlotKind {
                         || (matches!(variant_name, Some("Closed" | "TimedOut" | "Cancelled"))
                             && arm.label == otherwise))
             }
+            SlotKind::Text => {
+                matches!(enum_name, None | Some("Result"))
+                    && matches!(variant_name, Some("Ok" | "Err"))
+            }
+            SlotKind::Discarded => false,
+        }
+    }
+
+    /// Whether the slot keeps the payload a `VariantPayload` of
+    /// `variant_name` reads.
+    fn keeps_payload_of(self, variant_name: &str) -> bool {
+        match self {
+            SlotKind::Lookup | SlotKind::Receive => true,
+            SlotKind::Text => variant_name == "Ok",
             SlotKind::Discarded => false,
         }
     }
@@ -75,16 +96,34 @@ fn slot_kind(value: &Rvalue) -> Option<SlotKind> {
                 QueueOp::Get | QueueOp::GetInTaskGroup | QueueOp::GetWithRegisteredProducers,
             ) => Some(SlotKind::Receive),
             RuntimeOp::Queue(QueueOp::Put) => Some(SlotKind::Discarded),
+            RuntimeOp::Host(builtin) if is_str_from_bytes(*builtin) => Some(SlotKind::Text),
             _ => None,
         },
         _ => None,
     }
 }
 
+/// Whether `builtin` is `str.from_bytes`.
+pub(super) fn is_str_from_bytes(builtin: HostBuiltin) -> bool {
+    builtin.name() == "str.from_bytes"
+}
+
 /// The variant a slot holds a payload for: the one whose test is "not
 /// null".
 pub(super) fn is_payload_variant(variant_name: Option<&str>) -> bool {
-    matches!(variant_name, Some("Found" | "Item"))
+    matches!(variant_name, Some("Found" | "Item" | "Ok"))
+}
+
+/// The temporary a slot moves out of, when `value` is that move.
+fn moved_temporary(value: &Rvalue) -> Option<&str> {
+    match value {
+        Rvalue::Use(Operand::MovePlace(source)) if is_temporary(source) => Some(source),
+        _ => None,
+    }
+}
+
+fn is_temporary(place: &str) -> bool {
+    place.starts_with("%t") && !place.contains('.')
 }
 
 /// The temporaries of `function` that may hold a lookup's or a receive's
@@ -95,11 +134,16 @@ pub(super) fn is_payload_variant(variant_name: Option<&str>) -> bool {
 pub(super) fn lookup_payload_slots(function: &MirFunction) -> HashSet<String> {
     let mut candidates = HashMap::<&str, Candidate>::new();
     let mut rejected = HashSet::<&str>::new();
+    // Each move of one temporary into another, by target.
+    let mut moves = Vec::<(&str, &str, &str)>::new();
     for block in &function.blocks {
         for instruction in &block.instructions {
             if let Instruction::Assign { target, value } = instruction {
-                let kind =
-                    slot_kind(value).filter(|_| target.starts_with("%t") && !target.contains('.'));
+                if let Some(source) = moved_temporary(value).filter(|_| is_temporary(target)) {
+                    moves.push((target, source, &block.label));
+                    continue;
+                }
+                let kind = slot_kind(value).filter(|_| is_temporary(target));
                 if let Some(kind) = kind {
                     let candidate = candidates.entry(target).or_default();
                     if candidate
@@ -119,6 +163,35 @@ pub(super) fn lookup_payload_slots(function: &MirFunction) -> HashSet<String> {
     for param in &function.params {
         rejected.insert(&param.name);
     }
+    // A move from a slot makes its target a slot of the same kind. A move
+    // from anything else, or into a temporary assigned another way, makes
+    // neither one a slot.
+    let mut grew = true;
+    while grew {
+        grew = false;
+        for &(target, source, label) in &moves {
+            let kind = candidates.get(source).and_then(|candidate| candidate.kind);
+            let Some(kind) = kind.filter(|_| !rejected.contains(source)) else {
+                continue;
+            };
+            let candidate = candidates.entry(target).or_default();
+            if candidate.assigned.insert(label) {
+                grew = true;
+            }
+            if candidate
+                .kind
+                .replace(kind)
+                .is_some_and(|other| other != kind)
+            {
+                rejected.insert(target);
+            }
+        }
+    }
+    for &(target, source, _) in &moves {
+        if !candidates.contains_key(source) || rejected.contains(source) {
+            rejected.insert(target);
+        }
+    }
     candidates.retain(|name, _| !rejected.contains(name));
     if candidates.is_empty() {
         return HashSet::new();
@@ -128,6 +201,14 @@ pub(super) fn lookup_payload_slots(function: &MirFunction) -> HashSet<String> {
         for instruction in &block.instructions {
             match instruction {
                 Instruction::Release { .. } => continue,
+                // A move between slots copies the word.
+                Instruction::Assign { target, value }
+                    if moved_temporary(value).is_some_and(|source| {
+                        candidates.contains_key(source) && candidates.contains_key(target.as_str())
+                    }) =>
+                {
+                    continue
+                }
                 // A discarded value is loaded and dropped.
                 Instruction::Eval {
                     value: Operand::Place(place) | Operand::MovePlace(place),
@@ -136,13 +217,14 @@ pub(super) fn lookup_payload_slots(function: &MirFunction) -> HashSet<String> {
                     value:
                         Rvalue::VariantPayload {
                             scrutinee: Operand::Place(place) | Operand::MovePlace(place),
+                            variant_name,
                             index,
-                            ..
                         },
                     ..
                 } if candidates.contains_key(place.as_str()) => {
                     let candidate = candidates.get_mut(place.as_str()).expect("a candidate");
-                    if *index == 0 && candidate.kind != Some(SlotKind::Discarded) {
+                    let kind = candidate.kind.expect("an assigned candidate");
+                    if *index == 0 && kind.keeps_payload_of(variant_name) {
                         candidate.unpacked_in.push(&block.label);
                     } else {
                         rejected.insert(place);
@@ -192,7 +274,7 @@ pub(super) fn lookup_payload_slots(function: &MirFunction) -> HashSet<String> {
         .iter()
         .map(|block| (block.label.as_str(), successors(&block.terminator)))
         .collect::<HashMap<_, _>>();
-    candidates
+    let mut slots = candidates
         .into_iter()
         .filter(|(_, candidate)| match candidate.unpacked_in.as_slice() {
             [] => true,
@@ -200,8 +282,19 @@ pub(super) fn lookup_payload_slots(function: &MirFunction) -> HashSet<String> {
             // Two copies of one payload would share one box.
             _ => false,
         })
-        .map(|(name, _)| name.to_string())
-        .collect()
+        .map(|(name, _)| name)
+        .collect::<HashSet<_>>();
+    // Both ends of a move are slots, or neither is.
+    let mut shrank = true;
+    while shrank {
+        shrank = false;
+        for (target, source, _) in &moves {
+            if slots.contains(source) != slots.contains(target) {
+                shrank |= slots.remove(source) | slots.remove(target);
+            }
+        }
+    }
+    slots.into_iter().map(str::to_string).collect()
 }
 
 #[derive(Default)]
@@ -586,4 +679,96 @@ fn plain_step(
         },
         _ => false,
     }
+}
+
+/// The temporaries of `function` that hold a slice of a list of bytes
+/// which only the `str.from_bytes` call right after it reads. Native code
+/// makes no slice for them: the call reads the bytes in the list. Each one
+/// is assigned once, by the slice of a local list, and is otherwise only
+/// released.
+pub(super) fn text_byte_slices(function: &MirFunction) -> HashSet<String> {
+    let mut slices = HashSet::new();
+    for block in &function.blocks {
+        for pair in block.instructions.windows(2) {
+            let [Instruction::Assign {
+                target,
+                value:
+                    Rvalue::Call {
+                        callee:
+                            CallTarget::Runtime {
+                                op: RuntimeOp::List(ListOp::Slice),
+                                receiver: Some(Operand::Place(_)),
+                                ..
+                            },
+                        ..
+                    },
+            }, Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee:
+                            CallTarget::Runtime {
+                                op: RuntimeOp::Host(builtin),
+                                receiver: None,
+                                ..
+                            },
+                        args,
+                        ..
+                    },
+                ..
+            }] = pair
+            else {
+                continue;
+            };
+            let reads_slice = matches!(
+                args.as_slice(),
+                [MirArg {
+                    name: None,
+                    value: Operand::Place(place) | Operand::MovePlace(place),
+                    ..
+                }] if place == target
+            );
+            if is_temporary(target) && is_str_from_bytes(*builtin) && reads_slice {
+                slices.insert(target.as_str());
+            }
+        }
+    }
+    if slices.is_empty() {
+        return HashSet::new();
+    }
+    // Each one is assigned once, read once by its call, and released.
+    let mut mentions = HashMap::<&str, usize>::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            if let Instruction::Release { .. } = instruction {
+                continue;
+            }
+            let mut places = Vec::new();
+            instruction_place_mentions(instruction, &mut places);
+            if let Instruction::Assign { target, .. } | Instruction::ReadLoan { target, .. } =
+                instruction
+            {
+                places.push(target);
+            }
+            for place in places {
+                if let Some(slice) = slices.get(place.split('.').next().unwrap_or(place)) {
+                    *mentions.entry(slice).or_default() += 1;
+                }
+            }
+        }
+        for place in terminator_place_mentions(&block.terminator) {
+            if let Some(slice) = slices.get(place.split('.').next().unwrap_or(place)) {
+                *mentions.entry(slice).or_default() += 2;
+            }
+        }
+    }
+    let params = function
+        .params
+        .iter()
+        .map(|param| param.name.as_str())
+        .collect::<HashSet<_>>();
+    slices
+        .into_iter()
+        .filter(|slice| mentions.get(slice) == Some(&2) && !params.contains(slice))
+        .map(str::to_string)
+        .collect()
 }
