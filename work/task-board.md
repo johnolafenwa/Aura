@@ -40,6 +40,15 @@ Plan approved 2026-10-29 (all defaults; the release after this phase is
   cost is `dict[str]` variable lookups, not enums). No thin-block value
   representation and no cache-format bump. Details are in
   `2026-10-30-rust-speed-5d-enums.md`.
+- Step 5e: comparisons and `bool`/integer reads (`in`, `len`,
+  `starts_with`, `contains_key`, ...) read box fields of in-place
+  instances where they lie (`reads_operands_only`, borrowed join in
+  `load_class_place`; the runtime path's copy is released after the
+  rvalue). mini_browser -16.9% instructions, about 5.5x Rust wall time
+  (gate 4x missed: element paths are 10.7% and list field appends ~8%);
+  template_render unchanged (gate -15% missed: its field reads are
+  element paths, 5f). Details are in
+  `2026-10-30-rust-speed-5e-field-reads.md`.
 
 ## Aura 0.9.0 preview release (complete)
 

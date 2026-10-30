@@ -324,6 +324,7 @@ runtime_functions! {
     InstancePutField => ("aura_direct_instance_put_field", [I64, I64], None),
     InstanceRestoreField => ("aura_direct_instance_restore_field", [I64, I64], None),
     InstanceCopyField => ("aura_direct_instance_copy_field", [I64], Some(I64)),
+    ValueIsFrozen => ("aura_direct_value_is_frozen", [I64], Some(I64)),
     InstanceGetField => ("aura_direct_instance_get_field", [I64, I64, I64], Some(I64)),
     InstanceTakeField => ("aura_direct_instance_take_field", [I64, I64, I64], Some(I64)),
     InstanceSetFieldOwned => ("aura_direct_instance_set_field_owned", [I64, I64, I64, I64], None),

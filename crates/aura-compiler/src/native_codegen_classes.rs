@@ -373,6 +373,15 @@ impl FunctionCompiler<'_> {
         for abi in ty.abi_types() {
             self.builder.append_block_param(join_block, abi);
         }
+        // A borrowed read also passes the copy the slow path made, or null.
+        let borrowed = if matches!(slot.kind, SlotKind::Handle) {
+            self.next_field_read_copy()
+        } else {
+            None
+        };
+        if borrowed.is_some() {
+            self.builder.append_block_param(join_block, types::I64);
+        }
         self.emit_class_check(object, slot.access, slow_block, fast_block);
 
         self.builder.switch_to_block(fast_block);
@@ -393,10 +402,15 @@ impl FunctionCompiler<'_> {
                     .brif(boxed, present_block, &[], slow_block, &[]);
                 self.builder.switch_to_block(present_block);
                 self.builder.seal_block(present_block);
-                let copy = self
-                    .builder
-                    .call(self.runtime[RuntimeFn::InstanceCopyField], &[boxed]);
-                vec![copy.results[0]]
+                if borrowed.is_some() {
+                    let null = self.builder.iconst(types::I64, 0);
+                    vec![boxed, null]
+                } else {
+                    let copy = self
+                        .builder
+                        .call(self.runtime[RuntimeFn::InstanceCopyField], &[boxed]);
+                    vec![copy.results[0]]
+                }
             }
         };
         self.builder.jump(join_block, &values);
@@ -419,15 +433,22 @@ impl FunctionCompiler<'_> {
             };
         self.clear_temporary_opaque_owned(&loaded);
         self.release_temporary_owned_since(&caller_owned);
-        self.builder.jump(join_block, &loaded.values);
+        let mut values = loaded.values;
+        if borrowed.is_some() {
+            values.push(values[0]);
+        }
+        self.builder.jump(join_block, &values);
         self.layout_scratch = caller_owned;
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
-        let value = ValueRef {
-            values: self.builder.block_params(join_block).to_vec(),
-            ty,
-        };
+        let mut values = self.builder.block_params(join_block).to_vec();
+        if let Some(variable) = borrowed {
+            let copy = values.pop().expect("a borrowed read passes its copy");
+            self.builder.def_var(variable, copy);
+            return Ok(Some(ValueRef { values, ty }));
+        }
+        let value = ValueRef { values, ty };
         if matches!(slot.kind, SlotKind::Handle) {
             self.mark_temporary_opaque_owned(&value);
         }
@@ -567,9 +588,7 @@ impl FunctionCompiler<'_> {
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
         let caller_owned = self.layout_scratch.clone();
-        let value = self.take_lent_place(place)?;
-        self.mark_emptied_store_root(temp);
-        self.store_root(temp, value)?;
+        self.lend_on_runtime_path(place, temp, mutable)?;
         self.release_temporary_owned_since(&caller_owned);
         let zero = self.builder.iconst(types::I64, 0);
         self.builder.def_var(lent, zero);
@@ -597,6 +616,7 @@ impl FunctionCompiler<'_> {
         &mut self,
         place: &str,
         temp: &str,
+        mutable: bool,
     ) -> std::result::Result<bool, String> {
         let Some(lend) = self.field_lends.remove(temp) else {
             return Ok(false);
@@ -639,8 +659,7 @@ impl FunctionCompiler<'_> {
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
         let caller_owned = self.layout_scratch.clone();
-        let value = self.take_place(temp)?;
-        self.store_place(place, value)?;
+        self.end_lend_on_runtime_path(place, temp, mutable)?;
         self.release_temporary_owned_since(&caller_owned);
         self.builder.jump(join_block, &[]);
         self.layout_scratch = caller_owned;

@@ -1705,6 +1705,14 @@ fn direct_value_is_frozen(ptr: *mut OpaqueValue) -> bool {
     unsafe { ptr.as_ref() }.is_some_and(OpaqueValue::is_frozen)
 }
 
+/// 1 when `value` is frozen, as a module constant is, and 0 otherwise.
+/// Generated code lends a field of a frozen instance by copying it, since
+/// taking the field out would change the instance.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_value_is_frozen(value: *mut OpaqueValue) -> i64 {
+    i64::from(direct_value_is_frozen(value))
+}
+
 /// Freezes a module constant that its initializer just made: from now on
 /// every thread reads it without a lock, and nothing writes it, which the
 /// checker ensures by keeping module storage immutable. Frozen values are

@@ -15762,3 +15762,36 @@ def main() -> int32:
         "{referenced:?}"
     );
 }
+
+const FIELD_READS_SOURCE: &str = r#"
+class Rule:
+    tag: str
+    classes: list[str]
+
+def matches(rule: Rule, other: Rule) -> bool:
+    if rule.tag != "" and rule.tag != other.tag:
+        return false
+    return rule.tag in other.classes and other.classes.len() > 0
+
+def main():
+    rule = Rule(tag="p", classes=["p"])
+    print(matches(rule, rule))
+"#;
+
+#[test]
+fn direct_comparisons_and_membership_tests_read_box_fields_in_place() {
+    let mir = lower_source_to_mir(FIELD_READS_SOURCE).expect("the field reads should lower");
+    let object = emit_host_object(&mir).expect("the field reads should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    assert!(
+        !referenced.contains("aura_direct_instance_copy_field"),
+        "{referenced:?}"
+    );
+
+    // The class check still guards each read, with the runtime read for an
+    // instance kept out of place.
+    assert!(
+        referenced.contains("aura_direct_instance_get_field"),
+        "{referenced:?}"
+    );
+}
