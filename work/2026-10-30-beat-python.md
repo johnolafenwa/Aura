@@ -78,4 +78,12 @@ dictionary to the value to copy it, and released the copy at the end.
   boxes, which costs as much as the copies (net +8M instructions).
   What remains: freeing each line's lists (14%), and f-string build cost
   (about 225 instructions per part).
-- 4: `regex_match`.
+- 4: `regex_match` (0.59 s; Python 1.84 s, Rust 0.084 s). Callgrind:
+  21% went to type tags on `following: list[int64] = []`, made for each
+  byte. `aura_direct_vec_empty_tagged` did not record the shape tag
+  (step 5a), and each scalar push cleared it, so the tag on the next
+  assignment or call reached `set_explicit_runtime_type_tag` and compared
+  `Type`s. Now the new list records the tag, and a push that stores the
+  scalar unboxed in a list of that kind keeps it. 1,434M -> 1,164M
+  instructions, 0.59 -> 0.53 s (6.2x Rust). What remains: cloning the
+  element `Type` (String allocation) for each new list, about 6%.
