@@ -76,7 +76,7 @@ String and format-specification diagnostics are described under
 | `AU2002` | type mismatch | A value of the wrong type, a callback with the wrong contract, a type without the ordering an operation needs, or a format specification that does not fit its value. | Make the value's type match the type the position requires. |
 | `AU2003` | unsupported operator | An operator the operand types do not define, including ordering or arithmetic on a union. | Use an operator the operand types define. |
 | `AU2004` | argument binding | Arguments that do not bind to the callee's parameters. | Match the call to the callee's parameter list. |
-| `AU2005` | unsupported syntax or feature | Python-shaped source, a generator expression, a slice step, slice assignment, a decorator in a function or class body other than `@property`, or a reserved FFI contract. | Use the Aura form the message names. |
+| `AU2005` | unsupported syntax or feature | Python-shaped source, a generator expression, slice assignment, a decorator in a function or class body other than `@property`, or a reserved FFI contract. | Use the Aura form the message names. |
 | `AU2006` | builtin method collision | A trait method whose name shadows a builtin member of its target. | Rename the trait method. |
 | `AU2007` | builtin function redefinition | A module-level function named after a builtin function. | Rename the function. |
 | `AU2008` | equality unavailable | `==`, `!=`, or an equality-based collection operation on a type without equality. | Use a type that defines equality, or avoid the equality-based operation. |
@@ -721,12 +721,14 @@ items for Queue.
 
 ### Slices
 
-Owned list and str slicing is implemented. Step syntax and slice assignment
-are reserved. They report `AU2005` with these exact messages:
-
-    slice steps are unavailable; use an explicit loop to select a stride
+Owned list and str slicing, with or without a step, is implemented. Slice
+assignment is reserved. It reports `AU2005` with this exact message:
 
     slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value
+
+A stepped slice of an `Array` reports `AU2003`. A zero step, or a
+negative-step slice whose start is outside the value or whose end exceeds
+its start, stops the program with `AU4003`.
 
 Other slice rules:
 

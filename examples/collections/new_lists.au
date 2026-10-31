@@ -1,0 +1,25 @@
+# Building new lists: sorted, reversed, list, +, *, and stepped slices.
+# Each one copies elements, so the source collections stay usable.
+
+
+def by_length(name: str) -> int64:
+    return len(name)
+
+
+def main():
+    names = ["cy", "ada", "bo"]
+    print(sorted(names))
+    print(sorted(names, key=by_length, reverse=true))
+    print(reversed(names))
+    print(list({3}))
+    print(list(range(3)))
+    print(names + ["di"])
+    print([0] * 3)
+    print(names[::-1])
+    print("stressed"[::-1])
+
+    mut log: list[str] = []
+    log += names
+    log += ["eve"]
+    print(log)
+    print(names)

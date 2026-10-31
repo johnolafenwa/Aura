@@ -1,0 +1,2 @@
+def main() -> None:
+    print(reversed({1, 2}))

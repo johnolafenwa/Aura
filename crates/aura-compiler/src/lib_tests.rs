@@ -613,6 +613,11 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         "[20, 30]\n[10, 20]\n[30, 40]\n[10, 20, 30, 40]\n[10, 20, 30, 40]\n[99, 30]\n🎉\nA🎉\n🎉Z\nA🎉Z\nA🎉Z\n",
     ),
     (
+        "examples/collections/new_lists.au",
+        include_str!("../../../examples/collections/new_lists.au"),
+        "[ada, bo, cy]\n[ada, cy, bo]\n[bo, ada, cy]\n[3]\n[0, 1, 2]\n[cy, ada, bo, di]\n[0, 0, 0]\n[bo, ada, cy]\ndesserts\n[cy, ada, bo, eve]\n[cy, ada, bo]\n",
+    ),
+    (
         "examples/collections/span_views.au",
         include_str!("../../../examples/collections/span_views.au"),
         "18\n27\n3\n[1, 5, 7]\n[4, 9, 1, 5, 7]\n[40, 90, 1, 5, 7]\n[90, 1, 5]\ntrue\n",

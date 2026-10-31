@@ -1,0 +1,5 @@
+error[AU2002]: `reversed(...)` expects a list, Span, or Range, found `set[int64]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/reversed_set.au:2:20
+  |
+2 |     print(reversed({1, 2}))
+  |                    ^

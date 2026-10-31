@@ -5,8 +5,9 @@ use crate::ast::{
     WhileStmt,
 };
 use crate::call::{
-    bind_call_arguments, callable_params_from_decl, BuiltinAssociatedFunction,
-    BuiltinClassConstructor, BuiltinFunction, BuiltinMember, CallConvention, CallableParam,
+    bind_call_arguments, callable_params_from_decl, list_binary_result_type,
+    sequence_builtin_element_type, BuiltinAssociatedFunction, BuiltinClassConstructor,
+    BuiltinFunction, BuiltinMember, CallConvention, CallableParam,
 };
 use crate::diag::Span;
 use crate::integer::{minimal_signed_type_for_negative_literal, IntegerValue};
@@ -14291,6 +14292,28 @@ impl<'a> Lowerer<'a> {
             (AssignTarget::Index { .. }, _) => None,
         };
         if let Some(op) = assign.op {
+            // `items += more` extends the list in place with copies of the
+            // elements of `more`, as `items.extend(more[:])` does.
+            if let (BinaryOp::Add, Some(target_ty), Some(value_ty)) =
+                (op, &target_ty, self.infer_expr_type(&assign.value))
+            {
+                let concatenates = matches!(target_ty, Type::Named(name, _) if name == "list")
+                    && list_binary_result_type(op, target_ty, &value_ty).is_some();
+                if concatenates {
+                    let element_ty = sequence_builtin_element_type(target_ty, false)
+                        .expect("a list has an element type");
+                    let other = self.new_typed_temp(target_ty.clone());
+                    self.lower_owned_list_copy(
+                        &assign.value,
+                        &value_ty,
+                        &element_ty,
+                        &other,
+                        assign.span,
+                    );
+                    self.emit_list_member_call(&target, "extend", vec![Operand::MovePlace(other)]);
+                    return;
+                }
+            }
             let left = match &assign.target {
                 AssignTarget::Name(name) => Expr {
                     kind: ExprKind::Name(name.clone()),
@@ -19595,6 +19618,9 @@ impl<'a> Lowerer<'a> {
                 if let Some(equal) = self.lower_span_equality(*op, left, right, expr.span) {
                     return equal;
                 }
+                if let Some(list) = self.lower_list_binary(expr, *op, left, right) {
+                    return list;
+                }
                 if let Some((trait_name, field)) =
                     self.operator_trait_member_for_binary(*op, left, right)
                 {
@@ -19879,6 +19905,418 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Sorts the list in `receiver_place` in place, by `key` when one is
+    /// given. Every key is computed before the list changes, so a trapping
+    /// key function cannot leave the list half-sorted.
+    fn lower_list_sort(
+        &mut self,
+        receiver_place: &str,
+        element_ty: &Type,
+        key: Option<&Argument>,
+        reverse: Option<&Argument>,
+        span: Span,
+        result: &str,
+    ) {
+        let receiver_place = receiver_place.to_string();
+        let element_ty = element_ty.clone();
+        let callback = key.map(|argument| {
+            let callback_ty = self
+                .infer_expr_type(&argument.value)
+                .expect("checked list.sort key should have a function type");
+            let callback = self.lower_expr_at_sequence_point(&argument.value, Some(&callback_ty));
+            let key_ty = callback_result_type(callback_ty)
+                .expect("checked list.sort key should have a callable type");
+            (self.vec_callback_target(&argument.value, callback), key_ty)
+        });
+        let reverse = reverse
+            .map(|argument| {
+                self.lower_expr_at_sequence_point(&argument.value, Some(&Type::named("bool")))
+            })
+            .unwrap_or(Operand::Bool(false));
+        let source = Operand::Place(receiver_place.clone());
+        if let Some((callback, key_ty)) = callback {
+            let keys = self.new_typed_temp(Type::Named("list".to_string(), vec![key_ty.clone()]));
+            self.emit(Instruction::Assign {
+                target: keys.clone(),
+                value: Rvalue::VecLiteral {
+                    elements: Vec::new(),
+                    element_type: key_ty.clone(),
+                },
+            });
+            self.lower_vec_key_collection_loop(
+                source.clone(),
+                &element_ty,
+                callback,
+                &keys,
+                &key_ty,
+                span,
+            );
+            self.lower_stable_vec_sort(
+                source,
+                &receiver_place,
+                &key_ty,
+                Some((&keys, &key_ty)),
+                reverse,
+                span,
+                result,
+            );
+        } else {
+            self.lower_stable_vec_sort(
+                source,
+                &receiver_place,
+                &element_ty,
+                None,
+                reverse,
+                span,
+                result,
+            );
+        }
+    }
+
+    /// Lowers `sorted`, `reversed`, `list`, and a stepped slice. Each builds
+    /// a fresh owned list in `result` with the operations a hand-written
+    /// copy, `sort`, or `reverse` lowers to (ADR-0066).
+    fn lower_sequence_builtin(
+        &mut self,
+        expr: &Expr,
+        callee_span: Span,
+        builtin: BuiltinFunction,
+        args: &[Argument],
+        result: &str,
+    ) {
+        let ordered = builtin
+            .bind_args(args, expr.span)
+            .expect("checked sequence builtin arguments should bind during MIR lowering");
+        let values = ordered[0].expect("checked sequence builtins take a collection");
+        if builtin == BuiltinFunction::SliceStep {
+            self.lower_stepped_slice(&values.value, &ordered[1..], callee_span, result);
+            return;
+        }
+        let values_ty = self
+            .infer_expr_type(&values.value)
+            .expect("checked sequence builtin argument should have a type");
+        let element_ty = sequence_builtin_element_type(&values_ty, true)
+            .expect("checked sequence builtin argument should have elements");
+        self.lower_owned_list_copy(&values.value, &values_ty, &element_ty, result, expr.span);
+        match builtin {
+            BuiltinFunction::Sorted => {
+                let ignored = self.new_typed_temp(Type::Unit);
+                self.lower_list_sort(
+                    result,
+                    &element_ty,
+                    ordered[1],
+                    ordered[2],
+                    expr.span,
+                    &ignored,
+                );
+            }
+            BuiltinFunction::Reversed => {
+                self.emit_list_member_call(result, "reverse", Vec::new());
+            }
+            _ => {}
+        }
+    }
+
+    /// Calls the list method `field` on the list in `place` for its effect.
+    fn emit_list_member_call(&mut self, place: &str, field: &str, args: Vec<Operand>) {
+        let ignored = self.new_typed_temp(Type::Unit);
+        self.emit(Instruction::Assign {
+            target: ignored,
+            value: Rvalue::Call {
+                callee: CallTarget::Member {
+                    object: Operand::Place(place.to_string()),
+                    field: field.to_string(),
+                    receiver_place: Some(place.to_string()),
+                    dispatch: None,
+                },
+                args: args
+                    .into_iter()
+                    .map(|value| MirArg {
+                        name: None,
+                        value,
+                        writeback_place: None,
+                    })
+                    .collect(),
+                type_args: Default::default(),
+            },
+        });
+    }
+
+    /// Stores a fresh owned list of the elements of `values` in `target`. A
+    /// list or span is copied as the slice `values[:]` copies it. Any other
+    /// collection is read by the loop a `for` statement over it runs, which
+    /// appends a copy of each element.
+    fn lower_owned_list_copy(
+        &mut self,
+        values: &Expr,
+        values_ty: &Type,
+        element_ty: &Type,
+        target: &str,
+        span: Span,
+    ) {
+        if matches!(values_ty, Type::Named(name, _) if matches!(name.as_str(), "list" | "Span")) {
+            let copy = self.lower_expr(&Expr {
+                kind: ExprKind::Slice {
+                    object: Box::new(values.clone()),
+                    start: None,
+                    end: None,
+                    colon_span: span,
+                },
+                span: values.span,
+            });
+            let copy = match copy {
+                Operand::Place(place) => Operand::MovePlace(place),
+                other => other,
+            };
+            self.emit(Instruction::Assign {
+                target: target.to_string(),
+                value: Rvalue::Use(copy),
+            });
+            return;
+        }
+        self.emit(Instruction::Assign {
+            target: target.to_string(),
+            value: Rvalue::VecLiteral {
+                elements: Vec::new(),
+                element_type: element_ty.clone(),
+            },
+        });
+        const ITEM: &str = "%list_item";
+        let for_stmt = crate::ast::ForStmt {
+            target: BindingTarget::Name {
+                name: ITEM.to_string(),
+                span: values.span,
+            },
+            iterable: values.clone(),
+            borrow_mode: None,
+            body: Vec::new(),
+            span,
+        };
+        let copies = type_is_copy_in_program(element_ty, self.program);
+        let element_ty = element_ty.clone();
+        let target = target.to_string();
+        let mut lower_body = |lowerer: &mut Self| {
+            let item = lowerer
+                .scoped_local_name(ITEM)
+                .expect("the list copy loop binds its element")
+                .to_string();
+            let value = if copies {
+                Operand::Place(item)
+            } else {
+                let copy = lowerer.new_typed_temp(element_ty.clone());
+                lowerer.emit(Instruction::Assign {
+                    target: copy.clone(),
+                    value: Rvalue::Call {
+                        callee: CallTarget::Member {
+                            object: Operand::Place(item.clone()),
+                            field: "clone".to_string(),
+                            receiver_place: Some(item),
+                            dispatch: None,
+                        },
+                        args: Vec::new(),
+                        type_args: Default::default(),
+                    },
+                });
+                Operand::MovePlace(copy)
+            };
+            lowerer.emit_vec_push(Operand::Place(target.clone()), &target, value);
+        };
+        self.lower_for_with_body(&for_stmt, None, &mut lower_body);
+    }
+
+    /// `left + right` on lists, and `list * n` or `n * list`: a fresh owned
+    /// list built from copies of the operands' elements, which both stay
+    /// usable. Operands evaluate left to right.
+    fn lower_list_binary(
+        &mut self,
+        expr: &Expr,
+        op: BinaryOp,
+        left: &Expr,
+        right: &Expr,
+    ) -> Option<Operand> {
+        let left_ty = self.infer_expr_type(left)?;
+        let right_ty = self.infer_expr_type(right)?;
+        let list_ty = list_binary_result_type(op, &left_ty, &right_ty)?;
+        let element_ty =
+            sequence_builtin_element_type(&list_ty, false).expect("a list binary result is a list");
+        let result = self.new_typed_temp(list_ty.clone());
+        if op == BinaryOp::Add {
+            self.lower_owned_list_copy(left, &left_ty, &element_ty, &result, expr.span);
+            let other = self.new_typed_temp(list_ty);
+            self.lower_owned_list_copy(right, &right_ty, &element_ty, &other, expr.span);
+            self.emit_list_member_call(&result, "extend", vec![Operand::MovePlace(other)]);
+            return Some(Operand::Place(result));
+        }
+        // `list * n`: copy the list once, then append its elements `n` times.
+        let list_on_left = sequence_builtin_element_type(&left_ty, false).is_some();
+        let (list_expr, list_expr_ty, count_expr) = if list_on_left {
+            (left, &left_ty, right)
+        } else {
+            (right, &right_ty, left)
+        };
+        let source = self.new_typed_temp(Type::Named("list".to_string(), vec![element_ty.clone()]));
+        let count = if list_on_left {
+            self.lower_owned_list_copy(list_expr, list_expr_ty, &element_ty, &source, expr.span);
+            let count = self.lower_index_domain_expr(count_expr);
+            self.materialize_int64(count)
+        } else {
+            let count = self.lower_index_domain_expr(count_expr);
+            let count = self.materialize_int64(count);
+            self.lower_owned_list_copy(list_expr, list_expr_ty, &element_ty, &source, expr.span);
+            count
+        };
+        self.emit(Instruction::Assign {
+            target: result.clone(),
+            value: Rvalue::VecLiteral {
+                elements: Vec::new(),
+                element_type: element_ty,
+            },
+        });
+        // for %repeat in range(count): result.extend(source[:])
+        let source_name = "%repeat_source";
+        let count_name = "%repeat_count";
+        let mut scope = std::collections::HashMap::new();
+        scope.insert(source_name.to_string(), source.clone());
+        scope.insert(count_name.to_string(), count);
+        self.scoped_names.push(scope);
+        let name = |name: &str| Expr {
+            kind: ExprKind::Name(name.to_string()),
+            span: expr.span,
+        };
+        let for_stmt = crate::ast::ForStmt {
+            target: BindingTarget::Name {
+                name: "_".to_string(),
+                span: expr.span,
+            },
+            iterable: Expr {
+                kind: ExprKind::Call {
+                    callee: Box::new(name("range")),
+                    args: vec![Argument {
+                        name: None,
+                        value: name(count_name),
+                        span: expr.span,
+                    }],
+                },
+                span: expr.span,
+            },
+            borrow_mode: None,
+            body: Vec::new(),
+            span: expr.span,
+        };
+        let copy_source = Expr {
+            kind: ExprKind::Slice {
+                object: Box::new(name(source_name)),
+                start: None,
+                end: None,
+                colon_span: expr.span,
+            },
+            span: expr.span,
+        };
+        let result_place = result.clone();
+        let mut lower_body = |lowerer: &mut Self| {
+            let copy = lowerer.lower_expr(&copy_source);
+            let copy = match copy {
+                Operand::Place(place) => Operand::MovePlace(place),
+                other => other,
+            };
+            lowerer.emit_list_member_call(&result_place, "extend", vec![copy]);
+        };
+        self.lower_for_with_body(&for_stmt, None, &mut lower_body);
+        self.scoped_names.pop();
+        Some(Operand::Place(result))
+    }
+
+    /// `value` in an `int64` temporary of its own, so later code reads the
+    /// value it had here.
+    fn materialize_int64(&mut self, value: Operand) -> String {
+        if let Operand::Place(place) = &value {
+            if place.starts_with("%t") {
+                return place.clone();
+            }
+        }
+        let temp = self.new_typed_temp(Type::named("int64"));
+        self.emit(Instruction::Assign {
+            target: temp.clone(),
+            value: Rvalue::Use(value),
+        });
+        temp
+    }
+
+    /// `values[start:end:step]`: one runtime call on the list or `str`. A
+    /// span is first copied to a list, as its one-colon slice would be.
+    fn lower_stepped_slice(
+        &mut self,
+        object: &Expr,
+        bounds: &[Option<&Argument>],
+        colon_span: Span,
+        result: &str,
+    ) {
+        let object_ty = self
+            .infer_expr_type(object)
+            .expect("checked stepped slice object should have a type");
+        // A `view` of a slice has its base's list type and a hidden range.
+        let span_element = match &object_ty {
+            Type::Named(name, args) if name == "Span" && args.len() == 1 => Some(args[0].clone()),
+            Type::Named(name, args) if name == "list" && self.span_range_of(object).is_some() => {
+                args.first().cloned()
+            }
+            _ => None,
+        };
+        let (lowered_object, receiver_place) = match span_element {
+            Some(element_ty) => {
+                let list_ty = Type::Named("list".to_string(), vec![element_ty.clone()]);
+                let copy = self.new_typed_temp(list_ty.clone());
+                self.lower_owned_list_copy(object, &list_ty, &element_ty, &copy, colon_span);
+                (Operand::Place(copy.clone()), Some(copy))
+            }
+            None => {
+                let lowered = self.lower_expr_at_sequence_point(object, None);
+                let place = match &lowered {
+                    Operand::Place(place) | Operand::MovePlace(place) => Some(place.clone()),
+                    _ => self.render_place_expr_option(object),
+                };
+                (lowered, place)
+            }
+        };
+        let mut lowered_args = Vec::new();
+        for (index, bound) in bounds.iter().enumerate() {
+            let bound = bound.expect("a stepped slice binds every position");
+            let present = !matches!(bound.value.kind, ExprKind::BuiltinOmitted);
+            let value = if present {
+                self.lower_index_domain_expr(&bound.value)
+            } else {
+                Operand::Int(0)
+            };
+            lowered_args.push(value);
+            // The step is always written; the endpoints say whether they are.
+            if index < 2 {
+                lowered_args.push(Operand::Bool(present));
+            }
+        }
+        lowered_args.push(Operand::Int(colon_span.line as u128));
+        lowered_args.push(Operand::Int(colon_span.column as u128));
+        self.emit(Instruction::Assign {
+            target: result.to_string(),
+            value: Rvalue::Call {
+                callee: CallTarget::Member {
+                    object: lowered_object,
+                    field: crate::runtime_ops::SLICE_STEP_MEMBER.to_string(),
+                    receiver_place,
+                    dispatch: None,
+                },
+                args: lowered_args
+                    .into_iter()
+                    .map(|value| MirArg {
+                        name: None,
+                        value,
+                        writeback_place: None,
+                    })
+                    .collect(),
+                type_args: Default::default(),
+            },
+        });
+    }
+
     /// Lowers the higher-order Vec surface to the ordinary MIR operations both
     /// execution backends already share. In particular, callbacks remain
     /// `CallTarget::Value` calls instead of acquiring a second host callback
@@ -19922,63 +20360,14 @@ impl<'a> Lowerer<'a> {
                 let ordered = member
                     .bind_args(args, expr.span)
                     .expect("checked list.sort arguments should bind during MIR lowering");
-                let callback = ordered[0].map(|argument| {
-                    let callback_ty = self
-                        .infer_expr_type(&argument.value)
-                        .expect("checked list.sort key should have a function type");
-                    let callback =
-                        self.lower_expr_at_sequence_point(&argument.value, Some(&callback_ty));
-                    let key_ty = callback_result_type(callback_ty)
-                        .expect("checked list.sort key should have a callable type");
-                    (self.vec_callback_target(&argument.value, callback), key_ty)
-                });
-                let reverse = ordered[1]
-                    .map(|argument| {
-                        self.lower_expr_at_sequence_point(
-                            &argument.value,
-                            Some(&Type::named("bool")),
-                        )
-                    })
-                    .unwrap_or(Operand::Bool(false));
-                let source = Operand::Place(receiver_place.clone());
-                if let Some((callback, key_ty)) = callback {
-                    let keys =
-                        self.new_typed_temp(Type::Named("list".to_string(), vec![key_ty.clone()]));
-                    self.emit(Instruction::Assign {
-                        target: keys.clone(),
-                        value: Rvalue::VecLiteral {
-                            elements: Vec::new(),
-                            element_type: key_ty.clone(),
-                        },
-                    });
-                    self.lower_vec_key_collection_loop(
-                        source.clone(),
-                        &element_ty,
-                        callback,
-                        &keys,
-                        &key_ty,
-                        expr.span,
-                    );
-                    self.lower_stable_vec_sort(
-                        source,
-                        &receiver_place,
-                        &key_ty,
-                        Some((&keys, &key_ty)),
-                        reverse,
-                        expr.span,
-                        result,
-                    );
-                } else {
-                    self.lower_stable_vec_sort(
-                        source,
-                        &receiver_place,
-                        &element_ty,
-                        None,
-                        reverse,
-                        expr.span,
-                        result,
-                    );
-                }
+                self.lower_list_sort(
+                    &receiver_place,
+                    &element_ty,
+                    ordered[0],
+                    ordered[1],
+                    expr.span,
+                    result,
+                );
             }
             BuiltinMember::VecMap | BuiltinMember::VecFilter => {
                 let source = self.lower_shared_vec_source(object);
@@ -23513,6 +23902,22 @@ impl<'a> Lowerer<'a> {
                     .expect("reduction builtins have maintained call metadata");
                 self.lower_collection_reduction(expr, builtin, &args[0], &temp);
             }
+            ExprKind::Name(name)
+                if explicit_type_args.is_none()
+                    && matches!(
+                        BuiltinFunction::from_name(name),
+                        Some(
+                            BuiltinFunction::Sorted
+                                | BuiltinFunction::Reversed
+                                | BuiltinFunction::List
+                                | BuiltinFunction::SliceStep
+                        )
+                    ) =>
+            {
+                let builtin = BuiltinFunction::from_name(name)
+                    .expect("sequence builtins have maintained call metadata");
+                self.lower_sequence_builtin(expr, callee.span, builtin, args, &temp);
+            }
             ExprKind::Name(name) if matches!(name.as_str(), "min" | "max") && args.len() > 2 => {
                 // `min(a, b, c)` evaluates every argument left to right, then
                 // folds the two-argument builtin over them.
@@ -25573,6 +25978,28 @@ impl<'a> Lowerer<'a> {
                         if name == "str" {
                             return Some(Type::named("str"));
                         }
+                        match BuiltinFunction::from_name(name)
+                            .filter(|_| explicit_type_args.is_none())
+                        {
+                            Some(
+                                BuiltinFunction::Sorted
+                                | BuiltinFunction::Reversed
+                                | BuiltinFunction::List,
+                            ) => {
+                                let values = self.infer_expr_type(&args.first()?.value)?;
+                                let element = sequence_builtin_element_type(&values, true)?;
+                                return Some(Type::Named("list".to_string(), vec![element]));
+                            }
+                            Some(BuiltinFunction::SliceStep) => {
+                                return match self.infer_expr_type(&args.first()?.value)? {
+                                    Type::Named(name, element) if name == "Span" => {
+                                        Some(Type::Named("list".to_string(), element))
+                                    }
+                                    values => Some(values),
+                                };
+                            }
+                            _ => {}
+                        }
                         // A user function named like a built-in constructor,
                         // such as `set`, shadows it.
                         let user_function = self.resolve_function_info(name).is_some();
@@ -26181,6 +26608,9 @@ impl<'a> Lowerer<'a> {
                 let right_ty = self.infer_expr_type(right)?;
                 let (left_ty, right_ty) =
                     adjusted_binary_operand_types(left, left_ty, right, right_ty);
+                if let Some(list_ty) = list_binary_result_type(*op, &left_ty, &right_ty) {
+                    return Some(list_ty);
+                }
                 if is_builtin_binary_operator(*op, &left_ty, &right_ty) {
                     let duration = Type::named("Duration");
                     if matches!(

@@ -1,0 +1,5 @@
+error[AU2004]: parameter `key` of `sorted` is keyword-only
+ --> crates/aura-compiler/tests/fixtures/check-fail/sorted_key_is_keyword_only.au:3:26
+  |
+3 |     print(sorted(values, lambda value: value))
+  |                          ^

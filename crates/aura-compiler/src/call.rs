@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::ast::{Argument, Param, ReceiverKind};
 use crate::diag::{Diagnostic, Result, Span};
+use crate::sema::Type;
 
 pub(crate) use aura_core::task::{MAX_TASK_STACK_BYTES, MIN_TASK_STACK_BYTES};
 
@@ -89,7 +90,80 @@ macro_rules! builtin_param {
             passing: $passing,
         }
     };
+    (keyword, $name:literal, $passing:expr) => {
+        BuiltinParam {
+            binding: CallableParam {
+                name: $name,
+                required: false,
+                keyword_only: true,
+            },
+            passing: $passing,
+        }
+    };
 }
+
+/// The element type `list(values)`, `sorted(values)`, and `reversed(values)`
+/// read from `values`: a list's or span's element type, `int64` for a
+/// `Range`, and, where `allow_unordered` holds, a set's element type.
+/// `reversed` takes only the ordered forms.
+pub fn sequence_builtin_element_type(ty: &Type, allow_unordered: bool) -> Option<Type> {
+    match ty {
+        Type::Named(name, args) if name == "Range" && args.is_empty() => Some(Type::named("int64")),
+        Type::Named(name, args) if matches!(name.as_str(), "list" | "Span") && args.len() == 1 => {
+            Some(args[0].clone())
+        }
+        Type::Named(name, args) if allow_unordered && name == "set" && args.len() == 1 => {
+            Some(args[0].clone())
+        }
+        _ => None,
+    }
+}
+
+/// The list type `left op right` builds when it concatenates two lists or
+/// repeats one: `list[T] + list[T]` and `list[T] * n` or `n * list[T]`,
+/// where a `Span[T]` operand reads as `list[T]` and `n` is an integer in
+/// the `int64` index domain.
+pub fn list_binary_result_type(
+    op: crate::ast::BinaryOp,
+    left: &Type,
+    right: &Type,
+) -> Option<Type> {
+    fn as_list(ty: &Type) -> Option<Type> {
+        match ty {
+            Type::Named(name, args)
+                if matches!(name.as_str(), "list" | "Span") && args.len() == 1 =>
+            {
+                Some(Type::Named("list".to_string(), args.clone()))
+            }
+            _ => None,
+        }
+    }
+    fn is_count(ty: &Type) -> bool {
+        matches!(
+            ty,
+            Type::Named(name, args) if args.is_empty() && matches!(
+                name.as_str(),
+                "int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32"
+            )
+        )
+    }
+    match op {
+        crate::ast::BinaryOp::Add => {
+            let left = as_list(left)?;
+            (as_list(right)? == left).then_some(left)
+        }
+        crate::ast::BinaryOp::Mul => match (as_list(left), as_list(right)) {
+            (Some(list), None) if is_count(right) => Some(list),
+            (None, Some(list)) if is_count(left) => Some(list),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The callee name a stepped slice `values[start:end:step]` parses to. It
+/// is not an identifier, so no source program can name it.
+pub const STEPPED_SLICE_BUILTIN: &str = "%slice";
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct BuiltinCallShape {
@@ -282,6 +356,17 @@ const MIN_MAX_PARAMS: [BuiltinParam; 2] = [
 ];
 const REDUCTION_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "values", ReceiverKind::Borrow)];
+const SORTED_PARAMS: [BuiltinParam; 3] = [
+    builtin_param!(required, "values", ReceiverKind::Borrow),
+    builtin_param!(keyword, "key", ReceiverKind::Borrow),
+    builtin_param!(keyword, "reverse", ReceiverKind::Borrow),
+];
+const SLICE_STEP_PARAMS: [BuiltinParam; 4] = [
+    builtin_param!(required, "values", ReceiverKind::Borrow),
+    builtin_param!(required, "start", ReceiverKind::Borrow),
+    builtin_param!(required, "end", ReceiverKind::Borrow),
+    builtin_param!(required, "step", ReceiverKind::Borrow),
+];
 const SQRT_PARAMS: [BuiltinParam; 1] = [builtin_param!(required, "value", ReceiverKind::Borrow)];
 const PARSE_TEXT_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "text", ReceiverKind::Borrow)];
@@ -475,6 +560,13 @@ pub enum BuiltinFunction {
     Sum,
     Any,
     All,
+    Sorted,
+    Reversed,
+    List,
+    /// `values[start:end:step]`, which the parser writes as a call of
+    /// [`STEPPED_SLICE_BUILTIN`]. It is not in [`ALL_BUILTIN_FUNCTIONS`]
+    /// because no source name calls it.
+    SliceStep,
 }
 
 pub const ALL_BUILTIN_FUNCTIONS: &[BuiltinFunction] = &[
@@ -491,6 +583,9 @@ pub const ALL_BUILTIN_FUNCTIONS: &[BuiltinFunction] = &[
     BuiltinFunction::Sum,
     BuiltinFunction::Any,
     BuiltinFunction::All,
+    BuiltinFunction::Sorted,
+    BuiltinFunction::Reversed,
+    BuiltinFunction::List,
     BuiltinFunction::Abs,
     BuiltinFunction::Min,
     BuiltinFunction::Max,
@@ -527,6 +622,10 @@ impl BuiltinFunction {
             "sum" => Some(Self::Sum),
             "any" => Some(Self::Any),
             "all" => Some(Self::All),
+            "sorted" => Some(Self::Sorted),
+            "reversed" => Some(Self::Reversed),
+            "list" => Some(Self::List),
+            STEPPED_SLICE_BUILTIN => Some(Self::SliceStep),
             _ => None,
         }
     }
@@ -555,6 +654,10 @@ impl BuiltinFunction {
             Self::Sum => "sum",
             Self::Any => "any",
             Self::All => "all",
+            Self::Sorted => "sorted",
+            Self::Reversed => "reversed",
+            Self::List => "list",
+            Self::SliceStep => STEPPED_SLICE_BUILTIN,
         }
     }
 
@@ -592,6 +695,12 @@ impl BuiltinFunction {
             Self::Sum => "sum(values: list[T]|set[T]|Range|Array[T]) -> T",
             Self::Any => "any(values: list[bool]|set[bool]) -> bool",
             Self::All => "all(values: list[bool]|set[bool]) -> bool",
+            Self::Sorted => {
+                "sorted(values: list[T]|Span[T]|set[T]|Range, *, key: def(T) -> K = ..., reverse: bool = false) -> list[T]"
+            }
+            Self::Reversed => "reversed(values: list[T]|Span[T]|Range) -> list[T]",
+            Self::List => "list(values: list[T]|Span[T]|set[T]|Range) -> list[T]",
+            Self::SliceStep => "values[start:end:step]",
         }
     }
 
@@ -635,6 +744,18 @@ impl BuiltinFunction {
             }
             Self::Any => "Returns true when some element of a `bool` collection is true. An empty collection gives false.",
             Self::All => "Returns true when every element of a `bool` collection is true. An empty collection gives true.",
+            Self::Sorted => {
+                "Returns a new list of the elements in stable sorted order, by `key` when one is given and descending when `reverse` is true. The argument stays usable."
+            }
+            Self::Reversed => {
+                "Returns a new list of the elements in reverse order. The argument stays usable."
+            }
+            Self::List => {
+                "Returns a new list of the elements in iteration order. The argument stays usable."
+            }
+            Self::SliceStep => {
+                "Selects every `step`-th element from `start` toward `end` into a fresh owned value."
+            }
         }
     }
 
@@ -733,8 +854,14 @@ impl BuiltinFunction {
 
     const fn call_shape(self) -> BuiltinCallShape {
         match self {
-            Self::Sum | Self::Any | Self::All => {
+            Self::Sum | Self::Any | Self::All | Self::Reversed | Self::List => {
                 BuiltinCallShape::fixed(&REDUCTION_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::Sorted => {
+                BuiltinCallShape::fixed(&SORTED_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::SliceStep => {
+                BuiltinCallShape::fixed(&SLICE_STEP_PARAMS, CallConvention::PositionalOnly)
             }
             Self::Print | Self::Len | Self::Str => {
                 BuiltinCallShape::fixed(&PRINT_PARAMS, CallConvention::PositionalOrNamed)

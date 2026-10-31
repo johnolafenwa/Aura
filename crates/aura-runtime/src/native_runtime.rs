@@ -59,8 +59,8 @@ use crate::runtime_value::{
     render_float32, result_err, result_ok, round_float_to_int64, round_numeric_value,
     run_blocking_io, run_lightweight_root_task_with_forced_exit_cleanup, select_runtime_values,
     send_error_cancelled, send_error_closed, send_error_full, send_error_timed_out,
-    set_current_task_native_slot, sleep_with_runtime_scheduler, slice_text, slice_vec_owned,
-    spawn_lightweight_task_with_cancellation,
+    set_current_task_native_slot, sleep_with_runtime_scheduler, slice_text, slice_text_step,
+    slice_vec_owned, slice_vec_owned_step, spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup_and_stack_and_result_repeatability_registered,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
     task_result_timed_out, try_array_buffer, try_clone_array_containing_value, wait_all_cancelled,
@@ -7022,6 +7022,44 @@ pub extern "C-unwind" fn aura_direct_string_slice(
     })
 }
 
+/// `text[start:end:step]`.
+#[cfg_attr(not(coverage), no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "C-unwind" fn aura_direct_string_slice_step(
+    value: *mut OpaqueValue,
+    start: i64,
+    has_start: i64,
+    end: i64,
+    has_end: i64,
+    step: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let result = unsafe {
+            with_value(value, |value| match value {
+                Value::String(text) => slice_text_step(
+                    text,
+                    (has_start != 0).then_some(i128::from(start)),
+                    (has_end != 0).then_some(i128::from(end)),
+                    i128::from(step),
+                ),
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            })
+        };
+        match result {
+            Ok(slice) => boxed_value(Value::String(slice)),
+            Err(mut error) => {
+                error.span = runtime_span(line, column);
+                runtime_diagnostic_error(error)
+            }
+        }
+    })
+}
+
 /// `test(text, part)` on the text of `value`, read in place.
 fn string_affix(
     value: *mut OpaqueValue,
@@ -7980,6 +8018,38 @@ pub extern "C-unwind" fn aura_direct_vec_slice(
                 vector,
                 (has_start != 0).then_some(i128::from(start)),
                 (has_end != 0).then_some(i128::from(end)),
+            )
+        });
+        match result {
+            Ok(slice) => boxed_value(Value::Vec(slice)),
+            Err(mut error) => {
+                error.span = runtime_span(line, column);
+                runtime_diagnostic_error(error)
+            }
+        }
+    })
+}
+
+/// `list[start:end:step]`.
+#[cfg_attr(not(coverage), no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "C-unwind" fn aura_direct_vec_slice_step(
+    vec: *mut OpaqueValue,
+    start: i64,
+    has_start: i64,
+    end: i64,
+    has_end: i64,
+    step: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let result = with_vector(vec, |vector| {
+            slice_vec_owned_step(
+                vector,
+                (has_start != 0).then_some(i128::from(start)),
+                (has_end != 0).then_some(i128::from(end)),
+                i128::from(step),
             )
         });
         match result {

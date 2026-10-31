@@ -832,9 +832,22 @@ assignment. It is not a multidimensional slice or a view.
 
 ### Steps And Assignment
 
-A second colon is reserved for future step syntax. `value[start:end:step]` and
-`value[::]` report `AU2005` with `slice steps are unavailable; use an explicit
-loop to select a stride`.
+`value[start:end:step]` selects every `step`-th element of a `list`, `Span`,
+or `str` into a fresh owned value (ADR-0066). The step is in the `int64`
+index domain and may be negative. An empty step, as in `value[::]`, is a
+one-colon slice.
+
+- A positive step takes the one-colon slice `value[start:end]`, with its
+  defaults and checks, and keeps positions `start`, `start + step`, and so
+  on.
+- A negative step walks down. An omitted `start` is the last position, and
+  an omitted `end` lies before the first, so `value[::-1]` reverses. A
+  written endpoint is normalized once, as in a one-colon slice. The start
+  must be a position in the value, and the end must not exceed the start;
+  otherwise the slice stops the program with `AU4003`.
+- A zero step stops the program with `AU4003`.
+- A `str` step counts Unicode scalar values.
+- `Array` values have no stepped slice; the checker reports `AU2003`.
 
 Slice assignment and compound assignment report `AU2005` with `slice
 assignment is unavailable because slices are owned copies; mutate the source
@@ -1248,7 +1261,7 @@ Compile-time codes:
 | `AU2002` | A type, constructor-payload, match-result, or index-type mismatch. |
 | `AU2003` | An unsupported unary, binary, compound, membership, or cast operator. |
 | `AU2004` | Call or constructor argument binding failed. |
-| `AU2005` | An unsupported syntax or expression feature, including generator expressions, reserved slice steps, and slice assignment. |
+| `AU2005` | An unsupported syntax or expression feature, including generator expressions and slice assignment. |
 | `AU2008` | Equality on a union that has a member without equality. |
 | `AU2010` | A value is not a direct member of its expected union. |
 | `AU2011` | A literal that more than one union member could accept. |

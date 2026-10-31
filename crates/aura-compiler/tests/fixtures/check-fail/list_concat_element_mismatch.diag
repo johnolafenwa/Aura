@@ -1,0 +1,5 @@
+error[AU2002]: list concatenation needs two lists of one element type, found `list[int64]` and `list[str]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/list_concat_element_mismatch.au:4:11
+  |
+4 |     print(numbers + words)
+  |           ^

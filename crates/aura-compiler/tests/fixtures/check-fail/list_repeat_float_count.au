@@ -1,0 +1,3 @@
+def main() -> None:
+    values = [1, 2]
+    print(values * 1.5)
