@@ -13,6 +13,8 @@ Last updated: 2026-10-30
   (`docdb` about 8% fewer instructions).
 - Step 2a: single-pass `json.parse` with the serde parser as the error
   path (`json_roundtrip` 0.67 -> 0.59 s, parsing about 20% faster).
+- Step 2b: lend list elements to borrowed call arguments in loops
+  (element loop micro 648M -> 446M instructions).
 
 ## File I/O hand-off (complete)
 

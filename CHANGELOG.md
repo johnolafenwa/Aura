@@ -7,6 +7,11 @@ in this file.
 
 ## Unreleased
 
+- In `for item in items: f(item)`, where `f` only borrows its parameter,
+  native code now lends `f` the list's own element instead of copying it
+  into a new box for each step. A loop that passes each element of a
+  `list[json.Value]` to such a function runs about 30% fewer
+  instructions; `json_roundtrip` runs in about 0.56 s instead of 0.58 s.
 - `json.parse` reads valid JSON in one pass that builds the tree as it
   goes, checking the depth and size limits on the way, and copies an
   object key or a string without escapes straight from the source. Text

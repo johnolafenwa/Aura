@@ -1539,6 +1539,16 @@ not change. Parsing the `json_roundtrip` payload 50 times takes about
 0.24 s instead of 0.30 s, and the whole program about 0.59 s instead of
 0.67 s.
 
+### Loop Elements Lent To Calls
+
+When a loop passes each element of a list to a function that only
+borrows that parameter, as in `for item in items: total += size(item)`,
+a native build hands the function the element the list already holds
+instead of a fresh copy, and has nothing to free after the call. This
+already held for element reads that a `match` or a field read used in
+place; it now holds for borrowed call arguments too. A call that could
+change the list first gives the loop its own copy, as before.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and
