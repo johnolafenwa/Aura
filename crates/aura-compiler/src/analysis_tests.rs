@@ -11269,3 +11269,56 @@ fn import_completion_lists_builtin_and_sibling_modules() {
         .all(|completion| completion.kind != "module" || completion.name != "json"));
     let _ = std::fs::remove_dir_all(&temp);
 }
+
+#[test]
+fn compiler_analysis_infers_sequence_builtin_and_stepped_slice_results() {
+    let analysis = analyze_source(
+        r#"
+def main():
+    names = ["b", "a"]
+    words = {"x", "y"}
+    view middle = names[0:]
+    ordered = sorted(words)
+    backwards = reversed(names)
+    copied = list(range(3))
+    every_other = names[::2]
+    view_steps = middle[::-1]
+    letters = "abcdef"[1::2]
+    joined = names + ["c"]
+    repeated = 2 * names
+    print(ordered)
+    print(backwards)
+    print(copied)
+    print(every_other)
+    print(view_steps)
+    print(letters)
+    print(joined)
+    print(repeated)
+"#,
+    );
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    let hover_for = |name: &str| {
+        analysis
+            .occurrences
+            .iter()
+            .find(|occurrence| occurrence.hover.contains(&format!("{name}:")))
+            .map(|occurrence| occurrence.hover.clone())
+            .unwrap_or_else(|| panic!("hover for `{name}`"))
+    };
+    assert!(hover_for("ordered").contains("ordered: list[str]"));
+    assert!(hover_for("backwards").contains("backwards: list[str]"));
+    assert!(hover_for("copied").contains("copied: list[int64]"));
+    assert!(hover_for("every_other").contains("every_other: list[str]"));
+    assert!(hover_for("view_steps").contains("view_steps: list[str]"));
+    assert!(hover_for("letters").contains("letters: str"));
+    assert!(hover_for("joined").contains("joined: list[str]"));
+    assert!(
+        hover_for("repeated").contains("repeated: list[str]"),
+        "{}",
+        hover_for("repeated")
+    );
+}

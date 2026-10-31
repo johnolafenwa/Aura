@@ -1,0 +1,16 @@
+def main() -> None:
+    words = {"b", "a", "c"}
+    copied = list(words)
+    print(len(copied))
+    print(sorted(words))
+    print(sorted(words, reverse=true))
+    nested = [[1], [2, 3], [4]]
+    print(list(nested))
+    view middle = nested[0:]
+    stepped = middle[::2]
+    print(stepped)
+    picked = "abcdef"[::2]
+    print(picked)
+    print(reversed(sorted(words)))
+    print(len(nested * 2))
+    print(len(2 * list(words)))

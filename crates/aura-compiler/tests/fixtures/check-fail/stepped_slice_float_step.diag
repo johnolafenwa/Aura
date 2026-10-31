@@ -1,0 +1,5 @@
+error[AU2002]: slice endpoints and steps must have type `int64` or a losslessly narrower integer type, found `float64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/stepped_slice_float_step.au:3:20
+  |
+3 |     print(values[::1.5])
+  |                    ^

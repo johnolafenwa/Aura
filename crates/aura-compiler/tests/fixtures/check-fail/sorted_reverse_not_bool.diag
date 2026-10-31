@@ -1,0 +1,5 @@
+error[AU2002]: `sorted` expects `bool` for `reverse`, found `int64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/sorted_reverse_not_bool.au:2:26
+  |
+2 |     print(sorted([2, 1], reverse=1))
+  |                          ^

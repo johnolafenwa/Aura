@@ -1,0 +1,4 @@
+import random
+
+def go(generators: list[random.Rng]):
+    print(len(generators * 2))

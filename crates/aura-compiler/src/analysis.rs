@@ -5195,6 +5195,10 @@ impl<'a> AnalysisBuilder<'a> {
                 if let Some(result) = builtin_duration_binary_result(*op, &left_ty, &right_ty) {
                     return Some(result);
                 }
+                if let Some(result) = crate::call::list_binary_result_type(*op, &left_ty, &right_ty)
+                {
+                    return Some(result);
+                }
                 match op {
                     BinaryOp::And | BinaryOp::Or => Some(Type::named("bool")),
                     BinaryOp::Eq
