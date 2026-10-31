@@ -373,7 +373,7 @@ easy to reason about and easy to test.
 
 ## How Tasks Are Scheduled
 
-Aura 0.10 runs task bodies on cooperative pinned workers on both maintained
+Aura 0.11 runs task bodies on cooperative pinned workers on both maintained
 backends.
 
 - By default, the runtime uses the available parallelism that the host
@@ -506,7 +506,7 @@ Good Aura concurrency tends to look the same across programs:
 - task results inspected through `TaskResult`, `wait_any`, or `wait_all`
 - long CPU loops that check `cancelled()` when cancellation matters, and use
   explicit yields where a chunk boundary should schedule siblings
-- no detached background work, since Aura 0.10 has no detached task form
+- no detached background work, since Aura 0.11 has no detached task form
 
 For each child task, you should be able to say which scope created it and
 which scope waits for it. If you can, the program is usually on the right

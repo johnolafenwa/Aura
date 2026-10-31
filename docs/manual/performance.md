@@ -315,9 +315,9 @@ M2 Pro host feed later performance decisions.
 | `set_insert_contains` | 1.89 times Rust in instructions on Linux in 0.7.0 |
 | `int_list_sum` | 1.21 times Rust in instructions on Linux in 0.7.0 |
 | AuraDB `update` by id | about 3 times Python 3.13 |
-| 30 cross-language programs | median 3.9 times Rust and 0.40 times Python 3.13 by wall time on Linux in 0.10.0 |
-| `regex_match` cross-language program | 8.6 times Rust by wall time on Linux in 0.10.0, the one program above 8 times |
-| `task_pool` cross-language program | 2.1 times Rust with four workers in 0.10.0 |
+| 30 cross-language programs | median 3.7 times Rust and 0.40 times Python 3.13 by wall time on Linux in 0.11.0 |
+| `sql_engine` cross-language program | 7.6 times Rust by wall time on Linux in 0.11.0, the furthest from Rust |
+| `task_pool` cross-language program | 2.1 times Rust with four workers in 0.11.0 |
 
 These gaps are specific to these workloads. Scheduling, runtime
 implementation, allocation, and optimizer-barrier choices affect how to read
@@ -476,6 +476,29 @@ The phase's own targets, a median of 3x Rust and no program above 8x, are
 not met. `regex_match` is 8.6x: its matcher builds and compares small enum
 values for each step. `sql_engine` went from 21.8x to 5.9x, `graph_paths`
 from 10.5x to 3.8x, and `binary_trees` from 9.2x to 3.7x.
+
+Aura 0.11.0 works on the programs still slower than Python. File calls
+hand off to the blocking-I/O pool for less, a read-only `match
+d.lookup(key)` finds the entry once, `json.parse` builds the tree in one
+pass, list elements passed to a borrowing function are lent, and
+one-character `replace`, `count`, and `split` patterns scan with
+`memchr`. Both compilers measured in the same two passes on 31 October
+2026, median of ten runs:
+
+| Measure | Aura 0.10.0 | Aura 0.11.0 |
+| --- | ---: | ---: |
+| All 30 programs, wall time | 17.9 s | 16.4 s |
+| Median Aura / Rust, wall time | 3.9x | 3.7x |
+| Median Aura / Python 3.13, wall time | 0.41x | 0.40x |
+| Programs faster than Python | 25 | 25 |
+| Programs above 8x Rust | 0 | 0 |
+
+The container ran faster than on 30 October, so 0.10.0 measures 17.9
+seconds here instead of 20.9 and `regex_match` 7.4x instead of 8.6x.
+`file_io` went from 2.4x to 1.5x Rust (1.2 times Python's time), `docdb`
+ran 26% faster, `json_roundtrip` 21%, and `template_render` 18%. Aura
+is still slower than Python on `csv_aggregate`, `docdb`, `file_io`,
+`json_roundtrip`, and `template_render`.
 
 ### Per-Call Attribution
 

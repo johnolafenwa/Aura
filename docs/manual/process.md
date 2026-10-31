@@ -353,7 +353,7 @@ The host determines executable discovery, path syntax, the inherited environment
 
 ## Status
 
-Aura 0.10 implements one-shot execution, live children, standard-I/O configuration, pipes, completed output, status checking, supervisor restarts and events, typed failures, and Unix process-group cleanup. The fixed stream cap is an accepted design decision. So is the policy for omitted timeouts and invalid host timers.
+Aura 0.11 implements one-shot execution, live children, standard-I/O configuration, pipes, completed output, status checking, supervisor restarts and events, typed failures, and Unix process-group cleanup. The fixed stream cap is an accepted design decision. So is the policy for omitted timeouts and invalid host timers.
 
 These are not available: shell evaluation, pipelines, pseudo-terminals, Windows process groups, portable signal control, sandboxing, and operating-system service management. The current API does not provide any of them implicitly.
 
