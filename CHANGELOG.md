@@ -31,7 +31,8 @@ seconds instead of 0.10.0's 17.9, the median program is 3.7 times Rust's
 time instead of 3.9 times and 0.40 times Python's, and no program is
 above 8 times Rust. `file_io` went from 2.4 to 1.5 times Rust, `docdb`
 26% faster, and `regex_match` from 7.4 to 6.5 times Rust. Breaking:
-`sorted`, `reversed`, and `list` are now builtin names. The semantic
+`sorted`, `reversed`, and `list` are now builtin names. A task group no
+longer cancels a child waiting on file I/O when its block ends. The semantic
 interface stays 20, and the native cache format stays `v10`.
 
 - New builtins `sorted`, `reversed`, and `list`, list `+` and `*`, and
@@ -102,6 +103,12 @@ interface stays 20, and the native cache format stays `v10`.
   buffers before a file-system call, and `fs.exists` now run on the
   blocking-I/O pool instead of the worker thread in native builds, so a
   slow disk no longer holds up the worker's other tasks.
+- Fixed: leaving a `with TaskGroup()` block could cancel a child task that
+  was waiting on a file, process, or JSON call running on a helper thread,
+  because the check for stuck children took that wait for one no task could
+  end. The block then went on before the child finished, so a file the child
+  wrote could be missing or empty. Such a wait now counts as able to finish.
+  This was in 0.10.0 too, more often.
 
 ## VS Code extension 0.10.0 — 2026-10-30
 

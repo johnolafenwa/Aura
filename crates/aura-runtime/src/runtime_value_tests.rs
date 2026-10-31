@@ -11413,6 +11413,36 @@ fn task_group_cleanup_probe_detects_unbounded_waits_after_fresh_spawns() {
 }
 
 #[test]
+fn task_group_cleanup_probe_waits_for_a_child_parked_on_blocking_io() {
+    // A child parked on a blocking-pool job is woken by a pool thread, not a
+    // task, so the deadlock probe must not take it for stuck and cancel the
+    // group: `with TaskGroup()` would then return before the child's file
+    // write, and the parent would read an empty or missing file.
+    let root_result = run_lightweight_root_task(|| {
+        let group = TaskGroupValue::new(&CancellationContext::default());
+        let child_cancellation = group.child_cancellation();
+        let parked = spawn_lightweight_task_with_cancellation(child_cancellation, move || {
+            let slept = run_blocking_io(
+                || {
+                    thread::sleep(StdDuration::from_millis(200));
+                    Ok(())
+                },
+                None,
+            );
+            Ok(Value::Bool(slept.is_ok()))
+        })?;
+        group.register_task(parked.clone());
+
+        let tasks = group.drain_tasks();
+        let cancels = task_group_cleanup_should_cancel(&tasks, &CancellationContext::default());
+        assert_eq!(wait_task_ready(&parked)?, Value::Bool(true));
+        Ok(Value::Bool(cancels))
+    });
+
+    assert_eq!(root_result.unwrap(), Value::Bool(false));
+}
+
+#[test]
 fn task_wait_reachability_snapshot_does_not_retain_tasks_or_queues() {
     let channel = ChannelValue::new();
     let task = TaskValue::from_handle(thread::spawn(|| Ok(Value::Unit)));
