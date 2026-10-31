@@ -286,9 +286,10 @@ fn shares_list(instruction: &Instruction, list: &str) -> bool {
 
 /// The lent element reads of `function`. `lendable` says which locals hold
 /// a handle whose element a list may lend and the MIR releases.
-pub(super) fn lent_element_reads(
-    function: &MirFunction,
+pub(super) fn lent_element_reads<'f>(
+    function: &'f MirFunction,
     lendable: impl Fn(&str) -> bool,
+    borrowed: impl Fn(&'f Instruction) -> Vec<&'f Operand>,
 ) -> LentElements {
     let instructions = || function.blocks.iter().flat_map(|block| &block.instructions);
     let assigned = assignments(function);
@@ -314,6 +315,8 @@ pub(super) fn lent_element_reads(
     for block in &function.blocks {
         for instruction in &block.instructions {
             let roots = mentioned_roots(instruction);
+            // A call that borrows the element reads it where it lies.
+            let borrowed = borrowed(instruction);
             for (&temp, &list) in &lists {
                 let defines = matches!(
                     instruction,
@@ -324,7 +327,9 @@ pub(super) fn lent_element_reads(
                 // copies a lent element still to be read, and nothing can
                 // read the list while the loan lives.
                 if captures(instruction, list)
-                    || (roots.contains(temp) && !defines && !reads_lent(instruction, temp, &[]))
+                    || (roots.contains(temp)
+                        && !defines
+                        && !reads_lent(instruction, temp, &borrowed))
                 {
                     rejected.insert(temp);
                 }

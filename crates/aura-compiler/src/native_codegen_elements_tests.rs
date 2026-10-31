@@ -45,7 +45,7 @@ fn function(name: &str) -> MirFunction {
 }
 
 fn lent(function: &MirFunction) -> LentElements {
-    lent_element_reads(function, |place| place.starts_with("%t"))
+    lent_element_reads(function, |place| place.starts_with("%t"), |_| Vec::new())
 }
 
 /// The block and position of the read that assigns `temp`.
@@ -114,7 +114,9 @@ fn a_released_list_first_gives_its_live_element_a_copy() {
         Some(&vec![temp.clone()])
     );
     // Locals that may not hold a lent box are left alone.
-    assert!(lent_element_reads(&first, |_| false).lists.is_empty());
+    assert!(lent_element_reads(&first, |_| false, |_| Vec::new())
+        .lists
+        .is_empty());
 }
 
 /// `target = receiver.op()`, a runtime call that names its receiver as
@@ -630,7 +632,7 @@ fn lent_payloads(name: &str) -> (MirFunction, LentElements) {
         .find(|function| function.name == name)
         .expect("the function should exist")
         .clone();
-    let mut found = lent_element_reads(&function, |_| true);
+    let mut found = lent_element_reads(&function, |_| true, |_| Vec::new());
     lent_payload_reads(
         &function,
         &mut found,
@@ -718,7 +720,7 @@ fn a_payload_takes_a_reference_before_its_scrutinee_is_handed_on() {
             place: "expr".to_string(),
         },
     );
-    let mut found = lent_element_reads(&changed, |place| place.starts_with("%t"));
+    let mut found = lent_element_reads(&changed, |place| place.starts_with("%t"), |_| Vec::new());
     lent_payload_reads(
         &changed,
         &mut found,
@@ -823,7 +825,7 @@ def main():
             .iter()
             .find(|function| function.name == name)
             .expect("the function should exist");
-        let mut found = lent_element_reads(function, |_| true);
+        let mut found = lent_element_reads(function, |_| true, |_| Vec::new());
         lent_payload_reads(
             function,
             &mut found,

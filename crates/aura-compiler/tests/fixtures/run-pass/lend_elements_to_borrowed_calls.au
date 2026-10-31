@@ -1,0 +1,48 @@
+import json
+
+
+enum Shape:
+    Circle(float64)
+    Label(str)
+
+
+class Box:
+    items: list[Shape] = []
+
+
+def describe(shape: Shape) -> str:
+    match shape:
+        case Shape.Circle(radius):
+            return f"circle {radius}"
+        case Shape.Label(text):
+            return f"label {text}"
+
+
+def size(value: json.Value) -> int64:
+    match value:
+        case json.Value.String(text):
+            return text.byte_len()
+        case json.Value.Array(items):
+            mut total = 0
+            for item in items:
+                total += size(item)
+            return total
+        case _:
+            return 1
+
+
+def main() -> int32:
+    shapes = [Shape.Circle(1.5), Shape.Label("a"), Shape.Label("bc")]
+    for shape in shapes:
+        print(describe(shape))
+    mut holder = Box()
+    holder.items.append(Shape.Label("held"))
+    holder.items.append(Shape.Circle(3.0))
+    for shape in holder.items:
+        print(describe(shape))
+    value = json.Value.Array([json.Value.String("ab"), json.Value.Array([json.Value.String("cde"), json.Value.Int(1)])])
+    mut total = 0
+    for _ in range(3):
+        total += size(value)
+    print(total)
+    return 0

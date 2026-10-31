@@ -47,7 +47,19 @@ dictionary to the value to copy it, and released the copy at the end.
   0.67 -> 0.59 s. What remains in parsing is building the values (a
   payload `Vec` per node, two `Type`s per object, dict inserts) and
   dropping them.
-- Next: lend dictionary values and JSON array elements in `walk`.
+- 2a merged in PR #200.
+- 2b: `lent_element_reads` rejected a lent list element as soon as an
+  instruction other than a read named it, so a borrowed call argument
+  always got a copy (`aura_direct_vec_index`: clone, box, release).
+  It now takes the callee's borrowed operands, as `lent_payload_reads`
+  already did, and the existing promotion still copies the element
+  before any instruction that could change the list. Element loop micro
+  (400k elements to a borrowed `size`): 648M -> 446M instructions.
+  `json_roundtrip` gains little (0.58 -> 0.56 s), because `walk` binds
+  `items` as a fresh payload copy of a shared list each call, which the
+  runtime does not convert into boxes; lending payloads of borrowed
+  runtime-enum parameters in place is the next lever there.
+  Fixture: `lend_elements_to_borrowed_calls.au`.
 - 2: lend JSON array elements in loops.
 - 3: string work in `template_render` and `csv_aggregate`.
 - 4: `regex_match`.

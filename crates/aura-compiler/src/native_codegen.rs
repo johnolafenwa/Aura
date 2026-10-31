@@ -1513,13 +1513,21 @@ impl<'a> NativeCodegen<'a> {
                 )
             },
         );
-        let mut lent_element_reads = elements::lent_element_reads(function, |place| {
-            explicit_locals.tracked.contains(place)
-                && matches!(
-                    variable_types.get(place),
-                    Some(DirectType::Opaque(ty)) if !matches!(ty, Type::Named(name, _) if name == "str")
-                )
-        });
+        let mut lent_element_reads = elements::lent_element_reads(
+            function,
+            |place| {
+                explicit_locals.tracked.contains(place)
+                    && matches!(
+                        variable_types.get(place),
+                        Some(DirectType::Opaque(ty)) if !matches!(ty, Type::Named(name, _) if name == "str")
+                    )
+            },
+            |instruction| {
+                crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
+                    self.borrowing.get(name)
+                })
+            },
+        );
         let (native_loan_uses, element_lend_temps) =
             element_loans::native_element_loans(function, |instruction| {
                 crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
