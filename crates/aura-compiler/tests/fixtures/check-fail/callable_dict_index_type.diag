@@ -1,0 +1,5 @@
+error[AU2002]: dict index has type `int64`, expected `str`
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_dict_index_type.au:5:17
+  |
+5 |     print(steps[1](2))
+  |                 ^

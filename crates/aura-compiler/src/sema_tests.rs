@@ -31605,3 +31605,55 @@ fn binary_operator_symbols_match_source_spelling() {
         assert_eq!(binary_operator_symbol(op), symbol, "{op:?}");
     }
 }
+
+#[test]
+fn callable_slot_admission_explains_each_rejected_adapter_slot() {
+    let slot = |name: &str, keyword_only: bool, has_default: bool| FunctionParamContract {
+        keyword_only,
+        name: name.to_string(),
+        ty: Type::named("int64"),
+        passing: ReceiverKind::Borrow,
+        has_default,
+    };
+    let admit = |expected: &FunctionParamContract, actual: &FunctionParamContract| {
+        super::callable_slot_admission(expected, actual, 0)
+    };
+    assert_eq!(
+        admit(&slot("value", true, false), &slot("", false, false)),
+        Err("positional parameter 1 is positional-only, but the destination makes it keyword-only `value`".to_string())
+    );
+    assert_eq!(
+        admit(&slot("value", true, false), &slot("other", true, false)),
+        Err("keyword-only parameter `other` would be renamed to `value`; renaming requires an explicit wrapper".to_string())
+    );
+    assert_eq!(
+        admit(&slot("value", false, false), &slot("value", true, false)),
+        Err("parameter `value` is keyword-only and cannot become positional".to_string())
+    );
+    assert_eq!(
+        admit(&slot("value", false, false), &slot("", false, false)),
+        Err(
+            "positional parameter 1 has no exposed name, but the destination names it `value`"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        admit(&slot("value", false, false), &slot("other", false, false)),
+        Err(
+            "parameter `other` would be renamed to `value`; renaming requires an explicit wrapper"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        admit(&slot("value", false, true), &slot("value", false, false)),
+        Err("the destination promises a default for parameter `value`, which the source does not declare".to_string())
+    );
+    assert_eq!(
+        admit(&slot("", false, false), &slot("value", false, true)),
+        Ok(())
+    );
+    assert_eq!(
+        admit(&slot("value", true, false), &slot("value", false, false)),
+        Ok(())
+    );
+}

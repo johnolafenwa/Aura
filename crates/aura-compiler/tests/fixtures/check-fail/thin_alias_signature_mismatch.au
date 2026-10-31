@@ -1,0 +1,8 @@
+type Check = def(value: int64) -> bool
+
+def is_empty(value: str) -> bool:
+    return len(value) == 0
+
+def main():
+    check = Check(is_empty)
+    print(check(4))

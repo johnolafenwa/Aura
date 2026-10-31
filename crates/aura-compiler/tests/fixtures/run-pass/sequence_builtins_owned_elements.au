@@ -1,3 +1,8 @@
+def every_other(values: Span[int64]) -> list[int64]:
+    picked = values[::2]
+    return picked
+
+
 def main() -> None:
     words = {"b", "a", "c"}
     copied = list(words)
@@ -14,3 +19,7 @@ def main() -> None:
     print(reversed(sorted(words)))
     print(len(nested * 2))
     print(len(2 * list(words)))
+    count = 2
+    print(len(copied * count))
+    print("abc"[::1])
+    print(every_other([1, 2, 3, 4, 5]))
