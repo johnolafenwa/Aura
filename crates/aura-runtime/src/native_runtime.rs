@@ -7148,18 +7148,38 @@ fn replace_text(text: &crate::text::Text, from: &str, to: &str) -> crate::text::
     if from.is_empty() {
         return text.replace(from, to).into();
     }
-    let mut found = memchr::memmem::find_iter(text.as_bytes(), from.as_bytes());
+    // A one-byte pattern, such as each step of an HTML escape, needs no
+    // substring searcher.
+    match from.as_bytes() {
+        [byte] => replace_found(text, memchr::memchr_iter(*byte, text.as_bytes()), 1, to),
+        pattern => replace_found(
+            text,
+            memchr::memmem::find_iter(text.as_bytes(), pattern),
+            pattern.len(),
+            to,
+        ),
+    }
+}
+
+/// `text` with each occurrence that `found` lists, `from_len` bytes long,
+/// replaced by `to`, or `text` itself when there is none.
+fn replace_found(
+    text: &crate::text::Text,
+    mut found: impl Iterator<Item = usize>,
+    from_len: usize,
+    to: &str,
+) -> crate::text::Text {
     let Some(first) = found.next() else {
         return text.clone();
     };
-    let mut output = String::with_capacity(text.len() + to.len().saturating_sub(from.len()) * 4);
+    let mut output = String::with_capacity(text.len() + to.len().saturating_sub(from_len) * 4);
     output.push_str(&text[..first]);
     output.push_str(to);
-    let mut rest = first + from.len();
+    let mut rest = first + from_len;
     for position in found {
         output.push_str(&text[rest..position]);
         output.push_str(to);
-        rest = position + from.len();
+        rest = position + from_len;
     }
     output.push_str(&text[rest..]);
     if output.len() <= crate::text::INLINE_CAPACITY {

@@ -15,6 +15,8 @@ Last updated: 2026-10-30
   path (`json_roundtrip` 0.67 -> 0.59 s, parsing about 20% faster).
 - Step 2b: lend list elements to borrowed call arguments in loops
   (element loop micro 648M -> 446M instructions).
+- Step 3a: one-byte `replace` / `count` scan with memchr
+  (`template_render` 1.06 -> 0.91 s).
 
 ## File I/O hand-off (complete)
 

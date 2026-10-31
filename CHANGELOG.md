@@ -7,6 +7,10 @@ in this file.
 
 ## Unreleased
 
+- `str.replace` and `str.count` with a one-character pattern scan for
+  that byte directly instead of building a substring searcher on each
+  call. `template_render`, whose HTML escape is five such `replace`
+  calls, runs in about 0.91 s instead of 1.06 s.
 - In `for item in items: f(item)`, where `f` only borrows its parameter,
   native code now lends `f` the list's own element instead of copying it
   into a new box for each step. A loop that passes each element of a

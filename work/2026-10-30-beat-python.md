@@ -61,5 +61,12 @@ dictionary to the value to copy it, and released the copy at the end.
   runtime-enum parameters in place is the next lever there.
   Fixture: `lend_elements_to_borrowed_calls.au`.
 - 2: lend JSON array elements in loops.
-- 3: string work in `template_render` and `csv_aggregate`.
+- 2b merged in PR #201.
+- 3a: `template_render` spent 4.4% in `count`'s `str::matches`
+  (TwoWaySearcher) and about 10% in `replace`'s `memmem` finder setup
+  and search, all for one-byte patterns. Both now use `memchr` for a
+  one-byte pattern. `template_render` 1.06 -> 0.91 s (Python 0.57).
+  What remains: each chained `replace` makes a box even when nothing
+  matched, box churn in `out.append`, and `join`.
+- 3b: `csv_aggregate`.
 - 4: `regex_match`.

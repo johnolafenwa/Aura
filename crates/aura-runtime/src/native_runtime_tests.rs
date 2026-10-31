@@ -29197,3 +29197,26 @@ fn a_number_parse_for_a_slot_keeps_the_number_or_null() {
         "a number parse expects `str`, found `integer`"
     );
 }
+
+#[test]
+fn one_byte_replace_and_count_match_the_substring_search() {
+    use crate::text::Text;
+    let cases = [
+        ("", "&", "&amp;"),
+        ("plain", "&", "&amp;"),
+        ("a&b&&c&", "&", "&amp;"),
+        ("caf\u{e9} <b> \u{1f600}<", "<", "&lt;"),
+        ("aaaa", "aa", "b"),
+        ("x'y'z", "'", ""),
+    ];
+    for (text, from, to) in cases {
+        let replaced = super::replace_text(&Text::from(text), from, to);
+        assert_eq!(&*replaced, text.replace(from, to).as_str(), "{text}");
+        let counted = crate::text_methods::count_occurrences(text, from).unwrap();
+        let expected = text.matches(from).count();
+        assert!(
+            format!("{counted:?}").contains(&format!("({expected})")),
+            "{text}: {counted:?}"
+        );
+    }
+}

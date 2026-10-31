@@ -1549,6 +1549,14 @@ already held for element reads that a `match` or a field read used in
 place; it now holds for borrowed call arguments too. A call that could
 change the list first gives the loop its own copy, as before.
 
+### One-Character Patterns
+
+`text.replace("&", "&amp;")` and `text.count("&")` scan for the single
+byte directly. A longer pattern still builds a substring searcher, which
+costs more to set up than a short string takes to scan. An HTML escape
+written as five chained `replace` calls, as in `template_render`, now
+runs about 15% faster.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and
