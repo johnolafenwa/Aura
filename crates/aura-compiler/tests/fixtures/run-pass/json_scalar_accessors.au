@@ -1,0 +1,76 @@
+import json
+
+
+def describe_field(doc: json.Value, name: str) -> str:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    return describe(value)
+                case Lookup.Missing:
+                    return "missing"
+        case _:
+            return "not an object"
+
+
+def int_or(doc: json.Value, name: str, fallback: int64) -> int64:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    match json.as_int(value):
+                        case int64 as number:
+                            return number
+                        case None:
+                            return fallback
+                case Lookup.Missing:
+                    return fallback
+        case _:
+            return fallback
+
+
+def maybe_float(value: json.Value) -> float64 | None:
+    return json.as_float(value)
+
+
+def describe(value: json.Value) -> str:
+    match json.as_bool(value):
+        case bool as flag:
+            if flag:
+                return "yes"
+            return "no"
+        case None:
+            pass
+    match json.as_float(value):
+        case float64 as number:
+            return f"float {number}"
+        case None:
+            pass
+    match json.as_int(value):
+        case int64 as number:
+            return f"int {number}"
+        case None:
+            return "other"
+
+
+def main() -> int32:
+    text = "{\"a\": 7, \"b\": -9223372036854775807, \"c\": 2.5, \"d\": true, \"e\": false, \"f\": \"x\", \"g\": null, \"h\": [1, 2]}"
+    match json.parse(text):
+        case Result.Ok(doc):
+            for name in ["a", "b", "c", "d", "e", "f", "g", "h", "zz"]:
+                print(f"{name}: {describe_field(doc, name)} {int_or(doc, name, -1)}")
+            a = json.Value.Int(7)
+            c = json.Value.Float(2.5)
+            kept = json.as_int(a)
+            missing = json.as_int(c)
+            print(kept)
+            print(missing)
+            print(maybe_float(c))
+            print(maybe_float(a))
+            mut total = 0
+            for _ in range(3):
+                total += int_or(doc, "a", 0)
+            print(total)
+        case Result.Err(error):
+            print(error)
+    return 0

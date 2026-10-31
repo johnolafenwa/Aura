@@ -3187,6 +3187,40 @@ fn direct_host_arg_buffer_reports_metadata_and_storage_contract_violations() {
 }
 
 #[test]
+fn direct_json_as_scalar_reads_the_payload_without_a_result_box() {
+    fn json_value(variant_name: &str, payloads: Vec<Value>) -> *mut OpaqueValue {
+        boxed_value(Value::EnumVariant(EnumVariantValue {
+            enum_name: "json.Value".into(),
+            variant_name: variant_name.to_string().into(),
+            payloads: payloads.into(),
+        }))
+    }
+    let read = |value: *mut OpaqueValue, kind: i64| {
+        let mut out = -7;
+        let held = super::aura_direct_json_as_scalar(value, kind, &mut out);
+        unsafe { super::aura_direct_release_last_owned_value(value) };
+        (held, out)
+    };
+    let int = Value::Int(IntegerValue::from_i64(-42));
+    assert_eq!(read(json_value("Int", vec![int]), 0), (1, -42));
+    assert_eq!(
+        read(json_value("Float", vec![Value::Float(2.5)]), 1),
+        (1, 2.5f64.to_bits() as i64)
+    );
+    assert_eq!(read(json_value("Bool", vec![Value::Bool(true)]), 2), (1, 1));
+    assert_eq!(
+        read(json_value("Bool", vec![Value::Bool(false)]), 2),
+        (1, 0)
+    );
+    // Another variant leaves the slot as it was.
+    assert_eq!(read(json_value("Null", Vec::new()), 0), (0, -7));
+    assert_eq!(
+        read(json_value("Float", vec![Value::Float(1.0)]), 0),
+        (0, -7)
+    );
+}
+
+#[test]
 fn direct_json_host_abi_rejects_malformed_values_with_precise_diagnostics() {
     fn assert_au4001(error: Diagnostic, message: &str) {
         assert_eq!(error.code, "AU4001");

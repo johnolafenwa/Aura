@@ -19021,6 +19021,30 @@ and runs its worker's other ready tasks between checks. On a RAM disk, a
 instead of 38, as in Python, and `file_io` runs in about 0.45 s instead
 of 0.76 s (Python 0.45 s).
 
+### Read-Only Lookups
+
+When the `Found` arm of `match d.lookup(key)` only reads the value, or
+passes it to functions, a native build finds the entry once. One probe
+both tests for the key and copies the value out, where before the
+program tested for the key, probed again, and then walked from the
+dictionary to the value to copy it. This holds for a dictionary in a
+local variable and for one in a class field, with `str` or `int64` keys.
+
+| Program | Before | After |
+| --- | ---: | ---: |
+| `docdb` | 1.88 s | 1.49 s |
+| `json_roundtrip` | 0.88 s | 0.69 s |
+
+### JSON Scalar Reads
+
+`json.as_int`, `json.as_float`, and `json.as_bool` return a `T | None`
+that native code keeps in words, not in a box. One runtime call checks
+the variant and writes the number or flag into those words, where it used
+to pass the value through an argument buffer and build a boxed result for
+native code to take apart. In `docdb`, whose field readers call
+`json.as_int` and `json.as_bool` on every document, this removes about 8%
+of the instructions.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

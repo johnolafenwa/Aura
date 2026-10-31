@@ -7,6 +7,17 @@ in this file.
 
 ## Unreleased
 
+- `json.as_int`, `json.as_float`, and `json.as_bool` no longer make a
+  result box in native builds when the result is matched or kept as a
+  local: one runtime call reads the payload straight into the union's
+  words. This cuts about 8% of `docdb`'s instructions.
+- A read-only `match d.lookup(key)` whose `Found` arm only reads the
+  value or passes it to calls now finds the entry once in native builds:
+  the test for the key and the copy of its value come from one probe,
+  instead of a key test, a second probe and a separate walk to copy the
+  value. This covers dictionaries held in local variables and in class
+  fields. `docdb` runs in about 1.49 s instead of 1.88 s, and
+  `json_roundtrip` in about 0.69 s instead of 0.88 s.
 - File calls hand off to the blocking-I/O pool for less: a pool worker
   that just finished a job checks for the next one for 50 microseconds
   before it sleeps, a new job wakes one sleeping worker instead of all of

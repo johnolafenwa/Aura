@@ -1637,6 +1637,8 @@ impl<'a> NativeCodegen<'a> {
             native_loans: HashMap::new(),
             fused_entry_probes: element_loans::fused_entry_probes(function),
             fused_entry_slots: HashMap::new(),
+            entry_copy_loans: element_loans::entry_copy_loans(function),
+            fused_entry_copies: HashMap::new(),
             retain_calls: HashMap::new(),
             retain_releases: HashMap::new(),
             consumed_retains: HashSet::new(),
@@ -2992,6 +2994,10 @@ struct FunctionCompiler<'a> {
     /// the probes those tests made, by loan.
     fused_entry_probes: HashMap<String, element_loans::FusedEntryProbe>,
     fused_entry_slots: HashMap<String, Var>,
+    /// The entry loans of the function a fused test may copy for, with
+    /// whether each is read once, and the copies those tests made, by loan.
+    entry_copy_loans: HashMap<String, bool>,
+    fused_entry_copies: HashMap<String, Var>,
     /// Each retained handle with the retain that made it and the handle it
     /// retained. A consumer that copies the value into its slot turns the
     /// retain into the copy.
@@ -4354,6 +4360,7 @@ impl<'a> FunctionCompiler<'a> {
                 }
             }
             Instruction::EndLoan { loan } => {
+                self.end_fused_entry_copy(loan);
                 self.view_places.remove(loan);
                 // A loan that ends in both arms of a branch has one EndLoan
                 // per arm, and each must release the keys, so keep them.
@@ -8107,6 +8114,9 @@ impl<'a> FunctionCompiler<'a> {
                 return self.coerce_value(text, &target);
             }
         }
+        if let Some(scalar) = self.compile_json_scalar_accessor(builtin, args)? {
+            return Ok(scalar);
+        }
         // Checked MIR materializes builtin defaults before direct code generation, so
         // optional metadata parameters are present in this argument list too.
         let mut loaded_args = Vec::with_capacity(args.len());
@@ -8146,6 +8156,66 @@ impl<'a> FunctionCompiler<'a> {
             &format!("return value of `{name}`"),
         )?;
         self.coerce_value(result, &target)
+    }
+
+    /// `json.as_int`, `json.as_float`, or `json.as_bool` whose `T | None`
+    /// result lives in words: one call writes the payload to a stack slot
+    /// and returns whether the value held it, so no result box is made.
+    fn compile_json_scalar_accessor(
+        &mut self,
+        builtin: HostBuiltin,
+        args: &[MirArg],
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        let (kind, scalar) = match builtin.name() {
+            "json::as_int" => (0, ScalarKind::Int64),
+            "json::as_float" => (1, ScalarKind::Float64),
+            "json::as_bool" => (2, ScalarKind::Bool),
+            _ => return Ok(None),
+        };
+        let [argument] = args else {
+            return Ok(None);
+        };
+        let semantic_type = RuntimeOp::Host(builtin)
+            .result_type(None, &[])
+            .expect("a host builtin names its result type");
+        let target = ensure_direct_type(
+            &semantic_type,
+            &self.classes,
+            &format!("return value of `{}`", builtin.name()),
+        )?;
+        let DirectType::Union(union) = &target else {
+            return Ok(None);
+        };
+        let position = |ty: &DirectType| union.members.iter().position(|member| &member.ty == ty);
+        let (Some(found), Some(missing)) = (
+            position(&DirectType::Scalar(scalar)),
+            position(&DirectType::Scalar(ScalarKind::Unit)),
+        ) else {
+            return Ok(None);
+        };
+        let loaded = self.load_operand(&argument.value)?;
+        let loaded = self.ensure_opaque(loaded)?;
+        let slot = self.builder.create_sized_stack_slot(8, 3);
+        let out = self.builder.stack_addr(types::I64, slot, 0);
+        let zero = self.builder.iconst(types::I64, 0);
+        self.builder.store(MemFlags::new(), zero, out, 0);
+        let kind = self.builder.iconst(types::I64, kind);
+        let call = self.builder.call(
+            self.runtime[RuntimeFn::JsonAsScalar],
+            &[loaded.values[0], kind, out],
+        );
+        let held = self.builder.icmp_imm(IntCC::NotEqual, call.results[0], 0);
+        let bits = self.builder.load(types::I64, MemFlags::new(), out, 0);
+        let found = self.builder.iconst(types::I64, found as i64);
+        let missing = self.builder.iconst(types::I64, missing as i64);
+        let mut words = vec![self.builder.select(held, found, missing), bits];
+        while words.len() < union.payload_words + 1 {
+            words.push(self.builder.iconst(types::I64, 0));
+        }
+        Ok(Some(ValueRef {
+            values: words,
+            ty: target.clone(),
+        }))
     }
 
     /// The runtime entry for one host builtin, imported on first use.
@@ -8898,6 +8968,9 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn load_place(&mut self, place: &str) -> std::result::Result<ValueRef, String> {
+        if let Some(value) = self.take_fused_entry_copy(place)? {
+            return Ok(value);
+        }
         if let Some(value) = self.load_native_loan_projection(place)? {
             return Ok(value);
         }
@@ -8929,6 +9002,10 @@ impl<'a> FunctionCompiler<'a> {
         span: Span,
         checked: bool,
     ) -> std::result::Result<(), String> {
+        // Its fused test copied the entry already.
+        if self.fused_entry_copies.contains_key(loan) {
+            return Ok(());
+        }
         let collection_ty = direct_type_to_type(&self.type_of_place(source)?);
         let (kind, selector_ty) = match &collection_ty {
             Type::Named(name, args) if name == "list" && args.len() == 1 => (

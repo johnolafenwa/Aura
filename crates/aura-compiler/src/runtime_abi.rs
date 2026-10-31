@@ -272,6 +272,7 @@ runtime_functions! {
     CloneValue => ("aura_direct_clone_value", [I64], Some(I64)),
     UnboxI64 => ("aura_direct_unbox_i64", [I64], Some(I64)),
     UnboxInt64 => ("aura_direct_unbox_int64", [I64], Some(I64)),
+    JsonAsScalar => ("aura_direct_json_as_scalar", [I64, I64, I64], Some(I64)),
     IntegerToFloat => ("aura_direct_integer_to_float", [I64], Some(F64)),
     IntegerWidthBinary => ("aura_direct_integer_width_binary", [I64, I64, I64, I64, I64, I64], Some(I64)),
     UnboxU64 => ("aura_direct_unbox_u64", [I64], Some(I64)),
