@@ -1527,6 +1527,18 @@ native code to take apart. In `docdb`, whose field readers call
 `json.as_int` and `json.as_bool` on every document, this removes about 8%
 of the instructions.
 
+### JSON Parsing In One Pass
+
+`json.parse` first reads the source in a single pass that builds the
+tree as it goes and checks the nesting and size limits on the way. A key
+or string with no escapes is copied straight from the source into its
+`str`. Anything this pass does not take as plainly valid JSON, such as a
+syntax error or a source past a limit, goes to the full parser, which
+ranks and reports the error as before, so results and error messages do
+not change. Parsing the `json_roundtrip` payload 50 times takes about
+0.24 s instead of 0.30 s, and the whole program about 0.59 s instead of
+0.67 s.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

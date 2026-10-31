@@ -742,3 +742,63 @@ fn nesting_at_most_counts_arrays_and_objects_outside_strings() {
     // An escaped quote does not end the string, so its brackets stay text.
     assert!(nesting_at_most("[\"\\\"[[[\"]", 1));
 }
+
+#[test]
+fn the_single_pass_parser_builds_what_serde_builds_or_gives_up() {
+    let deep = |levels: usize| format!("{}{}", "[".repeat(levels), "]".repeat(levels));
+    let sources = [
+        "null".to_string(),
+        " true ".to_string(),
+        "false".to_string(),
+        "0".to_string(),
+        "-0".to_string(),
+        "-0.0".to_string(),
+        "1e3".to_string(),
+        "1.5E-2".to_string(),
+        "123456789012345678".to_string(),
+        "9223372036854775807".to_string(),
+        "-9223372036854775808".to_string(),
+        "9223372036854775808".to_string(),
+        "1e400".to_string(),
+        "12.000".to_string(),
+        "\"plain\"".to_string(),
+        r#""esc \" \\ \/ \b \f \n \r \t \u00e9 \ud83d\ude00 end""#.to_string(),
+        "\"caf\u{e9}\"".to_string(),
+        r#"{"a": 1, "b": [true, null, {"c": "d"}], "a": 2}"#.to_string(),
+        "{}".to_string(),
+        "[]".to_string(),
+        "[ 1 , 2 ]".to_string(),
+        deep(MAX_JSON_DEPTH),
+        deep(MAX_JSON_DEPTH + 1),
+        "01".to_string(),
+        "1.".to_string(),
+        "-".to_string(),
+        "[1,]".to_string(),
+        "{\"a\" 1}".to_string(),
+        "\"\\ud800\"".to_string(),
+        "\"\\udc00\"".to_string(),
+        "\"\\x\"".to_string(),
+        "\"tab\there\"".to_string(),
+        "\"open".to_string(),
+        "nul".to_string(),
+        "1 2".to_string(),
+        "\u{feff}1".to_string(),
+        "".to_string(),
+    ];
+    for source in &sources {
+        let serde = parse_with_serde::<JsonValue>(source);
+        match FastJsonParser::<JsonValue>::parse(source) {
+            Some(fast) => assert_eq!(
+                format!("{:?}", Ok::<_, JsonCodecError>(fast)),
+                format!("{serde:?}"),
+                "{source}"
+            ),
+            None => assert!(serde.is_err(), "the single pass gave up on {source}"),
+        }
+        assert_eq!(
+            format!("{:?}", parse_into::<JsonValue>(source)),
+            format!("{serde:?}"),
+            "{source}"
+        );
+    }
+}

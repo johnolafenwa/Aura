@@ -11,6 +11,8 @@ Last updated: 2026-10-30
   `json_roundtrip` 0.88 -> 0.69 s).
 - Step 1b: `json.as_int` / `as_float` / `as_bool` results stay in words
   (`docdb` about 8% fewer instructions).
+- Step 2a: single-pass `json.parse` with the serde parser as the error
+  path (`json_roundtrip` 0.67 -> 0.59 s, parsing about 20% faster).
 
 ## File I/O hand-off (complete)
 

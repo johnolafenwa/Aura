@@ -169,6 +169,14 @@ pub trait JsonTree: Sized {
         value: Self,
     ) -> Result<(), TryReserveError>;
     fn object(object: Self::Object) -> Self;
+    /// `object_insert` with a key the tree copies from `key`.
+    fn object_insert_str(
+        object: &mut Self::Object,
+        key: &str,
+        value: Self,
+    ) -> Result<(), TryReserveError> {
+        Self::object_insert(object, try_owned_string(key)?, value)
+    }
 }
 
 impl JsonTree for JsonValue {
@@ -221,6 +229,14 @@ impl JsonTree for JsonValue {
 /// but the nesting one, which bounds the parser's recursion.
 pub fn parse_into<T: JsonTree>(source: &str) -> Result<T, JsonCodecError> {
     check_input_len(source.len())?;
+    if let Some(value) = FastJsonParser::<T>::parse(source) {
+        return Ok(value);
+    }
+    parse_with_serde(source)
+}
+
+/// `parse_into` through serde, which also ranks the errors.
+fn parse_with_serde<T: JsonTree>(source: &str) -> Result<T, JsonCodecError> {
     validate_source_depth(source)?;
 
     let mut deserializer = serde_json::Deserializer::from_str(source);
@@ -240,6 +256,259 @@ pub fn parse_into<T: JsonTree>(source: &str) -> Result<T, JsonCodecError> {
             .and_then(|()| validate_number_ranges(source))
             .map_or_else(|ranked| ranked, |()| deserialize_error(source, error))
     })
+}
+
+/// A single pass over valid JSON that builds the tree as it reads, with
+/// the depth and size limits checked on the way. It gives up, returning
+/// `None`, at anything it does not take as plainly valid, and the serde
+/// path then parses the source and ranks the error, so the two agree on
+/// every source this one accepts: numbers go through `classify_number`
+/// and objects through `JsonTree::object_insert`, as serde's do.
+struct FastJsonParser<'a, T> {
+    bytes: &'a [u8],
+    source: &'a str,
+    index: usize,
+    nodes: usize,
+    tree: std::marker::PhantomData<T>,
+}
+
+impl<'a, T: JsonTree> FastJsonParser<'a, T> {
+    fn parse(source: &'a str) -> Option<T> {
+        let mut parser = Self {
+            bytes: source.as_bytes(),
+            source,
+            index: 0,
+            nodes: 0,
+            tree: std::marker::PhantomData,
+        };
+        let value = parser.value(0)?;
+        parser.skip_whitespace();
+        (parser.index == parser.bytes.len()).then_some(value)
+    }
+
+    fn skip_whitespace(&mut self) {
+        while let Some(b' ' | b'\t' | b'\n' | b'\r') = self.bytes.get(self.index) {
+            self.index += 1;
+        }
+    }
+
+    fn literal(&mut self, text: &[u8]) -> Option<()> {
+        let end = self.index.checked_add(text.len())?;
+        (self.bytes.get(self.index..end)? == text).then(|| self.index = end)
+    }
+
+    fn value(&mut self, depth: usize) -> Option<T> {
+        self.nodes += 1;
+        if self.nodes > MAX_JSON_VALUE_NODES {
+            return None;
+        }
+        self.skip_whitespace();
+        match *self.bytes.get(self.index)? {
+            b'{' => self.object(depth + 1),
+            b'[' => self.array(depth + 1),
+            b'"' => {
+                let text = self.string()?;
+                T::string(&text).ok()
+            }
+            b't' => self.literal(b"true").map(|()| T::boolean(true)),
+            b'f' => self.literal(b"false").map(|()| T::boolean(false)),
+            b'n' => self.literal(b"null").map(|()| T::null()),
+            b'-' | b'0'..=b'9' => self.number(),
+            _ => None,
+        }
+    }
+
+    fn array(&mut self, depth: usize) -> Option<T> {
+        if depth > MAX_JSON_DEPTH {
+            return None;
+        }
+        self.index += 1;
+        let mut values = Vec::new();
+        self.skip_whitespace();
+        if self.bytes.get(self.index) == Some(&b']') {
+            self.index += 1;
+            return Some(T::array(values));
+        }
+        loop {
+            let value = self.value(depth)?;
+            try_push(&mut values, value).ok()?;
+            self.skip_whitespace();
+            match *self.bytes.get(self.index)? {
+                b',' => self.index += 1,
+                b']' => {
+                    self.index += 1;
+                    return Some(T::array(values));
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    fn object(&mut self, depth: usize) -> Option<T> {
+        if depth > MAX_JSON_DEPTH {
+            return None;
+        }
+        self.index += 1;
+        self.skip_whitespace();
+        if self.bytes.get(self.index) == Some(&b'}') {
+            self.index += 1;
+            return Some(T::object(T::object_with_capacity(0).ok()?));
+        }
+        let mut entries = T::object_with_capacity(1).ok()?;
+        loop {
+            self.skip_whitespace();
+            if self.bytes.get(self.index) != Some(&b'"') {
+                return None;
+            }
+            let key = self.string()?;
+            self.skip_whitespace();
+            if self.bytes.get(self.index) != Some(&b':') {
+                return None;
+            }
+            self.index += 1;
+            let value = self.value(depth)?;
+            T::object_insert_str(&mut entries, &key, value).ok()?;
+            self.skip_whitespace();
+            match *self.bytes.get(self.index)? {
+                b',' => self.index += 1,
+                b'}' => {
+                    self.index += 1;
+                    return Some(T::object(entries));
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// The text of the string that opens at `index`, unescaped: a slice of
+    /// the source when it holds no escape.
+    fn string(&mut self) -> Option<std::borrow::Cow<'a, str>> {
+        self.index += 1;
+        let start = self.index;
+        loop {
+            match *self.bytes.get(self.index)? {
+                b'"' => {
+                    let text = &self.source[start..self.index];
+                    self.index += 1;
+                    return Some(std::borrow::Cow::Borrowed(text));
+                }
+                b'\\' => break,
+                0..=0x1f => return None,
+                _ => self.index += 1,
+            }
+        }
+        let mut text = try_owned_string(&self.source[start..self.index]).ok()?;
+        loop {
+            let run = self.index;
+            while let Some(&byte) = self.bytes.get(self.index) {
+                if byte == b'"' || byte == b'\\' || byte < 0x20 {
+                    break;
+                }
+                self.index += 1;
+            }
+            text.try_reserve(self.index - run).ok()?;
+            text.push_str(&self.source[run..self.index]);
+            match *self.bytes.get(self.index)? {
+                b'"' => {
+                    self.index += 1;
+                    return Some(std::borrow::Cow::Owned(text));
+                }
+                b'\\' => {
+                    let escaped = match *self.bytes.get(self.index + 1)? {
+                        b'"' => '"',
+                        b'\\' => '\\',
+                        b'/' => '/',
+                        b'b' => '\u{8}',
+                        b'f' => '\u{c}',
+                        b'n' => '\n',
+                        b'r' => '\r',
+                        b't' => '\t',
+                        b'u' => {
+                            self.index += 2;
+                            let first = self.hex4()?;
+                            let code = match first {
+                                0xd800..=0xdbff => {
+                                    self.literal(b"\\u")?;
+                                    let second = self.hex4()?;
+                                    if !(0xdc00..=0xdfff).contains(&second) {
+                                        return None;
+                                    }
+                                    0x10000 + ((first - 0xd800) << 10) + (second - 0xdc00)
+                                }
+                                0xdc00..=0xdfff => return None,
+                                code => code,
+                            };
+                            text.try_reserve(4).ok()?;
+                            text.push(char::from_u32(code)?);
+                            continue;
+                        }
+                        _ => return None,
+                    };
+                    self.index += 2;
+                    text.try_reserve(1).ok()?;
+                    text.push(escaped);
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    fn hex4(&mut self) -> Option<u32> {
+        let digits = self.bytes.get(self.index..self.index.checked_add(4)?)?;
+        let mut code = 0u32;
+        for &digit in digits {
+            code = code * 16 + char::from(digit).to_digit(16)?;
+        }
+        self.index += 4;
+        Some(code)
+    }
+
+    /// A number as JSON spells it, classified as serde's lexemes are.
+    fn number(&mut self) -> Option<T> {
+        let start = self.index;
+        if self.bytes.get(self.index) == Some(&b'-') {
+            self.index += 1;
+        }
+        match *self.bytes.get(self.index)? {
+            b'0' => self.index += 1,
+            b'1'..=b'9' => self.digits(),
+            _ => return None,
+        }
+        let mut plain = true;
+        if self.bytes.get(self.index) == Some(&b'.') {
+            plain = false;
+            self.index += 1;
+            if !self.bytes.get(self.index)?.is_ascii_digit() {
+                return None;
+            }
+            self.digits();
+        }
+        if let Some(b'e' | b'E') = self.bytes.get(self.index) {
+            plain = false;
+            self.index += 1;
+            if let Some(b'+' | b'-') = self.bytes.get(self.index) {
+                self.index += 1;
+            }
+            if !self.bytes.get(self.index)?.is_ascii_digit() {
+                return None;
+            }
+            self.digits();
+        }
+        let lexeme = &self.source[start..self.index];
+        // Up to 18 digits always fit an `int64`.
+        if plain && lexeme.len() <= 18 {
+            if let Ok(value) = lexeme.parse::<i64>() {
+                return Some(T::int(value));
+            }
+        }
+        classify_number::<T>(lexeme)
+    }
+
+    fn digits(&mut self) {
+        while self.bytes.get(self.index).is_some_and(u8::is_ascii_digit) {
+            self.index += 1;
+        }
+    }
 }
 
 pub fn dumps(value: &JsonValue, indent: Option<i64>) -> Result<String, JsonCodecError> {

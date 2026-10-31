@@ -7,6 +7,12 @@ in this file.
 
 ## Unreleased
 
+- `json.parse` reads valid JSON in one pass that builds the tree as it
+  goes, checking the depth and size limits on the way, and copies an
+  object key or a string without escapes straight from the source. Text
+  it does not take as plainly valid goes to the previous parser, which
+  reports the same errors as before. Parsing is about 20% faster, and
+  `json_roundtrip` runs in about 0.59 s instead of 0.67 s.
 - `json.as_int`, `json.as_float`, and `json.as_bool` no longer make a
   result box in native builds when the result is matched or kept as a
   local: one runtime call reads the payload straight into the union's
