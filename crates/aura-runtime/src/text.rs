@@ -184,6 +184,25 @@ impl Text {
         }
     }
 
+    /// Appends `other`, whose flag the caller already knows, growing the
+    /// storage once, or the error for storage that could not grow.
+    pub fn try_push_with(
+        &mut self,
+        other: &str,
+        other_ascii: bool,
+    ) -> Result<(), std::collections::TryReserveError> {
+        if let Repr::Inline { ascii, len, .. } = &self.0 {
+            if usize::from(*len) + other.len() > INLINE_CAPACITY {
+                let ascii = *ascii;
+                self.spill(ascii, other.len())?;
+            }
+        } else if let Repr::Heap { text, .. } = &mut self.0 {
+            text.try_reserve(other.len())?;
+        }
+        self.push_with(other, other_ascii);
+        Ok(())
+    }
+
     /// Appends `other`, keeping the flag.
     pub fn push_str(&mut self, other: &str) {
         self.push_with(other, other.is_ascii());

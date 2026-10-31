@@ -61,5 +61,21 @@ dictionary to the value to copy it, and released the copy at the end.
   runtime-enum parameters in place is the next lever there.
   Fixture: `lend_elements_to_borrowed_calls.au`.
 - 2: lend JSON array elements in loops.
-- 3: string work in `template_render` and `csv_aggregate`.
+- 2b merged in PR #201.
+- 3a: `template_render` spent 4.4% in `count`'s `str::matches`
+  (TwoWaySearcher) and about 10% in `replace`'s `memmem` finder setup
+  and search, all for one-byte patterns. Both now use `memchr` for a
+  one-byte pattern. `template_render` 1.06 -> 0.91 s (Python 0.57).
+  What remains: each chained `replace` makes a box even when nothing
+  matched, box churn in `out.append`, and `join`.
+- 3b: `csv_aggregate` (callgrind, 40k rows): `split(",")` ran
+  TwoWaySearcher (5.8%), and each field passed to `to_int`/`add_to`
+  was copied into a new box (360k copies). `split` now scans one-byte
+  separators with `memchr`, its parts skip the ASCII check, and
+  f-string parts pass their known ASCII flag: 943M -> 880M instructions.
+  Tried and dropped: lending element loans (`to_int(fields[3])`) to
+  borrowed calls. A fresh `list[str]` must first move its elements into
+  boxes, which costs as much as the copies (net +8M instructions).
+  What remains: freeing each line's lists (14%), and f-string build cost
+  (about 225 instructions per part).
 - 4: `regex_match`.

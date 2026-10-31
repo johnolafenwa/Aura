@@ -167,7 +167,12 @@ pub fn count_occurrences(text: &str, needle: &str) -> Result<Value> {
     if needle.is_empty() {
         return Err(Diagnostic::coded("AU4003", "`count` text cannot be empty"));
     }
-    Ok(int64_value(text.matches(needle).count()))
+    // Non-overlapping matches, as `str::matches` counts them.
+    let count = match needle.as_bytes() {
+        [byte] => memchr::memchr_iter(*byte, text.as_bytes()).count(),
+        needle => memchr::memmem::find_iter(text.as_bytes(), needle).count(),
+    };
+    Ok(int64_value(count))
 }
 
 /// `str.repeat(count)`: `count` concatenated copies. A negative count traps
