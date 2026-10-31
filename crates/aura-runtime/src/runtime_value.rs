@@ -17615,6 +17615,15 @@ impl json_codec::JsonTree for RuntimeJson {
         Ok(())
     }
 
+    fn object_insert_str(
+        object: &mut DictEntries,
+        key: &str,
+        value: Self,
+    ) -> std::result::Result<(), std::collections::TryReserveError> {
+        object.insert(Value::String(key.into()), value.0);
+        Ok(())
+    }
+
     fn object(object: DictEntries) -> Self {
         Self::variant(
             "Object",
