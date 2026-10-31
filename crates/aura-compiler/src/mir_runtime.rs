@@ -29,7 +29,7 @@ use crate::mir::{
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_ops::{
     builtin_function_for_name, builtin_member_for_receiver, ArgDefault, FunctionOp, RuntimeOp,
-    StrOp, INDEX_MEMBER, PERMUTE_MEMBER, SORT_BY_KEYS_MEMBER, SORT_MEMBER,
+    StrOp, INDEX_MEMBER, PERMUTE_MEMBER, SLICE_STEP_MEMBER, SORT_BY_KEYS_MEMBER, SORT_MEMBER,
 };
 use crate::runtime_value::{
     append_string_checked, cast_numeric_value, catch_lightweight_task_failure,
@@ -54,8 +54,8 @@ use crate::runtime_value::{
     render_float32, result_err, result_ok, round_numeric_value, run_blocking_io,
     run_lightweight_root_task, runtime_value_to_json, select_runtime_values, send_error_cancelled,
     send_error_closed, send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
-    slice_string_owned, slice_vec_owned, spawn_lightweight_task,
-    spawn_lightweight_task_with_result_repeatability_registered,
+    slice_string_owned, slice_text_step, slice_vec_owned, slice_vec_owned_step,
+    spawn_lightweight_task, spawn_lightweight_task_with_result_repeatability_registered,
     spawn_lightweight_task_with_stack_and_result_repeatability_registered,
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
     task_result_timed_out, try_array_buffer, try_clone_array_containing_value, wait_all_cancelled,
@@ -5538,7 +5538,7 @@ impl MirRuntime {
                         | RuntimeOp::Set(_)
                         | RuntimeOp::Array(_)
                         | RuntimeOp::Span(_)
-                        | RuntimeOp::Str(StrOp::Slice)
+                        | RuntimeOp::Str(StrOp::Slice | StrOp::SliceStep)
                 ) {
                     return self.evaluate_member_call(
                         object,
@@ -5706,6 +5706,29 @@ impl MirRuntime {
                     error
                 });
             }
+        }
+
+        if field == SLICE_STEP_MEMBER {
+            let values = evaluate_named_args(args, env)?;
+            let (start, end, step, span) = self.mir_slice_step_args(values)?;
+            let sliced = |value: &Value| match value {
+                Value::Vec(vector) => {
+                    slice_vec_owned_step(vector, start, end, step).map(Value::Vec)
+                }
+                Value::String(text) => slice_text_step(text, start, end, step).map(Value::String),
+                other => Err(Diagnostic::new(format!(
+                    "unsupported MIR member call `{SLICE_STEP_MEMBER}` on `{}`",
+                    other.render()
+                ))),
+            };
+            let result = match object {
+                Operand::Place(place) => sliced(&*env.place_ref(place)?),
+                _ => sliced(&self.evaluate_owned_operand(object, env)?),
+            };
+            return result.map_err(|mut error| {
+                error.span = Some(span);
+                error
+            });
         }
 
         if let Operand::Place(place) = object {
@@ -8040,6 +8063,29 @@ impl MirRuntime {
             has_end.then_some(end),
             Span::new(line, column),
         ))
+    }
+
+    /// The arguments of `__slice_step`: a slice's, with the step before the
+    /// line and column.
+    fn mir_slice_step_args(
+        &self,
+        mut values: Vec<EvaluatedMirArg>,
+    ) -> Result<(Option<i128>, Option<i128>, i128, Span)> {
+        if values.len() != 7 {
+            return Err(Diagnostic::new(
+                "internal stepped slicing requires start, has_start, end, has_end, step, line, and column operands",
+            ));
+        }
+        let Value::Int(step) = values.remove(4).value else {
+            return Err(Diagnostic::new(
+                "internal slice step operand must be an integer",
+            ));
+        };
+        let step = step
+            .as_i128()
+            .ok_or_else(|| Diagnostic::new("slice step is outside the supported signed range"))?;
+        let (start, end, span) = self.mir_slice_args(values)?;
+        Ok((start, end, step, span))
     }
 
     fn mir_index_from_value(&self, value: Value) -> Result<usize> {

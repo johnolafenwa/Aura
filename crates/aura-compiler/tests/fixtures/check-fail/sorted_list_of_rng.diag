@@ -1,0 +1,6 @@
+error[AU3007]: cannot use `sorted` because `random.Rng` contains non-cloneable `random.Rng` state
+ --> crates/aura-compiler/tests/fixtures/check-fail/sorted_list_of_rng.au:4:22
+  |
+4 |     print(len(sorted(generators)))
+  |                      ^
+  = help: move or remove the value so it has one owner, or construct an independent generator with an explicit seed

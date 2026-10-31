@@ -1,0 +1,6 @@
+class Point:
+    x: int64
+
+
+def main() -> None:
+    print(sorted([Point(x=1)]))

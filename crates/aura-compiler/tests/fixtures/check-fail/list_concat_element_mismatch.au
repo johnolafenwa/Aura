@@ -1,0 +1,4 @@
+def main() -> None:
+    numbers = [1, 2]
+    words = ["a"]
+    print(numbers + words)

@@ -568,7 +568,7 @@ test("bundled language server preserves owned slice intelligence and reserved di
 
   const steppedLines = [
     lines[0],
-    "    selected = values[1:3:2]",
+    "    values[1:3] = selected",
     "    return values[:]",
     ""
   ];
@@ -593,7 +593,8 @@ test("bundled language server preserves owned slice intelligence and reserved di
     },
     {
       code: "AU2005",
-      message: "slice steps are unavailable; use an explicit loop to select a stride",
+      message:
+        "slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value",
       range: {
         start: { line: 1, character: steppedLines[1].lastIndexOf(":") },
         end: { line: 1, character: steppedLines[1].lastIndexOf(":") + 1 }

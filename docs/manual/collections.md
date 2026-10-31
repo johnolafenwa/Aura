@@ -141,6 +141,43 @@ one. An `Array` argument uses the Array's own `sum()`, `min()`, or `max()`; see
 `min(3, 1, 2)`. A single number is an error: pass a collection or at least two
 values.
 
+## Building New Lists
+
+`sorted`, `reversed`, and `list` build a new list from a collection, and `+`
+and `*` build one from lists (ADR-0066). The operands are read through shared
+access and stay usable. The new list holds copies of the elements, so the
+element type must be clone-safe, as for a slice.
+
+```aura
+def main():
+    names = ["cy", "ada", "bo"]
+    print(sorted(names))                       # [ada, bo, cy]
+    print(sorted(names, key=lambda name: len(name), reverse=true))  # [ada, cy, bo]
+    print(reversed(names))                     # [bo, ada, cy]
+    print(list(range(3)))                      # [0, 1, 2]
+    print(names + ["di"])                      # [cy, ada, bo, di]
+    print([0] * 3)                             # [0, 0, 0]
+    print(names[::-1])                         # [bo, ada, cy]
+```
+
+| Form | Takes | Result |
+| --- | --- | --- |
+| `sorted(values, *, key=..., reverse=false)` | a list, span, set, or `Range` | the elements in stable sorted order |
+| `reversed(values)` | a list, span, or `Range` | the elements last to first |
+| `list(values)` | a list, span, set, or `Range` | the elements in iteration order |
+| `left + right` | two lists or spans of one element type | the elements of `left`, then those of `right` |
+| `values * n`, `n * values` | a list or span and an integer count | the elements repeated `n` times; empty when `n <= 0` |
+| `values[start:end:step]` | a list, span, or `str` | every `step`-th element; see [Steps](/manual/expressions#steps-and-assignment) |
+
+`sorted` orders as `list.sort` does, with the same `key` and `reverse`
+rules: keys are computed once per element before any element moves, and
+`reverse=true` mirrors the order rather than reversing the result. `key` and
+`reverse` are keyword-only. A dictionary is not iterated directly, so sort
+its keys with `sorted(table.keys())`.
+
+`items += more` on a list extends `items` in place with copies of the
+elements of `more`, so a loop of `+=` does not copy `items` each time.
+
 ## list[T]
 
 `list[T]` keeps elements in order. `len(values)` and `values.len()` return
@@ -656,7 +693,8 @@ These are not available:
 - mutable set iteration and direct dictionary iteration
 - set algebra and set relations
 - arbitrary user-defined iterables and generator expressions
-- slice steps and slice assignment
+- slice assignment
+- `sorted`, `reversed`, and `list` over a `str` or a dictionary
 - spans over `str`, `Array`, or a receiver field returned from a method
 - integer indexing of `str`
 

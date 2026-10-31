@@ -2584,21 +2584,52 @@ fn phase72_parser_keeps_index_specialization_and_postfix_chains_distinct() {
 }
 
 #[test]
-fn phase72_parser_rejects_slice_steps_and_slice_assignment_with_teaching_diagnostics() {
-    for (source, column) in [
-        ("values[::]", 9),
-        ("values[:3:2]", 10),
-        ("values[1::2]", 10),
-        ("values[1:3:2]", 11),
+fn phase72_parser_reads_slice_steps_and_rejects_slice_assignment() {
+    // A written step calls the hidden stepped-slice builtin with its
+    // object, both endpoints (omitted ones marked), and the step. An empty
+    // step leaves a one-colon slice.
+    for (source, start_omitted, end_omitted) in [
+        ("values[::2]", true, true),
+        ("values[:3:2]", true, false),
+        ("values[1::2]", false, true),
+        ("values[1:3:-1]", false, false),
     ] {
-        let error = parse_expression(source).expect_err("slice steps are reserved");
-        assert_eq!(error.code, "AU2005", "{source}");
-        assert_eq!(error.span, Some(Span::new(1, column)), "{source}");
+        let expr = parse_expression(source).expect("stepped slices parse");
+        let ExprKind::Call { callee, args } = &expr.kind else {
+            panic!(
+                "{source}: expected a stepped slice call, found {:?}",
+                expr.kind
+            );
+        };
         assert!(
-            error.message.contains("slice steps are unavailable")
-                && error.message.contains("select a stride"),
-            "{source}: {}",
-            error.message
+            matches!(&callee.kind, ExprKind::Name(name) if name == crate::call::STEPPED_SLICE_BUILTIN),
+            "{source}"
+        );
+        assert_eq!(
+            callee.span,
+            Span::new(1, 8 + usize::from(!start_omitted)),
+            "{source}"
+        );
+        assert_eq!(args.len(), 4, "{source}");
+        assert!(matches!(&args[0].value.kind, ExprKind::Name(name) if name == "values"));
+        assert_eq!(
+            matches!(args[1].value.kind, ExprKind::BuiltinOmitted),
+            start_omitted,
+            "{source}"
+        );
+        assert_eq!(
+            matches!(args[2].value.kind, ExprKind::BuiltinOmitted),
+            end_omitted,
+            "{source}"
+        );
+        assert!(!matches!(args[3].value.kind, ExprKind::BuiltinOmitted));
+    }
+    for source in ["values[::]", "values[1:3:]"] {
+        let expr = parse_expression(source).expect("an empty step parses");
+        assert!(
+            matches!(expr.kind, ExprKind::Slice { .. }),
+            "{source}: {:?}",
+            expr.kind
         );
     }
 

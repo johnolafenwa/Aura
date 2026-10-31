@@ -613,6 +613,11 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         "[20, 30]\n[10, 20]\n[30, 40]\n[10, 20, 30, 40]\n[10, 20, 30, 40]\n[99, 30]\n🎉\nA🎉\n🎉Z\nA🎉Z\nA🎉Z\n",
     ),
     (
+        "examples/collections/new_lists.au",
+        include_str!("../../../examples/collections/new_lists.au"),
+        "[ada, bo, cy]\n[ada, cy, bo]\n[bo, ada, cy]\n[3]\n[0, 1, 2]\n[cy, ada, bo, di]\n[0, 0, 0]\n[bo, ada, cy]\ndesserts\n[cy, ada, bo, eve]\n[cy, ada, bo]\n",
+    ),
+    (
         "examples/collections/span_views.au",
         include_str!("../../../examples/collections/span_views.au"),
         "18\n27\n3\n[1, 5, 7]\n[4, 9, 1, 5, 7]\n[40, 90, 1, 5, 7]\n[90, 1, 5]\ntrue\n",
@@ -3899,4 +3904,160 @@ fn export_qualification_covers_returned_views_and_callable_type_refs() {
         .expect("callable signature stays structural");
     assert_eq!(named_ref_name(&params[0].ty), qualified_box);
     assert_eq!(named_ref_name(return_type), qualified_box);
+}
+
+#[test]
+fn sequence_builtin_programs_run_in_the_library_interpreter() {
+    let source = r#"class Person:
+    name: str
+    age: int64
+
+
+def by_age(person: Person) -> int64:
+    return person.age
+
+
+def numbers() -> list[int64]:
+    return [5, 4, 9]
+
+
+def main() -> None:
+    names = ["b", "a", "c"]
+    print(sorted(names))
+    print(sorted(names, reverse=true))
+    print(names)
+    print(sorted(numbers()))
+    print(sorted({3, 1, 2}))
+    print(sorted(range(3), reverse=true))
+    print(reversed(names))
+    print(reversed(range(4)))
+    print(list(names))
+    print(list(range(4)))
+    print(len(list({7, 8})))
+
+    people = [Person(name="ada", age=36), Person(name="bo", age=19), Person(name="cy", age=36)]
+    by_years = sorted(people, key=by_age)
+    print(f"{by_years[0].name} {by_years[1].name} {by_years[2].name}")
+    by_name = sorted(people, key=lambda person: person.name.clone(), reverse=true)
+    print(f"{by_name[0].name} {by_name[2].name}")
+
+    view middle = names[1:]
+    print(sorted(middle))
+    print(reversed(middle))
+
+    values = [0, 1, 2, 3, 4, 5, 6]
+    print(values[::2])
+    print(values[::-1])
+    print(values[1:6:2])
+    print(values[5:1:-2])
+    print(values[-1::-3])
+    print(values[::10])
+    print(values[3:3:-1])
+    print(names[::-1])
+    print(middle[::-1])
+    print("héllo wörld"[::-1])
+    print("abcdef"[1::2])
+    empty: list[int64] = []
+    print(empty[::-1])
+
+    print(values[:2] + values[5:])
+    print(names + ["d"])
+    print([0] * 3)
+    print(2 * names)
+    print(names * 0)
+    times: int32 = 2
+    print([1, 2] * times)
+
+    mut collected: list[str] = []
+    collected += names
+    collected += ["z"]
+    collected += collected
+    print(collected)
+"#;
+    assert_eq!(
+        crate::run_source(source)
+            .expect("sequence_builtins runs")
+            .stdout,
+        r#"[a, b, c]
+[c, b, a]
+[b, a, c]
+[4, 5, 9]
+[1, 2, 3]
+[2, 1, 0]
+[c, a, b]
+[3, 2, 1, 0]
+[b, a, c]
+[0, 1, 2, 3]
+2
+bo ada cy
+cy ada
+[a, c]
+[c, a]
+[0, 2, 4, 6]
+[6, 5, 4, 3, 2, 1, 0]
+[1, 3, 5]
+[5, 3]
+[6, 3, 0]
+[0]
+[]
+[c, a, b]
+[c, a]
+dlröw olléh
+bdf
+[]
+[0, 1, 5, 6]
+[b, a, c, d]
+[0, 0, 0]
+[b, a, c, b, a, c]
+[]
+[1, 2, 1, 2]
+[b, a, c, z, b, a, c, z]
+"#
+    );
+    crate::lower_source_to_mir(source).expect("sequence_builtins lowers");
+    let source = r#"def every_other(values: Span[int64]) -> list[int64]:
+    picked = values[::2]
+    return picked
+
+
+def main() -> None:
+    words = {"b", "a", "c"}
+    copied = list(words)
+    print(len(copied))
+    print(sorted(words))
+    print(sorted(words, reverse=true))
+    nested = [[1], [2, 3], [4]]
+    print(list(nested))
+    view middle = nested[0:]
+    stepped = middle[::2]
+    print(stepped)
+    picked = "abcdef"[::2]
+    print(picked)
+    print(reversed(sorted(words)))
+    print(len(nested * 2))
+    print(len(2 * list(words)))
+    count = 2
+    print(len(copied * count))
+    print("abc"[::1])
+    print(every_other([1, 2, 3, 4, 5]))
+"#;
+    assert_eq!(
+        crate::run_source(source)
+            .expect("sequence_builtins_owned_elements runs")
+            .stdout,
+        r#"3
+[a, b, c]
+[c, b, a]
+[[1], [2, 3], [4]]
+[[1], [4]]
+ace
+[c, b, a]
+6
+6
+6
+abc
+[1, 3, 5]
+"#
+    );
+    crate::lower_source_to_mir(source).expect("sequence_builtins_owned_elements lowers");
 }

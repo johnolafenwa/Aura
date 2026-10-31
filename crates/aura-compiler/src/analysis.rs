@@ -20,9 +20,9 @@ use crate::ast::{
     ReceiverKind, Stmt, TypeRef, VariantPattern, ViewStmt, WithStmt,
 };
 use crate::call::{
-    bind_call_arguments, callable_params_from_decl, BuiltinAssociatedFunction,
-    BuiltinClassConstructor, BuiltinFunction, BuiltinMember, CallConvention,
-    ALL_BUILTIN_ASSOCIATED_FUNCTIONS, ALL_BUILTIN_FUNCTIONS,
+    bind_call_arguments, callable_params_from_decl, sequence_builtin_element_type,
+    BuiltinAssociatedFunction, BuiltinClassConstructor, BuiltinFunction, BuiltinMember,
+    CallConvention, ALL_BUILTIN_ASSOCIATED_FUNCTIONS, ALL_BUILTIN_FUNCTIONS,
 };
 use crate::diag::{Diagnostic, Result, RuntimeSourceSpan, Span};
 use crate::parser;
@@ -5195,6 +5195,10 @@ impl<'a> AnalysisBuilder<'a> {
                 if let Some(result) = builtin_duration_binary_result(*op, &left_ty, &right_ty) {
                     return Some(result);
                 }
+                if let Some(result) = crate::call::list_binary_result_type(*op, &left_ty, &right_ty)
+                {
+                    return Some(result);
+                }
                 match op {
                     BinaryOp::And | BinaryOp::Or => Some(Type::named("bool")),
                     BinaryOp::Eq
@@ -5290,6 +5294,24 @@ impl<'a> AnalysisBuilder<'a> {
                             .and_then(|ty| reduction_element_type(&ty))
                     }
                     BuiltinFunction::Any | BuiltinFunction::All => Some(Type::named("bool")),
+                    builtin @ (BuiltinFunction::Sorted
+                    | BuiltinFunction::Reversed
+                    | BuiltinFunction::List) => {
+                        let values = self.infer_expr_type(&args.first()?.value, scope)?;
+                        let element = sequence_builtin_element_type(
+                            &values,
+                            builtin != BuiltinFunction::Reversed,
+                        )?;
+                        Some(Type::Named("list".to_string(), vec![element]))
+                    }
+                    BuiltinFunction::SliceStep => {
+                        match self.infer_expr_type(&args.first()?.value, scope)? {
+                            Type::Named(name, element) if name == "Span" => {
+                                Some(Type::Named("list".to_string(), element))
+                            }
+                            values => Some(values),
+                        }
+                    }
                     BuiltinFunction::Abs | BuiltinFunction::Min | BuiltinFunction::Max => args
                         .first()
                         .and_then(|arg| self.infer_expr_type(&arg.value, scope)),
@@ -8085,6 +8107,10 @@ fn builtin_function_return_type(name: &str) -> Option<Type> {
         BuiltinFunction::Str => Some(Type::named("str")),
         BuiltinFunction::Sum => None,
         BuiltinFunction::Any | BuiltinFunction::All => Some(Type::named("bool")),
+        BuiltinFunction::Sorted
+        | BuiltinFunction::Reversed
+        | BuiltinFunction::List
+        | BuiltinFunction::SliceStep => None,
         BuiltinFunction::Abs => None,
         BuiltinFunction::Min => None,
         BuiltinFunction::Max => None,

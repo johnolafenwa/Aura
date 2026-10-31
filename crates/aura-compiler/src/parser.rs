@@ -11,6 +11,7 @@ use crate::ast::{
     TypeRef, TypeRefKind, UnaryOp, VariantPattern, ViewKind, ViewReturn, ViewStmt, WhileStmt,
     WithStmt,
 };
+use crate::call::STEPPED_SLICE_BUILTIN;
 use crate::diag::{Diagnostic, Result, Span};
 use crate::integer::IntegerValue;
 use crate::lexer::{lex, Token, TokenKind};
@@ -3016,54 +3017,12 @@ impl Parser {
                 chain_len += 1;
                 self.check_expression_chain_limit(chain_len)?;
                 if let Some(colon) = self.eat_simple(&TokenKind::Colon) {
-                    if self.at_simple(&TokenKind::Colon) {
-                        return Err(self.slice_step_error());
-                    }
-                    let end = if self.at_simple(&TokenKind::RBracket) {
-                        None
-                    } else {
-                        Some(Box::new(self.parse_expr()?))
-                    };
-                    if self.at_simple(&TokenKind::Colon) {
-                        return Err(self.slice_step_error());
-                    }
-                    self.expect_simple(TokenKind::RBracket)?;
-                    let span = expr.span;
-                    expr = Expr {
-                        kind: ExprKind::Slice {
-                            object: Box::new(expr),
-                            start: None,
-                            end,
-                            colon_span: colon.span,
-                        },
-                        span,
-                    };
+                    expr = self.finish_slice(expr, None, colon.span)?;
                     continue;
                 }
                 let first = self.parse_expr()?;
                 if let Some(colon) = self.eat_simple(&TokenKind::Colon) {
-                    if self.at_simple(&TokenKind::Colon) {
-                        return Err(self.slice_step_error());
-                    }
-                    let end = if self.at_simple(&TokenKind::RBracket) {
-                        None
-                    } else {
-                        Some(Box::new(self.parse_expr()?))
-                    };
-                    if self.at_simple(&TokenKind::Colon) {
-                        return Err(self.slice_step_error());
-                    }
-                    self.expect_simple(TokenKind::RBracket)?;
-                    let span = expr.span;
-                    expr = Expr {
-                        kind: ExprKind::Slice {
-                            object: Box::new(expr),
-                            start: Some(Box::new(first)),
-                            end,
-                            colon_span: colon.span,
-                        },
-                        span,
-                    };
+                    expr = self.finish_slice(expr, Some(Box::new(first)), colon.span)?;
                     continue;
                 }
                 let index = if self.eat_simple(&TokenKind::Comma).is_some() {
@@ -3486,12 +3445,68 @@ impl Parser {
         )
     }
 
-    fn slice_step_error(&self) -> Diagnostic {
-        Diagnostic::coded_at(
-            "AU2005",
-            self.current_span(),
-            "slice steps are unavailable; use an explicit loop to select a stride",
-        )
+    /// Parses the rest of a slice after its first colon: the end, then an
+    /// optional `:step`, then the closing bracket. A slice with a written
+    /// step becomes a call of the hidden stepped-slice builtin, whose
+    /// callee carries the colon's span for runtime failures; an omitted
+    /// endpoint is a `BuiltinOmitted` argument.
+    fn finish_slice(
+        &mut self,
+        object: Expr,
+        start: Option<Box<Expr>>,
+        colon_span: Span,
+    ) -> Result<Expr> {
+        let end = if self.at_simple(&TokenKind::RBracket) || self.at_simple(&TokenKind::Colon) {
+            None
+        } else {
+            Some(Box::new(self.parse_expr()?))
+        };
+        let step = if self.eat_simple(&TokenKind::Colon).is_some()
+            && !self.at_simple(&TokenKind::RBracket)
+        {
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+        self.expect_simple(TokenKind::RBracket)?;
+        let span = object.span;
+        let Some(step) = step else {
+            return Ok(Expr {
+                kind: ExprKind::Slice {
+                    object: Box::new(object),
+                    start,
+                    end,
+                    colon_span,
+                },
+                span,
+            });
+        };
+        let argument = |value: Expr| Argument {
+            span: value.span,
+            name: None,
+            value,
+        };
+        let omitted = |endpoint: Option<Box<Expr>>| {
+            endpoint.map(|endpoint| *endpoint).unwrap_or(Expr {
+                kind: ExprKind::BuiltinOmitted,
+                span: colon_span,
+            })
+        };
+        Ok(Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Name(STEPPED_SLICE_BUILTIN.to_string()),
+                    span: colon_span,
+                }),
+                args: vec![
+                    argument(object),
+                    argument(omitted(start)),
+                    argument(omitted(end)),
+                    argument(step),
+                ],
+            },
+            span,
+        })
     }
 
     fn slice_assignment_error(&self) -> Diagnostic {

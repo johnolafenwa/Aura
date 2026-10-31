@@ -1,0 +1,5 @@
+error[AU2004]: `Check(...)` adapts exactly one callable value, found 2 arguments
+ --> crates/aura-compiler/tests/fixtures/check-fail/thin_alias_two_arguments.au:7:13
+  |
+7 |     check = Check(is_even, is_even)
+  |             ^

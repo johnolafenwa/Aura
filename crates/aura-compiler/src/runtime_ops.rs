@@ -584,6 +584,8 @@ str_ops! {
     private {
         // `text[a:b]`.
         Slice => (SLICE_MEMBER, StringSlice),
+        // `text[a:b:k]`.
+        SliceStep => (SLICE_STEP_MEMBER, StringSliceStep),
     }
 }
 
@@ -604,7 +606,7 @@ impl StrOp {
             StripPrefix | StripSuffix => optional_type(text()),
             TrimStart | TrimEnd | SplitOnce | RsplitOnce | Lines | SplitWhitespace | Find
             | Count | Repeat => return text_convenience_result_type(self.builtin_member()?.name()),
-            Slice => text(),
+            Slice | SliceStep => text(),
         })
     }
 }
@@ -823,6 +825,8 @@ pub const INDEX_MEMBER: &str = "__index";
 pub const SET_INDEX_MEMBER: &str = "__set_index";
 /// The private member a slice `items[a:b]` lowers to.
 pub const SLICE_MEMBER: &str = "__slice";
+/// The private member a stepped slice `items[a:b:k]` lowers to.
+pub const SLICE_STEP_MEMBER: &str = "__slice_step";
 /// The private optional read a `for` loop over a borrowed collection lowers
 /// to.
 pub const INDEX_OPTION_MEMBER: &str = "__index_option";
@@ -967,6 +971,15 @@ const SLICE_PARAMS: &[CallableParam<'static>] = &[
     CallableParam::required("line"),
     CallableParam::required("column"),
 ];
+const SLICE_STEP_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("start"),
+    CallableParam::required("has_start"),
+    CallableParam::required("end"),
+    CallableParam::required("has_end"),
+    CallableParam::required("step"),
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
 const INDEX_OPTION_PARAMS: &[CallableParam<'static>] = &[CallableParam::required("index")];
 const SORT_PARAMS: &[CallableParam<'static>] = &[CallableParam::required("reverse")];
 const SORT_BY_KEYS_PARAMS: &[CallableParam<'static>] = &[
@@ -1048,6 +1061,8 @@ pub enum ListOp {
     SetIndexScalar(ScalarElement),
     /// `__slice(start, has_start, end, has_end, line, column)`.
     Slice,
+    /// `__slice_step(start, has_start, end, has_end, step, line, column)`.
+    SliceStep,
     /// `__index_option(index)`: a borrowed iteration read.
     IndexOption,
     /// `__take_index_option(index)`: a consuming iteration read.
@@ -1127,6 +1142,7 @@ impl ListOp {
         ListOp::SetIndexScalar(ScalarElement::Uint64),
         ListOp::SetIndexScalar(ScalarElement::Float32),
         ListOp::Slice,
+        ListOp::SliceStep,
         ListOp::IndexOption,
         ListOp::TakeIndexOption,
         ListOp::Sort,
@@ -1160,6 +1176,7 @@ impl ListOp {
             | ListOp::SetIndex
             | ListOp::SetIndexScalar(_)
             | ListOp::Slice
+            | ListOp::SliceStep
             | ListOp::IndexOption
             | ListOp::TakeIndexOption
             | ListOp::Sort
@@ -1199,6 +1216,7 @@ impl ListOp {
             | ListOp::IndexScalarUnchecked(_) => INDEX_MEMBER,
             ListOp::SetIndex | ListOp::SetIndexScalar(_) => SET_INDEX_MEMBER,
             ListOp::Slice => SLICE_MEMBER,
+            ListOp::SliceStep => SLICE_STEP_MEMBER,
             ListOp::IndexOption => INDEX_OPTION_MEMBER,
             ListOp::TakeIndexOption => TAKE_INDEX_OPTION_MEMBER,
             ListOp::Sort => SORT_MEMBER,
@@ -1213,6 +1231,7 @@ impl ListOp {
             INDEX_MEMBER => ListOp::Index,
             SET_INDEX_MEMBER => ListOp::SetIndex,
             SLICE_MEMBER => ListOp::Slice,
+            SLICE_STEP_MEMBER => ListOp::SliceStep,
             INDEX_OPTION_MEMBER => ListOp::IndexOption,
             TAKE_INDEX_OPTION_MEMBER => ListOp::TakeIndexOption,
             SORT_MEMBER => ListOp::Sort,
@@ -1230,6 +1249,7 @@ impl ListOp {
             | ListOp::IndexScalarUnchecked(_) => INDEX_PARAMS,
             ListOp::SetIndex | ListOp::SetIndexScalar(_) => SET_INDEX_PARAMS,
             ListOp::Slice => SLICE_PARAMS,
+            ListOp::SliceStep => SLICE_STEP_PARAMS,
             ListOp::IndexOption | ListOp::TakeIndexOption => INDEX_OPTION_PARAMS,
             ListOp::Sort => SORT_PARAMS,
             ListOp::SortByKeys => SORT_BY_KEYS_PARAMS,
@@ -1315,6 +1335,7 @@ impl ListOp {
                 helper_with(RuntimeFn::VecSetIndexScalar, kind.words(), 0)
             }
             ListOp::Slice => helper(RuntimeFn::VecSlice),
+            ListOp::SliceStep => helper(RuntimeFn::VecSliceStep),
             ListOp::IndexOption => helper(RuntimeFn::VecIndexOption),
             ListOp::TakeIndexOption => helper(RuntimeFn::VecTakeIndexInPlace),
             ListOp::Sort => helper(RuntimeFn::VecSortInPlace),
@@ -1352,7 +1373,7 @@ impl ListOp {
             ListOp::Get | ListOp::IndexOption | ListOp::TakeIndexOption => {
                 lookup_type(element.unwrap_or_else(|| Type::named("Unknown")))
             }
-            ListOp::Slice => receiver?.clone(),
+            ListOp::Slice | ListOp::SliceStep => receiver?.clone(),
         })
     }
 }
@@ -2739,6 +2760,7 @@ impl RuntimeOp {
     const fn private_params(self) -> Option<&'static [CallableParam<'static>]> {
         match self {
             RuntimeOp::Str(StrOp::Slice) => Some(SLICE_PARAMS),
+            RuntimeOp::Str(StrOp::SliceStep) => Some(SLICE_STEP_PARAMS),
             RuntimeOp::List(op) => op.private_params(),
             RuntimeOp::Dict(op) => op.private_params(),
             RuntimeOp::Set(op) => op.private_params(),
@@ -2905,7 +2927,7 @@ impl RuntimeOp {
             | RuntimeOp::Value(_)
             | RuntimeOp::Task(_)
             | RuntimeOp::TaskGroup(_) => member(),
-            RuntimeOp::Str(StrOp::Slice) => private(&[]),
+            RuntimeOp::Str(StrOp::Slice | StrOp::SliceStep) => private(&[]),
             RuntimeOp::Str(_) => member(),
             RuntimeOp::Queue(QueueOp::GetInTaskGroup | QueueOp::GetWithRegisteredProducers) => {
                 private(&[])
@@ -2918,6 +2940,7 @@ impl RuntimeOp {
                 | ListOp::IndexUnchecked
                 | ListOp::IndexScalarUnchecked(_)
                 | ListOp::Slice
+                | ListOp::SliceStep
                 | ListOp::IndexOption
                 | ListOp::TakeIndexOption
                 | ListOp::Sort

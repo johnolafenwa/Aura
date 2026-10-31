@@ -1,0 +1,5 @@
+error[AU2002]: expected `def(value: int64) -> bool`, found `def(value: str) -> bool`
+ --> crates/aura-compiler/tests/fixtures/check-fail/thin_alias_signature_mismatch.au:7:19
+  |
+7 |     check = Check(is_empty)
+  |                   ^

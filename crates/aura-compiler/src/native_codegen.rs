@@ -740,6 +740,18 @@ const SLICE_WORD_KINDS: &[ScalarKind] = &[
     ScalarKind::Int32,
 ];
 
+/// The word kinds of a stepped slice's arguments: a slice's, with the step
+/// before the source line and column.
+const SLICE_STEP_WORD_KINDS: &[ScalarKind] = &[
+    ScalarKind::Int64,
+    ScalarKind::Bool,
+    ScalarKind::Int64,
+    ScalarKind::Bool,
+    ScalarKind::Int64,
+    ScalarKind::Int32,
+    ScalarKind::Int32,
+];
+
 fn required_direct_field_slice(
     ty: &DirectType,
     field: &str,
@@ -13329,7 +13341,9 @@ impl<'a> FunctionCompiler<'a> {
         match op {
             RuntimeOp::Scalar(scalar) => self.compile_scalar_runtime_op(scalar, object, args),
             RuntimeOp::Value(value) => self.compile_value_runtime_op(value, object, args),
-            RuntimeOp::Str(StrOp::Slice) => self.compile_slice_runtime_op(op, object, args),
+            RuntimeOp::Str(StrOp::Slice | StrOp::SliceStep) => {
+                self.compile_slice_runtime_op(op, object, args)
+            }
             RuntimeOp::Str(text) if text.is_text_method() => {
                 self.compile_str_text_runtime_op(op, object, args)
             }
@@ -13793,11 +13807,20 @@ impl<'a> FunctionCompiler<'a> {
         let receiver_ty = direct_type_to_type(&object.ty);
         let object = self.ensure_opaque(object)?;
         let args = args.iter().collect::<Vec<_>>();
+        let stepped = matches!(
+            op,
+            RuntimeOp::List(ListOp::SliceStep) | RuntimeOp::Str(StrOp::SliceStep)
+        );
+        let kinds = if stepped {
+            SLICE_STEP_WORD_KINDS
+        } else {
+            SLICE_WORD_KINDS
+        };
         let mut words = vec![object.values[0]];
-        for (argument, kind) in args.iter().zip(SLICE_WORD_KINDS) {
+        for (argument, kind) in args.iter().zip(kinds) {
             words.push(self.load_word(argument, *kind, true)?);
         }
-        if let Some(slice) = self.deferred_byte_slice.take() {
+        if let Some(slice) = self.deferred_byte_slice.take().filter(|_| !stepped) {
             // The `str.from_bytes` that reads the slice takes these words.
             self.byte_slice_words.insert(slice, words);
             return Ok(ValueRef {
@@ -13851,7 +13874,9 @@ impl<'a> FunctionCompiler<'a> {
         let int64 = ScalarKind::Int64;
         let int32 = ScalarKind::Int32;
         match op {
-            ListOp::Slice => self.compile_slice_runtime_op(runtime_op, object, mir_args),
+            ListOp::Slice | ListOp::SliceStep => {
+                self.compile_slice_runtime_op(runtime_op, object, mir_args)
+            }
             ListOp::Len => {
                 let records = self.plain_record(&element_direct_ty)?.is_some();
                 let len = self.emit_list_len(list, records);

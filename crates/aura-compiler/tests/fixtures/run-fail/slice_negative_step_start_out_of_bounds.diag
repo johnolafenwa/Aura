@@ -1,0 +1,6 @@
+error[AU4003]: a negative-step slice from `3` down to `-1` is outside `0..3`
+ --> crates/aura-compiler/tests/fixtures/run-fail/slice_negative_step_start_out_of_bounds.au:3:19
+  |
+3 |     print(values[3::-1])
+  |                   ^
+  = note: Aura call chain (innermost first): main at 1:1

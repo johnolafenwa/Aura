@@ -7,6 +7,18 @@ in this file.
 
 ## Unreleased
 
+- New builtins `sorted`, `reversed`, and `list`, list `+` and `*`, and
+  slice steps (ADR-0066). `sorted(values, key=..., reverse=...)` returns a
+  new stably sorted list of a list, span, set, or `Range`, ordered as
+  `list.sort` orders. `reversed(values)` and `list(values)` return new
+  lists. `xs + ys` concatenates two lists, `xs * n` and `n * xs` repeat
+  one, and `items += more` extends `items` in place.
+  `values[start:end:step]` works on lists, spans, and `str`, so
+  `text[::-1]` reverses a string. A zero step, or a negative-step slice
+  whose start is outside the value, stops the program with `AU4003`;
+  endpoints are not clamped. Breaking: `sorted`, `reversed`, and `list`
+  are now builtin function names, so a top-level `def` with one of those
+  names is rejected with `AU2007`.
 - A new empty list such as `mut following: list[int64] = []` starts out
   with its type already recorded, and appending a scalar of the kind the
   list stores keeps that record. Before, the next assignment or call

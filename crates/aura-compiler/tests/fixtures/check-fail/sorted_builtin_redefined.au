@@ -1,0 +1,6 @@
+def sorted(value: int64) -> int64:
+    return value
+
+
+def main() -> None:
+    print(sorted(1))

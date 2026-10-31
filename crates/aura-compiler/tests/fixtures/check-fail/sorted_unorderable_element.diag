@@ -1,0 +1,6 @@
+error[AU2002]: `sorted` cannot order element type `Point`
+ --> crates/aura-compiler/tests/fixtures/check-fail/sorted_unorderable_element.au:6:18
+  |
+6 |     print(sorted([Point(x=1)]))
+  |                  ^
+  = help: use an existing naturally ordered type, or implement `Ord[T].lt` returning `bool`

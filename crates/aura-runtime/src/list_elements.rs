@@ -1150,6 +1150,23 @@ impl ListElements {
         )
     }
 
+    /// Keeps the elements at positions `0, stride, 2 * stride, ...`.
+    pub fn keep_every(&mut self, stride: usize) {
+        let len = self.len();
+        each_form!(
+            self,
+            values => {
+                let mut position = 0;
+                values.retain(|_| {
+                    let keep = position % stride == 0;
+                    position += 1;
+                    keep
+                })
+            },
+            typed => **typed = typed.permuted((0..len).step_by(stride))
+        )
+    }
+
     pub fn clear(&mut self) {
         // A fresh empty list drops shared storage without copying it.
         *self = Self::new();

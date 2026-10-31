@@ -23542,3 +23542,98 @@ fn mir_runtime_private_sort_members_sort_in_place_and_check_their_arguments() {
         vec![text("c"), text("a"), text("b")]
     );
 }
+
+#[test]
+fn mir_slice_step_internal_abi_rejects_malformed_operands_and_objects() {
+    fn evaluated(value: Value) -> EvaluatedMirArg {
+        EvaluatedMirArg {
+            name: None,
+            value,
+            ty: None,
+            writeback_place: None,
+        }
+    }
+    let int = |value: i64| Value::Int(IntegerValue::from_signed(value as i128));
+
+    let mut runtime = test_runtime();
+    let valid = || {
+        vec![
+            evaluated(int(0)),
+            evaluated(Value::Bool(false)),
+            evaluated(int(0)),
+            evaluated(Value::Bool(false)),
+            evaluated(int(2)),
+            evaluated(int(1)),
+            evaluated(int(1)),
+        ]
+    };
+    let (start, end, step, span) = runtime
+        .mir_slice_step_args(valid())
+        .expect("well-formed stepped slice operands");
+    assert_eq!((start, end, step, span), (None, None, 2, Span::new(1, 1)));
+
+    let wrong_count = runtime
+        .mir_slice_step_args(Vec::new())
+        .expect_err("the private ABI requires exactly seven operands");
+    assert!(wrong_count
+        .message
+        .contains("requires start, has_start, end, has_end, step"));
+
+    let mut not_integer = valid();
+    not_integer[4] = evaluated(Value::Bool(true));
+    let error = runtime
+        .mir_slice_step_args(not_integer)
+        .expect_err("a non-integer step must be rejected");
+    assert_eq!(
+        error.message,
+        "internal slice step operand must be an integer"
+    );
+
+    let mut too_wide = valid();
+    too_wide[4] = evaluated(Value::Int(
+        IntegerValue::from_typed_unsigned(u128::MAX, IntegerKind::Uint128)
+            .expect("uint128::MAX is a valid typed integer"),
+    ));
+    let error = runtime
+        .mir_slice_step_args(too_wide)
+        .expect_err("a step outside i128 must be rejected");
+    assert_eq!(
+        error.message,
+        "slice step is outside the supported signed range"
+    );
+
+    let step_args = || {
+        [
+            Operand::Int(0),
+            Operand::Bool(false),
+            Operand::Int(0),
+            Operand::Bool(false),
+            Operand::Int(1),
+            Operand::Int(3),
+            Operand::Int(4),
+        ]
+        .into_iter()
+        .map(|operand| mir_arg(None, operand))
+        .collect::<Vec<_>>()
+    };
+    let mut env = Env::default();
+    env.define_typed("flag", Type::named("bool"), Value::Bool(true));
+    for object in [Operand::Place("flag".to_string()), Operand::Bool(false)] {
+        let error = runtime
+            .evaluate_call(
+                &CallTarget::Member {
+                    object,
+                    field: "__slice_step".to_string(),
+                    receiver_place: None,
+                    dispatch: None,
+                },
+                &step_args(),
+                &mut env,
+            )
+            .expect_err("malformed MIR must reject a value that cannot be sliced");
+        assert!(error
+            .message
+            .starts_with("unsupported MIR member call `__slice_step` on `"));
+        assert_eq!(error.span, Some(Span::new(3, 4)));
+    }
+}

@@ -1,0 +1,6 @@
+def keep(value: int64) -> list[int64]:
+    return [value]
+
+
+def main() -> None:
+    print(sorted([2, 1], key=keep))

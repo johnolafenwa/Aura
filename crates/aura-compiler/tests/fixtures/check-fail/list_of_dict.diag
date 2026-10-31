@@ -1,0 +1,5 @@
+error[AU2002]: `list(...)` expects a list, Span, set, or Range, found `dict[str, int64]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/list_of_dict.au:3:16
+  |
+3 |     print(list(counts))
+  |                ^
