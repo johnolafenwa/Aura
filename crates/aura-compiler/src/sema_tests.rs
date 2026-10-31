@@ -31657,3 +31657,127 @@ fn callable_slot_admission_explains_each_rejected_adapter_slot() {
         Ok(())
     );
 }
+
+#[test]
+fn sequence_builtins_reject_unsupported_operands_in_the_library_checker() {
+    for (source, code, message) in [
+        (
+            r#"def main() -> None:
+    numbers = [1, 2]
+    words = ["a"]
+    print(numbers + words)
+"#,
+            "AU2002",
+            r#"list concatenation needs two lists of one element type, found `list[int64]` and `list[str]`"#,
+        ),
+        (
+            r#"def main() -> None:
+    values = [1, 2]
+    print(values * 1.5)
+"#,
+            "AU2002",
+            r#"list repetition needs a list and an integer count, found `list[int64]` and `float64`"#,
+        ),
+        (
+            r#"def main() -> None:
+    print(reversed({1, 2}))
+"#,
+            "AU2002",
+            r#"`reversed(...)` expects a list, Span, or Range, found `set[int64]`"#,
+        ),
+        (
+            r#"def main() -> None:
+    values = [2, 1]
+    print(sorted(values, lambda value: value))
+"#,
+            "AU2004",
+            r#"parameter `key` of `sorted` is keyword-only"#,
+        ),
+        (
+            r#"class Point:
+    x: int64
+
+
+def main() -> None:
+    print(sorted([Point(x=1)]))
+"#,
+            "AU2002",
+            r#"`sorted` cannot order element type `Point`"#,
+        ),
+        (
+            r#"def main() -> None:
+    values = Array[int32].zeros([4])
+    print(values[::2])
+"#,
+            "AU2003",
+            r#"stepped slicing is available only for `list[T]`, `Span[T]`, and `str`, found `Array[int32]`"#,
+        ),
+        (
+            r#"def sorted(value: int64) -> int64:
+    return value
+
+
+def main() -> None:
+    print(sorted(1))
+"#,
+            "AU2007",
+            r#"`sorted` is a builtin function name and cannot be redefined"#,
+        ),
+        (
+            r#"def main() -> None:
+    counts = {"a": 1}
+    print(list(counts))
+"#,
+            "AU2002",
+            r#"`list(...)` expects a list, Span, set, or Range, found `dict[str, int64]`"#,
+        ),
+        (
+            r#"def main() -> None:
+    print(sorted([2, 1], reverse=1))
+"#,
+            "AU2002",
+            r#"`sorted` expects `bool` for `reverse`, found `int64`"#,
+        ),
+        (
+            r#"def keep(value: int64) -> list[int64]:
+    return [value]
+
+
+def main() -> None:
+    print(sorted([2, 1], key=keep))
+"#,
+            "AU2002",
+            r#"`sorted` cannot order key type `list[int64]`"#,
+        ),
+        (
+            r#"def main() -> None:
+    values = [1, 2, 3]
+    print(values[::1.5])
+"#,
+            "AU2002",
+            r#"slice endpoints and steps must have type `int64` or a losslessly narrower integer type, found `float64`"#,
+        ),
+        (
+            r#"import random
+
+def go(generators: list[random.Rng]):
+    print(len(sorted(generators)))
+"#,
+            "AU3007",
+            r#"cannot use `sorted` because `random.Rng` contains non-cloneable `random.Rng` state"#,
+        ),
+        (
+            r#"import random
+
+def go(generators: list[random.Rng]):
+    print(len(generators * 2))
+"#,
+            "AU3007",
+            r#"cannot use `list repetition` because `random.Rng` contains non-cloneable `random.Rng` state"#,
+        ),
+    ] {
+        let diagnostic = crate::check_source(source).expect_err(message);
+        assert_eq!(diagnostic.code, code, "{source}\n{diagnostic:?}");
+        assert_eq!(diagnostic.message, message, "{source}");
+    }
+}
