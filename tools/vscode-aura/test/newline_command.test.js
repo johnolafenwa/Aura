@@ -91,8 +91,16 @@ async function activateWithEditor(editor, settings = {}) {
         executed.push(args);
       }
     },
-    window: { activeTextEditor: editor, onDidCloseTerminal: () => ({ dispose() {} }) },
+    window: {
+      activeTextEditor: editor,
+      onDidCloseTerminal: () => ({ dispose() {} }),
+      createOutputChannel: () => ({ dispose() {} })
+    },
     languages: { registerCodeLensProvider: () => ({ dispose() {} }) },
+    debug: {
+      registerDebugConfigurationProvider: () => ({ dispose() {} }),
+      registerDebugAdapterDescriptorFactory: () => ({ dispose() {} })
+    },
     workspace: {
       createFileSystemWatcher: () => ({ dispose() {} }),
       getConfiguration: () => ({
@@ -136,6 +144,7 @@ async function activateWithEditor(editor, settings = {}) {
   }
   await extension.activate({
     subscriptions: [],
+    globalStorageUri: { fsPath: path.join(__dirname, "..", ".storage") },
     asAbsolutePath: (relative) => path.join(__dirname, "..", relative)
   });
   return { type: commands.get("type"), commands, executed, clients, configurationListeners };

@@ -10,9 +10,9 @@ use crate::mir::{
     Terminator, NATIVE_LOOP_SAFEPOINT_INTERVAL,
 };
 use crate::native_backend::{
-    types, AliasClass, Blk, CallConv, DataDescription, DataHandle, DefineError, FloatCC,
-    FuncHandle, FuncRef, FunctionBackend, Inst, IntCC, Linkage, MemFlags, ModuleBackend,
-    ScalarType, Signature, TrapCode, Val, Var,
+    types, AliasClass, Blk, CallConv, DataDescription, DataHandle, DebugEncoding, DebugRecord,
+    DebugVariable, DefineError, FloatCC, FuncHandle, FuncRef, FunctionBackend, FunctionSource,
+    Inst, IntCC, Linkage, MemFlags, ModuleBackend, ScalarType, Signature, TrapCode, Val, Var,
 };
 use crate::native_runtime::{
     encode_direct_ffi_call_spec, DirectFfiCallSpec, DirectFfiParam, DirectFfiType,
@@ -59,6 +59,21 @@ pub fn emit_host_objects_with_metadata(
 ) -> std::result::Result<Vec<Vec<u8>>, String> {
     let module = validated_for_emission(module)?;
     NativeCodegen::with_validated_loans(&module, program_path, program_source)?.emit_units()
+}
+
+/// The program's object for a debugger: unoptimized, with DWARF line
+/// tables from the module's `SourceLocation`s and the source variables
+/// that live in one word.
+pub fn emit_host_debug_objects_with_metadata(
+    module: &MirModule,
+    program_path: &str,
+    program_source: &str,
+) -> std::result::Result<Vec<Vec<u8>>, String> {
+    let module = validated_for_emission(module)?;
+    let mut codegen = NativeCodegen::with_validated_loans(&module, program_path, program_source)?;
+    codegen.debug_info = true;
+    codegen.module_backend()?.enable_debug_info();
+    codegen.emit_units()
 }
 
 /// `module` pruned, resolved, and validated, as the emitter takes it.
@@ -633,6 +648,9 @@ struct NativeCodegen<'a> {
     safepoints_enabled: bool,
     program_path: String,
     program_source: String,
+    /// Whether the object is a debug build, which describes each function
+    /// and its variables for a debugger.
+    debug_info: bool,
     /// The module backend. A function definition holds it while the
     /// function's body is built, and the body reaches it through its
     /// function backend.
@@ -989,6 +1007,7 @@ impl<'a> NativeCodegen<'a> {
             explicit_locals: crate::mir::ownership::explicit_locals(module),
             reachable_blocks,
             safepoints_enabled,
+            debug_info: false,
             program_path: program_path.to_string(),
             program_source: program_source.to_string(),
             object: Some(object),
@@ -1137,6 +1156,18 @@ impl<'a> NativeCodegen<'a> {
     fn define_function(&mut self, function: &MirFunction) -> std::result::Result<(), String> {
         let func_id = self.functions[&function.name];
         let signature = signature_for(function, &self.classes)?;
+        if self.debug_info {
+            let path = function
+                .source_path
+                .as_deref()
+                .unwrap_or(&self.program_path);
+            let source = FunctionSource {
+                path: debug_source_path_as_given(path, &self.program_path),
+                name: public_direct_function_name(&function.name),
+                line: u32::try_from(function.span.line).unwrap_or(u32::MAX),
+            };
+            self.module_backend()?.describe_function(func_id, source);
+        }
         self.define_body(
             func_id,
             &signature,
@@ -1260,6 +1291,10 @@ impl<'a> NativeCodegen<'a> {
                 ty,
                 None,
             );
+        }
+
+        if self.debug_info {
+            describe_debug_variables(builder, function, &variables, &variable_types);
         }
 
         // MIR records the type of every assigned local (Batch 7 step 8c), so
@@ -4164,6 +4199,10 @@ impl<'a> FunctionCompiler<'a> {
                     self.end_lend_on_runtime_path(place, temp, *mutable)?;
                 }
             }
+            Instruction::SourceLocation { line, column } => {
+                self.builder.set_source_location(*line, *column);
+            }
+            Instruction::SourceName { .. } => {}
             Instruction::Safepoint => {
                 let Some(fuel_variable) = self.safepoint_fuel else {
                     return Ok(());
@@ -16124,6 +16163,8 @@ fn validate_function_in_reachable(
         for instruction in &block.instructions {
             match instruction {
                 Instruction::Safepoint
+                | Instruction::SourceLocation { .. }
+                | Instruction::SourceName { .. }
                 | Instruction::IndexInRange { .. }
                 | Instruction::Retain { .. }
                 | Instruction::Release { .. }
@@ -17270,6 +17311,131 @@ fn mangle_symbol(name: &str) -> String {
 
 fn public_direct_function_name(name: &str) -> String {
     crate::mir::public_function_name(name)
+}
+
+/// `path` as a debug build records it: absolute, so a debugger finds the
+/// file from any directory.
+/// The path a debugger should show for `path`, a module the program at
+/// `program_path` loaded. The loader resolves symbolic links, but an editor
+/// sets breakpoints on the path it opened, such as `/var/...` on macOS for a
+/// file under `/private/var/...`. So a module under the program's resolved
+/// directory is named under the program's directory as given.
+fn debug_source_path_as_given(path: &str, program_path: &str) -> String {
+    let path = debug_source_path(path);
+    let program = std::path::PathBuf::from(debug_source_path(program_path));
+    let Some(given_directory) = program.parent() else {
+        return path;
+    };
+    let Ok(resolved_directory) = std::fs::canonicalize(given_directory) else {
+        return path;
+    };
+    match std::path::Path::new(&path).strip_prefix(&resolved_directory) {
+        Ok(rest) if resolved_directory != given_directory => {
+            given_directory.join(rest).to_string_lossy().into_owned()
+        }
+        _ => path,
+    }
+}
+
+fn debug_source_path(path: &str) -> String {
+    let path = std::path::Path::new(path);
+    if path.is_absolute() {
+        return path.to_string_lossy().into_owned();
+    }
+    std::env::current_dir()
+        .map(|directory| directory.join(path))
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Shows each source variable that lives in one word in a debugger: a
+/// scalar as its value and a runtime value as its address. A local the
+/// compiler made, whose name starts with `%`, shows only under the source
+/// name a `SourceName` gives it. Multi-word values stay hidden.
+fn describe_debug_variables(
+    builder: &mut dyn FunctionBackend,
+    function: &MirFunction,
+    variables: &HashMap<String, Vec<Var>>,
+    variable_types: &HashMap<String, DirectType>,
+) {
+    let source_names = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::SourceName { local, name } => Some((local.as_str(), name.as_str())),
+            _ => None,
+        })
+        .collect::<HashMap<_, _>>();
+    let mut names = variables
+        .keys()
+        .filter_map(|local| match source_names.get(local.as_str()) {
+            Some(name) => Some((local, *name)),
+            None if local.starts_with('%') => None,
+            None => Some((local, local.as_str())),
+        })
+        .collect::<Vec<_>>();
+    names.sort();
+    for (local, name) in names {
+        let Some(ty) = variable_types.get(local) else {
+            continue;
+        };
+        if let DirectType::PlainClass(class) = ty {
+            if let Some(fields) = debug_record_fields(class, variables[local].as_slice()) {
+                builder.describe_record(DebugRecord {
+                    name: name.to_string(),
+                    type_name: class.class_name.clone(),
+                    fields,
+                });
+            }
+            continue;
+        }
+        let ([var], Some(variable)) = (variables[local].as_slice(), debug_variable(name, ty))
+        else {
+            continue;
+        };
+        builder.describe_var(*var, variable);
+    }
+}
+
+/// How a debugger shows a one-word value of `ty` named `name`, unless it
+/// shows nothing for it.
+fn debug_variable(name: &str, ty: &DirectType) -> Option<DebugVariable> {
+    let encoding = match ty {
+        DirectType::Scalar(ScalarKind::Unit) => return None,
+        DirectType::Scalar(ScalarKind::Bool) => DebugEncoding::Bool,
+        DirectType::Scalar(kind) if kind.is_float() => DebugEncoding::Float,
+        DirectType::Scalar(kind) if kind.is_unsigned_integer() => DebugEncoding::Unsigned,
+        DirectType::Scalar(_) => DebugEncoding::Signed,
+        DirectType::Opaque(_) => DebugEncoding::Value,
+        DirectType::PlainClass(_) | DirectType::Union(_) | DirectType::Callable(_) => return None,
+    };
+    Some(DebugVariable {
+        name: name.to_string(),
+        type_name: render_direct_type(ty),
+        encoding,
+    })
+}
+
+/// The fields of a plain class value held in `vars`, each in one word, as
+/// a debugger shows them. A class with a field of more words, or none to
+/// show, shows nothing.
+fn debug_record_fields(class: &PlainClassType, vars: &[Var]) -> Option<Vec<(Var, DebugVariable)>> {
+    if class.fields.len() != vars.len() {
+        return None;
+    }
+    class
+        .fields
+        .iter()
+        .zip(vars)
+        .map(|(field, var)| {
+            if field.ty.value_count() != 1 {
+                return None;
+            }
+            debug_variable(&field.name, &field.ty).map(|variable| (*var, variable))
+        })
+        .collect()
 }
 
 fn mangle_thunk_symbol(name: &str) -> String {

@@ -2846,6 +2846,7 @@ aura check app.au
 | `aura run --backend mir\|direct\|auto file.au` | Choose the execution backend explicitly. |
 | `aura run file.au -- args...` | Execute with program arguments available through `sys.args()`. |
 | `aura build -o path file.au` | Build a native binary. |
+| `aura build --debug -o path file.au` | Build an unoptimized native binary with debug information, for a debugger. |
 | `aura ast file.au` | Print the syntax tree. |
 | `aura ast-json file.au` | Print syntax tree JSON. |
 | `aura mir file.au` | Print lowered MIR. |
@@ -2949,6 +2950,37 @@ under `lib/aura`. It needs only a host C compiler for the final link. A binary
 built from a source checkout falls back to Cargo-built runtime artifacts, for
 contributor convenience.
 
+### Debug Builds
+
+`aura build --debug -o app app.au` builds a binary for a debugger:
+
+- The code is unoptimized, and every Aura statement has a line-table
+  entry, so a debugger stops on breakpoints and steps one statement at a
+  time.
+- Each function is named in the call stack. Each local that fits in one
+  word is described, with its Aura type: numbers and `bool` show their
+  value, `str`, `list[T]`, `dict[K, V]`, and other runtime values show what
+  `print` would write, and a plain class shows its fields.
+- Nothing is stripped. On macOS, `dsymutil` writes the debug information to
+  `app.dSYM` beside the binary.
+- The build reports ``aura: built `app` with direct backend (debug)``.
+
+Plain lldb can debug the binary. Load the extension's formatter to see Aura
+values as `print` writes them:
+
+```text
+lldb ./app
+(lldb) command script import /path/to/tools/vscode-aura/debug/aura_lldb.py
+(lldb) breakpoint set --file app.au --line 12
+(lldb) run
+(lldb) frame variable
+```
+
+A debug build runs slower than a normal one. A union, a callable, and a
+class with a field that is itself more than one word are not shown yet. A
+value whose last use has passed has already been released, so it reads
+`<unset>` or null.
+
 ### Keeping Native Symbols For Profiling
 
 Set `AURA_NATIVE_KEEP_SYMBOLS=1` to skip the post-link `strip` step. This works
@@ -2979,7 +3011,7 @@ the runtime's `extern "C-unwind"` boundaries. This profile reduces shipped
 compiler metadata. It does not strip the runtime archive's linkable symbols or
 change the default MIR execution mode.
 
-Every build requests unused-section
+Every build except a [debug build](#debug-builds) requests unused-section
 removal: `-Wl,-dead_strip` on macOS and `-Wl,--gc-sections` on Linux. After a
 successful link, Aura runs `strip -S -x` on the user executable. This removes
 debug and local symbols but keeps globals for process-global FFI.
@@ -2988,7 +3020,8 @@ debug and local symbols but keeps globals for process-global FFI.
   build error.
 - Aura's embedded source metadata keeps typed call frames, task ancestry, and
   source-located traps. Native debugger symbol information is reduced.
-- No separate debug companion artifact is emitted.
+- No separate debug companion artifact is emitted, except the `.dSYM` of a
+  macOS debug build.
 - The runtime archive stays intact.
 
 [Performance](performance.md#executable-size) records the executable-size
@@ -3332,6 +3365,15 @@ Ordinary parameter signatures keep their bare, `own`, and `mut` spelling.
 Built-in hover and completion detail shows retained-value contracts such as
 `list.append(value: own T)`. Class field and enum payload completion detail
 renders their implicit constructor ownership as `own`.
+
+The extension also debugs Aura programs. **Aura: Debug File**, the Debug
+lens above `def main`, or F5 builds the file with
+[`aura build --debug`](#debug-builds) and starts LLVM's `lldb-dap` on it.
+Breakpoints, stepping, the call stack, and local variables then work as in
+any VS Code debugger. A `launch.json` entry of type `aura` takes `program`,
+`args`, `cwd`, `env`, and `stopOnEntry`. The extension looks for `lldb-dap`
+in `aura.lldbDapPath`, then through `xcrun` on macOS, then on `PATH`, as
+`lldb-dap`, `lldb-dap-<version>`, or `lldb-vscode`.
 
 Formatting uses the same rules as [`aura fmt`](#formatting). Run the editor's
 Format Document command, or set `"editor.formatOnSave": true` for Aura files
@@ -6455,6 +6497,7 @@ The foreign function interface (FFI) is at version 0.
 - Human diagnostics synthesize the compact call-chain, task-entry, and task-ancestry note lines.
 - Structured schema-version-1 diagnostics expose `call_frames` and `task_ancestry` arrays instead. They do not duplicate the generated frame prose in `notes`.
 - Aura does not expose host Rust or LLVM backtraces, debugger stack reflection, exception catching, or a standalone-binary JSON switch.
+- A [debug build](cli-and-tooling.md#debug-builds) does not show unions, callables, or a class with a field of more than one word, and lldb evaluates C expressions rather than Aura ones. A released value reads `<unset>` or null.
 
 ### Scheduling
 
@@ -6607,7 +6650,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - Panic unwinding stays enabled. The runtime archive keeps linkable symbols.
 - Built user executables link with `-Wl,-dead_strip` on macOS or `-Wl,--gc-sections` on Linux.
 - After linking, `strip -S -x` removes debug and local symbols while keeping the globals that process-global FFI needs.
-- Source locations, typed Aura call frames, and task ancestry are embedded runtime metadata and stay available. Native symbol and debugger information is reduced.
+- Source locations, typed Aura call frames, and task ancestry are embedded runtime metadata and stay available. Native symbol and debugger information is reduced, except in a `aura build --debug` build, which keeps it.
 - The host toolchain must provide `strip` as well as `cc`.
 - User executables link `libaura_runtime.a`, which contains the runtime and none of the compiler.
 

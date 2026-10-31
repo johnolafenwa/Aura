@@ -16,6 +16,7 @@
 //! convention returns many values as one struct, which every Aura caller and
 //! callee in the object shares; the C convention uses the C ABI.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
@@ -24,8 +25,12 @@ use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::{Builder, BuilderError};
 use inkwell::context::Context;
+use inkwell::debug_info::{
+    AsDIScope, DICompileUnit, DIFile, DIFlags, DIFlagsConstants, DILocalVariable, DILocation,
+    DIScope, DISubprogram, DIType, DWARFEmissionKind, DWARFSourceLanguage, DebugInfoBuilder,
+};
 use inkwell::intrinsics::Intrinsic;
-use inkwell::module::{Linkage as LlvmLinkage, Module};
+use inkwell::module::{FlagBehavior, Linkage as LlvmLinkage, Module};
 use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
@@ -41,8 +46,9 @@ use units::{Partition, Placement};
 
 use super::{
     AliasClass, Blk, Call, CallConv, DataAddress, DataDescription, DataHandle, DataRef,
-    DefineError, FloatCC, FuncHandle, FuncRef, FunctionBackend, FunctionBody, Inst, IntCC, Linkage,
-    MemFlags, ModuleBackend, ScalarType, SigRef, Signature, Slot, TrapCode, Val, Var,
+    DebugEncoding, DebugRecord, DebugVariable, DefineError, FloatCC, FuncHandle, FuncRef,
+    FunctionBackend, FunctionBody, FunctionSource, Inst, IntCC, Linkage, MemFlags, ModuleBackend,
+    ScalarType, SigRef, Signature, Slot, TrapCode, Val, Var,
 };
 
 /// The pass pipeline every object runs. Step 9c measured `O1`, `O2`, and
@@ -77,6 +83,9 @@ pub(super) struct LlvmModule {
     functions: Vec<FunctionDecl>,
     data: Vec<DataDecl>,
     names: HashMap<String, Symbol>,
+    /// Whether the object is a debug build, written without the pass
+    /// pipeline and with DWARF for the functions that have a source.
+    debug_info: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -92,6 +101,7 @@ struct FunctionDecl {
     body: Option<FunctionIr>,
     task_invariant: bool,
     inline: bool,
+    source: Option<FunctionSource>,
 }
 
 struct DataDecl {
@@ -110,6 +120,7 @@ impl LlvmModule {
             functions: Vec::new(),
             data: Vec::new(),
             names: HashMap::new(),
+            debug_info: false,
         })
     }
 }
@@ -142,7 +153,14 @@ impl LlvmModule {
         module.set_source_file_name(&name);
         module.set_triple(&machine.get_triple());
         module.set_data_layout(&machine.get_target_data().get_data_layout());
-        ObjectLowerer::new(context, &module, self, partition, unit)?.lower_bodies(self)?;
+        let debug = self
+            .debug_info
+            .then(|| DebugInfo::new(context, &module, self));
+        let lowerer = ObjectLowerer::new(context, &module, self, partition, unit, debug)?;
+        lowerer.lower_bodies(self)?;
+        if let Some(debug) = &lowerer.debug {
+            debug.builder.finalize();
+        }
         if let Err(error) = module.verify() {
             return Err(format!("LLVM rejected the generated module: {error}"));
         }
@@ -195,6 +213,7 @@ impl ModuleBackend for LlvmModule {
                     body: None,
                     task_invariant: false,
                     inline: false,
+                    source: None,
                 });
                 self.names.insert(name.to_string(), Symbol::Function(id));
                 Ok(FuncHandle(id))
@@ -257,6 +276,14 @@ impl ModuleBackend for LlvmModule {
         self.functions[function.0 as usize].inline = true;
     }
 
+    fn enable_debug_info(&mut self) {
+        self.debug_info = true;
+    }
+
+    fn describe_function(&mut self, function: FuncHandle, source: FunctionSource) {
+        self.functions[function.0 as usize].source = Some(source);
+    }
+
     fn define_function(
         &mut self,
         function: FuncHandle,
@@ -298,20 +325,35 @@ impl ModuleBackend for LlvmModule {
 
     fn finish(self: Box<Self>) -> Result<Vec<u8>, String> {
         self.unit_object(
-            &host_target_machine()?,
+            &self.target_machine()?,
             &Partition::whole(&self),
             0,
-            super::optimizes(),
+            super::optimizes() && !self.debug_info,
         )
     }
 
     fn finish_units(self: Box<Self>) -> Result<Vec<Vec<u8>>, String> {
+        // A debug build is one unit: it runs no passes, so it gains little
+        // from threads, and one compile unit keeps its DWARF whole.
+        if self.debug_info {
+            return self.finish().map(|object| vec![object]);
+        }
         let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
         self.unit_objects(&Partition::split(&self), threads)
     }
 }
 
 impl LlvmModule {
+    /// The host machine the object is written for. A debug build's machine
+    /// optimizes nothing, so every variable keeps its stack slot.
+    fn target_machine(&self) -> Result<TargetMachine, String> {
+        if self.debug_info {
+            host_target_machine_at(OptimizationLevel::None)
+        } else {
+            host_target_machine()
+        }
+    }
+
     /// The object for `machine`: lowered, optimized, and written.
     #[cfg(test)]
     fn object_for(&self, machine: &TargetMachine) -> Result<Vec<u8>, String> {
@@ -421,16 +463,30 @@ fn host_triple() -> TargetTriple {
 }
 
 fn host_target_machine() -> Result<TargetMachine, String> {
+    host_target_machine_at(OptimizationLevel::Default)
+}
+
+fn host_target_machine_at(level: OptimizationLevel) -> Result<TargetMachine, String> {
     static INITIALIZED: OnceLock<Result<(), String>> = OnceLock::new();
     INITIALIZED
         .get_or_init(|| Target::initialize_native(&InitializationConfig::default()))
         .clone()
         .map_err(|error| format!("failed to initialize the LLVM host target: {error}"))?;
-    target_machine(&host_triple())
+    target_machine_at(&host_triple(), level)
 }
 
 /// A machine for `triple`, whose target must already be initialized.
+#[cfg(test)]
 fn target_machine(triple: &TargetTriple) -> Result<TargetMachine, String> {
+    target_machine_at(triple, OptimizationLevel::Default)
+}
+
+/// A machine for `triple` that optimizes at `level`, whose target must
+/// already be initialized.
+fn target_machine_at(
+    triple: &TargetTriple,
+    level: OptimizationLevel,
+) -> Result<TargetMachine, String> {
     let target = Target::from_triple(triple)
         .map_err(|error| format!("LLVM has no target for {triple}: {error}"))?;
     // A generic CPU keeps objects the same on every host of one target.
@@ -439,7 +495,7 @@ fn target_machine(triple: &TargetTriple) -> Result<TargetMachine, String> {
             triple,
             "generic",
             "",
-            OptimizationLevel::Default,
+            level,
             RelocMode::PIC,
             CodeModel::Default,
         )
@@ -560,6 +616,8 @@ struct InstIr {
     op: Op,
     results: Vec<Val>,
     block: u32,
+    /// The source line and column the instruction was built for.
+    location: Option<(u32, u32)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -591,6 +649,12 @@ struct FunctionIr {
     sig_refs: Vec<Signature>,
     current: Option<u32>,
     params_block: Option<u32>,
+    /// The source position of the instructions built from here on.
+    location: Option<(u32, u32)>,
+    /// The variables a debugger shows, by variable.
+    debug_vars: BTreeMap<u32, DebugVariable>,
+    /// The plain class variables a debugger shows.
+    debug_records: Vec<DebugRecord>,
 }
 
 /// Where a variable's value comes from at a use.
@@ -616,6 +680,9 @@ impl FunctionIr {
             sig_refs: Vec::new(),
             current: None,
             params_block: None,
+            location: None,
+            debug_vars: BTreeMap::new(),
+            debug_records: Vec::new(),
         }
     }
 
@@ -652,6 +719,7 @@ impl FunctionIr {
             op,
             results: results.clone(),
             block,
+            location: self.location,
         });
         let entry = &mut self.blocks[block as usize];
         if !entry.in_layout {
@@ -825,6 +893,18 @@ impl FunctionBackend for LlvmFunction<'_> {
 
     fn set_cold_block(&mut self, block: Blk) {
         self.ir.blocks[block.0 as usize].cold = true;
+    }
+
+    fn set_source_location(&mut self, line: u32, column: u32) {
+        self.ir.location = Some((line, column));
+    }
+
+    fn describe_var(&mut self, var: Var, variable: DebugVariable) {
+        self.ir.debug_vars.insert(var.0, variable);
+    }
+
+    fn describe_record(&mut self, record: DebugRecord) {
+        self.ir.debug_records.push(record);
     }
 
     fn current_block(&self) -> Option<Blk> {
@@ -1368,6 +1448,250 @@ struct ObjectLowerer<'ctx, 'm> {
     globals: Vec<GlobalValue<'ctx>>,
     /// The functions whose bodies this unit lowers, in declaration order.
     bodies: Vec<usize>,
+    debug: Option<DebugInfo<'ctx>>,
+}
+
+/// The DWARF of a debug build's module, as its functions are lowered.
+struct DebugInfo<'ctx> {
+    builder: DebugInfoBuilder<'ctx>,
+    unit: DICompileUnit<'ctx>,
+    files: RefCell<HashMap<String, DIFile<'ctx>>>,
+    types: RefCell<HashMap<(String, ScalarType, bool), DIType<'ctx>>>,
+    runtime_value: std::cell::Cell<Option<DIType<'ctx>>>,
+}
+
+/// The DWARF version a debug build writes, which every lldb and gdb in use
+/// reads.
+const DWARF_VERSION: u64 = 4;
+
+/// The DWARF name of the record type every runtime value's word is.
+const RUNTIME_VALUE_TYPE: &str = "AuraValue";
+
+/// The DWARF expression operation that places a slot's bits at an offset
+/// of a variable, as LLVM numbers it: `DW_OP_LLVM_fragment`.
+const DW_OP_LLVM_FRAGMENT: i64 = 0x1000;
+
+/// The `DW_ATE` encodings of a variable's word.
+const DW_ATE_BOOLEAN: u32 = 0x02;
+const DW_ATE_FLOAT: u32 = 0x04;
+const DW_ATE_SIGNED: u32 = 0x05;
+const DW_ATE_UNSIGNED: u32 = 0x07;
+
+impl<'ctx> DebugInfo<'ctx> {
+    /// The compile unit of `module`, named for the first source file the
+    /// object describes.
+    fn new(context: &'ctx Context, module: &Module<'ctx>, object: &LlvmModule) -> Self {
+        let path = object
+            .functions
+            .iter()
+            .find_map(|decl| decl.source.as_ref())
+            .map_or("aura", |source| source.path.as_str());
+        let (directory, file) = split_source_path(path);
+        let (builder, unit) = module.create_debug_info_builder(
+            true,
+            DWARFSourceLanguage::C,
+            &file,
+            &directory,
+            "aura",
+            false,
+            "",
+            0,
+            "",
+            DWARFEmissionKind::Full,
+            0,
+            false,
+            false,
+            "",
+            "",
+        );
+        let i32_type = context.i32_type();
+        module.add_basic_value_flag(
+            "Debug Info Version",
+            FlagBehavior::Warning,
+            i32_type.const_int(u64::from(module.get_debug_metadata_version()), false),
+        );
+        module.add_basic_value_flag(
+            "Dwarf Version",
+            FlagBehavior::Warning,
+            i32_type.const_int(DWARF_VERSION, false),
+        );
+        Self {
+            builder,
+            unit,
+            files: RefCell::new(HashMap::new()),
+            types: RefCell::new(HashMap::new()),
+            runtime_value: std::cell::Cell::new(None),
+        }
+    }
+
+    fn file(&self, path: &str) -> DIFile<'ctx> {
+        *self
+            .files
+            .borrow_mut()
+            .entry(path.to_string())
+            .or_insert_with(|| {
+                let (directory, file) = split_source_path(path);
+                self.builder.create_file(&file, &directory)
+            })
+    }
+
+    /// The subprogram of a function defined at `source`.
+    fn subprogram(&self, source: &FunctionSource) -> DISubprogram<'ctx> {
+        let file = self.file(&source.path);
+        let ty = self
+            .builder
+            .create_subroutine_type(file, None, &[], DIFlags::ZERO);
+        self.builder.create_function(
+            self.unit.as_debug_info_scope(),
+            &source.name,
+            None,
+            file,
+            source.line,
+            ty,
+            false,
+            true,
+            source.line,
+            DIFlags::ZERO,
+            false,
+        )
+    }
+
+    /// The width a debugger reads of `variable`'s word of `ty`. A flag lives
+    /// in the low byte of its word, which every host Aura targets stores
+    /// first.
+    fn variable_bits(variable: &DebugVariable, ty: ScalarType) -> u64 {
+        match variable.encoding {
+            DebugEncoding::Bool => 8,
+            _ => scalar_bits(ty),
+        }
+    }
+
+    /// The record every runtime value's word is, as `RUNTIME_VALUE_TYPE`
+    /// describes it.
+    fn runtime_value_type(&self, bits: u64) -> DIType<'ctx> {
+        if let Some(found) = self.runtime_value.get() {
+            return found;
+        }
+        let file = self.unit.get_file();
+        let scope = self.unit.as_debug_info_scope();
+        let address = self
+            .builder
+            .create_basic_type("__aura_address", bits, DW_ATE_UNSIGNED, DIFlags::ZERO)
+            .expect("the basic type has a name");
+        let member = self.builder.create_member_type(
+            scope,
+            "address",
+            file,
+            0,
+            bits,
+            0,
+            0,
+            DIFlags::ZERO,
+            address.as_type(),
+        );
+        let record = self
+            .builder
+            .create_struct_type(
+                scope,
+                RUNTIME_VALUE_TYPE,
+                file,
+                0,
+                bits,
+                0,
+                DIFlags::ZERO,
+                None,
+                &[member.as_type()],
+                0,
+                None,
+                RUNTIME_VALUE_TYPE,
+            )
+            .as_type();
+        self.runtime_value.set(Some(record));
+        record
+    }
+
+    /// The type a debugger reads `variable` as, held in a word of `ty`. A
+    /// runtime value reads as a pointer to an opaque type of its Aura name.
+    fn variable_type(&self, variable: &DebugVariable, ty: ScalarType) -> DIType<'ctx> {
+        let value = variable.encoding == DebugEncoding::Value;
+        let key = (variable.type_name.clone(), ty, value);
+        if let Some(found) = self.types.borrow().get(&key) {
+            return *found;
+        }
+        let bits = Self::variable_bits(variable, ty);
+        let created = if value {
+            // Every runtime value is one record type holding the value's
+            // address, which the Aura formatter for lldb renders, under a
+            // typedef of its Aura name. A record has no value of its own, so
+            // a debugger shows only the rendering.
+            let file = self.unit.get_file();
+            let scope = self.unit.as_debug_info_scope();
+            self.builder
+                .create_typedef(
+                    self.runtime_value_type(bits),
+                    &variable.type_name,
+                    file,
+                    0,
+                    scope,
+                    0,
+                )
+                .as_type()
+        } else {
+            let (encoding, kind) = match variable.encoding {
+                DebugEncoding::Signed => (DW_ATE_SIGNED, "signed"),
+                DebugEncoding::Unsigned => (DW_ATE_UNSIGNED, "unsigned"),
+                DebugEncoding::Float => (DW_ATE_FLOAT, "float"),
+                DebugEncoding::Bool | DebugEncoding::Value => (DW_ATE_BOOLEAN, "bool"),
+            };
+            // lldb reads a C basic type by its name, so each size and
+            // encoding has its own, and the Aura name is a typedef of it.
+            let basic = self
+                .builder
+                .create_basic_type(
+                    &format!("__aura_{kind}{bits}"),
+                    bits,
+                    encoding,
+                    DIFlags::ZERO,
+                )
+                .expect("the basic type has a name");
+            self.builder
+                .create_typedef(
+                    basic.as_type(),
+                    &variable.type_name,
+                    self.unit.get_file(),
+                    0,
+                    self.unit.as_debug_info_scope(),
+                    0,
+                )
+                .as_type()
+        };
+        self.types.borrow_mut().insert(key, created);
+        created
+    }
+}
+
+/// The directory and file name of a source path, as DWARF splits them.
+fn split_source_path(path: &str) -> (String, String) {
+    let path = std::path::Path::new(path);
+    let file = path
+        .file_name()
+        .map_or_else(|| path.to_string_lossy(), |name| name.to_string_lossy())
+        .into_owned();
+    let directory = path
+        .parent()
+        .map(|parent| parent.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    (directory, file)
+}
+
+/// The width of a word of `ty`.
+fn scalar_bits(ty: ScalarType) -> u64 {
+    match ty {
+        ScalarType::I8 => 8,
+        ScalarType::I16 => 16,
+        ScalarType::I32 | ScalarType::F32 => 32,
+        ScalarType::I64 | ScalarType::F64 => 64,
+    }
 }
 
 impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
@@ -1379,6 +1703,7 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
         object: &LlvmModule,
         partition: &Partition,
         unit: usize,
+        debug: Option<DebugInfo<'ctx>>,
     ) -> Result<Self, String> {
         let uwtable = context
             .create_enum_attribute(Attribute::get_named_enum_kind_id("uwtable"), UWTABLE_ASYNC);
@@ -1477,6 +1802,7 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
             functions,
             globals,
             bodies,
+            debug,
         };
         for (index, fields) in initialized {
             if let Some(contents) = &object.data[index].contents {
@@ -1518,8 +1844,19 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
 
     fn lower_bodies(&self, object: &LlvmModule) -> Result<(), String> {
         for index in &self.bodies {
-            if let Some(body) = &object.functions[*index].body {
-                FunctionLowerer::new(self, self.functions[*index], body).lower()?;
+            let decl = &object.functions[*index];
+            if let Some(body) = &decl.body {
+                let mut lowerer = FunctionLowerer::new(self, self.functions[*index], body);
+                if let (Some(debug), Some(source)) = (&self.debug, &decl.source) {
+                    let subprogram = debug.subprogram(source);
+                    self.functions[*index].set_subprogram(subprogram);
+                    lowerer.scope = Some(FunctionScope {
+                        subprogram,
+                        file: debug.file(&source.path),
+                        line: source.line,
+                    });
+                }
+                lowerer.lower()?;
             }
         }
         Ok(())
@@ -1539,6 +1876,16 @@ struct FunctionLowerer<'ctx, 'm, 'o> {
     vars: BTreeMap<u32, (PointerValue<'ctx>, BasicTypeEnum<'ctx>)>,
     slots: Vec<PointerValue<'ctx>>,
     trap_block: Option<BasicBlock<'ctx>>,
+    /// The function's DWARF, in a debug build.
+    scope: Option<FunctionScope<'ctx>>,
+}
+
+/// Where a debug build's function is defined.
+#[derive(Clone, Copy)]
+struct FunctionScope<'ctx> {
+    subprogram: DISubprogram<'ctx>,
+    file: DIFile<'ctx>,
+    line: u32,
 }
 
 impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
@@ -1560,6 +1907,142 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
             vars: BTreeMap::new(),
             slots: Vec::new(),
             trap_block: None,
+            scope: None,
+        }
+    }
+
+    /// Makes the instructions built next carry `location`, or the line of
+    /// the function's `def` before its first statement. A function with no
+    /// DWARF carries none.
+    fn set_location(&self, location: Option<(u32, u32)>) {
+        let (Some(scope), Some(debug)) = (self.scope, &self.object.debug) else {
+            return;
+        };
+        let (line, column) = location.unwrap_or((scope.line, 0));
+        let location = debug.builder.create_debug_location(
+            self.context,
+            line,
+            column,
+            scope.subprogram.as_debug_info_scope(),
+            None,
+        );
+        self.builder.set_current_debug_location(location);
+    }
+
+    /// Declares the variables a debugger shows at their slots, at the end
+    /// of `entry`. A record's fields each declare their part of it.
+    fn declare_debug_vars(&self, entry: BasicBlock<'ctx>) {
+        let (Some(scope), Some(debug)) = (self.scope, &self.object.debug) else {
+            return;
+        };
+        let function_scope: DIScope<'ctx> = scope.subprogram.as_debug_info_scope();
+        let location =
+            debug
+                .builder
+                .create_debug_location(self.context, scope.line, 0, function_scope, None);
+        let auto_variable = |name: &str, ty: DIType<'ctx>| {
+            debug.builder.create_auto_variable(
+                function_scope,
+                name,
+                scope.file,
+                scope.line,
+                ty,
+                true,
+                DIFlags::ZERO,
+                0,
+            )
+        };
+        for (var, variable) in &self.ir.debug_vars {
+            let (Some((slot, _)), Some(ty)) = (self.vars.get(var), self.ir.vars.get(var)) else {
+                continue;
+            };
+            let info = auto_variable(&variable.name, debug.variable_type(variable, *ty));
+            self.declare(debug, *slot, info, Vec::new(), location, entry);
+        }
+        for record in &self.ir.debug_records {
+            let mut members = Vec::new();
+            let mut parts = Vec::new();
+            let mut offset = 0u64;
+            for (var, field) in &record.fields {
+                let (Some((slot, _)), Some(ty)) = (self.vars.get(&var.0), self.ir.vars.get(&var.0))
+                else {
+                    continue;
+                };
+                let field_type = debug.variable_type(field, *ty);
+                let bits = DebugInfo::variable_bits(field, *ty);
+                members.push(
+                    debug
+                        .builder
+                        .create_member_type(
+                            function_scope,
+                            &field.name,
+                            scope.file,
+                            0,
+                            bits,
+                            0,
+                            offset,
+                            DIFlags::ZERO,
+                            field_type,
+                        )
+                        .as_type(),
+                );
+                parts.push((*slot, offset, bits));
+                offset += bits;
+            }
+            let record_type = debug.builder.create_struct_type(
+                function_scope,
+                &record.type_name,
+                scope.file,
+                0,
+                offset,
+                0,
+                DIFlags::ZERO,
+                None,
+                &members,
+                0,
+                None,
+                "",
+            );
+            let info = auto_variable(&record.name, record_type.as_type());
+            // A record of one field is wholly that field's slot, which LLVM
+            // takes only without a fragment.
+            let whole = parts.len() == 1;
+            for (slot, offset, bits) in parts {
+                let fragment = if whole {
+                    Vec::new()
+                } else {
+                    vec![DW_OP_LLVM_FRAGMENT, offset as i64, bits as i64]
+                };
+                self.declare(debug, slot, info, fragment, location, entry);
+            }
+        }
+    }
+
+    /// Declares that `slot` holds `info`, or the part of it `expression`
+    /// names, at the end of `entry`.
+    fn declare(
+        &self,
+        debug: &DebugInfo<'ctx>,
+        slot: PointerValue<'ctx>,
+        info: DILocalVariable<'ctx>,
+        expression: Vec<i64>,
+        location: DILocation<'ctx>,
+        entry: BasicBlock<'ctx>,
+    ) {
+        let expression = debug.builder.create_expression(expression);
+        // inkwell's `insert_declare_at_end` treats the debug record LLVM
+        // returns as an instruction, which it is not since LLVM 19.
+        // SAFETY: every handle is live in this thread's context, and the
+        // record LLVM inserts is owned by `entry`.
+        unsafe {
+            inkwell::llvm_sys::debuginfo::LLVMDIBuilderInsertDeclareRecordAtEnd(
+                debug.builder.as_mut_ptr(),
+                slot.as_value_ref(),
+                info.as_mut_ptr(),
+                expression.as_mut_ptr(),
+                location.as_mut_ptr(),
+                entry.as_mut_ptr(),
+            );
         }
     }
 
@@ -1574,6 +2057,7 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
         // promote the variables. A variable read before any write reads
         // zero.
         self.builder.position_at_end(entry);
+        self.set_location(None);
         for (var, ty) in &self.ir.vars {
             let llvm_ty = basic_type(context, *ty);
             let slot = built(self.builder.build_alloca(llvm_ty, &format!("var{var}")))?;
@@ -1590,6 +2074,7 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
             }
             self.slots.push(slot);
         }
+        self.declare_debug_vars(entry);
         for block in &self.ir.layout {
             self.builder.position_at_end(self.blocks[block]);
             let mut phis = Vec::new();
@@ -1631,6 +2116,7 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
             self.builder.position_at_end(self.blocks[block]);
             for inst in &self.ir.blocks[*block as usize].insts {
                 let inst = &self.ir.insts[*inst as usize];
+                self.set_location(inst.location);
                 self.lower_inst(inst)?;
                 if inst.op.is_terminator() {
                     break;

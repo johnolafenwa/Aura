@@ -454,6 +454,8 @@ pub fn operand_roles(instruction: &Instruction) -> Vec<(&Operand, OperandRole)> 
     let mut roles = Vec::new();
     match instruction {
         Instruction::Safepoint
+        | Instruction::SourceLocation { .. }
+        | Instruction::SourceName { .. }
         | Instruction::Retain { .. }
         | Instruction::Release { .. }
         | Instruction::Lend { .. }
@@ -897,6 +899,8 @@ pub(crate) fn instruction_accesses_with<'a>(
     }
     match instruction {
         Instruction::Safepoint
+        | Instruction::SourceLocation { .. }
+        | Instruction::SourceName { .. }
         | Instruction::Retain { .. }
         | Instruction::Release { .. }
         | Instruction::Eval { .. } => {}
@@ -2261,6 +2265,8 @@ fn place_operand_mut<'a>(instruction: &'a mut Instruction, name: &str) -> Option
         }
         Instruction::Eval { value } => operands.push(value),
         Instruction::Safepoint
+        | Instruction::SourceLocation { .. }
+        | Instruction::SourceName { .. }
         | Instruction::Retain { .. }
         | Instruction::Release { .. }
         | Instruction::Lend { .. }

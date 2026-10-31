@@ -2,7 +2,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
 
-use aura_compiler::{check_path, check_source, parse_source, run_path};
+use aura_compiler::mir::Instruction;
+use aura_compiler::{
+    check_path, check_source, emit_host_native_debug_objects_with_metadata, lower_path_to_mir,
+    lower_path_to_mir_with_source_locations, lower_path_with_source_to_mir_with_source_locations,
+    parse_source, run_path, MirModule,
+};
 
 #[test]
 fn parse_pass_fixtures_parse() {
@@ -123,6 +128,101 @@ fn run_pass_fixtures_match_expected_stdout() {
             fixture.display()
         );
     }
+}
+
+/// A debug build's markers change nothing else: with its `SourceLocation`s
+/// and `SourceName`s taken out, every run-pass fixture lowers to the MIR a
+/// normal build lowers, and its debug object emits.
+#[test]
+fn run_pass_fixtures_lower_the_same_mir_with_source_locations() {
+    let fixtures = fixture_files("run-pass");
+    on_large_stack(move || {
+        for fixture in fixtures {
+            let normal = lower_path_to_mir(&fixture)
+                .unwrap_or_else(|error| panic!("{} should lower: {}", fixture.display(), error));
+            let mut debug = lower_path_to_mir_with_source_locations(&fixture)
+                .unwrap_or_else(|error| panic!("{} should lower: {}", fixture.display(), error));
+            let from_source =
+                lower_path_with_source_to_mir_with_source_locations(&fixture, &read(&fixture))
+                    .unwrap_or_else(|error| {
+                        panic!("{} should lower: {}", fixture.display(), error)
+                    });
+            assert_eq!(
+                serde_json::to_string(&from_source).unwrap(),
+                serde_json::to_string(&debug).unwrap(),
+                "{} lowers alike from its path and its source",
+                fixture.display()
+            );
+            let markers = remove_source_markers(&mut debug);
+            assert!(markers > 0, "{} has no statements", fixture.display());
+            assert_eq!(
+                serde_json::to_string(&debug).unwrap(),
+                serde_json::to_string(&normal).unwrap(),
+                "debug lowering of {} differs beyond its markers",
+                fixture.display()
+            );
+        }
+    });
+}
+
+#[test]
+fn run_pass_fixtures_emit_debug_objects() {
+    let fixtures = fixture_files("run-pass");
+    on_large_stack(move || {
+        for fixture in fixtures {
+            let debug = lower_path_to_mir_with_source_locations(&fixture)
+                .unwrap_or_else(|error| panic!("{} should lower: {}", fixture.display(), error));
+            let source = read(&fixture);
+            let objects = emit_host_native_debug_objects_with_metadata(
+                &debug,
+                &fixture.display().to_string(),
+                &source,
+            )
+            .unwrap_or_else(|error| panic!("{} should emit: {}", fixture.display(), error));
+            assert_eq!(objects.len(), 1, "{} is one unit", fixture.display());
+            assert!(
+                contains(&objects[0], b"debug_line"),
+                "{} has a line table",
+                fixture.display()
+            );
+        }
+    });
+}
+
+fn remove_source_markers(module: &mut MirModule) -> usize {
+    let mut removed = 0;
+    for function in module
+        .functions
+        .iter_mut()
+        .chain(module.top_level.iter_mut())
+    {
+        for block in &mut function.blocks {
+            let before = block.instructions.len();
+            block.instructions.retain(|instruction| {
+                !matches!(
+                    instruction,
+                    Instruction::SourceLocation { .. } | Instruction::SourceName { .. }
+                )
+            });
+            removed += before - block.instructions.len();
+        }
+    }
+    removed
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
+}
+
+fn on_large_stack(work: impl FnOnce() + Send + 'static) {
+    thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(work)
+        .unwrap_or_else(|error| panic!("failed to spawn fixture thread: {}", error))
+        .join()
+        .unwrap_or_else(|payload| std::panic::resume_unwind(payload));
 }
 
 #[test]

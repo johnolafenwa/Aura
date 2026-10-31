@@ -11875,6 +11875,48 @@ pub extern "C-unwind" fn aura_direct_print_value(value: *mut OpaqueValue) {
     })
 }
 
+thread_local! {
+    /// The text [`aura_debug_render`] last returned on this thread.
+    static DEBUG_RENDERING: RefCell<std::ffi::CString> = RefCell::new(std::ffi::CString::default());
+}
+
+/// The text a debugger shows for the runtime value at `value`: what
+/// `print` writes, with a `str` quoted. The Aura formatter for lldb calls
+/// it while the program is stopped, so it runs none of the program's
+/// `Display` code, and it answers rather than fails: an unset local reads
+/// `<unset>`. The text lives until the thread's next call.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C" fn aura_debug_render(value: *mut OpaqueValue) -> *const std::ffi::c_char {
+    // A lent lookup result marks its address in the low bit.
+    let value = (value as usize & !1) as *mut OpaqueValue;
+    let rendered = if value.is_null() {
+        "<unset>".to_string()
+    } else {
+        // SAFETY: a debug build's variable holds a live box or null, and the
+        // program is stopped on this thread.
+        unsafe { with_value(value, render_debug_value) }
+    };
+    DEBUG_RENDERING.with(|slot| {
+        let text =
+            std::ffi::CString::new(rendered.replace('\0', "\\0")).expect("NUL bytes are escaped");
+        let pointer = text.as_ptr();
+        *slot.borrow_mut() = text;
+        pointer
+    })
+}
+
+/// `value` as [`aura_debug_render`] shows it.
+fn render_debug_value(value: &Value) -> String {
+    if let Value::String(text) = value {
+        return format!("{:?}", text.as_str());
+    }
+    let rendered = match DIRECT_FLOAT32_SLOTS.get() {
+        Some(slots) => value.render_with_slots(None, slots),
+        None => Ok(value.render()),
+    };
+    rendered.unwrap_or_else(|_| "<unavailable>".to_string())
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_value_as_condition(value: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| match unsafe { value_ref(value) } {

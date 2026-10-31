@@ -5413,6 +5413,37 @@ fn direct_print_helpers_are_callable() {
 }
 
 #[test]
+fn debug_render_shows_values_as_print_does_with_strings_quoted() {
+    fn rendered(value: *mut OpaqueValue) -> String {
+        let text = super::aura_debug_render(value);
+        unsafe { std::ffi::CStr::from_ptr(text) }
+            .to_string_lossy()
+            .into_owned()
+    }
+    assert_eq!(rendered(std::ptr::null_mut()), "<unset>");
+    let word = string_value("say \"hi\"\n\0");
+    assert_eq!(rendered(word), "\"say \\\"hi\\\"\\n\\0\"");
+    // A lent lookup result marks its address in the low bit.
+    let lent = (word as usize | 1) as *mut OpaqueValue;
+    assert_eq!(rendered(lent), "\"say \\\"hi\\\"\\n\\0\"");
+    unsafe { release_value(word) };
+    let list = boxed_value(Value::Vec(VecValue {
+        element_type: Type::named("str"),
+        elements: vec![
+            Value::String("a".to_string().into()),
+            Value::String("b".to_string().into()),
+        ]
+        .into(),
+        str_view: Default::default(),
+    }));
+    assert_eq!(rendered(list), "[a, b]");
+    unsafe { release_value(list) };
+    let number = int_value(42);
+    assert_eq!(rendered(number), "42");
+    unsafe { release_value(number) };
+}
+
+#[test]
 fn direct_print_u64_renders_the_full_unsigned_range() {
     const HELPER_ENV: &str = "AURA_DIRECT_RUNTIME_PRINT_U64_HELPER";
     if std::env::var_os(HELPER_ENV).is_some() {

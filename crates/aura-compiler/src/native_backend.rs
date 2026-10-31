@@ -178,6 +178,45 @@ impl MemFlags {
     }
 }
 
+/// A defined function as a debugger names it: its source file, the name
+/// a call stack shows, and the line of its `def`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FunctionSource {
+    pub(crate) path: String,
+    pub(crate) name: String,
+    pub(crate) line: u32,
+}
+
+/// How a debugger reads the one word of a variable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DebugEncoding {
+    Signed,
+    Unsigned,
+    Float,
+    Bool,
+    /// The address of a runtime value.
+    Value,
+}
+
+/// A source variable a debugger shows, held in one variable of the body.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DebugVariable {
+    pub(crate) name: String,
+    /// The Aura type, as the debugger names the variable's type.
+    pub(crate) type_name: String,
+    pub(crate) encoding: DebugEncoding,
+}
+
+/// A source variable of a plain class type a debugger shows, whose fields
+/// are each held in one variable of the body. Each field's `name` is the
+/// field's.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DebugRecord {
+    pub(crate) name: String,
+    pub(crate) type_name: String,
+    pub(crate) fields: Vec<(Var, DebugVariable)>,
+}
+
 /// Why a trap ends the task. Nothing reads the code; it only marks the
 /// path in the machine code.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -295,6 +334,12 @@ pub(crate) trait ModuleBackend {
     ) -> Result<DataHandle, String>;
 
     fn define_data(&mut self, data: DataHandle, contents: DataDescription) -> Result<(), String>;
+    /// Makes the object a debug build: unoptimized, with DWARF for the
+    /// functions `describe_function` names.
+    fn enable_debug_info(&mut self);
+    /// Gives `function` a debugger's name and source position. Only a
+    /// debug build reads it.
+    fn describe_function(&mut self, function: FuncHandle, source: FunctionSource);
 
     /// Declares that `function`, an import, touches no memory its callers
     /// see and returns the same value on every call from one task, so the
@@ -338,6 +383,14 @@ pub(crate) trait FunctionBackend {
     /// Marks `block` as rarely run, so the code generator lays it out and
     /// predicts branches to it as cold.
     fn set_cold_block(&mut self, block: Blk);
+    /// The source position of the instructions built from here on, for a
+    /// debug build's line table.
+    fn set_source_location(&mut self, line: u32, column: u32);
+    /// Shows `var` in a debugger as `variable`, in a debug build.
+    fn describe_var(&mut self, var: Var, variable: DebugVariable);
+    /// Shows the variables of `record`'s fields in a debugger as one
+    /// record, in a debug build.
+    fn describe_record(&mut self, record: DebugRecord);
     fn current_block(&self) -> Option<Blk>;
     fn block_params(&self, block: Blk) -> Vec<Val>;
     fn append_block_param(&mut self, block: Blk, ty: ScalarType) -> Val;

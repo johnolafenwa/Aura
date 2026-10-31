@@ -4061,3 +4061,50 @@ abc
     );
     crate::lower_source_to_mir(source).expect("sequence_builtins_owned_elements lowers");
 }
+
+#[test]
+fn debug_builds_emit_line_tables_and_variables_for_every_value_kind() {
+    let source = r#"class Point:
+    x: int64
+    y: float64
+
+class Tag:
+    name: str
+
+def scale(point: Point, by: float64) -> float64:
+    total = point.y * by
+    return total
+
+def main() -> None:
+    flag = true
+    small: uint8 = 7
+    mut count: int32 = 3
+    words = ["a", "b"]
+    tag = Tag(name="t")
+    p = Point(x=1, y=2.5)
+    for word in words:
+        print(word)
+    count = count + 1
+    print(f"{flag} {small} {count} {tag.name} {scale(p, 2.0)}")
+"#;
+    let path = std::path::Path::new("/tmp/debug_value_kinds.au");
+    let module = crate::lower_path_with_source_to_mir_with_source_locations(path, source)
+        .expect("the program lowers with source locations");
+    let objects = crate::emit_host_native_debug_objects_with_metadata(
+        &module,
+        &path.display().to_string(),
+        source,
+    )
+    .expect("the program emits debug objects");
+    assert_eq!(objects.len(), 1);
+    let has = |needle: &[u8]| {
+        objects[0]
+            .windows(needle.len())
+            .any(|window| window == needle)
+    };
+    assert!(has(b"debug_line"));
+    assert!(has(b"debug_info"));
+    for name in ["AuraValue", "Point", "word", "total", "flag", "small"] {
+        assert!(has(name.as_bytes()), "debug info names `{name}`");
+    }
+}

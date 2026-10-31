@@ -206,6 +206,8 @@ pub(super) fn shaped_locals(
                     excluded.insert(root(origin));
                 }
                 Instruction::Safepoint
+                | Instruction::SourceLocation { .. }
+                | Instruction::SourceName { .. }
                 | Instruction::Retain { .. }
                 | Instruction::Release { .. }
                 | Instruction::IndexInRange { .. }

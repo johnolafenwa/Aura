@@ -29,8 +29,32 @@ files. It provides:
   Tests** commands, a Run button in the editor title, and a **▶ Run** lens
   above `def main`. They run `aura` in an integrated terminal named Aura.
 
-Aura native builds do not carry debug information yet, so the extension has
-no debugger.
+- a debugger: **Aura: Debug File**, a Debug lens above `def main`, and F5
+  build the file with `aura build --debug` and debug it with LLVM's
+  `lldb-dap`, with breakpoints, stepping, the call stack, and local
+  variables shown as Aura values
+
+## Debugging
+
+The debugger needs `lldb-dap`. On macOS it comes with Xcode's command line
+tools (`xcode-select --install`). On Linux, install your distribution's
+`lldb` package, which provides `lldb-dap` or `lldb-dap-<version>`. Set
+`aura.lldbDapPath` if it is somewhere else.
+
+To debug with settings, add a `launch.json` entry:
+
+```json
+{
+  "type": "aura",
+  "request": "launch",
+  "name": "Debug app",
+  "program": "${workspaceFolder}/src/main.au",
+  "args": ["--verbose"]
+}
+```
+
+`cwd`, `env`, and `stopOnEntry` work as in other debuggers. Debug builds go
+to the extension's storage directory, not your workspace.
 
 ## Install
 
