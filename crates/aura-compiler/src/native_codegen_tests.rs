@@ -15866,3 +15866,47 @@ fn direct_element_views_and_field_lists_read_in_place() {
         assert!(referenced.contains(helper), "{helper}: {referenced:?}");
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn debug_source_paths_keep_the_directory_the_program_was_given_by() {
+    let directory = std::env::temp_dir().join(format!(
+        "aura-debug-paths-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time is after the epoch")
+            .as_nanos()
+    ));
+    let real = directory.join("real");
+    let linked = directory.join("linked");
+    std::fs::create_dir_all(real.join("lib")).expect("create the real directory");
+    std::os::unix::fs::symlink(&real, &linked).expect("link the directory");
+    let resolved = std::fs::canonicalize(&real).expect("resolve the real directory");
+    let program = linked.join("app.au").to_string_lossy().into_owned();
+
+    let module = resolved.join("lib").join("util.au");
+    assert_eq!(
+        super::debug_source_path_as_given(&module.to_string_lossy(), &program),
+        linked.join("lib").join("util.au").to_string_lossy()
+    );
+    let elsewhere = "/elsewhere/other.au";
+    assert_eq!(
+        super::debug_source_path_as_given(elsewhere, &program),
+        elsewhere
+    );
+    let direct = resolved.join("app.au").to_string_lossy().into_owned();
+    let unlinked = direct.clone();
+    assert_eq!(
+        super::debug_source_path_as_given(&direct, &unlinked),
+        direct
+    );
+    assert_eq!(
+        super::debug_source_path_as_given(&direct, "/missing/dir/app.au"),
+        direct
+    );
+    assert!(
+        super::debug_source_path_as_given("relative.au", "relative.au").ends_with("relative.au")
+    );
+    std::fs::remove_dir_all(&directory).expect("remove the test directory");
+}

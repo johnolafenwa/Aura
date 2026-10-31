@@ -126,8 +126,14 @@ test("a debug session stops at breakpoints and shows Aura values", { skip, timeo
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "aura-debug-session-"));
   const client = new DapClient(adapter);
   try {
-    const program = path.join(directory, "app.au");
-    const binary = path.join(directory, "app");
+    // Editors set breakpoints on the path they opened, which may run
+    // through a symbolic link, as macOS's temporary directory does.
+    const real = path.join(directory, "real");
+    const linked = path.join(directory, "linked");
+    fs.mkdirSync(real);
+    fs.symlinkSync(real, linked, "dir");
+    const program = path.join(linked, "app.au");
+    const binary = path.join(linked, "app");
     fs.writeFileSync(program, PROGRAM);
     childProcess.execFileSync(aura, debugBuildArguments(program, binary), { stdio: "pipe" });
 

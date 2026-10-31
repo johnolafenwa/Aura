@@ -1162,7 +1162,7 @@ impl<'a> NativeCodegen<'a> {
                 .as_deref()
                 .unwrap_or(&self.program_path);
             let source = FunctionSource {
-                path: debug_source_path(path),
+                path: debug_source_path_as_given(path, &self.program_path),
                 name: public_direct_function_name(&function.name),
                 line: u32::try_from(function.span.line).unwrap_or(u32::MAX),
             };
@@ -17315,6 +17315,28 @@ fn public_direct_function_name(name: &str) -> String {
 
 /// `path` as a debug build records it: absolute, so a debugger finds the
 /// file from any directory.
+/// The path a debugger should show for `path`, a module the program at
+/// `program_path` loaded. The loader resolves symbolic links, but an editor
+/// sets breakpoints on the path it opened, such as `/var/...` on macOS for a
+/// file under `/private/var/...`. So a module under the program's resolved
+/// directory is named under the program's directory as given.
+fn debug_source_path_as_given(path: &str, program_path: &str) -> String {
+    let path = debug_source_path(path);
+    let program = std::path::PathBuf::from(debug_source_path(program_path));
+    let Some(given_directory) = program.parent() else {
+        return path;
+    };
+    let Ok(resolved_directory) = std::fs::canonicalize(given_directory) else {
+        return path;
+    };
+    match std::path::Path::new(&path).strip_prefix(&resolved_directory) {
+        Ok(rest) if resolved_directory != given_directory => {
+            given_directory.join(rest).to_string_lossy().into_owned()
+        }
+        _ => path,
+    }
+}
+
 fn debug_source_path(path: &str) -> String {
     let path = std::path::Path::new(path);
     if path.is_absolute() {
