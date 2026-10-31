@@ -20,13 +20,15 @@
     "vscode": "^1.91.0"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Debuggers"
   ],
   "files": [
     "INSTALL.md",
     "LICENSE",
     "README.md",
     "dist/**",
+    "debug/**",
     "images/aura.png",
     "language-configuration.json",
     "snippets/**",
@@ -40,7 +42,10 @@
     "virtualWorkspaces": false
   },
   "activationEvents": [
-    "onLanguage:aura"
+    "onLanguage:aura",
+    "onDebugResolve:aura",
+    "onDebugDynamicConfigurations:aura",
+    "onCommand:aura.debugFile"
   ],
   "main": "./dist/extension.js",
   "devDependencies": {
@@ -91,6 +96,12 @@
         "icon": "$(play)"
       },
       {
+        "command": "aura.debugFile",
+        "title": "Debug File",
+        "category": "Aura",
+        "icon": "$(debug-alt)"
+      },
+      {
         "command": "aura.buildFile",
         "title": "Build File",
         "category": "Aura"
@@ -112,11 +123,20 @@
           "command": "aura.runFile",
           "when": "editorLangId == aura",
           "group": "navigation"
+        },
+        {
+          "command": "aura.debugFile",
+          "when": "editorLangId == aura",
+          "group": "navigation"
         }
       ],
       "commandPalette": [
         {
           "command": "aura.runFile",
+          "when": "editorLangId == aura"
+        },
+        {
+          "command": "aura.debugFile",
           "when": "editorLangId == aura"
         },
         {
@@ -137,6 +157,12 @@
           "default": "",
           "scope": "machine",
           "markdownDescription": "Full path to the `aura` executable the language server runs. Leave empty to use `aura` on `PATH`, then `~/.local/bin`, `~/.cargo/bin`, `/opt/homebrew/bin`, and `/usr/local/bin`."
+        },
+        "aura.lldbDapPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Full path to the `lldb-dap` debug adapter the Aura debugger starts. Leave empty to use Xcode's on macOS (`xcrun -f lldb-dap`), then `lldb-dap`, `lldb-dap-<version>`, or `lldb-vscode` on `PATH`."
         }
       }
     },
@@ -144,6 +170,79 @@
       {
         "language": "aura",
         "path": "./snippets/aura.json"
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "aura"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "aura",
+        "label": "Aura",
+        "languages": [
+          "aura"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "The .au file to build with `aura build --debug` and debug.",
+                "default": "${file}"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Arguments the program receives.",
+                "default": []
+              },
+              "cwd": {
+                "type": "string",
+                "description": "The program's working directory. Defaults to the directory of `program`."
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Environment variables to add for the program.",
+                "default": {}
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Stop at the program's first instruction.",
+                "default": false
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "aura",
+            "request": "launch",
+            "name": "Debug Aura file",
+            "program": "${file}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Aura: Debug file",
+            "description": "Build the current .au file with debug info and debug it.",
+            "body": {
+              "type": "aura",
+              "request": "launch",
+              "name": "Debug Aura file",
+              "program": "^\"\\${file}\""
+            }
+          }
+        ]
       }
     ]
   },

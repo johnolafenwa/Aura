@@ -84,7 +84,7 @@ test("extension manifest and listing are ready for both public marketplaces", ()
   assert.equal(manifest.preview, true);
   assert.equal(manifest.private, undefined);
   assert.equal(manifest.icon, "images/aura.png");
-  assert.deepEqual(manifest.categories, ["Programming Languages"]);
+  assert.deepEqual(manifest.categories, ["Programming Languages", "Debuggers"]);
   assert.deepEqual(manifest.keywords, [
     "aura",
     "compiled language",

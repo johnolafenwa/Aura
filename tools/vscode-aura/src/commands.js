@@ -96,12 +96,19 @@ function registerRunCommands(vscode, context) {
     provideCodeLenses(document) {
       return mainDefinitionLines(document.getText()).map((line) => {
         const range = new vscode.Range(line, 0, line, 0);
-        return new vscode.CodeLens(range, {
-          title: "▶ Run",
-          command: "aura.runFile",
-          arguments: [document.uri]
-        });
-      });
+        return [
+          new vscode.CodeLens(range, {
+            title: "▶ Run",
+            command: "aura.runFile",
+            arguments: [document.uri]
+          }),
+          new vscode.CodeLens(range, {
+            title: "Debug",
+            command: "aura.debugFile",
+            arguments: [document.uri]
+          })
+        ];
+      }).flat();
     }
   };
 

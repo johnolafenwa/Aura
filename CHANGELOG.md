@@ -19,6 +19,15 @@ in this file.
   endpoints are not clamped. Breaking: `sorted`, `reversed`, and `list`
   are now builtin function names, so a top-level `def` with one of those
   names is rejected with `AU2007`.
+- Aura programs can be debugged. `aura build --debug -o app app.au` builds
+  an unoptimized binary with DWARF line tables, function names, and local
+  variables, kept unstripped (with `app.dSYM` on macOS). The VS Code
+  extension adds an `aura` debug type, a **Debug File** command, and a
+  Debug lens above `def main`. Each builds the file and debugs it with
+  LLVM's `lldb-dap`: breakpoints, stepping, the call stack, and locals,
+  with `str`, `list`, `dict`, and other values shown as `print` writes
+  them and class fields shown one by one. Unions, callables, and classes
+  with a field of more than one word are not shown yet. See ADR-0067.
 - A new empty list such as `mut following: list[int64] = []` starts out
   with its type already recorded, and appending a scalar of the kind the
   list stores keeps that record. Before, the next assignment or call

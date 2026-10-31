@@ -267,6 +267,8 @@ fn reject_untrusted_extern_calls(module: &MirModule) -> Result<()> {
                 _ => None,
             },
             Instruction::Safepoint
+            | Instruction::SourceLocation { .. }
+            | Instruction::SourceName { .. }
             | Instruction::Retain { .. }
             | Instruction::Release { .. }
             | Instruction::Lend { .. }
@@ -323,6 +325,8 @@ fn function_uses_lightweight_tasks(function: &MirFunction) -> bool {
             .any(|instruction| match instruction {
                 Instruction::Assign { value, .. } => rvalue_uses_lightweight_tasks(value),
                 Instruction::Safepoint
+                | Instruction::SourceLocation { .. }
+                | Instruction::SourceName { .. }
                 | Instruction::Retain { .. }
                 | Instruction::Release { .. }
                 | Instruction::Lend { .. }
@@ -3770,6 +3774,7 @@ impl MirRuntime {
                 }
                 Ok(None)
             }
+            Instruction::SourceLocation { .. } | Instruction::SourceName { .. } => Ok(None),
             Instruction::Safepoint => {
                 if self.safepoints_enabled {
                     *safepoint_fuel -= 1;

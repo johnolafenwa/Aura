@@ -140,6 +140,7 @@ The foreign function interface (FFI) is at version 0.
 - Human diagnostics synthesize the compact call-chain, task-entry, and task-ancestry note lines.
 - Structured schema-version-1 diagnostics expose `call_frames` and `task_ancestry` arrays instead. They do not duplicate the generated frame prose in `notes`.
 - Aura does not expose host Rust or LLVM backtraces, debugger stack reflection, exception catching, or a standalone-binary JSON switch.
+- A [debug build](cli-and-tooling.md#debug-builds) does not show unions, callables, or a class with a field of more than one word, and lldb evaluates C expressions rather than Aura ones. A released value reads `<unset>` or null.
 
 ### Scheduling
 
@@ -292,7 +293,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - Panic unwinding stays enabled. The runtime archive keeps linkable symbols.
 - Built user executables link with `-Wl,-dead_strip` on macOS or `-Wl,--gc-sections` on Linux.
 - After linking, `strip -S -x` removes debug and local symbols while keeping the globals that process-global FFI needs.
-- Source locations, typed Aura call frames, and task ancestry are embedded runtime metadata and stay available. Native symbol and debugger information is reduced.
+- Source locations, typed Aura call frames, and task ancestry are embedded runtime metadata and stay available. Native symbol and debugger information is reduced, except in a `aura build --debug` build, which keeps it.
 - The host toolchain must provide `strip` as well as `cc`.
 - User executables link `libaura_runtime.a`, which contains the runtime and none of the compiler.
 

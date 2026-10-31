@@ -8822,6 +8822,89 @@ fn build_produces_a_runnable_binary() {
 }
 
 #[test]
+fn build_debug_keeps_dwarf_and_the_debugger_renderer() {
+    let temp = TempDir::new("aura-build-debug");
+    let source_path = temp.path().join("app.au");
+    let source = "def add(a: int64, b: int64) -> int64:\n    total = a + b\n    return total\n\ndef main() -> None:\n    names = [\"a\", \"b\"]\n    print(add(2, 3))\n    print(names)\n";
+    fs::write(&source_path, source).unwrap();
+    let contains = |haystack: &[u8], needle: &[u8]| {
+        haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
+    };
+
+    for from_stdin in [false, true] {
+        let output_path = temp.path().join(if from_stdin { "piped" } else { "app" });
+        let mut command = Command::new(aura_bin());
+        command.args(["build", "--debug", "-o"]).arg(&output_path);
+        if from_stdin {
+            command
+                .arg("--stdin")
+                .arg(&source_path)
+                .stdin(Stdio::piped());
+        } else {
+            command.arg(&source_path);
+        }
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = command.spawn().expect("failed to run aura build --debug");
+        if from_stdin {
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(source.as_bytes())
+                .unwrap();
+        }
+        let build = child.wait_with_output().unwrap();
+        assert!(
+            build.status.success(),
+            "debug build should succeed, stderr was:\n{}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&build.stderr).contains("with direct backend (debug)"),
+            "the build names itself a debug build: {}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+        let run = generated_binary(&output_path).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n[a, b]\n");
+
+        let binary = fs::read(&output_path).unwrap();
+        assert!(
+            contains(&binary, b"aura_debug_render"),
+            "the debugger's renderer is linked in"
+        );
+        let dwarf = if cfg!(target_os = "macos") {
+            let bundle = output_path.with_extension("dSYM");
+            let dwarf = bundle
+                .join("Contents/Resources/DWARF")
+                .join(output_path.file_name().unwrap());
+            fs::read(dwarf).expect("dsymutil writes the DWARF bundle")
+        } else {
+            binary
+        };
+        assert!(
+            contains(&dwarf, b"app.au"),
+            "the line table names the source"
+        );
+        assert!(contains(&dwarf, b"total"), "the variables are described");
+    }
+
+    let release_path = temp.path().join("release");
+    let release = Command::new(aura_bin())
+        .args(["build", "-o"])
+        .arg(&release_path)
+        .arg(&source_path)
+        .output()
+        .unwrap();
+    assert!(release.status.success());
+    assert!(
+        !contains(&fs::read(&release_path).unwrap(), b"aura_debug_render"),
+        "a normal build drops the debugger's renderer"
+    );
+}
+
+#[test]
 fn build_with_direct_backend_produces_runnable_binary_for_supported_program() {
     let temp = TempDir::new("aura-build-direct");
     let source_path = temp.path().join("main.au");

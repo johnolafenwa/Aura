@@ -544,6 +544,8 @@ impl Substitution<'_> {
                 Instruction::BeginElementLoan { selector, .. }
                 | Instruction::ReborrowElement { selector, .. } => self.operand(selector),
                 Instruction::Safepoint
+                | Instruction::SourceLocation { .. }
+                | Instruction::SourceName { .. }
                 | Instruction::Retain { .. }
                 | Instruction::Release { .. }
                 | Instruction::Lend { .. }

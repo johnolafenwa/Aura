@@ -729,7 +729,7 @@ pub(crate) fn stmt_references_name(stmt: &Stmt, name: &str) -> bool {
     }
 }
 
-fn statement_span(stmt: &Stmt) -> crate::diag::Span {
+pub(crate) fn statement_span(stmt: &Stmt) -> crate::diag::Span {
     match stmt {
         Stmt::Assign(stmt) => stmt.span,
         Stmt::View(stmt) => stmt.span,

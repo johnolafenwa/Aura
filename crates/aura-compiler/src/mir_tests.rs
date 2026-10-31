@@ -15771,3 +15771,50 @@ def main():
     let output = crate::run_mir(&module).expect("a user Ord sort should run");
     assert_eq!(output.stdout, "321\n");
 }
+
+#[test]
+fn source_locations_mark_each_statement_and_name_compiler_made_locals() {
+    let program = checked_program(
+        "def main() -> None:\n    mut total = 0\n    for i in range(3):\n        total = total + i\n    print(total)\n",
+    );
+    let plain = lower(&program);
+    let debug = lower_with_source_locations(&program);
+    let instructions = |module: &MirModule| {
+        module
+            .functions
+            .iter()
+            .find(|function| function.name == "main")
+            .expect("main is lowered")
+            .blocks
+            .iter()
+            .flat_map(|block| block.instructions.clone())
+            .collect::<Vec<_>>()
+    };
+    assert!(!instructions(&plain).iter().any(|instruction| matches!(
+        instruction,
+        Instruction::SourceLocation { .. } | Instruction::SourceName { .. }
+    )));
+    let debug_instructions = instructions(&debug);
+    let lines = debug_instructions
+        .iter()
+        .filter_map(|instruction| match instruction {
+            Instruction::SourceLocation { line, column } => Some((*line, *column)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    // A `mut` binding's statement starts at its name.
+    assert_eq!(lines, vec![(2, 9), (3, 5), (4, 9), (5, 5)]);
+    let names = debug_instructions
+        .iter()
+        .filter_map(|instruction| match instruction {
+            Instruction::SourceName { local, name } => Some((local.clone(), name.clone())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(names.len(), 1, "{names:?}");
+    assert_eq!(names[0].1, "i");
+    assert!(names[0].0.starts_with('%'));
+    // The interpreter skips both markers.
+    let output = crate::run_mir(&debug).expect("the debug module runs");
+    assert_eq!(output.stdout, "3\n");
+}

@@ -811,6 +811,21 @@ pub enum Instruction {
     /// one on each semantic backedge; runtimes amortize the actual yield with
     /// a per-function fuel counter.
     Safepoint,
+    /// The source position of the statement whose instructions follow,
+    /// for a debugger's line table. Only `aura build --debug` lowers with
+    /// these, and every pass and both backends' semantics ignore them.
+    SourceLocation {
+        line: u32,
+        column: u32,
+    },
+    /// Names the compiler-made `local` that holds source variable `name`,
+    /// as a loop target or a binding in a match arm, for a debugger. Like
+    /// `SourceLocation`, only `aura build --debug` lowers with these, at the
+    /// start of the entry block.
+    SourceName {
+        local: String,
+        name: String,
+    },
     /// Creates one new reference to the value at `place`. The next
     /// consuming `Place(place)` operand in the same block takes it. Only an
     /// explicit module holds it, and both backends treat it as a no-op.
@@ -8180,6 +8195,8 @@ fn validate_loan_instruction(
                     ..
                 }
                 | Instruction::Safepoint
+                | Instruction::SourceLocation { .. }
+                | Instruction::SourceName { .. }
         )
     {
         return Err(format!(
@@ -9274,7 +9291,9 @@ fn validate_loan_instruction(
                 None,
             )?;
         }
-        Instruction::Safepoint => {}
+        Instruction::Safepoint
+        | Instruction::SourceLocation { .. }
+        | Instruction::SourceName { .. } => {}
     }
     Ok(())
 }
@@ -10156,7 +10175,9 @@ pub(crate) fn instruction_place_mentions<'a>(
     mentions: &mut Vec<&'a str>,
 ) {
     match instruction {
-        Instruction::Safepoint => {}
+        Instruction::Safepoint
+        | Instruction::SourceLocation { .. }
+        | Instruction::SourceName { .. } => {}
         Instruction::Retain { place } | Instruction::Release { place } => mentions.push(place),
         Instruction::Lend { place, temp, .. } | Instruction::EndLend { place, temp, .. } => {
             mentions.extend([place.as_str(), temp])
@@ -10314,6 +10335,23 @@ pub fn lower(program: &Program) -> MirModule {
     let mut module = lower_unresolved(program);
     specialize::specialize_generic_functions(&mut module);
     make_explicit(program, module)
+}
+
+thread_local! {
+    static SOURCE_LOCATIONS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Lowers `program` as `lower` does and puts a `SourceLocation` before each
+/// statement's instructions, for a build a debugger steps through.
+pub fn lower_with_source_locations(program: &Program) -> MirModule {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SOURCE_LOCATIONS.with(|enabled| enabled.set(self.0));
+        }
+    }
+    let _restore = Restore(SOURCE_LOCATIONS.with(|enabled| enabled.replace(true)));
+    lower(program)
 }
 
 /// Lowers `program` as `lower` does but keeps every generic call erased,
@@ -11502,6 +11540,9 @@ struct Lowerer<'a> {
     specialized_bound_roots: BTreeMap<String, String>,
     non_owning_roots: BTreeSet<String>,
     scoped_names: Vec<std::collections::HashMap<String, String>>,
+    /// The source name of each compiler-made local that holds a source
+    /// variable, kept for a debug build once the variable's scope ends.
+    debug_names: BTreeMap<String, String>,
     /// The source bindings of each open statement block, innermost last,
     /// above one for bindings made outside any statement block.
     binding_blocks: Vec<BindingBlock>,
@@ -11724,6 +11765,7 @@ impl<'a> Lowerer<'a> {
             specialized_bound_roots: BTreeMap::new(),
             non_owning_roots: BTreeSet::new(),
             scoped_names: Vec::new(),
+            debug_names: BTreeMap::new(),
             binding_blocks: vec![BindingBlock::default()],
             ended_bindings: BTreeSet::new(),
             generated_functions: Vec::new(),
@@ -13015,6 +13057,13 @@ impl<'a> Lowerer<'a> {
                 Some(Terminator::Return(spec.default_return));
         }
         self.complete_local_types(&spec.params);
+        let debug_names = std::mem::take(&mut self.debug_names);
+        self.blocks[0].instructions.splice(
+            0..0,
+            debug_names
+                .into_iter()
+                .map(|(local, name)| Instruction::SourceName { local, name }),
+        );
 
         let mut function = MirFunction {
             name: spec.name,
@@ -13101,6 +13150,7 @@ impl<'a> Lowerer<'a> {
                 .cloned()
                 .collect::<BTreeSet<_>>();
             self.needed_after_current_stmt = needed_after.clone();
+            self.emit_source_location(crate::sema::statement_span(stmt));
             if !self.lower_stmt(stmt, &needed_after) {
                 self.needed_after_current_stmt.clear();
                 break;
@@ -13196,6 +13246,26 @@ impl<'a> Lowerer<'a> {
             .pop()
             .expect("statement block should have a binding block");
         self.ended_bindings.extend(block.declared);
+        self.keep_debug_names(block.rebound);
+    }
+
+    /// Ends the innermost scope of source names.
+    fn pop_scoped_names(&mut self) {
+        if let Some(scope) = self.scoped_names.pop() {
+            self.keep_debug_names(scope);
+        }
+    }
+
+    /// Records which local holds each source name of `scope`, for a debug
+    /// build.
+    fn keep_debug_names(&mut self, scope: std::collections::HashMap<String, String>) {
+        if SOURCE_LOCATIONS.with(std::cell::Cell::get) {
+            for (name, local) in scope {
+                if local != name {
+                    self.debug_names.insert(local, name);
+                }
+            }
+        }
     }
 
     /// Whether source `name` is in scope here, so assigning it reassigns
@@ -15799,7 +15869,7 @@ impl<'a> Lowerer<'a> {
             if !self.current_terminated() {
                 self.terminate(Terminator::Goto(self.label(after_block)));
             }
-            self.scoped_names.pop();
+            self.pop_scoped_names();
             self.restore_branch_loan_state(saved);
 
             next_condition_block = else_block;
@@ -15827,7 +15897,7 @@ impl<'a> Lowerer<'a> {
             if !self.current_terminated() {
                 self.terminate(Terminator::Goto(self.label(after_block)));
             }
-            self.scoped_names.pop();
+            self.pop_scoped_names();
             self.restore_branch_loan_state(saved);
         }
         if let Some(cleanup_block) = false_cleanup_block {
@@ -16135,7 +16205,7 @@ impl<'a> Lowerer<'a> {
                         self.terminate(Terminator::Goto(self.label(after_block)));
                     }
                 }
-                self.scoped_names.pop();
+                self.pop_scoped_names();
                 next_case_block = next_block;
             }
         }
@@ -17853,7 +17923,7 @@ impl<'a> Lowerer<'a> {
         if !self.current_terminated() {
             self.terminate(Terminator::Goto(self.label(safepoint_block)));
         }
-        self.scoped_names.pop();
+        self.pop_scoped_names();
         self.loop_stack.pop();
 
         self.switch_to(safepoint_block);
@@ -18456,7 +18526,7 @@ impl<'a> Lowerer<'a> {
         if !self.current_terminated() {
             self.terminate(Terminator::Goto(self.label(safepoint_block)));
         }
-        self.scoped_names.pop();
+        self.pop_scoped_names();
         self.loop_stack.pop();
 
         self.switch_to(safepoint_block);
@@ -18722,7 +18792,7 @@ impl<'a> Lowerer<'a> {
             self.emit_loan_cleanup_from(loan_depth, None);
             self.terminate(Terminator::Goto(self.label(continue_block)));
         }
-        self.scoped_names.pop();
+        self.pop_scoped_names();
         self.loop_stack.pop();
         let iteration_loans = self
             .loan_scopes
@@ -21997,7 +22067,7 @@ impl<'a> Lowerer<'a> {
                         self.terminate(Terminator::Goto(self.label(after_block)));
                     }
                 }
-                self.scoped_names.pop();
+                self.pop_scoped_names();
                 next_case_block = next_block;
             }
         }
@@ -27242,6 +27312,15 @@ impl<'a> Lowerer<'a> {
             ExprKind::Member { object, .. } => self.is_non_owning_place_expr(object),
             ExprKind::Index { object, .. } => self.is_non_owning_place_expr(object),
             _ => false,
+        }
+    }
+
+    fn emit_source_location(&mut self, span: crate::diag::Span) {
+        if SOURCE_LOCATIONS.with(std::cell::Cell::get) {
+            self.emit(Instruction::SourceLocation {
+                line: u32::try_from(span.line).unwrap_or(u32::MAX),
+                column: u32::try_from(span.column).unwrap_or(u32::MAX),
+            });
         }
     }
 

@@ -114,16 +114,19 @@ test("command lines quote paths for the shell", () => {
   assert.equal(commandLine("test", "aura", "/w/main.au"), "aura test '/w/main.au'");
 });
 
-test("main definitions get a Run lens", () => {
+test("main definitions get Run and Debug lenses", () => {
   assert.deepEqual(mainDefinitionLines("import io\n\ndef main() -> int32:\n    def main_helper():\n"), [2]);
   const fake = fakeVscode();
   const { codeLensProvider } = registerRunCommands(fake.vscode, { subscriptions: [] });
   assert.deepEqual(fake.codeLensSelector(), { language: "aura", scheme: "file" });
   const lenses = codeLensProvider.provideCodeLenses(document("/w/main.au"));
-  assert.equal(lenses.length, 1);
+  assert.equal(lenses.length, 2);
   assert.equal(lenses[0].range.startLine, 0);
   assert.deepEqual(lenses[0].command.arguments, [{ fsPath: "/w/main.au" }]);
   assert.equal(lenses[0].command.command, "aura.runFile");
+  assert.equal(lenses[1].range.startLine, 0);
+  assert.deepEqual(lenses[1].command.arguments, [{ fsPath: "/w/main.au" }]);
+  assert.equal(lenses[1].command.command, "aura.debugFile");
 });
 
 test("run, build, and test commands save the file and use one Aura terminal", async () => {

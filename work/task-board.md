@@ -501,7 +501,14 @@ Plan approved 2026-10-29 (all defaults; the release after this phase is
 - Target: fix every gap John listed for the VS Code extension and language
   server on 2026-10-23. Details are in `2026-10-23-editor-experience.md`.
 - Done: merged in PRs #119, #121, #123, #124, and #125.
-- Next: a debugger, which needs DWARF from the LLVM backend.
+- Next: a debugger, which needs DWARF from the LLVM backend. Done: see
+  "VS Code debugger" below.
+
+## VS Code debugger (complete)
+
+- `aura build --debug` and the extension's `aura` debug type through
+  `lldb-dap`, at John's request on 2026-10-31, specified in ADR-0067.
+  Details are in `2026-10-31-vs-code-debugger.md`.
 
 ## Batch 7 step 8: semantics in MIR (in progress)
 

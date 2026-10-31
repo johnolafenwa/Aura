@@ -52,6 +52,7 @@ pub use mir_runtime::{
     run_with_stdout_sink_and_program_args as run_mir_with_stdout_sink_and_program_args, StdoutSink,
 };
 pub use native_codegen::{
+    emit_host_debug_objects_with_metadata as emit_host_native_debug_objects_with_metadata,
     emit_host_object as emit_host_native_object,
     emit_host_object_with_metadata as emit_host_native_object_with_metadata,
     emit_host_objects_with_metadata as emit_host_native_objects_with_metadata,
@@ -527,6 +528,23 @@ pub fn lower_path_to_checked_mir(path: &Path) -> Result<CheckedMirModule> {
 pub fn lower_path_to_mir(path: &Path) -> Result<MirModule> {
     let program = check_path(path)?;
     Ok(lower_to_mir(&program))
+}
+
+/// Lowers `path` as [`lower_path_to_mir`] does, with the statement source
+/// locations a debug build's line table needs.
+pub fn lower_path_to_mir_with_source_locations(path: &Path) -> Result<MirModule> {
+    let program = check_path(path)?;
+    Ok(mir::lower_with_source_locations(&program))
+}
+
+/// Lowers `source` for `path` as [`lower_path_with_source_to_mir`] does,
+/// with the statement source locations a debug build's line table needs.
+pub fn lower_path_with_source_to_mir_with_source_locations(
+    path: &Path,
+    source: &str,
+) -> Result<MirModule> {
+    let program = check_path_with_source(path, source)?;
+    Ok(mir::lower_with_source_locations(&program))
 }
 
 pub fn update_git_dependencies_in_working_dir(

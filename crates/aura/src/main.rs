@@ -7,9 +7,10 @@ use std::process::{self, Command};
 use aura_compiler::format::{format_source, FormatError};
 use aura_compiler::{
     analyze_path_source, check_path, check_path_with_source, complete_path_source,
-    emit_host_native_objects_with_metadata, lower_path_to_checked_mir, lower_path_to_mir,
-    lower_path_with_source_to_mir, parse_source,
-    run_checked_mir_entry_with_stdout_sink_and_program_args,
+    emit_host_native_debug_objects_with_metadata, emit_host_native_objects_with_metadata,
+    lower_path_to_checked_mir, lower_path_to_mir, lower_path_to_mir_with_source_locations,
+    lower_path_with_source_to_mir, lower_path_with_source_to_mir_with_source_locations,
+    parse_source, run_checked_mir_entry_with_stdout_sink_and_program_args,
     run_path_with_source_and_stdout_sink_and_program_args,
     run_path_with_stdout_sink_and_program_args, update_git_dependencies_in_working_dir,
     CheckedMirModule, Diagnostic, MirModule, StructuredDiagnostic, Value,
@@ -191,12 +192,18 @@ fn main() {
         "build" => {
             let remaining = args.collect::<Vec<_>>();
             let (diagnostic_format, remaining) = parse_diagnostic_format(remaining);
-            let (output_path, input_args) = parse_build_args(remaining);
+            let (output_path, debug, input_args) = parse_build_args(remaining);
             let input = read_input(&mut input_args.into_iter());
-            let result = if input.from_stdin {
-                lower_path_with_source_to_mir(Path::new(&input.path), &input.source)
-            } else {
-                lower_path_to_mir(Path::new(&input.path))
+            let result = match (input.from_stdin, debug) {
+                (true, false) => {
+                    lower_path_with_source_to_mir(Path::new(&input.path), &input.source)
+                }
+                (true, true) => lower_path_with_source_to_mir_with_source_locations(
+                    Path::new(&input.path),
+                    &input.source,
+                ),
+                (false, false) => lower_path_to_mir(Path::new(&input.path)),
+                (false, true) => lower_path_to_mir_with_source_locations(Path::new(&input.path)),
             };
             match result {
                 Ok(mir) => {
@@ -208,15 +215,21 @@ fn main() {
                             wait_reported: false,
                             rebuild_reported: false,
                         };
-                        build_binary(&input.path, &input.source, &mir, &output_path, || {
-                            progress_reporter.wait()
-                        })
+                        build_binary(
+                            &input.path,
+                            &input.source,
+                            &mir,
+                            &output_path,
+                            debug,
+                            || progress_reporter.wait(),
+                        )
                     };
                     match build {
                         Ok(()) => {
                             eprintln!(
-                                "aura: built `{}` with direct backend",
-                                output_path.display()
+                                "aura: built `{}` with direct backend{}",
+                                output_path.display(),
+                                if debug { " (debug)" } else { "" }
                             );
                         }
                         Err(message) => {
@@ -3913,8 +3926,11 @@ fn temporary_run_binary_path(source_path: &str) -> PathBuf {
     std::env::temp_dir().join(unique)
 }
 
-fn parse_build_args(args: Vec<String>) -> (PathBuf, Vec<String>) {
+/// The output path, whether the build is a debug build, and the input
+/// arguments of `aura build`.
+fn parse_build_args(args: Vec<String>) -> (PathBuf, bool, Vec<String>) {
     let mut output = None;
+    let mut debug = false;
     let mut input_args = Vec::new();
     let mut index = 0;
 
@@ -3942,6 +3958,10 @@ fn parse_build_args(args: Vec<String>) -> (PathBuf, Vec<String>) {
                 }
                 index += 1;
             }
+            "--debug" => {
+                debug = true;
+                index += 1;
+            }
             _ => {
                 input_args.push(args[index].clone());
                 index += 1;
@@ -3954,7 +3974,7 @@ fn parse_build_args(args: Vec<String>) -> (PathBuf, Vec<String>) {
         print_usage_and_exit(2);
     }
 
-    (output, input_args)
+    (output, debug, input_args)
 }
 
 fn read_input(args: &mut impl Iterator<Item = String>) -> Input {
@@ -4054,11 +4074,14 @@ fn build_binary(
     source: &str,
     mir: &MirModule,
     output_path: &Path,
+    debug: bool,
     mut on_wait: impl FnMut(),
 ) -> std::result::Result<(), String> {
-    build_direct_native_binary(path, source, mir, output_path, Some(&mut on_wait))
+    let runtime_lock = acquire_native_runtime_build_lock(Some(&mut on_wait))?;
+    link_direct_native_binary(path, source, mir, output_path, runtime_lock, debug).map(|_| ())
 }
 
+#[cfg(test)]
 fn build_direct_native_binary(
     path: &str,
     source: &str,
@@ -4078,6 +4101,21 @@ fn build_direct_native_binary_with_identity(
     output_path: &Path,
     runtime_lock: Option<NativeBuildLock>,
 ) -> std::result::Result<NativeRuntimeIdentity, String> {
+    link_direct_native_binary(path, source, mir, output_path, runtime_lock, false)
+}
+
+/// Emits `mir`, links it with the runtime at `output_path`, and returns the
+/// runtime's identity. A `debug` build keeps its DWARF: the objects are
+/// unoptimized, nothing is stripped, and on macOS `dsymutil` collects the
+/// DWARF into `<output>.dSYM` before the objects are removed.
+fn link_direct_native_binary(
+    path: &str,
+    source: &str,
+    mir: &MirModule,
+    output_path: &Path,
+    runtime_lock: Option<NativeBuildLock>,
+    debug: bool,
+) -> std::result::Result<NativeRuntimeIdentity, String> {
     if let Some(parent) = output_path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
             format!(
@@ -4089,7 +4127,11 @@ fn build_direct_native_binary_with_identity(
     }
 
     let native_runtime = ensure_native_runtime_artifacts()?;
-    let objects = emit_host_native_objects_with_metadata(mir, path, source)?;
+    let objects = if debug {
+        emit_host_native_debug_objects_with_metadata(mir, path, source)?
+    } else {
+        emit_host_native_objects_with_metadata(mir, path, source)?
+    };
     let temp_objects = (0..objects.len())
         .map(|unit| temporary_direct_object_path(output_path, unit))
         .collect::<Vec<_>>();
@@ -4169,24 +4211,58 @@ fn build_direct_native_binary_with_identity(
     for arg in &native_runtime.native_link_args {
         command.arg(arg);
     }
-    command.args(user_binary_link_args(std::env::consts::OS));
+    if debug {
+        command.args(debug_binary_link_args(std::env::consts::OS));
+    } else {
+        command.args(user_binary_link_args(std::env::consts::OS));
+    }
 
     let result = command
         .output()
         .map_err(|error| format!("failed to run native linker for direct backend: {}", error));
-
-    remove_temp_objects();
     let _ = fs::remove_file(&temp_staticlib);
 
-    let output = result?;
+    let linked = result.and_then(|output| {
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "direct backend link failed:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            ))
+        }
+    });
+    // A macOS link leaves the DWARF in the objects, so the bundle must be
+    // made while they still exist.
+    let collected = linked.and_then(|()| {
+        if debug && std::env::consts::OS == "macos" {
+            collect_debug_symbols(output_path)
+        } else {
+            Ok(())
+        }
+    });
+    remove_temp_objects();
+    collected?;
+    if !debug {
+        strip_user_binary(output_path)?;
+    }
+    Ok(runtime_identity)
+}
+
+/// Runs `dsymutil` on a linked debug build, which writes `<output>.dSYM`
+/// beside it for lldb to find.
+fn collect_debug_symbols(output_path: &Path) -> std::result::Result<(), String> {
+    let output = Command::new("dsymutil")
+        .arg(output_path)
+        .output()
+        .map_err(|error| format!("failed to run dsymutil for the debug build: {error}"))?;
     if !output.status.success() {
         return Err(format!(
-            "direct backend link failed:\n{}",
+            "dsymutil failed for the debug build:\n{}",
             String::from_utf8_lossy(&output.stderr)
         ));
     }
-    strip_user_binary(output_path)?;
-    Ok(runtime_identity)
+    Ok(())
 }
 
 fn user_binary_strip_command(path: &Path) -> Command {
@@ -4214,6 +4290,16 @@ fn strip_user_binary(path: &Path) -> std::result::Result<(), String> {
 
 fn native_keep_symbols() -> bool {
     std::env::var_os("AURA_NATIVE_KEEP_SYMBOLS").is_some_and(|value| value == "1")
+}
+
+/// The link arguments of a debug build: no section garbage collection, and
+/// the runtime's `aura_debug_render`, which nothing in the program calls,
+/// linked in for the debugger's formatter.
+fn debug_binary_link_args(os: &str) -> &'static [&'static str] {
+    match os {
+        "macos" => &["-Wl,-u,_aura_debug_render"],
+        _ => &["-Wl,-u,aura_debug_render"],
+    }
 }
 
 fn user_binary_link_args(os: &str) -> &'static [&'static str] {
@@ -4731,8 +4817,8 @@ fn usage_text() -> &'static str {
        or: aura <ast|ast-json|mir|analyze> <file.au>\n\
        or: aura <check|run|ast|ast-json|mir|analyze> --stdin <virtual-path>\n\
        or: aura run [--backend mir|direct|auto] <file.au> [-- <program-args>...]\n\
-       or: aura build -o <output> [--backend auto|direct] [--format human|json] <file.au>\n\
-       or: aura build -o <output> [--backend auto|direct] [--format human|json] --stdin <virtual-path>\n\
+       or: aura build -o <output> [--backend auto|direct] [--debug] [--format human|json] <file.au>\n\
+       or: aura build -o <output> [--backend auto|direct] [--debug] [--format human|json] --stdin <virtual-path>\n\
        or: aura complete --line <n> --character <n> [--trigger .] <file.au>\n\
        or: aura complete --line <n> --character <n> [--trigger .] --stdin <virtual-path>\n\
        or: aura <signature-help|references|prepare-rename|rename> --line <n> --character <n> [--new-name <name>] [--include-declaration] [--stdin] <path>\n\
@@ -4818,6 +4904,14 @@ mod tests {
             &["-Wl,--gc-sections"]
         );
         assert!(super::user_binary_link_args("windows").is_empty());
+        assert_eq!(
+            super::debug_binary_link_args("macos"),
+            &["-Wl,-u,_aura_debug_render"]
+        );
+        assert_eq!(
+            super::debug_binary_link_args("linux"),
+            &["-Wl,-u,aura_debug_render"]
+        );
     }
 
     #[test]
