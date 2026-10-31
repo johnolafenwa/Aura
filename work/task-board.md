@@ -19,6 +19,8 @@ Last updated: 2026-10-30
   (`template_render` 1.06 -> 0.91 s).
 - Step 3b: one-byte `split` scan, known ASCII flags in f-string parts
   (`csv_aggregate` 943M -> 880M instructions).
+- Step 4a: new empty lists record their tag's shape, scalar pushes keep
+  it (`regex_match` 1,434M -> 1,164M instructions, 0.59 -> 0.53 s).
 
 ## File I/O hand-off (complete)
 

@@ -7,6 +7,12 @@ in this file.
 
 ## Unreleased
 
+- A new empty list such as `mut following: list[int64] = []` starts out
+  with its type already recorded, and appending a scalar of the kind the
+  list stores keeps that record. Before, the next assignment or call
+  checked the type again in the runtime. `regex_match`, which builds two
+  such lists for every byte it scans, runs 19% fewer instructions
+  (0.59 s -> 0.53 s).
 - `str.replace` and `str.count` with a one-character pattern scan for
   that byte directly instead of building a substring searcher on each
   call. `template_render`, whose HTML escape is five such `replace`

@@ -1559,6 +1559,15 @@ runs about 15% faster. `line.split(",")` scans for the comma the same
 way, so `csv_aggregate`, which splits every line, runs about 7% fewer
 instructions.
 
+### Type Checks on New Lists
+
+Native code skips the runtime type check on a value that already has the
+type it is given. A new empty list such as `mut states: list[int64] = []`
+now counts as having its type from the start, and appending an `int64` to a
+`list[int64]` keeps it. A loop that builds a fresh list for each step and
+passes it on, as `regex_match` does for every byte, no longer pays a
+runtime type check for each pass.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

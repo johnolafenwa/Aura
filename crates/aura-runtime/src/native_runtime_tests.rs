@@ -27520,7 +27520,21 @@ fn a_tag_through_a_cell_records_the_shape_until_the_next_write() {
     assert!(shape(list).is_null());
     super::aura_direct_tag_value_type_cell(list, &cell, descriptor.as_ptr(), descriptor.len());
     assert_eq!(shape(list).cast::<std::ffi::c_void>(), tag);
+    // An unboxed element of the kind the list keeps changes no shape.
+    super::aura_direct_vec_push_scalar(list, 8, super::DirectScalarKind::Int64 as i64);
+    assert_eq!(shape(list).cast::<std::ffi::c_void>(), tag);
+    // One the list stores as a value does.
+    super::aura_direct_vec_push_scalar(
+        list,
+        1.5_f64.to_bits() as i64,
+        super::DirectScalarKind::Float64 as i64,
+    );
+    assert!(shape(list).is_null());
     unsafe { release_value(list) };
+    // A list made empty through the cell already has the shape.
+    let made = super::aura_direct_vec_empty_tagged(&cell, descriptor.as_ptr(), descriptor.len());
+    assert_eq!(shape(made).cast::<std::ffi::c_void>(), tag);
+    unsafe { release_value(made) };
 }
 
 #[test]

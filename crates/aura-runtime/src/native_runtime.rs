@@ -7932,14 +7932,20 @@ pub extern "C-unwind" fn aura_direct_vec_empty_tagged(
             _ => runtime_error(format!("an empty list cannot take the type `{}`", tag.name)),
         };
         let elements = empty_elements_for(&element_type);
-        boxed_value_with_type(
+        let boxed = boxed_value_with_type(
             Value::Vec(VecValue {
                 element_type,
                 elements,
                 str_view: Default::default(),
             }),
             Some(Arc::clone(&tag.name)),
-        )
+        );
+        // The new list has the shape the tag records, as a tag through the
+        // same cell would leave it.
+        (*boxed)
+            .shape_tag
+            .store(std::ptr::from_ref(tag).cast_mut(), Ordering::Relaxed);
+        boxed
     })
 }
 
@@ -8135,12 +8141,16 @@ fn narrow_for_scalar_write(vector: &mut VecValue, kind: i64) {
 pub extern "C-unwind" fn aura_direct_vec_push_scalar(vec: *mut OpaqueValue, bits: i64, kind: i64) {
     task_runtime_boundary(|| {
         let kind = DirectScalarKind::of_code(kind);
-        with_vector_mut(vec, |vector| {
+        // SAFETY: `with_vector_mut` checks the handle before anything else.
+        let shape_tag = unsafe { vec.as_ref() }.map_or(std::ptr::null_mut(), |held| {
+            held.shape_tag.load(Ordering::Relaxed)
+        });
+        let kept_shape = with_vector_mut(vec, |vector| {
             if kind == DirectScalarKind::Float32 {
                 vector.elements.narrow_to_float32();
             }
             if push_scalar_bits(&mut vector.elements, kind, bits) {
-                return;
+                return true;
             }
             let value = kind.value(bits);
             if is_unknown_runtime_type(&vector.element_type) {
@@ -8150,7 +8160,17 @@ pub extern "C-unwind" fn aura_direct_vec_push_scalar(vec: *mut OpaqueValue, bits
                 }
             }
             vector.elements.push(value);
+            false
         });
+        // An element stored unboxed in a list that keeps that kind changes
+        // neither its element type nor its form, so the list keeps the
+        // shape its last tag gave it, and the next tag needs no call.
+        if kept_shape {
+            // SAFETY: as above; the write has ended.
+            if let Some(held) = unsafe { vec.as_ref() } {
+                held.shape_tag.store(shape_tag, Ordering::Relaxed);
+            }
+        }
     })
 }
 
