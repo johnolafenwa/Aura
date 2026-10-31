@@ -2929,6 +2929,138 @@ pub fn slice_text(text: &Text, start: Option<i128>, end: Option<i128>) -> Result
     Ok(text.slice(range))
 }
 
+/// The first position and the count of positions that the stepped slice
+/// `[start:end:step]` selects from a sequence of `len` elements.
+///
+/// A positive step takes the one-colon slice `[start:end]`, with its
+/// defaults and checks, and every `step`-th position of it from its start.
+/// A negative step walks down from `start` to just above `end`: an omitted
+/// `start` is the last position, an omitted `end` lies before the first,
+/// and a written endpoint is normalized once, as in a one-colon slice.
+pub fn stepped_slice_positions(
+    start: Option<i128>,
+    end: Option<i128>,
+    step: i128,
+    len: usize,
+) -> Result<(usize, usize)> {
+    if step == 0 {
+        return Err(Diagnostic::coded("AU4003", "slice step cannot be zero"));
+    }
+    if step > 0 {
+        let (start, end) = normalize_slice_bounds(start, end, len)?;
+        // `step` fits in i64, so it fits in u128 and the count fits `len`.
+        let count = ((end - start) as u128).div_ceil(step as u128) as usize;
+        return Ok((start, count));
+    }
+    // Every supported Rust pointer width fits losslessly in i128.
+    let len = len as i128;
+    let normalize = |position: i128| {
+        if position < 0 {
+            position + len
+        } else {
+            position
+        }
+    };
+    let first = start.map(normalize).unwrap_or(len - 1);
+    let last = end.map(normalize).unwrap_or(-1);
+    if first == last && (-1..=len).contains(&first) {
+        return Ok((0, 0));
+    }
+    if last > first {
+        return Err(Diagnostic::coded(
+            "AU4003",
+            format!("slice end `{last}` is greater than slice start `{first}` for a negative step"),
+        ));
+    }
+    if first >= len || last < -1 {
+        return Err(Diagnostic::coded(
+            "AU4003",
+            format!("a negative-step slice from `{first}` down to `{last}` is outside `0..{len}`"),
+        ));
+    }
+    // `last < first`, so the walk takes at least one position.
+    let count = (first - last).unsigned_abs().div_ceil(step.unsigned_abs()) as usize;
+    Ok((first as usize, count))
+}
+
+/// The positions a stepped slice selects, as the inclusive range of the
+/// one-colon slice that covers them: `(low, high)` with `high` exclusive.
+fn stepped_slice_cover(first: usize, count: usize, step: i128) -> (usize, usize) {
+    if count == 0 {
+        return (0, 0);
+    }
+    // The last selected position is inside the sequence, so the distance
+    // to it fits usize.
+    let span = (count - 1) * step.unsigned_abs() as usize;
+    if step > 0 {
+        (first, first + span + 1)
+    } else {
+        (first - span, first + 1)
+    }
+}
+
+/// `list[start:end:step]`: a fresh owned list of the selected elements, in
+/// the order the step walks them.
+pub fn slice_vec_owned_step(
+    vector: &VecValue,
+    start: Option<i128>,
+    end: Option<i128>,
+    step: i128,
+) -> Result<VecValue> {
+    let (first, count) = stepped_slice_positions(start, end, step, vector.elements.len())?;
+    let (low, high) = stepped_slice_cover(first, count, step);
+    let mut slice = slice_vec_owned(vector, Some(low as i128), Some(high as i128))?;
+    if step < 0 {
+        slice.elements.reverse();
+    }
+    let stride = step.unsigned_abs();
+    if stride > 1 && count > 1 {
+        // `count > 1` means the stride fits inside the sequence.
+        slice.elements.keep_every(stride as usize);
+    }
+    Ok(slice)
+}
+
+/// `str[start:end:step]`: positions count Unicode scalar values, as in a
+/// one-colon `str` slice.
+pub fn slice_text_step(
+    text: &Text,
+    start: Option<i128>,
+    end: Option<i128>,
+    step: i128,
+) -> Result<Text> {
+    if step == 1 {
+        return slice_text(text, start, end);
+    }
+    let pick = |len: usize| -> Result<Vec<usize>> {
+        let (first, count) = stepped_slice_positions(start, end, step, len)?;
+        let stride = step.unsigned_abs() as usize;
+        Ok((0..count)
+            .map(|index| {
+                if step > 0 {
+                    first + index * stride
+                } else {
+                    first - index * stride
+                }
+            })
+            .collect())
+    };
+    if text.is_ascii() {
+        let bytes = text.as_bytes();
+        let picked = pick(bytes.len())?
+            .into_iter()
+            .map(|position| bytes[position] as char)
+            .collect::<String>();
+        return Ok(Text::from(picked));
+    }
+    let scalars = text.chars().collect::<Vec<_>>();
+    let picked = pick(scalars.len())?
+        .into_iter()
+        .map(|position| scalars[position])
+        .collect::<String>();
+    Ok(Text::from(picked))
+}
+
 pub fn slice_string_owned(text: &str, start: Option<i128>, end: Option<i128>) -> Result<String> {
     let range = string_slice_byte_range(text, start, end)?;
     Ok(text[range].to_owned())

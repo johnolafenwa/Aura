@@ -1,0 +1,6 @@
+type Check = def(value: int64) -> bool
+
+def main():
+    limit = 3
+    check = Check(lambda [limit] value: value > limit)
+    print(check(4))

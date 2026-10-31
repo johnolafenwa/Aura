@@ -31605,3 +31605,179 @@ fn binary_operator_symbols_match_source_spelling() {
         assert_eq!(binary_operator_symbol(op), symbol, "{op:?}");
     }
 }
+
+#[test]
+fn callable_slot_admission_explains_each_rejected_adapter_slot() {
+    let slot = |name: &str, keyword_only: bool, has_default: bool| FunctionParamContract {
+        keyword_only,
+        name: name.to_string(),
+        ty: Type::named("int64"),
+        passing: ReceiverKind::Borrow,
+        has_default,
+    };
+    let admit = |expected: &FunctionParamContract, actual: &FunctionParamContract| {
+        super::callable_slot_admission(expected, actual, 0)
+    };
+    assert_eq!(
+        admit(&slot("value", true, false), &slot("", false, false)),
+        Err("positional parameter 1 is positional-only, but the destination makes it keyword-only `value`".to_string())
+    );
+    assert_eq!(
+        admit(&slot("value", true, false), &slot("other", true, false)),
+        Err("keyword-only parameter `other` would be renamed to `value`; renaming requires an explicit wrapper".to_string())
+    );
+    assert_eq!(
+        admit(&slot("value", false, false), &slot("value", true, false)),
+        Err("parameter `value` is keyword-only and cannot become positional".to_string())
+    );
+    assert_eq!(
+        admit(&slot("value", false, false), &slot("", false, false)),
+        Err(
+            "positional parameter 1 has no exposed name, but the destination names it `value`"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        admit(&slot("value", false, false), &slot("other", false, false)),
+        Err(
+            "parameter `other` would be renamed to `value`; renaming requires an explicit wrapper"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        admit(&slot("value", false, true), &slot("value", false, false)),
+        Err("the destination promises a default for parameter `value`, which the source does not declare".to_string())
+    );
+    assert_eq!(
+        admit(&slot("", false, false), &slot("value", false, true)),
+        Ok(())
+    );
+    assert_eq!(
+        admit(&slot("value", true, false), &slot("value", false, false)),
+        Ok(())
+    );
+}
+
+#[test]
+fn sequence_builtins_reject_unsupported_operands_in_the_library_checker() {
+    for (source, code, message) in [
+        (
+            r#"def main() -> None:
+    numbers = [1, 2]
+    words = ["a"]
+    print(numbers + words)
+"#,
+            "AU2002",
+            r#"list concatenation needs two lists of one element type, found `list[int64]` and `list[str]`"#,
+        ),
+        (
+            r#"def main() -> None:
+    values = [1, 2]
+    print(values * 1.5)
+"#,
+            "AU2002",
+            r#"list repetition needs a list and an integer count, found `list[int64]` and `float64`"#,
+        ),
+        (
+            r#"def main() -> None:
+    print(reversed({1, 2}))
+"#,
+            "AU2002",
+            r#"`reversed(...)` expects a list, Span, or Range, found `set[int64]`"#,
+        ),
+        (
+            r#"def main() -> None:
+    values = [2, 1]
+    print(sorted(values, lambda value: value))
+"#,
+            "AU2004",
+            r#"parameter `key` of `sorted` is keyword-only"#,
+        ),
+        (
+            r#"class Point:
+    x: int64
+
+
+def main() -> None:
+    print(sorted([Point(x=1)]))
+"#,
+            "AU2002",
+            r#"`sorted` cannot order element type `Point`"#,
+        ),
+        (
+            r#"def main() -> None:
+    values = Array[int32].zeros([4])
+    print(values[::2])
+"#,
+            "AU2003",
+            r#"stepped slicing is available only for `list[T]`, `Span[T]`, and `str`, found `Array[int32]`"#,
+        ),
+        (
+            r#"def sorted(value: int64) -> int64:
+    return value
+
+
+def main() -> None:
+    print(sorted(1))
+"#,
+            "AU2007",
+            r#"`sorted` is a builtin function name and cannot be redefined"#,
+        ),
+        (
+            r#"def main() -> None:
+    counts = {"a": 1}
+    print(list(counts))
+"#,
+            "AU2002",
+            r#"`list(...)` expects a list, Span, set, or Range, found `dict[str, int64]`"#,
+        ),
+        (
+            r#"def main() -> None:
+    print(sorted([2, 1], reverse=1))
+"#,
+            "AU2002",
+            r#"`sorted` expects `bool` for `reverse`, found `int64`"#,
+        ),
+        (
+            r#"def keep(value: int64) -> list[int64]:
+    return [value]
+
+
+def main() -> None:
+    print(sorted([2, 1], key=keep))
+"#,
+            "AU2002",
+            r#"`sorted` cannot order key type `list[int64]`"#,
+        ),
+        (
+            r#"def main() -> None:
+    values = [1, 2, 3]
+    print(values[::1.5])
+"#,
+            "AU2002",
+            r#"slice endpoints and steps must have type `int64` or a losslessly narrower integer type, found `float64`"#,
+        ),
+        (
+            r#"import random
+
+def go(generators: list[random.Rng]):
+    print(len(sorted(generators)))
+"#,
+            "AU3007",
+            r#"cannot use `sorted` because `random.Rng` contains non-cloneable `random.Rng` state"#,
+        ),
+        (
+            r#"import random
+
+def go(generators: list[random.Rng]):
+    print(len(generators * 2))
+"#,
+            "AU3007",
+            r#"cannot use `list repetition` because `random.Rng` contains non-cloneable `random.Rng` state"#,
+        ),
+    ] {
+        let diagnostic = crate::check_source(source).expect_err(message);
+        assert_eq!(diagnostic.code, code, "{source}\n{diagnostic:?}");
+        assert_eq!(diagnostic.message, message, "{source}");
+    }
+}

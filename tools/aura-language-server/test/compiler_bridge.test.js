@@ -6038,7 +6038,7 @@ test("compiler bridge preserves owned slice result types, endpoint intelligence,
       `file://${path.join(tempRoot, "stepped.au")}`,
       [
         "def reject(values: list[int32]):",
-        "    print(values[::2])",
+        "    values[1:3] = values",
         ""
       ].join("\n")
     );
@@ -6046,7 +6046,7 @@ test("compiler bridge preserves owned slice result types, endpoint intelligence,
     assert.equal(stepped.diagnostics[0].code, "AU2005");
     assert.equal(
       stepped.diagnostics[0].message,
-      "slice steps are unavailable; use an explicit loop to select a stride"
+      "slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value"
     );
 
     for (const diagnosticCase of [

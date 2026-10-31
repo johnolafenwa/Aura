@@ -482,6 +482,13 @@ Plan approved 2026-10-29 (all defaults; the release after this phase is
 - Done: merged in PRs #136 and #137. The 0.7.0 release is the first
   Release workflow run, which confirms the macOS archives.
 
+## Sequence builtins and slice steps (complete)
+
+- `sorted`, `reversed`, `list`, list `+`, `*`, and `+=`, and stepped
+  slices for lists, spans, and `str`, specified in ADR-0066 at John's
+  request on 2026-10-31. Details are in
+  `2026-10-31-sequence-builtins.md`.
+
 ## Collection reduction builtins (complete)
 
 - `sum`, `any`, `all`, collection `min`/`max`, and variadic `min`/`max`,

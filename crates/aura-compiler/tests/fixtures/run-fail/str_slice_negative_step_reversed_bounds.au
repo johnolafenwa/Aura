@@ -1,0 +1,4 @@
+def main() -> int32:
+    text = "abc"
+    print(text[0:2:-1])
+    return 0

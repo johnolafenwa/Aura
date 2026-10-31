@@ -27,6 +27,9 @@ message evaluation, `AU4001`, cleanup, and matching behavior across backends.
 | `sum` | `sum(values: list[T]\|set[T]\|Span[T]\|Range\|Array[T]) -> T` | Adds the elements left to right with checked arithmetic. An empty collection gives zero. |
 | `any` | `any(values: list[bool]\|set[bool]\|Span[bool]) -> bool` | Whether some element is `true`. Stops at the first `true`. |
 | `all` | `all(values: list[bool]\|set[bool]\|Span[bool]) -> bool` | Whether every element is `true`. Stops at the first `false`. |
+| `sorted` | `sorted(values: list[T]\|Span[T]\|set[T]\|Range, *, key: def(T) -> K = ..., reverse: bool = false) -> list[T]` | A new list of the elements in stable sorted order, as `list.sort` orders them. The argument stays usable. |
+| `reversed` | `reversed(values: list[T]\|Span[T]\|Range) -> list[T]` | A new list of the elements in reverse order. |
+| `list` | `list(values: list[T]\|Span[T]\|set[T]\|Range) -> list[T]` | A new list of the elements in iteration order. |
 | `sqrt` | `sqrt(value: float32|float64) -> float32|float64` | Square root. |
 | `round` | `round(value: T) -> T` for integers; `round(value: float32\|float64) -> int64` | Returns an integer unchanged. Rounds a float to the nearest integer, with ties to even. |
 | `divmod` | `divmod(left: T, right: T) -> (T, T)` for one exact integer or float type | Returns the floor quotient and the remainder. The remainder takes the sign of the divisor. |

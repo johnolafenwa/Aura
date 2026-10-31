@@ -1,0 +1,5 @@
+type Step = Callable[def(value: int64) -> int64]
+
+def main():
+    steps: dict[str, Step] = {"double": Step(lambda value: value * 2)}
+    print(steps[1](2))

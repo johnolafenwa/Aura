@@ -1,0 +1,6 @@
+error[AU4003]: slice step cannot be zero
+ --> crates/aura-compiler/tests/fixtures/run-fail/slice_step_zero.au:4:18
+  |
+4 |     print(values[::step])
+  |                  ^
+  = note: Aura call chain (innermost first): main at 1:1

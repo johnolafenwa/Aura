@@ -1,0 +1,6 @@
+error[AU2002]: `sorted` cannot order key type `list[int64]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/sorted_key_unorderable.au:6:26
+  |
+6 |     print(sorted([2, 1], key=keep))
+  |                          ^
+  = help: use an existing naturally ordered type, or implement `Ord[T].lt` returning `bool`

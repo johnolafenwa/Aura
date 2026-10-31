@@ -1,0 +1,8 @@
+type Check = def(value: int64) -> bool
+
+def is_even(value: int64) -> bool:
+    return value % 2 == 0
+
+def main():
+    check = Check(function=is_even)
+    print(check(4))

@@ -1,0 +1,6 @@
+error[AU2002]: list repetition needs a list and an integer count, found `list[int64]` and `float64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/list_repeat_float_count.au:3:11
+  |
+3 |     print(values * 1.5)
+  |           ^
+  = help: the count is an `int64` or a losslessly narrower integer

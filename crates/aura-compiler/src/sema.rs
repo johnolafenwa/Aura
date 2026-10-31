@@ -156,8 +156,9 @@ use crate::ast::{
     ParamMode, Pattern, ReceiverKind, Stmt, TraitDecl, TypeRef, UnaryOp, VariantPattern, WithStmt,
 };
 use crate::call::{
-    bind_call_arguments, callable_params_from_decl, BuiltinAssociatedFunction,
-    BuiltinClassConstructor, BuiltinFunction, BuiltinMember, CallConvention,
+    bind_call_arguments, callable_params_from_decl, list_binary_result_type,
+    sequence_builtin_element_type, BuiltinAssociatedFunction, BuiltinClassConstructor,
+    BuiltinFunction, BuiltinMember, CallConvention,
 };
 use crate::diag::{Diagnostic, Result};
 use crate::integer::{
@@ -1322,6 +1323,17 @@ impl<'a> FunctionChecker<'a> {
         ty: &Type,
         span: crate::diag::Span,
     ) -> Result<()> {
+        self.require_orderable(&format!("list.{method_name}"), subject, ty, span)
+    }
+
+    /// Rejects ordering `ty` for `callee` unless `<` orders two `ty` values.
+    fn require_orderable(
+        &self,
+        callee: &str,
+        subject: &str,
+        ty: &Type,
+        span: crate::diag::Span,
+    ) -> Result<()> {
         if self
             .type_of_binary(span, BinaryOp::Less, ty.clone(), ty.clone())
             .is_ok()
@@ -1331,7 +1343,7 @@ impl<'a> FunctionChecker<'a> {
         Err(Diagnostic::coded_at(
             "AU2002",
             span,
-            format!("`list.{method_name}` cannot order {subject} `{ty}`"),
+            format!("`{callee}` cannot order {subject} `{ty}`"),
         )
         .with_help(
             "use an existing naturally ordered type, or implement `Ord[T].lt` returning `bool`",
@@ -9133,6 +9145,37 @@ impl<'a> FunctionChecker<'a> {
                 ),
             ));
         }
+        if let Some(list_ty) = list_binary_result_type(op, &left_ty, &right_ty) {
+            let operation = if op == BinaryOp::Add {
+                "list concatenation"
+            } else {
+                "list repetition"
+            };
+            if let Some(element_ty) = vec_element_type(&list_ty) {
+                self.reject_rng_duplication(operation, element_ty, span)?;
+            }
+            return Ok(list_ty);
+        }
+        let list_like = |ty: &Type| matches!(ty, Type::Named(name, args) if matches!(name.as_str(), "list" | "Span") && args.len() == 1);
+        if op == BinaryOp::Add && list_like(&left_ty) && list_like(&right_ty) {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                span,
+                format!(
+                    "list concatenation needs two lists of one element type, found `{left_ty}` and `{right_ty}`"
+                ),
+            ));
+        }
+        if op == BinaryOp::Mul && (list_like(&left_ty) || list_like(&right_ty)) {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                span,
+                format!(
+                    "list repetition needs a list and an integer count, found `{left_ty}` and `{right_ty}`"
+                ),
+            )
+            .with_help("the count is an `int64` or a losslessly narrower integer"));
+        }
         match (op, &left_ty, &right_ty) {
             (BinaryOp::And | BinaryOp::Or, Type::Named(name, args), _)
                 if args.is_empty() && name == "bool" && left_ty == right_ty =>
@@ -10401,6 +10444,124 @@ impl<'a> FunctionChecker<'a> {
                     }
                     BuiltinFunction::Sum | BuiltinFunction::Any | BuiltinFunction::All => {
                         unreachable!("`sum`, `any`, and `all` always reduce a collection")
+                    }
+                    BuiltinFunction::Sorted | BuiltinFunction::Reversed | BuiltinFunction::List => {
+                        let values_arg = required_ordered_arg(
+                            &ordered_args,
+                            0,
+                            span,
+                            format!(
+                                "internal error: `{}` should bind one collection",
+                                builtin.name()
+                            ),
+                        )?;
+                        let values_ty = self.type_of_expr(&values_arg.value, locals)?;
+                        self.apply_builtin_function_argument_passing(
+                            builtin, 0, values_arg, locals,
+                        )?;
+                        let ordered_only = builtin == BuiltinFunction::Reversed;
+                        let Some(element_ty) =
+                            sequence_builtin_element_type(&values_ty, !ordered_only)
+                        else {
+                            let accepted = if ordered_only {
+                                "a list, Span, or Range"
+                            } else {
+                                "a list, Span, set, or Range"
+                            };
+                            return Err(Diagnostic::coded_at(
+                                "AU2002",
+                                values_arg.span,
+                                format!(
+                                    "`{}(...)` expects {accepted}, found `{values_ty}`",
+                                    builtin.name()
+                                ),
+                            ));
+                        };
+                        self.reject_rng_duplication(builtin.name(), &element_ty, values_arg.span)?;
+                        if builtin == BuiltinFunction::Sorted {
+                            if let Some(key_arg) = ordered_args[1] {
+                                let key_ty = self.vec_callback_return_type(
+                                    "sort",
+                                    key_arg,
+                                    &element_ty,
+                                    locals,
+                                )?;
+                                self.require_orderable(
+                                    "sorted",
+                                    "key type",
+                                    &key_ty,
+                                    key_arg.span,
+                                )?;
+                                self.apply_builtin_function_argument_passing(
+                                    builtin, 1, key_arg, locals,
+                                )?;
+                            } else {
+                                self.require_orderable(
+                                    "sorted",
+                                    "element type",
+                                    &element_ty,
+                                    values_arg.span,
+                                )?;
+                            }
+                            if let Some(reverse_arg) = ordered_args[2] {
+                                let actual = self.type_of_expr_hint(
+                                    &reverse_arg.value,
+                                    locals,
+                                    Some(&Type::named("bool")),
+                                )?;
+                                if actual != Type::named("bool") {
+                                    return Err(Diagnostic::coded_at(
+                                        "AU2002",
+                                        reverse_arg.span,
+                                        format!(
+                                            "`sorted` expects `bool` for `reverse`, found `{actual}`"
+                                        ),
+                                    ));
+                                }
+                            }
+                        }
+                        Ok(Type::Named("list".to_string(), vec![element_ty]))
+                    }
+                    BuiltinFunction::SliceStep => {
+                        let values_arg = required_ordered_arg(
+                            &ordered_args,
+                            0,
+                            span,
+                            "internal error: a stepped slice should bind its object",
+                        )?;
+                        let object_ty =
+                            span_as_list_type(self.type_of_expr(&values_arg.value, locals)?);
+                        let element_ty = vec_element_type(&object_ty).cloned();
+                        if element_ty.is_none() && object_ty != Type::named("str") {
+                            return Err(Diagnostic::coded_at(
+                                "AU2003",
+                                values_arg.span,
+                                format!(
+                                    "stepped slicing is available only for `list[T]`, `Span[T]`, and `str`, found `{object_ty}`"
+                                ),
+                            )
+                            .with_help(
+                                "drop the step, or convert the value to a list or str before slicing",
+                            ));
+                        }
+                        self.apply_builtin_function_argument_passing(
+                            builtin, 0, values_arg, locals,
+                        )?;
+                        for argument in ordered_args.iter().skip(1).flatten() {
+                            if matches!(argument.value.kind, ExprKind::BuiltinOmitted) {
+                                continue;
+                            }
+                            self.check_index_domain_type(
+                                &argument.value,
+                                argument.value.span,
+                                "slice endpoints and steps",
+                                locals,
+                            )?;
+                        }
+                        if let Some(element_ty) = element_ty {
+                            self.reject_rng_duplication("list slice", &element_ty, span)?;
+                        }
+                        Ok(object_ty)
                     }
                     BuiltinFunction::Print => {
                         let value_arg = required_ordered_arg(

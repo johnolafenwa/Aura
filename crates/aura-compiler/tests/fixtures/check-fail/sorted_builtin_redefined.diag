@@ -1,0 +1,5 @@
+error[AU2007]: `sorted` is a builtin function name and cannot be redefined
+ --> crates/aura-compiler/tests/fixtures/check-fail/sorted_builtin_redefined.au:1:1
+  |
+1 | def sorted(value: int64) -> int64:
+  | ^

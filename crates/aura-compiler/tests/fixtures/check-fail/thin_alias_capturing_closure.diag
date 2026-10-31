@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: thin alias `Check` cannot hold a capturing closure; an owned environment needs `Callable[...]` storage
+ --> crates/aura-compiler/tests/fixtures/check-fail/thin_alias_capturing_closure.au:5:19
+  |
+5 |     check = Check(lambda [limit] value: value > limit)
+  |                   ^
+  = help: preserve identical complete contracts at bare destinations; apply safe restrictions through an explicit thin alias or owned callable constructor such as `Alias(function)`

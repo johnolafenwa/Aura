@@ -1,0 +1,5 @@
+error[AU2004]: `Check(...)` takes its callable value positionally
+ --> crates/aura-compiler/tests/fixtures/check-fail/thin_alias_keyword_argument.au:7:19
+  |
+7 |     check = Check(function=is_even)
+  |                   ^

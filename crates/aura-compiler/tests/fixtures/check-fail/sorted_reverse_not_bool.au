@@ -1,0 +1,2 @@
+def main() -> None:
+    print(sorted([2, 1], reverse=1))

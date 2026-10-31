@@ -1,0 +1,5 @@
+def main() -> int32:
+    values: list[int32] = [10, 20, 30]
+    step = 0
+    print(values[::step])
+    return 0

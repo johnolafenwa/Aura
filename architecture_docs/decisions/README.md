@@ -91,3 +91,4 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 63. [ADR-0063: Everyday syntax and pattern ergonomics](0063-everyday-syntax-and-pattern-ergonomics.md) — Accepted roadmap direction; syntax/pattern/API details pending
 64. [ADR-0064: Native backend strategy and codegen boundary](0064-native-backend-strategy-and-codegen-boundary.md) — Accepted; pre-Batch-1 measurements, incremental thin boundary, and the Batch 7 decision: LLVM replaces Cranelift as the only native backend
 65. [ADR-0065: Collection reduction builtins](0065-collection-reduction-builtins.md) — Accepted; `sum`, `any`, `all`, and collection and variadic `min`/`max`
+66. [ADR-0066: Sequence builtins, list operators, and slice steps](0066-sequence-builtins-and-list-operators.md) — Accepted; `sorted`, `reversed`, `list`, list `+` and `*`, and `values[start:end:step]`

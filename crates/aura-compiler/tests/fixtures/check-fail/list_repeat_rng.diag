@@ -1,0 +1,6 @@
+error[AU3007]: cannot use `list repetition` because `random.Rng` contains non-cloneable `random.Rng` state
+ --> crates/aura-compiler/tests/fixtures/check-fail/list_repeat_rng.au:4:15
+  |
+4 |     print(len(generators * 2))
+  |               ^
+  = help: move or remove the value so it has one owner, or construct an independent generator with an explicit seed

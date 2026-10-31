@@ -9059,6 +9059,160 @@ fn direct_runtime_round_and_divmod_use_shared_checked_numeric_contracts() {
 }
 
 #[test]
+fn direct_stepped_slices_walk_lists_and_text_and_trap_with_their_spans() {
+    let source = int_vec(&[0, 1, 2, 3, 4, 5, 6]);
+    for (start, has_start, end, has_end, step, expected) in [
+        (0, 0, 0, 0, 2, vec![0, 2, 4, 6]),
+        (0, 0, 0, 0, -1, vec![6, 5, 4, 3, 2, 1, 0]),
+        (1, 1, 6, 1, 2, vec![1, 3, 5]),
+        (5, 1, 1, 1, -2, vec![5, 3]),
+        (-1, 1, 0, 0, -3, vec![6, 3, 0]),
+        (3, 1, 3, 1, -1, vec![]),
+        (0, 0, 0, 0, 10, vec![0]),
+    ] {
+        let slice =
+            super::aura_direct_vec_slice_step(source, start, has_start, end, has_end, step, 1, 1);
+        assert_eq!(expect_vec_ints(slice), expected, "[{start}:{end}:{step}]");
+    }
+    assert_eq!(
+        expect_vec_ints(super::aura_direct_clone_value(source)),
+        vec![0, 1, 2, 3, 4, 5, 6]
+    );
+    unsafe { release_value(source) };
+    let words = string_vec(&["a", "b", "c", "d", "e"]);
+    assert_eq!(
+        expect_vec_strings(super::aura_direct_vec_slice_step(
+            words, 0, 0, 0, 0, -2, 1, 1
+        )),
+        vec!["e", "c", "a"]
+    );
+    unsafe { release_value(words) };
+
+    let text = string_value("héllo");
+    assert_eq!(
+        expect_string(super::aura_direct_string_slice_step(
+            text, 0, 0, 0, 0, -1, 1, 1
+        )),
+        "olléh"
+    );
+    assert_eq!(
+        expect_string(super::aura_direct_string_slice_step(
+            text, 1, 1, 0, 0, 2, 1, 1
+        )),
+        "él"
+    );
+    unsafe { release_value(text) };
+    let ascii = string_value("abcdef");
+    assert_eq!(
+        expect_string(super::aura_direct_string_slice_step(
+            ascii, 0, 0, 0, 0, -2, 1, 1
+        )),
+        "fdb"
+    );
+    assert_eq!(
+        expect_string(super::aura_direct_string_slice_step(
+            ascii, 1, 1, 4, 1, 1, 1, 1
+        )),
+        "bcd"
+    );
+    unsafe { release_value(ascii) };
+
+    let source = int_vec(&[1, 2, 3]);
+    let source_address = source as usize;
+    let zero = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aura_direct_vec_slice_step(
+                source_address as *mut OpaqueValue,
+                0,
+                0,
+                0,
+                0,
+                0,
+                7,
+                3,
+            );
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("a zero step must trap");
+    unsafe { release_value(source) };
+    assert_eq!(zero.code, "AU4003");
+    assert_eq!(zero.message, "slice step cannot be zero");
+    assert_eq!(zero.span, Some(Span::new(7, 3)));
+
+    let text = string_value("abc");
+    let text_address = text as usize;
+    let backward = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aura_direct_string_slice_step(
+                text_address as *mut OpaqueValue,
+                0,
+                1,
+                2,
+                1,
+                -1,
+                8,
+                4,
+            );
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("an end above the start must trap for a negative step");
+    unsafe { release_value(text) };
+    assert_eq!(
+        backward.message,
+        "slice end `2` is greater than slice start `0` for a negative step"
+    );
+    assert_eq!(backward.span, Some(Span::new(8, 4)));
+
+    let wrong = int_value(7);
+    let wrong_address = wrong as usize;
+    let wrong_receiver = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aura_direct_string_slice_step(
+                wrong_address as *mut OpaqueValue,
+                0,
+                0,
+                0,
+                0,
+                1,
+                1,
+                1,
+            );
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("a stepped str slice must reject the wrong receiver type");
+    unsafe { release_value(wrong) };
+    assert_eq!(wrong_receiver.message, "expected `str`, found `integer`");
+
+    let source = int_vec(&[1, 2, 3]);
+    let source_address = source as usize;
+    let outside = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let _ = super::aura_direct_vec_slice_step(
+                source_address as *mut OpaqueValue,
+                3,
+                1,
+                0,
+                0,
+                -1,
+                9,
+                2,
+            );
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("a start past the end must trap for a negative step");
+    unsafe { release_value(source) };
+    assert_eq!(
+        outside.message,
+        "a negative-step slice from `3` down to `-1` is outside `0..3`"
+    );
+    assert_eq!(outside.span, Some(Span::new(9, 2)));
+}
+
+#[test]
 fn direct_owned_slice_runtime_copies_values_and_preserves_au4003_spans() {
     let source = int_vec(&[10, 20, 30, 40]);
     let source_elements = unsafe {

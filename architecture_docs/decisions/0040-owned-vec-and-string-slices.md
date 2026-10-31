@@ -4,6 +4,10 @@
 > adds slice views with explicit lifetime rules. Existing owned slices remain
 > copies; this approval does not silently change them into aliases.
 
+> Extended (2026-10-31): [ADR-0066](0066-sequence-builtins-and-list-operators.md)
+> defines slice steps for lists, spans, and `str`, so `value[start:end:step]`
+> and `value[::]` no longer report `AU2005`. Slice assignment stays reserved.
+
 - Status: Accepted
 - Date: 2026-07-31
 - Roadmap decision: Batch 6, Phase 7.2
