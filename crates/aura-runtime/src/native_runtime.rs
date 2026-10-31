@@ -37,7 +37,7 @@ use crate::integer::{
 use crate::list_elements::{ElementRefMut, ListElements};
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_value::{
-    append_string_checked, append_text_checked, cancel_current_lightweight_task_boundary,
+    append_string_checked, append_text_checked_with, cancel_current_lightweight_task_boundary,
     cast_numeric_value, claim_task_result_observations, clear_current_task_native_slot,
     clone_json_codec_source, collect_queue_values, concat_text_checked, concat_texts_checked,
     current_lightweight_task_cancellation, current_lightweight_task_id, current_task_native_slot,
@@ -6724,9 +6724,15 @@ pub extern "C-unwind" fn aura_direct_format_begin(ptr: *const u8, len: usize) ->
 }
 
 fn push_format_text(builder: *mut OpaqueValue, text: &str) {
+    push_format_text_with(builder, text, text.is_ascii());
+}
+
+/// Appends `text`, whose ASCII flag the caller already knows, to the
+/// f-string `builder`.
+fn push_format_text_with(builder: *mut OpaqueValue, text: &str, ascii: bool) {
     let appended = unsafe {
         value_mut(builder, |value| match value {
-            Value::String(output) => append_text_checked(output, text),
+            Value::String(output) => append_text_checked_with(output, text, ascii),
             other => runtime_error(format!(
                 "f-string builder holds `{}` instead of `str`",
                 value_type_name(&*other)
@@ -6745,7 +6751,9 @@ pub extern "C-unwind" fn aura_direct_format_push_str(
     len: usize,
 ) {
     task_runtime_boundary(|| {
-        push_format_text(builder, literal_str(ptr, len));
+        // SAFETY: the caller's contract.
+        let bytes = unsafe { slice::from_raw_parts(ptr, len) };
+        push_format_text_with(builder, utf8_text(bytes), bytes.is_ascii());
     })
 }
 
@@ -6753,7 +6761,7 @@ pub extern "C-unwind" fn aura_direct_format_push_str(
 pub extern "C-unwind" fn aura_direct_format_push_i64(builder: *mut OpaqueValue, value: i64) {
     task_runtime_boundary(|| {
         let mut digits = [0_u8; I64_DECIMAL_BYTES];
-        push_format_text(builder, i64_decimal(value, &mut digits));
+        push_format_text_with(builder, i64_decimal(value, &mut digits), true);
     })
 }
 
@@ -6825,7 +6833,7 @@ pub extern "C-unwind" fn aura_direct_format_push_value(
         let appended = unsafe {
             with_value(value, |value| match value {
                 Value::String(text) => {
-                    push_format_text(builder, text);
+                    push_format_text_with(builder, text, text.is_ascii());
                     true
                 }
                 _ => false,
@@ -7130,7 +7138,7 @@ pub extern "C-unwind" fn aura_direct_string_split(
             with_value(value, |value| match value {
                 Value::String(text) => boxed_value(Value::Vec(VecValue {
                     element_type: Type::named("str"),
-                    elements: text.split(separator.as_str()).map(Value::string).collect(),
+                    elements: split_text(text, separator.as_str()).into(),
                     str_view: Default::default(),
                 })),
                 other => runtime_error(format!(
@@ -7140,6 +7148,23 @@ pub extern "C-unwind" fn aura_direct_string_split(
             })
         }
     })
+}
+
+/// The parts of `text` between occurrences of `separator`, as `str::split`
+/// gives them. A one-byte separator, such as a CSV comma, is found with
+/// `memchr`, and parts of ASCII text skip the ASCII check.
+fn split_text(text: &crate::text::Text, separator: &str) -> Vec<Value> {
+    let [byte] = separator.as_bytes() else {
+        return text.split(separator).map(Value::string).collect();
+    };
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for position in memchr::memchr_iter(*byte, text.as_bytes()) {
+        parts.push(Value::String(text.slice(start..position)));
+        start = position + 1;
+    }
+    parts.push(Value::String(text.slice(start..text.len())));
+    parts
 }
 
 /// `text` with every occurrence of `from` replaced by `to`, as

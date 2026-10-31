@@ -68,5 +68,14 @@ dictionary to the value to copy it, and released the copy at the end.
   one-byte pattern. `template_render` 1.06 -> 0.91 s (Python 0.57).
   What remains: each chained `replace` makes a box even when nothing
   matched, box churn in `out.append`, and `join`.
-- 3b: `csv_aggregate`.
+- 3b: `csv_aggregate` (callgrind, 40k rows): `split(",")` ran
+  TwoWaySearcher (5.8%), and each field passed to `to_int`/`add_to`
+  was copied into a new box (360k copies). `split` now scans one-byte
+  separators with `memchr`, its parts skip the ASCII check, and
+  f-string parts pass their known ASCII flag: 943M -> 880M instructions.
+  Tried and dropped: lending element loans (`to_int(fields[3])`) to
+  borrowed calls. A fresh `list[str]` must first move its elements into
+  boxes, which costs as much as the copies (net +8M instructions).
+  What remains: freeing each line's lists (14%), and f-string build cost
+  (about 225 instructions per part).
 - 4: `regex_match`.

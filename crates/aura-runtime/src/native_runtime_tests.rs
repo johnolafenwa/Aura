@@ -29199,7 +29199,7 @@ fn a_number_parse_for_a_slot_keeps_the_number_or_null() {
 }
 
 #[test]
-fn one_byte_replace_and_count_match_the_substring_search() {
+fn one_byte_replace_count_and_split_match_the_substring_search() {
     use crate::text::Text;
     let cases = [
         ("", "&", "&amp;"),
@@ -29208,6 +29208,8 @@ fn one_byte_replace_and_count_match_the_substring_search() {
         ("caf\u{e9} <b> \u{1f600}<", "<", "&lt;"),
         ("aaaa", "aa", "b"),
         ("x'y'z", "'", ""),
+        ("2026-01-02,north,SKU-7,,", ",", ""),
+        ("\u{e9},\u{1f600},", ",", ""),
     ];
     for (text, from, to) in cases {
         let replaced = super::replace_text(&Text::from(text), from, to);
@@ -29218,5 +29220,16 @@ fn one_byte_replace_and_count_match_the_substring_search() {
             format!("{counted:?}").contains(&format!("({expected})")),
             "{text}: {counted:?}"
         );
+        let parts: Vec<String> = super::split_text(&Text::from(text), from)
+            .into_iter()
+            .map(|part| match part {
+                Value::String(part) => {
+                    assert_eq!(part.is_ascii(), part.as_str().is_ascii(), "{text}");
+                    part.as_str().to_owned()
+                }
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(parts, text.split(from).collect::<Vec<_>>(), "{text}");
     }
 }

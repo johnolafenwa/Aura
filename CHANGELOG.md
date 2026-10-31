@@ -10,7 +10,10 @@ in this file.
 - `str.replace` and `str.count` with a one-character pattern scan for
   that byte directly instead of building a substring searcher on each
   call. `template_render`, whose HTML escape is five such `replace`
-  calls, runs in about 0.91 s instead of 1.06 s.
+  calls, runs in about 0.91 s instead of 1.06 s. `str.split` with a
+  one-character separator, such as a CSV comma, does the same, and
+  f-string parts no longer check their text for ASCII twice:
+  `csv_aggregate` runs 6.6% fewer instructions.
 - In `for item in items: f(item)`, where `f` only borrows its parameter,
   native code now lends `f` the list's own element instead of copying it
   into a new box for each step. A loop that passes each element of a

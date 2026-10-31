@@ -8984,6 +8984,12 @@ pub fn append_string_checked(output: &mut String, text: &str) -> Result<()> {
 
 /// [`append_string_checked`] for the text of a `str` value.
 pub fn append_text_checked(output: &mut Text, text: &str) -> Result<()> {
+    append_text_checked_with(output, text, text.is_ascii())
+}
+
+/// Appends `text`, whose ASCII flag the caller already knows, as
+/// [`append_text_checked`] does, growing the storage once.
+pub fn append_text_checked_with(output: &mut Text, text: &str, ascii: bool) -> Result<()> {
     let required = output
         .len()
         .checked_add(text.len())
@@ -8997,10 +9003,8 @@ pub fn append_text_checked(output: &mut Text, text: &str) -> Result<()> {
         ));
     }
     output
-        .try_reserve(text.len())
-        .map_err(|_| Diagnostic::coded("AU4005", "string allocation failed"))?;
-    output.push_str(text);
-    Ok(())
+        .try_push_with(text, ascii)
+        .map_err(|_| Diagnostic::coded("AU4005", "string allocation failed"))
 }
 
 pub fn concat_text_checked(mut left: Text, right: &str) -> Result<Text> {
