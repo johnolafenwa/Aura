@@ -14,7 +14,7 @@ use aura_core::types::Type;
 
 /// The `str` text-convenience methods, in the order the direct backend
 /// numbers them for its runtime dispatcher.
-pub const TEXT_METHOD_NAMES: [&str; 9] = [
+pub const TEXT_METHOD_NAMES: [&str; 10] = [
     "trim_start",
     "trim_end",
     "split_once",
@@ -24,6 +24,7 @@ pub const TEXT_METHOD_NAMES: [&str; 9] = [
     "find",
     "count",
     "repeat",
+    "chars",
 ];
 
 /// Evaluates one text-convenience method by name. `argument` is the text
@@ -50,6 +51,7 @@ pub fn evaluate_text_method(
         "find" => Ok(find(text, argument()?)),
         "count" => count_occurrences(text, argument()?),
         "repeat" => repeat(text, count),
+        "chars" => Ok(chars(text)),
         _ => Err(Diagnostic::coded(
             "AU4001",
             format!("unknown text method `str.{method}`"),
@@ -144,6 +146,42 @@ pub fn lines(text: &str) -> Value {
         }
     }
     string_list(parts)
+}
+
+/// `str.chars()`: each Unicode scalar value as a one-character string.
+pub fn chars(text: &str) -> Value {
+    string_list(text.chars().map(String::from))
+}
+
+/// `ord(text)`: the Unicode scalar value of a one-character string. Any
+/// other length traps with `AU4003`.
+pub fn ord(text: &str) -> Result<i64> {
+    let mut characters = text.chars();
+    match (characters.next(), characters.next()) {
+        (Some(character), None) => Ok(i64::from(u32::from(character))),
+        _ => Err(Diagnostic::coded(
+            "AU4003",
+            format!(
+                "`ord(...)` expects a one-character `str`, found {} characters",
+                text.chars().count()
+            ),
+        )),
+    }
+}
+
+/// `chr(code)`: the one-character string for a Unicode scalar value. A
+/// surrogate or out-of-range code traps with `AU4003`.
+pub fn chr(code: i64) -> Result<Value> {
+    u32::try_from(code)
+        .ok()
+        .and_then(char::from_u32)
+        .map(|character| Value::String(String::from(character).into()))
+        .ok_or_else(|| {
+            Diagnostic::coded(
+                "AU4003",
+                format!("`chr(...)` expects a Unicode scalar value, found {code}"),
+            )
+        })
 }
 
 /// `str.split_whitespace()`: splits on runs of Unicode whitespace and drops

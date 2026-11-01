@@ -7,6 +7,15 @@ in this file.
 
 ## Unreleased
 
+- New `ord(text)` and `chr(code)` builtins convert between a one-character
+  `str` and its Unicode scalar value, and `str.chars()` returns a string's
+  scalars as one-character strings. A wrong length or an invalid scalar value
+  stops the program with `AU4003`.
+- `min` and `max` accept `str`: two or more strings, or a list, set, or span
+  of them. The result is a copy.
+- **Incompatible:** `ord` and `chr` are now reserved builtin names, so a
+  module-level function with either name is rejected with `AU2007`.
+
 ## VS Code extension 0.11.0 — 2026-10-31
 
 - Debugs Aura programs. A new `aura` debug type, a **Debug File** command,

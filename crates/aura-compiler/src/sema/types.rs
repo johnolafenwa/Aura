@@ -1678,7 +1678,9 @@ pub(crate) fn text_convenience_result_type(method: &str) -> Option<Type> {
     match method {
         "trim_start" | "trim_end" | "repeat" => Some(text()),
         "split_once" | "rsplit_once" => Some(optional_type(Type::Tuple(vec![text(), text()]))),
-        "lines" | "split_whitespace" => Some(Type::Named("list".to_string(), vec![text()])),
+        "lines" | "chars" | "split_whitespace" => {
+            Some(Type::Named("list".to_string(), vec![text()]))
+        }
         "find" => Some(optional_type(Type::named("int64"))),
         "count" => Some(Type::named("int64")),
         _ => None,

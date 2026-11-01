@@ -266,6 +266,8 @@ fn builtin_function_bind_args_cover_remaining_variants() {
         BuiltinFunction::ParseInt32,
         BuiltinFunction::ParseInt64,
         BuiltinFunction::ParseFloat64,
+        BuiltinFunction::Ord,
+        BuiltinFunction::Chr,
     ] {
         let args = [dummy_arg(None)];
         let bound = builtin

@@ -9006,6 +9006,8 @@ fn direct_runtime_string_and_numeric_helpers_cover_builtin_surface() {
         expect_result_ok_int(super::aura_direct_parse_int32(string_value("123"))),
         123
     );
+    assert_eq!(super::aura_direct_string_ord(string_value("é")), 233);
+    assert_eq!(expect_string(super::aura_direct_string_chr(128512)), "😀");
     assert_eq!(
         expect_result_ok_int(super::aura_direct_parse_int64(string_value("-456"))),
         -456
@@ -13739,6 +13741,15 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "parse-float64-type" => {
                 super::aura_direct_parse_float64(bool_value(true));
             }
+            "ord-type" => {
+                super::aura_direct_string_ord(bool_value(true));
+            }
+            "ord-length" => {
+                super::aura_direct_string_ord(string_value("ab"));
+            }
+            "chr-surrogate" => {
+                super::aura_direct_string_chr(0xD800);
+            }
             "map-index-missing" => {
                 let map = super::aura_direct_map_empty();
                 expect_lookup_missing(super::aura_direct_map_set_in_place(
@@ -15030,6 +15041,15 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         (
             "parse-float64-type",
             "`parse_float64(...)` expects `str`, found `bool`",
+        ),
+        ("ord-type", "`ord(...)` expects `str`, found `bool`"),
+        (
+            "ord-length",
+            "`ord(...)` expects a one-character `str`, found 2 characters",
+        ),
+        (
+            "chr-surrogate",
+            "`chr(...)` expects a Unicode scalar value, found 55296",
         ),
         ("map-index-missing", "dict key `missing` was not present"),
         (

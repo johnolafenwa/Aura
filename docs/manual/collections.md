@@ -123,7 +123,7 @@ def main():
 | Call | Element type | Result | Empty collection |
 | --- | --- | --- | --- |
 | `sum(values)` | numeric `T` | `T` | zero |
-| `min(values)`, `max(values)` | numeric `T` | `T` | stops with `AU4001` |
+| `min(values)`, `max(values)` | numeric `T` or `str` | `T` | stops with `AU4001` |
 | `any(values)` | `bool` | `bool` | `false` |
 | `all(values)` | `bool` | `bool` | `true` |
 
@@ -140,6 +140,16 @@ one. An `Array` argument uses the Array's own `sum()`, `min()`, or `max()`; see
 `min` and `max` also take two or more numbers of one exact type, as in
 `min(3, 1, 2)`. A single number is an error: pass a collection or at least two
 values.
+
+`min` and `max` work on strings too, in the order `<` uses. The result is a
+copy, so the collection or the arguments stay usable:
+
+```aura
+def main():
+    words = ["pear", "apple", "fig"]
+    print(min(words))           # apple
+    print(max("b", "c", "a"))   # c
+```
 
 ## Building New Lists
 

@@ -146,6 +146,8 @@ runtime_functions! {
     ParseInt64 => ("aura_direct_parse_int64", [I64], Some(I64)),
     ParseNumberOk => ("aura_direct_parse_number_ok", [I64, I64], Some(I64)),
     ParseFloat64 => ("aura_direct_parse_float64", [I64], Some(I64)),
+    StringOrd => ("aura_direct_string_ord", [I64], Some(I64)),
+    StringChr => ("aura_direct_string_chr", [I64], Some(I64)),
     DurationLiteral => ("aura_direct_duration_literal", [I64, I64], Some(I64)),
     DurationFromI64 => ("aura_direct_duration_from_i64", [I64, I64], Some(I64)),
     DurationToFloat => ("aura_direct_duration_to_float", [I64, I64], Some(F64)),

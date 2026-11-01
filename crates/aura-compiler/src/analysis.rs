@@ -4050,6 +4050,7 @@ impl<'a> AnalysisBuilder<'a> {
                 | BuiltinMember::StringSplitOnce
                 | BuiltinMember::StringRsplitOnce
                 | BuiltinMember::StringLines
+                | BuiltinMember::StringChars
                 | BuiltinMember::StringSplitWhitespace
                 | BuiltinMember::StringFind
                 | BuiltinMember::StringCount
@@ -7941,6 +7942,7 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::StringSplitOnce,
         BuiltinMember::StringRsplitOnce,
         BuiltinMember::StringLines,
+        BuiltinMember::StringChars,
         BuiltinMember::StringSplitWhitespace,
         BuiltinMember::StringFind,
         BuiltinMember::StringCount,
@@ -8129,6 +8131,8 @@ fn builtin_function_return_type(name: &str) -> Option<Type> {
             "Result".to_string(),
             vec![Type::named("float64"), Type::named("str")],
         )),
+        BuiltinFunction::Ord => Some(Type::named("int64")),
+        BuiltinFunction::Chr => Some(Type::named("str")),
     }
 }
 

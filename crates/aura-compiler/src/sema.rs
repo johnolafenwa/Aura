@@ -10428,12 +10428,22 @@ impl<'a> FunctionChecker<'a> {
                                 ))
                             }
                             (_, Some(element)) if is_numeric_type(&element) => Ok(element),
+                            (BuiltinFunction::Min | BuiltinFunction::Max, Some(element))
+                                if !is_array && element == Type::named("str") =>
+                            {
+                                Ok(element)
+                            }
                             _ => Err(Diagnostic::coded_at(
                                 "AU2002",
                                 values_arg.span,
                                 format!(
-                                    "`{}(...)` expects a list, set, Range, or Array of numbers, found `{values_ty}`",
-                                    builtin.name()
+                                    "`{}(...)` expects a list, set, Range, or Array of numbers{}, found `{values_ty}`",
+                                    builtin.name(),
+                                    if builtin == BuiltinFunction::Sum {
+                                        ""
+                                    } else {
+                                        ", or a list or set of `str`"
+                                    }
                                 ),
                             )
                             .with_help(format!(
@@ -10911,11 +10921,11 @@ impl<'a> FunctionChecker<'a> {
                             ),
                         )?;
                         let left_ty = self.type_of_expr(&left_arg.value, locals)?;
-                        if !is_numeric_type(&left_ty) {
+                        if !is_numeric_type(&left_ty) && left_ty != Type::named("str") {
                             return Err(Diagnostic::at(
                                 left_arg.span,
                                 format!(
-                                    "`{}` expects numeric arguments, found `{}`",
+                                    "`{}` expects numeric or `str` arguments, found `{}`",
                                     builtin.name(),
                                     left_ty
                                 ),
@@ -11113,6 +11123,35 @@ impl<'a> FunctionChecker<'a> {
                             "Result".to_string(),
                             vec![Type::named("float64"), Type::named("str")],
                         ))
+                    }
+                    BuiltinFunction::Ord | BuiltinFunction::Chr => {
+                        let (expected, result) = if builtin == BuiltinFunction::Ord {
+                            (Type::named("str"), Type::named("int64"))
+                        } else {
+                            (Type::named("int64"), Type::named("str"))
+                        };
+                        let value_arg = required_ordered_arg(
+                            &ordered_args,
+                            0,
+                            span,
+                            format!(
+                                "internal error: `{}` should bind exactly one argument",
+                                builtin.name()
+                            ),
+                        )?;
+                        let value_ty =
+                            self.type_of_expr_hint(&value_arg.value, locals, Some(&expected))?;
+                        if value_ty != expected {
+                            return Err(Diagnostic::coded_at(
+                                "AU2002",
+                                value_arg.span,
+                                format!(
+                                    "`{}(...)` expects `{expected}`, found `{value_ty}`",
+                                    builtin.name()
+                                ),
+                            ));
+                        }
+                        Ok(result)
                     }
                 }
             }
@@ -12612,6 +12651,7 @@ impl<'a> FunctionChecker<'a> {
                                 | BuiltinMember::StringTrimEnd
                                 | BuiltinMember::StringClone => Ok(Type::named("str")),
                                 BuiltinMember::StringLines
+                                | BuiltinMember::StringChars
                                 | BuiltinMember::StringSplitWhitespace => {
                                     Ok(Type::Named("list".to_string(), vec![Type::named("str")]))
                                 }

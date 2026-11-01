@@ -23988,6 +23988,15 @@ impl<'a> Lowerer<'a> {
                     .expect("sequence builtins have maintained call metadata");
                 self.lower_sequence_builtin(expr, callee.span, builtin, args, &temp);
             }
+            ExprKind::Name(name)
+                if matches!(name.as_str(), "min" | "max")
+                    && args.len() >= 2
+                    && self.infer_expr_type(&args[0].value) == Some(Type::named("str")) =>
+            {
+                let builtin = BuiltinFunction::from_name(name)
+                    .expect("min and max have maintained call metadata");
+                self.lower_str_extremum(expr.span, builtin, args, &temp);
+            }
             ExprKind::Name(name) if matches!(name.as_str(), "min" | "max") && args.len() > 2 => {
                 // `min(a, b, c)` evaluates every argument left to right, then
                 // folds the two-argument builtin over them.
@@ -24235,6 +24244,97 @@ impl<'a> Lowerer<'a> {
     /// Lowers `sum`, `any`, `all`, and one-argument `min` or `max` over a
     /// list, set, span, or Range to a loop that folds each element into
     /// `result`. An Array argument calls the Array's own reduction instead.
+    /// A fresh owned copy of the `str` in `value`, as a movable operand.
+    fn emit_str_clone(&mut self, value: Operand) -> Operand {
+        let place = match value {
+            Operand::Place(place) | Operand::MovePlace(place) => place,
+            other => {
+                let place = self.new_typed_temp(Type::named("str"));
+                self.emit(Instruction::Assign {
+                    target: place.clone(),
+                    value: Rvalue::Use(other),
+                });
+                place
+            }
+        };
+        let copy = self.new_typed_temp(Type::named("str"));
+        self.emit(Instruction::Assign {
+            target: copy.clone(),
+            value: Rvalue::Call {
+                callee: CallTarget::Member {
+                    object: Operand::Place(place.clone()),
+                    field: "clone".to_string(),
+                    receiver_place: Some(place),
+                    dispatch: None,
+                },
+                args: Vec::new(),
+                type_args: Default::default(),
+            },
+        });
+        Operand::MovePlace(copy)
+    }
+
+    /// `min(a, b, ...)` or `max(a, b, ...)` of `str` values. Every argument
+    /// evaluates left to right and stays usable; `result` receives a copy of
+    /// the first smallest (or largest) one.
+    fn lower_str_extremum(
+        &mut self,
+        span: Span,
+        builtin: BuiltinFunction,
+        args: &[Argument],
+        result: &str,
+    ) {
+        let values = args
+            .iter()
+            .map(|argument| {
+                // Each argument is only read: the result is a copy.
+                match self.lower_expr_at_sequence_point(&argument.value, None) {
+                    Operand::MovePlace(place) => Operand::Place(place),
+                    other => other,
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut values = values.into_iter();
+        let first = values.next().expect("min and max of str have arguments");
+        let first = self.emit_str_clone(first);
+        self.emit(Instruction::Assign {
+            target: result.to_string(),
+            value: Rvalue::Use(first),
+        });
+        for value in values {
+            let keep = self.new_typed_temp(Type::named("bool"));
+            self.emit(Instruction::Assign {
+                target: keep.clone(),
+                value: Rvalue::Binary {
+                    op: if builtin == BuiltinFunction::Min {
+                        BinaryOp::LessEq
+                    } else {
+                        BinaryOp::GreaterEq
+                    },
+                    left: Operand::Place(result.to_string()),
+                    right: value.clone(),
+                    span,
+                    trap: ArithmeticTrap::Runtime,
+                },
+            });
+            let replace = self.new_block("str_extremum_replace");
+            let join = self.new_block("str_extremum_join");
+            self.terminate(Terminator::Branch {
+                condition: Operand::Place(keep),
+                then_label: self.label(join),
+                else_label: self.label(replace),
+            });
+            self.switch_to(replace);
+            let copy = self.emit_str_clone(value);
+            self.emit(Instruction::Assign {
+                target: result.to_string(),
+                value: Rvalue::Use(copy),
+            });
+            self.terminate(Terminator::Goto(self.label(join)));
+            self.switch_to(join);
+        }
+    }
+
     fn lower_collection_reduction(
         &mut self,
         expr: &Expr,
@@ -24272,7 +24372,11 @@ impl<'a> Lowerer<'a> {
             &element_ty,
             Type::Named(name, _) if matches!(name.as_str(), "float32" | "float64")
         );
-        let zero = if is_float {
+        // `min` and `max` of strings keep a copy of the best element.
+        let is_str = element_ty == Type::named("str");
+        let zero = if is_str {
+            Operand::String(String::new())
+        } else if is_float {
             Operand::Float(0.0)
         } else {
             Operand::Int(0)
@@ -24386,7 +24490,11 @@ impl<'a> Lowerer<'a> {
                             left: Operand::Place(result.clone()),
                             right: item.clone(),
                             span,
-                            trap: ArithmeticTrap::None,
+                            trap: if is_str {
+                                ArithmeticTrap::Runtime
+                            } else {
+                                ArithmeticTrap::None
+                            },
                         },
                     });
                     lowerer.terminate(Terminator::Branch {
@@ -24395,6 +24503,11 @@ impl<'a> Lowerer<'a> {
                         else_label: lowerer.label(replace),
                     });
                     lowerer.switch_to(replace);
+                    let item = if is_str {
+                        lowerer.emit_str_clone(item)
+                    } else {
+                        item
+                    };
                     assign(lowerer, &result, item);
                     lowerer.terminate(Terminator::Goto(lowerer.label(join)));
                     lowerer.switch_to(join);

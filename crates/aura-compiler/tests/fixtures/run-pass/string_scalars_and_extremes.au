@@ -1,0 +1,36 @@
+class Word:
+    text: str
+
+
+def shortest_first(words: list[str]) -> str:
+    return min(words)
+
+
+def main() -> None:
+    words = ["pear", "apple", "fig"]
+    print(min(words))
+    print(max(words))
+    print(shortest_first(words))
+    print(words)
+    view front = words[0:2]
+    print(max(front))
+    tags = {"q", "b", "x"}
+    print(f"{min(tags)} {max(tags)}")
+    first = "zeta"
+    second = "alpha"
+    print(min(first, second))
+    print(max(first, second, "omega"))
+    print(f"{first} {second}")
+    print(min("b", "a", "a"))
+    held = Word(text="mid")
+    print(max(held.text, "low"))
+    print("héllo".chars())
+    print("".chars())
+    print(f"{ord("A")} {ord("é")} {ord("😀")}")
+    print(chr(97) + chr(233) + chr(128512))
+    mut total = 0
+    for letter in "abc".chars():
+        total = total + ord(letter)
+    print(total)
+    shifted = [chr(ord(letter) + 1) for letter in "HAL".chars()]
+    print("".join(shifted))

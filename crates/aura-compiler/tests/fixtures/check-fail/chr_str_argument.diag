@@ -1,0 +1,5 @@
+error[AU2002]: `chr(...)` expects `int64`, found `str`
+ --> crates/aura-compiler/tests/fixtures/check-fail/chr_str_argument.au:2:15
+  |
+2 |     print(chr("A"))
+  |               ^

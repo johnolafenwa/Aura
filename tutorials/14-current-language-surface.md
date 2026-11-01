@@ -554,7 +554,7 @@ can use the result in three ways:
 | Math | `abs`, `min`, `max`, `sqrt`, `round`, `divmod` |
 | Reductions | `sum`, `min`, `max`, `any`, `all` over a list, set, span, or range |
 | New lists | `sorted`, `reversed`, `list`; list `+` and `*`; stepped slices `values[::step]` |
-| Parsing | `parse_int32`, `parse_int64`, `parse_float64` |
+| Parsing and characters | `parse_int32`, `parse_int64`, `parse_float64`, `ord`, `chr` |
 
 These names are reserved. A module-level function that redefines one, such
 as `len`, `str`, `abs`, or `print`, is rejected with `AU2007`.

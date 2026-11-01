@@ -1,0 +1,5 @@
+error[AU2002]: `ord(...)` expects `str`, found `int64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/ord_int_argument.au:2:15
+  |
+2 |     print(ord(65))
+  |               ^
