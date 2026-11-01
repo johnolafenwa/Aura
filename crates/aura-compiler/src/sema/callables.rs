@@ -2287,7 +2287,14 @@ impl<'a> FunctionChecker<'a> {
 
         let mut substitutions = seed_substitutions;
         if let Some(expected_return) = expected_return {
-            if let Err(error) = unify_type_pattern(return_type, expected_return, &mut substitutions)
+            // Only this callee's own type parameters are inferred from the
+            // expected result. A type parameter of the enclosing function in
+            // the return type (`f: def(A) -> R` called inside `run[A, R]`) is
+            // already fixed, and must not be rebound to whatever the
+            // destination expects, such as an outer generic call's still
+            // unresolved parameter.
+            let mut from_expected = substitutions.clone();
+            if let Err(error) = unify_type_pattern(return_type, expected_return, &mut from_expected)
             {
                 return Err(Diagnostic::at(
                     span,
@@ -2296,6 +2303,11 @@ impl<'a> FunctionChecker<'a> {
                         callee_name, error.message
                     ),
                 ));
+            }
+            for (name, ty) in from_expected {
+                if callee_type_params.contains(&name) {
+                    substitutions.entry(name).or_insert(ty);
+                }
             }
         }
         let mut resolved_args = Vec::new();
@@ -2531,6 +2543,23 @@ impl<'a> FunctionChecker<'a> {
             .iter()
             .map(|param| substitute_type(param, &substitutions))
             .collect::<Vec<_>>();
+
+        // A callable argument was typed against a generic parameter before
+        // its type arguments were known. Once they are, it must keep the
+        // complete contract a bare destination requires, as it would against
+        // the written type (`apply[R](f: def(R) -> R)` called with a
+        // function whose parameter is named).
+        for ((argument, actual, _, _), (expected, resolved)) in resolved_args
+            .iter()
+            .zip(param_types.iter().zip(&resolved_param_types))
+        {
+            let Some(argument) = argument else {
+                continue;
+            };
+            if has_unresolved_type_params(expected) && !has_unresolved_type_params(resolved) {
+                self.enforce_callable_destination(&argument.value, resolved, actual)?;
+            }
+        }
 
         if closure_argument_policy == ClosureArgumentPolicy::Reject {
             if let Some((argument, _actual, _, _)) = resolved_args

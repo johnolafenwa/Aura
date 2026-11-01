@@ -1,0 +1,8 @@
+def apply[R](f: def(R) -> R, value: R) -> R:
+    return f(value)
+
+def twice(n: int64) -> int64:
+    return n * 2
+
+def main():
+    print(apply(twice, 4))

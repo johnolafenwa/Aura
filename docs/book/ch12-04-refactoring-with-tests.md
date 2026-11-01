@@ -231,13 +231,9 @@ without looking anywhere else.
 
 This module uses both import forms: `import records` for the functions and for
 `Record`, which it names as `records.Record`, and `from records import Level`
-for the type it uses everywhere. Aura 0.11 makes the qualified form more than
-a matter of taste here. When a *method* signature names a type that its module
-brought in with `from ... import`, a third module that imports the class with
-`from stats import Summary` fails to resolve that type, and reports
-``unknown type `stats.Record` `` at an unrelated line. Naming the type through
-its module, as `records.Record`, avoids it. Plain functions and fields are not
-affected.
+for the type it uses everywhere. Which form to use is mostly a matter of
+taste: `records.Record` tells a reader at the point of use where the type comes
+from, while `Level` reads better in the many places that compare levels.
 
 ## The report module
 
