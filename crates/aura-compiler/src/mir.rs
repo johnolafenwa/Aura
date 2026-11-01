@@ -20081,8 +20081,16 @@ impl<'a> Lowerer<'a> {
                     });
                     return Operand::Place(temp);
                 }
-                let left_ty = self.infer_expr_type(left);
-                let right_ty = self.infer_expr_type(right);
+                // A numeric literal against an `Array[dtype]` operand takes the
+                // array's dtype, as the checker typed it (`arr + 5`).
+                let array_dtype = |ty: Option<Type>| match ty {
+                    Some(Type::Named(name, mut args)) if name == "Array" && args.len() == 1 => {
+                        args.pop()
+                    }
+                    other => other,
+                };
+                let left_ty = array_dtype(self.infer_expr_type(left));
+                let right_ty = array_dtype(self.infer_expr_type(right));
                 let shared_equality_expected = matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
                     .then(|| self.infer_equality_hint(left, right))
                     .flatten();
