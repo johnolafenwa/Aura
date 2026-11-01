@@ -9707,6 +9707,30 @@ impl<'a> FunctionChecker<'a> {
             }
 
             let hinted_field_ty = substitute_type(&field_info.ty, &substitutions);
+            // An empty literal gives no element type, so a class parameter it
+            // stands for would stay unresolved and reach the runtime.
+            let empty_literal = matches!(
+                &argument.value.kind,
+                ExprKind::List(elements) | ExprKind::Set(elements) if elements.is_empty()
+            ) || matches!(&argument.value.kind, ExprKind::Map(entries) if entries.is_empty());
+            if empty_literal {
+                if let Some(type_param) = class.decl.type_params.iter().find(|type_param| {
+                    !substitutions.contains_key(*type_param)
+                        && type_mentions_type_param(&hinted_field_ty, type_param)
+                }) {
+                    return Err(Diagnostic::coded_at(
+                        "AU2002",
+                        argument.value.span,
+                        format!(
+                            "cannot infer type parameter `{type_param}` for class constructor `{constructor_name}` from an empty literal"
+                        ),
+                    )
+                    .with_help(format!(
+                        "annotate the binding, as in `value: {}[...] = ...`, or write the type arguments on the constructor",
+                        class.decl.name
+                    )));
+                }
+            }
             if self
                 .direct_view_value_kind(&argument.value, locals)?
                 .is_some()
@@ -16735,3 +16759,18 @@ impl<'a> FunctionChecker<'a> {
 #[cfg(test)]
 #[path = "sema_tests.rs"]
 mod tests;
+
+fn type_mentions_type_param(ty: &Type, name: &str) -> bool {
+    match ty {
+        Type::TypeParam(param) => param == name,
+        Type::Named(_, args) => args.iter().any(|arg| type_mentions_type_param(arg, name)),
+        Type::Tuple(elements) => elements
+            .iter()
+            .any(|element| type_mentions_type_param(element, name)),
+        Type::Union(union) => union
+            .members
+            .iter()
+            .any(|member| type_mentions_type_param(member, name)),
+        _ => false,
+    }
+}

@@ -1,0 +1,18 @@
+class Stack[T]:
+    items: list[T]
+
+def make[T](xs: own list[T]) -> Stack[T]:
+    return Stack(items=xs)
+
+def empty[T]() -> Stack[T]:
+    return Stack(items=[])
+
+def main():
+    s = make([1, 2])
+    print(len(s.items))
+    e: Stack[str] = empty()
+    print(len(e.items))
+    annotated: Stack[int64] = Stack(items=[])
+    print(len(annotated.items))
+    explicit = Stack[str](items=[])
+    print(len(explicit.items))
