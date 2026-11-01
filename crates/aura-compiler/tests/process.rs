@@ -336,7 +336,7 @@ def main() -> int32:
         .expect("zero-sized process reads should be represented as typed results");
     assert_eq!(
         output.stdout,
-        "Result.Err(Error.Io(io.Error.InvalidInput))\nResult.Ok([120])\n"
+        "Result.Err(process.Error.Io(io.Error.InvalidInput))\nResult.Ok([120])\n"
     );
 }
 
