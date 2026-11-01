@@ -1013,6 +1013,13 @@ fn same_source_file(left: &str, right: &str) -> bool {
     if left == right {
         return true;
     }
+    // One side may be the caller's relative spelling of the other.
+    let (left_path, right_path) = (std::path::Path::new(left), std::path::Path::new(right));
+    if (left_path.is_absolute() && right_path.is_relative() && left_path.ends_with(right_path))
+        || (right_path.is_absolute() && left_path.is_relative() && right_path.ends_with(left_path))
+    {
+        return true;
+    }
     match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
         (Ok(left), Ok(right)) => left == right,
         _ => false,

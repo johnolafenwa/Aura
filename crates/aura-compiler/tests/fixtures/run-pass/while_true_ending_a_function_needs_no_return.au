@@ -1,0 +1,44 @@
+# A `while true:` loop with no `break` of its own never falls through, so a
+# function that ends with one needs no dead `return` after it.
+def find(xs: list[int64], target: int64) -> int64:
+    mut i = 0
+    while true:
+        if xs[i] == target:
+            return i
+        i += 1
+
+def first_even_row(rows: list[list[int64]]) -> int64:
+    mut row = 0
+    while true:
+        for value in rows[row]:
+            if value % 2 == 1:
+                break
+        if rows[row][0] % 2 == 0:
+            return row
+        row += 1
+
+class Counter:
+    count: int64
+
+    def next_multiple(mut self, of: int64) -> int64:
+        while true:
+            self.count += 1
+            if self.count % of == 0:
+                return self.count
+
+def pick(flag: bool) -> str:
+    if flag:
+        return "yes"
+    else:
+        mut n = 0
+        while true:
+            n += 1
+            if n == 3:
+                return f"no after {n}"
+
+def main():
+    print(find([4, 5, 6], 6))
+    print(first_even_row([[1, 3], [2, 4]]))
+    mut counter = Counter(count=0)
+    print(counter.next_multiple(of=4))
+    print(pick(false))

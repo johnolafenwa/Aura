@@ -272,23 +272,12 @@ def run_job(job: Job) -> Report:
         backoff = backoff * 2
 ```
 
-```console
-$ aura check src/main.au
-error[AU2999]: function `run_job` is missing a return
- --> src/main.au:91:1
-   |
-91 | def run_job(job: Job) -> Report:
-   | ^
-```
-
-We can see that the loop never ends except through one of the two `return`
-statements, but the compiler does not treat `while true` as special. It sees
-a loop whose condition could, in principle, become false, and a path after
-the loop that falls off the end of a function that promised a `Report`. We
-could argue with that, but the error points at a real weakness in the code:
-the "give up" decision is buried inside a match arm, two levels down. It reads
-better as the loop's own exit. Let's remember the last error, `break` when we
-are out of attempts, and build the failure report once, after the loop:
+This compiles. The loop has no `break`, so the compiler knows the only ways
+out of it are the two `return` statements, and it doesn't ask for a `return`
+after the loop. But the code has a real weakness: the "give up" decision is
+buried inside a match arm, two levels down. It reads better as the loop's own
+exit. Let's remember the last error, `break` when we are out of attempts, and
+build the failure report once, after the loop:
 
 ```aura fragment
 def run_job(job: Job) -> Report:

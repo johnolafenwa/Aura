@@ -4920,6 +4920,17 @@ impl<'a> FunctionChecker<'a> {
                         }
                         self.merge_control_flow_moves(locals, &[&baseline_locals, &body_locals]);
                     }
+                    // `while true:` with no `break` of its own never reaches
+                    // the next statement: it only leaves by returning or
+                    // trapping. As the last statement it ends the block the
+                    // way a `return` does, so no dead `return` is needed
+                    // after it.
+                    if stmt_index + 1 == body.len()
+                        && self.const_bool_value(&while_stmt.condition) == Some(true)
+                        && !block_contains_break(&while_stmt.body)
+                    {
+                        flow = BlockFlow::AlwaysReturns;
+                    }
                 }
                 Stmt::Break(break_stmt) => {
                     if loop_depth == 0 {

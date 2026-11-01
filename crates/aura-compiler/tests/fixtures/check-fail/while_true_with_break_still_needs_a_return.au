@@ -1,0 +1,11 @@
+def find(xs: list[int64], target: int64) -> int64:
+    mut i = 0
+    while true:
+        if i == xs.len():
+            break
+        if xs[i] == target:
+            return i
+        i += 1
+
+def main():
+    print(find([1], 1))
