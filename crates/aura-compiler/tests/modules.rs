@@ -899,3 +899,40 @@ def main():
     let output = run_path(&main_path).expect("module defaults should run");
     assert_eq!(output.stdout, "4\n6\n7\n100\n");
 }
+
+#[test]
+fn from_imported_class_in_a_method_signature_matches_across_three_modules() {
+    let temp = TempDir::new("aura-modules-reexported-signature-type");
+    temp.write("a.au", "public class Record:\n    public level: str\n");
+    temp.write(
+        "b.au",
+        r#"from a import Record
+
+public class Stats:
+    public count: int64
+
+    public def add(mut self, record: Record):
+        self.count += 1
+"#,
+    );
+    for (name, source) in [
+        (
+            "from_both.au",
+            "from a import Record\nfrom b import Stats\n\ndef main():\n    mut stats = Stats(count=0)\n    stats.add(Record(level=\"info\"))\n    print(stats.count)\n",
+        ),
+        (
+            "module_import.au",
+            "from b import Stats\nimport a\n\ndef main():\n    mut stats = Stats(count=0)\n    stats.add(a.Record(level=\"info\"))\n    print(stats.count)\n",
+        ),
+        (
+            "only_stats.au",
+            "from b import Stats\n\ndef main():\n    mut stats = Stats(count=2)\n    print(stats.count)\n",
+        ),
+    ] {
+        let main_path = temp.write(name, source);
+        let output = run_path(&main_path)
+            .unwrap_or_else(|error| panic!("{name} should run: {}", error.message));
+        let expected = if name == "only_stats.au" { "2\n" } else { "1\n" };
+        assert_eq!(output.stdout, expected, "{name}");
+    }
+}

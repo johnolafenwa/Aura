@@ -2611,6 +2611,30 @@ pub(super) fn register_module_namespace_types(
         type_names.insert(qualified_name.clone(), trait_info.decl.span);
         type_arities.insert(qualified_name, trait_info.decl.type_params.len());
     }
+    // A type the module brought in with `from other import Name` appears in
+    // its signatures under the declaring module's name.
+    for class in namespace.all_classes.values() {
+        if !class.module_name.is_empty() && class.module_name != namespace.path {
+            let qualified_name = format!("{}.{}", class.module_name, class.decl.name);
+            type_names.insert(qualified_name.clone(), class.decl.span);
+            type_arities.insert(qualified_name, class.decl.type_params.len());
+        }
+    }
+    for enum_info in namespace.all_enums.values() {
+        if !enum_info.module_name.is_empty() && enum_info.module_name != namespace.path {
+            let qualified_name = format!("{}.{}", enum_info.module_name, enum_info.decl.name);
+            type_names.insert(qualified_name.clone(), enum_info.decl.span);
+            type_arities.insert(qualified_name, enum_info.decl.type_params.len());
+        }
+    }
+    for trait_info in namespace.all_traits.values() {
+        if !trait_info.module_name.is_empty() && trait_info.module_name != namespace.path {
+            let qualified_name = format!("{}.{}", trait_info.module_name, trait_info.decl.name);
+            type_names.non_value_names.insert(qualified_name.clone());
+            type_names.insert(qualified_name.clone(), trait_info.decl.span);
+            type_arities.insert(qualified_name, trait_info.decl.type_params.len());
+        }
+    }
     for child in namespace.modules.values() {
         register_module_namespace_types(child, type_names, type_arities);
     }
