@@ -789,7 +789,10 @@ impl<'a> Formatter<'a> {
     fn is_clause_keyword(&self, index: usize, first: usize) -> bool {
         index == first
             && self.toks[index].class == Class::Name
-            && matches!(self.toks[index].text.as_str(), "requires" | "ensures")
+            && matches!(
+                self.toks[index].text.as_str(),
+                "requires" | "ensures" | "invariant" | "decreases"
+            )
             && self
                 .toks
                 .get(index + 1)

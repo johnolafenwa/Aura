@@ -1506,6 +1506,11 @@ pub enum AssertKind {
     Requires,
     /// An `ensures` clause failed on return: `AU4009`.
     Ensures,
+    /// A loop `invariant` clause failed: `AU4009`.
+    Invariant,
+    /// A `while` loop's `decreases` measure went negative or did not get
+    /// smaller: `AU4009`.
+    Decreases,
 }
 
 impl AssertKind {
@@ -1517,7 +1522,10 @@ impl AssertKind {
     pub const fn code(self) -> &'static str {
         match self {
             AssertKind::Assert => "AU4001",
-            AssertKind::Requires | AssertKind::Ensures => "AU4009",
+            AssertKind::Requires
+            | AssertKind::Ensures
+            | AssertKind::Invariant
+            | AssertKind::Decreases => "AU4009",
         }
     }
 
@@ -1527,8 +1535,22 @@ impl AssertKind {
             AssertKind::Assert => 0,
             AssertKind::Requires => 1,
             AssertKind::Ensures => 2,
+            AssertKind::Invariant => 3,
+            AssertKind::Decreases => 4,
         }
     }
+}
+
+/// The hidden locals a `while` loop's `decreases` check reads. The names
+/// cannot be written in source.
+const DECREASES_CURRENT: &str = "decreases measure";
+const DECREASES_PREVIOUS: &str = "previous measure";
+const DECREASES_STARTED: &str = "measured before";
+
+struct DecreasesState {
+    clause: crate::ast::ContractClause,
+    previous: String,
+    started: String,
 }
 
 #[derive(Clone, Debug)]
@@ -13914,29 +13936,147 @@ impl<'a> Lowerer<'a> {
         function: &crate::ast::FunctionDecl,
         kind: crate::ast::ContractKind,
     ) {
-        for clause in function
+        self.lower_clause_checks(&function.contracts, kind);
+    }
+
+    /// Checks each clause of `kind` in `clauses`, in source order.
+    fn lower_clause_checks(
+        &mut self,
+        clauses: &[crate::ast::ContractClause],
+        kind: crate::ast::ContractKind,
+    ) {
+        for clause in clauses.iter().filter(|clause| clause.kind == kind) {
+            let message = format!("`{}` clause failed: `{}`", kind.keyword(), clause.text);
+            self.lower_clause_check(&clause.condition, message, clause.span, kind);
+        }
+    }
+
+    fn lower_clause_check(
+        &mut self,
+        condition: &Expr,
+        message: String,
+        span: Span,
+        kind: crate::ast::ContractKind,
+    ) {
+        let check = crate::ast::AssertStmt {
+            condition: condition.clone(),
+            message: Some(Expr {
+                kind: ExprKind::String(message),
+                span,
+            }),
+            span: condition.span,
+        };
+        let assert_kind = match kind {
+            crate::ast::ContractKind::Requires => AssertKind::Requires,
+            crate::ast::ContractKind::Ensures => AssertKind::Ensures,
+            crate::ast::ContractKind::Invariant => AssertKind::Invariant,
+            crate::ast::ContractKind::Decreases => AssertKind::Decreases,
+        };
+        self.lower_check(&check, assert_kind);
+    }
+
+    /// Lowers the hidden state a `while` loop's `decreases` measure needs:
+    /// the measure's value at the previous body entry, and whether there
+    /// was one.
+    fn lower_decreases_state(&mut self, while_stmt: &WhileStmt) -> Option<DecreasesState> {
+        let clause = while_stmt
             .contracts
             .iter()
-            .filter(|clause| clause.kind == kind)
-        {
-            let check = crate::ast::AssertStmt {
-                condition: clause.condition.clone(),
-                message: Some(Expr {
-                    kind: ExprKind::String(format!(
-                        "`{}` clause failed: `{}`",
-                        kind.keyword(),
-                        clause.text
-                    )),
-                    span: clause.span,
-                }),
-                span: clause.condition.span,
-            };
-            let assert_kind = match kind {
-                crate::ast::ContractKind::Requires => AssertKind::Requires,
-                crate::ast::ContractKind::Ensures => AssertKind::Ensures,
-            };
-            self.lower_check(&check, assert_kind);
-        }
+            .find(|clause| clause.kind == crate::ast::ContractKind::Decreases)?;
+        let previous = self.new_typed_temp(Type::named("int64"));
+        let started = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: previous.clone(),
+            value: Rvalue::Use(Operand::Int(0)),
+        });
+        self.emit(Instruction::Assign {
+            target: started.clone(),
+            value: Rvalue::Use(Operand::Bool(false)),
+        });
+        Some(DecreasesState {
+            clause: clause.clone(),
+            previous,
+            started,
+        })
+    }
+
+    /// On body entry, checks that the measure is non-negative and smaller
+    /// than on the previous entry, then records it.
+    fn lower_decreases_check(&mut self, state: &DecreasesState) {
+        let current = self.new_typed_temp(Type::named("int64"));
+        let value = self.lower_expr(&state.clause.condition);
+        self.emit(Instruction::Assign {
+            target: current.clone(),
+            value: Rvalue::Use(value),
+        });
+        let span = state.clause.condition.span;
+        let name = |name: &str| Expr {
+            kind: ExprKind::Name(name.to_string()),
+            span,
+        };
+        let binary = |op, left, right| Expr {
+            kind: ExprKind::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            },
+            span,
+        };
+        self.scoped_names.push(std::collections::HashMap::from([
+            (DECREASES_CURRENT.to_string(), current.clone()),
+            (DECREASES_PREVIOUS.to_string(), state.previous.clone()),
+            (DECREASES_STARTED.to_string(), state.started.clone()),
+        ]));
+        let non_negative = binary(
+            BinaryOp::GreaterEq,
+            name(DECREASES_CURRENT),
+            Expr {
+                kind: ExprKind::Int(0),
+                span,
+            },
+        );
+        self.lower_clause_check(
+            &non_negative,
+            format!(
+                "`decreases` clause failed: `{}` went below 0",
+                state.clause.text
+            ),
+            state.clause.span,
+            crate::ast::ContractKind::Decreases,
+        );
+        let compare_block = self.new_block("decreases_compare");
+        let recorded_block = self.new_block("decreases_record");
+        self.terminate(Terminator::Branch {
+            condition: Operand::Place(state.started.clone()),
+            then_label: self.label(compare_block),
+            else_label: self.label(recorded_block),
+        });
+        self.switch_to(compare_block);
+        let smaller = binary(
+            BinaryOp::Less,
+            name(DECREASES_CURRENT),
+            name(DECREASES_PREVIOUS),
+        );
+        self.lower_clause_check(
+            &smaller,
+            format!(
+                "`decreases` clause failed: `{}` did not get smaller in the last iteration",
+                state.clause.text
+            ),
+            state.clause.span,
+            crate::ast::ContractKind::Decreases,
+        );
+        self.terminate(Terminator::Goto(self.label(recorded_block)));
+        self.switch_to(recorded_block);
+        self.scoped_names.pop();
+        self.emit(Instruction::Assign {
+            target: state.previous.clone(),
+            value: Rvalue::Use(Operand::Place(current)),
+        });
+        self.emit(Instruction::Assign {
+            target: state.started.clone(),
+            value: Rvalue::Use(Operand::Bool(true)),
+        });
     }
 
     fn lower_assert(&mut self, assert_stmt: &crate::ast::AssertStmt) {
@@ -18053,7 +18193,12 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_for(&mut self, for_stmt: &crate::ast::ForStmt) {
-        let mut lower_body = |lowerer: &mut Self| lowerer.lower_stmts(&for_stmt.body);
+        // A `for` invariant holds at the start of every iteration, with the
+        // loop target bound.
+        let mut lower_body = |lowerer: &mut Self| {
+            lowerer.lower_clause_checks(&for_stmt.contracts, crate::ast::ContractKind::Invariant);
+            lowerer.lower_stmts(&for_stmt.body);
+        };
         self.lower_for_with_body(for_stmt, None, &mut lower_body);
     }
 
@@ -18944,9 +19089,13 @@ impl<'a> Lowerer<'a> {
         let safepoint_block = self.new_block("while_safepoint");
         let after_block = self.new_block("while_end");
 
+        let decreases = self.lower_decreases_state(while_stmt);
         self.terminate(Terminator::Goto(self.label(condition_block)));
 
         self.switch_to(condition_block);
+        // Invariants hold before every test of the condition: on entry,
+        // after every iteration, and when the condition ends the loop.
+        self.lower_clause_checks(&while_stmt.contracts, crate::ast::ContractKind::Invariant);
         let (body_label, after_label) = (self.label(body_block), self.label(after_block));
         self.lower_condition_branch(&while_stmt.condition, body_label, after_label);
 
@@ -18958,6 +19107,9 @@ impl<'a> Lowerer<'a> {
             outer_loans: self.view_sources.keys().cloned().collect(),
         });
         self.switch_to(body_block);
+        if let Some(state) = &decreases {
+            self.lower_decreases_check(state);
+        }
         self.lower_stmts(&while_stmt.body);
         if !self.current_terminated() {
             self.terminate(Terminator::Goto(self.label(safepoint_block)));
@@ -19033,6 +19185,7 @@ impl<'a> Lowerer<'a> {
             .get(clause_index)
             .expect("checked comprehension should contain an iteration clause");
         let for_stmt = crate::ast::ForStmt {
+            contracts: Vec::new(),
             target: clause.target.clone(),
             iterable: clause.iterable.clone(),
             borrow_mode: None,
@@ -20272,6 +20425,7 @@ impl<'a> Lowerer<'a> {
         });
         const ITEM: &str = "%list_item";
         let for_stmt = crate::ast::ForStmt {
+            contracts: Vec::new(),
             target: BindingTarget::Name {
                 name: ITEM.to_string(),
                 span: values.span,
@@ -20373,6 +20527,7 @@ impl<'a> Lowerer<'a> {
             span: expr.span,
         };
         let for_stmt = crate::ast::ForStmt {
+            contracts: Vec::new(),
             target: BindingTarget::Name {
                 name: "_".to_string(),
                 span: expr.span,
@@ -24519,6 +24674,7 @@ impl<'a> Lowerer<'a> {
         });
         const ITEM: &str = "%reduce_item";
         let for_stmt = crate::ast::ForStmt {
+            contracts: Vec::new(),
             target: BindingTarget::Name {
                 name: ITEM.to_string(),
                 span: argument.span,

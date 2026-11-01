@@ -202,9 +202,15 @@ impl<'a> InitializerChecker<'a> {
             }
             Stmt::For(for_stmt) => {
                 self.expr(&for_stmt.iterable, &state)?;
+                for clause in &for_stmt.contracts {
+                    self.expr(&clause.condition, &state)?;
+                }
                 self.repeat(&for_stmt.body, state, None)
             }
             Stmt::While(while_stmt) => {
+                for clause in &while_stmt.contracts {
+                    self.expr(&clause.condition, &state)?;
+                }
                 let infinite = matches!(while_stmt.condition.kind, ExprKind::Bool(true));
                 self.repeat(
                     &while_stmt.body,

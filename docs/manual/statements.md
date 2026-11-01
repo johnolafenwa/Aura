@@ -235,6 +235,8 @@ A fact established before the loop survives into the condition and the body only
 
 The checker rejects the first move of a non-copy outer value inside a repeatable loop when that move could make a later iteration invalid. Reinitialize the place on every continuing path, or restructure ownership explicitly.
 
+A loop body may start with `invariant` clauses, and a `while` body with one `decreases` clause. They are checked at run time; see [Loop invariants and `decreases`](/manual/functions#loop-invariants-and-decreases).
+
 ## `for` Iteration
 
 A `for` statement binds one name, or recursively unpacks one tuple target, for each value from an iterable:

@@ -167,6 +167,13 @@ pub(super) fn last_name_reference_span_in_stmt(
         Stmt::Match(match_stmt) => {
             last_name_reference_span_in_match(match_stmt, name).or(Some(match_stmt.span))
         }
+        // A name an invariant reads stays live for the whole loop, since the
+        // invariant runs again on every iteration.
+        Stmt::For(for_stmt) if super::clauses_reference_name(&for_stmt.contracts, name) => Some(
+            block_end_span(&for_stmt.body)
+                .map(|span| later_span(Some(for_stmt.span), Some(span)).unwrap_or(for_stmt.span))
+                .unwrap_or(for_stmt.span),
+        ),
         Stmt::For(for_stmt) => Some(
             last_name_reference_span_in_block(&for_stmt.body, name)
                 .map(|span| later_span(Some(for_stmt.span), Some(span)).unwrap_or(for_stmt.span))

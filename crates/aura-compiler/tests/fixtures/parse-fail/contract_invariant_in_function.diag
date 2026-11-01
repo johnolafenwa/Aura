@@ -1,0 +1,5 @@
+error[AU2048]: `invariant` clauses belong at the top of a loop body; a function states `requires` and `ensures`
+ --> crates/aura-compiler/tests/fixtures/parse-fail/contract_invariant_in_function.au:2:5
+  |
+2 |     invariant x > 0
+  |     ^

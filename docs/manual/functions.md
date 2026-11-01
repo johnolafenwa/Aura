@@ -565,10 +565,60 @@ and comprehensions, and call pure builtins such as `len`, `min`, `max`,
 and `keys`. Calling a user function, or a method that changes its
 receiver, is `AU2048`.
 
-`requires` and `ensures` are keywords only at the start of a clause line.
+`requires`, `ensures`, `invariant`, and `decreases` are keywords only at
+the start of a clause line.
 Elsewhere they are ordinary names, so `requires = 1` and the call
 `requires(x)` keep their meaning. Write a space before a parenthesis that
 starts a condition: `requires (a or b) and c`.
+
+### Loop invariants and `decreases`
+
+A loop can state what stays true while it runs, with `invariant` clauses at
+the top of its body. A `while` loop can also state why it ends, with one
+`decreases` clause.
+
+```aura
+def find(xs: list[int64], key: int64) -> int64:
+    """Index of `key` in sorted `xs`, or -1."""
+    mut lo = 0
+    mut hi = len(xs)
+    while lo < hi:
+        invariant 0 <= lo and lo <= hi and hi <= len(xs)
+        decreases hi - lo
+        mid = lo + (hi - lo) // 2
+        if xs[mid] < key:
+            lo = mid + 1
+        elif xs[mid] > key:
+            hi = mid
+        else:
+            return mid
+    return -1
+
+
+def total(xs: list[int64]) -> int64:
+    mut acc = 0
+    for i, x in enumerate(xs):
+        invariant acc == sum(xs[0:i])
+        acc += x
+    return acc
+
+
+def main():
+    print(find([1, 3, 5, 7], 5))  # 2
+    print(total([1, 2, 3]))  # 6
+```
+
+- A `while` invariant is checked before every test of the condition: on
+  entry, after every iteration (including one that ends in `continue`),
+  and when the condition ends the loop. A `break` leaves without a check.
+- A `for` invariant is checked at the start of every iteration, after the
+  loop target is bound, so it can read the target.
+- `decreases measure` takes an `int64` measure. It is checked each time
+  the body starts: the measure must be at least 0, and smaller than it was
+  the previous time. A loop that keeps both rules must end. A `for` loop
+  always ends, so it takes no `decreases`.
+- Loop clauses come first in the loop body, follow the same purity rules
+  as function clauses, and fail with `AU4009`.
 
 These forms are not available yet and report `AU2048`:
 
@@ -578,8 +628,8 @@ These forms are not available yet and report `AU2048`:
 - a parameter named `result` in a function with `ensures`
 - clauses on the methods of a trait implementation
 
-Loop and class invariants, `decreases`, `old(...)`, and `spec def` helper
-functions are planned next, followed by `aura verify`, which proves clauses
+Class invariants, `old(...)`, and `spec def` helper functions are planned
+next, followed by `aura verify`, which proves clauses
 before the program runs. See the
 [verification design](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/23-verification-design-checkpoint.md).
 

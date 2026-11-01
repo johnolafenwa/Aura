@@ -485,7 +485,7 @@
         },
         {
           "name": "keyword.control.contract.aura",
-          "match": "^\\s*(requires|ensures)(?=\\s+[^\\s=:,.)\\]])"
+          "match": "^\\s*(requires|ensures|invariant|decreases)(?=\\s+[^\\s=:,.)\\]])"
         },
         {
           "name": "keyword.control.aura",

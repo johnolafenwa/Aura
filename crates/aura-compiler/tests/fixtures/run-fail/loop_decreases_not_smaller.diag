@@ -1,0 +1,8 @@
+error[AU4009]: `decreases` clause failed: `k` did not get smaller in the last iteration
+ --> crates/aura-compiler/tests/fixtures/run-fail/loop_decreases_not_smaller.au:5:19
+  |
+5 |         decreases k
+  |                   ^
+  = note: left = 2
+  = note: right = 2
+  = note: Aura call chain (innermost first): main at 1:1

@@ -20,6 +20,10 @@ in this file.
   naming the clause. Conditions must be pure `bool` expressions; an impure or
   misplaced clause is rejected with `AU2048`. `requires` and `ensures` stay
   ordinary names everywhere else.
+- Loops can declare contracts too. `invariant` clauses at the top of a
+  `while` or `for` body are checked on every pass, and a `while` loop's
+  `decreases` clause names an `int64` measure that must stay at or above 0
+  and get smaller every iteration. Failures report `AU4009`.
 - **Incompatible:** `ord` and `chr` are now reserved builtin names, so a
   module-level function with either name is rejected with `AU2007`.
 

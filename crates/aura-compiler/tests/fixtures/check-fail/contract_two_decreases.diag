@@ -1,0 +1,5 @@
+error[AU2048]: a loop takes at most one `decreases` clause
+ --> crates/aura-compiler/tests/fixtures/check-fail/contract_two_decreases.au:5:9
+  |
+5 |         decreases k + 1
+  |         ^

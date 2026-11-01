@@ -1,0 +1,5 @@
+error[AU2048]: `requires` clauses belong at the top of a function body; a loop states `invariant` and `decreases`
+ --> crates/aura-compiler/tests/fixtures/parse-fail/contract_requires_in_loop.au:4:9
+  |
+4 |         requires k > 0
+  |         ^

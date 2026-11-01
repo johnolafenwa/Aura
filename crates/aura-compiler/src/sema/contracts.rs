@@ -1,4 +1,5 @@
-//! `requires` and `ensures` clauses (verification checkpoint, stage V1).
+//! Contract clauses (verification checkpoint, stage V1): `requires` and
+//! `ensures` on functions, `invariant` and `decreases` on loops.
 //!
 //! A clause's condition is a specification expression: it must have type
 //! `bool` and must not change program state. It may read parameters, `self`,
@@ -13,7 +14,7 @@ use super::{
     BTreeMap, Diagnostic, Expr, ExprKind, FunctionChecker, FunctionDecl, HashMap, LocalBinding,
     Result, Type,
 };
-use crate::ast::{ComprehensionOutput, ContractKind, FormatPart};
+use crate::ast::{ComprehensionOutput, ContractClause, ContractKind, FormatPart};
 use aura_core::ops::ReceiverKind;
 
 const CODE: &str = "AU2048";
@@ -110,23 +111,75 @@ impl FunctionChecker<'_> {
                     ));
                 }
             }
-            reject_impure_condition(&clause.condition, clause.kind)?;
             let mut scope = locals.clone();
             if clause.kind == ContractKind::Ensures {
                 scope.insert(RESULT_NAME.to_string(), result_binding(return_type.clone()));
             }
-            let bool_type = Type::named("bool");
-            let actual = self.type_of_expr_hint(&clause.condition, &mut scope, Some(&bool_type))?;
-            if actual != bool_type {
-                return Err(Diagnostic::coded_at(
-                    "AU2002",
-                    clause.condition.span,
-                    format!(
-                        "a `{}` condition must be `bool`, found `{actual}`",
-                        clause.kind.keyword()
-                    ),
-                ));
+            self.check_clause_condition(clause, &mut scope)?;
+        }
+        Ok(())
+    }
+
+    /// Checks the clauses of `kinds` at the top of a loop body against the
+    /// scope they are evaluated in.
+    pub(super) fn check_loop_clauses(
+        &self,
+        clauses: &[ContractClause],
+        kinds: &[ContractKind],
+        locals: &HashMap<String, LocalBinding>,
+        for_loop: bool,
+    ) -> Result<()> {
+        let mut measures = 0;
+        for clause in clauses.iter().filter(|clause| kinds.contains(&clause.kind)) {
+            if clause.kind == ContractKind::Decreases {
+                if for_loop {
+                    return Err(Diagnostic::coded_at(
+                        CODE,
+                        clause.span,
+                        "a `for` loop always ends, so it takes no `decreases` clause; `decreases` belongs on `while`",
+                    ));
+                }
+                measures += 1;
+                if measures > 1 {
+                    return Err(Diagnostic::coded_at(
+                        CODE,
+                        clause.span,
+                        "a loop takes at most one `decreases` clause",
+                    ));
+                }
             }
+            self.check_clause_condition(clause, &mut locals.clone())?;
+        }
+        Ok(())
+    }
+
+    /// Checks one clause's condition: pure, and `bool` (or `int64` for a
+    /// `decreases` measure).
+    fn check_clause_condition(
+        &self,
+        clause: &ContractClause,
+        scope: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        reject_impure_condition(&clause.condition, clause.kind)?;
+        let (expected, what) = match clause.kind {
+            ContractKind::Decreases => (Type::named("int64"), "measure"),
+            _ => (Type::named("bool"), "condition"),
+        };
+        let actual = self.type_of_expr_hint(&clause.condition, scope, Some(&expected))?;
+        if actual != expected {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                clause.condition.span,
+                format!(
+                    "{} `{}` {what} must be `{expected}`, found `{actual}`",
+                    if clause.kind == ContractKind::Invariant {
+                        "an"
+                    } else {
+                        "a"
+                    },
+                    clause.kind.keyword()
+                ),
+            ));
         }
         Ok(())
     }
@@ -163,7 +216,8 @@ fn impure(expr: &Expr, kind: ContractKind, what: &str) -> Diagnostic {
         CODE,
         expr.span,
         format!(
-            "a `{}` condition must not change program state; {what} is not allowed here",
+            "{} `{}` condition must not change program state; {what} is not allowed here",
+            if kind == ContractKind::Invariant { "an" } else { "a" },
             kind.keyword()
         ),
     )

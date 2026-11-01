@@ -5134,7 +5134,7 @@ fn contract_clauses_parse_before_the_body_and_keep_their_text() {
         panic!("third item is a function");
     };
     assert_eq!(empty.body.len(), 1);
-    assert_eq!(ContractKind::from_keyword("invariant"), None);
+    assert_eq!(ContractKind::from_keyword("assert"), None);
 
     let misplaced =
         crate::parser::parse("def f(x: int64):\n    if x > 0:\n        ensures x > 1\n")
@@ -5143,4 +5143,78 @@ fn contract_clauses_parse_before_the_body_and_keep_their_text() {
     assert!(misplaced
         .message
         .contains("`ensures` clauses must come first"));
+}
+
+#[test]
+fn loop_clauses_parse_at_the_top_of_loop_bodies() {
+    let module = crate::parser::parse(concat!(
+        "def f(n: int64):\n",
+        "    mut k = n\n",
+        "    while k > 0:\n",
+        "        invariant k <= n\n",
+        "        decreases k\n",
+        "        k -= 1\n",
+        "    for x in [1]:\n",
+        "        invariant (x >\n",
+        "            0)\n",
+        "    while k < 0:\n",
+        "        decreases(k)\n",
+        "        k += 1\n",
+    ))
+    .expect("loop clauses parse");
+    let Item::Function(function) = &module.items[0] else {
+        panic!("first item is a function");
+    };
+    let Stmt::While(first) = &function.body[1] else {
+        panic!("a while loop");
+    };
+    let clauses = first
+        .contracts
+        .iter()
+        .map(|clause| (clause.kind, clause.text.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        clauses,
+        vec![
+            (ContractKind::Invariant, "k <= n"),
+            (ContractKind::Decreases, "k"),
+        ]
+    );
+    assert_eq!(first.body.len(), 1);
+    let Stmt::For(for_stmt) = &function.body[2] else {
+        panic!("a for loop");
+    };
+    assert_eq!(for_stmt.contracts[0].text, "(x > 0)");
+    assert_eq!(for_stmt.body.len(), 1, "a clause-only body gets a `pass`");
+    let serialized = serde_json::to_string(for_stmt).expect("for loops serialize");
+    assert!(serialized.contains("\"contracts\""));
+    // `decreases(k)` is a call statement, not a clause.
+    let Stmt::While(second) = &function.body[3] else {
+        panic!("a second while loop");
+    };
+    assert!(second.contracts.is_empty());
+    assert_eq!(second.body.len(), 2);
+
+    for (source, message) in [
+        (
+            "def f(k: int64):\n    while k > 0:\n        requires k > 0\n        pass\n",
+            "`requires` clauses belong at the top of a function body",
+        ),
+        (
+            "def f(k: int64):\n    decreases k\n",
+            "`decreases` clauses belong at the top of a loop body",
+        ),
+        (
+            "def f(k: int64):\n    while k > 0:\n        pass\n        invariant k > 0\n",
+            "`invariant` clauses must come first in a loop body, before any other statement",
+        ),
+    ] {
+        let error = crate::parser::parse(source).expect_err(source);
+        assert_eq!(error.code, "AU2048", "{source}");
+        assert!(
+            error.message.contains(message),
+            "{source}: {}",
+            error.message
+        );
+    }
 }

@@ -1,0 +1,8 @@
+error[AU4009]: `invariant` clause failed: `x % 2 == 0`
+ --> crates/aura-compiler/tests/fixtures/run-fail/for_invariant_fails.au:4:19
+  |
+4 |         invariant x % 2 == 0
+  |                   ^
+  = note: left = 1
+  = note: right = 0
+  = note: Aura call chain (innermost first): main at 1:1

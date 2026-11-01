@@ -248,8 +248,10 @@ what a program observes: a removed check is one that cannot fire.
 
 V1 progress: V1a (`requires` and `ensures` on functions and methods,
 `result`, the pure condition check, runtime checks on both backends,
-`AU2048` and `AU4009`) is implemented. Loop and class invariants, `spec def`
-and `old` follow in V1b and V1c, and the contracts manual page in V1d.
+`AU2048` and `AU4009`) is implemented. V1b adds loop `invariant` clauses and
+a runtime `decreases` check on `while` (measure at least 0 and strictly
+smaller at each body entry); class invariants follow. `spec def` and `old`
+follow in V1c, and the contracts manual page in V1d.
 
 V1 needs each stage's full local gates, coverage floors, and interpreter and
 native parity, like every other batch. V1 also adds a fixture family of

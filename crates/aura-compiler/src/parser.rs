@@ -37,16 +37,44 @@ fn misplaced_decorator_error(span: Span) -> Diagnostic {
     )
 }
 
-/// A `requires` or `ensures` clause after a function's first statement.
+/// A contract clause after the first statement of its body.
 fn misplaced_contract_error(span: Span, kind: ContractKind) -> Diagnostic {
+    let place = match kind {
+        ContractKind::Requires | ContractKind::Ensures => {
+            "a function body, after any docstring and"
+        }
+        ContractKind::Invariant | ContractKind::Decreases => "a loop body,",
+    };
     Diagnostic::coded_at(
         "AU2048",
         span,
         format!(
-            "`{}` clauses must come first in a function body, after the docstring and before any other statement",
+            "`{}` clauses must come first in {place} before any other statement",
             kind.keyword()
         ),
     )
+}
+
+/// Where a run of contract clauses appears.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum ClauseContext {
+    Function,
+    Loop,
+}
+
+/// A clause whose kind does not belong in `context`.
+fn wrong_place_contract_error(span: Span, kind: ContractKind) -> Diagnostic {
+    let message = match kind {
+        ContractKind::Requires | ContractKind::Ensures => format!(
+            "`{}` clauses belong at the top of a function body; a loop states `invariant` and `decreases`",
+            kind.keyword()
+        ),
+        ContractKind::Invariant | ContractKind::Decreases => format!(
+            "`{}` clauses belong at the top of a loop body; a function states `requires` and `ensures`",
+            kind.keyword()
+        ),
+    };
+    Diagnostic::coded_at("AU2048", span, message)
 }
 
 fn property_target_error(span: Span) -> Diagnostic {
@@ -141,41 +169,12 @@ fn validate_rest_targets(target: &BindingTarget, rest_allowed: bool) -> Result<(
 
 pub fn parse(source: &str) -> Result<Module> {
     let tokens = lex(source)?;
-    let mut module = Parser::new(tokens).parse_module()?;
+    let mut parser = Parser::new(tokens);
+    parser.source_lines = source.lines().map(str::to_owned).collect();
+    let mut module = parser.parse_module()?;
     check_module_documentation_limit(&module)?;
     record_decorator_text(&mut module, source);
-    record_contract_text(&mut module, source);
     Ok(module)
-}
-
-/// Copies each contract clause's condition as written, joining the lines of
-/// a clause that spans several.
-fn record_contract_text(module: &mut Module, source: &str) {
-    let lines = source.lines().collect::<Vec<_>>();
-    let functions = module.items.iter_mut().flat_map(|item| match item {
-        Item::Function(function) => std::slice::from_mut(function),
-        Item::Class(class) => class.methods.as_mut_slice(),
-        Item::Impl(implementation) => implementation.methods.as_mut_slice(),
-        _ => &mut [],
-    });
-    for function in functions {
-        for clause in &mut function.contracts {
-            let start = clause.span.line.saturating_sub(1);
-            let end = clause.end_line.max(clause.span.line).min(lines.len());
-            let text = lines
-                .get(start..end)
-                .unwrap_or_default()
-                .iter()
-                .map(|line| line.trim())
-                .collect::<Vec<_>>()
-                .join(" ");
-            clause.text = text
-                .strip_prefix(clause.kind.keyword())
-                .unwrap_or(&text)
-                .trim()
-                .to_string();
-        }
-    }
 }
 
 /// Copies each decorator's source text, from its `@` line up to the next
@@ -292,6 +291,9 @@ struct Parser {
     index: usize,
     recursion_depth: usize,
     current_function_returns_view: bool,
+    /// The source, line by line, for contract clause text. Empty for
+    /// generated source.
+    source_lines: Vec<String>,
 }
 
 impl Parser {
@@ -305,6 +307,7 @@ impl Parser {
             index: 0,
             recursion_depth,
             current_function_returns_view: false,
+            source_lines: Vec::new(),
         }
     }
 
@@ -1713,11 +1716,12 @@ impl Parser {
         let iterable = self.parse_expr()?;
         self.expect_simple(TokenKind::Colon)?;
         self.expect_newline()?;
-        let body = self.parse_block()?;
+        let (contracts, body) = self.parse_loop_block()?;
         Ok(Stmt::For(ForStmt {
             target,
             iterable,
             borrow_mode,
+            contracts,
             body,
             span,
         }))
@@ -2130,9 +2134,10 @@ impl Parser {
         let condition = self.parse_expr()?;
         self.expect_simple(TokenKind::Colon)?;
         self.expect_newline()?;
-        let body = self.parse_block()?;
+        let (contracts, body) = self.parse_loop_block()?;
         Ok(Stmt::While(WhileStmt {
             condition,
+            contracts,
             body,
             span,
         }))
@@ -2192,27 +2197,7 @@ impl Parser {
         self.expect_simple(TokenKind::Indent)?;
         self.skip_newlines();
         let doc = self.take_docstring()?;
-        let mut contracts = Vec::new();
-        loop {
-            self.skip_newlines();
-            let Some(kind) = self.at_contract_clause() else {
-                break;
-            };
-            let span = self.bump().span;
-            let condition = self.parse_expr()?;
-            let end_line = self
-                .tokens
-                .get(self.index.saturating_sub(1))
-                .map_or(span.line, |token| token.span.line);
-            self.expect_statement_terminator()?;
-            contracts.push(ContractClause {
-                kind,
-                condition,
-                span,
-                text: String::new(),
-                end_line,
-            });
-        }
+        let contracts = self.parse_contract_clauses(ClauseContext::Function)?;
         let mut body = Vec::new();
         while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
             if self.at_simple(&TokenKind::Newline) {
@@ -2225,8 +2210,63 @@ impl Parser {
         Ok((doc, contracts, body))
     }
 
-    /// The clause a line starting here begins, if it begins one. `requires`
-    /// and `ensures` are keywords only before an expression: `requires = 1`,
+    /// Parses the clauses at the top of a body, each on its own line.
+    fn parse_contract_clauses(&mut self, context: ClauseContext) -> Result<Vec<ContractClause>> {
+        let mut clauses = Vec::new();
+        loop {
+            self.skip_newlines();
+            let Some(kind) = self.at_contract_clause() else {
+                break;
+            };
+            let allowed = match kind {
+                ContractKind::Requires | ContractKind::Ensures => {
+                    context == ClauseContext::Function
+                }
+                ContractKind::Invariant | ContractKind::Decreases => context == ClauseContext::Loop,
+            };
+            if !allowed {
+                return Err(wrong_place_contract_error(self.current_span(), kind));
+            }
+            let span = self.bump().span;
+            let condition = self.parse_expr()?;
+            let end_line = self
+                .tokens
+                .get(self.index.saturating_sub(1))
+                .map_or(span.line, |token| token.span.line);
+            self.expect_statement_terminator()?;
+            let text = self.clause_text(kind, span.line, end_line);
+            clauses.push(ContractClause {
+                kind,
+                condition,
+                span,
+                text,
+                end_line,
+            });
+        }
+        Ok(clauses)
+    }
+
+    /// A clause's condition as written, joining the lines of a clause that
+    /// spans several.
+    fn clause_text(&self, kind: ContractKind, start_line: usize, end_line: usize) -> String {
+        let start = start_line.saturating_sub(1);
+        let end = end_line.max(start_line).min(self.source_lines.len());
+        let text = self
+            .source_lines
+            .get(start..end)
+            .unwrap_or_default()
+            .iter()
+            .map(|line| line.trim())
+            .collect::<Vec<_>>()
+            .join(" ");
+        text.strip_prefix(kind.keyword())
+            .unwrap_or(&text)
+            .trim()
+            .to_string()
+    }
+
+    /// The clause a line starting here begins, if it begins one. Clause words
+    /// are keywords only before an expression: `requires = 1`,
     /// `requires.x`, `requires[0]`, and the call `requires(x)` stay ordinary
     /// statements. A parenthesis after a space starts a clause.
     fn at_contract_clause(&self) -> Option<ContractKind> {
@@ -2320,6 +2360,30 @@ impl Parser {
             ));
         }
         Ok(())
+    }
+
+    /// Parses a loop body with its leading `invariant` and `decreases`
+    /// clauses.
+    fn parse_loop_block(&mut self) -> Result<(Vec<ContractClause>, Vec<Stmt>)> {
+        self.expect_simple(TokenKind::Indent)?;
+        let contracts = self.parse_contract_clauses(ClauseContext::Loop)?;
+        let mut body = Vec::new();
+        while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
+            if self.at_simple(&TokenKind::Newline) {
+                self.bump();
+                continue;
+            }
+            body.push(self.parse_stmt()?);
+        }
+        if body.is_empty() {
+            body.push(Stmt::Pass(crate::ast::PassStmt {
+                span: contracts
+                    .last()
+                    .map_or(self.current_span(), |clause| clause.span),
+            }));
+        }
+        self.expect_simple(TokenKind::Dedent)?;
+        Ok((contracts, body))
     }
 
     fn parse_block(&mut self) -> Result<Vec<Stmt>> {

@@ -1,0 +1,8 @@
+error[AU4009]: `invariant` clause failed: `k <= 3`
+ --> crates/aura-compiler/tests/fixtures/run-fail/loop_invariant_fails.au:4:19
+  |
+4 |         invariant k <= 3
+  |                   ^
+  = note: left = 4
+  = note: right = 3
+  = note: Aura call chain (innermost first): main at 1:1

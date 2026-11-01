@@ -310,6 +310,11 @@ pub enum ContractKind {
     Requires,
     /// `ensures condition`: the function promises it on return.
     Ensures,
+    /// `invariant condition`: holds on every pass of a loop.
+    Invariant,
+    /// `decreases measure`: a `while` loop's non-negative integer measure
+    /// that every iteration makes smaller.
+    Decreases,
 }
 
 impl ContractKind {
@@ -317,6 +322,8 @@ impl ContractKind {
         match self {
             ContractKind::Requires => "requires",
             ContractKind::Ensures => "ensures",
+            ContractKind::Invariant => "invariant",
+            ContractKind::Decreases => "decreases",
         }
     }
 
@@ -324,12 +331,14 @@ impl ContractKind {
         match word {
             "requires" => Some(ContractKind::Requires),
             "ensures" => Some(ContractKind::Ensures),
+            "invariant" => Some(ContractKind::Invariant),
+            "decreases" => Some(ContractKind::Decreases),
             _ => None,
         }
     }
 }
 
-/// One `requires` or `ensures` line.
+/// One `requires`, `ensures`, `invariant`, or `decreases` line.
 #[derive(Clone, Debug, Serialize)]
 pub struct ContractClause {
     pub kind: ContractKind,
@@ -705,6 +714,8 @@ pub struct ForStmt {
     pub target: BindingTarget,
     pub iterable: Expr,
     pub borrow_mode: Option<ReceiverKind>,
+    /// The `invariant` clauses at the top of the body.
+    pub contracts: Vec<ContractClause>,
     pub body: Vec<Stmt>,
     pub span: Span,
 }
@@ -723,6 +734,9 @@ impl Serialize for ForStmt {
         }
         state.serialize_field("iterable", &self.iterable)?;
         state.serialize_field("borrow_mode", &self.borrow_mode)?;
+        if !self.contracts.is_empty() {
+            state.serialize_field("contracts", &self.contracts)?;
+        }
         state.serialize_field("body", &self.body)?;
         state.serialize_field("span", &self.span)?;
         state.end()
@@ -740,6 +754,9 @@ pub struct WithStmt {
 #[derive(Clone, Debug, Serialize)]
 pub struct WhileStmt {
     pub condition: Expr,
+    /// The `invariant` and `decreases` clauses at the top of the body.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub contracts: Vec<ContractClause>,
     pub body: Vec<Stmt>,
     pub span: Span,
 }

@@ -6774,7 +6774,7 @@ String and format-specification diagnostics are described under
 | `AU2045` | invalid property use | Assignment, compound assignment, a `mut` argument or receiver, `match mut`, a view, or call syntax on a property. | Read the property without parentheses, or bind it to a local and change the local. |
 | `AU2046` | invalid derived implementation | A bodyless `impl` for a trait other than `json.Codec`, for a type from another module, a generic class or enum, or a class with `__init__`. Also a positional enum payload, a field type with no JSON form, or a union whose members a decoder cannot tell apart. | Write the implementation by hand, or change the field to a supported type. See [Derived Codecs](/manual/json#derived-codecs). |
 | `AU2047` | invalid decorator | A decorator on a generic function, on `main`, on a function with a parameter default or a view result, or a decorator line not followed by a module-level `def`. | Remove the decorator, or change the function so a closure can stand in for it. See [Decorators](/manual/functions#decorators). |
-| `AU2048` | invalid contract clause | A `requires` or `ensures` line after the body's first statement, a condition that calls a user function or a method that changes its receiver, `ensures` on `__init__` or on a function with a view result, an `ensures` that reads an `own` parameter, a parameter named `result` beside `ensures`, or a clause on a trait implementation method. | Put clauses first, keep conditions to reads and pure builtins, and see [Contracts](/manual/functions#contracts). |
+| `AU2048` | invalid contract clause | A clause after the body's first statement or in the wrong body (`requires` and `ensures` belong to functions, `invariant` and `decreases` to loops), `decreases` on a `for` loop or twice on one loop, a condition that calls a user function or a method that changes its receiver, `ensures` on `__init__` or on a function with a view result, an `ensures` that reads an `own` parameter, a parameter named `result` beside `ensures`, or a clause on a trait implementation method. | Put clauses first, keep conditions to reads and pure builtins, and see [Contracts](/manual/functions#contracts). |
 | `AU2999` | general compile-time rejection | A rejection that has no narrower public category. | Follow the message. |
 
 **`AU2002` type mismatch.** List `map`, `filter`, and keyed `sort` require the
@@ -7122,7 +7122,7 @@ owner's region.
 | `AU4005` | resource, allocation, or I/O failure | An exceeded size limit, allocation failure, or stack exhaustion. | Stay within the documented limit, or request more stack. |
 | `AU4006` | invalid runtime configuration | An invalid `AURA_WORKERS`, `AURA_BLOCKING_WORKERS`, or `AURA_BLOCKING_QUEUE_CAPACITY` value. | Set the variable to a positive decimal integer, or unset it. |
 | `AU4007` | numeric Array shape or reduction violation | Mismatched Array shapes, or `min`, `max`, or `mean` of an empty Array. | Match the shapes, or check that the Array is not empty. |
-| `AU4009` | contract violated | A `requires` condition was false when the function was called, or an `ensures` condition was false when it returned. | Fix the caller for `requires`, or the function body for `ensures`. The message names the clause. |
+| `AU4009` | contract violated | A `requires` condition was false when the function was called, an `ensures` condition was false when it returned, a loop `invariant` was false, or a `decreases` measure went below 0 or did not get smaller. | Fix the caller for `requires`, or the function or loop body for the others. The message names the clause. |
 
 Each runtime code's precise causes are listed under
 [Runtime Traps And Backtraces](#runtime-traps-and-backtraces).
@@ -11608,10 +11608,58 @@ and comprehensions, and call pure builtins such as `len`, `min`, `max`,
 and `keys`. Calling a user function, or a method that changes its
 receiver, is `AU2048`.
 
-`requires` and `ensures` are keywords only at the start of a clause line.
+`requires`, `ensures`, `invariant`, and `decreases` are keywords only at
+the start of a clause line.
 Elsewhere they are ordinary names, so `requires = 1` and the call
 `requires(x)` keep their meaning. Write a space before a parenthesis that
 starts a condition: `requires (a or b) and c`.
+
+### Loop invariants and `decreases`
+
+A loop can state what stays true while it runs, with `invariant` clauses at
+the top of its body. A `while` loop can also state why it ends, with one
+`decreases` clause.
+
+```aura
+def find(xs: list[int64], key: int64) -> int64:
+    """Index of `key` in sorted `xs`, or -1."""
+    mut lo = 0
+    mut hi = len(xs)
+    while lo < hi:
+        invariant 0 <= lo and lo <= hi and hi <= len(xs)
+        decreases hi - lo
+        mid = lo + (hi - lo) // 2
+        if xs[mid] < key:
+            lo = mid + 1
+        elif xs[mid] > key:
+            hi = mid
+        else:
+            return mid
+    return -1
+
+def total(xs: list[int64]) -> int64:
+    mut acc = 0
+    for i, x in enumerate(xs):
+        invariant acc == sum(xs[0:i])
+        acc += x
+    return acc
+
+def main():
+    print(find([1, 3, 5, 7], 5))  # 2
+    print(total([1, 2, 3]))  # 6
+```
+
+- A `while` invariant is checked before every test of the condition: on
+  entry, after every iteration (including one that ends in `continue`),
+  and when the condition ends the loop. A `break` leaves without a check.
+- A `for` invariant is checked at the start of every iteration, after the
+  loop target is bound, so it can read the target.
+- `decreases measure` takes an `int64` measure. It is checked each time
+  the body starts: the measure must be at least 0, and smaller than it was
+  the previous time. A loop that keeps both rules must end. A `for` loop
+  always ends, so it takes no `decreases`.
+- Loop clauses come first in the loop body, follow the same purity rules
+  as function clauses, and fail with `AU4009`.
 
 These forms are not available yet and report `AU2048`:
 
@@ -11621,8 +11669,8 @@ These forms are not available yet and report `AU2048`:
 - a parameter named `result` in a function with `ensures`
 - clauses on the methods of a trait implementation
 
-Loop and class invariants, `decreases`, `old(...)`, and `spec def` helper
-functions are planned next, followed by `aura verify`, which proves clauses
+Class invariants, `old(...)`, and `spec def` helper functions are planned
+next, followed by `aura verify`, which proves clauses
 before the program runs. See the
 [verification design](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/23-verification-design-checkpoint.md).
 
@@ -20395,6 +20443,8 @@ A `while` condition that tests a union place with `is None` or `is not None` nar
 A fact established before the loop survives into the condition and the body only when no iteration can invalidate it. The checker treats the loop header as a fixed point over the loop entry and every backedge, the path from the body back to the header. A body that assigns such a place is therefore checked again without the entry fact.
 
 The checker rejects the first move of a non-copy outer value inside a repeatable loop when that move could make a later iteration invalid. Reinitialize the place on every continuing path, or restructure ownership explicitly.
+
+A loop body may start with `invariant` clauses, and a `while` body with one `decreases` clause. They are checked at run time; see [Loop invariants and `decreases`](/manual/functions#loop-invariants-and-decreases).
 
 ## `for` Iteration
 

@@ -1,0 +1,10 @@
+def main():
+    mut k = 3
+    mut turns = 0
+    while turns < 10:
+        decreases k
+        turns += 1
+        if turns == 2:
+            k += 1
+        k -= 1
+    print(k)

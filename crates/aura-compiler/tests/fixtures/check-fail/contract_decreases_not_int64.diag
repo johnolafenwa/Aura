@@ -1,0 +1,5 @@
+error[AU2002]: a `decreases` measure must be `int64`, found `float64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/contract_decreases_not_int64.au:4:19
+  |
+4 |         decreases k
+  |                   ^

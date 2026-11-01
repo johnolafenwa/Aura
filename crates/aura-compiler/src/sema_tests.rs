@@ -31913,3 +31913,60 @@ fn contract_clauses_check_as_pure_bool_conditions() {
         assert!(error.message.contains(message), "{source}: {}", error.message);
     }
 }
+
+#[test]
+fn loop_clauses_check_as_pure_conditions_and_measures() {
+    crate::check_source(concat!(
+        "def f(xs: list[int64], n: int64) -> int64:\n",
+        "    mut lo = 0\n",
+        "    mut hi = len(xs)\n",
+        "    while lo < hi:\n",
+        "        invariant 0 <= lo and hi <= len(xs)\n",
+        "        decreases hi - lo\n",
+        "        lo += 1\n",
+        "    mut acc = 0\n",
+        "    for i, x in enumerate(xs):\n",
+        "        invariant acc == sum(xs[0:i]) and x == xs[i]\n",
+        "        acc += x\n",
+        "    for x in xs:\n",
+        "        invariant x >= 0 or n > 0\n",
+        "    return acc\n",
+    ))
+    .expect("pure loop clauses check");
+    for (source, code, message) in [
+        (
+            "def main():\n    for x in [1, 2]:\n        decreases x\n        print(x)\n",
+            "AU2048",
+            "a `for` loop always ends",
+        ),
+        (
+            "def main():\n    mut k = 3\n    while k > 0:\n        decreases k\n        decreases k + 1\n        k -= 1\n",
+            "AU2048",
+            "at most one `decreases` clause",
+        ),
+        (
+            "def main():\n    mut k = 3.0\n    while k > 0.0:\n        decreases k\n        k -= 1.0\n",
+            "AU2002",
+            "a `decreases` measure must be `int64`, found `float64`",
+        ),
+        (
+            "def main():\n    mut k = 3\n    while k > 0:\n        invariant k\n        k -= 1\n",
+            "AU2002",
+            "an `invariant` condition must be `bool`, found `int64`",
+        ),
+        (
+            "def main():\n    mut xs = [1]\n    while len(xs) < 3:\n        invariant xs.pop() > 0\n        xs.append(1)\n",
+            "AU2048",
+            "an `invariant` condition must not change program state",
+        ),
+        (
+            "def main():\n    for x in [1]:\n        invariant [y for y in [x]].pop() > 0\n",
+            "AU2048",
+            "an `invariant` condition must not change program state",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err(source);
+        assert_eq!(error.code, code, "{source}: {}", error.message);
+        assert!(error.message.contains(message), "{source}: {}", error.message);
+    }
+}

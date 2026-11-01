@@ -387,6 +387,9 @@ impl<'a> AliasValidator<'a> {
                 }
                 Stmt::For(stmt) => {
                     self.expr(&stmt.iterable)?;
+                    for clause in &stmt.contracts {
+                        self.expr(&clause.condition)?;
+                    }
                     self.stmts(&stmt.body)?;
                 }
                 Stmt::With(stmt) => {
@@ -395,6 +398,9 @@ impl<'a> AliasValidator<'a> {
                 }
                 Stmt::While(stmt) => {
                     self.expr(&stmt.condition)?;
+                    for clause in &stmt.contracts {
+                        self.expr(&clause.condition)?;
+                    }
                     self.stmts(&stmt.body)?;
                 }
                 Stmt::Expr(stmt) => self.expr(&stmt.expr)?,

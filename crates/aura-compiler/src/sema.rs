@@ -153,9 +153,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{
     Argument, AssignStmt, AssignTarget, BinaryOp, BindingTarget, ClassDecl, CompareLink,
-    ComprehensionClause, ComprehensionOutput, EnumDecl, Expr, ExprKind, FunctionDecl, ImplDecl,
-    Item, LambdaParam, LiteralPattern, LiteralPatternKind, MatchExprArm, MatchStmt, Module, Param,
-    ParamMode, Pattern, ReceiverKind, Stmt, TraitDecl, TypeRef, UnaryOp, VariantPattern, WithStmt,
+    ComprehensionClause, ComprehensionOutput, ContractKind, EnumDecl, Expr, ExprKind, FunctionDecl,
+    ImplDecl, Item, LambdaParam, LiteralPattern, LiteralPatternKind, MatchExprArm, MatchStmt,
+    Module, Param, ParamMode, Pattern, ReceiverKind, Stmt, TraitDecl, TypeRef, UnaryOp,
+    VariantPattern, WithStmt,
 };
 use crate::call::{
     bind_call_arguments, callable_params_from_decl, list_binary_result_type,
@@ -167,6 +168,10 @@ use crate::integer::{
     integer_type_bounds as integer_type_bounds_impl, IntegerBounds, IntegerValue,
 };
 use crate::runtime_value::{parse_format_spec, validate_format_spec_for_type};
+
+/// The clauses a `for` loop body may start with. `decreases` is listed so
+/// the checker can reject it with a clear message.
+const ALL_LOOP_CLAUSES: &[ContractKind] = &[ContractKind::Invariant, ContractKind::Decreases];
 
 const NO_IDENTITY_EQUALITY_NOTE: &str =
     "Aura has no identity-equality fallback; equality-dependent operations require a defined value relation";
@@ -667,6 +672,13 @@ fn block_contains_break(body: &[Stmt]) -> bool {
     })
 }
 
+/// True when a loop's contract clauses read `name`.
+pub(crate) fn clauses_reference_name(clauses: &[crate::ast::ContractClause], name: &str) -> bool {
+    clauses
+        .iter()
+        .any(|clause| expr_references_name(&clause.condition, name))
+}
+
 fn block_references_name(body: &[Stmt], name: &str) -> bool {
     body.iter().any(|stmt| stmt_references_name(stmt, name))
 }
@@ -717,6 +729,7 @@ pub(crate) fn stmt_references_name(stmt: &Stmt, name: &str) -> bool {
         }
         Stmt::For(for_stmt) => {
             expr_references_name(&for_stmt.iterable, name)
+                || clauses_reference_name(&for_stmt.contracts, name)
                 || block_references_name(&for_stmt.body, name)
         }
         Stmt::With(with_stmt) => {
@@ -725,6 +738,7 @@ pub(crate) fn stmt_references_name(stmt: &Stmt, name: &str) -> bool {
         }
         Stmt::While(while_stmt) => {
             expr_references_name(&while_stmt.condition, name)
+                || clauses_reference_name(&while_stmt.contracts, name)
                 || block_references_name(&while_stmt.body, name)
         }
         Stmt::Expr(expr_stmt) => expr_references_name(&expr_stmt.expr, name),
@@ -3409,6 +3423,7 @@ impl<'a> FunctionChecker<'a> {
             &mut body_locals,
             "loop",
         )?;
+        self.check_loop_clauses(&for_stmt.contracts, ALL_LOOP_CLAUSES, &body_locals, true)?;
         self.check_block(
             &for_stmt.body,
             &mut body_locals,
@@ -4774,13 +4789,22 @@ impl<'a> FunctionChecker<'a> {
                                 .borrow_mut()
                                 .push((place.clone(), for_stmt.iterable.span));
                         }
-                        let checked = self.check_block(
-                            &for_stmt.body,
-                            &mut body_locals,
-                            return_type,
-                            loop_depth + 1,
-                            allow_return,
-                        );
+                        let checked = self
+                            .check_loop_clauses(
+                                &for_stmt.contracts,
+                                ALL_LOOP_CLAUSES,
+                                &body_locals,
+                                true,
+                            )
+                            .and_then(|()| {
+                                self.check_block(
+                                    &for_stmt.body,
+                                    &mut body_locals,
+                                    return_type,
+                                    loop_depth + 1,
+                                    allow_return,
+                                )
+                            });
                         if mutable_iteration.is_some() {
                             self.mutable_iteration_places.borrow_mut().pop();
                         }
@@ -4813,6 +4837,12 @@ impl<'a> FunctionChecker<'a> {
                     // iteration, so its own true-successor facts are
                     // re-established for the body on each pass.
                     let (when_false, body_locals) = loop {
+                        self.check_loop_clauses(
+                            &while_stmt.contracts,
+                            &[ContractKind::Invariant],
+                            locals,
+                            false,
+                        )?;
                         let condition_ty = self.type_of_expr(&while_stmt.condition, locals)?;
                         if condition_ty != Type::named("bool") {
                             return Err(Diagnostic::at(
@@ -4827,6 +4857,12 @@ impl<'a> FunctionChecker<'a> {
                             self.condition_narrowing(&while_stmt.condition, locals)?;
                         let mut body_locals = locals.clone();
                         self.apply_narrowing(&when_true, &mut body_locals);
+                        self.check_loop_clauses(
+                            &while_stmt.contracts,
+                            &[ContractKind::Decreases],
+                            &body_locals,
+                            false,
+                        )?;
                         self.check_block(
                             &while_stmt.body,
                             &mut body_locals,

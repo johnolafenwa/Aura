@@ -475,6 +475,14 @@ fn decorators_attach_to_their_definition() {
 }
 
 #[test]
+fn loop_clauses_keep_the_space_after_their_keyword() {
+    assert_formats(
+        "def f(k: int64):\n    while k > 0:\n        invariant (k)>=0\n        decreases -(-k)\n        k -= 1\n",
+        "def f(k: int64):\n    while k > 0:\n        invariant (k) >= 0\n        decreases -(-k)\n        k -= 1\n",
+    );
+}
+
+#[test]
 fn contract_clauses_keep_the_space_after_their_keyword() {
     assert_formats(
         "def f(a: bool, b: bool):\n    requires (a or b) and a\n    requires [1][0] == 1\n    requires -1 < 0\n    ensures   a==a\n    requires(a)\n    print(a)\n",
