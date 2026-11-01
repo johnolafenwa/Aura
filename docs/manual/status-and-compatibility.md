@@ -1,6 +1,6 @@
 # Status And Compatibility
 
-Aura 0.10.0 is a technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments. It is not a production systems-language release, and it is not a security boundary for untrusted programs.
+Aura 0.11.0 is a technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments. It is not a production systems-language release, and it is not a security boundary for untrusted programs.
 
 This page states what the maintained language contract is, which surface it currently covers, and how that surface may change.
 
@@ -125,11 +125,11 @@ The Manual is reference-frozen. Every semantic change, including any extension, 
 
 Compiler coverage is held at the current non-regression floor, not pushed to 100%. New behavior still requires focused tests. The freeze only ends marginal coverage work that does not reduce product risk.
 
-Seeded randomness has an extra observable-data promise. The algorithm, seed mapping, integer and floating mappings, and shuffle order documented in [Randomness Module](/manual/randomness) stay stable throughout Aura 0.3.x, 0.4.x, 0.5.x, 0.6.x, 0.7.x, 0.8.x, 0.9.x, and 0.10.x. A later release may change them only with an explicit decision and new conformance vectors. OS-secure outputs are intentionally not stable.
+Seeded randomness has an extra observable-data promise. The algorithm, seed mapping, integer and floating mappings, and shuffle order documented in [Randomness Module](/manual/randomness) stay stable throughout Aura 0.3.x, 0.4.x, 0.5.x, 0.6.x, 0.7.x, 0.8.x, 0.9.x, 0.10.x, and 0.11.x. A later release may change them only with an explicit decision and new conformance vectors. OS-secure outputs are intentionally not stable.
 
 ## Maintained Concurrency Surface
 
-Aura 0.10 uses structured concurrency:
+Aura 0.11 uses structured concurrency:
 
 - `TaskGroup()` owns child tasks inside `with`.
 - `TaskGroup.start(...)` returns a `Task[T]`.

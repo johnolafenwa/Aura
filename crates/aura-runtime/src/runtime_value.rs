@@ -3937,6 +3937,10 @@ struct ChannelState {
     recv_reactor_subscribers: Mutex<HashMap<ReactorSubscriptionKey, ReactorRecvSubscription>>,
     send_reactor_subscribers: Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
     runtime_type_name: Mutex<Option<String>>,
+    /// A pool thread, not a task, sends this channel's one value: the result
+    /// of a blocking-I/O, protocol, or codec job. A task waiting on it is
+    /// never stuck, since the job always finishes and sends or closes.
+    host_completion: bool,
 }
 
 struct ChannelInner {
@@ -5942,7 +5946,7 @@ impl BlockingIoPool {
             return Ok(());
         };
 
-        let completion = ChannelValue::new();
+        let completion = ChannelValue::host_completion();
         let outcome = Arc::new(Mutex::new(None));
         let waiter_id;
         {
@@ -6811,7 +6815,7 @@ where
     F: FnOnce() -> io::Result<T> + Send + 'static,
 {
     check_deadline_and_cancellation(admission_deadline, cancellation)?;
-    let completion = ChannelValue::new();
+    let completion = ChannelValue::host_completion();
     let result = Arc::new(Mutex::new(None::<io::Result<T>>));
     let result_slot = result.clone();
     let completion_signal = completion.clone();
@@ -7026,7 +7030,7 @@ where
 {
     check_deadline_and_cancellation(deadline, cancellation)?;
 
-    let completion = ChannelValue::new();
+    let completion = ChannelValue::host_completion();
     let result = Arc::new(Mutex::new(None::<io::Result<T>>));
     let result_slot = result.clone();
     let completion_signal = completion.clone();
@@ -9919,7 +9923,17 @@ impl ChannelValue {
         Self::with_optional_capacity(Some(capacity))
     }
 
+    /// A channel a pool thread completes. The task-group deadlock probe
+    /// counts a task waiting on one as able to make progress.
+    fn host_completion() -> Self {
+        Self::with_options(None, true)
+    }
+
     fn with_optional_capacity(capacity: Option<usize>) -> Self {
+        Self::with_options(capacity, false)
+    }
+
+    fn with_options(capacity: Option<usize>, host_completion: bool) -> Self {
         Self {
             inner: Arc::new(ChannelState {
                 state: Mutex::new(ChannelInner {
@@ -9936,6 +9950,7 @@ impl ChannelValue {
                 recv_reactor_subscribers: Mutex::new(HashMap::new()),
                 send_reactor_subscribers: Mutex::new(HashMap::new()),
                 runtime_type_name: Mutex::new(None),
+                host_completion,
             }),
         }
     }
@@ -16077,7 +16092,8 @@ fn recv_channel_has_reachable_waker(
     }
     search.channel_expansions += 1;
 
-    let mut reachable = channel.is_ready_for_scheduler_recv(ignore_closed);
+    let mut reachable = channel.is_ready_for_scheduler_recv(ignore_closed)
+        || (channel.inner.host_completion && channel.is_open());
     if !reachable {
         let mut seen = HashSet::new();
         reachable =
@@ -17364,7 +17380,7 @@ fn run_json_codec_operation_on_pool_with<F>(
 where
     F: FnOnce() -> std::result::Result<JsonValue, JsonCodecError> + Send + 'static,
 {
-    let completion = ChannelValue::new();
+    let completion = ChannelValue::host_completion();
     let result = Arc::new(Mutex::new(None));
     reservation.submit(JsonCodecJob {
         operation: Box::new(operation),

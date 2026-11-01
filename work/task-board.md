@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-10-30
+Last updated: 2026-10-31
 
 ## Beat Python on the last slow benchmarks (in progress)
 
@@ -21,6 +21,14 @@ Last updated: 2026-10-30
   (`csv_aggregate` 943M -> 880M instructions).
 - Step 4a: new empty lists record their tag's shape, scalar pushes keep
   it (`regex_match` 1,434M -> 1,164M instructions, 0.59 -> 0.53 s).
+- Released in 0.11.0-preview with the sequence builtins (ADR-0066) and
+  the VS Code debugger (ADR-0067). Measured against 0.10.0 in the same
+  passes on 2026-10-31, median of ten runs: all 30 programs 17.9 s ->
+  16.4 s, median 3.9x -> 3.7x Rust, 0.40x Python, 25 programs faster than
+  Python, none above 8x Rust. Still slower than Python: `csv_aggregate`
+  (1.21x), `docdb` (2.36x), `file_io` (1.20x), `json_roundtrip` (1.55x),
+  `template_render` (1.48x). Details are in
+  `2026-10-31-v0.11.0-preview-release.md`.
 
 ## File I/O hand-off (complete)
 

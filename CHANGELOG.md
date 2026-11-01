@@ -7,6 +7,34 @@ in this file.
 
 ## Unreleased
 
+## VS Code extension 0.11.0 — 2026-10-31
+
+- Debugs Aura programs. A new `aura` debug type, a **Debug File** command,
+  and a Debug lens above `def main` build the file with
+  `aura build --debug` and debug it with LLVM's `lldb-dap`: breakpoints,
+  stepping, the call stack, and locals. The `aura.lldbDapPath`
+  setting names the adapter when it is not found on its own. Bundles
+  language server 0.11.0; the semantic interface version stays 20.
+
+## 0.11.0 — 2026-10-31 (technical preview)
+
+Aura 0.11.0 adds the `sorted`, `reversed`, and `list` builtins, list `+`
+and `*`, and slice steps, and Aura programs can now be debugged with
+`aura build --debug` and the VS Code extension. It also speeds up the
+programs that were furthest behind Python: file calls hand off to the
+blocking-I/O pool for less, read-only dictionary lookups and `json.parse`
+do less work, borrowed list elements are lent instead of copied, and
+one-character string patterns scan with `memchr`. Measured in the same
+passes on the Linux measurement host, the 30
+[cross-language programs](benchmarks/cross_language/README.md) take 16.4
+seconds instead of 0.10.0's 17.9, the median program is 3.7 times Rust's
+time instead of 3.9 times and 0.40 times Python's, and no program is
+above 8 times Rust. `file_io` went from 2.4 to 1.5 times Rust, `docdb`
+26% faster, and `regex_match` from 7.4 to 6.5 times Rust. Breaking:
+`sorted`, `reversed`, and `list` are now builtin names. A task group no
+longer cancels a child waiting on file I/O when its block ends. The semantic
+interface stays 20, and the native cache format stays `v10`.
+
 - New builtins `sorted`, `reversed`, and `list`, list `+` and `*`, and
   slice steps (ADR-0066). `sorted(values, key=..., reverse=...)` returns a
   new stably sorted list of a list, span, set, or `Range`, ordered as
@@ -75,6 +103,12 @@ in this file.
   buffers before a file-system call, and `fs.exists` now run on the
   blocking-I/O pool instead of the worker thread in native builds, so a
   slow disk no longer holds up the worker's other tasks.
+- Fixed: leaving a `with TaskGroup()` block could cancel a child task that
+  was waiting on a file, process, or JSON call running on a helper thread,
+  because the check for stuck children took that wait for one no task could
+  end. The block then went on before the child finished, so a file the child
+  wrote could be missing or empty. Such a wait now counts as able to finish.
+  This was in 0.10.0 too, more often.
 
 ## VS Code extension 0.10.0 — 2026-10-30
 

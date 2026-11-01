@@ -190,7 +190,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - Deep HTTP, TLS, and maintained Unix WebSocket library frames run on a separate protocol-step pool with two 2 MiB-stack workers and a 64-job queue.
 - Each submitted protocol job is a bounded, nonblocking step. It returns owned protocol state before cancellation or reactor waiting resumes.
 - The non-Unix WebSocket fallback does not use the protocol-step pool.
-- The protocol-step pool is process-global, lazily initialized, shared by all lightweight schedulers, and lives for the whole process. It has no 0.10 runtime shutdown or join API.
+- The protocol-step pool is process-global, lazily initialized, shared by all lightweight schedulers, and lives for the whole process. It has no 0.11 runtime shutdown or join API.
 - File reads, resolver work, and listener binding run on the generic blocking-I/O pool. TLS asset bytes are read there, and then PEM parsing and rustls construction run on protocol workers.
 - The process-wide blocking-I/O pool defaults from host parallelism, with fallback `4` and a derived `2..=8` clamp. `AURA_BLOCKING_WORKERS=<positive integer>` requests that exact count without clamping.
 - `AURA_BLOCKING_QUEUE_CAPACITY=<positive integer>` bounds pending accepted jobs only. Running jobs and admission waiters do not consume it. Without it, the queue is unbounded.
@@ -203,7 +203,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 
 ### Size Limits
 
-- Filesystem one-shot reads and `fs.File` whole-file reads are capped at 256 MiB of remaining content. Aura 0.10 has no chunked file-read API.
+- Filesystem one-shot reads and `fs.File` whole-file reads are capped at 256 MiB of remaining content. Aura 0.11 has no chunked file-read API.
 - Process-pipe and captured-output reads are capped at 64 MiB. So are TCP, Unix, and TLS whole and bounded reads.
 - TLS certificate, private-key, and CA-file loading uses the same independent 64 MiB ceiling.
 - A bounded byte count of zero is invalid.
@@ -219,7 +219,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - TLS handshakes have a 10-second hard cap, even when the caller supplies no shorter timeout.
 - TLS APIs require PEM certificate and key assets.
 - High-level HTTP clients support HTTP/1.1 over `http://` and validated `https://`, including content-length, chunked, and close-delimited responses. Redirects, pooling, HTTP/2, proxy configuration, decompression, and high-level custom CA arguments are not implemented.
-- The high-level dictionary header model cannot preserve repeated equal field names losslessly. When the wire message repeats a header name, conversion may expose duplicate equal dictionary keys. Repeated headers are not a lossless 0.10 contract.
+- The high-level dictionary header model cannot preserve repeated equal field names losslessly. When the wire message repeats a header name, conversion may expose duplicate equal dictionary keys. Repeated headers are not a lossless 0.11 contract.
 - Unix domain sockets require a Unix host.
 - `WebSocketListener` has no explicit `close()` method. WebSocket cancellation and error propagation are not fully aligned with TCP and UDP.
 
@@ -236,7 +236,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - Dynamic `json.parse` uses a separate process-global service with two 2 MiB-stack workers and a total in-flight capacity of two.
 - The service reserves capacity before the fallible source copy. Lightweight tasks that find it saturated park through the scheduler. Once admitted, a synchronous parse defers cancellation until the codec completes.
 - Runtime materialization, JSON-aware clone and render, and dumping use iterative traversals.
-- The parse service lives for the whole process and has no 0.10 sizing or shutdown API.
+- The parse service lives for the whole process and has no 0.11 sizing or shutdown API.
 - The bounded `json.is_valid` and `json.parse_string_map` helpers keep their bounded caller-side paths and do not use that service.
 - JSON flat-dictionary and TOML helpers are restricted to typed `dict[str, str]`.
 - JSON has no arbitrary-precision number, streaming codec, or schema validation. A derived `json.Codec` for a generic class or enum is not implemented.
