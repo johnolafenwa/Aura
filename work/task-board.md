@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-10-31
+Last updated: 2026-11-01
 
 ## Beat Python on the last slow benchmarks (in progress)
 
@@ -29,6 +29,10 @@ Last updated: 2026-10-31
   (1.21x), `docdb` (2.36x), `file_io` (1.20x), `json_roundtrip` (1.55x),
   `template_render` (1.48x). Details are in
   `2026-10-31-v0.11.0-preview-release.md`.
+- Released 0.11.0-preview: PR #206 merged as `02bacd62`. The annotated
+  `v0.11.0-preview` tag (`5ea03b10`) was pushed on 2026-11-01, and Release
+  run `41322156118` published the three archives, docs, VSIX, and
+  `SHA256SUMS`, and extension 0.11.0 to the Marketplace and Open VSX.
 
 ## File I/O hand-off (complete)
 
