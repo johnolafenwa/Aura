@@ -3,8 +3,8 @@
 Working outline for *The Aura Programming Language*. Not published. File names
 follow `chNN-MM-slug.md`; `-00-` is the chapter landing page.
 
-The book replaces `docs/learn/`. Existing Learn chapters and case studies are
-source material: keep their facts and good examples, rewrite the prose.
+The book replaced the old Learn track (`docs/learn/`) and `tutorials/` on
+2026-11-01; both are in git history if you need their examples.
 
 ## Front matter
 

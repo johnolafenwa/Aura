@@ -92,8 +92,6 @@ def discover_sources(root: Path) -> List[Source]:
     candidates.extend(_ordered_markdown(root / "docs/install"))
     candidates.extend(_ordered_markdown(root / "docs/manual"))
     candidates.extend(_book_markdown(root / "docs/book"))
-    candidates.extend(_ordered_markdown(root / "docs/learn"))
-    candidates.extend(_ordered_markdown(root / "tutorials"))
 
     sources: List[Source] = []
     seen = set()
@@ -127,8 +125,6 @@ def _public_url(relative: Path) -> str:
     parts = list(relative.parts)
     if parts == ["README.md"]:
         return "https://github.com/johnolafenwa/Aura#readme"
-    if parts[:1] == ["tutorials"]:
-        return f"https://github.com/johnolafenwa/Aura/blob/main/{relative.as_posix()}"
     if parts[:1] == ["docs"]:
         parts = parts[1:]
     if parts[-1] == "index.md":
@@ -145,8 +141,6 @@ def _summary(sources: List[Source]) -> str:
         ("Install Aura", lambda source: source.relative.parts[:2] == ("docs", "install")),
         ("Language Manual", lambda source: source.relative.parts[:2] == ("docs", "manual")),
         ("The Aura Programming Language", lambda source: source.relative.parts[:2] == ("docs", "book")),
-        ("Learn Aura", lambda source: source.relative.parts[:2] == ("docs", "learn")),
-        ("Tutorials", lambda source: source.relative.parts[:1] == ("tutorials",)),
     ]
     lines = [
         "# Aura",
@@ -171,7 +165,7 @@ def _full(sources: List[Source]) -> str:
     lines = [
         "# Aura full documentation",
         "",
-        "> Build-derived from the maintained Aura README, website, Manual, Learn track, and tutorials.",
+        "> Build-derived from the maintained Aura README, website, Manual, and book.",
         "",
     ]
     for source in sources:

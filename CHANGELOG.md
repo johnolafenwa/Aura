@@ -7,6 +7,9 @@ in this file.
 
 ## Unreleased
 
+- Documentation: *The Aura Programming Language*, a new book at `/book/`,
+  replaces the Learn track and the `tutorials/` directory. Old `/learn/`
+  links no longer resolve; start at `/book/`.
 - New `ord(text)` and `chr(code)` builtins convert between a one-character
   `str` and its Unicode scalar value, and `str.chars()` returns a string's
   scalars as one-character strings. A wrong length or an invalid scalar value

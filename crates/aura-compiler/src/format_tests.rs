@@ -75,7 +75,6 @@ fn every_example_and_tutorial_program_formats_idempotently() {
     let root = repository_root();
     let mut sources = Vec::new();
     collect_sources(&root.join("examples"), "au", &mut sources);
-    collect_sources(&root.join("tutorials"), "au", &mut sources);
     assert!(sources.len() > 50, "expected the example corpus");
     for path in &sources {
         let source = std::fs::read_to_string(path).unwrap();
@@ -86,7 +85,6 @@ fn every_example_and_tutorial_program_formats_idempotently() {
         assert_eq!(again, formatted, "{label}: formatting is not idempotent");
     }
     let mut pages = Vec::new();
-    collect_sources(&root.join("tutorials"), "md", &mut pages);
     collect_sources(&root.join("docs/manual"), "md", &mut pages);
     collect_sources(&root.join("docs/book"), "md", &mut pages);
     for page in &pages {

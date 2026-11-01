@@ -24,7 +24,7 @@ async function copyInstruction() {
       <h2 id="aura-agent-docs-title">Teach an agent Aura in one URL.</h2>
       <p>
         Aura publishes machine-readable documentation generated from the
-        maintained Manual, Learn track, tutorials, installation guides, and
+        maintained Manual, the Aura book, installation guides, and
         project overview.
       </p>
 

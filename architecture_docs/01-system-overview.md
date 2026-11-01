@@ -20,8 +20,8 @@ The repo is not just a compiler crate. It is a language implementation monorepo.
   A thin VS Code client around the language server, plus indentation behavior and packaging.
 - `examples/`
   Runnable language examples grouped by topic.
-- `tutorials/`
-  End-user docs for the implemented language subset.
+- `docs/book/`
+  The Aura book: end-user docs for the implemented language.
 - `work/`
   Task tracking and engineering notes.
 

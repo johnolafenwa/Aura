@@ -596,7 +596,7 @@ def _is_public_document(relative: str) -> bool:
     }:
         return True
     return relative.startswith(
-        ("docs/", "tutorials/", "examples/", "llms/", "release-notes/")
+        ("docs/", "examples/", "llms/", "release-notes/")
     ) and Path(relative).suffix.lower() in {".md", ".txt", ".json"}
 
 

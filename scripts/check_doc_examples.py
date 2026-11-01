@@ -31,7 +31,6 @@ SOURCES = (
     "README.md",
     "CONTRIBUTING.md",
     "docs",
-    "tutorials",
     "examples",
     "crates/aura/README.md",
     "crates/aura-compiler/README.md",

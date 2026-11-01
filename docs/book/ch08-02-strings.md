@@ -162,18 +162,46 @@ error[AU2999]: `for` currently requires a `Range`, `Queue[T]`, `list[T]`, or `se
   |     ^
 ```
 
-This is a real gap if you're used to Python, so let's be clear about why it
-exists and what to do instead. Aura has no character type: a single letter is
-a `str` of length one. Finding the scalar at position `n` in UTF-8 means
-walking from the start, so `word[n]` inside a loop would quietly turn a
-linear algorithm into a quadratic one. Aura would rather not offer an
-operation that looks cheap and isn't. `chars()`, `ord()`, and `chr()` aren't
-available yet.
+This trips up everyone coming from Python, so let's be clear about why it
+happens. Aura has no character type: a single letter is a `str` of length
+one. Finding the scalar at position `n` in UTF-8 means walking from the
+start, so if a string could be indexed or iterated one position at a time, a
+loop like this would quietly turn a linear algorithm into a quadratic one.
+Aura would rather make you ask for the characters explicitly, so the cost is
+visible. You ask with `chars()`, which walks the string once and gives back a
+`list[str]` of one-character strings. `ord` turns one of them into its
+Unicode scalar value, and `chr` goes the other way:
 
-In practice, most text processing doesn't need single characters. You want
-words, fields, lines, and prefixes, and the methods in the rest of this
-section work on those directly. When you do need one character, a slice such
-as `word[0:1]` gives it to you as a one-character `str`.
+*Filename: src/main.au*
+
+```aura
+def main():
+    word = "naïve"
+    for ch in word.chars():
+        print(f"{ch} {ord(ch)}")
+    print(chr(97))
+```
+
+```console
+$ aura run src/main.au
+n 110
+a 97
+ï 239
+v 118
+e 101
+a
+```
+
+Notice that `ï` is one character here, even though it takes two bytes in
+UTF-8. `chars()` splits on Unicode scalars, not bytes. Passing `ord` a string
+that isn't exactly one character, or `chr` a number that isn't a valid
+scalar, stops the program with a trap.
+
+In practice, most text processing doesn't need single characters at all. You
+want words, fields, lines, and prefixes, and the methods in the rest of this
+section work on those directly. When you need one character from a known
+position, a slice such as `word[0:1]` gives it to you as a one-character
+`str` without building the whole list.
 
 ## Searching
 

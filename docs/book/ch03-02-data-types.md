@@ -436,7 +436,9 @@ Aura has no separate character type. A one-character piece of text is still
 a `str`, and you get one with a slice, `word[0:1]`, as the word counter did.
 Leaving out single-number indexing keeps you from writing code that looks
 like it takes constant time but has to scan the string from the start, which
-any UTF-8 string has to do to find the nth character.
+any UTF-8 string has to do to find the nth character. When you really want
+every character, `word.chars()` gives them to you as a list in one pass;
+Chapter 8 shows it along with `ord` and `chr`.
 
 ### f-strings
 

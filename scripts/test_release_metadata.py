@@ -123,7 +123,6 @@ class ReleaseMetadataTests(unittest.TestCase):
             if "node_modules" not in path.parts
             and path.name not in {"auro" + "ra_language_proposal.md", "ml_systems_support_plan.md"}
         )
-        pages += sorted((ROOT / "tutorials").rglob("*.md"))
         pages += sorted((ROOT / "tools").glob("*/README.md"))
         pages += sorted((ROOT / "crates").glob("*/README.md"))
         pages += sorted((ROOT / "examples").rglob("*.md"))

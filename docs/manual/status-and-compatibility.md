@@ -121,7 +121,7 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 - Work prioritizes correctness, native-runtime safety, editor responsiveness, and a coherent control-plane surface.
 - APIs may change while Aura remains a technical preview.
 
-The Manual is reference-frozen. Every semantic change, including any extension, requires an ADR. It must update the normative reference, compiler fixtures, maintained examples, and tutorials in the same commit. A change that cannot keep those surfaces synchronized does not enter the maintained language.
+The Manual is reference-frozen. Every semantic change, including any extension, requires an ADR. It must update the normative reference, compiler fixtures, maintained examples, and the book in the same commit. A change that cannot keep those surfaces synchronized does not enter the maintained language.
 
 Compiler coverage is held at the current non-regression floor, not pushed to 100%. New behavior still requires focused tests. The freeze only ends marginal coverage work that does not reduce product risk.
 
