@@ -4180,7 +4180,7 @@ fn expect_result_err_payload(ptr: *mut OpaqueValue) -> Value {
 }
 
 fn expect_process_invalid_input(value: Value) {
-    let mut io_payloads = expect_variant_value(value, "Error", "Io");
+    let mut io_payloads = expect_variant_value(value, "process.Error", "Io");
     assert_eq!(io_payloads.len(), 1);
     assert!(expect_variant_value(io_payloads.remove(0), "io.Error", "InvalidInput").is_empty());
 }
@@ -5202,7 +5202,7 @@ fn invalid_direct_host_timers_use_typed_io_and_process_errors() {
         duration_value(-1),
         bool_value(false),
     ));
-    let mut io_payloads = expect_variant_value(process_error, "Error", "Io");
+    let mut io_payloads = expect_variant_value(process_error, "process.Error", "Io");
     assert_eq!(io_payloads.len(), 1);
     assert!(expect_variant_value(io_payloads.remove(0), "io.Error", "InvalidInput").is_empty());
 
@@ -5261,7 +5261,8 @@ fn invalid_direct_host_timers_use_typed_io_and_process_errors() {
         failed_payloads.remove(0),
         Value::String("<supervisor>".to_string().into())
     );
-    let mut process_io_payloads = expect_variant_value(failed_payloads.remove(0), "Error", "Io");
+    let mut process_io_payloads =
+        expect_variant_value(failed_payloads.remove(0), "process.Error", "Io");
     assert_eq!(process_io_payloads.len(), 1);
     assert!(
         expect_variant_value(process_io_payloads.remove(0), "io.Error", "InvalidInput",).is_empty()
@@ -5274,7 +5275,7 @@ fn invalid_direct_host_timers_use_typed_io_and_process_errors() {
     let wait_or_none_error = expect_result_err_payload(
         super::aura_direct_process_supervisor_wait_or_none(supervisor, duration_value(-1)),
     );
-    let mut process_io_payloads = expect_variant_value(wait_or_none_error, "Error", "Io");
+    let mut process_io_payloads = expect_variant_value(wait_or_none_error, "process.Error", "Io");
     assert_eq!(process_io_payloads.len(), 1);
     assert!(
         expect_variant_value(process_io_payloads.remove(0), "io.Error", "InvalidInput",).is_empty()
@@ -6682,20 +6683,20 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
 fn native_runtime_process_error_and_wait_all_helpers_cover_remaining_paths() {
     assert!(expect_variant_value(
         super::process_error_from_io(io::Error::new(io::ErrorKind::TimedOut, "timed out")),
-        "Error",
+        "process.Error",
         "TimedOut",
     )
     .is_empty());
     assert!(expect_variant_value(
         super::process_error_from_io(io::Error::new(io::ErrorKind::Interrupted, "cancelled")),
-        "Error",
+        "process.Error",
         "Cancelled",
     )
     .is_empty());
     assert_eq!(
         expect_variant_value(
             super::process_error_from_io(io::Error::other("io failure")),
-            "Error",
+            "process.Error",
             "Io",
         )
         .len(),
@@ -6857,7 +6858,7 @@ fn native_runtime_process_error_and_wait_all_helpers_cover_remaining_paths() {
         super::aura_direct_process_null(),
         bool_value(false),
     ));
-    assert!(expect_variant_value(no_start_command, "Error", "NoCommand").is_empty());
+    assert!(expect_variant_value(no_start_command, "process.Error", "NoCommand").is_empty());
 
     let no_run_command = expect_result_err_payload(super::aura_direct_process_run(
         super::aura_direct_vec_empty(),
@@ -6869,7 +6870,7 @@ fn native_runtime_process_error_and_wait_all_helpers_cover_remaining_paths() {
         boxed_value(Value::Unit),
         bool_value(false),
     ));
-    assert!(expect_variant_value(no_run_command, "Error", "NoCommand").is_empty());
+    assert!(expect_variant_value(no_run_command, "process.Error", "NoCommand").is_empty());
 }
 
 #[test]
@@ -7504,7 +7505,7 @@ fn native_runtime_direct_process_wrappers_cover_timeout_and_error_results() {
     }
 
     fn assert_process_io_error(value: Value) {
-        assert_eq!(expect_variant_value(value, "Error", "Io").len(), 1);
+        assert_eq!(expect_variant_value(value, "process.Error", "Io").len(), 1);
     }
 
     let failed_completed = ProcessCompletedValue::new(
@@ -7526,7 +7527,7 @@ fn native_runtime_direct_process_wrappers_cover_timeout_and_error_results() {
             expect_result_err_payload(super::aura_direct_process_completed_check(
                 failed_completed_ptr
             )),
-            "Error",
+            "process.Error",
             "Other",
         )
         .len(),
@@ -7545,7 +7546,7 @@ fn native_runtime_direct_process_wrappers_cover_timeout_and_error_results() {
                 super::aura_direct_process_null(),
                 bool_value(false),
             )),
-            "Error",
+            "process.Error",
             "Spawn",
         )
         .len(),
@@ -7563,7 +7564,7 @@ fn native_runtime_direct_process_wrappers_cover_timeout_and_error_results() {
                 boxed_value(Value::Unit),
                 bool_value(false),
             )),
-            "Error",
+            "process.Error",
             "Spawn",
         )
         .len(),
@@ -7601,7 +7602,7 @@ fn native_runtime_direct_process_wrappers_cover_timeout_and_error_results() {
             slow_child_ptr,
             duration_value(0)
         )),
-        "Error",
+        "process.Error",
         "TimedOut",
     )
     .is_empty());
@@ -7622,7 +7623,7 @@ fn native_runtime_direct_process_wrappers_cover_timeout_and_error_results() {
             duration_value(1_000),
             bool_value(false),
         ));
-        assert!(expect_variant_value(cancelled_run, "Error", "Cancelled").is_empty());
+        assert!(expect_variant_value(cancelled_run, "process.Error", "Cancelled").is_empty());
     });
 
     let cancelled_child = ProcessChildValue::spawn(
@@ -7652,7 +7653,7 @@ fn native_runtime_direct_process_wrappers_cover_timeout_and_error_results() {
                 cancelled_child_ptr,
                 duration_value(1_000),
             )),
-            "Error",
+            "process.Error",
             "Cancelled",
         )
         .is_empty());
@@ -7661,7 +7662,7 @@ fn native_runtime_direct_process_wrappers_cover_timeout_and_error_results() {
                 cancelled_child_ptr,
                 duration_value(1_000),
             )),
-            "Error",
+            "process.Error",
             "Cancelled",
         )
         .is_empty());
@@ -7771,7 +7772,7 @@ fn native_runtime_direct_process_wrappers_cover_timeout_and_error_results() {
                 empty_supervisor_ptr,
                 duration_value(1_000),
             )),
-            "Error",
+            "process.Error",
             "Cancelled",
         )
         .is_empty());
@@ -7797,7 +7798,7 @@ fn native_runtime_direct_process_run_wrapper_covers_timeout_result_path() {
         duration_value(0),
         bool_value(false),
     ));
-    assert!(expect_variant_value(timed_out, "Error", "TimedOut").is_empty());
+    assert!(expect_variant_value(timed_out, "process.Error", "TimedOut").is_empty());
 }
 
 #[test]
@@ -7861,7 +7862,7 @@ fn native_runtime_direct_process_supervisor_wrappers_cover_start_wait_and_stop_p
         int_value(-1),
         bool_value(false),
     ));
-    assert!(expect_variant_value(no_command, "Error", "NoCommand").is_empty());
+    assert!(expect_variant_value(no_command, "process.Error", "NoCommand").is_empty());
 
     expect_result_ok_unit(super::aura_direct_process_supervisor_start(
         supervisor_ptr,
@@ -12217,9 +12218,12 @@ fn direct_supervisor_start_consumes_every_value_argument_without_value_clones() 
         clone_count + 1,
         "only the borrowed Supervisor receiver may be cloned by the direct runtime wrapper"
     );
-    assert!(
-        expect_variant_value(expect_result_err_payload(result), "Error", "NoCommand").is_empty()
-    );
+    assert!(expect_variant_value(
+        expect_result_err_payload(result),
+        "process.Error",
+        "NoCommand"
+    )
+    .is_empty());
     unsafe {
         release_value(result);
         release_value(supervisor);

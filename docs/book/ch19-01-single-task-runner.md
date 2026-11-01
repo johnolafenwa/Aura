@@ -217,10 +217,10 @@ def run_job(job: Job):
 
 ```console
 $ aura run src/main.au
-greet: could not start: Error.Spawn(No such file or directory (os error 2))
-count: could not start: Error.Spawn(No such file or directory (os error 2))
-nap: could not start: Error.Spawn(No such file or directory (os error 2))
-broken: could not start: Error.Spawn(No such file or directory (os error 2))
+greet: could not start: process.Error.Spawn(No such file or directory (os error 2))
+count: could not start: process.Error.Spawn(No such file or directory (os error 2))
+nap: could not start: process.Error.Spawn(No such file or directory (os error 2))
+broken: could not start: process.Error.Spawn(No such file or directory (os error 2))
 ```
 
 The operating system went looking for a program literally named

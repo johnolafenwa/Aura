@@ -18979,7 +18979,7 @@ pub fn process_supervisor_event_failed(
 
 pub fn process_error_no_command() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: RuntimeName::from_static("Error"),
+        enum_name: RuntimeName::from_static("process.Error"),
         variant_name: RuntimeName::from_static("NoCommand"),
         payloads: Vec::new().into(),
     })
@@ -18987,7 +18987,7 @@ pub fn process_error_no_command() -> Value {
 
 pub fn process_error_timed_out() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: RuntimeName::from_static("Error"),
+        enum_name: RuntimeName::from_static("process.Error"),
         variant_name: RuntimeName::from_static("TimedOut"),
         payloads: Vec::new().into(),
     })
@@ -18995,7 +18995,7 @@ pub fn process_error_timed_out() -> Value {
 
 pub fn process_error_cancelled() -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: RuntimeName::from_static("Error"),
+        enum_name: RuntimeName::from_static("process.Error"),
         variant_name: RuntimeName::from_static("Cancelled"),
         payloads: Vec::new().into(),
     })
@@ -19003,7 +19003,7 @@ pub fn process_error_cancelled() -> Value {
 
 pub fn process_error_io(error: io::Error) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: RuntimeName::from_static("Error"),
+        enum_name: RuntimeName::from_static("process.Error"),
         variant_name: RuntimeName::from_static("Io"),
         payloads: vec![io_error(error)].into(),
     })
@@ -19011,7 +19011,7 @@ pub fn process_error_io(error: io::Error) -> Value {
 
 pub fn process_error_spawn(message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: RuntimeName::from_static("Error"),
+        enum_name: RuntimeName::from_static("process.Error"),
         variant_name: RuntimeName::from_static("Spawn"),
         payloads: vec![Value::String(message.into())].into(),
     })
@@ -19019,7 +19019,7 @@ pub fn process_error_spawn(message: String) -> Value {
 
 pub fn process_error_other(message: String) -> Value {
     Value::EnumVariant(EnumVariantValue {
-        enum_name: RuntimeName::from_static("Error"),
+        enum_name: RuntimeName::from_static("process.Error"),
         variant_name: RuntimeName::from_static("Other"),
         payloads: vec![Value::String(message.into())].into(),
     })

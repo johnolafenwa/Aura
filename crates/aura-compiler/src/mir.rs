@@ -9650,7 +9650,7 @@ fn validate_function_loan_flow(
                         let declared_type = context.place_type(function, place)?;
                         let enum_type = match declared_type {
                             Some(Type::Named(name, args))
-                                if name == enum_name
+                                if mir_enum_type_has_runtime_name(&name, enum_name)
                                     && (context.enums.contains_key(enum_name)
                                         || !context.classes.contains_key(enum_name)) =>
                             {
@@ -28456,6 +28456,28 @@ fn is_builtin_module_name(module_name: &str) -> bool {
         .map(str::to_string)
         .collect::<Vec<_>>();
     crate::builtin_modules::builtin_module_namespace(&module_path).is_some()
+}
+
+/// Whether a match arm's runtime enum name names the declared enum type.
+/// Host enums of builtin modules, such as `process.ExitStatus`, keep their
+/// bare runtime names (`ExitStatus`) in match arms; see
+/// `mir_runtime_enum_name`.
+fn mir_enum_type_has_runtime_name(declared: &str, runtime: &str) -> bool {
+    if declared == runtime {
+        return true;
+    }
+    let Some((module_path, item_name)) = declared.rsplit_once('.') else {
+        return false;
+    };
+    if item_name != runtime {
+        return false;
+    }
+    let module_path = module_path
+        .split('.')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    crate::builtin_modules::builtin_module_namespace(&module_path)
+        .is_some_and(|namespace| namespace.enums.contains_key(item_name))
 }
 
 fn mir_runtime_enum_name(program: &Program, enum_info: &crate::sema::EnumInfo) -> String {

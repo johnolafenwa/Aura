@@ -3109,7 +3109,9 @@ impl MirRuntime {
                     Some(Type::Named("process.ExitStatus".to_string(), Vec::new()))
                 }
                 ("Wait", _, _) => Some(Type::Named("process.Wait".to_string(), Vec::new())),
-                ("Error", _, _) => Some(Type::Named("process.Error".to_string(), Vec::new())),
+                ("Error" | "process.Error", _, _) => {
+                    Some(Type::Named("process.Error".to_string(), Vec::new()))
+                }
                 _ => Some(Type::named(&variant.enum_name)),
             },
             Value::Channel(_) | Value::Task(_) | Value::TaskGroup(_) => None,

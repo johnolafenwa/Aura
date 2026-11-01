@@ -3,6 +3,6 @@ io.Error.InvalidInput
 network deadline
 io.Error.InvalidInput
 supervisor wait
-SupervisorWait.Event(SupervisorEvent.Failed(<supervisor>, Error.Io(io.Error.InvalidInput), 0))
+SupervisorWait.Event(SupervisorEvent.Failed(<supervisor>, process.Error.Io(io.Error.InvalidInput), 0))
 supervisor wait_or_none
-Error.Io(io.Error.InvalidInput)
+process.Error.Io(io.Error.InvalidInput)

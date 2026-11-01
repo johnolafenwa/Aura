@@ -405,7 +405,7 @@ $ time aura run src/main.au
   flaky: attempt 2 failed (ExitStatus.Exited(1): not yet (run 2)), retrying in 200ms
 [FAIL] broken (115 ms, 2 attempts) ExitStatus.Exited(3): about to fail
 [ok  ] flaky (332 ms, 3 attempts) worked on run 3
-[FAIL] slow (5005 ms) Error.TimedOut
+[FAIL] slow (5005 ms) process.Error.TimedOut
 5 jobs, 2 failed
 
 real	0m5.143s
@@ -446,7 +446,7 @@ $ time aura run src/main.au
   flaky: attempt 2 failed (ExitStatus.Exited(1): not yet (run 2)), retrying in 200ms
 [FAIL] broken (118 ms, 2 attempts) ExitStatus.Exited(3): about to fail
 [ok  ] flaky (333 ms, 3 attempts) worked on run 3
-[FAIL] slow (2215 ms) Error.TimedOut
+[FAIL] slow (2215 ms) process.Error.TimedOut
 5 jobs, 2 failed
 
 real	0m2.355s
@@ -861,7 +861,7 @@ $ ./target/jobrunner --workers 2
 [ok  ] flaky (323 ms, 3 attempts) worked on run 3
   broken: attempt 1 failed (ExitStatus.Exited(3): about to fail), retrying in 100ms
 [FAIL] broken (115 ms, 2 attempts) ExitStatus.Exited(3): about to fail
-[FAIL] slow (2210 ms) Error.TimedOut
+[FAIL] slow (2210 ms) process.Error.TimedOut
 5 jobs, 2 failed, 0 cancelled
 ```
 
