@@ -13344,6 +13344,18 @@ impl<'a> Lowerer<'a> {
     /// spelling, now out of scope, gave the local another type: then the
     /// new binding gets a fresh local of its own type.
     fn declare_binding(&mut self, name: &str, ty: Option<&Type>) -> String {
+        // A checker-made hidden name, such as the iterator a `for` loop
+        // consumes, contains a space; it always binds a temporary.
+        if name.contains(' ') {
+            let slot = match ty {
+                Some(ty) => self.new_typed_temp(ty.clone()),
+                None => self.new_temp(),
+            };
+            self.current_binding_block()
+                .rebound
+                .insert(name.to_string(), slot.clone());
+            return slot;
+        }
         if let (Some(ty), Some(existing)) = (ty, self.local_types.get(name)) {
             if existing != ty {
                 let slot = self.new_typed_temp(ty.clone());

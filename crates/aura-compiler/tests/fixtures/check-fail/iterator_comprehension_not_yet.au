@@ -1,0 +1,18 @@
+from iter import Iterator, Step
+
+
+class Count:
+    n: int64
+
+
+impl Iterator[int64] for Count:
+    def next(mut self) -> Step[int64]:
+        if self.n == 0:
+            return Step.End
+        self.n -= 1
+        return Step.Item(self.n)
+
+
+
+def main():
+    print([x for x in Count(n=2)])

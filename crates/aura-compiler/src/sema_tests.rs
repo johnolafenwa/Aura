@@ -15895,7 +15895,7 @@ fn checker_function_default_loop_and_resource_validation_cover_additional_branch
             ),
             (
                 "def main() -> None:\n    flag = true\n    for value in flag:\n        pass\n",
-                "`for` currently requires a `Range`, `Queue[T]`, `list[T]`, or `set[T]` iterable, found `bool`",
+                "`for` requires a `Range`, `Queue[T]`, `list[T]`, `set[T]`, or `iter.Iterator[T]` iterable, found `bool`",
             ),
             (
                 "def main() -> None:\n    value = 1\n    for value in range(3):\n        pass\n",
@@ -32101,4 +32101,97 @@ fn old_values_and_spec_functions_check_in_spec_contexts_only() {
         assert_eq!(error.code, "AU2048", "{source}: {}", error.message);
         assert!(error.message.contains(message), "{source}: {}", error.message);
     }
+}
+
+const ITERATOR_PRELUDE: &str = concat!(
+    "from iter import Iterator, Step\n",
+    "\n",
+    "class Count:\n",
+    "    n: int64\n",
+    "\n",
+    "impl Iterator[int64] for Count:\n",
+    "    def next(mut self) -> Step[int64]:\n",
+    "        if self.n == 0:\n",
+    "            return Step.End\n",
+    "        self.n -= 1\n",
+    "        return Step.Item(self.n)\n",
+    "\n",
+);
+
+#[test]
+fn for_loops_iterate_user_iterators() {
+    let source = format!(
+        "{ITERATOR_PRELUDE}def main():\n    for x in Count(n=2):\n        print(x)\n    mut c = Count(n=3)\n    for x in mut c:\n        break\n    for _ in mut c:\n        pass\n    print(c.n)\n"
+    );
+    crate::check_source(&source).expect("iterator loops check");
+
+    for (body, code, message) in [
+        (
+            "    c = Count(n=2)\n    for x in c:\n        print(x)\n    print(c.n)\n",
+            "AU3001",
+            "use of moved value `c`",
+        ),
+        (
+            "    c = Count(n=2)\n    for x in own c:\n        print(x)\n",
+            "AU3004",
+            "a `for` loop already consumes an iterator",
+        ),
+        (
+            "    c = Count(n=2)\n    for x in mut c:\n        print(x)\n",
+            "AU3002",
+            "requires a mutable iterator place",
+        ),
+        (
+            "    for x in Count(n=2):\n        invariant x >= 0\n        print(x)\n",
+            "AU2048",
+            "loop clauses on a `for` loop over an iterator",
+        ),
+        (
+            "    print([x for x in Count(n=2)])\n",
+            "AU2002",
+            "a comprehension cannot iterate the iterator `Count` yet",
+        ),
+        (
+            "    for x in 3:\n        print(x)\n",
+            "AU2999",
+            "or `iter.Iterator[T]` iterable, found `int64`",
+        ),
+    ] {
+        let source = format!("{ITERATOR_PRELUDE}def main():\n{body}");
+        let diagnostic = crate::check_source(&source).expect_err("the loop is rejected");
+        assert_eq!(diagnostic.code, code, "{source}\n{diagnostic:?}");
+        assert!(
+            diagnostic.message.contains(message),
+            "{source}\n{diagnostic:?}"
+        );
+    }
+}
+
+#[test]
+fn imported_generic_unit_variants_take_expected_type_arguments() {
+    let diagnostic = crate::check_source(concat!(
+        "import iter\n",
+        "\n",
+        "def main():\n",
+        "    step = iter.Step.End\n",
+    ))
+    .expect_err("no expected type");
+    assert!(
+        diagnostic
+            .message
+            .contains("cannot infer type parameter `T` for enum variant `iter.Step.End`"),
+        "{diagnostic:?}"
+    );
+    crate::check_source(concat!(
+        "import iter\n",
+        "\n",
+        "def done() -> iter.Step[str]:\n",
+        "    return iter.Step.End\n",
+        "\n",
+        "def main():\n",
+        "    match done():\n",
+        "        case _:\n",
+        "            pass\n",
+    ))
+    .expect("the expected type supplies `T`");
 }

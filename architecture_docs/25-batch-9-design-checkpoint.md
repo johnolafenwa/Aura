@@ -195,6 +195,20 @@ New codes are assigned in the step that needs them and registered in
 7. G1: implement generators as stackful frames first, with stackless state
    machines as a later optimization?
 
+## Progress
+
+- **9b (2026-11-01).** The protocol is the builtin `iter` module, written in
+  Aura (`crates/aura-compiler/std/iter.au`), rather than prelude names: a
+  program opts in with `from iter import Iterator, Step`, so no existing
+  name becomes reserved. A `for` loop over an `Iterator[T]` implementation
+  is rewritten after checking into a `while true:` loop over
+  `match own source.next():` (as property reads are rewritten), so ownership
+  analysis and both backends see ordinary statements. The bare form moves
+  the source into a hidden local; `for x in mut place:` advances the place
+  itself. `own` reports `AU3004`. Comprehensions, `enumerate`/`zip`, and
+  loop clauses over iterator sources are deferred to 9d, where the loop
+  owns closing the iterator.
+
 ## Ratification Record
 
 Pending.

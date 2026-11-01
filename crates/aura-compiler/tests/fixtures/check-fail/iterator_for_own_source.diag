@@ -1,0 +1,5 @@
+error[AU3004]: a `for` loop already consumes an iterator; write `for item in source:` to consume it, or `for item in mut source:` to borrow it
+ --> crates/aura-compiler/tests/fixtures/check-fail/iterator_for_own_source.au:19:5
+   |
+19 |     for x in own counter:
+   |     ^

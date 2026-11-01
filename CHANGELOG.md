@@ -33,6 +33,15 @@ in this file.
   `spec def` helper functions, which only contracts and other `spec def`
   bodies may call. The new [Contracts](docs/manual/contracts.md) manual page
   covers all of it.
+- New builtin `iter` module with the iteration protocol: `enum Step[T]`
+  (`Step.Item(value)` and `Step.End`) and `trait Iterator[T]` with
+  `next(mut self) -> Step[T]`. A `for` loop iterates any class or enum that
+  implements `Iterator[T]`: the bare form consumes the iterator, and
+  `for x in mut it:` borrows it so a later loop can continue where a
+  `break` left off.
+- A unit variant of an imported generic enum, such as `opt.Opt.Nothing`,
+  now takes its type arguments from the expected type, as an unqualified
+  variant already did. It used to report a return type mismatch.
 - **Incompatible:** `ord` and `chr` are now reserved builtin names, so a
   module-level function with either name is rejected with `AU2007`.
 

@@ -1,0 +1,8 @@
+error[AU4001]: the source broke
+ --> crates/aura-compiler/tests/fixtures/run-fail/iterator_next_trap.au:11:9
+   |
+11 |         assert self.n < 3, "the source broke"
+   |         ^
+  = note: left = 3
+  = note: right = 3
+  = note: Aura call chain (innermost first): Iterator for Fails.next at 9:5 -> main at 15:1

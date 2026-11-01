@@ -15895,7 +15895,7 @@ An associated method has no receiver. You reference it through the type, for exa
 
 Top-level builtin functions such as `print`, `range`, `sleep`, and `select` are available without an import. Builtin enum names such as `SelectOutcome` are also reserved and available without an import.
 
-Builtin modules must be imported before you use their module-qualified members. They include `fs`, `io`, `net`, `process`, `random`, `sys`, `path`, `bytes`, `json`, `toml`, `log`, `trace`, and `metrics`.
+Builtin modules must be imported before you use their module-qualified members. They include `fs`, `io`, `net`, `process`, `random`, `sys`, `path`, `bytes`, `json`, `iter`, `toml`, `log`, `trace`, and `metrics`.
 
 `random.Rng` is the builtin type and constructor spelling for a deterministic generator. Its methods stay module-qualified through the receiver type. There is no implicit global random-stream name. The secure operations are `random.secure_int` and `random.secure_bytes`.
 
@@ -20661,6 +20661,8 @@ Maintained iterable forms include:
 | `for value in queue:` | Receives queue items under the scheduler-aware queue iteration contract. |
 | `for index, value in enumerate(seq):` | Yields `(int64, element)` pairs, counting positions from zero. |
 | `for left, right in zip(first, second):` | Yields one pair per shared position and stops at the shorter sequence. |
+| `for value in iterator:` | Consumes an `iter.Iterator[T]` implementation and yields each owned item. |
+| `for value in mut iterator:` | Borrows a mutable `iter.Iterator[T]` place and yields each owned item, leaving the iterator usable afterwards. |
 
 `for value in mut set:` is not supported in Aura 0.3.
 
@@ -20701,6 +20703,51 @@ Both forms read their operands by position, so each operand must be a `list[T]` 
 `enumerate` takes exactly one operand and `zip` takes exactly two, both positionally. Any other arity, or a named argument, reports `AU2004`.
 
 `zip` stops as soon as any operand has no value at the current position. It performs `min(len(first), len(second))` iterations and never observes the tail of the longer sequence.
+
+### Iterator Iteration
+
+A class or enum becomes a loop source by implementing the `Iterator[T]` trait
+of the builtin `iter` module. Its one method, `next(mut self) -> Step[T]`,
+returns `Step.Item(value)` for each item and `Step.End` when there are no
+more:
+
+```aura
+from iter import Iterator, Step
+
+class Countdown:
+    n: int64
+
+impl Iterator[int64] for Countdown:
+    def next(mut self) -> Step[int64]:
+        if self.n == 0:
+            return Step.End
+        self.n -= 1
+        return Step.Item(self.n + 1)
+
+def main():
+    for x in Countdown(n=3):
+        print(x)  # 3, then 2, then 1
+    mut rest = Countdown(n=4)
+    for x in mut rest:
+        print(x)  # 4
+        break
+    for x in mut rest:
+        print(x)  # 3, then 2, then 1
+```
+
+- The loop calls `next` before each iteration and ends at the first
+  `Step.End`. Each item arrives owned, so a tuple target unpacks owned leaves.
+- The bare form consumes the source: a source binding is moved at loop entry
+  and cannot be used afterwards.
+- `for value in mut iterator:` borrows a mutable place instead. `break`
+  leaves the iterator where it stopped, so a later loop continues from the
+  next item.
+- `own` reports `AU3004`, since the bare form already consumes the source.
+- `Step` is an ordinary generic enum, so code may also call `next` and
+  `match` its result directly.
+
+Comprehensions, `enumerate`, and `zip` do not take iterator sources yet, and
+loop clauses (`invariant`) on an iterator loop report `AU2048` for now.
 
 ### Range Iteration
 

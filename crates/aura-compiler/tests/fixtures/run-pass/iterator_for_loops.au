@@ -1,0 +1,68 @@
+from iter import Iterator, Step
+
+
+class Countdown:
+    n: int64
+
+
+impl Iterator[int64] for Countdown:
+    def next(mut self) -> Step[int64]:
+        if self.n == 0:
+            return Step.End
+        self.n -= 1
+        return Step.Item(self.n + 1)
+
+
+class Words:
+    items: list[str]
+    at: int64 = 0
+
+
+impl Iterator[str] for Words:
+    def next(mut self) -> Step[str]:
+        if self.at == len(self.items):
+            return Step.End
+        self.at += 1
+        return Step.Item(self.items[self.at - 1].clone())
+
+
+class Pairs:
+    i: int64 = 0
+
+
+impl Iterator[(int64, str)] for Pairs:
+    def next(mut self) -> Step[(int64, str)]:
+        self.i += 1
+        if self.i > 3:
+            return Step.End
+        return Step.Item((self.i, f"p{self.i}"))
+
+
+def first_over(limit: int64) -> int64:
+    for x in Countdown(n=10):
+        if x < limit:
+            return x
+    return -1
+
+
+def main():
+    for x in Countdown(n=3):
+        print(x)
+    for word in Words(items=["a", "b", "c"]):
+        if word == "b":
+            continue
+        print(word)
+    for i, name in Pairs():
+        print(f"{i} {name}")
+    mut words = Words(items=["x", "y", "z"])
+    for w in mut words:
+        print(w)
+        break
+    for w in mut words:
+        print(f"rest {w}")
+    print(first_over(4))
+    mut total = 0
+    for a in Countdown(n=3):
+        for b in Countdown(n=a):
+            total += b
+    print(total)

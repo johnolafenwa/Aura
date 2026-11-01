@@ -1,0 +1,5 @@
+error[AU2048]: loop clauses on a `for` loop over an iterator are not available yet
+ --> crates/aura-compiler/tests/fixtures/check-fail/iterator_for_clauses_not_yet.au:19:9
+   |
+19 |         invariant x >= 0
+   |         ^

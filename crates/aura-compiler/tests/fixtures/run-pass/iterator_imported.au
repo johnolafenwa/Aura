@@ -1,0 +1,18 @@
+from iterator_imported_support.counter import Upto
+import iterator_imported_support.opt as opt
+
+
+def lookup(x: int64) -> opt.Opt[int64]:
+    if x == 0:
+        return opt.Opt.Nothing
+    return opt.Opt.Some(x)
+
+
+def main():
+    for i in Upto(limit=3):
+        print(i)
+    match lookup(0):
+        case opt.Opt.Nothing:
+            print("nothing")
+        case _:
+            print("some")

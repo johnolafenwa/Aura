@@ -14,10 +14,12 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 const JSON_SOURCE: &str = include_str!("../std/json.au");
+const ITER_SOURCE: &str = include_str!("../std/iter.au");
 
 fn module_source(name: &str) -> Option<&'static str> {
     match name {
         "json" => Some(JSON_SOURCE),
+        "iter" => Some(ITER_SOURCE),
         _ => None,
     }
 }

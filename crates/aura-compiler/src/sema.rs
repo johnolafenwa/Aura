@@ -19,6 +19,7 @@ pub(crate) use loans::{synthetic_returned_view_decl, SYNTHETIC_CALLABLE_DECL};
 pub(crate) use types::closure_call_kind_for;
 mod display;
 pub(crate) use display::{is_prelude_display, DISPLAY_METHOD, DISPLAY_TRAIT};
+mod iterator_loops;
 mod property_reads;
 #[cfg(test)]
 mod property_reads_tests;
@@ -3514,6 +3515,15 @@ impl<'a> FunctionChecker<'a> {
                         };
                         (element_ty, passing, false)
                     }
+                    _ if self.iterator_item_type(&iterable_ty).is_some() => {
+                        return Err(Diagnostic::coded_at(
+                            "AU2002",
+                            clause.iterable.span,
+                            format!(
+                                "a comprehension cannot iterate the iterator `{iterable_ty}` yet; collect its items with a `for` loop"
+                            ),
+                        ));
+                    }
                     _ => {
                         return Err(Diagnostic::coded_at(
                             "AU2002",
@@ -4712,11 +4722,21 @@ impl<'a> FunctionChecker<'a> {
                             };
                             (element_ty, passing, borrow_mode == Some(ReceiverKind::Value))
                         }
+                        _ if self.iterator_item_type(&iterable_ty).is_some() => {
+                            let item_ty = self
+                                .iterator_item_type(&iterable_ty)
+                                .expect("the guard found an item type");
+                            (
+                                self.discover_iterator_loop(for_stmt, item_ty, locals)?,
+                                ReceiverKind::Value,
+                                false,
+                            )
+                        }
                         _ => {
                             return Err(Diagnostic::at(
                                 for_stmt.span,
                                 format!(
-                                    "`for` currently requires a `Range`, `Queue[T]`, `list[T]`, or `set[T]` iterable, found `{}`",
+                                    "`for` requires a `Range`, `Queue[T]`, `list[T]`, `set[T]`, or `iter.Iterator[T]` iterable, found `{}`",
                                     iterable_ty
                                 ),
                             ))
@@ -8386,8 +8406,30 @@ impl<'a> FunctionChecker<'a> {
                                     ),
                                 ));
                             }
-                            return Ok(Type::named(
-                                self.module_enum_type_name(&module_path, enum_info),
+                            let type_name = self.module_enum_type_name(&module_path, enum_info);
+                            if enum_info.decl.type_params.is_empty() {
+                                return Ok(Type::named(type_name));
+                            }
+                            // A generic unit variant takes its type arguments
+                            // from the expected type, as an unqualified one does.
+                            if let Some(Type::Named(expected_name, expected_args)) = expected {
+                                if self.canonical_enum_name(expected_name)
+                                    == self.canonical_enum_name(&type_name)
+                                {
+                                    return Ok(Type::Named(type_name, expected_args.clone()));
+                                }
+                            }
+                            let missing = enum_info
+                                .decl
+                                .type_params
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| "T".to_string());
+                            return Err(Diagnostic::at(
+                                expr.span,
+                                format!(
+                                    "cannot infer type parameter `{missing}` for enum variant `{module_path}.{enum_name}.{field}`"
+                                ),
                             ));
                         }
                     }

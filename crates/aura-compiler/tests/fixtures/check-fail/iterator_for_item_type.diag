@@ -1,0 +1,5 @@
+error[AU2002]: binding `name` has annotated type `str`, but value has type `int64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/iterator_for_item_type.au:19:9
+   |
+19 |         name: str = x
+   |         ^

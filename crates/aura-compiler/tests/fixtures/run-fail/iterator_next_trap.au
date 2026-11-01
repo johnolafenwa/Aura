@@ -1,0 +1,17 @@
+from iter import Iterator, Step
+
+
+class Fails:
+    n: int64
+
+
+impl Iterator[int64] for Fails:
+    def next(mut self) -> Step[int64]:
+        self.n += 1
+        assert self.n < 3, "the source broke"
+        return Step.Item(self.n)
+
+
+def main():
+    for x in Fails(n=0):
+        print(x)

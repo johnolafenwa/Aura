@@ -251,7 +251,7 @@ An associated method has no receiver. You reference it through the type, for exa
 
 Top-level builtin functions such as `print`, `range`, `sleep`, and `select` are available without an import. Builtin enum names such as `SelectOutcome` are also reserved and available without an import.
 
-Builtin modules must be imported before you use their module-qualified members. They include `fs`, `io`, `net`, `process`, `random`, `sys`, `path`, `bytes`, `json`, `toml`, `log`, `trace`, and `metrics`.
+Builtin modules must be imported before you use their module-qualified members. They include `fs`, `io`, `net`, `process`, `random`, `sys`, `path`, `bytes`, `json`, `iter`, `toml`, `log`, `trace`, and `metrics`.
 
 `random.Rng` is the builtin type and constructor spelling for a deterministic generator. Its methods stay module-qualified through the receiver type. There is no implicit global random-stream name. The secure operations are `random.secure_int` and `random.secure_bytes`.
 
