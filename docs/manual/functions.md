@@ -562,8 +562,8 @@ A condition has type `bool` and must not change program state. It may read
 parameters, `self`, fields, elements, and module constants, use operators
 and comprehensions, and call pure builtins such as `len`, `min`, `max`,
 `sum`, `all`, and `any`, and read-only methods such as `contains`, `find`,
-and `keys`. Calling a user function, or a method that changes its
-receiver, is `AU2048`.
+and `keys` on builtin collections and strings. Calling a user function, or
+any method of a user class, enum, or type parameter, is `AU2048`.
 
 `requires`, `ensures`, `invariant`, and `decreases` are keywords only at
 the start of a clause line.
@@ -620,6 +620,44 @@ def main():
 - Loop clauses come first in the loop body, follow the same purity rules
   as function clauses, and fail with `AU4009`.
 
+### Class invariants
+
+A class can state what is true of every one of its objects, with
+`invariant` lines in its body. Inside them, `self` names the object.
+
+```aura
+class Account:
+    balance: int64
+    limit: int64 = 1000
+    invariant self.balance >= 0
+    invariant self.balance <= self.limit
+
+    public def deposit(mut self, amount: int64):
+        requires amount > 0
+        self.balance += amount
+
+
+def main():
+    mut account = Account(balance=10)
+    account.deposit(5)
+    print(account.balance)  # 15
+```
+
+The invariants are checked:
+
+- after every construction, by a field call such as `Account(balance=10)`
+  or by `__init__`, in whichever module builds the object, and
+- on entry to and on every return from each `public` method that takes
+  `mut self`, after the method's own `requires` and `ensures` checks.
+
+Methods that are not `public`, and methods that only read `self`, run
+without checks, so a private helper may pass through a state that breaks
+an invariant as long as the public method that calls it restores it. Code
+in the class's own module that assigns a field directly is not checked
+either. Objects that `json.decode` builds are not checked yet.
+
+The method name `__invariant__` is reserved for the check.
+
 These forms are not available yet and report `AU2048`:
 
 - `ensures` on `__init__` or on a function with a view result
@@ -628,7 +666,7 @@ These forms are not available yet and report `AU2048`:
 - a parameter named `result` in a function with `ensures`
 - clauses on the methods of a trait implementation
 
-Class invariants, `old(...)`, and `spec def` helper functions are planned
+`old(...)`, `forall`, `exists`, and `spec def` helper functions are planned
 next, followed by `aura verify`, which proves clauses
 before the program runs. See the
 [verification design](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/23-verification-design-checkpoint.md).

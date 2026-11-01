@@ -160,7 +160,8 @@ impl FunctionChecker<'_> {
         clause: &ContractClause,
         scope: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
-        reject_impure_condition(&clause.condition, clause.kind)?;
+        let mut receivers = Vec::new();
+        reject_impure_condition(&clause.condition, clause.kind, &mut receivers)?;
         let (expected, what) = match clause.kind {
             ContractKind::Decreases => (Type::named("int64"), "measure"),
             _ => (Type::named("bool"), "condition"),
@@ -181,7 +182,32 @@ impl FunctionChecker<'_> {
                 ),
             ));
         }
+        // A method allowed by name must also be a builtin's: a user type's
+        // method of the same name may change state.
+        for receiver in receivers {
+            let ty = self.type_of_expr(receiver, scope)?;
+            if !has_builtin_methods(&ty) {
+                return Err(impure(
+                    receiver,
+                    clause.kind,
+                    &format!("a method call on `{ty}`, which may change program state,"),
+                ));
+            }
+        }
         Ok(())
+    }
+}
+
+/// True when `ty`'s methods are the builtin read-only ones of
+/// [`PURE_METHODS`].
+fn has_builtin_methods(ty: &Type) -> bool {
+    match ty {
+        Type::Named(name, _) => matches!(
+            name.as_str(),
+            "list" | "dict" | "set" | "str" | "bytes" | "Array" | "Span" | "Range"
+        ),
+        Type::Tuple(_) => true,
+        _ => false,
     }
 }
 
@@ -225,8 +251,19 @@ fn impure(expr: &Expr, kind: ContractKind, what: &str) -> Diagnostic {
 }
 
 /// Rejects a condition that could change program state.
-fn reject_impure_condition(expr: &Expr, kind: ContractKind) -> Result<()> {
-    let check = |expr: &Expr| reject_impure_condition(expr, kind);
+///
+/// Method calls are allowed by name here; `receivers` collects each call's
+/// receiver so the caller can check that it has a builtin type.
+fn reject_impure_condition<'e>(
+    expr: &'e Expr,
+    kind: ContractKind,
+    receivers: &mut Vec<&'e Expr>,
+) -> Result<()> {
+    macro_rules! check {
+        ($expr:expr) => {
+            reject_impure_condition($expr, kind, receivers)
+        };
+    }
     match &expr.kind {
         ExprKind::Name(_)
         | ExprKind::Int(_)
@@ -235,75 +272,96 @@ fn reject_impure_condition(expr: &Expr, kind: ContractKind) -> Result<()> {
         | ExprKind::Float(_)
         | ExprKind::Bool(_)
         | ExprKind::String(_) => Ok(()),
-        ExprKind::FString(parts) => parts.iter().try_for_each(|part| match part {
-            FormatPart::Literal(_) => Ok(()),
-            FormatPart::Expr(expr) | FormatPart::Formatted { expr, .. } => check(expr),
-        }),
-        ExprKind::Tuple(items) | ExprKind::List(items) | ExprKind::Set(items) => {
-            items.iter().try_for_each(check)
-        }
-        ExprKind::Map(entries) => entries
-            .iter()
-            .try_for_each(|entry| check(&entry.key).and_then(|()| check(&entry.value))),
-        ExprKind::Comprehension { output, clauses } => {
-            match output {
-                ComprehensionOutput::List(value) | ComprehensionOutput::Set(value) => check(value)?,
-                ComprehensionOutput::Map { key, value } => {
-                    check(key)?;
-                    check(value)?;
+        ExprKind::FString(parts) => {
+            for part in parts {
+                match part {
+                    FormatPart::Literal(_) => {}
+                    FormatPart::Expr(expr) | FormatPart::Formatted { expr, .. } => check!(expr)?,
                 }
             }
-            clauses.iter().try_for_each(|clause| {
-                check(&clause.iterable)?;
-                clause.filters.iter().try_for_each(check)
-            })
+            Ok(())
+        }
+        ExprKind::Tuple(items) | ExprKind::List(items) | ExprKind::Set(items) => {
+            for item in items {
+                check!(item)?;
+            }
+            Ok(())
+        }
+        ExprKind::Map(entries) => {
+            for entry in entries {
+                check!(&entry.key)?;
+                check!(&entry.value)?;
+            }
+            Ok(())
+        }
+        ExprKind::Comprehension { output, clauses } => {
+            match output {
+                ComprehensionOutput::List(value) | ComprehensionOutput::Set(value) => {
+                    check!(value)?
+                }
+                ComprehensionOutput::Map { key, value } => {
+                    check!(key)?;
+                    check!(value)?;
+                }
+            }
+            for clause in clauses {
+                check!(&clause.iterable)?;
+                for filter in &clause.filters {
+                    check!(filter)?;
+                }
+            }
+            Ok(())
         }
         ExprKind::Unary { expr, .. } | ExprKind::Cast { expr, .. } | ExprKind::Group(expr) => {
-            check(expr)
+            check!(expr)
         }
         ExprKind::Binary { left, right, .. } => {
-            check(left)?;
-            check(right)
+            check!(left)?;
+            check!(right)
         }
         ExprKind::Conditional {
             then_expr,
             condition,
             else_expr,
         } => {
-            check(then_expr)?;
-            check(condition)?;
-            check(else_expr)
+            check!(then_expr)?;
+            check!(condition)?;
+            check!(else_expr)
         }
-        ExprKind::Member { object, .. } => check(object),
+        ExprKind::Member { object, .. } => check!(object),
         ExprKind::Index { object, index } => {
-            check(object)?;
-            check(index)
+            check!(object)?;
+            check!(index)
         }
         ExprKind::Slice {
             object, start, end, ..
         } => {
-            check(object)?;
-            start
-                .iter()
-                .chain(end.iter())
-                .try_for_each(|bound| check(bound))
+            check!(object)?;
+            for bound in start.iter().chain(end.iter()) {
+                check!(bound)?;
+            }
+            Ok(())
         }
         ExprKind::Membership {
             value, container, ..
         } => {
-            check(value)?;
-            check(container)
+            check!(value)?;
+            check!(container)
         }
         ExprKind::CompareChain { first, links } => {
-            check(first)?;
-            links.iter().try_for_each(|link| check(&link.operand))
+            check!(first)?;
+            for link in links {
+                check!(&link.operand)?;
+            }
+            Ok(())
         }
-        ExprKind::IsNone { value, .. } => check(value),
+        ExprKind::IsNone { value, .. } => check!(value),
         ExprKind::Call { callee, args } => {
             let allowed = match &callee.kind {
                 ExprKind::Name(name) => PURE_FUNCTIONS.contains(&name.as_str()),
                 ExprKind::Member { object, field } => {
-                    check(object)?;
+                    check!(object)?;
+                    receivers.push(object);
                     PURE_METHODS.contains(&field.as_str())
                 }
                 _ => false,
@@ -315,7 +373,10 @@ fn reject_impure_condition(expr: &Expr, kind: ContractKind) -> Result<()> {
                     "a call to a user function or a method that may change its receiver",
                 ));
             }
-            args.iter().try_for_each(|arg| check(&arg.value))
+            for arg in args {
+                check!(&arg.value)?;
+            }
+            Ok(())
         }
         ExprKind::Lambda { .. } => Err(impure(expr, kind, "a lambda")),
         ExprKind::Specialize { .. } => Err(impure(expr, kind, "an explicit specialization")),

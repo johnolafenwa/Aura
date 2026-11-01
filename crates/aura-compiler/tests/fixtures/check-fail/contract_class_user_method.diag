@@ -1,0 +1,6 @@
+error[AU2048]: an `invariant` condition must not change program state; a method call on `C`, which may change program state, is not allowed here
+ --> crates/aura-compiler/tests/fixtures/check-fail/contract_class_user_method.au:3:15
+  |
+3 |     invariant self.get() > 0
+  |               ^
+  = help: conditions may read values and call pure builtins such as `len`, `min`, `all`, and read-only methods such as `contains`

@@ -1,0 +1,5 @@
+error[AU2002]: an `invariant` condition must be `bool`, found `int64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/contract_class_invariant_not_bool.au:3:20
+  |
+3 |     invariant self.n
+  |                    ^

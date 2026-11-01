@@ -2502,6 +2502,12 @@ For a class with `__init__`, the initializer's visibility decides who may call t
 
 An imported declaration keeps its defining module's identity for private-access checks. See [Names And Scopes](/manual/names-and-scopes#imports).
 
+## Invariants
+
+A class body may declare `invariant` clauses that every object must keep.
+They are checked after construction and around each `public` method that
+takes `mut self`; see [Class invariants](/manual/functions#class-invariants).
+
 ## Methods And Receivers
 
 ```aura
@@ -6774,7 +6780,7 @@ String and format-specification diagnostics are described under
 | `AU2045` | invalid property use | Assignment, compound assignment, a `mut` argument or receiver, `match mut`, a view, or call syntax on a property. | Read the property without parentheses, or bind it to a local and change the local. |
 | `AU2046` | invalid derived implementation | A bodyless `impl` for a trait other than `json.Codec`, for a type from another module, a generic class or enum, or a class with `__init__`. Also a positional enum payload, a field type with no JSON form, or a union whose members a decoder cannot tell apart. | Write the implementation by hand, or change the field to a supported type. See [Derived Codecs](/manual/json#derived-codecs). |
 | `AU2047` | invalid decorator | A decorator on a generic function, on `main`, on a function with a parameter default or a view result, or a decorator line not followed by a module-level `def`. | Remove the decorator, or change the function so a closure can stand in for it. See [Decorators](/manual/functions#decorators). |
-| `AU2048` | invalid contract clause | A clause after the body's first statement or in the wrong body (`requires` and `ensures` belong to functions, `invariant` and `decreases` to loops), `decreases` on a `for` loop or twice on one loop, a condition that calls a user function or a method that changes its receiver, `ensures` on `__init__` or on a function with a view result, an `ensures` that reads an `own` parameter, a parameter named `result` beside `ensures`, or a clause on a trait implementation method. | Put clauses first, keep conditions to reads and pure builtins, and see [Contracts](/manual/functions#contracts). |
+| `AU2048` | invalid contract clause | A clause after the body's first statement or in the wrong body (`requires` and `ensures` belong to functions, `invariant` to loops and class bodies, `decreases` to `while` loops), `decreases` on a `for` loop or twice on one loop, a condition that calls a user function or a method of a user type, a method named `__invariant__`, `ensures` on `__init__` or on a function with a view result, an `ensures` that reads an `own` parameter, a parameter named `result` beside `ensures`, or a clause on a trait implementation method. | Put clauses first, keep conditions to reads and pure builtins, and see [Contracts](/manual/functions#contracts). |
 | `AU2999` | general compile-time rejection | A rejection that has no narrower public category. | Follow the message. |
 
 **`AU2002` type mismatch.** List `map`, `filter`, and keyed `sort` require the
@@ -7122,7 +7128,7 @@ owner's region.
 | `AU4005` | resource, allocation, or I/O failure | An exceeded size limit, allocation failure, or stack exhaustion. | Stay within the documented limit, or request more stack. |
 | `AU4006` | invalid runtime configuration | An invalid `AURA_WORKERS`, `AURA_BLOCKING_WORKERS`, or `AURA_BLOCKING_QUEUE_CAPACITY` value. | Set the variable to a positive decimal integer, or unset it. |
 | `AU4007` | numeric Array shape or reduction violation | Mismatched Array shapes, or `min`, `max`, or `mean` of an empty Array. | Match the shapes, or check that the Array is not empty. |
-| `AU4009` | contract violated | A `requires` condition was false when the function was called, an `ensures` condition was false when it returned, a loop `invariant` was false, or a `decreases` measure went below 0 or did not get smaller. | Fix the caller for `requires`, or the function or loop body for the others. The message names the clause. |
+| `AU4009` | contract violated | A `requires` condition was false when the function was called, an `ensures` condition was false when it returned, a loop or class `invariant` was false, or a `decreases` measure went below 0 or did not get smaller. | Fix the caller for `requires`, or the function or loop body for the others. The message names the clause. |
 
 Each runtime code's precise causes are listed under
 [Runtime Traps And Backtraces](#runtime-traps-and-backtraces).
@@ -11605,8 +11611,8 @@ A condition has type `bool` and must not change program state. It may read
 parameters, `self`, fields, elements, and module constants, use operators
 and comprehensions, and call pure builtins such as `len`, `min`, `max`,
 `sum`, `all`, and `any`, and read-only methods such as `contains`, `find`,
-and `keys`. Calling a user function, or a method that changes its
-receiver, is `AU2048`.
+and `keys` on builtin collections and strings. Calling a user function, or
+any method of a user class, enum, or type parameter, is `AU2048`.
 
 `requires`, `ensures`, `invariant`, and `decreases` are keywords only at
 the start of a clause line.
@@ -11661,6 +11667,43 @@ def main():
 - Loop clauses come first in the loop body, follow the same purity rules
   as function clauses, and fail with `AU4009`.
 
+### Class invariants
+
+A class can state what is true of every one of its objects, with
+`invariant` lines in its body. Inside them, `self` names the object.
+
+```aura
+class Account:
+    balance: int64
+    limit: int64 = 1000
+    invariant self.balance >= 0
+    invariant self.balance <= self.limit
+
+    public def deposit(mut self, amount: int64):
+        requires amount > 0
+        self.balance += amount
+
+def main():
+    mut account = Account(balance=10)
+    account.deposit(5)
+    print(account.balance)  # 15
+```
+
+The invariants are checked:
+
+- after every construction, by a field call such as `Account(balance=10)`
+  or by `__init__`, in whichever module builds the object, and
+- on entry to and on every return from each `public` method that takes
+  `mut self`, after the method's own `requires` and `ensures` checks.
+
+Methods that are not `public`, and methods that only read `self`, run
+without checks, so a private helper may pass through a state that breaks
+an invariant as long as the public method that calls it restores it. Code
+in the class's own module that assigns a field directly is not checked
+either. Objects that `json.decode` builds are not checked yet.
+
+The method name `__invariant__` is reserved for the check.
+
 These forms are not available yet and report `AU2048`:
 
 - `ensures` on `__init__` or on a function with a view result
@@ -11669,7 +11712,7 @@ These forms are not available yet and report `AU2048`:
 - a parameter named `result` in a function with `ensures`
 - clauses on the methods of a trait implementation
 
-Class invariants, `old(...)`, and `spec def` helper functions are planned
+`old(...)`, `forall`, `exists`, and `spec def` helper functions are planned
 next, followed by `aura verify`, which proves clauses
 before the program runs. See the
 [verification design](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/23-verification-design-checkpoint.md).

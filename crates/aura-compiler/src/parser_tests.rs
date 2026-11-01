@@ -5202,7 +5202,7 @@ fn loop_clauses_parse_at_the_top_of_loop_bodies() {
         ),
         (
             "def f(k: int64):\n    decreases k\n",
-            "`decreases` clauses belong at the top of a loop body",
+            "`decreases` clauses belong at the top of a `while` loop body",
         ),
         (
             "def f(k: int64):\n    while k > 0:\n        pass\n        invariant k > 0\n",
@@ -5216,5 +5216,70 @@ fn loop_clauses_parse_at_the_top_of_loop_bodies() {
             "{source}: {}",
             error.message
         );
+    }
+}
+
+#[test]
+fn class_invariants_become_a_hidden_checking_method() {
+    let module = crate::parser::parse(concat!(
+        "public class C:\n",
+        "    n: int64\n",
+        "    invariant self.n >= 0\n",
+        "    invariant: int64 = 0\n",
+        "    invariant (self.n <\n",
+        "        10)\n",
+        "\n",
+        "    def get(self) -> int64:\n",
+        "        return self.n\n",
+        "\n",
+        "class Plain:\n",
+        "    n: int64\n",
+    ))
+    .expect("class invariants parse");
+    let Item::Class(class) = &module.items[0] else {
+        panic!("first item is a class");
+    };
+    assert_eq!(class.fields.len(), 2, "`invariant: int64` stays a field");
+    let check = class
+        .methods
+        .iter()
+        .find(|method| method.name == crate::ast::CLASS_INVARIANT_METHOD)
+        .expect("the hidden invariant method");
+    assert!(check.public, "public with its class");
+    assert_eq!(check.receiver, Some(ReceiverKind::Borrow));
+    let texts = check
+        .contracts
+        .iter()
+        .map(|clause| (clause.kind, clause.text.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        texts,
+        vec![
+            (ContractKind::Invariant, "self.n >= 0"),
+            (ContractKind::Invariant, "(self.n < 10)"),
+        ]
+    );
+    let Item::Class(plain) = &module.items[1] else {
+        panic!("second item is a class");
+    };
+    assert!(plain.methods.is_empty());
+
+    for (source, message) in [
+        (
+            "class C:\n    n: int64\n    ensures self.n > 0\n",
+            "a class body states only `invariant` clauses; `ensures` belongs at the top of a method body",
+        ),
+        (
+            "class C:\n    n: int64\n    decreases self.n\n",
+            "`decreases` belongs at the top of a `while` loop body",
+        ),
+        (
+            "class C:\n    n: int64\n\n    def __invariant__(self):\n        pass\n",
+            "`__invariant__` is reserved",
+        ),
+    ] {
+        let error = crate::parser::parse(source).expect_err(source);
+        assert_eq!(error.code, "AU2048", "{source}");
+        assert!(error.message.contains(message), "{source}: {}", error.message);
     }
 }

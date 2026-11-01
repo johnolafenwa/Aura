@@ -303,6 +303,11 @@ pub struct FunctionDecl {
     pub contracts: Vec<ContractClause>,
 }
 
+/// The hidden method that checks a class's `invariant` clauses. The parser
+/// adds it to every class that declares one; it borrows `self` and checks
+/// each clause on entry.
+pub const CLASS_INVARIANT_METHOD: &str = "__invariant__";
+
 /// Which promise a contract clause states.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum ContractKind {
@@ -310,7 +315,8 @@ pub enum ContractKind {
     Requires,
     /// `ensures condition`: the function promises it on return.
     Ensures,
-    /// `invariant condition`: holds on every pass of a loop.
+    /// `invariant condition`: holds on every pass of a loop, or whenever a
+    /// class's object is visible to code outside its methods.
     Invariant,
     /// `decreases measure`: a `while` loop's non-negative integer measure
     /// that every iteration makes smaller.

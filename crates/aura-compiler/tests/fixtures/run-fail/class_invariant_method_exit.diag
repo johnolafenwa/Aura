@@ -1,0 +1,8 @@
+error[AU4009]: `invariant` clause failed: `self.n >= 0`
+ --> crates/aura-compiler/tests/fixtures/run-fail/class_invariant_method_exit.au:3:20
+  |
+3 |     invariant self.n >= 0
+  |                    ^
+  = note: left = -2
+  = note: right = 0
+  = note: Aura call chain (innermost first): C.__invariant__ at 3:5 -> C.drop at 5:12 -> main at 9:1

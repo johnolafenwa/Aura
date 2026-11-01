@@ -31970,3 +31970,44 @@ fn loop_clauses_check_as_pure_conditions_and_measures() {
         assert!(error.message.contains(message), "{source}: {}", error.message);
     }
 }
+
+#[test]
+fn class_invariants_check_against_self_and_builtin_receivers_only() {
+    crate::check_source(concat!(
+        "class Bag:\n",
+        "    items: list[int64]\n",
+        "    tags: dict[str, int64]\n",
+        "    invariant len(self.items) >= 0 and not self.items.contains(-1)\n",
+        "    invariant len(self.tags.keys()) == len(self.tags) and \"ab\".count(\"a\") == 1\n",
+        "\n",
+        "    public def add(mut self, x: int64):\n",
+        "        self.items.append(x)\n",
+    ))
+    .expect("class invariants over builtin receivers check");
+    for (source, code, message) in [
+        (
+            "class C:\n    n: int64\n    invariant self.get() > 0\n\n    def get(self) -> int64:\n        return self.n\n",
+            "AU2048",
+            "a method call on `C`, which may change program state",
+        ),
+        (
+            "class C:\n    n: int64\n\n    def count(mut self) -> int64:\n        self.n += 1\n        return self.n\n\ndef f(c: mut C):\n    requires c.count() > 0\n    pass\n",
+            "AU2048",
+            "a method call on `C`",
+        ),
+        (
+            "class C:\n    n: int64\n    invariant self.n\n",
+            "AU2002",
+            "an `invariant` condition must be `bool`, found `int64`",
+        ),
+        (
+            "class C:\n    n: int64\n    invariant missing > 0\n",
+            "AU2001",
+            "unknown name `missing`",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err(source);
+        assert_eq!(error.code, code, "{source}: {}", error.message);
+        assert!(error.message.contains(message), "{source}: {}", error.message);
+    }
+}

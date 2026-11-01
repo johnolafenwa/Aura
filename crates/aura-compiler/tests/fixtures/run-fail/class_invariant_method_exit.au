@@ -1,0 +1,11 @@
+class C:
+    n: int64
+    invariant self.n >= 0
+
+    public def drop(mut self):
+        self.n -= 5
+
+
+def main():
+    mut c = C(n=3)
+    c.drop()

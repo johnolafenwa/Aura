@@ -1967,8 +1967,10 @@ impl<'a> AnalysisBuilder<'a> {
                 });
             }
             for (name, method) in &class_info.methods {
-                // `__init__` runs only through a class call.
-                if name == crate::sema::INITIALIZER_NAME {
+                // `__init__` runs only through a class call; the invariant check is hidden.
+                if name == crate::sema::INITIALIZER_NAME
+                    || name == crate::ast::CLASS_INVARIANT_METHOD
+                {
                     continue;
                 }
                 completions.push(member_completion(name, &method.decl));

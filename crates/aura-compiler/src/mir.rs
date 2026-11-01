@@ -1541,6 +1541,9 @@ impl AssertKind {
     }
 }
 
+/// The hidden local naming the object a class invariant check reads.
+const INVARIANT_SUBJECT: &str = "invariant subject";
+
 /// The hidden locals a `while` loop's `decreases` check reads. The names
 /// cannot be written in source.
 const DECREASES_CURRENT: &str = "decreases measure";
@@ -13893,11 +13896,17 @@ impl<'a> Lowerer<'a> {
     /// with `result` naming the returned value.
     fn lower_contracted_body(&mut self, function: &crate::ast::FunctionDecl) {
         self.lower_contract_checks(function, crate::ast::ContractKind::Requires);
+        // Only the hidden class invariant method has `invariant` clauses.
+        self.lower_contract_checks(function, crate::ast::ContractKind::Invariant);
+        let guarded = self.guarded_self_class(function);
+        if let Some(class) = &guarded {
+            self.emit_class_invariant_check("self", class);
+        }
         let has_ensures = function
             .contracts
             .iter()
             .any(|clause| clause.kind == crate::ast::ContractKind::Ensures);
-        if !has_ensures {
+        if !has_ensures && guarded.is_none() {
             self.lower_stmts(&function.body);
             return;
         }
@@ -13926,6 +13935,9 @@ impl<'a> Lowerer<'a> {
         )]));
         self.lower_contract_checks(function, crate::ast::ContractKind::Ensures);
         self.scoped_names.pop();
+        if let Some(class) = &guarded {
+            self.emit_class_invariant_check("self", class);
+        }
         let value = self.move_place_for_type(return_place, &return_type);
         self.terminate(Terminator::Return(value));
     }
@@ -23465,6 +23477,7 @@ impl<'a> Lowerer<'a> {
                         fields,
                     },
                 });
+                self.emit_class_invariant_check(&temp, &class);
             }
             ExprKind::Name(name) if name == "Queue" => {
                 let lowered_args = self.lower_args(args);
@@ -23986,6 +23999,7 @@ impl<'a> Lowerer<'a> {
                                     fields,
                                 },
                             });
+                            self.emit_class_invariant_check(&temp, &class);
                             return Operand::Place(temp);
                         }
                     }
@@ -25258,6 +25272,62 @@ impl<'a> Lowerer<'a> {
                 type_args: Default::default(),
             },
         });
+        self.emit_class_invariant_check(target, class);
+    }
+
+    /// Calls the class's hidden invariant method on `object`, when the class
+    /// declares `invariant` clauses.
+    fn emit_class_invariant_check(&mut self, object: &str, class: &crate::sema::ClassInfo) {
+        if !class
+            .methods
+            .contains_key(crate::ast::CLASS_INVARIANT_METHOD)
+        {
+            return;
+        }
+        let span = class.methods[crate::ast::CLASS_INVARIANT_METHOD].decl.span;
+        let call = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Member {
+                        object: Box::new(Expr {
+                            kind: ExprKind::Name(INVARIANT_SUBJECT.to_string()),
+                            span,
+                        }),
+                        field: crate::ast::CLASS_INVARIANT_METHOD.to_string(),
+                    },
+                    span,
+                }),
+                args: Vec::new(),
+            },
+            span,
+        };
+        self.scoped_names.push(std::collections::HashMap::from([(
+            INVARIANT_SUBJECT.to_string(),
+            object.to_string(),
+        )]));
+        self.lower_expr(&call);
+        self.scoped_names.pop();
+    }
+
+    /// The class whose invariant guards this method's `self`: the method is
+    /// public and takes `mut self`, and its class declares invariants.
+    fn guarded_self_class(
+        &self,
+        function: &crate::ast::FunctionDecl,
+    ) -> Option<crate::sema::ClassInfo> {
+        if !function.public || function.receiver != Some(ReceiverKind::BorrowMut) {
+            return None;
+        }
+        let Some(Type::Named(name, _)) = self.local_types.get("self") else {
+            return None;
+        };
+        self.resolve_class_info(name)
+            .filter(|class| {
+                class
+                    .methods
+                    .contains_key(crate::ast::CLASS_INVARIANT_METHOD)
+            })
+            .cloned()
     }
 
     fn lower_user_args(

@@ -250,8 +250,13 @@ V1 progress: V1a (`requires` and `ensures` on functions and methods,
 `result`, the pure condition check, runtime checks on both backends,
 `AU2048` and `AU4009`) is implemented. V1b adds loop `invariant` clauses and
 a runtime `decreases` check on `while` (measure at least 0 and strictly
-smaller at each body entry); class invariants follow. `spec def` and `old`
-follow in V1c, and the contracts manual page in V1d.
+smaller at each body entry), and class invariants: the parser turns a
+class's `invariant` lines into a hidden `__invariant__(self)` method that
+construction sites, `__init__` callers, and public `mut self` methods (on
+entry and exit) call, so the check always runs in the class's module.
+Condition purity now also requires a method call's receiver to have a
+builtin type. `spec def` and `old` follow in V1c, and the contracts manual
+page in V1d.
 
 V1 needs each stage's full local gates, coverage floors, and interpreter and
 native parity, like every other batch. V1 also adds a fixture family of

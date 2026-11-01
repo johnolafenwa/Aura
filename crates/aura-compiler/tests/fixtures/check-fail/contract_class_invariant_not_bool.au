@@ -1,0 +1,3 @@
+class C:
+    n: int64
+    invariant self.n

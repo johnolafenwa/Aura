@@ -1,0 +1,8 @@
+error[AU4009]: `invariant` clause failed: `len(self.items) == 2`
+ --> crates/aura-compiler/tests/fixtures/run-fail/class_invariant_after_construction.au:3:15
+  |
+3 |     invariant len(self.items) == 2
+  |               ^
+  = note: left = 1
+  = note: right = 2
+  = note: Aura call chain (innermost first): Pair.__invariant__ at 3:5 -> main at 6:1

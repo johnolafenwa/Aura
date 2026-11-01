@@ -55,24 +55,64 @@ fn misplaced_contract_error(span: Span, kind: ContractKind) -> Diagnostic {
     )
 }
 
+/// The hidden method that checks a class's `invariant` clauses on entry.
+/// It is public with its class, so construction in another module can
+/// call it.
+fn class_invariant_method(
+    public: bool,
+    span: Span,
+    invariants: Vec<ContractClause>,
+) -> FunctionDecl {
+    FunctionDecl {
+        public,
+        name: crate::ast::CLASS_INVARIANT_METHOD.to_string(),
+        type_params: Vec::new(),
+        type_param_bounds: std::collections::BTreeMap::new(),
+        receiver: Some(ReceiverKind::Borrow),
+        params: Vec::new(),
+        return_type: TypeRef::named("None", Vec::new(), false, span),
+        view_return: None,
+        body: vec![Stmt::Pass(crate::ast::PassStmt { span })],
+        span,
+        property: None,
+        decorators: Vec::new(),
+        doc: None,
+        contracts: invariants,
+    }
+}
+
 /// Where a run of contract clauses appears.
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum ClauseContext {
     Function,
     Loop,
+    Class,
 }
 
 /// A clause whose kind does not belong in `context`.
-fn wrong_place_contract_error(span: Span, kind: ContractKind) -> Diagnostic {
+fn wrong_place_contract_error(
+    span: Span,
+    kind: ContractKind,
+    context: ClauseContext,
+) -> Diagnostic {
+    if context == ClauseContext::Class {
+        return Diagnostic::coded_at(
+            "AU2048",
+            span,
+            format!(
+                "a class body states only `invariant` clauses; `{}` belongs at the top of a {} body",
+                kind.keyword(),
+                if kind == ContractKind::Decreases { "`while` loop" } else { "method" }
+            ),
+        );
+    }
     let message = match kind {
         ContractKind::Requires | ContractKind::Ensures => format!(
             "`{}` clauses belong at the top of a function body; a loop states `invariant` and `decreases`",
             kind.keyword()
         ),
-        ContractKind::Invariant | ContractKind::Decreases => format!(
-            "`{}` clauses belong at the top of a loop body; a function states `requires` and `ensures`",
-            kind.keyword()
-        ),
+        ContractKind::Invariant => "`invariant` clauses belong at the top of a loop body or in a class body; a function states `requires` and `ensures`".to_string(),
+        ContractKind::Decreases => "`decreases` clauses belong at the top of a `while` loop body; a function states `requires` and `ensures`".to_string(),
     };
     Diagnostic::coded_at("AU2048", span, message)
 }
@@ -740,7 +780,19 @@ impl Parser {
         let doc = self.take_docstring()?;
         let mut fields: Vec<FieldDecl> = Vec::new();
         let mut methods = Vec::new();
+        let mut invariants = Vec::new();
         while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
+            if let Some(kind) = self.at_contract_clause() {
+                if kind != ContractKind::Invariant {
+                    return Err(wrong_place_contract_error(
+                        self.current_span(),
+                        kind,
+                        ClauseContext::Class,
+                    ));
+                }
+                invariants.push(self.parse_contract_clause(kind)?);
+                continue;
+            }
             if self.at_field_docstring(fields.last()) {
                 let field_doc = self.take_docstring()?;
                 fields
@@ -785,6 +837,19 @@ impl Parser {
         }
 
         self.expect_simple(TokenKind::Dedent)?;
+        if let Some(method) = methods
+            .iter()
+            .find(|method| method.name == crate::ast::CLASS_INVARIANT_METHOD)
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2048",
+                method.span,
+                "`__invariant__` is reserved for checking a class's `invariant` clauses; rename the method",
+            ));
+        }
+        if let Some(first) = invariants.first() {
+            methods.push(class_invariant_method(public, first.span, invariants));
+        }
 
         Ok(ClassDecl {
             public,
@@ -2222,11 +2287,24 @@ impl Parser {
                 ContractKind::Requires | ContractKind::Ensures => {
                     context == ClauseContext::Function
                 }
-                ContractKind::Invariant | ContractKind::Decreases => context == ClauseContext::Loop,
+                ContractKind::Invariant => context != ClauseContext::Function,
+                ContractKind::Decreases => context == ClauseContext::Loop,
             };
             if !allowed {
-                return Err(wrong_place_contract_error(self.current_span(), kind));
+                return Err(wrong_place_contract_error(
+                    self.current_span(),
+                    kind,
+                    context,
+                ));
             }
+            clauses.push(self.parse_contract_clause(kind)?);
+        }
+        Ok(clauses)
+    }
+
+    /// Parses one clause line whose keyword is the current token.
+    fn parse_contract_clause(&mut self, kind: ContractKind) -> Result<ContractClause> {
+        {
             let span = self.bump().span;
             let condition = self.parse_expr()?;
             let end_line = self
@@ -2235,15 +2313,14 @@ impl Parser {
                 .map_or(span.line, |token| token.span.line);
             self.expect_statement_terminator()?;
             let text = self.clause_text(kind, span.line, end_line);
-            clauses.push(ContractClause {
+            Ok(ContractClause {
                 kind,
                 condition,
                 span,
                 text,
                 end_line,
-            });
+            })
         }
-        Ok(clauses)
     }
 
     /// A clause's condition as written, joining the lines of a clause that

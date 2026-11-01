@@ -191,6 +191,12 @@ For a class with `__init__`, the initializer's visibility decides who may call t
 
 An imported declaration keeps its defining module's identity for private-access checks. See [Names And Scopes](/manual/names-and-scopes#imports).
 
+## Invariants
+
+A class body may declare `invariant` clauses that every object must keep.
+They are checked after construction and around each `public` method that
+takes `mut self`; see [Class invariants](/manual/functions#class-invariants).
+
 ## Methods And Receivers
 
 ```aura

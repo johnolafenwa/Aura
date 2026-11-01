@@ -219,7 +219,9 @@ pub fn api_module_from_program(module_name: &str, program: &Program) -> ApiModul
                 entry.methods = class
                     .methods
                     .iter()
-                    .filter(|method| method.public)
+                    .filter(|method| {
+                        method.public && method.name != crate::ast::CLASS_INVARIANT_METHOD
+                    })
                     .map(|method| function_declaration("method", method))
                     .collect();
                 declarations.push(entry);

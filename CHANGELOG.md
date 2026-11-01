@@ -24,6 +24,10 @@ in this file.
   `while` or `for` body are checked on every pass, and a `while` loop's
   `decreases` clause names an `int64` measure that must stay at or above 0
   and get smaller every iteration. Failures report `AU4009`.
+- Classes can declare `invariant` clauses in their body. They are checked
+  after every construction and on entry to and return from each `public`
+  method that takes `mut self`. The method name `__invariant__` is now
+  reserved.
 - **Incompatible:** `ord` and `chr` are now reserved builtin names, so a
   module-level function with either name is rejected with `AU2007`.
 

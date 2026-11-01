@@ -238,3 +238,22 @@ fn api_docs_list_a_decorated_function_with_its_decorators_and_docstring() {
     );
     assert_eq!(fact.doc.as_deref(), Some("Multiplies 1 to n."));
 }
+
+#[test]
+fn api_docs_and_completion_hide_the_class_invariant_check() {
+    let source = "public class C:\n    n: int64\n    invariant self.n >= 0\n\n    public def get(self) -> int64:\n        return self.n\n\ndef main():\n    c = C(n=1)\n    print(c.get())\n";
+    let program = crate::check_source(source).expect("checks");
+    let markdown = render_api_markdown(&api_module_from_program("guarded", &program));
+    assert!(markdown.contains("get"), "{markdown}");
+    assert!(!markdown.contains("__invariant__"), "{markdown}");
+    let completions = crate::analysis::complete_source(source, 9, 12, Some('.'))
+        .expect("completion succeeds")
+        .into_iter()
+        .map(|completion| completion.name)
+        .collect::<Vec<_>>();
+    assert!(completions.contains(&"get".to_string()), "{completions:?}");
+    assert!(
+        !completions.contains(&crate::ast::CLASS_INVARIANT_METHOD.to_string()),
+        "{completions:?}"
+    );
+}
