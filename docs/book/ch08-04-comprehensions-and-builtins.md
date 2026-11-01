@@ -224,8 +224,9 @@ return the element type: these scores are `int64`, so the sum is an `int64`.
 `any` and `all` take a collection of `bool`s, which a comprehension is good
 at producing; `any` stops at the first `true` and `all` at the first `false`.
 `min` and `max` also accept two or more separate numbers of the same type, as
-in `max(72, 95, 64)`. All of them read the collection with shared access and
-leave it as it was.
+in `max(72, 95, 64)`, and they work on strings too: `min("pear", "apple",
+"fig")` is `"apple"`, and the result is a copy you own. All of them read the
+collection with shared access and leave it as it was.
 
 The average shows a step you'll write often. `sum(scores)` and `len(scores)`
 are both integers, and Aura doesn't do integer `/`, so we convert each to a
@@ -325,8 +326,8 @@ take a `str` or a dictionary; to sort a dictionary's keys, write
 these copies elements, the element type has to be one that can be copied:
 copy values, strings, lists, and classes made of those are all fine.
 
-The names `sum`, `min`, `max`, `any`, `all`, `sorted`, `reversed`, and
-`list` belong to the builtins, so a top-level function can't use them:
+The names `sum`, `min`, `max`, `any`, `all`, `sorted`, `reversed`, `list`,
+`ord`, and `chr` belong to the builtins, so a top-level function can't use them:
 `def sum(...)` is rejected with `AU2007`. A local binding can still have one
 of those names, although giving a binding the same name as a builtin is
 rarely a kindness to the reader.

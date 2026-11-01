@@ -24891,7 +24891,9 @@ Aura has no separate character type. A one-character piece of text is still
 a `str`, and you get one with a slice, `word[0:1]`, as the word counter did.
 Leaving out single-number indexing keeps you from writing code that looks
 like it takes constant time but has to scan the string from the start, which
-any UTF-8 string has to do to find the nth character.
+any UTF-8 string has to do to find the nth character. When you really want
+every character, `word.chars()` gives them to you as a list in one pass;
+Chapter 8 shows it along with `ord` and `chr`.
 
 ### f-strings
 
@@ -31894,18 +31896,46 @@ error[AU2999]: `for` currently requires a `Range`, `Queue[T]`, `list[T]`, or `se
   |     ^
 ```
 
-This is a real gap if you're used to Python, so let's be clear about why it
-exists and what to do instead. Aura has no character type: a single letter is
-a `str` of length one. Finding the scalar at position `n` in UTF-8 means
-walking from the start, so `word[n]` inside a loop would quietly turn a
-linear algorithm into a quadratic one. Aura would rather not offer an
-operation that looks cheap and isn't. `chars()`, `ord()`, and `chr()` aren't
-available yet.
+This trips up everyone coming from Python, so let's be clear about why it
+happens. Aura has no character type: a single letter is a `str` of length
+one. Finding the scalar at position `n` in UTF-8 means walking from the
+start, so if a string could be indexed or iterated one position at a time, a
+loop like this would quietly turn a linear algorithm into a quadratic one.
+Aura would rather make you ask for the characters explicitly, so the cost is
+visible. You ask with `chars()`, which walks the string once and gives back a
+`list[str]` of one-character strings. `ord` turns one of them into its
+Unicode scalar value, and `chr` goes the other way:
 
-In practice, most text processing doesn't need single characters. You want
-words, fields, lines, and prefixes, and the methods in the rest of this
-section work on those directly. When you do need one character, a slice such
-as `word[0:1]` gives it to you as a one-character `str`.
+*Filename: src/main.au*
+
+```aura
+def main():
+    word = "naïve"
+    for ch in word.chars():
+        print(f"{ch} {ord(ch)}")
+    print(chr(97))
+```
+
+```console
+$ aura run src/main.au
+n 110
+a 97
+ï 239
+v 118
+e 101
+a
+```
+
+Notice that `ï` is one character here, even though it takes two bytes in
+UTF-8. `chars()` splits on Unicode scalars, not bytes. Passing `ord` a string
+that isn't exactly one character, or `chr` a number that isn't a valid
+scalar, stops the program with a trap.
+
+In practice, most text processing doesn't need single characters at all. You
+want words, fields, lines, and prefixes, and the methods in the rest of this
+section work on those directly. When you need one character from a known
+position, a slice such as `word[0:1]` gives it to you as a one-character
+`str` without building the whole list.
 
 ## Searching
 
@@ -32774,8 +32804,9 @@ return the element type: these scores are `int64`, so the sum is an `int64`.
 `any` and `all` take a collection of `bool`s, which a comprehension is good
 at producing; `any` stops at the first `true` and `all` at the first `false`.
 `min` and `max` also accept two or more separate numbers of the same type, as
-in `max(72, 95, 64)`. All of them read the collection with shared access and
-leave it as it was.
+in `max(72, 95, 64)`, and they work on strings too: `min("pear", "apple",
+"fig")` is `"apple"`, and the result is a copy you own. All of them read the
+collection with shared access and leave it as it was.
 
 The average shows a step you'll write often. `sum(scores)` and `len(scores)`
 are both integers, and Aura doesn't do integer `/`, so we convert each to a
@@ -32875,8 +32906,8 @@ take a `str` or a dictionary; to sort a dictionary's keys, write
 these copies elements, the element type has to be one that can be copied:
 copy values, strings, lists, and classes made of those are all fine.
 
-The names `sum`, `min`, `max`, `any`, `all`, `sorted`, `reversed`, and
-`list` belong to the builtins, so a top-level function can't use them:
+The names `sum`, `min`, `max`, `any`, `all`, `sorted`, `reversed`, `list`,
+`ord`, and `chr` belong to the builtins, so a top-level function can't use them:
 `def sum(...)` is rejected with `AU2007`. A local binding can still have one
 of those names, although giving a binding the same name as a builtin is
 rarely a kindness to the reader.
