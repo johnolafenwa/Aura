@@ -1,0 +1,7 @@
+def next_up(x: int64) -> int64:
+    ensures result > x
+    return x - 1
+
+
+def main() -> None:
+    print(next_up(3))

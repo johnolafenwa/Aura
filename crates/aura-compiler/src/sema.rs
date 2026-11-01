@@ -52,6 +52,8 @@ use properties::{
 };
 #[cfg(test)]
 use types::type_pattern_specificity;
+mod contracts;
+pub(crate) use contracts::RESULT_NAME as CONTRACT_RESULT_NAME;
 mod decorators;
 mod init;
 pub(crate) use decorators::{DECORATED_PREFIX, UNDECORATED_PREFIX};
@@ -3104,6 +3106,7 @@ impl<'a> FunctionChecker<'a> {
             );
         }
 
+        checker.check_contracts(function, &locals, &return_type)?;
         let flow = checker.check_block(&function.body, &mut locals, &return_type, 0, true)?;
         if return_type != Type::Unit && flow != BlockFlow::AlwaysReturns {
             return Err(Diagnostic::at(
@@ -3258,6 +3261,7 @@ impl<'a> FunctionChecker<'a> {
             );
         }
 
+        checker.check_contracts(method, &locals, &return_type)?;
         let flow = checker.check_block(&method.body, &mut locals, &return_type, 0, true)?;
         if return_type != Type::Unit && flow != BlockFlow::AlwaysReturns {
             return Err(Diagnostic::at(

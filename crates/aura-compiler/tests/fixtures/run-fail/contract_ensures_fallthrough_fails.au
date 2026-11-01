@@ -1,0 +1,8 @@
+def check(xs: mut list[int64]):
+    ensures len(xs) > 0
+    xs.clear()
+
+
+def main() -> None:
+    mut values = [1, 2]
+    check(values)

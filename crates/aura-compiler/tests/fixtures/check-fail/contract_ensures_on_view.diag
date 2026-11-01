@@ -1,0 +1,5 @@
+error[AU2048]: a function with a view result cannot declare `ensures` yet
+ --> crates/aura-compiler/tests/fixtures/check-fail/contract_ensures_on_view.au:5:9
+  |
+5 |         ensures true
+  |         ^

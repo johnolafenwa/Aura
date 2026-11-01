@@ -82,6 +82,7 @@ pub(crate) fn synthetic_returned_view_decl(
         property: None,
         decorators: Vec::new(),
         doc: None,
+        contracts: Vec::new(),
     })
 }
 

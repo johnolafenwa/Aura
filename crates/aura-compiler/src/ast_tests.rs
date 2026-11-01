@@ -26,6 +26,7 @@ fn dummy_function(name: &str) -> FunctionDecl {
         property: None,
         decorators: Vec::new(),
         doc: None,
+        contracts: Vec::new(),
     }
 }
 

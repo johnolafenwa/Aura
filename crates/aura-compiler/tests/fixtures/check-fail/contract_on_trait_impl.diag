@@ -1,0 +1,5 @@
+error[AU2048]: the `Shape` implementation of `area` cannot declare `requires`: trait methods do not have contracts yet
+ --> crates/aura-compiler/tests/fixtures/check-fail/contract_on_trait_impl.au:11:9
+   |
+11 |         requires self.side > 0
+   |         ^

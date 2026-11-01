@@ -4766,6 +4766,7 @@ impl<'a> FunctionCompiler<'a> {
                 message,
                 captures,
                 span,
+                kind,
             } => {
                 let message = match message {
                     Some(message) => {
@@ -4785,10 +4786,13 @@ impl<'a> FunctionCompiler<'a> {
                     None => self.builder.iconst(types::I64, 0),
                 };
                 let (line, column) = self.span_values(Some(*span));
+                let kind = self.builder.iconst(types::I64, kind.word());
                 match captures.as_slice() {
                     [] => {
-                        self.builder
-                            .call(self.runtime[RuntimeFn::AssertFail], &[message, line, column]);
+                        self.builder.call(
+                            self.runtime[RuntimeFn::AssertFail],
+                            &[message, line, column, kind],
+                        );
                     }
                     [left, right] => {
                         let left_label = self.string_value(&left.label)?.values[0];
@@ -4809,6 +4813,7 @@ impl<'a> FunctionCompiler<'a> {
                                 right_label,
                                 right_type,
                                 right_value,
+                                kind,
                             ],
                         );
                     }

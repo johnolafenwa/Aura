@@ -4048,6 +4048,7 @@ impl MirRuntime {
                 message,
                 captures,
                 span,
+                kind,
             } => {
                 if !matches!(captures.len(), 0 | 2) {
                     return Err(Diagnostic::coded_at(
@@ -4106,7 +4107,7 @@ impl MirRuntime {
                     },
                     None => "assertion failed".to_string(),
                 };
-                let mut diagnostic = Diagnostic::coded_at("AU4001", *span, message);
+                let mut diagnostic = Diagnostic::coded_at(kind.code(), *span, message);
                 for (capture, rendered) in rendered_captures {
                     diagnostic = diagnostic.with_assertion_operand(
                         capture.label.clone(),

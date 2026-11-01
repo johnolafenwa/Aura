@@ -519,6 +519,70 @@ A decorator inside a function body, or in a class body other than `@property`, r
 
 Hover on a decorated function shows its decorator lines above the signature. `aura doc` lists it as a function, with its decorators and docstring. `aura fmt` keeps decorator lines directly above their definition.
 
+## Contracts
+
+A function can state its rules as `requires` and `ensures` clauses. Aura
+checks them every time the function runs, in `aura run` and in built
+programs.
+
+```aura
+def withdraw(balance: int64, amount: int64) -> int64:
+    """Returns the balance left after taking out `amount`."""
+    requires amount > 0
+    requires amount <= balance
+    ensures result >= 0
+    return balance - amount
+
+
+def main():
+    print(withdraw(100, 30))  # 70
+```
+
+- `requires condition` is checked on entry, after the arguments are bound.
+  It is the caller's promise.
+- `ensures condition` is checked on every path that returns, after any
+  `with` exits have run. It is the function's promise. Inside `ensures`,
+  `result` names the returned value. A function that returns `None` checks
+  its `ensures` when it falls off the end or reaches `return`.
+- Clauses come after the docstring and before the first other statement,
+  in any mix. They run in source order. A clause later in the body is
+  `AU2048`.
+- A failed clause stops the program with `AU4009`. The message names the
+  clause and its condition, and a comparison reports its two operands as a
+  failed `assert` does:
+
+```text
+error[AU4009]: `requires` clause failed: `amount <= balance`
+ --> bank.au:4:14
+  = note: left = 500
+  = note: right = 100
+```
+
+A condition has type `bool` and must not change program state. It may read
+parameters, `self`, fields, elements, and module constants, use operators
+and comprehensions, and call pure builtins such as `len`, `min`, `max`,
+`sum`, `all`, and `any`, and read-only methods such as `contains`, `find`,
+and `keys`. Calling a user function, or a method that changes its
+receiver, is `AU2048`.
+
+`requires` and `ensures` are keywords only at the start of a clause line.
+Elsewhere they are ordinary names, so `requires = 1` and the call
+`requires(x)` keep their meaning. Write a space before a parenthesis that
+starts a condition: `requires (a or b) and c`.
+
+These forms are not available yet and report `AU2048`:
+
+- `ensures` on `__init__` or on a function with a view result
+- an `ensures` that reads an `own` parameter of a non-Copy type, which the
+  body may have moved
+- a parameter named `result` in a function with `ensures`
+- clauses on the methods of a trait implementation
+
+Loop and class invariants, `decreases`, `old(...)`, and `spec def` helper
+functions are planned next, followed by `aura verify`, which proves clauses
+before the program runs. See the
+[verification design](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/23-verification-design-checkpoint.md).
+
 ## `main`
 
 In the selected entry module, a local function named `main` is the entrypoint when the module has no executable top-level statements. Its only valid signatures are:

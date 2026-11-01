@@ -1,0 +1,6 @@
+class Holder:
+    items: list[int64]
+
+    def first(self) -> view int64 from self:
+        ensures true
+        return self.items[0]

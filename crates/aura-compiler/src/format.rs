@@ -181,6 +181,8 @@ struct Tok {
     leading: Vec<String>,
     /// A comment after this token on the same physical line.
     trailing: Option<String>,
+    /// Whether a space or tab came directly before the token.
+    spaced: bool,
 }
 
 /// A comment on its own line between statements.
@@ -476,6 +478,7 @@ fn scan(source: &str) -> Scan {
                     end_line: line + newlines,
                     leading: std::mem::take(&mut pending),
                     trailing: None,
+                    spaced: index > 0 && matches!(source.as_bytes()[index - 1], b' ' | b'\t'),
                 });
                 if newlines > 0 {
                     line += newlines;
@@ -567,6 +570,7 @@ impl<'a> Formatter<'a> {
             end_line: usize::MAX,
             leading: Vec::new(),
             trailing: None,
+            spaced: false,
         });
         let space_before = vec![false; toks.len()];
         Self {
@@ -778,11 +782,25 @@ impl<'a> Formatter<'a> {
         self.toks[index].class == Class::Close || self.is_name_like(index, first)
     }
 
+    /// Whether the token at `index` is a `requires` or `ensures` keyword:
+    /// the first token of a line, followed after a space by its condition.
+    /// The parser reads `requires(x)` as a call and `requires (x)` as a
+    /// clause, so the space must stay.
+    fn is_clause_keyword(&self, index: usize, first: usize) -> bool {
+        index == first
+            && self.toks[index].class == Class::Name
+            && matches!(self.toks[index].text.as_str(), "requires" | "ensures")
+            && self
+                .toks
+                .get(index + 1)
+                .is_some_and(|next| next.spaced && next.line == self.toks[index].line)
+    }
+
     fn is_unary(&self, index: usize, first: usize) -> bool {
         if !matches!(self.toks[index].text.as_str(), "-" | "+" | "~" | "*" | "**") {
             return false;
         }
-        index == first || {
+        index == first || self.is_clause_keyword(index - 1, first) || {
             let previous = &self.toks[index - 1];
             match previous.class {
                 Class::Open | Class::Comma | Class::Colon | Class::Operator => true,
@@ -800,6 +818,7 @@ impl<'a> Formatter<'a> {
         }
         let previous = index - 1;
         self.ends_value(previous, first)
+            && !self.is_clause_keyword(previous, first)
             && self.toks[previous].text != "lambda"
             && !(previous > first
                 && matches!(
@@ -855,6 +874,9 @@ impl<'a> Formatter<'a> {
         }
         if index - 1 == first && left.text == "@" {
             return false;
+        }
+        if self.is_clause_keyword(index - 1, first) {
+            return true;
         }
         if self.is_unary(index - 1, first) {
             return false;

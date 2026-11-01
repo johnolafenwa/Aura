@@ -246,6 +246,11 @@ what a program observes: a removed check is one that cannot fire.
 | V3 | Required loop invariants for static proof, `decreases`, ghost code, lemmas, quantifiers over lists, `mut` frame conditions, trait-level contracts for generics | 6 to 10 PRs | V2 |
 | V4 | Models of `str`, `dict`, `set`; contracts on `Callable` types; task bodies verified sequentially under structured concurrency; trusted specifications for FFI and I/O | Open-ended | V3 |
 
+V1 progress: V1a (`requires` and `ensures` on functions and methods,
+`result`, the pure condition check, runtime checks on both backends,
+`AU2048` and `AU4009`) is implemented. Loop and class invariants, `spec def`
+and `old` follow in V1b and V1c, and the contracts manual page in V1d.
+
 V1 needs each stage's full local gates, coverage floors, and interpreter and
 native parity, like every other batch. V1 also adds a fixture family of
 contract programs that V2 then proves.

@@ -1,0 +1,4 @@
+def f(x: int64) -> int64:
+    y = x
+    requires x > 0
+    return y

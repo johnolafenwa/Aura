@@ -7627,6 +7627,7 @@ fn function_decl(name: &str) -> FunctionDecl {
         property: None,
         decorators: Vec::new(),
         doc: None,
+        contracts: Vec::new(),
     }
 }
 
@@ -31817,5 +31818,98 @@ def go(generators: list[random.Rng]):
         let diagnostic = crate::check_source(source).expect_err(message);
         assert_eq!(diagnostic.code, code, "{source}\n{diagnostic:?}");
         assert_eq!(diagnostic.message, message, "{source}");
+    }
+}
+
+#[test]
+fn contract_clauses_check_as_pure_bool_conditions() {
+    crate::check_source(concat!(
+        "class Box:\n",
+        "    items: list[int64]\n",
+        "\n",
+        "    def total(self, scale: int64) -> int64:\n",
+        "        requires scale > 0 and len(self.items) >= 0\n",
+        "        requires all([item >= 0 for item in self.items])\n",
+        "        requires self.items.contains(1) or not self.items.contains(1)\n",
+        "        ensures result == sum(self.items) * scale\n",
+        "        ensures f\"{result}\" != \"\" and -result <= 0 or result < 0\n",
+        "        return sum(self.items) * scale\n",
+        "\n",
+        "def none_result(xs: mut list[int64], n: own int64) -> None:\n",
+        "    requires n in [1, 2] and (n, n)[0] == n and {n: n}[n] == n\n",
+        "    requires n in {n} and xs[0:1] == xs[0:1] and (n if n > 0 else 1) > 0\n",
+        "    ensures len(xs) > 0 and n > 0 and result is None\n",
+        "    xs.append(n)\n",
+        "\n",
+        "def main():\n",
+        "    print(Box(items=[1]).total(2))\n",
+    ))
+    .expect("pure conditions check");
+
+    for (source, code, message) in [
+        (
+            "def g() -> bool:\n    return true\n\ndef f():\n    requires g()\n    pass\n",
+            "AU2048",
+            "a call to a user function",
+        ),
+        (
+            "def f(xs: mut list[int64]):\n    ensures xs.pop() > 0\n    pass\n",
+            "AU2048",
+            "`ensures` condition must not change program state",
+        ),
+        (
+            "def f(x: int64):\n    requires (lambda: x)() > 0\n    pass\n",
+            "AU2048",
+            "a call to a user function",
+        ),
+        (
+            "def f(x: int64):\n    requires [lambda: x] == []\n    pass\n",
+            "AU2048",
+            "a lambda",
+        ),
+        (
+            "def f(x: int64) -> Result[int64, str]:\n    requires try parse_int64(\"1\") > 0\n    return Result.Ok(x)\n",
+            "AU2048",
+            "`try`",
+        ),
+        (
+            "def f(x: int64):\n    requires match x:\n        case 1: true\n        case _: false\n    pass\n",
+            "AU2048",
+            "a `match` expression",
+        ),
+        (
+            "def f(x: int64):\n    requires x\n    pass\n",
+            "AU2002",
+            "a `requires` condition must be `bool`, found `int64`",
+        ),
+        (
+            "def f(result: int64) -> int64:\n    ensures result > 0\n    return 1\n",
+            "AU2048",
+            "rename the parameter `result`",
+        ),
+        (
+            "def f(xs: own list[int64]) -> int64:\n    ensures result <= len(xs)\n    return 0\n",
+            "AU2048",
+            "cannot read `own` parameter `xs`",
+        ),
+        (
+            "class C:\n    n: int64\n\n    def __init__(self, n: int64):\n        ensures true\n        self.n = n\n",
+            "AU2048",
+            "`__init__` cannot declare `ensures` yet",
+        ),
+        (
+            "class C:\n    items: list[int64]\n\n    def first(self) -> view int64 from self:\n        ensures true\n        return self.items[0]\n",
+            "AU2048",
+            "a function with a view result cannot declare `ensures` yet",
+        ),
+        (
+            "trait Shape:\n    def area(self) -> int64\n\nclass Sq:\n    side: int64\n\nimpl Shape for Sq:\n    def area(self) -> int64:\n        ensures result >= 0\n        return self.side\n",
+            "AU2048",
+            "cannot declare `ensures`: trait methods do not have contracts yet",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err(source);
+        assert_eq!(error.code, code, "{source}: {}", error.message);
+        assert!(error.message.contains(message), "{source}: {}", error.message);
     }
 }

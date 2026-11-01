@@ -1489,8 +1489,46 @@ pub enum Terminator {
         message: Option<Operand>,
         captures: Vec<AssertionCapture>,
         span: crate::diag::Span,
+        /// What failed: an `assert` or a contract clause.
+        #[serde(default, skip_serializing_if = "AssertKind::is_assert")]
+        kind: AssertKind,
     },
     Unreachable,
+}
+
+/// The source check an `AssertFail` reports.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AssertKind {
+    /// An `assert` statement or a compiler-inserted check: `AU4001`.
+    #[default]
+    Assert,
+    /// A `requires` clause failed on entry: `AU4009`.
+    Requires,
+    /// An `ensures` clause failed on return: `AU4009`.
+    Ensures,
+}
+
+impl AssertKind {
+    pub fn is_assert(&self) -> bool {
+        *self == AssertKind::Assert
+    }
+
+    /// The diagnostic code a failure of this kind reports.
+    pub const fn code(self) -> &'static str {
+        match self {
+            AssertKind::Assert => "AU4001",
+            AssertKind::Requires | AssertKind::Ensures => "AU4009",
+        }
+    }
+
+    /// The word the native runtime receives for this kind.
+    pub const fn word(self) -> i64 {
+        match self {
+            AssertKind::Assert => 0,
+            AssertKind::Requires => 1,
+            AssertKind::Ensures => 2,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -11403,9 +11441,10 @@ fn lower_function_or_initializer(
     } else if let Some(class) = initializer {
         lowerer.initializer_self = true;
         lowerer.emit_initializer_slot(class, return_type);
+        lowerer.lower_contract_checks(function, crate::ast::ContractKind::Requires);
         lowerer.lower_stmts(&function.body);
     } else {
-        lowerer.lower_stmts(&function.body);
+        lowerer.lower_contracted_body(function);
     }
     let default_return = if initializer.is_some() {
         Operand::MovePlace("self".to_string())
@@ -13827,7 +13866,84 @@ impl<'a> Lowerer<'a> {
         self.terminate(Terminator::Goto(break_label));
     }
 
+    /// Lowers a function body with its contract clauses: each `requires`
+    /// is checked on entry, and each `ensures` on every path that returns,
+    /// with `result` naming the returned value.
+    fn lower_contracted_body(&mut self, function: &crate::ast::FunctionDecl) {
+        self.lower_contract_checks(function, crate::ast::ContractKind::Requires);
+        let has_ensures = function
+            .contracts
+            .iter()
+            .any(|clause| clause.kind == crate::ast::ContractKind::Ensures);
+        if !has_ensures {
+            self.lower_stmts(&function.body);
+            return;
+        }
+        let return_type = self.return_type.clone();
+        let return_place = self.new_typed_temp(return_type.clone());
+        let exit = self.new_block("ensures");
+        self.return_redirects.push(ReturnRedirect {
+            label: self.label(exit),
+            return_place: return_place.clone(),
+            cleanup_depth: 0,
+        });
+        self.lower_stmts(&function.body);
+        self.return_redirects.pop();
+        if !self.current_terminated() {
+            // Falling off the end returns `None`.
+            self.emit(Instruction::Assign {
+                target: return_place.clone(),
+                value: Rvalue::Use(default_return_operand(&return_type)),
+            });
+            self.terminate(Terminator::Goto(self.label(exit)));
+        }
+        self.switch_to(exit);
+        self.scoped_names.push(std::collections::HashMap::from([(
+            crate::sema::CONTRACT_RESULT_NAME.to_string(),
+            return_place.clone(),
+        )]));
+        self.lower_contract_checks(function, crate::ast::ContractKind::Ensures);
+        self.scoped_names.pop();
+        let value = self.move_place_for_type(return_place, &return_type);
+        self.terminate(Terminator::Return(value));
+    }
+
+    /// Checks each clause of `kind` in source order.
+    fn lower_contract_checks(
+        &mut self,
+        function: &crate::ast::FunctionDecl,
+        kind: crate::ast::ContractKind,
+    ) {
+        for clause in function
+            .contracts
+            .iter()
+            .filter(|clause| clause.kind == kind)
+        {
+            let check = crate::ast::AssertStmt {
+                condition: clause.condition.clone(),
+                message: Some(Expr {
+                    kind: ExprKind::String(format!(
+                        "`{}` clause failed: `{}`",
+                        kind.keyword(),
+                        clause.text
+                    )),
+                    span: clause.span,
+                }),
+                span: clause.condition.span,
+            };
+            let assert_kind = match kind {
+                crate::ast::ContractKind::Requires => AssertKind::Requires,
+                crate::ast::ContractKind::Ensures => AssertKind::Ensures,
+            };
+            self.lower_check(&check, assert_kind);
+        }
+    }
+
     fn lower_assert(&mut self, assert_stmt: &crate::ast::AssertStmt) {
+        self.lower_check(assert_stmt, AssertKind::Assert);
+    }
+
+    fn lower_check(&mut self, assert_stmt: &crate::ast::AssertStmt, kind: AssertKind) {
         let (condition, pending_captures) = self
             .lower_introspected_assertion_condition(&assert_stmt.condition)
             .unwrap_or_else(|| (self.lower_expr(&assert_stmt.condition), Vec::new()));
@@ -13869,6 +13985,7 @@ impl<'a> Lowerer<'a> {
             message,
             captures,
             span: assert_stmt.span,
+            kind,
         });
 
         self.switch_to(continuation_block);
@@ -17349,6 +17466,7 @@ impl<'a> Lowerer<'a> {
                         )),
                         captures: Vec::new(),
                         span: pattern.span,
+                        kind: AssertKind::Assert,
                     });
                     self.switch_to(current);
                     self.lower_type_pattern_test(
@@ -17580,6 +17698,7 @@ impl<'a> Lowerer<'a> {
             )),
             captures: Vec::new(),
             span: pattern.span,
+            kind: AssertKind::Assert,
         });
         self.switch_to(current);
         let done = self.new_block("match_class_commit_done");
@@ -24531,6 +24650,7 @@ impl<'a> Lowerer<'a> {
                 ))),
                 captures: Vec::new(),
                 span,
+                kind: AssertKind::Assert,
             });
             self.switch_to(done);
         }

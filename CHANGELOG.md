@@ -13,6 +13,13 @@ in this file.
   stops the program with `AU4003`.
 - `min` and `max` accept `str`: two or more strings, or a list, set, or span
   of them. The result is a copy.
+- Functions and methods can declare contracts. `requires` clauses state
+  what a caller must provide and `ensures` clauses state what the function
+  promises, with `result` naming the return value. Both are checked at run
+  time on every call, and a failed clause stops the program with `AU4009`,
+  naming the clause. Conditions must be pure `bool` expressions; an impure or
+  misplaced clause is rejected with `AU2048`. `requires` and `ensures` stay
+  ordinary names everywhere else.
 - **Incompatible:** `ord` and `chr` are now reserved builtin names, so a
   module-level function with either name is rejected with `AU2007`.
 

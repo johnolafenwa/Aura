@@ -1,0 +1,8 @@
+error[AU4009]: `ensures` clause failed: `result > x`
+ --> crates/aura-compiler/tests/fixtures/run-fail/contract_ensures_fails.au:2:13
+  |
+2 |     ensures result > x
+  |             ^
+  = note: left = 2
+  = note: right = 3
+  = note: Aura call chain (innermost first): next_up at 1:1 -> main at 6:1

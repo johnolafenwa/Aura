@@ -297,6 +297,51 @@ pub struct FunctionDecl {
     pub decorators: Vec<Decorator>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<DocString>,
+    /// The `requires` and `ensures` clauses at the top of the body, in
+    /// source order. They are part of the signature, not body statements.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub contracts: Vec<ContractClause>,
+}
+
+/// Which promise a contract clause states.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize)]
+pub enum ContractKind {
+    /// `requires condition`: the caller promises it on entry.
+    Requires,
+    /// `ensures condition`: the function promises it on return.
+    Ensures,
+}
+
+impl ContractKind {
+    pub const fn keyword(self) -> &'static str {
+        match self {
+            ContractKind::Requires => "requires",
+            ContractKind::Ensures => "ensures",
+        }
+    }
+
+    pub fn from_keyword(word: &str) -> Option<Self> {
+        match word {
+            "requires" => Some(ContractKind::Requires),
+            "ensures" => Some(ContractKind::Ensures),
+            _ => None,
+        }
+    }
+}
+
+/// One `requires` or `ensures` line.
+#[derive(Clone, Debug, Serialize)]
+pub struct ContractClause {
+    pub kind: ContractKind,
+    pub condition: Expr,
+    /// The span of the clause keyword.
+    pub span: Span,
+    /// The condition as written, for runtime messages.
+    #[serde(skip)]
+    pub text: String,
+    /// The line the condition ends on.
+    #[serde(skip)]
+    pub end_line: usize,
 }
 
 /// One `@expression` line above a module-level function.

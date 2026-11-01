@@ -5073,3 +5073,74 @@ fn an_impl_without_a_body_is_marked_derived() {
         .collect::<Vec<_>>();
     assert_eq!(impls, vec![("json.Codec", true, 0), ("Show", false, 0)]);
 }
+
+#[test]
+fn contract_clauses_parse_before_the_body_and_keep_their_text() {
+    let module = crate::parser::parse(concat!(
+        "def f(x: int64, xs: list[int64]) -> int64:\n",
+        "    \"\"\"Doc.\"\"\"\n",
+        "    requires x > 0\n",
+        "    requires (x < 10 or\n",
+        "        x == 20)\n",
+        "    requires [x][0] == x\n",
+        "    requires -x < 0\n",
+        "    ensures result >= 0\n",
+        "    requires(x)\n",
+        "    requires[0]\n",
+        "    requires-x\n",
+        "    return x\n",
+        "\n",
+        "class C:\n",
+        "    n: int64\n",
+        "\n",
+        "    def get(self) -> int64:\n",
+        "        ensures result == self.n\n",
+        "\n",
+        "def empty(x: int64):\n",
+        "    requires x > 0\n",
+    ))
+    .expect("contract clauses parse");
+    let Item::Function(function) = &module.items[0] else {
+        panic!("first item is a function");
+    };
+    let kinds = function
+        .contracts
+        .iter()
+        .map(|clause| (clause.kind, clause.text.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        vec![
+            (ContractKind::Requires, "x > 0"),
+            (ContractKind::Requires, "(x < 10 or x == 20)"),
+            (ContractKind::Requires, "[x][0] == x"),
+            (ContractKind::Requires, "-x < 0"),
+            (ContractKind::Ensures, "result >= 0"),
+        ]
+    );
+    // `requires(x)`, `requires[0]`, and `requires-x` after the clauses are
+    // body statements; the last is an ordinary subtraction.
+    assert_eq!(function.body.len(), 4);
+    let Item::Class(class) = &module.items[1] else {
+        panic!("second item is a class");
+    };
+    assert_eq!(class.methods[0].contracts.len(), 1);
+    assert_eq!(
+        class.methods[0].body.len(),
+        1,
+        "a clause-only body gets a `pass`"
+    );
+    let Item::Function(empty) = &module.items[2] else {
+        panic!("third item is a function");
+    };
+    assert_eq!(empty.body.len(), 1);
+    assert_eq!(ContractKind::from_keyword("invariant"), None);
+
+    let misplaced =
+        crate::parser::parse("def f(x: int64):\n    if x > 0:\n        ensures x > 1\n")
+            .expect_err("a clause inside a block is misplaced");
+    assert_eq!(misplaced.code, "AU2048");
+    assert!(misplaced
+        .message
+        .contains("`ensures` clauses must come first"));
+}

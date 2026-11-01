@@ -6774,6 +6774,7 @@ String and format-specification diagnostics are described under
 | `AU2045` | invalid property use | Assignment, compound assignment, a `mut` argument or receiver, `match mut`, a view, or call syntax on a property. | Read the property without parentheses, or bind it to a local and change the local. |
 | `AU2046` | invalid derived implementation | A bodyless `impl` for a trait other than `json.Codec`, for a type from another module, a generic class or enum, or a class with `__init__`. Also a positional enum payload, a field type with no JSON form, or a union whose members a decoder cannot tell apart. | Write the implementation by hand, or change the field to a supported type. See [Derived Codecs](/manual/json#derived-codecs). |
 | `AU2047` | invalid decorator | A decorator on a generic function, on `main`, on a function with a parameter default or a view result, or a decorator line not followed by a module-level `def`. | Remove the decorator, or change the function so a closure can stand in for it. See [Decorators](/manual/functions#decorators). |
+| `AU2048` | invalid contract clause | A `requires` or `ensures` line after the body's first statement, a condition that calls a user function or a method that changes its receiver, `ensures` on `__init__` or on a function with a view result, an `ensures` that reads an `own` parameter, a parameter named `result` beside `ensures`, or a clause on a trait implementation method. | Put clauses first, keep conditions to reads and pure builtins, and see [Contracts](/manual/functions#contracts). |
 | `AU2999` | general compile-time rejection | A rejection that has no narrower public category. | Follow the message. |
 
 **`AU2002` type mismatch.** List `map`, `filter`, and keyed `sort` require the
@@ -7121,6 +7122,7 @@ owner's region.
 | `AU4005` | resource, allocation, or I/O failure | An exceeded size limit, allocation failure, or stack exhaustion. | Stay within the documented limit, or request more stack. |
 | `AU4006` | invalid runtime configuration | An invalid `AURA_WORKERS`, `AURA_BLOCKING_WORKERS`, or `AURA_BLOCKING_QUEUE_CAPACITY` value. | Set the variable to a positive decimal integer, or unset it. |
 | `AU4007` | numeric Array shape or reduction violation | Mismatched Array shapes, or `min`, `max`, or `mean` of an empty Array. | Match the shapes, or check that the Array is not empty. |
+| `AU4009` | contract violated | A `requires` condition was false when the function was called, or an `ensures` condition was false when it returned. | Fix the caller for `requires`, or the function body for `ensures`. The message names the clause. |
 
 Each runtime code's precise causes are listed under
 [Runtime Traps And Backtraces](#runtime-traps-and-backtraces).
@@ -11560,6 +11562,69 @@ A decorator inside a function body, or in a class body other than `@property`, r
 ### Tooling
 
 Hover on a decorated function shows its decorator lines above the signature. `aura doc` lists it as a function, with its decorators and docstring. `aura fmt` keeps decorator lines directly above their definition.
+
+## Contracts
+
+A function can state its rules as `requires` and `ensures` clauses. Aura
+checks them every time the function runs, in `aura run` and in built
+programs.
+
+```aura
+def withdraw(balance: int64, amount: int64) -> int64:
+    """Returns the balance left after taking out `amount`."""
+    requires amount > 0
+    requires amount <= balance
+    ensures result >= 0
+    return balance - amount
+
+def main():
+    print(withdraw(100, 30))  # 70
+```
+
+- `requires condition` is checked on entry, after the arguments are bound.
+  It is the caller's promise.
+- `ensures condition` is checked on every path that returns, after any
+  `with` exits have run. It is the function's promise. Inside `ensures`,
+  `result` names the returned value. A function that returns `None` checks
+  its `ensures` when it falls off the end or reaches `return`.
+- Clauses come after the docstring and before the first other statement,
+  in any mix. They run in source order. A clause later in the body is
+  `AU2048`.
+- A failed clause stops the program with `AU4009`. The message names the
+  clause and its condition, and a comparison reports its two operands as a
+  failed `assert` does:
+
+```text
+error[AU4009]: `requires` clause failed: `amount <= balance`
+ --> bank.au:4:14
+  = note: left = 500
+  = note: right = 100
+```
+
+A condition has type `bool` and must not change program state. It may read
+parameters, `self`, fields, elements, and module constants, use operators
+and comprehensions, and call pure builtins such as `len`, `min`, `max`,
+`sum`, `all`, and `any`, and read-only methods such as `contains`, `find`,
+and `keys`. Calling a user function, or a method that changes its
+receiver, is `AU2048`.
+
+`requires` and `ensures` are keywords only at the start of a clause line.
+Elsewhere they are ordinary names, so `requires = 1` and the call
+`requires(x)` keep their meaning. Write a space before a parenthesis that
+starts a condition: `requires (a or b) and c`.
+
+These forms are not available yet and report `AU2048`:
+
+- `ensures` on `__init__` or on a function with a view result
+- an `ensures` that reads an `own` parameter of a non-Copy type, which the
+  body may have moved
+- a parameter named `result` in a function with `ensures`
+- clauses on the methods of a trait implementation
+
+Loop and class invariants, `decreases`, `old(...)`, and `spec def` helper
+functions are planned next, followed by `aura verify`, which proves clauses
+before the program runs. See the
+[verification design](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/23-verification-design-checkpoint.md).
 
 ## `main`
 

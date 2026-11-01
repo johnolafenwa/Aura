@@ -1,15 +1,15 @@
 use crate::ast::{
     Argument, AssertStmt, AssignStmt, AssignTarget, BinaryOp, BindingPattern, BindingTarget,
     BreakStmt, ClassDecl, ClassPattern, ClassPatternField, CompareLink, CompareOp,
-    ComprehensionClause, ComprehensionOutput, ConstantDecl, ContinueStmt, Decorator,
-    DestructureStmt, DocString, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind,
-    ExprStmt, ExternFunctionDecl, ExternOpaqueClassDecl, FieldDecl, ForStmt, FormatPart,
-    FunctionDecl, FunctionTypeParam, IfBranch, IfStmt, ImplDecl, ImportDecl, ImportKind,
-    ImportName, Item, LambdaCapture, LambdaParam, LiteralPattern, LiteralPatternKind, MapEntryExpr,
-    MatchArm, MatchExprArm, MatchStmt, Module, Param, ParamMode, Pattern, ReceiverKind,
-    RestPattern, ReturnStmt, SequencePattern, Stmt, TraitDecl, TuplePattern, TypeAliasDecl,
-    TypeRef, TypeRefKind, UnaryOp, VariantPattern, ViewKind, ViewReturn, ViewStmt, WhileStmt,
-    WithStmt,
+    ComprehensionClause, ComprehensionOutput, ConstantDecl, ContinueStmt, ContractClause,
+    ContractKind, Decorator, DestructureStmt, DocString, EnumDecl, EnumPayloadFieldDecl,
+    EnumVariantDecl, Expr, ExprKind, ExprStmt, ExternFunctionDecl, ExternOpaqueClassDecl,
+    FieldDecl, ForStmt, FormatPart, FunctionDecl, FunctionTypeParam, IfBranch, IfStmt, ImplDecl,
+    ImportDecl, ImportKind, ImportName, Item, LambdaCapture, LambdaParam, LiteralPattern,
+    LiteralPatternKind, MapEntryExpr, MatchArm, MatchExprArm, MatchStmt, Module, Param, ParamMode,
+    Pattern, ReceiverKind, RestPattern, ReturnStmt, SequencePattern, Stmt, TraitDecl, TuplePattern,
+    TypeAliasDecl, TypeRef, TypeRefKind, UnaryOp, VariantPattern, ViewKind, ViewReturn, ViewStmt,
+    WhileStmt, WithStmt,
 };
 use crate::call::STEPPED_SLICE_BUILTIN;
 use crate::diag::{Diagnostic, Result, Span};
@@ -34,6 +34,18 @@ fn misplaced_decorator_error(span: Span) -> Diagnostic {
         "AU2047",
         span,
         "a decorator must come directly before a module-level function definition",
+    )
+}
+
+/// A `requires` or `ensures` clause after a function's first statement.
+fn misplaced_contract_error(span: Span, kind: ContractKind) -> Diagnostic {
+    Diagnostic::coded_at(
+        "AU2048",
+        span,
+        format!(
+            "`{}` clauses must come first in a function body, after the docstring and before any other statement",
+            kind.keyword()
+        ),
     )
 }
 
@@ -132,7 +144,38 @@ pub fn parse(source: &str) -> Result<Module> {
     let mut module = Parser::new(tokens).parse_module()?;
     check_module_documentation_limit(&module)?;
     record_decorator_text(&mut module, source);
+    record_contract_text(&mut module, source);
     Ok(module)
+}
+
+/// Copies each contract clause's condition as written, joining the lines of
+/// a clause that spans several.
+fn record_contract_text(module: &mut Module, source: &str) {
+    let lines = source.lines().collect::<Vec<_>>();
+    let functions = module.items.iter_mut().flat_map(|item| match item {
+        Item::Function(function) => std::slice::from_mut(function),
+        Item::Class(class) => class.methods.as_mut_slice(),
+        Item::Impl(implementation) => implementation.methods.as_mut_slice(),
+        _ => &mut [],
+    });
+    for function in functions {
+        for clause in &mut function.contracts {
+            let start = clause.span.line.saturating_sub(1);
+            let end = clause.end_line.max(clause.span.line).min(lines.len());
+            let text = lines
+                .get(start..end)
+                .unwrap_or_default()
+                .iter()
+                .map(|line| line.trim())
+                .collect::<Vec<_>>()
+                .join(" ");
+            clause.text = text
+                .strip_prefix(clause.kind.keyword())
+                .unwrap_or(&text)
+                .trim()
+                .to_string();
+        }
+    }
 }
 
 /// Copies each decorator's source text, from its `@` line up to the next
@@ -967,12 +1010,18 @@ impl Parser {
         self.expect_newline()?;
         let previous_view_return = self.current_function_returns_view;
         self.current_function_returns_view = view_return.is_some();
-        let body = self.parse_block_with_docstring();
+        let body = self.parse_function_body();
         self.current_function_returns_view = previous_view_return;
-        let (doc, mut body) = body?;
-        if let (Some(doc), true) = (&doc, body.is_empty()) {
-            // A docstring-only body is a body with no statements.
-            body.push(Stmt::Pass(crate::ast::PassStmt { span: doc.span }));
+        let (doc, contracts, mut body) = body?;
+        if body.is_empty() {
+            // A body of only a docstring or clauses has no statements.
+            if let Some(span) = contracts
+                .last()
+                .map(|clause| clause.span)
+                .or(doc.as_ref().map(|doc| doc.span))
+            {
+                body.push(Stmt::Pass(crate::ast::PassStmt { span }));
+            }
         }
 
         Ok(FunctionDecl {
@@ -989,6 +1038,7 @@ impl Parser {
             property: None,
             decorators: Vec::new(),
             doc,
+            contracts,
         })
     }
 
@@ -1155,6 +1205,7 @@ impl Parser {
             property: None,
             decorators: Vec::new(),
             doc,
+            contracts: Vec::new(),
         })
     }
 
@@ -1403,6 +1454,9 @@ impl Parser {
     }
 
     fn parse_stmt_inner(&mut self) -> Result<Stmt> {
+        if let Some(kind) = self.at_contract_clause() {
+            return Err(misplaced_contract_error(self.current_span(), kind));
+        }
         if self.at_simple(&TokenKind::At) {
             let property = self.parse_property_marker()?;
             return Err(property_target_error(property));
@@ -2128,6 +2182,86 @@ impl Parser {
 
         self.expect_simple(TokenKind::Dedent)?;
         Ok((doc, body))
+    }
+
+    /// Parses a function body: an optional docstring, then the `requires`
+    /// and `ensures` clauses, then the statements.
+    fn parse_function_body(
+        &mut self,
+    ) -> Result<(Option<DocString>, Vec<ContractClause>, Vec<Stmt>)> {
+        self.expect_simple(TokenKind::Indent)?;
+        self.skip_newlines();
+        let doc = self.take_docstring()?;
+        let mut contracts = Vec::new();
+        loop {
+            self.skip_newlines();
+            let Some(kind) = self.at_contract_clause() else {
+                break;
+            };
+            let span = self.bump().span;
+            let condition = self.parse_expr()?;
+            let end_line = self
+                .tokens
+                .get(self.index.saturating_sub(1))
+                .map_or(span.line, |token| token.span.line);
+            self.expect_statement_terminator()?;
+            contracts.push(ContractClause {
+                kind,
+                condition,
+                span,
+                text: String::new(),
+                end_line,
+            });
+        }
+        let mut body = Vec::new();
+        while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
+            if self.at_simple(&TokenKind::Newline) {
+                self.bump();
+                continue;
+            }
+            body.push(self.parse_stmt()?);
+        }
+        self.expect_simple(TokenKind::Dedent)?;
+        Ok((doc, contracts, body))
+    }
+
+    /// The clause a line starting here begins, if it begins one. `requires`
+    /// and `ensures` are keywords only before an expression: `requires = 1`,
+    /// `requires.x`, `requires[0]`, and the call `requires(x)` stay ordinary
+    /// statements. A parenthesis after a space starts a clause.
+    fn at_contract_clause(&self) -> Option<ContractKind> {
+        let TokenKind::Identifier(word) = self.current_kind() else {
+            return None;
+        };
+        let kind = ContractKind::from_keyword(word)?;
+        let keyword = &self.tokens[self.index];
+        let next = self.tokens.get(self.index + 1)?;
+        let starts_expression = match &next.kind {
+            TokenKind::Identifier(_)
+            | TokenKind::IntLiteral(_)
+            | TokenKind::DurationLiteral(_)
+            | TokenKind::FloatLiteral(_)
+            | TokenKind::BoolLiteral(_)
+            | TokenKind::StringLiteral(_)
+            | TokenKind::FStringLiteral(_)
+            | TokenKind::KwNot
+            | TokenKind::KwTry
+            | TokenKind::KwMatch
+            | TokenKind::Minus
+            | TokenKind::LBracket
+            | TokenKind::LBrace => true,
+            // `requires(x)` is a call; `requires (x)` is a clause.
+            TokenKind::LParen => {
+                next.span.line != keyword.span.line
+                    || next.span.column > keyword.span.column + word.len()
+            }
+            _ => false,
+        };
+        // `requires [x]` and `requires -x` read as clauses only with a space.
+        let spaced = next.span.column > keyword.span.column + word.len();
+        let starts_expression = starts_expression
+            && (spaced || !matches!(next.kind, TokenKind::LBracket | TokenKind::Minus));
+        starts_expression.then_some(kind)
     }
 
     /// True when the current token is a plain triple-quoted string that is a

@@ -1,0 +1,5 @@
+error[AU2048]: `requires` clauses must come first in a function body, after the docstring and before any other statement
+ --> crates/aura-compiler/tests/fixtures/parse-fail/contract_misplaced.au:3:5
+  |
+3 |     requires x > 0
+  |     ^

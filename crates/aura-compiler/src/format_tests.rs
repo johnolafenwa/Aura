@@ -473,3 +473,11 @@ fn decorators_attach_to_their_definition() {
         "x = 1\n\n\n@tag(\"outer\")\n# kept\n@traced\ndef run(n: int64) -> int64:\n    return n\n\n\nclass Grid:\n    width: int64\n\n    @property\n    def area(self) -> int64:\n        return self.width\n",
     );
 }
+
+#[test]
+fn contract_clauses_keep_the_space_after_their_keyword() {
+    assert_formats(
+        "def f(a: bool, b: bool):\n    requires (a or b) and a\n    requires [1][0] == 1\n    requires -1 < 0\n    ensures   a==a\n    requires(a)\n    print(a)\n",
+        "def f(a: bool, b: bool):\n    requires (a or b) and a\n    requires [1][0] == 1\n    requires -1 < 0\n    ensures a == a\n    requires(a)\n    print(a)\n",
+    );
+}
