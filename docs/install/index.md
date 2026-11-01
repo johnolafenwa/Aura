@@ -75,5 +75,5 @@ Each platform guide gives the exact commands.
 
 ## Next Step
 
-Continue with [Getting Aura Running](/learn/install-and-run) to create a
-source file, run it, check it, and build a native executable.
+Continue with [Hello, world](/book/ch01-02-hello-world) in the book to
+write a program, run it, and build a native executable.

@@ -121,4 +121,4 @@ Run `xcode-select -p`. If it fails, install or repair the Xcode command-line
 tools before you use `aura build` or `--backend direct`.
 
 Continue with the [VS Code extension guide](/install/vscode) or
-[Getting Aura Running](/learn/install-and-run).
+[Hello, world](/book/ch01-02-hello-world).

@@ -7,6 +7,10 @@ in this file.
 
 ## Unreleased
 
+- Documentation: *The Aura Programming Language*, a new book at `/book/`,
+  replaces the Learn track and the `tutorials/` directory. Old `/learn/`
+  links no longer resolve; start at `/book/`.
+
 ## VS Code extension 0.11.0 — 2026-10-31
 
 - Debugs Aura programs. A new `aura` debug type, a **Debug File** command,

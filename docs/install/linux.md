@@ -136,4 +136,4 @@ sudo apt install -y libstdc++6 zlib1g libzstd1
 ```
 
 Continue with the [VS Code extension guide](/install/vscode) or
-[Getting Aura Running](/learn/install-and-run).
+[Hello, world](/book/ch01-02-hello-world).

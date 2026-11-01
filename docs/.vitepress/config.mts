@@ -46,11 +46,10 @@ export default defineConfig({
     nav: [
       { text: 'Install', link: '/install/' },
       { text: 'Book', link: '/book/' },
-      { text: 'Learn', link: '/learn/' },
       { text: 'Manual', link: '/manual/' },
       { text: 'Downloads', link: '/downloads' },
       { text: 'Why Aura', link: '/positioning' },
-      { text: 'Examples', link: '/learn/case-studies/log-analyzer' },
+      { text: 'Examples', link: 'https://github.com/johnolafenwa/Aura/tree/main/examples' },
       { text: 'GitHub', link: 'https://github.com/johnolafenwa/Aura' }
     ],
     sidebar: {
@@ -65,37 +64,6 @@ export default defineConfig({
             { text: 'Windows With WSL', link: '/install/windows-wsl' },
             { text: 'VS Code Extension', link: '/install/vscode' },
             { text: 'Release Downloads', link: '/downloads' }
-          ]
-        }
-      ],
-      '/learn/': [
-        {
-          text: 'Learn Aura',
-          items: [
-            { text: 'Overview', link: '/learn/' },
-            { text: 'Install And Run', link: '/learn/install-and-run' },
-            { text: 'Aura For Python Developers', link: '/learn/from-python' },
-            { text: 'Small Programs', link: '/learn/small-programs' },
-            { text: 'Data Modeling', link: '/learn/data-modeling' },
-            { text: 'Collections', link: '/learn/collections' },
-            { text: 'Converting Between Types', link: '/learn/casting' },
-            { text: 'Ownership And Borrowing', link: '/learn/ownership-and-borrowing' },
-            { text: 'Results And Optional Values', link: '/learn/results-and-options' },
-            { text: 'Testing', link: '/learn/testing' },
-            { text: 'Modules And Packages', link: '/learn/modules-and-packages' },
-            { text: 'Concurrency', link: '/learn/concurrency' },
-            { text: 'Files, Processes, Networking', link: '/learn/io-process-networking' },
-            { text: 'Native Builds', link: '/learn/native-builds' },
-            { text: 'Calling C With FFI', link: '/learn/ffi' }
-          ]
-        },
-        {
-          text: 'Use Case Lessons',
-          items: [
-            { text: 'Log Analyzer', link: '/learn/case-studies/log-analyzer' },
-            { text: 'Queue Worker Pool', link: '/learn/case-studies/queue-worker-pool' },
-            { text: 'Supervised Process Runner', link: '/learn/case-studies/process-supervisor' },
-            { text: 'Typed Tool Agent', link: '/learn/case-studies/tool-agent' }
           ]
         }
       ],
@@ -148,14 +116,14 @@ export default defineConfig({
       ],
       '/': [
         {
-          text: 'Aura Book',
+          text: 'Aura',
           items: [
             { text: 'Home', link: '/' },
             { text: 'Install', link: '/install/' },
             { text: 'Why Aura', link: '/positioning' },
             { text: 'Downloads', link: '/downloads' },
             { text: 'Release Process', link: '/release-process' },
-            { text: 'Learn', link: '/learn/' },
+            { text: 'Book', link: '/book/' },
             { text: 'Manual', link: '/manual/' }
           ]
         }

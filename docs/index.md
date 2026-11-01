@@ -11,7 +11,7 @@ hero:
   actions:
     - theme: brand
       text: Start Learning
-      link: /learn/
+      link: /book/
     - theme: alt
       text: Read The Manual
       link: /manual/
@@ -116,7 +116,8 @@ aura run program.au
 aura build -o ./program program.au
 ```
 
-[Learn Aura](/learn/) starts with runnable scripts and works up to tasks,
-typed failures, and I/O. [The Manual](/manual/) is the normative reference. It
+[The Aura Programming Language](/book/) is the book. It starts with a
+first program and works up to tasks, typed failures, and I/O, building real
+tools along the way. [The Manual](/manual/) is the normative reference. It
 covers the grammar, ownership rules, execution model, APIs, diagnostics, and
 limits.

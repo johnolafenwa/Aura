@@ -66,10 +66,10 @@ explains the project direction.
 
 ## Documentation
 
-- [The Aura book](docs/index.md): the guided Learn track plus the normative
-  language and API reference.
-- [Tutorials](tutorials/README.md) and [examples](examples/README.md): the
-  tutorial track and the categorized library of runnable programs.
+- [The Aura Programming Language](docs/book/index.md): the book. It teaches
+  Aura from installation to a concurrent job runner, one program at a time.
+- [Examples](examples/README.md): the categorized library of runnable
+  programs.
 - [Language Specification](docs/manual/language-specification.md) and
   [complete grammar](docs/manual/grammar.md): the implemented contract, together
   with the rest of the [Manual](docs/manual/index.md).
@@ -90,8 +90,7 @@ explains the project direction.
 | `tools/` | Editor integrations and other developer tools |
 | `package.json` | npm workspace manifest for the repository's tools |
 | `examples/` | Categorized sample Aura programs |
-| `tutorials/` | Markdown tutorials for the implemented language |
-| `docs/` | VitePress book, language proposal, and supporting documents |
+| `docs/` | VitePress site: the book (`docs/book/`), the Manual, install guides, and supporting documents |
 | `architecture_docs/` | Architecture guides and component deep dives for the current implementation |
 | `work/` | Task board and implementation notes |
 

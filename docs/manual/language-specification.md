@@ -63,7 +63,7 @@ Any behavior change MUST update these in the same pass:
 - the relevant reference page
 - conformance tests
 - examples
-- tutorials
+- the book
 - the work record
 
 The repository commit identifies the precise revision of the specification.

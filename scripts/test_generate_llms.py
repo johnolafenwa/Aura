@@ -28,10 +28,6 @@ class GenerateLlmsTests(unittest.TestCase):
                 "docs/book/ch01-01-install.md": "# Install\n\nFirst section.\n",
                 "docs/book/ch01-00-start.md": "# Start\n\nFirst chapter.\n",
                 "docs/book/foreword.md": "# Foreword\n\nWhy.\n",
-                "docs/learn/index.md": "# Learn\n\nLearning entry.\n",
-                "docs/learn/start.md": "# Start\n\nStart here.\n",
-                "tutorials/02-next.md": "# Next\n\nSecond tutorial.\n",
-                "tutorials/01-first.md": "# First\n\nFirst tutorial.\n",
                 "work/history.md": "# Historical secret\n",
                 "architecture_docs/decisions/0001-old.md": "# Old ADR\n",
             }.items():
@@ -56,10 +52,6 @@ class GenerateLlmsTests(unittest.TestCase):
                     "docs/book/ch01-01-install.md",
                     "docs/book/ch02-00-project.md",
                     "docs/book/appendix-01-keywords.md",
-                    "docs/learn/index.md",
-                    "docs/learn/start.md",
-                    "tutorials/01-first.md",
-                    "tutorials/02-next.md",
                 ],
             )
 

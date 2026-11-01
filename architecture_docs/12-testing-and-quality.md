@@ -124,7 +124,7 @@ That is useful because compiler work often spans:
 
 - [`AGENTS.md`](../AGENTS.md)
 - [`crates/aura-compiler/README.md`](../crates/aura-compiler/README.md)
-- [`tutorials/README.md`](../tutorials/README.md)
+- [`docs/book/STYLE.md`](../docs/book/STYLE.md)
 - [`examples/README.md`](../examples/README.md)
 - [`package.json`](../package.json)
 

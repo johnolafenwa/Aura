@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This repository is a monorepo for the Aura language, compiler, examples, tutorials, and editor tooling.
+This repository is a monorepo for the Aura language, compiler, examples, the book, and editor tooling.
 
 The default engineering mode for this repo is test-first development.
 
@@ -11,9 +11,9 @@ Before implementing a new feature or fixing a bug:
 1. add or update a failing test
 2. implement the change
 3. run the relevant verification commands
-4. update examples, tutorials, and work logs when the user-facing surface changes
+4. update examples, the book, and work logs when the user-facing surface changes
 
-Do not treat examples and tutorials as passive documentation. They are part of the maintained surface of the project.
+Do not treat examples and the book as passive documentation. They are part of the maintained surface of the project.
 
 ## Security-Sensitive Agent Delegation
 
@@ -72,7 +72,7 @@ If a language or tooling behavior changes, update these in the same pass when re
 - compiler tests
 - language-server tests
 - examples under `examples/`
-- tutorials under `tutorials/`
+- chapters of the book under `docs/book/`
 - package or root README files
 - `work/task-board.md`
 - a dated note under `work/`
@@ -205,11 +205,11 @@ an example, and move on.
   such as a diagnostic code, a signature, a default, or a limit, keep it
   exactly.
 
-## Tutorials And Examples
+## The Book And Examples
 
-The `tutorials/` directory should track the implemented subset of Aura, not just the proposal.
+The book under `docs/book/` should track the implemented subset of Aura, not just the proposal. Write and edit it by `docs/book/STYLE.md`.
 
-The `examples/` directory should stay categorized, runnable, and aligned with tutorial chapters.
+The `examples/` directory should stay categorized and runnable.
 
 If a feature is not implemented in the compiler, do not teach it as if it exists.
 

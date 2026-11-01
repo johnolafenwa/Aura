@@ -1,7 +1,8 @@
 # Aura Examples
 
 This directory holds runnable Aura programs, grouped by topic. They serve as
-quick references and as a companion to the chapters in `tutorials/`.
+quick references and as a companion to the chapters of the book in
+`docs/book/`.
 
 Every table lists the file, what it shows, and what it prints. Run any example
 from the repository root with `cargo run -p aura -- run <path>`. See

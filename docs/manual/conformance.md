@@ -134,7 +134,7 @@ The parity matrix runs every eligible runtime fixture through both paths. It com
 
 ## Documentation Conformance
 
-The build does not execute or hash-check the examples in the Manual or the tutorials. The evidence for a rule is the compiler fixture, regression test, or maintained example listed in the [Executable Reference Map](#executable-reference-map). The documentation build checks links and rendering.
+The build does not execute or hash-check the examples in the Manual or the book. The evidence for a rule is the compiler fixture, regression test, or maintained example listed in the [Executable Reference Map](#executable-reference-map). The documentation build checks links and rendering.
 
 A Manual fence label records the example's intended outcome: `aura check-pass`, `aura check-fail:<code>`, or `aura fragment`. A `python` fence means Python and is never Aura.
 

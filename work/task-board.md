@@ -7,8 +7,8 @@ Last updated: 2026-11-01
 - Target: docs that read like The Rust Programming Language book (John,
   2026-11-01). The new book is in `docs/book/`; details are in
   `2026-11-01-aura-book.md`.
-- Next: retire `docs/learn/` and `tutorials/`, and link the book from the
-  home page, README and install pages.
+- The book replaces `docs/learn/` and `tutorials/`; the home page,
+  README, install pages and llms.txt point at it.
 
 ## Beat Python on the last slow benchmarks (in progress)
 
