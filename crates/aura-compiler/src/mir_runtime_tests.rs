@@ -4501,7 +4501,7 @@ fn assert_result_err(value: Value) {
 }
 
 fn assert_process_invalid_input(value: Value) {
-    let mut io_payloads = enum_payloads(value, "Error", "Io");
+    let mut io_payloads = enum_payloads(value, "process.Error", "Io");
     assert_eq!(io_payloads.len(), 1);
     assert!(enum_payloads(io_payloads.remove(0), "io.Error", "InvalidInput").is_empty());
 }
@@ -6826,7 +6826,7 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
             .expect_err("an explicit negative process timeout must not mean omitted");
     assert_eq!(
         negative_process_timeout.render(),
-        "Error.Io(io.Error.InvalidInput)"
+        "process.Error.Io(io.Error.InvalidInput)"
     );
     assert_eq!(
         super::expect_process_optional_timeout(&Value::Duration(10_000_000), "timeout")
@@ -6838,7 +6838,7 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
             .expect_err("process timeout helper should reject oversized durations");
     assert_eq!(
         process_timeout_range_error.render(),
-        "Error.Io(io.Error.InvalidInput)"
+        "process.Error.Io(io.Error.InvalidInput)"
     );
     let process_timeout_type_error = super::expect_process_optional_timeout(
         &Value::String("soon".to_string().into()),
@@ -6847,7 +6847,7 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
     .expect_err("process timeout helper should reject strings");
     assert_eq!(
         process_timeout_type_error.render(),
-        "Error.Io(io.Error.InvalidInput)"
+        "process.Error.Io(io.Error.InvalidInput)"
     );
 
     assert_eq!(
@@ -6859,14 +6859,14 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
         .expect_err("negative durations should be rejected");
     assert_eq!(
         negative_duration_error.render(),
-        "Error.Io(io.Error.InvalidInput)"
+        "process.Error.Io(io.Error.InvalidInput)"
     );
     let duration_type_error =
         super::expect_duration_value(&Value::String("soon".to_string().into()), "timeout")
             .expect_err("duration helper should reject strings");
     assert_eq!(
         duration_type_error.render(),
-        "Error.Io(io.Error.InvalidInput)"
+        "process.Error.Io(io.Error.InvalidInput)"
     );
 
     assert_eq!(
@@ -11173,7 +11173,7 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
     )
     .expect("process.start should return a Result for empty commands");
     let start_error = enum_payloads(start_no_command, "Result", "Err").remove(0);
-    enum_payloads(start_error, "Error", "NoCommand");
+    enum_payloads(start_error, "process.Error", "NoCommand");
 
     let child = result_ok_payload(
         call_name(
@@ -12057,7 +12057,7 @@ fn mir_runtime_process_run_builtin_captures_stdio_under_scheduler() {
 fn mir_runtime_process_builtins_cover_spawn_timeout_and_cancelled_edges() {
     fn expect_process_error_variant(value: Value, variant_name: &str) {
         let error = enum_payloads(value, "Result", "Err").remove(0);
-        enum_payloads(error, "Error", variant_name);
+        enum_payloads(error, "process.Error", variant_name);
     }
 
     fn install_process_env(runtime: &mut MirRuntime, env: &mut Env, command: &[&str]) {
