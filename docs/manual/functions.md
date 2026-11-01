@@ -521,14 +521,11 @@ Hover on a decorated function shows its decorator lines above the signature. `au
 
 ## Contracts
 
-A function can state its rules as `requires` and `ensures` clauses. Aura
-checks them every time the function runs, in `aura run` and in built
-programs.
+A function can state its rules as `requires` and `ensures` clauses at the
+top of its body:
 
 ```aura
 def withdraw(balance: int64, amount: int64) -> int64:
-    """Returns the balance left after taking out `amount`."""
-    requires amount > 0
     requires amount <= balance
     ensures result >= 0
     return balance - amount
@@ -538,184 +535,9 @@ def main():
     print(withdraw(100, 30))  # 70
 ```
 
-- `requires condition` is checked on entry, after the arguments are bound.
-  It is the caller's promise.
-- `ensures condition` is checked on every path that returns, after any
-  `with` exits have run. It is the function's promise. Inside `ensures`,
-  `result` names the returned value. A function that returns `None` checks
-  its `ensures` when it falls off the end or reaches `return`.
-- Clauses come after the docstring and before the first other statement,
-  in any mix. They run in source order. A clause later in the body is
-  `AU2048`.
-- A failed clause stops the program with `AU4009`. The message names the
-  clause and its condition, and a comparison reports its two operands as a
-  failed `assert` does:
-
-```text
-error[AU4009]: `requires` clause failed: `amount <= balance`
- --> bank.au:4:14
-  = note: left = 500
-  = note: right = 100
-```
-
-A condition has type `bool` and must not change program state. It may read
-parameters, `self`, fields, elements, and module constants, use operators
-and comprehensions, and call pure builtins such as `len`, `min`, `max`,
-`sum`, `all`, and `any`, and read-only methods such as `contains`, `find`,
-and `keys` on builtin collections and strings. Calling a user function, or
-any method of a user class, enum, or type parameter, is `AU2048`.
-
-`requires`, `ensures`, `invariant`, and `decreases` are keywords only at
-the start of a clause line.
-Elsewhere they are ordinary names, so `requires = 1` and the call
-`requires(x)` keep their meaning. Write a space before a parenthesis that
-starts a condition: `requires (a or b) and c`.
-
-### `old`, quantifiers, and `spec def`
-
-Inside `ensures`, `old(expr)` is the value `expr` had on entry, after the
-`requires` checks. `expr` reads a parameter or `self`, or a field, element,
-or slice of one. The function keeps a copy, so `expr` must have a Copy type
-or be a `str`, list, dict, set, or `Array`.
-
-`forall(x in collection, condition)` is true when `condition` holds for
-every element, and `exists(x in collection, condition)` when it holds for
-at least one. The binding may be a tuple, as in `forall((i, x) in
-enumerate(xs), ...)`, and the collection may be a `range`.
-
-A `spec def` is a helper for conditions. Its body is one `return` of a
-condition-style expression, it takes no `mut` parameters, and it may call
-other `spec def` functions, itself included. Only contract clauses and
-other `spec def` bodies may call or name it.
-
-```aura
-spec def is_sorted(xs: list[int64]) -> bool:
-    return forall(i in range(len(xs) - 1), xs[i] <= xs[i + 1])
-
-
-def insert_sorted(xs: mut list[int64], x: int64):
-    requires is_sorted(xs)
-    ensures is_sorted(xs)
-    ensures len(xs) == len(old(xs)) + 1
-    ensures exists(y in xs, y == x)
-    mut i = len(xs)
-    xs.append(x)
-    while i > 0 and xs[i - 1] > x:
-        invariant 0 <= i and i < len(xs)
-        decreases i
-        previous = xs[i - 1]
-        xs[i] = previous
-        i -= 1
-    xs[i] = x
-
-
-def main():
-    mut xs = [1, 3, 5]
-    insert_sorted(xs, 4)
-    print(xs)  # [1, 3, 4, 5]
-```
-
-`old`, `forall`, and `exists` are special only inside clauses and `spec def`
-bodies, and `spec` is a keyword only before `def`.
-
-### Loop invariants and `decreases`
-
-A loop can state what stays true while it runs, with `invariant` clauses at
-the top of its body. A `while` loop can also state why it ends, with one
-`decreases` clause.
-
-```aura
-def find(xs: list[int64], key: int64) -> int64:
-    """Index of `key` in sorted `xs`, or -1."""
-    mut lo = 0
-    mut hi = len(xs)
-    while lo < hi:
-        invariant 0 <= lo and lo <= hi and hi <= len(xs)
-        decreases hi - lo
-        mid = lo + (hi - lo) // 2
-        if xs[mid] < key:
-            lo = mid + 1
-        elif xs[mid] > key:
-            hi = mid
-        else:
-            return mid
-    return -1
-
-
-def total(xs: list[int64]) -> int64:
-    mut acc = 0
-    for i, x in enumerate(xs):
-        invariant acc == sum(xs[0:i])
-        acc += x
-    return acc
-
-
-def main():
-    print(find([1, 3, 5, 7], 5))  # 2
-    print(total([1, 2, 3]))  # 6
-```
-
-- A `while` invariant is checked before every test of the condition: on
-  entry, after every iteration (including one that ends in `continue`),
-  and when the condition ends the loop. A `break` leaves without a check.
-- A `for` invariant is checked at the start of every iteration, after the
-  loop target is bound, so it can read the target.
-- `decreases measure` takes an `int64` measure. It is checked each time
-  the body starts: the measure must be at least 0, and smaller than it was
-  the previous time. A loop that keeps both rules must end. A `for` loop
-  always ends, so it takes no `decreases`.
-- Loop clauses come first in the loop body, follow the same purity rules
-  as function clauses, and fail with `AU4009`.
-
-### Class invariants
-
-A class can state what is true of every one of its objects, with
-`invariant` lines in its body. Inside them, `self` names the object.
-
-```aura
-class Account:
-    balance: int64
-    limit: int64 = 1000
-    invariant self.balance >= 0
-    invariant self.balance <= self.limit
-
-    public def deposit(mut self, amount: int64):
-        requires amount > 0
-        self.balance += amount
-
-
-def main():
-    mut account = Account(balance=10)
-    account.deposit(5)
-    print(account.balance)  # 15
-```
-
-The invariants are checked:
-
-- after every construction, by a field call such as `Account(balance=10)`
-  or by `__init__`, in whichever module builds the object, and
-- on entry to and on every return from each `public` method that takes
-  `mut self`, after the method's own `requires` and `ensures` checks.
-
-Methods that are not `public`, and methods that only read `self`, run
-without checks, so a private helper may pass through a state that breaks
-an invariant as long as the public method that calls it restores it. Code
-in the class's own module that assigns a field directly is not checked
-either. Objects that `json.decode` builds are not checked yet.
-
-The method name `__invariant__` is reserved for the check.
-
-These forms are not available yet and report `AU2048`:
-
-- `ensures` on `__init__` or on a function with a view result
-- an `ensures` that reads an `own` parameter of a non-Copy type, which the
-  body may have moved
-- a parameter named `result` in a function with `ensures`
-- clauses on the methods of a trait implementation
-
-`spec def` methods and contracts on trait methods are planned next, followed by `aura verify`, which proves clauses
-before the program runs. See the
-[verification design](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/23-verification-design-checkpoint.md).
+Aura checks them every time the function runs. See
+[Contracts](/manual/contracts) for the clauses, loop and class invariants,
+`old`, quantifiers, and `spec def`.
 
 ## `main`
 

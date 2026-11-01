@@ -195,7 +195,7 @@ An imported declaration keeps its defining module's identity for private-access 
 
 A class body may declare `invariant` clauses that every object must keep.
 They are checked after construction and around each `public` method that
-takes `mut self`; see [Class invariants](/manual/functions#class-invariants).
+takes `mut self`; see [Class Invariants](/manual/contracts#class-invariants).
 
 ## Methods And Receivers
 

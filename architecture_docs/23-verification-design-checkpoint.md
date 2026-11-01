@@ -259,8 +259,9 @@ builtin type. V1c adds `old(expr)` (the parser replaces each call with a
 hidden name; the function copies the value after its entry checks),
 `forall`/`exists` (rewritten to `all`/`any` over a list comprehension), and
 module-level `spec def` helpers (one pure `return`, no `mut` parameters,
-usable only in clauses and other spec bodies). V1d moves the material into
-its own manual page.
+usable only in clauses and other spec bodies). V1d gives contracts their
+own manual page, `docs/manual/contracts.md`. V1 is complete; `ghost`
+locals, `spec def` methods, and trait-method contracts move to V2 and V3.
 
 V1 needs each stage's full local gates, coverage floors, and interpreter and
 native parity, like every other batch. V1 also adds a fixture family of

@@ -31,7 +31,8 @@ in this file.
 - Contract conditions can use `old(expr)` in `ensures` for a parameter's
   value on entry, `forall(x in xs, condition)` and `exists(...)`, and
   `spec def` helper functions, which only contracts and other `spec def`
-  bodies may call.
+  bodies may call. The new [Contracts](docs/manual/contracts.md) manual page
+  covers all of it.
 - **Incompatible:** `ord` and `chr` are now reserved builtin names, so a
   module-level function with either name is rejected with `AU2007`.
 
