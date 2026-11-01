@@ -5293,6 +5293,26 @@ impl MirRuntime {
             return evaluate_divmod_builtin(args, env);
         }
 
+        if name == "ord" {
+            let values = evaluate_named_args(args, env)?;
+            let bound = bind_builtin_args(&["text"], values)?;
+            return match &bound[0].value {
+                Value::String(text) => {
+                    Ok(Value::Int(IntegerValue::from_i64(text_methods::ord(text)?)))
+                }
+                other => Err(Diagnostic::new(format!(
+                    "`ord(...)` expects `str`, found `{}`",
+                    other.render()
+                ))),
+            };
+        }
+
+        if name == "chr" {
+            let values = evaluate_named_args(args, env)?;
+            let bound = bind_builtin_args(&["code"], values)?;
+            return text_methods::chr(expect_i64_value(&bound[0].value, "chr(...)")?);
+        }
+
         if name == "parse_int32" {
             let values = evaluate_named_args(args, env)?;
             let bound = bind_builtin_args(&["text"], values)?;
@@ -7756,7 +7776,7 @@ impl MirRuntime {
                 }
                 Ok(Value::String(text.trim().to_string().into()))
             }
-            "trim_start" | "trim_end" | "split_once" | "rsplit_once" | "lines"
+            "trim_start" | "trim_end" | "split_once" | "rsplit_once" | "lines" | "chars"
             | "split_whitespace" | "find" | "count" | "repeat" => {
                 let parameters: &[&str] = match field {
                     "split_once" | "rsplit_once" => &["separator"],

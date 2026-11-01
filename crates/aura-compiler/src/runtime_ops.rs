@@ -580,6 +580,7 @@ str_ops! {
         Find => (StringFind, StringTextMethod, &[6], 1),
         Count => (StringCount, StringTextMethod, &[7], 1),
         Repeat => (StringRepeat, StringTextMethod, &[8], 1),
+        Chars => (StringChars, StringTextMethod, &[9], 2),
     }
     private {
         // `text[a:b]`.
@@ -604,8 +605,10 @@ impl StrOp {
             Split => Type::Named("list".to_string(), vec![text()]),
             Replace | ToLower | ToUpper | Trim | Join => text(),
             StripPrefix | StripSuffix => optional_type(text()),
-            TrimStart | TrimEnd | SplitOnce | RsplitOnce | Lines | SplitWhitespace | Find
-            | Count | Repeat => return text_convenience_result_type(self.builtin_member()?.name()),
+            TrimStart | TrimEnd | SplitOnce | RsplitOnce | Lines | Chars | SplitWhitespace
+            | Find | Count | Repeat => {
+                return text_convenience_result_type(self.builtin_member()?.name())
+            }
             Slice | SliceStep => text(),
         })
     }
@@ -2140,6 +2143,8 @@ function_ops! {
         ParseInt32 => ("parse_int32", ParseInt32),
         ParseInt64 => ("parse_int64", ParseInt64),
         ParseFloat64 => ("parse_float64", ParseFloat64),
+        Ord => ("ord", StringOrd),
+        Chr => ("chr", StringChr),
         MonotonicTimeMs => ("sys::monotonic_time_ms", MonotonicTimeMs),
         IoWrite => ("io::write", IoWrite),
         IoFlush => ("io::flush", IoFlush),
@@ -2381,6 +2386,8 @@ impl FunctionOp {
             ParseInt32 => parsed("int32"),
             ParseInt64 => parsed("int64"),
             ParseFloat64 => parsed("float64"),
+            Ord => Type::named("int64"),
+            Chr => Type::named("str"),
             ArrayZeros | ArrayFull | ArrayFromList | ListWithCapacity | DictWithCapacity
             | SetWithCapacity | ListEmpty | DictEmpty | SetEmpty | QueueNew => return None,
             _ => self.module_metadata()?.return_type.clone(),

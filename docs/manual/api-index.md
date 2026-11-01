@@ -22,8 +22,8 @@ message evaluation, `AU4001`, cleanup, and matching behavior across backends.
 | `wait_any` | `wait_any(tasks: list[Task[T]], timeout: Duration = ...) -> WaitAny[T]` | Waits for the first task outcome. When `T` is non-repeatable, it consumes the list and abandons the rights of the tasks it does not choose. `wait_any([])` returns `TimedOut` immediately. |
 | `wait_all` | `wait_all(tasks: list[Task[T]], timeout: Duration = ...) -> WaitAll[T]` | Waits for all tasks, the first task error, the timeout, or cancellation. When `T` is non-repeatable, it consumes the list. |
 | `abs` | `abs(value: number) -> number` | Absolute value of an integer or a float. |
-| `min` | `min(left: number, right: number, ...) -> number`; `min(values: list[T]\|set[T]\|Span[T]\|Range\|Array[T]) -> T` | The smallest of two or more values of one numeric type, or the smallest element of a collection. An empty list, set, span, or Range is `AU4001`. |
-| `max` | `max(left: number, right: number, ...) -> number`; `max(values: list[T]\|set[T]\|Span[T]\|Range\|Array[T]) -> T` | The largest of two or more values of one numeric type, or the largest element of a collection. An empty list, set, span, or Range is `AU4001`. |
+| `min` | `min(left: T, right: T, ...) -> T` for a number or `str`; `min(values: list[T]\|set[T]\|Span[T]\|Range\|Array[T]) -> T` | The smallest of two or more values of one numeric type or of `str`, or the smallest element of a collection. A `str` result is a copy. An empty list, set, span, or Range is `AU4001`. |
+| `max` | `max(left: T, right: T, ...) -> T` for a number or `str`; `max(values: list[T]\|set[T]\|Span[T]\|Range\|Array[T]) -> T` | The largest of two or more values of one numeric type or of `str`, or the largest element of a collection. A `str` result is a copy. An empty list, set, span, or Range is `AU4001`. |
 | `sum` | `sum(values: list[T]\|set[T]\|Span[T]\|Range\|Array[T]) -> T` | Adds the elements left to right with checked arithmetic. An empty collection gives zero. |
 | `any` | `any(values: list[bool]\|set[bool]\|Span[bool]) -> bool` | Whether some element is `true`. Stops at the first `true`. |
 | `all` | `all(values: list[bool]\|set[bool]\|Span[bool]) -> bool` | Whether every element is `true`. Stops at the first `false`. |
@@ -36,6 +36,8 @@ message evaluation, `AU4001`, cleanup, and matching behavior across backends.
 | `parse_int32` | `parse_int32(text: str) -> Result[int32, str]` | Parses a signed 32-bit integer. |
 | `parse_int64` | `parse_int64(text: str) -> Result[int64, str]` | Parses a signed 64-bit integer. |
 | `parse_float64` | `parse_float64(text: str) -> Result[float64, str]` | Parses a 64-bit float. |
+| `ord` | `ord(text: str) -> int64` | The Unicode scalar value of a one-character string. Any other length stops the program with `AU4003`. |
+| `chr` | `chr(code: int64) -> str` | The one-character string for a Unicode scalar value. A surrogate, negative, or too-large code stops the program with `AU4003`. |
 | `len` | `len(value: str\|list[T]\|dict[K, V]\|set[T]\|Array[T]) -> int64` | Returns the same `int64` as the value's own `len()` method. |
 | `str` | `str(value) -> str` | Renders `value` exactly as `print` and f-string interpolation do. |
 
@@ -93,6 +95,7 @@ safety boundary, diagnostics, and backend rules.
 | `str.rsplit_once` | `rsplit_once(separator: str) -> (str, str) \| None` | Splits at the last occurrence of `separator`. Returns `None` when it is absent. An empty `separator` traps with `AU4003`. |
 | `str.lines` | `lines() -> list[str]` | Splits at each `\n` and removes one `\r` before each `\n`. A final line terminator adds no empty line. An empty string has no lines. |
 | `str.split_whitespace` | `split_whitespace() -> list[str]` | Splits on runs of Unicode whitespace and drops empty parts. |
+| `str.chars` | `chars() -> list[str]` | Each Unicode scalar value as a one-character string, in order. An empty string gives an empty list. |
 | `str.find` | `find(text: str) -> int64 \| None` | Index of the first occurrence of `text`, counted in Unicode scalar values. O(n). Returns `None` when it is absent. An empty `text` returns `0`. |
 | `str.count` | `count(text: str) -> int64` | Number of non-overlapping occurrences of `text`. An empty `text` traps with `AU4003`. |
 | `str.repeat` | `repeat(count: int64) -> str` | Concatenates `count` copies. A negative `count` traps with `AU4003`. A result above the 64 MiB string limit traps with `AU4005` before it allocates. |

@@ -370,6 +370,7 @@ const SLICE_STEP_PARAMS: [BuiltinParam; 4] = [
 const SQRT_PARAMS: [BuiltinParam; 1] = [builtin_param!(required, "value", ReceiverKind::Borrow)];
 const PARSE_TEXT_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "text", ReceiverKind::Borrow)];
+const CHR_PARAMS: [BuiltinParam; 1] = [builtin_param!(required, "code", ReceiverKind::Borrow)];
 const RNG_SEED_PARAMS: [BuiltinParam; 1] = [builtin_param!(required, "seed", ReceiverKind::Borrow)];
 const SLEEP_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "duration", ReceiverKind::Borrow)];
@@ -555,6 +556,8 @@ pub enum BuiltinFunction {
     ParseInt32,
     ParseInt64,
     ParseFloat64,
+    Ord,
+    Chr,
     Len,
     Str,
     Sum,
@@ -595,6 +598,8 @@ pub const ALL_BUILTIN_FUNCTIONS: &[BuiltinFunction] = &[
     BuiltinFunction::ParseInt32,
     BuiltinFunction::ParseInt64,
     BuiltinFunction::ParseFloat64,
+    BuiltinFunction::Ord,
+    BuiltinFunction::Chr,
 ];
 
 impl BuiltinFunction {
@@ -617,6 +622,8 @@ impl BuiltinFunction {
             "parse_int32" => Some(Self::ParseInt32),
             "parse_int64" => Some(Self::ParseInt64),
             "parse_float64" => Some(Self::ParseFloat64),
+            "ord" => Some(Self::Ord),
+            "chr" => Some(Self::Chr),
             "len" => Some(Self::Len),
             "str" => Some(Self::Str),
             "sum" => Some(Self::Sum),
@@ -649,6 +656,8 @@ impl BuiltinFunction {
             Self::ParseInt32 => "parse_int32",
             Self::ParseInt64 => "parse_int64",
             Self::ParseFloat64 => "parse_float64",
+            Self::Ord => "ord",
+            Self::Chr => "chr",
             Self::Len => "len",
             Self::Str => "str",
             Self::Sum => "sum",
@@ -690,6 +699,8 @@ impl BuiltinFunction {
             Self::ParseInt32 => "parse_int32(text: str) -> Result[int32, str]",
             Self::ParseInt64 => "parse_int64(text: str) -> Result[int64, str]",
             Self::ParseFloat64 => "parse_float64(text: str) -> Result[float64, str]",
+            Self::Ord => "ord(text: str) -> int64",
+            Self::Chr => "chr(code: int64) -> str",
             Self::Len => "len(value: str|list[T]|dict[K, V]|set[T]) -> int64",
             Self::Str => "str(value) -> str",
             Self::Sum => "sum(values: list[T]|set[T]|Range|Array[T]) -> T",
@@ -726,10 +737,10 @@ impl BuiltinFunction {
             }
             Self::Abs => "Returns the absolute value of an integer or float.",
             Self::Min => {
-                "Returns the smallest of two or more numeric values of the same type, or the smallest element of a numeric collection. An empty collection stops the program."
+                "Returns the smallest of two or more numeric or `str` values of the same type, or the smallest element of a numeric or `str` collection. An empty collection stops the program."
             }
             Self::Max => {
-                "Returns the largest of two or more numeric values of the same type, or the largest element of a numeric collection. An empty collection stops the program."
+                "Returns the largest of two or more numeric or `str` values of the same type, or the largest element of a numeric or `str` collection. An empty collection stops the program."
             }
             Self::Sqrt => "Returns the square root of a `float32` or `float64` value.",
             Self::Round => "Returns an integer unchanged, or rounds a float to the nearest `int64` using ties-to-even.",
@@ -737,6 +748,8 @@ impl BuiltinFunction {
             Self::ParseInt32 => "Parses a `str` into an `int32`, returning `Result.Err(str)` on failure.",
             Self::ParseInt64 => "Parses a `str` into an `int64`, returning `Result.Err(str)` on failure.",
             Self::ParseFloat64 => "Parses a `str` into a `float64`, returning `Result.Err(str)` on failure.",
+            Self::Ord => "Returns the Unicode scalar value of a one-character `str`. Any other length stops the program.",
+            Self::Chr => "Returns the one-character `str` for a Unicode scalar value. A value that is not a scalar value stops the program.",
             Self::Len => "Returns the length of a value that has a `len()` member, delegating to that member.",
             Self::Str => "Renders a value the way `print` and f-string interpolation render it.",
             Self::Sum => {
@@ -889,9 +902,10 @@ impl BuiltinFunction {
                 BuiltinCallShape::fixed(&MIN_MAX_PARAMS, CallConvention::PositionalOrNamed)
             }
             Self::Sqrt => BuiltinCallShape::fixed(&SQRT_PARAMS, CallConvention::PositionalOrNamed),
-            Self::ParseInt32 | Self::ParseInt64 | Self::ParseFloat64 => {
+            Self::ParseInt32 | Self::ParseInt64 | Self::ParseFloat64 | Self::Ord => {
                 BuiltinCallShape::fixed(&PARSE_TEXT_PARAMS, CallConvention::PositionalOrNamed)
             }
+            Self::Chr => BuiltinCallShape::fixed(&CHR_PARAMS, CallConvention::PositionalOrNamed),
         }
     }
 }
@@ -1177,6 +1191,7 @@ pub enum BuiltinMember {
     StringSplitOnce,
     StringRsplitOnce,
     StringLines,
+    StringChars,
     StringSplitWhitespace,
     StringFind,
     StringCount,
@@ -1582,6 +1597,7 @@ impl BuiltinMember {
             ("str", "split_once") => Some(Self::StringSplitOnce),
             ("str", "rsplit_once") => Some(Self::StringRsplitOnce),
             ("str", "lines") => Some(Self::StringLines),
+            ("str", "chars") => Some(Self::StringChars),
             ("str", "split_whitespace") => Some(Self::StringSplitWhitespace),
             ("str", "find") => Some(Self::StringFind),
             ("str", "count") => Some(Self::StringCount),
@@ -1741,6 +1757,7 @@ impl BuiltinMember {
             Self::StringSplitOnce => "split_once",
             Self::StringRsplitOnce => "rsplit_once",
             Self::StringLines => "lines",
+            Self::StringChars => "chars",
             Self::StringSplitWhitespace => "split_whitespace",
             Self::StringFind => "find",
             Self::StringCount => "count",
@@ -1951,6 +1968,7 @@ impl BuiltinMember {
             Self::StringSplitOnce => "split_once(separator: str) -> (str, str) | None",
             Self::StringRsplitOnce => "rsplit_once(separator: str) -> (str, str) | None",
             Self::StringLines => "lines() -> list[str]",
+            Self::StringChars => "chars() -> list[str]",
             Self::StringSplitWhitespace => "split_whitespace() -> list[str]",
             Self::StringFind => "find(text: str) -> int64 | None",
             Self::StringCount => "count(text: str) -> int64",
@@ -2250,6 +2268,9 @@ impl BuiltinMember {
             Self::StringLines => {
                 "Splits the string at each `\\n`, removing one `\\r` before each `\\n`. A final line terminator adds no empty line."
             }
+            Self::StringChars => {
+                "Returns each Unicode scalar value of the string as a one-character `str`, in order."
+            }
             Self::StringSplitWhitespace => {
                 "Splits the string on runs of Unicode whitespace and drops empty parts."
             }
@@ -2532,6 +2553,7 @@ impl BuiltinMember {
             | Self::StringTrimStart
             | Self::StringTrimEnd
             | Self::StringLines
+            | Self::StringChars
             | Self::StringSplitWhitespace
             | Self::StringToBytes
             | Self::ArrayShape
