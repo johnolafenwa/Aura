@@ -246,6 +246,23 @@ what a program observes: a removed check is one that cannot fire.
 | V3 | Required loop invariants for static proof, `decreases`, ghost code, lemmas, quantifiers over lists, `mut` frame conditions, trait-level contracts for generics | 6 to 10 PRs | V2 |
 | V4 | Models of `str`, `dict`, `set`; contracts on `Callable` types; task bodies verified sequentially under structured concurrency; trusted specifications for FFI and I/O | Open-ended | V3 |
 
+V1 progress: V1a (`requires` and `ensures` on functions and methods,
+`result`, the pure condition check, runtime checks on both backends,
+`AU2048` and `AU4009`) is implemented. V1b adds loop `invariant` clauses and
+a runtime `decreases` check on `while` (measure at least 0 and strictly
+smaller at each body entry), and class invariants: the parser turns a
+class's `invariant` lines into a hidden `__invariant__(self)` method that
+construction sites, `__init__` callers, and public `mut self` methods (on
+entry and exit) call, so the check always runs in the class's module.
+Condition purity now also requires a method call's receiver to have a
+builtin type. V1c adds `old(expr)` (the parser replaces each call with a
+hidden name; the function copies the value after its entry checks),
+`forall`/`exists` (rewritten to `all`/`any` over a list comprehension), and
+module-level `spec def` helpers (one pure `return`, no `mut` parameters,
+usable only in clauses and other spec bodies). V1d gives contracts their
+own manual page, `docs/manual/contracts.md`. V1 is complete; `ghost`
+locals, `spec def` methods, and trait-method contracts move to V2 and V3.
+
 V1 needs each stage's full local gates, coverage floors, and interpreter and
 native parity, like every other batch. V1 also adds a fixture family of
 contract programs that V2 then proves.

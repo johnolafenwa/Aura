@@ -1,0 +1,8 @@
+error[AU4009]: `invariant` clause failed: `self.lo <= self.hi`
+ --> crates/aura-compiler/tests/fixtures/run-fail/class_invariant_after_init.au:4:20
+  |
+4 |     invariant self.lo <= self.hi
+  |                    ^
+  = note: left = 3
+  = note: right = 2
+  = note: Aura call chain (innermost first): Span2.__invariant__ at 4:5 -> main at 11:1

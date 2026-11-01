@@ -358,6 +358,8 @@ fn function_decl(name: &str, return_type: &str) -> FunctionDecl {
         property: None,
         decorators: Vec::new(),
         doc: None,
+        contracts: Vec::new(),
+        spec: false,
     }
 }
 
@@ -6545,6 +6547,7 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
         span: Span::new(6, 5),
     });
     let for_stmt = crate::ast::Stmt::For(crate::ast::ForStmt {
+        contracts: Vec::new(),
         target: crate::ast::BindingTarget::Name {
             name: "value".to_string(),
             span: Span::new(9, 5),
@@ -6582,6 +6585,7 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
         span: Span::new(13, 5),
     });
     let while_stmt = crate::ast::Stmt::While(crate::ast::WhileStmt {
+        contracts: Vec::new(),
         condition: Expr {
             kind: ExprKind::Bool(true),
             span: Span::new(15, 11),

@@ -1,0 +1,6 @@
+def main():
+    mut k = 2
+    while k > -5:
+        decreases k + 1
+        k -= 1
+    print(k)

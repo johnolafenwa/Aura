@@ -1,0 +1,5 @@
+def main():
+    mut xs = [1]
+    while len(xs) < 3:
+        invariant xs.pop() > 0
+        xs.append(1)

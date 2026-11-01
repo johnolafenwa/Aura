@@ -1,0 +1,10 @@
+class Pair[T]:
+    items: list[T]
+    invariant len(self.items) == 2
+
+
+def main():
+    ok = Pair[int64](items=[1, 2])
+    print(len(ok.items))
+    bad = Pair(items=["a"])
+    print(len(bad.items))

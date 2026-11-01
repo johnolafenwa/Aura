@@ -1,0 +1,13 @@
+class Span2:
+    lo: int64
+    hi: int64
+    invariant self.lo <= self.hi
+
+    def __init__(self, lo: int64, hi: int64):
+        self.lo = lo
+        self.hi = hi
+
+
+def main():
+    r = Span2(3, 2)
+    print(r.lo)

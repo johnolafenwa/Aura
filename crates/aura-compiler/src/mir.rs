@@ -1489,8 +1489,71 @@ pub enum Terminator {
         message: Option<Operand>,
         captures: Vec<AssertionCapture>,
         span: crate::diag::Span,
+        /// What failed: an `assert` or a contract clause.
+        #[serde(default, skip_serializing_if = "AssertKind::is_assert")]
+        kind: AssertKind,
     },
     Unreachable,
+}
+
+/// The source check an `AssertFail` reports.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AssertKind {
+    /// An `assert` statement or a compiler-inserted check: `AU4001`.
+    #[default]
+    Assert,
+    /// A `requires` clause failed on entry: `AU4009`.
+    Requires,
+    /// An `ensures` clause failed on return: `AU4009`.
+    Ensures,
+    /// A loop `invariant` clause failed: `AU4009`.
+    Invariant,
+    /// A `while` loop's `decreases` measure went negative or did not get
+    /// smaller: `AU4009`.
+    Decreases,
+}
+
+impl AssertKind {
+    pub fn is_assert(&self) -> bool {
+        *self == AssertKind::Assert
+    }
+
+    /// The diagnostic code a failure of this kind reports.
+    pub const fn code(self) -> &'static str {
+        match self {
+            AssertKind::Assert => "AU4001",
+            AssertKind::Requires
+            | AssertKind::Ensures
+            | AssertKind::Invariant
+            | AssertKind::Decreases => "AU4009",
+        }
+    }
+
+    /// The word the native runtime receives for this kind.
+    pub const fn word(self) -> i64 {
+        match self {
+            AssertKind::Assert => 0,
+            AssertKind::Requires => 1,
+            AssertKind::Ensures => 2,
+            AssertKind::Invariant => 3,
+            AssertKind::Decreases => 4,
+        }
+    }
+}
+
+/// The hidden local naming the object a class invariant check reads.
+const INVARIANT_SUBJECT: &str = "invariant subject";
+
+/// The hidden locals a `while` loop's `decreases` check reads. The names
+/// cannot be written in source.
+const DECREASES_CURRENT: &str = "decreases measure";
+const DECREASES_PREVIOUS: &str = "previous measure";
+const DECREASES_STARTED: &str = "measured before";
+
+struct DecreasesState {
+    clause: crate::ast::ContractClause,
+    previous: String,
+    started: String,
 }
 
 #[derive(Clone, Debug)]
@@ -11403,9 +11466,10 @@ fn lower_function_or_initializer(
     } else if let Some(class) = initializer {
         lowerer.initializer_self = true;
         lowerer.emit_initializer_slot(class, return_type);
+        lowerer.lower_contract_checks(function, crate::ast::ContractKind::Requires);
         lowerer.lower_stmts(&function.body);
     } else {
-        lowerer.lower_stmts(&function.body);
+        lowerer.lower_contracted_body(function);
     }
     let default_return = if initializer.is_some() {
         Operand::MovePlace("self".to_string())
@@ -13280,6 +13344,18 @@ impl<'a> Lowerer<'a> {
     /// spelling, now out of scope, gave the local another type: then the
     /// new binding gets a fresh local of its own type.
     fn declare_binding(&mut self, name: &str, ty: Option<&Type>) -> String {
+        // A checker-made hidden name, such as the iterator a `for` loop
+        // consumes, contains a space; it always binds a temporary.
+        if name.contains(' ') {
+            let slot = match ty {
+                Some(ty) => self.new_typed_temp(ty.clone()),
+                None => self.new_temp(),
+            };
+            self.current_binding_block()
+                .rebound
+                .insert(name.to_string(), slot.clone());
+            return slot;
+        }
         if let (Some(ty), Some(existing)) = (ty, self.local_types.get(name)) {
             if existing != ty {
                 let slot = self.new_typed_temp(ty.clone());
@@ -13827,7 +13903,262 @@ impl<'a> Lowerer<'a> {
         self.terminate(Terminator::Goto(break_label));
     }
 
+    /// Lowers a function body with its contract clauses: each `requires`
+    /// is checked on entry, and each `ensures` on every path that returns,
+    /// with `result` naming the returned value.
+    fn lower_contracted_body(&mut self, function: &crate::ast::FunctionDecl) {
+        self.lower_contract_checks(function, crate::ast::ContractKind::Requires);
+        // Only the hidden class invariant method has `invariant` clauses.
+        self.lower_contract_checks(function, crate::ast::ContractKind::Invariant);
+        let guarded = self.guarded_self_class(function);
+        if let Some(class) = &guarded {
+            self.emit_class_invariant_check("self", class);
+        }
+        let has_ensures = function
+            .contracts
+            .iter()
+            .any(|clause| clause.kind == crate::ast::ContractKind::Ensures);
+        if !has_ensures && guarded.is_none() {
+            self.lower_stmts(&function.body);
+            return;
+        }
+        // Each `old(expr)` is a copy of `expr` taken after the entry checks.
+        let olds = function
+            .contracts
+            .iter()
+            .flat_map(|clause| clause.olds.iter())
+            .map(|old| (old.name.clone(), self.lower_old_value(&old.expr)))
+            .collect::<std::collections::HashMap<_, _>>();
+        let has_olds = !olds.is_empty();
+        if has_olds {
+            self.scoped_names.push(olds);
+        }
+        let return_type = self.return_type.clone();
+        let return_place = self.new_typed_temp(return_type.clone());
+        let exit = self.new_block("ensures");
+        self.return_redirects.push(ReturnRedirect {
+            label: self.label(exit),
+            return_place: return_place.clone(),
+            cleanup_depth: 0,
+        });
+        self.lower_stmts(&function.body);
+        self.return_redirects.pop();
+        if !self.current_terminated() {
+            // Falling off the end returns `None`.
+            self.emit(Instruction::Assign {
+                target: return_place.clone(),
+                value: Rvalue::Use(default_return_operand(&return_type)),
+            });
+            self.terminate(Terminator::Goto(self.label(exit)));
+        }
+        self.switch_to(exit);
+        self.scoped_names.push(std::collections::HashMap::from([(
+            crate::sema::CONTRACT_RESULT_NAME.to_string(),
+            return_place.clone(),
+        )]));
+        self.lower_contract_checks(function, crate::ast::ContractKind::Ensures);
+        self.scoped_names.pop();
+        if has_olds {
+            self.scoped_names.pop();
+        }
+        if let Some(class) = &guarded {
+            self.emit_class_invariant_check("self", class);
+        }
+        let value = self.move_place_for_type(return_place, &return_type);
+        self.terminate(Terminator::Return(value));
+    }
+
+    /// Copies the value `expr` has now into a new local: a Copy value as
+    /// is, a string or collection by copying it.
+    fn lower_old_value(&mut self, expr: &Expr) -> String {
+        let ty = self
+            .infer_expr_type(expr)
+            .expect("a checked `old` value has a type");
+        let value = match &ty {
+            Type::Named(name, _) if matches!(name.as_str(), "list" | "dict" | "set" | "Array") => {
+                let copy = Expr {
+                    kind: ExprKind::Call {
+                        callee: Box::new(Expr {
+                            kind: ExprKind::Member {
+                                object: Box::new(expr.clone()),
+                                field: "copy".to_string(),
+                            },
+                            span: expr.span,
+                        }),
+                        args: Vec::new(),
+                    },
+                    span: expr.span,
+                };
+                self.lower_expr(&copy)
+            }
+            Type::Named(name, _) if name == "str" => {
+                let value = self.lower_expr(expr);
+                self.emit_str_clone(value)
+            }
+            _ => self.lower_expr(expr),
+        };
+        let place = self.new_typed_temp(ty);
+        self.emit(Instruction::Assign {
+            target: place.clone(),
+            value: Rvalue::Use(value),
+        });
+        place
+    }
+
+    /// Checks each clause of `kind` in source order.
+    fn lower_contract_checks(
+        &mut self,
+        function: &crate::ast::FunctionDecl,
+        kind: crate::ast::ContractKind,
+    ) {
+        self.lower_clause_checks(&function.contracts, kind);
+    }
+
+    /// Checks each clause of `kind` in `clauses`, in source order.
+    fn lower_clause_checks(
+        &mut self,
+        clauses: &[crate::ast::ContractClause],
+        kind: crate::ast::ContractKind,
+    ) {
+        for clause in clauses.iter().filter(|clause| clause.kind == kind) {
+            let message = format!("`{}` clause failed: `{}`", kind.keyword(), clause.text);
+            self.lower_clause_check(&clause.condition, message, clause.span, kind);
+        }
+    }
+
+    fn lower_clause_check(
+        &mut self,
+        condition: &Expr,
+        message: String,
+        span: Span,
+        kind: crate::ast::ContractKind,
+    ) {
+        let check = crate::ast::AssertStmt {
+            condition: condition.clone(),
+            message: Some(Expr {
+                kind: ExprKind::String(message),
+                span,
+            }),
+            span: condition.span,
+        };
+        let assert_kind = match kind {
+            crate::ast::ContractKind::Requires => AssertKind::Requires,
+            crate::ast::ContractKind::Ensures => AssertKind::Ensures,
+            crate::ast::ContractKind::Invariant => AssertKind::Invariant,
+            crate::ast::ContractKind::Decreases => AssertKind::Decreases,
+        };
+        self.lower_check(&check, assert_kind);
+    }
+
+    /// Lowers the hidden state a `while` loop's `decreases` measure needs:
+    /// the measure's value at the previous body entry, and whether there
+    /// was one.
+    fn lower_decreases_state(&mut self, while_stmt: &WhileStmt) -> Option<DecreasesState> {
+        let clause = while_stmt
+            .contracts
+            .iter()
+            .find(|clause| clause.kind == crate::ast::ContractKind::Decreases)?;
+        let previous = self.new_typed_temp(Type::named("int64"));
+        let started = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: previous.clone(),
+            value: Rvalue::Use(Operand::Int(0)),
+        });
+        self.emit(Instruction::Assign {
+            target: started.clone(),
+            value: Rvalue::Use(Operand::Bool(false)),
+        });
+        Some(DecreasesState {
+            clause: clause.clone(),
+            previous,
+            started,
+        })
+    }
+
+    /// On body entry, checks that the measure is non-negative and smaller
+    /// than on the previous entry, then records it.
+    fn lower_decreases_check(&mut self, state: &DecreasesState) {
+        let current = self.new_typed_temp(Type::named("int64"));
+        let value = self.lower_expr(&state.clause.condition);
+        self.emit(Instruction::Assign {
+            target: current.clone(),
+            value: Rvalue::Use(value),
+        });
+        let span = state.clause.condition.span;
+        let name = |name: &str| Expr {
+            kind: ExprKind::Name(name.to_string()),
+            span,
+        };
+        let binary = |op, left, right| Expr {
+            kind: ExprKind::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            },
+            span,
+        };
+        self.scoped_names.push(std::collections::HashMap::from([
+            (DECREASES_CURRENT.to_string(), current.clone()),
+            (DECREASES_PREVIOUS.to_string(), state.previous.clone()),
+            (DECREASES_STARTED.to_string(), state.started.clone()),
+        ]));
+        let non_negative = binary(
+            BinaryOp::GreaterEq,
+            name(DECREASES_CURRENT),
+            Expr {
+                kind: ExprKind::Int(0),
+                span,
+            },
+        );
+        self.lower_clause_check(
+            &non_negative,
+            format!(
+                "`decreases` clause failed: `{}` went below 0",
+                state.clause.text
+            ),
+            state.clause.span,
+            crate::ast::ContractKind::Decreases,
+        );
+        let compare_block = self.new_block("decreases_compare");
+        let recorded_block = self.new_block("decreases_record");
+        self.terminate(Terminator::Branch {
+            condition: Operand::Place(state.started.clone()),
+            then_label: self.label(compare_block),
+            else_label: self.label(recorded_block),
+        });
+        self.switch_to(compare_block);
+        let smaller = binary(
+            BinaryOp::Less,
+            name(DECREASES_CURRENT),
+            name(DECREASES_PREVIOUS),
+        );
+        self.lower_clause_check(
+            &smaller,
+            format!(
+                "`decreases` clause failed: `{}` did not get smaller in the last iteration",
+                state.clause.text
+            ),
+            state.clause.span,
+            crate::ast::ContractKind::Decreases,
+        );
+        self.terminate(Terminator::Goto(self.label(recorded_block)));
+        self.switch_to(recorded_block);
+        self.scoped_names.pop();
+        self.emit(Instruction::Assign {
+            target: state.previous.clone(),
+            value: Rvalue::Use(Operand::Place(current)),
+        });
+        self.emit(Instruction::Assign {
+            target: state.started.clone(),
+            value: Rvalue::Use(Operand::Bool(true)),
+        });
+    }
+
     fn lower_assert(&mut self, assert_stmt: &crate::ast::AssertStmt) {
+        self.lower_check(assert_stmt, AssertKind::Assert);
+    }
+
+    fn lower_check(&mut self, assert_stmt: &crate::ast::AssertStmt, kind: AssertKind) {
         let (condition, pending_captures) = self
             .lower_introspected_assertion_condition(&assert_stmt.condition)
             .unwrap_or_else(|| (self.lower_expr(&assert_stmt.condition), Vec::new()));
@@ -13869,6 +14200,7 @@ impl<'a> Lowerer<'a> {
             message,
             captures,
             span: assert_stmt.span,
+            kind,
         });
 
         self.switch_to(continuation_block);
@@ -17349,6 +17681,7 @@ impl<'a> Lowerer<'a> {
                         )),
                         captures: Vec::new(),
                         span: pattern.span,
+                        kind: AssertKind::Assert,
                     });
                     self.switch_to(current);
                     self.lower_type_pattern_test(
@@ -17580,6 +17913,7 @@ impl<'a> Lowerer<'a> {
             )),
             captures: Vec::new(),
             span: pattern.span,
+            kind: AssertKind::Assert,
         });
         self.switch_to(current);
         let done = self.new_block("match_class_commit_done");
@@ -17934,7 +18268,12 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_for(&mut self, for_stmt: &crate::ast::ForStmt) {
-        let mut lower_body = |lowerer: &mut Self| lowerer.lower_stmts(&for_stmt.body);
+        // A `for` invariant holds at the start of every iteration, with the
+        // loop target bound.
+        let mut lower_body = |lowerer: &mut Self| {
+            lowerer.lower_clause_checks(&for_stmt.contracts, crate::ast::ContractKind::Invariant);
+            lowerer.lower_stmts(&for_stmt.body);
+        };
         self.lower_for_with_body(for_stmt, None, &mut lower_body);
     }
 
@@ -18825,9 +19164,13 @@ impl<'a> Lowerer<'a> {
         let safepoint_block = self.new_block("while_safepoint");
         let after_block = self.new_block("while_end");
 
+        let decreases = self.lower_decreases_state(while_stmt);
         self.terminate(Terminator::Goto(self.label(condition_block)));
 
         self.switch_to(condition_block);
+        // Invariants hold before every test of the condition: on entry,
+        // after every iteration, and when the condition ends the loop.
+        self.lower_clause_checks(&while_stmt.contracts, crate::ast::ContractKind::Invariant);
         let (body_label, after_label) = (self.label(body_block), self.label(after_block));
         self.lower_condition_branch(&while_stmt.condition, body_label, after_label);
 
@@ -18839,6 +19182,9 @@ impl<'a> Lowerer<'a> {
             outer_loans: self.view_sources.keys().cloned().collect(),
         });
         self.switch_to(body_block);
+        if let Some(state) = &decreases {
+            self.lower_decreases_check(state);
+        }
         self.lower_stmts(&while_stmt.body);
         if !self.current_terminated() {
             self.terminate(Terminator::Goto(self.label(safepoint_block)));
@@ -18914,6 +19260,7 @@ impl<'a> Lowerer<'a> {
             .get(clause_index)
             .expect("checked comprehension should contain an iteration clause");
         let for_stmt = crate::ast::ForStmt {
+            contracts: Vec::new(),
             target: clause.target.clone(),
             iterable: clause.iterable.clone(),
             borrow_mode: None,
@@ -20153,6 +20500,7 @@ impl<'a> Lowerer<'a> {
         });
         const ITEM: &str = "%list_item";
         let for_stmt = crate::ast::ForStmt {
+            contracts: Vec::new(),
             target: BindingTarget::Name {
                 name: ITEM.to_string(),
                 span: values.span,
@@ -20254,6 +20602,7 @@ impl<'a> Lowerer<'a> {
             span: expr.span,
         };
         let for_stmt = crate::ast::ForStmt {
+            contracts: Vec::new(),
             target: BindingTarget::Name {
                 name: "_".to_string(),
                 span: expr.span,
@@ -23191,6 +23540,7 @@ impl<'a> Lowerer<'a> {
                         fields,
                     },
                 });
+                self.emit_class_invariant_check(&temp, &class);
             }
             ExprKind::Name(name) if name == "Queue" => {
                 let lowered_args = self.lower_args(args);
@@ -23712,6 +24062,7 @@ impl<'a> Lowerer<'a> {
                                     fields,
                                 },
                             });
+                            self.emit_class_invariant_check(&temp, &class);
                             return Operand::Place(temp);
                         }
                     }
@@ -24400,6 +24751,7 @@ impl<'a> Lowerer<'a> {
         });
         const ITEM: &str = "%reduce_item";
         let for_stmt = crate::ast::ForStmt {
+            contracts: Vec::new(),
             target: BindingTarget::Name {
                 name: ITEM.to_string(),
                 span: argument.span,
@@ -24531,6 +24883,7 @@ impl<'a> Lowerer<'a> {
                 ))),
                 captures: Vec::new(),
                 span,
+                kind: AssertKind::Assert,
             });
             self.switch_to(done);
         }
@@ -24982,6 +25335,62 @@ impl<'a> Lowerer<'a> {
                 type_args: Default::default(),
             },
         });
+        self.emit_class_invariant_check(target, class);
+    }
+
+    /// Calls the class's hidden invariant method on `object`, when the class
+    /// declares `invariant` clauses.
+    fn emit_class_invariant_check(&mut self, object: &str, class: &crate::sema::ClassInfo) {
+        if !class
+            .methods
+            .contains_key(crate::ast::CLASS_INVARIANT_METHOD)
+        {
+            return;
+        }
+        let span = class.methods[crate::ast::CLASS_INVARIANT_METHOD].decl.span;
+        let call = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Member {
+                        object: Box::new(Expr {
+                            kind: ExprKind::Name(INVARIANT_SUBJECT.to_string()),
+                            span,
+                        }),
+                        field: crate::ast::CLASS_INVARIANT_METHOD.to_string(),
+                    },
+                    span,
+                }),
+                args: Vec::new(),
+            },
+            span,
+        };
+        self.scoped_names.push(std::collections::HashMap::from([(
+            INVARIANT_SUBJECT.to_string(),
+            object.to_string(),
+        )]));
+        self.lower_expr(&call);
+        self.scoped_names.pop();
+    }
+
+    /// The class whose invariant guards this method's `self`: the method is
+    /// public and takes `mut self`, and its class declares invariants.
+    fn guarded_self_class(
+        &self,
+        function: &crate::ast::FunctionDecl,
+    ) -> Option<crate::sema::ClassInfo> {
+        if !function.public || function.receiver != Some(ReceiverKind::BorrowMut) {
+            return None;
+        }
+        let Some(Type::Named(name, _)) = self.local_types.get("self") else {
+            return None;
+        };
+        self.resolve_class_info(name)
+            .filter(|class| {
+                class
+                    .methods
+                    .contains_key(crate::ast::CLASS_INVARIANT_METHOD)
+            })
+            .cloned()
     }
 
     fn lower_user_args(

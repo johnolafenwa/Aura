@@ -1,0 +1,7 @@
+def positive(x: int64) -> bool:
+    return x > 0
+
+
+def f(x: int64) -> int64:
+    requires positive(x)
+    return x

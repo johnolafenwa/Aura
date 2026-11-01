@@ -115,6 +115,7 @@ export default defineConfig({
             { text: 'Statements', link: '/manual/statements' },
             { text: 'Tuples', link: '/manual/tuples' },
             { text: 'Assertions', link: '/manual/assertions' },
+            { text: 'Contracts', link: '/manual/contracts' },
             { text: 'Functions', link: '/manual/functions' },
             { text: 'Closures', link: '/manual/closures' },
             { text: 'Foreign Function Interface', link: '/manual/ffi' },

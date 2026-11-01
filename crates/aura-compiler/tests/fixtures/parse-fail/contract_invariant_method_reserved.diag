@@ -1,0 +1,5 @@
+error[AU2048]: `__invariant__` is reserved for checking a class's `invariant` clauses; rename the method
+ --> crates/aura-compiler/tests/fixtures/parse-fail/contract_invariant_method_reserved.au:5:5
+  |
+5 |     def __invariant__(self):
+  |     ^

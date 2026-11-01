@@ -1,0 +1,5 @@
+error[AU2048]: a `spec def` is a module-level function; `spec def` methods are not available yet
+ --> crates/aura-compiler/tests/fixtures/parse-fail/contract_spec_method.au:4:5
+  |
+4 |     spec def pos(self) -> bool:
+  |     ^

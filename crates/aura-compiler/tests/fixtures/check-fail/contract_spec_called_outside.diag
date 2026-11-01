@@ -1,0 +1,5 @@
+error[AU2048]: `pos` is a `spec def`; only contract clauses and other `spec def` bodies may use it
+ --> crates/aura-compiler/tests/fixtures/check-fail/contract_spec_called_outside.au:5:11
+  |
+5 |     print(pos(1))
+  |           ^

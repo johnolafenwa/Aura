@@ -1,0 +1,3 @@
+def f(result: int64) -> int64:
+    ensures result > 0
+    return 1

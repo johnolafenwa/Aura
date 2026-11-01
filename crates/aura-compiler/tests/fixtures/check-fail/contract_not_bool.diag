@@ -1,0 +1,5 @@
+error[AU2002]: a `requires` condition must be `bool`, found `int64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/contract_not_bool.au:2:14
+  |
+2 |     requires x
+  |              ^

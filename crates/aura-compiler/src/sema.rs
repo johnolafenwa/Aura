@@ -19,6 +19,7 @@ pub(crate) use loans::{synthetic_returned_view_decl, SYNTHETIC_CALLABLE_DECL};
 pub(crate) use types::closure_call_kind_for;
 mod display;
 pub(crate) use display::{is_prelude_display, DISPLAY_METHOD, DISPLAY_TRAIT};
+mod iterator_loops;
 mod property_reads;
 #[cfg(test)]
 mod property_reads_tests;
@@ -52,6 +53,8 @@ use properties::{
 };
 #[cfg(test)]
 use types::type_pattern_specificity;
+mod contracts;
+pub(crate) use contracts::RESULT_NAME as CONTRACT_RESULT_NAME;
 mod decorators;
 mod init;
 pub(crate) use decorators::{DECORATED_PREFIX, UNDECORATED_PREFIX};
@@ -151,9 +154,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{
     Argument, AssignStmt, AssignTarget, BinaryOp, BindingTarget, ClassDecl, CompareLink,
-    ComprehensionClause, ComprehensionOutput, EnumDecl, Expr, ExprKind, FunctionDecl, ImplDecl,
-    Item, LambdaParam, LiteralPattern, LiteralPatternKind, MatchExprArm, MatchStmt, Module, Param,
-    ParamMode, Pattern, ReceiverKind, Stmt, TraitDecl, TypeRef, UnaryOp, VariantPattern, WithStmt,
+    ComprehensionClause, ComprehensionOutput, ContractKind, EnumDecl, Expr, ExprKind, FunctionDecl,
+    ImplDecl, Item, LambdaParam, LiteralPattern, LiteralPatternKind, MatchExprArm, MatchStmt,
+    Module, Param, ParamMode, Pattern, ReceiverKind, Stmt, TraitDecl, TypeRef, UnaryOp,
+    VariantPattern, WithStmt,
 };
 use crate::call::{
     bind_call_arguments, callable_params_from_decl, list_binary_result_type,
@@ -165,6 +169,10 @@ use crate::integer::{
     integer_type_bounds as integer_type_bounds_impl, IntegerBounds, IntegerValue,
 };
 use crate::runtime_value::{parse_format_spec, validate_format_spec_for_type};
+
+/// The clauses a `for` loop body may start with. `decreases` is listed so
+/// the checker can reject it with a clear message.
+const ALL_LOOP_CLAUSES: &[ContractKind] = &[ContractKind::Invariant, ContractKind::Decreases];
 
 const NO_IDENTITY_EQUALITY_NOTE: &str =
     "Aura has no identity-equality fallback; equality-dependent operations require a defined value relation";
@@ -665,6 +673,13 @@ fn block_contains_break(body: &[Stmt]) -> bool {
     })
 }
 
+/// True when a loop's contract clauses read `name`.
+pub(crate) fn clauses_reference_name(clauses: &[crate::ast::ContractClause], name: &str) -> bool {
+    clauses
+        .iter()
+        .any(|clause| expr_references_name(&clause.condition, name))
+}
+
 fn block_references_name(body: &[Stmt], name: &str) -> bool {
     body.iter().any(|stmt| stmt_references_name(stmt, name))
 }
@@ -715,6 +730,7 @@ pub(crate) fn stmt_references_name(stmt: &Stmt, name: &str) -> bool {
         }
         Stmt::For(for_stmt) => {
             expr_references_name(&for_stmt.iterable, name)
+                || clauses_reference_name(&for_stmt.contracts, name)
                 || block_references_name(&for_stmt.body, name)
         }
         Stmt::With(with_stmt) => {
@@ -723,6 +739,7 @@ pub(crate) fn stmt_references_name(stmt: &Stmt, name: &str) -> bool {
         }
         Stmt::While(while_stmt) => {
             expr_references_name(&while_stmt.condition, name)
+                || clauses_reference_name(&while_stmt.contracts, name)
                 || block_references_name(&while_stmt.body, name)
         }
         Stmt::Expr(expr_stmt) => expr_references_name(&expr_stmt.expr, name),
@@ -1065,6 +1082,9 @@ struct FunctionChecker<'a> {
     /// Set while an argument bound to a `mut` union parameter is typed: the
     /// declared union is exposed whole, so refinements do not apply.
     suppress_narrowing: Rc<std::cell::Cell<bool>>,
+    /// Set while a contract condition or a `spec def` body is typed: only
+    /// there may a `spec def` be named.
+    in_spec: Rc<std::cell::Cell<bool>>,
     /// Owned lambda captures the current lambda body mutates in place (C2).
     mutated_captures: Rc<RefCell<BTreeSet<String>>>,
     /// The index expression currently typed as a place read: the object of
@@ -2117,6 +2137,7 @@ impl<'a> FunctionChecker<'a> {
             active_match_borrow_places: Rc::new(RefCell::new(Vec::new())),
             mutable_iteration_places: Rc::new(RefCell::new(Vec::new())),
             suppress_narrowing: Rc::new(std::cell::Cell::new(false)),
+            in_spec: Rc::new(std::cell::Cell::new(false)),
             mutated_captures: Rc::new(RefCell::new(BTreeSet::new())),
             index_place_read: Rc::new(std::cell::Cell::new(None)),
             index_owned_read: Rc::new(std::cell::Cell::new(None)),
@@ -2176,6 +2197,7 @@ impl<'a> FunctionChecker<'a> {
             narrowed_reads: self.narrowed_reads.clone(),
             type_param_calls: self.type_param_calls.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
+            in_spec: self.in_spec.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
@@ -2220,6 +2242,7 @@ impl<'a> FunctionChecker<'a> {
             narrowed_reads: self.narrowed_reads.clone(),
             type_param_calls: self.type_param_calls.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
+            in_spec: self.in_spec.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
@@ -2260,6 +2283,7 @@ impl<'a> FunctionChecker<'a> {
             narrowed_reads: self.narrowed_reads.clone(),
             type_param_calls: self.type_param_calls.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
+            in_spec: self.in_spec.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
@@ -2300,6 +2324,7 @@ impl<'a> FunctionChecker<'a> {
             narrowed_reads: self.narrowed_reads.clone(),
             type_param_calls: self.type_param_calls.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
+            in_spec: self.in_spec.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
@@ -3104,6 +3129,10 @@ impl<'a> FunctionChecker<'a> {
             );
         }
 
+        if function.spec {
+            return checker.check_spec_function(function, &mut locals, &return_type);
+        }
+        checker.check_contracts(function, &locals, &return_type)?;
         let flow = checker.check_block(&function.body, &mut locals, &return_type, 0, true)?;
         if return_type != Type::Unit && flow != BlockFlow::AlwaysReturns {
             return Err(Diagnostic::at(
@@ -3258,6 +3287,7 @@ impl<'a> FunctionChecker<'a> {
             );
         }
 
+        checker.check_contracts(method, &locals, &return_type)?;
         let flow = checker.check_block(&method.body, &mut locals, &return_type, 0, true)?;
         if return_type != Type::Unit && flow != BlockFlow::AlwaysReturns {
             return Err(Diagnostic::at(
@@ -3405,6 +3435,7 @@ impl<'a> FunctionChecker<'a> {
             &mut body_locals,
             "loop",
         )?;
+        self.check_loop_clauses(&for_stmt.contracts, ALL_LOOP_CLAUSES, &body_locals, true)?;
         self.check_block(
             &for_stmt.body,
             &mut body_locals,
@@ -3483,6 +3514,15 @@ impl<'a> FunctionChecker<'a> {
                             ReceiverKind::Borrow
                         };
                         (element_ty, passing, false)
+                    }
+                    _ if self.iterator_item_type(&iterable_ty).is_some() => {
+                        return Err(Diagnostic::coded_at(
+                            "AU2002",
+                            clause.iterable.span,
+                            format!(
+                                "a comprehension cannot iterate the iterator `{iterable_ty}` yet; collect its items with a `for` loop"
+                            ),
+                        ));
                     }
                     _ => {
                         return Err(Diagnostic::coded_at(
@@ -4682,11 +4722,21 @@ impl<'a> FunctionChecker<'a> {
                             };
                             (element_ty, passing, borrow_mode == Some(ReceiverKind::Value))
                         }
+                        _ if self.iterator_item_type(&iterable_ty).is_some() => {
+                            let item_ty = self
+                                .iterator_item_type(&iterable_ty)
+                                .expect("the guard found an item type");
+                            (
+                                self.discover_iterator_loop(for_stmt, item_ty, locals)?,
+                                ReceiverKind::Value,
+                                false,
+                            )
+                        }
                         _ => {
                             return Err(Diagnostic::at(
                                 for_stmt.span,
                                 format!(
-                                    "`for` currently requires a `Range`, `Queue[T]`, `list[T]`, or `set[T]` iterable, found `{}`",
+                                    "`for` requires a `Range`, `Queue[T]`, `list[T]`, `set[T]`, or `iter.Iterator[T]` iterable, found `{}`",
                                     iterable_ty
                                 ),
                             ))
@@ -4770,13 +4820,22 @@ impl<'a> FunctionChecker<'a> {
                                 .borrow_mut()
                                 .push((place.clone(), for_stmt.iterable.span));
                         }
-                        let checked = self.check_block(
-                            &for_stmt.body,
-                            &mut body_locals,
-                            return_type,
-                            loop_depth + 1,
-                            allow_return,
-                        );
+                        let checked = self
+                            .check_loop_clauses(
+                                &for_stmt.contracts,
+                                ALL_LOOP_CLAUSES,
+                                &body_locals,
+                                true,
+                            )
+                            .and_then(|()| {
+                                self.check_block(
+                                    &for_stmt.body,
+                                    &mut body_locals,
+                                    return_type,
+                                    loop_depth + 1,
+                                    allow_return,
+                                )
+                            });
                         if mutable_iteration.is_some() {
                             self.mutable_iteration_places.borrow_mut().pop();
                         }
@@ -4809,6 +4868,12 @@ impl<'a> FunctionChecker<'a> {
                     // iteration, so its own true-successor facts are
                     // re-established for the body on each pass.
                     let (when_false, body_locals) = loop {
+                        self.check_loop_clauses(
+                            &while_stmt.contracts,
+                            &[ContractKind::Invariant],
+                            locals,
+                            false,
+                        )?;
                         let condition_ty = self.type_of_expr(&while_stmt.condition, locals)?;
                         if condition_ty != Type::named("bool") {
                             return Err(Diagnostic::at(
@@ -4823,6 +4888,12 @@ impl<'a> FunctionChecker<'a> {
                             self.condition_narrowing(&while_stmt.condition, locals)?;
                         let mut body_locals = locals.clone();
                         self.apply_narrowing(&when_true, &mut body_locals);
+                        self.check_loop_clauses(
+                            &while_stmt.contracts,
+                            &[ContractKind::Decreases],
+                            &body_locals,
+                            false,
+                        )?;
                         self.check_block(
                             &while_stmt.body,
                             &mut body_locals,
@@ -6840,6 +6911,7 @@ impl<'a> FunctionChecker<'a> {
         expected: Option<&Type>,
     ) -> Result<Type> {
         reject_initializer_member(expr)?;
+        self.reject_spec_reference(expr, locals)?;
         let actual = self.type_of_expr_hint_uncontracted(expr, locals, expected)?;
         if let Some(expected) = expected {
             self.enforce_callable_destination(expr, expected, &actual)?;
@@ -8334,8 +8406,30 @@ impl<'a> FunctionChecker<'a> {
                                     ),
                                 ));
                             }
-                            return Ok(Type::named(
-                                self.module_enum_type_name(&module_path, enum_info),
+                            let type_name = self.module_enum_type_name(&module_path, enum_info);
+                            if enum_info.decl.type_params.is_empty() {
+                                return Ok(Type::named(type_name));
+                            }
+                            // A generic unit variant takes its type arguments
+                            // from the expected type, as an unqualified one does.
+                            if let Some(Type::Named(expected_name, expected_args)) = expected {
+                                if self.canonical_enum_name(expected_name)
+                                    == self.canonical_enum_name(&type_name)
+                                {
+                                    return Ok(Type::Named(type_name, expected_args.clone()));
+                                }
+                            }
+                            let missing = enum_info
+                                .decl
+                                .type_params
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| "T".to_string());
+                            return Err(Diagnostic::at(
+                                expr.span,
+                                format!(
+                                    "cannot infer type parameter `{missing}` for enum variant `{module_path}.{enum_name}.{field}`"
+                                ),
                             ));
                         }
                     }

@@ -1,0 +1,5 @@
+error[AU2048]: `result` names the return value in an `ensures` clause; rename the parameter `result`
+ --> crates/aura-compiler/tests/fixtures/check-fail/contract_result_parameter.au:2:5
+  |
+2 |     ensures result > 0
+  |     ^

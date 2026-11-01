@@ -1,0 +1,5 @@
+error[AU2048]: an `ensures` clause cannot read `own` parameter `xs`, which the body may move
+ --> crates/aura-compiler/tests/fixtures/check-fail/contract_reads_own_parameter.au:2:5
+  |
+2 |     ensures result <= len(xs)
+  |     ^

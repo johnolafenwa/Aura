@@ -5978,6 +5978,7 @@ fn ordinary_for_target_scope_starts_after_iterable_evaluation() {
         Type::Named("list".to_string(), vec![Type::named("int64")]),
     );
     lowerer.lower_for(&ForStmt {
+        contracts: Vec::new(),
         target: BindingTarget::Name {
             name: "values".to_string(),
             span: Span::new(1, 1),
@@ -10272,6 +10273,7 @@ def main() -> int32:
     );
 
     lowerer.lower_for(&ForStmt {
+        contracts: Vec::new(),
         target: BindingTarget::Name {
             name: "item".to_string(),
             span: Span::new(1, 1),
@@ -10317,6 +10319,7 @@ def main() -> int32:
         cleanup_depth: 0,
     });
     return_lowerer.lower_for(&ForStmt {
+        contracts: Vec::new(),
         target: BindingTarget::Name {
             name: "item".to_string(),
             span: Span::new(1, 1),

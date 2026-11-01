@@ -1,0 +1,13 @@
+# The builtin `iter` module: the iteration protocol (Batch 9, ADR-0054).
+# The compiler checks this file as module `iter`.
+
+
+public enum Step[T]:
+    """The result of advancing an iterator: the next item, or the end."""
+    Item(value: T)
+    End
+
+
+public trait Iterator[T]:
+    """A source of items that a `for` loop can consume one at a time."""
+    def next(mut self) -> Step[T]

@@ -1,0 +1,5 @@
+error[AU2001]: unknown name `result`
+ --> crates/aura-compiler/tests/fixtures/check-fail/contract_result_in_requires.au:2:14
+  |
+2 |     requires result > 0
+  |              ^

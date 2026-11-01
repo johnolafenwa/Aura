@@ -519,6 +519,26 @@ A decorator inside a function body, or in a class body other than `@property`, r
 
 Hover on a decorated function shows its decorator lines above the signature. `aura doc` lists it as a function, with its decorators and docstring. `aura fmt` keeps decorator lines directly above their definition.
 
+## Contracts
+
+A function can state its rules as `requires` and `ensures` clauses at the
+top of its body:
+
+```aura
+def withdraw(balance: int64, amount: int64) -> int64:
+    requires amount <= balance
+    ensures result >= 0
+    return balance - amount
+
+
+def main():
+    print(withdraw(100, 30))  # 70
+```
+
+Aura checks them every time the function runs. See
+[Contracts](/manual/contracts) for the clauses, loop and class invariants,
+`old`, quantifiers, and `spec def`.
+
 ## `main`
 
 In the selected entry module, a local function named `main` is the entrypoint when the module has no executable top-level statements. Its only valid signatures are:

@@ -1,0 +1,5 @@
+error[AU2048]: a `spec def` cannot take `mut` parameter `xs`
+ --> crates/aura-compiler/tests/fixtures/check-fail/contract_spec_mut_parameter.au:1:14
+  |
+1 | spec def pos(xs: mut list[int64]) -> bool:
+  |              ^

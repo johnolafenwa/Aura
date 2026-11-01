@@ -5073,3 +5073,279 @@ fn an_impl_without_a_body_is_marked_derived() {
         .collect::<Vec<_>>();
     assert_eq!(impls, vec![("json.Codec", true, 0), ("Show", false, 0)]);
 }
+
+#[test]
+fn contract_clauses_parse_before_the_body_and_keep_their_text() {
+    let module = crate::parser::parse(concat!(
+        "def f(x: int64, xs: list[int64]) -> int64:\n",
+        "    \"\"\"Doc.\"\"\"\n",
+        "    requires x > 0\n",
+        "    requires (x < 10 or\n",
+        "        x == 20)\n",
+        "    requires [x][0] == x\n",
+        "    requires -x < 0\n",
+        "    ensures result >= 0\n",
+        "    requires(x)\n",
+        "    requires[0]\n",
+        "    requires-x\n",
+        "    return x\n",
+        "\n",
+        "class C:\n",
+        "    n: int64\n",
+        "\n",
+        "    def get(self) -> int64:\n",
+        "        ensures result == self.n\n",
+        "\n",
+        "def empty(x: int64):\n",
+        "    requires x > 0\n",
+    ))
+    .expect("contract clauses parse");
+    let Item::Function(function) = &module.items[0] else {
+        panic!("first item is a function");
+    };
+    let kinds = function
+        .contracts
+        .iter()
+        .map(|clause| (clause.kind, clause.text.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        vec![
+            (ContractKind::Requires, "x > 0"),
+            (ContractKind::Requires, "(x < 10 or x == 20)"),
+            (ContractKind::Requires, "[x][0] == x"),
+            (ContractKind::Requires, "-x < 0"),
+            (ContractKind::Ensures, "result >= 0"),
+        ]
+    );
+    // `requires(x)`, `requires[0]`, and `requires-x` after the clauses are
+    // body statements; the last is an ordinary subtraction.
+    assert_eq!(function.body.len(), 4);
+    let Item::Class(class) = &module.items[1] else {
+        panic!("second item is a class");
+    };
+    assert_eq!(class.methods[0].contracts.len(), 1);
+    assert_eq!(
+        class.methods[0].body.len(),
+        1,
+        "a clause-only body gets a `pass`"
+    );
+    let Item::Function(empty) = &module.items[2] else {
+        panic!("third item is a function");
+    };
+    assert_eq!(empty.body.len(), 1);
+    assert_eq!(ContractKind::from_keyword("assert"), None);
+
+    let misplaced =
+        crate::parser::parse("def f(x: int64):\n    if x > 0:\n        ensures x > 1\n")
+            .expect_err("a clause inside a block is misplaced");
+    assert_eq!(misplaced.code, "AU2048");
+    assert!(misplaced
+        .message
+        .contains("`ensures` clauses must come first"));
+}
+
+#[test]
+fn loop_clauses_parse_at_the_top_of_loop_bodies() {
+    let module = crate::parser::parse(concat!(
+        "def f(n: int64):\n",
+        "    mut k = n\n",
+        "    while k > 0:\n",
+        "        invariant k <= n\n",
+        "        decreases k\n",
+        "        k -= 1\n",
+        "    for x in [1]:\n",
+        "        invariant (x >\n",
+        "            0)\n",
+        "    while k < 0:\n",
+        "        decreases(k)\n",
+        "        k += 1\n",
+    ))
+    .expect("loop clauses parse");
+    let Item::Function(function) = &module.items[0] else {
+        panic!("first item is a function");
+    };
+    let Stmt::While(first) = &function.body[1] else {
+        panic!("a while loop");
+    };
+    let clauses = first
+        .contracts
+        .iter()
+        .map(|clause| (clause.kind, clause.text.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        clauses,
+        vec![
+            (ContractKind::Invariant, "k <= n"),
+            (ContractKind::Decreases, "k"),
+        ]
+    );
+    assert_eq!(first.body.len(), 1);
+    let Stmt::For(for_stmt) = &function.body[2] else {
+        panic!("a for loop");
+    };
+    assert_eq!(for_stmt.contracts[0].text, "(x > 0)");
+    assert_eq!(for_stmt.body.len(), 1, "a clause-only body gets a `pass`");
+    let serialized = serde_json::to_string(for_stmt).expect("for loops serialize");
+    assert!(serialized.contains("\"contracts\""));
+    // `decreases(k)` is a call statement, not a clause.
+    let Stmt::While(second) = &function.body[3] else {
+        panic!("a second while loop");
+    };
+    assert!(second.contracts.is_empty());
+    assert_eq!(second.body.len(), 2);
+
+    for (source, message) in [
+        (
+            "def f(k: int64):\n    while k > 0:\n        requires k > 0\n        pass\n",
+            "`requires` clauses belong at the top of a function body",
+        ),
+        (
+            "def f(k: int64):\n    decreases k\n",
+            "`decreases` clauses belong at the top of a `while` loop body",
+        ),
+        (
+            "def f(k: int64):\n    while k > 0:\n        pass\n        invariant k > 0\n",
+            "`invariant` clauses must come first in a loop body, before any other statement",
+        ),
+    ] {
+        let error = crate::parser::parse(source).expect_err(source);
+        assert_eq!(error.code, "AU2048", "{source}");
+        assert!(
+            error.message.contains(message),
+            "{source}: {}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn class_invariants_become_a_hidden_checking_method() {
+    let module = crate::parser::parse(concat!(
+        "public class C:\n",
+        "    n: int64\n",
+        "    invariant self.n >= 0\n",
+        "    invariant: int64 = 0\n",
+        "    invariant (self.n <\n",
+        "        10)\n",
+        "\n",
+        "    def get(self) -> int64:\n",
+        "        return self.n\n",
+        "\n",
+        "class Plain:\n",
+        "    n: int64\n",
+    ))
+    .expect("class invariants parse");
+    let Item::Class(class) = &module.items[0] else {
+        panic!("first item is a class");
+    };
+    assert_eq!(class.fields.len(), 2, "`invariant: int64` stays a field");
+    let check = class
+        .methods
+        .iter()
+        .find(|method| method.name == crate::ast::CLASS_INVARIANT_METHOD)
+        .expect("the hidden invariant method");
+    assert!(check.public, "public with its class");
+    assert_eq!(check.receiver, Some(ReceiverKind::Borrow));
+    let texts = check
+        .contracts
+        .iter()
+        .map(|clause| (clause.kind, clause.text.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        texts,
+        vec![
+            (ContractKind::Invariant, "self.n >= 0"),
+            (ContractKind::Invariant, "(self.n < 10)"),
+        ]
+    );
+    let Item::Class(plain) = &module.items[1] else {
+        panic!("second item is a class");
+    };
+    assert!(plain.methods.is_empty());
+
+    for (source, message) in [
+        (
+            "class C:\n    n: int64\n    ensures self.n > 0\n",
+            "a class body states only `invariant` clauses; `ensures` belongs at the top of a method body",
+        ),
+        (
+            "class C:\n    n: int64\n    decreases self.n\n",
+            "`decreases` belongs at the top of a `while` loop body",
+        ),
+        (
+            "class C:\n    n: int64\n\n    def __invariant__(self):\n        pass\n",
+            "`__invariant__` is reserved",
+        ),
+    ] {
+        let error = crate::parser::parse(source).expect_err(source);
+        assert_eq!(error.code, "AU2048", "{source}");
+        assert!(error.message.contains(message), "{source}: {}", error.message);
+    }
+}
+
+#[test]
+fn quantifiers_old_values_and_spec_functions_parse() {
+    let module = crate::parser::parse(concat!(
+        "public spec def sorted_pairs(xs: list[int64]) -> bool:\n",
+        "    return forall((i, x) in enumerate(xs), exists(y in xs, y >= x) and i >= 0)\n",
+        "\n",
+        "def f(xs: mut list[int64], spec: int64) -> int64:\n",
+        "    ensures len(xs) == len(old(xs)) and old(xs[0]) >= 0\n",
+        "    ensures forall(x in xs, x > 0, extra=1) or forall(xs, true) or forall(x not in xs, true)\n",
+        "    return spec\n",
+    ))
+    .expect("V1c forms parse");
+    let Item::Function(spec_fn) = &module.items[0] else {
+        panic!("a spec function");
+    };
+    assert!(spec_fn.spec && spec_fn.public);
+    let Stmt::Return(ReturnStmt {
+        value: Some(value), ..
+    }) = &spec_fn.body[0]
+    else {
+        panic!("a return");
+    };
+    let ExprKind::Call { callee, args } = &value.kind else {
+        panic!("`forall` became a call to `all`");
+    };
+    assert!(matches!(&callee.kind, ExprKind::Name(name) if name == "all"));
+    let ExprKind::Comprehension { clauses, output } = &args[0].value.kind else {
+        panic!("over a list comprehension");
+    };
+    assert!(matches!(
+        &clauses[0].target,
+        BindingTarget::Tuple { elements, .. } if elements.len() == 2
+    ));
+    let ComprehensionOutput::List(condition) = output else {
+        panic!("a list comprehension");
+    };
+    let ExprKind::Binary { left, .. } = &condition.kind else {
+        panic!("the condition keeps its shape");
+    };
+    assert!(
+        matches!(&left.kind, ExprKind::Call { callee, .. } if matches!(&callee.kind, ExprKind::Name(name) if name == "any"))
+    );
+
+    let Item::Function(function) = &module.items[1] else {
+        panic!("a function");
+    };
+    assert!(!function.spec, "`spec` as a parameter name is ordinary");
+    let olds = &function.contracts[0].olds;
+    assert_eq!(olds.len(), 2);
+    assert!(olds[0].name.starts_with("old value "));
+    assert!(matches!(&olds[1].expr.kind, ExprKind::Index { .. }));
+    assert_eq!(
+        function.contracts[0].text,
+        "len(xs) == len(old(xs)) and old(xs[0]) >= 0"
+    );
+    // Quantifiers of other shapes stay calls for the checker to reject.
+    let rendered = format!("{:?}", function.contracts[1].condition);
+    assert_eq!(rendered.matches("\"forall\"").count(), 3, "{rendered}");
+
+    let error = crate::parser::parse(
+        "class C:\n    n: int64\n\n    spec def p(self) -> bool:\n        return true\n",
+    )
+    .expect_err("spec methods are rejected");
+    assert_eq!(error.code, "AU2048");
+}

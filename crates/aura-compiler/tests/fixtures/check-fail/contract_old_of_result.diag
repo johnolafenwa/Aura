@@ -1,0 +1,5 @@
+error[AU2048]: `old` reads a parameter or `self`, or a field or element of one
+ --> crates/aura-compiler/tests/fixtures/check-fail/contract_old_of_result.au:2:17
+  |
+2 |     ensures old(result) > 0
+  |                 ^

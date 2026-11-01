@@ -409,6 +409,7 @@ fn terminators_return_by_consuming_and_test_by_borrowing() {
                 value: place("x"),
             }],
             span: Span::new(1, 1),
+            kind: crate::mir::AssertKind::Assert,
         }),
         expect(&[("m", Borrow), ("x", Borrow)])
     );

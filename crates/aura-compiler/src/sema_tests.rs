@@ -7627,6 +7627,8 @@ fn function_decl(name: &str) -> FunctionDecl {
         property: None,
         decorators: Vec::new(),
         doc: None,
+        contracts: Vec::new(),
+        spec: false,
     }
 }
 
@@ -15893,7 +15895,7 @@ fn checker_function_default_loop_and_resource_validation_cover_additional_branch
             ),
             (
                 "def main() -> None:\n    flag = true\n    for value in flag:\n        pass\n",
-                "`for` currently requires a `Range`, `Queue[T]`, `list[T]`, or `set[T]` iterable, found `bool`",
+                "`for` requires a `Range`, `Queue[T]`, `list[T]`, `set[T]`, or `iter.Iterator[T]` iterable, found `bool`",
             ),
             (
                 "def main() -> None:\n    value = 1\n    for value in range(3):\n        pass\n",
@@ -31818,4 +31820,378 @@ def go(generators: list[random.Rng]):
         assert_eq!(diagnostic.code, code, "{source}\n{diagnostic:?}");
         assert_eq!(diagnostic.message, message, "{source}");
     }
+}
+
+#[test]
+fn contract_clauses_check_as_pure_bool_conditions() {
+    crate::check_source(concat!(
+        "class Box:\n",
+        "    items: list[int64]\n",
+        "\n",
+        "    def total(self, scale: int64) -> int64:\n",
+        "        requires scale > 0 and len(self.items) >= 0\n",
+        "        requires all([item >= 0 for item in self.items])\n",
+        "        requires self.items.contains(1) or not self.items.contains(1)\n",
+        "        ensures result == sum(self.items) * scale\n",
+        "        ensures f\"{result}\" != \"\" and -result <= 0 or result < 0\n",
+        "        return sum(self.items) * scale\n",
+        "\n",
+        "def none_result(xs: mut list[int64], n: own int64) -> None:\n",
+        "    requires n in [1, 2] and (n, n)[0] == n and {n: n}[n] == n\n",
+        "    requires n in {n} and xs[0:1] == xs[0:1] and (n if n > 0 else 1) > 0\n",
+        "    ensures len(xs) > 0 and n > 0 and result is None\n",
+        "    xs.append(n)\n",
+        "\n",
+        "def main():\n",
+        "    print(Box(items=[1]).total(2))\n",
+    ))
+    .expect("pure conditions check");
+
+    for (source, code, message) in [
+        (
+            "def g() -> bool:\n    return true\n\ndef f():\n    requires g()\n    pass\n",
+            "AU2048",
+            "a call to a user function",
+        ),
+        (
+            "def f(xs: mut list[int64]):\n    ensures xs.pop() > 0\n    pass\n",
+            "AU2048",
+            "`ensures` condition must not change program state",
+        ),
+        (
+            "def f(x: int64):\n    requires (lambda: x)() > 0\n    pass\n",
+            "AU2048",
+            "a call to a user function",
+        ),
+        (
+            "def f(x: int64):\n    requires [lambda: x] == []\n    pass\n",
+            "AU2048",
+            "a lambda",
+        ),
+        (
+            "def f(x: int64) -> Result[int64, str]:\n    requires try parse_int64(\"1\") > 0\n    return Result.Ok(x)\n",
+            "AU2048",
+            "`try`",
+        ),
+        (
+            "def f(x: int64):\n    requires match x:\n        case 1: true\n        case _: false\n    pass\n",
+            "AU2048",
+            "a `match` expression",
+        ),
+        (
+            "def f(x: int64):\n    requires x\n    pass\n",
+            "AU2002",
+            "a `requires` condition must be `bool`, found `int64`",
+        ),
+        (
+            "def f(result: int64) -> int64:\n    ensures result > 0\n    return 1\n",
+            "AU2048",
+            "rename the parameter `result`",
+        ),
+        (
+            "def f(xs: own list[int64]) -> int64:\n    ensures result <= len(xs)\n    return 0\n",
+            "AU2048",
+            "cannot read `own` parameter `xs`",
+        ),
+        (
+            "class C:\n    n: int64\n\n    def __init__(self, n: int64):\n        ensures true\n        self.n = n\n",
+            "AU2048",
+            "`__init__` cannot declare `ensures` yet",
+        ),
+        (
+            "class C:\n    items: list[int64]\n\n    def first(self) -> view int64 from self:\n        ensures true\n        return self.items[0]\n",
+            "AU2048",
+            "a function with a view result cannot declare `ensures` yet",
+        ),
+        (
+            "trait Shape:\n    def area(self) -> int64\n\nclass Sq:\n    side: int64\n\nimpl Shape for Sq:\n    def area(self) -> int64:\n        ensures result >= 0\n        return self.side\n",
+            "AU2048",
+            "cannot declare `ensures`: trait methods do not have contracts yet",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err(source);
+        assert_eq!(error.code, code, "{source}: {}", error.message);
+        assert!(error.message.contains(message), "{source}: {}", error.message);
+    }
+}
+
+#[test]
+fn loop_clauses_check_as_pure_conditions_and_measures() {
+    crate::check_source(concat!(
+        "def f(xs: list[int64], n: int64) -> int64:\n",
+        "    mut lo = 0\n",
+        "    mut hi = len(xs)\n",
+        "    while lo < hi:\n",
+        "        invariant 0 <= lo and hi <= len(xs)\n",
+        "        decreases hi - lo\n",
+        "        lo += 1\n",
+        "    mut acc = 0\n",
+        "    for i, x in enumerate(xs):\n",
+        "        invariant acc == sum(xs[0:i]) and x == xs[i]\n",
+        "        acc += x\n",
+        "    for x in xs:\n",
+        "        invariant x >= 0 or n > 0\n",
+        "    return acc\n",
+    ))
+    .expect("pure loop clauses check");
+    for (source, code, message) in [
+        (
+            "def main():\n    for x in [1, 2]:\n        decreases x\n        print(x)\n",
+            "AU2048",
+            "a `for` loop always ends",
+        ),
+        (
+            "def main():\n    mut k = 3\n    while k > 0:\n        decreases k\n        decreases k + 1\n        k -= 1\n",
+            "AU2048",
+            "at most one `decreases` clause",
+        ),
+        (
+            "def main():\n    mut k = 3.0\n    while k > 0.0:\n        decreases k\n        k -= 1.0\n",
+            "AU2002",
+            "a `decreases` measure must be `int64`, found `float64`",
+        ),
+        (
+            "def main():\n    mut k = 3\n    while k > 0:\n        invariant k\n        k -= 1\n",
+            "AU2002",
+            "an `invariant` condition must be `bool`, found `int64`",
+        ),
+        (
+            "def main():\n    mut xs = [1]\n    while len(xs) < 3:\n        invariant xs.pop() > 0\n        xs.append(1)\n",
+            "AU2048",
+            "an `invariant` condition must not change program state",
+        ),
+        (
+            "def main():\n    for x in [1]:\n        invariant [y for y in [x]].pop() > 0\n",
+            "AU2048",
+            "an `invariant` condition must not change program state",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err(source);
+        assert_eq!(error.code, code, "{source}: {}", error.message);
+        assert!(error.message.contains(message), "{source}: {}", error.message);
+    }
+}
+
+#[test]
+fn class_invariants_check_against_self_and_builtin_receivers_only() {
+    crate::check_source(concat!(
+        "class Bag:\n",
+        "    items: list[int64]\n",
+        "    tags: dict[str, int64]\n",
+        "    invariant len(self.items) >= 0 and not self.items.contains(-1)\n",
+        "    invariant len(self.tags.keys()) == len(self.tags) and \"ab\".count(\"a\") == 1\n",
+        "\n",
+        "    public def add(mut self, x: int64):\n",
+        "        self.items.append(x)\n",
+    ))
+    .expect("class invariants over builtin receivers check");
+    for (source, code, message) in [
+        (
+            "class C:\n    n: int64\n    invariant self.get() > 0\n\n    def get(self) -> int64:\n        return self.n\n",
+            "AU2048",
+            "a method call on `C`, which may change program state",
+        ),
+        (
+            "class C:\n    n: int64\n\n    def count(mut self) -> int64:\n        self.n += 1\n        return self.n\n\ndef f(c: mut C):\n    requires c.count() > 0\n    pass\n",
+            "AU2048",
+            "a method call on `C`",
+        ),
+        (
+            "class C:\n    n: int64\n    invariant self.n\n",
+            "AU2002",
+            "an `invariant` condition must be `bool`, found `int64`",
+        ),
+        (
+            "class C:\n    n: int64\n    invariant missing > 0\n",
+            "AU2001",
+            "unknown name `missing`",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err(source);
+        assert_eq!(error.code, code, "{source}: {}", error.message);
+        assert!(error.message.contains(message), "{source}: {}", error.message);
+    }
+}
+
+#[test]
+fn old_values_and_spec_functions_check_in_spec_contexts_only() {
+    crate::check_source(concat!(
+        "spec def is_sorted(xs: list[int64]) -> bool:\n",
+        "    \"\"\"Sorted.\"\"\"\n",
+        "    return forall(i in range(len(xs) - 1), xs[i] <= xs[i + 1])\n",
+        "\n",
+        "spec def total(xs: list[int64], i: int64) -> int64:\n",
+        "    return 0 if i >= len(xs) else xs[i] + total(xs, i + 1)\n",
+        "\n",
+        "class Box:\n",
+        "    items: list[int64]\n",
+        "    label: str\n",
+        "    invariant is_sorted(self.items)\n",
+        "\n",
+        "    def push(mut self, x: int64):\n",
+        "        ensures len(self.items) == len(old(self.items)) + 1\n",
+        "        ensures old(self.label) == self.label and old(self.items[0:1]) == self.items[0:1]\n",
+        "        self.items.append(x)\n",
+        "\n",
+        "def f(xs: list[int64], n: own int64) -> int64:\n",
+        "    requires is_sorted(xs)\n",
+        "    ensures result == total(xs, 0) + old(n) - n\n",
+        "    mut i = 0\n",
+        "    while i < len(xs):\n",
+        "        invariant is_sorted(xs) and exists(x in xs, x == xs[0])\n",
+        "        i += 1\n",
+        "    return sum(xs)\n",
+    ))
+    .expect("spec functions and old values check");
+    for (source, message) in [
+        (
+            "spec def pos(x: int64) -> bool:\n    return x > 0\n\ndef main():\n    print(pos(1))\n",
+            "`pos` is a `spec def`; only contract clauses and other `spec def` bodies may use it",
+        ),
+        (
+            "spec def pos(x: int64) -> bool:\n    return x > 0\n\ndef main():\n    f = pos\n",
+            "`pos` is a `spec def`",
+        ),
+        (
+            "spec def pos(x: int64) -> bool:\n    y = x\n    return y > 0\n",
+            "a `spec def` body is one `return`",
+        ),
+        (
+            "spec def pos(xs: mut list[int64]) -> bool:\n    return len(xs) > 0\n",
+            "a `spec def` cannot take `mut` parameter `xs`",
+        ),
+        (
+            "spec def pos(x: int64) -> bool:\n    requires x > 0\n    return x > 0\n",
+            "a `spec def` cannot declare contract clauses yet",
+        ),
+        (
+            "def g() -> int64:\n    return 1\n\nspec def pos(x: int64) -> bool:\n    return x > g()\n",
+            "a `spec def` body must not change program state",
+        ),
+        (
+            "def f(x: int64):\n    requires old(x) > 0\n    pass\n",
+            "allowed only in an `ensures` condition",
+        ),
+        (
+            "def f(x: int64) -> int64:\n    ensures old(result) > 0\n    return x\n",
+            "`old` reads a parameter or `self`",
+        ),
+        (
+            "def f(x: int64) -> int64:\n    ensures old(x + 1) > 0\n    return x\n",
+            "`old` reads a parameter or `self`",
+        ),
+        (
+            "def f(xs: list[int64]) -> int64:\n    ensures old(xs.copy()) == xs\n    return 1\n",
+            "`old` reads a parameter or `self`",
+        ),
+        (
+            "def g() -> int64:\n    return 0\n\ndef f(xs: list[int64]) -> int64:\n    ensures old((xs)[g()]) == 1\n    return 1\n",
+            "an `old` value must not change program state",
+        ),
+        (
+            "class C:\n    n: int64\n\ndef f(c: C) -> int64:\n    ensures old(c).n > 0\n    return 1\n",
+            "takes a Copy type, `str`, or a list, dict, set, or Array, not `C`",
+        ),
+        (
+            "def f(xs: list[int64]):\n    requires forall(xs, true)\n    pass\n",
+            "write `forall(name in collection, condition)`",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err(source);
+        assert_eq!(error.code, "AU2048", "{source}: {}", error.message);
+        assert!(error.message.contains(message), "{source}: {}", error.message);
+    }
+}
+
+const ITERATOR_PRELUDE: &str = concat!(
+    "from iter import Iterator, Step\n",
+    "\n",
+    "class Count:\n",
+    "    n: int64\n",
+    "\n",
+    "impl Iterator[int64] for Count:\n",
+    "    def next(mut self) -> Step[int64]:\n",
+    "        if self.n == 0:\n",
+    "            return Step.End\n",
+    "        self.n -= 1\n",
+    "        return Step.Item(self.n)\n",
+    "\n",
+);
+
+#[test]
+fn for_loops_iterate_user_iterators() {
+    let source = format!(
+        "{ITERATOR_PRELUDE}def main():\n    for x in Count(n=2):\n        print(x)\n    mut c = Count(n=3)\n    for x in mut c:\n        break\n    for _ in mut c:\n        pass\n    print(c.n)\n"
+    );
+    crate::check_source(&source).expect("iterator loops check");
+
+    for (body, code, message) in [
+        (
+            "    c = Count(n=2)\n    for x in c:\n        print(x)\n    print(c.n)\n",
+            "AU3001",
+            "use of moved value `c`",
+        ),
+        (
+            "    c = Count(n=2)\n    for x in own c:\n        print(x)\n",
+            "AU3004",
+            "a `for` loop already consumes an iterator",
+        ),
+        (
+            "    c = Count(n=2)\n    for x in mut c:\n        print(x)\n",
+            "AU3002",
+            "requires a mutable iterator place",
+        ),
+        (
+            "    for x in Count(n=2):\n        invariant x >= 0\n        print(x)\n",
+            "AU2048",
+            "loop clauses on a `for` loop over an iterator",
+        ),
+        (
+            "    print([x for x in Count(n=2)])\n",
+            "AU2002",
+            "a comprehension cannot iterate the iterator `Count` yet",
+        ),
+        (
+            "    for x in 3:\n        print(x)\n",
+            "AU2999",
+            "or `iter.Iterator[T]` iterable, found `int64`",
+        ),
+    ] {
+        let source = format!("{ITERATOR_PRELUDE}def main():\n{body}");
+        let diagnostic = crate::check_source(&source).expect_err("the loop is rejected");
+        assert_eq!(diagnostic.code, code, "{source}\n{diagnostic:?}");
+        assert!(
+            diagnostic.message.contains(message),
+            "{source}\n{diagnostic:?}"
+        );
+    }
+}
+
+#[test]
+fn imported_generic_unit_variants_take_expected_type_arguments() {
+    let diagnostic = crate::check_source(concat!(
+        "import iter\n",
+        "\n",
+        "def main():\n",
+        "    step = iter.Step.End\n",
+    ))
+    .expect_err("no expected type");
+    assert!(
+        diagnostic
+            .message
+            .contains("cannot infer type parameter `T` for enum variant `iter.Step.End`"),
+        "{diagnostic:?}"
+    );
+    crate::check_source(concat!(
+        "import iter\n",
+        "\n",
+        "def done() -> iter.Step[str]:\n",
+        "    return iter.Step.End\n",
+        "\n",
+        "def main():\n",
+        "    match done():\n",
+        "        case _:\n",
+        "            pass\n",
+    ))
+    .expect("the expected type supplies `T`");
 }

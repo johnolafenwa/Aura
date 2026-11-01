@@ -1,0 +1,8 @@
+error[AU4009]: `invariant` clause failed: `self.balance >= 0`
+ --> crates/aura-compiler/tests/fixtures/run-fail/class_invariant_method_entry.au:5:20
+  |
+5 |     invariant self.balance >= 0
+  |                    ^
+  = note: left = -1
+  = note: right = 0
+  = note: Aura call chain (innermost first): Account.__invariant__ at 5:5 -> Account.deposit at 8:12 -> main at 32:1

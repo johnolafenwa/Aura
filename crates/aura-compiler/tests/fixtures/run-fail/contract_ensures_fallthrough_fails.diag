@@ -1,0 +1,8 @@
+error[AU4009]: `ensures` clause failed: `len(xs) > 0`
+ --> crates/aura-compiler/tests/fixtures/run-fail/contract_ensures_fallthrough_fails.au:2:13
+  |
+2 |     ensures len(xs) > 0
+  |             ^
+  = note: left = 0
+  = note: right = 0
+  = note: Aura call chain (innermost first): check at 1:1 -> main at 6:1

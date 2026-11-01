@@ -445,6 +445,19 @@ impl<'a> FunctionChecker<'a> {
         method_info: &TraitImplMethodInfo,
     ) -> Result<()> {
         let method = &method_info.decl;
+        if let Some(clause) = method.contracts.first() {
+            // A trait method has no contract yet, so a clause here would
+            // change what callers through the trait may rely on.
+            return Err(Diagnostic::coded_at(
+                "AU2048",
+                clause.span,
+                format!(
+                    "the `{trait_name}` implementation of `{}` cannot declare `{}`: trait methods do not have contracts yet",
+                    method.name,
+                    clause.kind.keyword()
+                ),
+            ));
+        }
         self.validate_view_return_contract(method)?;
         let impl_type_param_scope = type_param_scope(impl_type_params);
         let type_param_scope = merged_type_param_scope(&impl_type_param_scope, &method.type_params);

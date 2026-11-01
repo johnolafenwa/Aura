@@ -1,0 +1,6 @@
+def main():
+    mut k = 0
+    while k < 5:
+        invariant k <= 3
+        k += 1
+    print(k)

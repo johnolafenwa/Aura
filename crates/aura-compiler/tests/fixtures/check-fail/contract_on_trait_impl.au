@@ -1,0 +1,12 @@
+trait Shape:
+    def area(self) -> int64
+
+
+class Square:
+    side: int64
+
+
+impl Shape for Square:
+    def area(self) -> int64:
+        requires self.side > 0
+        return self.side * self.side

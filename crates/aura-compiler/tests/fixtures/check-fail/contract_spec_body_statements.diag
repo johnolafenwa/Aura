@@ -1,0 +1,5 @@
+error[AU2048]: a `spec def` body is one `return` of a pure expression, after an optional docstring
+ --> crates/aura-compiler/tests/fixtures/check-fail/contract_spec_body_statements.au:1:6
+  |
+1 | spec def pos(x: int64) -> bool:
+  |      ^

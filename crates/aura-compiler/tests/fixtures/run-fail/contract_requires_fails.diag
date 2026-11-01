@@ -1,0 +1,8 @@
+error[AU4009]: `requires` clause failed: `amount <= balance`
+ --> crates/aura-compiler/tests/fixtures/run-fail/contract_requires_fails.au:2:14
+  |
+2 |     requires amount <= balance
+  |              ^
+  = note: left = 30
+  = note: right = 10
+  = note: Aura call chain (innermost first): withdraw at 1:1 -> main at 6:1

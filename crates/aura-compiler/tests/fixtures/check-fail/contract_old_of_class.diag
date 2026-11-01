@@ -1,0 +1,5 @@
+error[AU2048]: `old` keeps a copy of its value, so it takes a Copy type, `str`, or a list, dict, set, or Array, not `C`
+ --> crates/aura-compiler/tests/fixtures/check-fail/contract_old_of_class.au:5:17
+  |
+5 |     ensures old(c).n > 0
+  |                 ^

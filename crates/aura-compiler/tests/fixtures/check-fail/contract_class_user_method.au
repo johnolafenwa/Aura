@@ -1,0 +1,6 @@
+class C:
+    n: int64
+    invariant self.get() > 0
+
+    def get(self) -> int64:
+        return self.n

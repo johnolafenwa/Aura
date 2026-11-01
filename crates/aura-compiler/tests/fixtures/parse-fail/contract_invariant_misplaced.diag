@@ -1,0 +1,5 @@
+error[AU2048]: `invariant` clauses must come first in a loop body, before any other statement
+ --> crates/aura-compiler/tests/fixtures/parse-fail/contract_invariant_misplaced.au:5:9
+  |
+5 |         invariant k >= 0
+  |         ^

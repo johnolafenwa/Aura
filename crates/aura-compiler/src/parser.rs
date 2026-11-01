@@ -1,15 +1,15 @@
 use crate::ast::{
     Argument, AssertStmt, AssignStmt, AssignTarget, BinaryOp, BindingPattern, BindingTarget,
     BreakStmt, ClassDecl, ClassPattern, ClassPatternField, CompareLink, CompareOp,
-    ComprehensionClause, ComprehensionOutput, ConstantDecl, ContinueStmt, Decorator,
-    DestructureStmt, DocString, EnumDecl, EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind,
-    ExprStmt, ExternFunctionDecl, ExternOpaqueClassDecl, FieldDecl, ForStmt, FormatPart,
-    FunctionDecl, FunctionTypeParam, IfBranch, IfStmt, ImplDecl, ImportDecl, ImportKind,
-    ImportName, Item, LambdaCapture, LambdaParam, LiteralPattern, LiteralPatternKind, MapEntryExpr,
-    MatchArm, MatchExprArm, MatchStmt, Module, Param, ParamMode, Pattern, ReceiverKind,
-    RestPattern, ReturnStmt, SequencePattern, Stmt, TraitDecl, TuplePattern, TypeAliasDecl,
-    TypeRef, TypeRefKind, UnaryOp, VariantPattern, ViewKind, ViewReturn, ViewStmt, WhileStmt,
-    WithStmt,
+    ComprehensionClause, ComprehensionOutput, ConstantDecl, ContinueStmt, ContractClause,
+    ContractKind, Decorator, DestructureStmt, DocString, EnumDecl, EnumPayloadFieldDecl,
+    EnumVariantDecl, Expr, ExprKind, ExprStmt, ExternFunctionDecl, ExternOpaqueClassDecl,
+    FieldDecl, ForStmt, FormatPart, FunctionDecl, FunctionTypeParam, IfBranch, IfStmt, ImplDecl,
+    ImportDecl, ImportKind, ImportName, Item, LambdaCapture, LambdaParam, LiteralPattern,
+    LiteralPatternKind, MapEntryExpr, MatchArm, MatchExprArm, MatchStmt, Module, Param, ParamMode,
+    Pattern, ReceiverKind, RestPattern, ReturnStmt, SequencePattern, Stmt, TraitDecl, TuplePattern,
+    TypeAliasDecl, TypeRef, TypeRefKind, UnaryOp, VariantPattern, ViewKind, ViewReturn, ViewStmt,
+    WhileStmt, WithStmt,
 };
 use crate::call::STEPPED_SLICE_BUILTIN;
 use crate::diag::{Diagnostic, Result, Span};
@@ -35,6 +35,189 @@ fn misplaced_decorator_error(span: Span) -> Diagnostic {
         span,
         "a decorator must come directly before a module-level function definition",
     )
+}
+
+/// A contract clause after the first statement of its body.
+fn misplaced_contract_error(span: Span, kind: ContractKind) -> Diagnostic {
+    let place = match kind {
+        ContractKind::Requires | ContractKind::Ensures => {
+            "a function body, after any docstring and"
+        }
+        ContractKind::Invariant | ContractKind::Decreases => "a loop body,",
+    };
+    Diagnostic::coded_at(
+        "AU2048",
+        span,
+        format!(
+            "`{}` clauses must come first in {place} before any other statement",
+            kind.keyword()
+        ),
+    )
+}
+
+/// The hidden method that checks a class's `invariant` clauses on entry.
+/// It is public with its class, so construction in another module can
+/// call it.
+fn class_invariant_method(
+    public: bool,
+    span: Span,
+    invariants: Vec<ContractClause>,
+) -> FunctionDecl {
+    FunctionDecl {
+        public,
+        name: crate::ast::CLASS_INVARIANT_METHOD.to_string(),
+        type_params: Vec::new(),
+        type_param_bounds: std::collections::BTreeMap::new(),
+        receiver: Some(ReceiverKind::Borrow),
+        params: Vec::new(),
+        return_type: TypeRef::named("None", Vec::new(), false, span),
+        view_return: None,
+        body: vec![Stmt::Pass(crate::ast::PassStmt { span })],
+        span,
+        property: None,
+        decorators: Vec::new(),
+        doc: None,
+        contracts: invariants,
+        spec: false,
+    }
+}
+
+/// Rewrites each `forall(x in xs, condition)` into `all([condition for x
+/// in xs])`, and each `exists(...)` into `any(...)`, innermost first. A
+/// call of another shape is left for the checker to reject.
+pub(crate) fn rewrite_quantifiers(expr: &mut Expr) {
+    expr.for_each_child_mut(&mut rewrite_quantifiers);
+    let span = expr.span;
+    let ExprKind::Call { callee, args } = &mut expr.kind else {
+        return;
+    };
+    let reduction = match &callee.kind {
+        ExprKind::Name(name) if name == "forall" => "all",
+        ExprKind::Name(name) if name == "exists" => "any",
+        _ => return,
+    };
+    let [binding, condition] = args.as_slice() else {
+        return;
+    };
+    if binding.name.is_some() || condition.name.is_some() {
+        return;
+    }
+    let ExprKind::Membership {
+        value,
+        container,
+        negated: false,
+        ..
+    } = &binding.value.kind
+    else {
+        return;
+    };
+    let Some(target) = quantifier_target(value) else {
+        return;
+    };
+    let comprehension = Expr {
+        kind: ExprKind::Comprehension {
+            output: ComprehensionOutput::List(Box::new(condition.value.clone())),
+            clauses: vec![crate::ast::ComprehensionClause {
+                target,
+                iterable: (**container).clone(),
+                filters: Vec::new(),
+                span: binding.value.span,
+            }],
+        },
+        span: binding.value.span,
+    };
+    *expr = Expr {
+        kind: ExprKind::Call {
+            callee: Box::new(Expr {
+                kind: ExprKind::Name(reduction.to_string()),
+                span: callee.span,
+            }),
+            args: vec![Argument {
+                name: None,
+                value: comprehension,
+                span: binding.span,
+            }],
+        },
+        span,
+    };
+}
+
+/// The binding of a quantifier: a name, or a tuple of names.
+fn quantifier_target(expr: &Expr) -> Option<BindingTarget> {
+    match &expr.kind {
+        ExprKind::Name(name) => Some(BindingTarget::Name {
+            name: name.clone(),
+            span: expr.span,
+        }),
+        ExprKind::Tuple(items) => {
+            let elements = items
+                .iter()
+                .map(quantifier_target)
+                .collect::<Option<Vec<_>>>()?;
+            Some(BindingTarget::Tuple {
+                elements,
+                span: expr.span,
+            })
+        }
+        ExprKind::Group(inner) => quantifier_target(inner),
+        _ => None,
+    }
+}
+
+/// Replaces each `old(expr)` with a hidden name and records `expr`, which
+/// the function evaluates on entry.
+fn rewrite_olds(expr: &mut Expr, olds: &mut Vec<crate::ast::OldValue>) {
+    if let ExprKind::Call { callee, args } = &expr.kind {
+        if matches!(&callee.kind, ExprKind::Name(name) if name == "old")
+            && args.len() == 1
+            && args[0].name.is_none()
+        {
+            let name = format!("old value {}:{}", expr.span.line, expr.span.column);
+            olds.push(crate::ast::OldValue {
+                name: name.clone(),
+                expr: args[0].value.clone(),
+            });
+            expr.kind = ExprKind::Name(name);
+            return;
+        }
+    }
+    expr.for_each_child_mut(&mut |child| rewrite_olds(child, olds));
+}
+
+/// Where a run of contract clauses appears.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum ClauseContext {
+    Function,
+    Loop,
+    Class,
+}
+
+/// A clause whose kind does not belong in `context`.
+fn wrong_place_contract_error(
+    span: Span,
+    kind: ContractKind,
+    context: ClauseContext,
+) -> Diagnostic {
+    if context == ClauseContext::Class {
+        return Diagnostic::coded_at(
+            "AU2048",
+            span,
+            format!(
+                "a class body states only `invariant` clauses; `{}` belongs at the top of a {} body",
+                kind.keyword(),
+                if kind == ContractKind::Decreases { "`while` loop" } else { "method" }
+            ),
+        );
+    }
+    let message = match kind {
+        ContractKind::Requires | ContractKind::Ensures => format!(
+            "`{}` clauses belong at the top of a function body; a loop states `invariant` and `decreases`",
+            kind.keyword()
+        ),
+        ContractKind::Invariant => "`invariant` clauses belong at the top of a loop body or in a class body; a function states `requires` and `ensures`".to_string(),
+        ContractKind::Decreases => "`decreases` clauses belong at the top of a `while` loop body; a function states `requires` and `ensures`".to_string(),
+    };
+    Diagnostic::coded_at("AU2048", span, message)
 }
 
 fn property_target_error(span: Span) -> Diagnostic {
@@ -129,7 +312,9 @@ fn validate_rest_targets(target: &BindingTarget, rest_allowed: bool) -> Result<(
 
 pub fn parse(source: &str) -> Result<Module> {
     let tokens = lex(source)?;
-    let mut module = Parser::new(tokens).parse_module()?;
+    let mut parser = Parser::new(tokens);
+    parser.source_lines = source.lines().map(str::to_owned).collect();
+    let mut module = parser.parse_module()?;
     check_module_documentation_limit(&module)?;
     record_decorator_text(&mut module, source);
     Ok(module)
@@ -249,6 +434,9 @@ struct Parser {
     index: usize,
     recursion_depth: usize,
     current_function_returns_view: bool,
+    /// The source, line by line, for contract clause text. Empty for
+    /// generated source.
+    source_lines: Vec<String>,
 }
 
 impl Parser {
@@ -262,6 +450,7 @@ impl Parser {
             index: 0,
             recursion_depth,
             current_function_returns_view: false,
+            source_lines: Vec::new(),
         }
     }
 
@@ -327,6 +516,7 @@ impl Parser {
                 || self.at_keyword_enum()
                 || self.at_keyword_extern()
                 || self.at_keyword_def()
+                || self.at_spec_def_start()
                 || self.at_keyword_trait()
                 || self.at_keyword_impl()
             {
@@ -353,7 +543,11 @@ impl Parser {
             TokenKind::Identifier(_) => {
                 matches!(self.peek_kind(1), Some(TokenKind::Equal | TokenKind::Colon))
             }
-            TokenKind::KwPublic => matches!(self.peek_kind(1), Some(TokenKind::Identifier(_))),
+            TokenKind::KwPublic => {
+                matches!(self.peek_kind(1), Some(TokenKind::Identifier(_)))
+                    && !(matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "spec")
+                        && matches!(self.peek_kind(2), Some(TokenKind::KwDef)))
+            }
             _ => false,
         }
     }
@@ -402,6 +596,19 @@ impl Parser {
             self.parse_extern_item(public)
         } else if self.at_keyword_def() {
             Ok(Item::Function(self.parse_function(public)?))
+        } else if self.at_spec_def_start() {
+            self.bump();
+            let mut function = self.parse_function(public)?;
+            function.spec = true;
+            for stmt in &mut function.body {
+                if let Stmt::Return(ReturnStmt {
+                    value: Some(value), ..
+                }) = stmt
+                {
+                    rewrite_quantifiers(value);
+                }
+            }
+            Ok(Item::Function(function))
         } else if self.at_keyword_trait() {
             Ok(Item::Trait(self.parse_trait(public)?))
         } else if self.at_keyword_impl() {
@@ -412,6 +619,12 @@ impl Parser {
         } else {
             Err(self.error_here("expected `class`, `enum`, `extern`, `def`, `trait`, or `impl`"))
         }
+    }
+
+    /// `spec def`: `spec` is a keyword only before `def`.
+    fn at_spec_def_start(&self) -> bool {
+        matches!(self.current_kind(), TokenKind::Identifier(name) if name == "spec")
+            && matches!(self.peek_kind(1), Some(TokenKind::KwDef))
     }
 
     fn at_type_alias_start(&self) -> bool {
@@ -694,7 +907,26 @@ impl Parser {
         let doc = self.take_docstring()?;
         let mut fields: Vec<FieldDecl> = Vec::new();
         let mut methods = Vec::new();
+        let mut invariants = Vec::new();
         while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
+            if self.at_spec_def_start() {
+                return Err(Diagnostic::coded_at(
+                    "AU2048",
+                    self.current_span(),
+                    "a `spec def` is a module-level function; `spec def` methods are not available yet",
+                ));
+            }
+            if let Some(kind) = self.at_contract_clause() {
+                if kind != ContractKind::Invariant {
+                    return Err(wrong_place_contract_error(
+                        self.current_span(),
+                        kind,
+                        ClauseContext::Class,
+                    ));
+                }
+                invariants.push(self.parse_contract_clause(kind)?);
+                continue;
+            }
             if self.at_field_docstring(fields.last()) {
                 let field_doc = self.take_docstring()?;
                 fields
@@ -739,6 +971,19 @@ impl Parser {
         }
 
         self.expect_simple(TokenKind::Dedent)?;
+        if let Some(method) = methods
+            .iter()
+            .find(|method| method.name == crate::ast::CLASS_INVARIANT_METHOD)
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2048",
+                method.span,
+                "`__invariant__` is reserved for checking a class's `invariant` clauses; rename the method",
+            ));
+        }
+        if let Some(first) = invariants.first() {
+            methods.push(class_invariant_method(public, first.span, invariants));
+        }
 
         Ok(ClassDecl {
             public,
@@ -967,12 +1212,18 @@ impl Parser {
         self.expect_newline()?;
         let previous_view_return = self.current_function_returns_view;
         self.current_function_returns_view = view_return.is_some();
-        let body = self.parse_block_with_docstring();
+        let body = self.parse_function_body();
         self.current_function_returns_view = previous_view_return;
-        let (doc, mut body) = body?;
-        if let (Some(doc), true) = (&doc, body.is_empty()) {
-            // A docstring-only body is a body with no statements.
-            body.push(Stmt::Pass(crate::ast::PassStmt { span: doc.span }));
+        let (doc, contracts, mut body) = body?;
+        if body.is_empty() {
+            // A body of only a docstring or clauses has no statements.
+            if let Some(span) = contracts
+                .last()
+                .map(|clause| clause.span)
+                .or(doc.as_ref().map(|doc| doc.span))
+            {
+                body.push(Stmt::Pass(crate::ast::PassStmt { span }));
+            }
         }
 
         Ok(FunctionDecl {
@@ -989,6 +1240,8 @@ impl Parser {
             property: None,
             decorators: Vec::new(),
             doc,
+            contracts,
+            spec: false,
         })
     }
 
@@ -1155,6 +1408,8 @@ impl Parser {
             property: None,
             decorators: Vec::new(),
             doc,
+            contracts: Vec::new(),
+            spec: false,
         })
     }
 
@@ -1403,6 +1658,9 @@ impl Parser {
     }
 
     fn parse_stmt_inner(&mut self) -> Result<Stmt> {
+        if let Some(kind) = self.at_contract_clause() {
+            return Err(misplaced_contract_error(self.current_span(), kind));
+        }
         if self.at_simple(&TokenKind::At) {
             let property = self.parse_property_marker()?;
             return Err(property_target_error(property));
@@ -1659,11 +1917,12 @@ impl Parser {
         let iterable = self.parse_expr()?;
         self.expect_simple(TokenKind::Colon)?;
         self.expect_newline()?;
-        let body = self.parse_block()?;
+        let (contracts, body) = self.parse_loop_block()?;
         Ok(Stmt::For(ForStmt {
             target,
             iterable,
             borrow_mode,
+            contracts,
             body,
             span,
         }))
@@ -2076,9 +2335,10 @@ impl Parser {
         let condition = self.parse_expr()?;
         self.expect_simple(TokenKind::Colon)?;
         self.expect_newline()?;
-        let body = self.parse_block()?;
+        let (contracts, body) = self.parse_loop_block()?;
         Ok(Stmt::While(WhileStmt {
             condition,
+            contracts,
             body,
             span,
         }))
@@ -2128,6 +2388,140 @@ impl Parser {
 
         self.expect_simple(TokenKind::Dedent)?;
         Ok((doc, body))
+    }
+
+    /// Parses a function body: an optional docstring, then the `requires`
+    /// and `ensures` clauses, then the statements.
+    fn parse_function_body(
+        &mut self,
+    ) -> Result<(Option<DocString>, Vec<ContractClause>, Vec<Stmt>)> {
+        self.expect_simple(TokenKind::Indent)?;
+        self.skip_newlines();
+        let doc = self.take_docstring()?;
+        let contracts = self.parse_contract_clauses(ClauseContext::Function)?;
+        let mut body = Vec::new();
+        while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
+            if self.at_simple(&TokenKind::Newline) {
+                self.bump();
+                continue;
+            }
+            body.push(self.parse_stmt()?);
+        }
+        self.expect_simple(TokenKind::Dedent)?;
+        Ok((doc, contracts, body))
+    }
+
+    /// Parses the clauses at the top of a body, each on its own line.
+    fn parse_contract_clauses(&mut self, context: ClauseContext) -> Result<Vec<ContractClause>> {
+        let mut clauses = Vec::new();
+        loop {
+            self.skip_newlines();
+            let Some(kind) = self.at_contract_clause() else {
+                break;
+            };
+            let allowed = match kind {
+                ContractKind::Requires | ContractKind::Ensures => {
+                    context == ClauseContext::Function
+                }
+                ContractKind::Invariant => context != ClauseContext::Function,
+                ContractKind::Decreases => context == ClauseContext::Loop,
+            };
+            if !allowed {
+                return Err(wrong_place_contract_error(
+                    self.current_span(),
+                    kind,
+                    context,
+                ));
+            }
+            clauses.push(self.parse_contract_clause(kind)?);
+        }
+        Ok(clauses)
+    }
+
+    /// Parses one clause line whose keyword is the current token.
+    fn parse_contract_clause(&mut self, kind: ContractKind) -> Result<ContractClause> {
+        {
+            let span = self.bump().span;
+            let condition = self.parse_expr()?;
+            let end_line = self
+                .tokens
+                .get(self.index.saturating_sub(1))
+                .map_or(span.line, |token| token.span.line);
+            self.expect_statement_terminator()?;
+            let text = self.clause_text(kind, span.line, end_line);
+            let mut condition = condition;
+            rewrite_quantifiers(&mut condition);
+            let mut olds = Vec::new();
+            if kind == ContractKind::Ensures {
+                rewrite_olds(&mut condition, &mut olds);
+            }
+            Ok(ContractClause {
+                kind,
+                condition,
+                span,
+                text,
+                end_line,
+                olds,
+            })
+        }
+    }
+
+    /// A clause's condition as written, joining the lines of a clause that
+    /// spans several.
+    fn clause_text(&self, kind: ContractKind, start_line: usize, end_line: usize) -> String {
+        let start = start_line.saturating_sub(1);
+        let end = end_line.max(start_line).min(self.source_lines.len());
+        let text = self
+            .source_lines
+            .get(start..end)
+            .unwrap_or_default()
+            .iter()
+            .map(|line| line.trim())
+            .collect::<Vec<_>>()
+            .join(" ");
+        text.strip_prefix(kind.keyword())
+            .unwrap_or(&text)
+            .trim()
+            .to_string()
+    }
+
+    /// The clause a line starting here begins, if it begins one. Clause words
+    /// are keywords only before an expression: `requires = 1`,
+    /// `requires.x`, `requires[0]`, and the call `requires(x)` stay ordinary
+    /// statements. A parenthesis after a space starts a clause.
+    fn at_contract_clause(&self) -> Option<ContractKind> {
+        let TokenKind::Identifier(word) = self.current_kind() else {
+            return None;
+        };
+        let kind = ContractKind::from_keyword(word)?;
+        let keyword = &self.tokens[self.index];
+        let next = self.tokens.get(self.index + 1)?;
+        let starts_expression = match &next.kind {
+            TokenKind::Identifier(_)
+            | TokenKind::IntLiteral(_)
+            | TokenKind::DurationLiteral(_)
+            | TokenKind::FloatLiteral(_)
+            | TokenKind::BoolLiteral(_)
+            | TokenKind::StringLiteral(_)
+            | TokenKind::FStringLiteral(_)
+            | TokenKind::KwNot
+            | TokenKind::KwTry
+            | TokenKind::KwMatch
+            | TokenKind::Minus
+            | TokenKind::LBracket
+            | TokenKind::LBrace => true,
+            // `requires(x)` is a call; `requires (x)` is a clause.
+            TokenKind::LParen => {
+                next.span.line != keyword.span.line
+                    || next.span.column > keyword.span.column + word.len()
+            }
+            _ => false,
+        };
+        // `requires [x]` and `requires -x` read as clauses only with a space.
+        let spaced = next.span.column > keyword.span.column + word.len();
+        let starts_expression = starts_expression
+            && (spaced || !matches!(next.kind, TokenKind::LBracket | TokenKind::Minus));
+        starts_expression.then_some(kind)
     }
 
     /// True when the current token is a plain triple-quoted string that is a
@@ -2186,6 +2580,30 @@ impl Parser {
             ));
         }
         Ok(())
+    }
+
+    /// Parses a loop body with its leading `invariant` and `decreases`
+    /// clauses.
+    fn parse_loop_block(&mut self) -> Result<(Vec<ContractClause>, Vec<Stmt>)> {
+        self.expect_simple(TokenKind::Indent)?;
+        let contracts = self.parse_contract_clauses(ClauseContext::Loop)?;
+        let mut body = Vec::new();
+        while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
+            if self.at_simple(&TokenKind::Newline) {
+                self.bump();
+                continue;
+            }
+            body.push(self.parse_stmt()?);
+        }
+        if body.is_empty() {
+            body.push(Stmt::Pass(crate::ast::PassStmt {
+                span: contracts
+                    .last()
+                    .map_or(self.current_span(), |clause| clause.span),
+            }));
+        }
+        self.expect_simple(TokenKind::Dedent)?;
+        Ok((contracts, body))
     }
 
     fn parse_block(&mut self) -> Result<Vec<Stmt>> {

@@ -1,0 +1,5 @@
+error[AU3002]: `for value in mut ...:` requires a mutable iterator place
+ --> crates/aura-compiler/tests/fixtures/check-fail/iterator_for_mut_immutable.au:19:18
+   |
+19 |     for x in mut counter:
+   |                  ^

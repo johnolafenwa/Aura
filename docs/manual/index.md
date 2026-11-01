@@ -51,6 +51,9 @@ scope, terminology, authority, and conformance language.
   recursive equality.
 - [Assertions](/manual/assertions): exact boolean conditions, lazy messages,
   `AU4001` failures, cleanup precedence, and backend behavior.
+- [Contracts](/manual/contracts): `requires`, `ensures`, loop and class
+  invariants, `decreases`, `old`, `forall`, `exists`, `spec def`, and
+  `AU4009` failures.
 - [Functions](/manual/functions): signatures, the bare, `own`, and `mut`
   parameter modes, default and named arguments, `main`, owned returns, and
   call binding.

@@ -19323,10 +19323,15 @@ pub extern "C-unwind" fn aura_direct_round_f64(value: f64) -> i64 {
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_assert_fail(message: i64, line: i64, column: i64) -> ! {
+pub extern "C-unwind" fn aura_direct_assert_fail(
+    message: i64,
+    line: i64,
+    column: i64,
+    kind: i64,
+) -> ! {
     task_runtime_boundary(|| {
         let message = direct_assert_message(message);
-        runtime_diagnostic_error(direct_assert_diagnostic(message, line, column))
+        runtime_diagnostic_error(direct_assert_diagnostic(message, line, column, kind))
     })
 }
 
@@ -19356,10 +19361,13 @@ fn direct_assert_string(value: i64, field: &str) -> String {
     value.unwrap_or_else(|error| runtime_error(error))
 }
 
-fn direct_assert_diagnostic(message: String, line: i64, column: i64) -> Diagnostic {
+/// The code a failed check reports: `AU4001` for an `assert` (kind 0) and
+/// `AU4009` for a contract clause (kinds 1 and 2).
+fn direct_assert_diagnostic(message: String, line: i64, column: i64, kind: i64) -> Diagnostic {
+    let code = if kind == 0 { "AU4001" } else { "AU4009" };
     match runtime_span(line, column) {
-        Some(span) => Diagnostic::coded_at("AU4001", span, message),
-        None => Diagnostic::coded("AU4001", message),
+        Some(span) => Diagnostic::coded_at(code, span, message),
+        None => Diagnostic::coded(code, message),
     }
 }
 
@@ -19377,6 +19385,7 @@ pub extern "C-unwind" fn aura_direct_assert_fail_detailed(
     right_label: i64,
     right_type: i64,
     right_value: i64,
+    kind: i64,
 ) -> ! {
     task_runtime_boundary(|| {
         let message = direct_assert_message(message);
@@ -19386,7 +19395,7 @@ pub extern "C-unwind" fn aura_direct_assert_fail_detailed(
         let right_label = direct_assert_string(right_label, "right label");
         let right_type = direct_assert_string(right_type, "right type");
         let right_value = direct_assert_string(right_value, "right value");
-        let diagnostic = direct_assert_diagnostic(message, line, column)
+        let diagnostic = direct_assert_diagnostic(message, line, column, kind)
             .with_assertion_operand(left_label, left_type, left_value)
             .with_assertion_operand(right_label, right_type, right_value);
         runtime_diagnostic_error(diagnostic)

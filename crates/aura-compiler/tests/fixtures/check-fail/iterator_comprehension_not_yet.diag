@@ -1,0 +1,5 @@
+error[AU2002]: a comprehension cannot iterate the iterator `Count` yet; collect its items with a `for` loop
+ --> crates/aura-compiler/tests/fixtures/check-fail/iterator_comprehension_not_yet.au:18:23
+   |
+18 |     print([x for x in Count(n=2)])
+   |                       ^

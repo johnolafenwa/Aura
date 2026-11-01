@@ -1,0 +1,5 @@
+error[AU2048]: a class body states only `invariant` clauses; `requires` belongs at the top of a method body
+ --> crates/aura-compiler/tests/fixtures/parse-fail/contract_class_requires.au:3:5
+  |
+3 |     requires self.n > 0
+  |     ^

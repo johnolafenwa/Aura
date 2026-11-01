@@ -1,0 +1,14 @@
+import iter
+
+
+public class Upto:
+    public limit: int64
+    at: int64 = 0
+
+
+impl iter.Iterator[int64] for Upto:
+    def next(mut self) -> iter.Step[int64]:
+        if self.at >= self.limit:
+            return iter.Step.End
+        self.at += 1
+        return iter.Step.Item(self.at)

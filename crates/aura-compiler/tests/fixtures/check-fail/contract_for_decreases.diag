@@ -1,0 +1,5 @@
+error[AU2048]: a `for` loop always ends, so it takes no `decreases` clause; `decreases` belongs on `while`
+ --> crates/aura-compiler/tests/fixtures/check-fail/contract_for_decreases.au:3:9
+  |
+3 |         decreases x
+  |         ^

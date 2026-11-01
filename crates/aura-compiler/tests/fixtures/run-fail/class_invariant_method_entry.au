@@ -1,0 +1,42 @@
+class Account:
+    """A bank account that never goes negative."""
+    balance: int64
+    limit: int64 = 1000
+    invariant self.balance >= 0
+    invariant self.balance <= self.limit
+
+    public def deposit(mut self, amount: int64):
+        requires amount > 0
+        self.balance += amount
+
+    public def withdraw(mut self, amount: int64) -> int64:
+        if amount > self.balance:
+            return 0
+        self.balance -= amount
+        return amount
+
+    def raw_set(mut self, value: int64):
+        self.balance = value
+
+
+class Span2:
+    lo: int64
+    hi: int64
+    invariant self.lo <= self.hi
+
+    def __init__(self, lo: int64, hi: int64):
+        self.lo = lo
+        self.hi = hi
+
+
+def main():
+    mut a = Account(balance=10)
+    a.deposit(5)
+    print(a.withdraw(3))
+    print(a.withdraw(100))
+    print(a.balance)
+    a.raw_set(-1)
+    print(a.balance)
+    r = Span2(1, 2)
+    print(r.hi - r.lo)
+    a.deposit(1)

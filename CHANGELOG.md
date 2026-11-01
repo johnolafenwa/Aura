@@ -13,6 +13,35 @@ in this file.
   stops the program with `AU4003`.
 - `min` and `max` accept `str`: two or more strings, or a list, set, or span
   of them. The result is a copy.
+- Functions and methods can declare contracts. `requires` clauses state
+  what a caller must provide and `ensures` clauses state what the function
+  promises, with `result` naming the return value. Both are checked at run
+  time on every call, and a failed clause stops the program with `AU4009`,
+  naming the clause. Conditions must be pure `bool` expressions; an impure or
+  misplaced clause is rejected with `AU2048`. `requires` and `ensures` stay
+  ordinary names everywhere else.
+- Loops can declare contracts too. `invariant` clauses at the top of a
+  `while` or `for` body are checked on every pass, and a `while` loop's
+  `decreases` clause names an `int64` measure that must stay at or above 0
+  and get smaller every iteration. Failures report `AU4009`.
+- Classes can declare `invariant` clauses in their body. They are checked
+  after every construction and on entry to and return from each `public`
+  method that takes `mut self`. The method name `__invariant__` is now
+  reserved.
+- Contract conditions can use `old(expr)` in `ensures` for a parameter's
+  value on entry, `forall(x in xs, condition)` and `exists(...)`, and
+  `spec def` helper functions, which only contracts and other `spec def`
+  bodies may call. The new [Contracts](docs/manual/contracts.md) manual page
+  covers all of it.
+- New builtin `iter` module with the iteration protocol: `enum Step[T]`
+  (`Step.Item(value)` and `Step.End`) and `trait Iterator[T]` with
+  `next(mut self) -> Step[T]`. A `for` loop iterates any class or enum that
+  implements `Iterator[T]`: the bare form consumes the iterator, and
+  `for x in mut it:` borrows it so a later loop can continue where a
+  `break` left off.
+- A unit variant of an imported generic enum, such as `opt.Opt.Nothing`,
+  now takes its type arguments from the expected type, as an unqualified
+  variant already did. It used to report a return type mismatch.
 - **Incompatible:** `ord` and `chr` are now reserved builtin names, so a
   module-level function with either name is rejected with `AU2007`.
 

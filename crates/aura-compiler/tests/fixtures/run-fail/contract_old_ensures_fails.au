@@ -1,0 +1,9 @@
+def push_twice(xs: mut list[int64], x: int64):
+    ensures len(xs) == len(old(xs)) + 1
+    xs.append(x)
+    xs.append(x)
+
+
+def main():
+    mut xs = [1]
+    push_twice(xs, 2)

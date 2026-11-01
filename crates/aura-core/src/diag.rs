@@ -223,6 +223,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "invalid decorator",
     },
     DiagnosticCodeInfo {
+        code: "AU2048",
+        band: "names/types",
+        title: "invalid contract clause",
+    },
+    DiagnosticCodeInfo {
         code: "AU2999",
         band: "names/types",
         title: "general compile-time rejection",
@@ -326,6 +331,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         code: "AU4008",
         band: "runtime",
         title: "collection value not found",
+    },
+    DiagnosticCodeInfo {
+        code: "AU4009",
+        band: "runtime",
+        title: "contract violated",
     },
     DiagnosticCodeInfo {
         code: "AU5001",

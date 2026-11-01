@@ -21283,7 +21283,7 @@ fn native_assert_failure_preserves_default_custom_empty_whitespace_and_span() {
     let assert_diagnostic = |message: i64, line, column| {
         run_lightweight_root_task(move || {
             super::with_task_runtime_error_capture(|| {
-                super::aura_direct_assert_fail(message, line, column);
+                super::aura_direct_assert_fail(message, line, column, 0);
             })
         })
         .expect_err("assert failure should fail the active lightweight task")
@@ -21339,6 +21339,7 @@ fn native_detailed_assert_failure_attaches_typed_bounded_operands_without_consum
                 addresses[4] as i64,
                 addresses[5] as i64,
                 addresses[6] as i64,
+                0,
             );
         })
     })
@@ -21403,6 +21404,7 @@ fn native_detailed_assert_failure_rejects_malformed_capture_strings() {
                 addresses[3] as i64,
                 addresses[4] as i64,
                 addresses[5] as i64,
+                0,
             );
         })
     })
@@ -21431,7 +21433,7 @@ fn native_assert_failure_rejects_non_string_messages_without_consuming_them() {
     let diagnostic = run_lightweight_root_task(move || {
         let message = message_address as *mut super::OpaqueValue;
         super::with_task_runtime_error_capture(|| {
-            super::aura_direct_assert_fail(message as i64, 6, 4);
+            super::aura_direct_assert_fail(message as i64, 6, 4, 0);
         })
     })
     .expect_err("an invalid assertion message should fail the active lightweight task");
@@ -21457,7 +21459,7 @@ fn native_assert_failure_omits_spans_for_absent_or_invalid_coordinates() {
     let assert_diagnostic = |message: i64, line, column| {
         run_lightweight_root_task(move || {
             super::with_task_runtime_error_capture(|| {
-                super::aura_direct_assert_fail(message, line, column);
+                super::aura_direct_assert_fail(message, line, column, 0);
             })
         })
         .expect_err("assert failure should fail the active lightweight task")
@@ -21521,7 +21523,7 @@ fn native_assert_failure_remains_primary_when_cleanup_traps() {
                     args,
                     0,
                 );
-                super::aura_direct_assert_fail(0, 12, 5);
+                super::aura_direct_assert_fail(0, 12, 5, 0);
             }))
         })
     })
@@ -22939,6 +22941,7 @@ fn direct_capacity_format_and_detailed_assertion_abis_pin_observable_contracts()
             addresses[3] as i64,
             addresses[4] as i64,
             addresses[5] as i64,
+            0,
         );
     });
     assert_eq!(diagnostic.code, "AU4001");

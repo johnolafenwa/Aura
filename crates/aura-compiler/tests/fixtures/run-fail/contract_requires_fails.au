@@ -1,0 +1,8 @@
+def withdraw(balance: int64, amount: int64) -> int64:
+    requires amount <= balance
+    return balance - amount
+
+
+def main() -> None:
+    print(withdraw(10, 3))
+    print(withdraw(10, 30))

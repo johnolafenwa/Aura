@@ -1,0 +1,6 @@
+error[AU4009]: `requires` clause failed: `all_positive(xs)`
+ --> crates/aura-compiler/tests/fixtures/run-fail/contract_spec_requires_fails.au:6:14
+  |
+6 |     requires all_positive(xs)
+  |              ^
+  = note: Aura call chain (innermost first): total at 5:1 -> main at 10:1

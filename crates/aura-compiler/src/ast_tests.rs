@@ -26,6 +26,8 @@ fn dummy_function(name: &str) -> FunctionDecl {
         property: None,
         decorators: Vec::new(),
         doc: None,
+        contracts: Vec::new(),
+        spec: false,
     }
 }
 
@@ -577,6 +579,7 @@ fn for_stmt_json_preserves_simple_binding_shape_and_exposes_tuple_targets() {
         span: Span::new(4, 24),
     };
     let simple = ForStmt {
+        contracts: Vec::new(),
         target: BindingTarget::Name {
             name: "row".to_string(),
             span,
@@ -591,6 +594,7 @@ fn for_stmt_json_preserves_simple_binding_shape_and_exposes_tuple_targets() {
     assert!(simple_json.get("target").is_none());
 
     let tuple = ForStmt {
+        contracts: Vec::new(),
         target: BindingTarget::Tuple {
             elements: vec![
                 BindingTarget::Name {
