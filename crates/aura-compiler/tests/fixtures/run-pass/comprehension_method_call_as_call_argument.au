@@ -1,0 +1,13 @@
+# A comprehension whose output calls a method on its own loop name, passed
+# straight into a call.
+def total(lengths: list[int64]) -> int64:
+    return sum(lengths)
+
+def main():
+    words = ["ab", "cde", "f"]
+    print([word.len() for word in words])
+    print(total([word.len() for word in words if word.len() > 1]))
+    pairs = [("a", "xy"), ("b", "z")]
+    print({key.clone(): value.len() for (key, value) in pairs})
+    grid = [["ab"], ["c", "de"]]
+    print([cell.len() for row in grid for cell in row])
