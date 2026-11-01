@@ -196,7 +196,7 @@ def main() -> int32:
     let error = check_path(&invalid_path)
         .expect_err("a from-import alias must not also bind the target name");
     assert!(
-        error.message.contains("unsupported call target"),
+        error.message.contains("unknown function `twice`"),
         "unexpected diagnostic: {}",
         error.message
     );

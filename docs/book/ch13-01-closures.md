@@ -141,7 +141,7 @@ error[AU2002]: lambda parameter types require an expected `def(...) -> ...` cont
   |
 3 |     is_slow = lambda ms: ms > limit
   |               ^
-  = help: add a `def(...) -> ...` annotation to the immutable local, or pass the lambda directly to a callback parameter
+  = help: annotate the binding with a `def(...) -> ...` type, or pass the lambda directly to a callback parameter
 ```
 
 Aura doesn't guess a parameter's type from how the body uses it. `ms > limit`

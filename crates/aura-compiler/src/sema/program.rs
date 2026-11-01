@@ -1958,7 +1958,10 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
     ) {
         return Err(Diagnostic::at(
             main.decl.span,
-            "files cannot mix top-level statements, including declarations, with an explicit `main` function",
+            "files cannot mix top-level statements with an explicit `main` function",
+        )
+        .with_help(
+            "imports, constants, and declarations can sit beside `main`; move the top-level statements into `main`",
         ));
     }
 

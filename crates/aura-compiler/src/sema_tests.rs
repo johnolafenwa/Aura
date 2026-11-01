@@ -3054,7 +3054,7 @@ fn ffi_qualified_imports_do_not_expose_private_extern_declarations() {
     assert_eq!(diagnostic.code, "AU2001");
     assert_eq!(
         diagnostic.message,
-        "module `ffi_api` has no callable member `hidden`"
+        "item `hidden` is private in module `ffi_api`"
     );
 }
 
@@ -4259,11 +4259,11 @@ fn indexed_read_guidance_follows_the_element_clone_safety() {
     for (source, message) in [
         (
             "def main():\n    values: list[str] = [\"one\"]\n    taken = values[0]\n    print(taken)\n",
-            "cannot implicitly copy `str` out of a list index; use `view value = items[index]` for shared access, `items[index].clone()` for an explicit cloned owner, or `pop(index)` or `set(index, value)` to transfer ownership",
+            "cannot implicitly copy `str` out of a list index; use `view value = items[index]` for shared access, `items[index].clone()` for an explicit copy, or `pop(index)` or `set(index, value)` to transfer ownership",
         ),
         (
             "def main():\n    mut values = dict[str, str]()\n    values[\"a\"] = \"b\"\n    taken = values[\"a\"]\n    print(taken)\n",
-            "cannot implicitly copy `str` out of a dict index; use `view value = table[key]` for shared access, `table[key].clone()` for an explicit cloned owner, or `remove(key)` to transfer ownership",
+            "cannot implicitly copy `str` out of a dict index; use `view value = table[key]` for shared access, `table[key].clone()` for an explicit copy, or `remove(key)` to transfer ownership",
         ),
     ] {
         let rejected = crate::check_source(source)
@@ -5349,9 +5349,9 @@ verify(true, "ready")
 
     let mixed_entry = crate::check_source("assert true\n\ndef main():\n    pass\n")
         .expect_err("top-level assertions must preserve the explicit-main carve-out");
-    assert!(mixed_entry.message.contains(
-        "files cannot mix top-level statements, including declarations, with an explicit `main` function"
-    ));
+    assert!(mixed_entry
+        .message
+        .contains("files cannot mix top-level statements with an explicit `main` function"));
 }
 
 #[test]
@@ -21202,9 +21202,9 @@ def main():
 ",
     )
     .expect_err("top-level statements and main should not mix");
-    assert!(mixed_top_level.message.contains(
-        "files cannot mix top-level statements, including declarations, with an explicit `main` function"
-    ));
+    assert!(mixed_top_level
+        .message
+        .contains("files cannot mix top-level statements with an explicit `main` function"));
 
     let main_params = crate::check_source(
         "\

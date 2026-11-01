@@ -703,17 +703,17 @@ fn generic_constructor_fields_report_the_hinted_argument_error() {
     let holder = "class Holder[T]:\n    value: T\ndef main():\n";
     rejects(
         &format!("{holder}    holder = Holder(value=[])\n    print(1)\n"),
-        "empty list literals require an expected `list[T]` type annotation",
+        "cannot infer type parameter `T` for class constructor `Holder` from an empty literal",
     );
     rejects_with_code(
         &format!("{holder}    holder = Holder(value=missing())\n    print(1)\n"),
-        "AU2999",
-        "unsupported call target",
+        "AU2001",
+        "unknown function `missing`",
     );
     rejects_with_code(
         &format!("{holder}    holder = Holder(value=(missing()))\n    print(1)\n"),
-        "AU2999",
-        "unsupported call target",
+        "AU2001",
+        "unknown function `missing`",
     );
 }
 

@@ -34,6 +34,14 @@ fn main() {
     let Some(command) = args.next() else {
         print_usage_and_exit(2);
     };
+    let rest = std::env::args().skip(2).collect::<Vec<_>>();
+    if rest
+        .iter()
+        .take_while(|argument| argument.as_str() != "--")
+        .any(|argument| argument == "--help" || argument == "-h")
+    {
+        print_command_usage_and_exit(&command);
+    }
     match command.as_str() {
         "help" | "--help" | "-h" => print_usage_and_exit(0),
         "version" | "--version" | "-V" => print_version_and_exit(),
@@ -4840,6 +4848,42 @@ fn print_usage_and_exit(exit_code: i32) -> ! {
         eprintln!("{}", usage_text());
     }
     process::exit(exit_code);
+}
+
+/// `aura <command> --help` prints the usage lines for that command, or the
+/// whole usage when the command is unknown.
+fn print_command_usage_and_exit(command: &str) -> ! {
+    let lines = usage_text()
+        .lines()
+        .map(|line| {
+            line.trim_start()
+                .trim_start_matches("usage:")
+                .trim_start_matches("or:")
+                .trim()
+        })
+        .filter(|line| {
+            line.strip_prefix("aura ").is_some_and(|rest| {
+                let word = rest.split_whitespace().next().unwrap_or("");
+                word == command
+                    || (word.starts_with('<')
+                        && word
+                            .trim_matches(|c| c == '<' || c == '>')
+                            .split('|')
+                            .any(|name| name == command))
+            })
+        })
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        print_usage_and_exit(0);
+    }
+    let mut text = String::new();
+    for (index, line) in lines.iter().enumerate() {
+        text.push_str(if index == 0 { "usage: " } else { "   or: " });
+        text.push_str(line);
+        text.push('\n');
+    }
+    write_stdout(&text);
+    process::exit(0);
 }
 
 fn print_version_and_exit() -> ! {

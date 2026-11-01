@@ -26671,60 +26671,66 @@ impl<'a> Lowerer<'a> {
                                 explicit_type_args,
                             );
                         }
-                        self.resolve_function_info(name).map(|function| {
-                            if let Some(type_args) = explicit_type_args {
-                                let substitutions = function
-                                    .decl
-                                    .type_params
-                                    .iter()
-                                    .cloned()
-                                    .zip(
-                                        type_args
-                                            .iter()
-                                            .map(|ty| self.lower_type_ref_with_provenance(ty)),
+                        self.resolve_function_info(name)
+                            .map(|function| {
+                                if let Some(type_args) = explicit_type_args {
+                                    let substitutions = function
+                                        .decl
+                                        .type_params
+                                        .iter()
+                                        .cloned()
+                                        .zip(
+                                            type_args
+                                                .iter()
+                                                .map(|ty| self.lower_type_ref_with_provenance(ty)),
+                                        )
+                                        .collect();
+                                    substitute_type(&function.signature.return_type, &substitutions)
+                                } else {
+                                    let ordered_args = bind_call_arguments(
+                                        name,
+                                        &callable_params_from_decl(&function.decl.params),
+                                        args,
+                                        callee.span,
+                                        CallConvention::PositionalOrNamed,
                                     )
-                                    .collect();
-                                substitute_type(&function.signature.return_type, &substitutions)
-                            } else {
-                                let ordered_args = bind_call_arguments(
-                                    name,
-                                    &callable_params_from_decl(&function.decl.params),
-                                    args,
-                                    callee.span,
-                                    CallConvention::PositionalOrNamed,
-                                )
-                                .ok();
-                                let type_params = function
-                                    .decl
-                                    .type_params
-                                    .iter()
-                                    .cloned()
-                                    .collect::<BTreeSet<_>>();
-                                let mut substitutions = std::collections::HashMap::new();
-                                if let Some(ordered_args) = ordered_args {
-                                    for (bound_arg, expected) in ordered_args
-                                        .into_iter()
-                                        .zip(function.signature.params.iter())
-                                    {
-                                        let Some(argument) = bound_arg else {
-                                            continue;
-                                        };
-                                        let Some(actual_ty) = self.infer_expr_type(&argument.value)
-                                        else {
-                                            continue;
-                                        };
-                                        let actual_ty = inference_shape(actual_ty, expected);
-                                        let _ = crate::sema::type_pattern_matches(
-                                            expected,
-                                            &actual_ty,
-                                            &type_params,
-                                            &mut substitutions,
-                                        );
+                                    .ok();
+                                    let type_params = function
+                                        .decl
+                                        .type_params
+                                        .iter()
+                                        .cloned()
+                                        .collect::<BTreeSet<_>>();
+                                    let mut substitutions = std::collections::HashMap::new();
+                                    if let Some(ordered_args) = ordered_args {
+                                        for (bound_arg, expected) in ordered_args
+                                            .into_iter()
+                                            .zip(function.signature.params.iter())
+                                        {
+                                            let Some(argument) = bound_arg else {
+                                                continue;
+                                            };
+                                            let Some(actual_ty) =
+                                                self.infer_expr_type(&argument.value)
+                                            else {
+                                                continue;
+                                            };
+                                            let actual_ty = inference_shape(actual_ty, expected);
+                                            let _ = crate::sema::type_pattern_matches(
+                                                expected,
+                                                &actual_ty,
+                                                &type_params,
+                                                &mut substitutions,
+                                            );
+                                        }
                                     }
+                                    substitute_type(&function.signature.return_type, &substitutions)
                                 }
-                                substitute_type(&function.signature.return_type, &substitutions)
-                            }
-                        })
+                            })
+                            .or_else(|| {
+                                self.resolve_extern_function_info(name)
+                                    .map(|function| function.signature.return_type.clone())
+                            })
                     }
                     ExprKind::Member { object, field } => {
                         let receiver_type = match &object.kind {

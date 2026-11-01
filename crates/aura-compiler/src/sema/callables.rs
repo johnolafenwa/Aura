@@ -1083,7 +1083,7 @@ impl<'a> FunctionChecker<'a> {
                 "lambda parameter types require an expected `def(...) -> ...` context",
             )
             .with_help(
-                "add a `def(...) -> ...` annotation to the immutable local, or pass the lambda directly to a callback parameter",
+                "annotate the binding with a `def(...) -> ...` type, or pass the lambda directly to a callback parameter",
             ));
         }
         if let Some((expected_params, _)) = expected_signature {
@@ -1819,6 +1819,30 @@ impl<'a> FunctionChecker<'a> {
                 span,
                 "bare enum variants require an expected enum type or a qualified form such as `Result.Ok(...)`",
             ),
+            Some(name)
+                if self.resolve_function_info(name).is_none()
+                    && !self.type_names.contains_key(name)
+                    && !self.constants.contains_key(name)
+                    && !super::is_builtin_type(name) =>
+            {
+                let diagnostic = Diagnostic::coded_at(
+                    "AU2001",
+                    span,
+                    format!("unknown function `{name}`"),
+                );
+                let candidates = crate::call::ALL_BUILTIN_FUNCTIONS
+                    .iter()
+                    .map(|builtin| builtin.name())
+                    .chain(self.functions.keys().map(String::as_str))
+                    .chain(self.extern_functions.keys().map(String::as_str))
+                    .chain(self.classes.keys().map(String::as_str));
+                match closest_name(name, candidates) {
+                    Some(suggestion) => {
+                        diagnostic.with_help(format!("did you mean `{suggestion}`?"))
+                    }
+                    None => diagnostic,
+                }
+            }
             _ => Diagnostic::at(span, "unsupported call target"),
         }
     }
@@ -3396,4 +3420,36 @@ impl FunctionChecker<'_> {
             _ => self.consume_value_expr(object, locals),
         }
     }
+}
+
+/// The candidate closest to a misspelled name, when it is close enough to be
+/// a likely typo: at most one edit for short names, two for longer ones.
+pub(super) fn closest_name<'n>(
+    name: &str,
+    candidates: impl IntoIterator<Item = &'n str>,
+) -> Option<&'n str> {
+    let limit = if name.chars().count() <= 4 { 1 } else { 2 };
+    candidates
+        .into_iter()
+        .filter(|candidate| *candidate != name && !candidate.contains('.'))
+        .map(|candidate| (edit_distance(name, candidate), candidate))
+        .filter(|(distance, _)| *distance <= limit)
+        .min()
+        .map(|(_, candidate)| candidate)
+}
+
+fn edit_distance(left: &str, right: &str) -> usize {
+    let right = right.chars().collect::<Vec<_>>();
+    let mut previous = (0..=right.len()).collect::<Vec<_>>();
+    for (row, left_char) in left.chars().enumerate() {
+        let mut current = vec![row + 1; right.len() + 1];
+        for (column, right_char) in right.iter().enumerate() {
+            let substitution = previous[column] + usize::from(left_char != *right_char);
+            current[column + 1] = substitution
+                .min(previous[column + 1] + 1)
+                .min(current[column] + 1);
+        }
+        previous = current;
+    }
+    previous[right.len()]
 }

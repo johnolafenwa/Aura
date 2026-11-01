@@ -469,7 +469,7 @@ def main():
 
 ```console
 $ aura check index.au
-error[AU3005]: cannot implicitly copy `str` out of a list index; use `view value = items[index]` for shared access, `items[index].clone()` for an explicit cloned owner, or `pop(index)` or `set(index, value)` to transfer ownership
+error[AU3005]: cannot implicitly copy `str` out of a list index; use `view value = items[index]` for shared access, `items[index].clone()` for an explicit copy, or `pop(index)` or `set(index, value)` to transfer ownership
  --> index.au:3:13
   |
 3 |     first = names[0]
