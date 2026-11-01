@@ -27829,7 +27829,11 @@ impl<'a> Lowerer<'a> {
 
     fn is_non_owning_place_expr(&self, expr: &Expr) -> bool {
         match &expr.kind {
-            ExprKind::Name(name) => self.non_owning_roots.contains(name),
+            // A module constant is shared storage: a local bound to it
+            // shares the value, as a local bound to a borrowed parameter does.
+            ExprKind::Name(name) => {
+                self.non_owning_roots.contains(name) || self.resolve_constant_info(name).is_some()
+            }
             ExprKind::Group(inner) => self.is_non_owning_place_expr(inner),
             ExprKind::Member { object, .. } => self.is_non_owning_place_expr(object),
             ExprKind::Index { object, .. } => self.is_non_owning_place_expr(object),

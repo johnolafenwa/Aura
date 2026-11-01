@@ -1,0 +1,16 @@
+scores = [10, 20, 30]
+labels = {"a": "first"}
+
+def total() -> int64:
+    taken = scores
+    mut sum: int64 = 0
+    for value in taken:
+        sum += value
+    return sum
+
+def main():
+    for _ in range(3):
+        print(total())
+    names = labels
+    print(names["a"])
+    print(scores)
