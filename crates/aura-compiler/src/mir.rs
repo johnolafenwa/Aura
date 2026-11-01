@@ -13417,11 +13417,12 @@ impl<'a> Lowerer<'a> {
         &mut self,
         ending: &BTreeSet<String>,
         body_endings: &BTreeSet<String>,
-    ) -> (BTreeMap<String, String>, BTreeSet<String>) {
-        let saved = (
-            self.view_sources.clone(),
-            self.returned_view_descriptors.clone(),
-        );
+    ) -> BranchLoanState {
+        let saved = BranchLoanState {
+            view_sources: self.view_sources.clone(),
+            returned_view_descriptors: self.returned_view_descriptors.clone(),
+            loan_scopes: self.loan_scopes.clone(),
+        };
         for loan in ending
             .iter()
             .rev()
@@ -13434,8 +13435,13 @@ impl<'a> Lowerer<'a> {
         saved
     }
 
-    fn restore_branch_loan_state(&mut self, saved: (BTreeMap<String, String>, BTreeSet<String>)) {
-        (self.view_sources, self.returned_view_descriptors) = saved;
+    /// Restores the loans live before a branch. A statement nested in the
+    /// branch may end a loan on its own paths; a sibling branch still holds
+    /// it and must end it on its own exits.
+    fn restore_branch_loan_state(&mut self, saved: BranchLoanState) {
+        self.view_sources = saved.view_sources;
+        self.returned_view_descriptors = saved.returned_view_descriptors;
+        self.loan_scopes = saved.loan_scopes;
     }
 
     fn is_collection_expr(&self, expr: &Expr) -> bool {
@@ -28460,6 +28466,13 @@ fn is_builtin_module_name(module_name: &str) -> bool {
         .map(str::to_string)
         .collect::<Vec<_>>();
     crate::builtin_modules::builtin_module_namespace(&module_path).is_some()
+}
+
+/// The lowering's view of the loans live at the start of a branch.
+struct BranchLoanState {
+    view_sources: BTreeMap<String, String>,
+    returned_view_descriptors: BTreeSet<String>,
+    loan_scopes: Vec<Vec<String>>,
 }
 
 /// Whether a match arm's runtime enum name names the declared enum type.

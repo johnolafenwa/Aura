@@ -1,0 +1,35 @@
+def pick(args: list[str]) -> str:
+    view arg = args[0]
+    if arg == "a":
+        if len(args) < 2:
+            return arg.clone()
+        return "two"
+    elif arg == "b":
+        return arg.clone()
+    return "none"
+
+enum ConfigError:
+    MissingValue(flag: str)
+    UnknownFlag(flag: str)
+
+def parse_args(args: list[str]) -> Result[str, ConfigError]:
+    mut index = 0
+    while index < args.len():
+        view arg = args[index]
+        if arg == "--level":
+            if index + 1 >= args.len():
+                return Err(ConfigError.MissingValue(flag=arg.clone()))
+            view text = args[index + 1]
+            return Ok(text.clone())
+        elif arg.starts_with("-"):
+            return Err(ConfigError.UnknownFlag(flag=arg.clone()))
+        index += 1
+    return Ok("none")
+
+def main():
+    print(pick(["a"]))
+    print(pick(["b"]))
+    print(parse_args(["--level", "warn"]))
+    print(parse_args(["--level"]))
+    print(parse_args(["-x"]))
+    print(parse_args(["a"]))
