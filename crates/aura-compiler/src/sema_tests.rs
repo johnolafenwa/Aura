@@ -10096,17 +10096,14 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Name("min".to_string())),
-            &[
-                arg(expr(ExprKind::String("bad".to_string()))),
-                arg(expr(ExprKind::Int(1)))
-            ],
+            &[arg(expr(ExprKind::Bool(true))), arg(expr(ExprKind::Int(1)))],
             span,
             &mut locals,
             None,
         )
         .expect_err("min() rejects non-numeric left operands")
         .message
-        .contains("expects numeric arguments"));
+        .contains("expects numeric or `str` arguments"));
     assert!(checker
         .type_of_call(
             &expr(ExprKind::Name("max".to_string())),
@@ -10229,20 +10226,61 @@ fn checker_call_surface_helpers_cover_builtin_constructors_and_builtin_calls() {
         .message
         .contains("cannot infer type parameter `T` for class constructor `Phantom`"));
 
-    assert!(checker
-        .type_of_call(
-            &expr(ExprKind::Name("min".to_string())),
-            &[
-                arg(expr(ExprKind::Name("text".to_string()))),
-                arg(expr(ExprKind::Name("text".to_string()))),
-            ],
-            span,
-            &mut locals,
-            None,
-        )
-        .expect_err("min should reject non-numeric matching arguments")
-        .message
-        .contains("`min` expects numeric arguments, found `str`"));
+    assert_eq!(
+        checker
+            .type_of_call(
+                &expr(ExprKind::Name("min".to_string())),
+                &[
+                    arg(expr(ExprKind::Name("text".to_string()))),
+                    arg(expr(ExprKind::Name("text".to_string()))),
+                ],
+                span,
+                &mut locals,
+                None,
+            )
+            .expect("min accepts matching str arguments"),
+        Type::named("str")
+    );
+    assert_eq!(
+        checker
+            .type_of_call(
+                &expr(ExprKind::Name("ord".to_string())),
+                &[arg(expr(ExprKind::Name("text".to_string())))],
+                span,
+                &mut locals,
+                None,
+            )
+            .expect("ord takes a str"),
+        Type::named("int64")
+    );
+    assert_eq!(
+        checker
+            .type_of_call(
+                &expr(ExprKind::Name("chr".to_string())),
+                &[arg(expr(ExprKind::Int(65)))],
+                span,
+                &mut locals,
+                None,
+            )
+            .expect("chr takes an int64"),
+        Type::named("str")
+    );
+    for (name, argument, message) in [
+        ("ord", "count", "`ord(...)` expects `str`, found `int32`"),
+        ("chr", "text", "`chr(...)` expects `int64`, found `str`"),
+    ] {
+        let error = checker
+            .type_of_call(
+                &expr(ExprKind::Name(name.to_string())),
+                &[arg(expr(ExprKind::Name(argument.to_string())))],
+                span,
+                &mut locals,
+                None,
+            )
+            .expect_err("a character builtin rejects the wrong argument type");
+        assert_eq!(error.code, "AU2002");
+        assert!(error.message.contains(message), "{}", error.message);
+    }
 }
 
 #[test]
@@ -17226,7 +17264,7 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
             ),
             (
                 "def main() -> int32:\n    return min(left=true, right=false)\n",
-                "`min` expects numeric arguments, found `bool`",
+                "`min` expects numeric or `str` arguments, found `bool`",
             ),
             (
                 "def main() -> int32:\n    return max(left=1, right=2.0)\n",

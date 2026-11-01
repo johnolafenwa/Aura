@@ -1,4 +1,4 @@
-error[AU2002]: `min(...)` expects a list, set, Range, or Array of numbers, found `int64`
+error[AU2002]: `min(...)` expects a list, set, Range, or Array of numbers, or a list or set of `str`, found `int64`
  --> crates/aura-compiler/tests/fixtures/check-fail/min_max_single_number.au:2:15
   |
 2 |     print(min(3))

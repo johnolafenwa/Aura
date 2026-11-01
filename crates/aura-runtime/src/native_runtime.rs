@@ -7602,6 +7602,30 @@ pub extern "C-unwind" fn aura_direct_divmod(
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_string_ord(value: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| {
+        let value = unsafe { take_value(value) };
+        match value {
+            Value::String(text) => {
+                text_methods::ord(&text).unwrap_or_else(|error| runtime_diagnostic_error(error))
+            }
+            other => runtime_error(format!(
+                "`ord(...)` expects `str`, found `{}`",
+                value_type_name(&other)
+            )),
+        }
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_string_chr(code: i64) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match text_methods::chr(code) {
+        Ok(value) => boxed_value(value),
+        Err(error) => runtime_diagnostic_error(error),
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_parse_int32(value: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let value = unsafe { take_value(value) };

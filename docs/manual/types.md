@@ -132,7 +132,7 @@ A bare `value: str` parameter grants shared access. Bare parameters grant shared
 
 `<`, `<=`, `>`, and `>=` order two `str` values by their UTF-8 bytes, which is the order of their Unicode scalar values. `list[str]` sorts by the same order.
 
-Aura has no distinct character type, no integer str indexing, and no `chars()`, `ord()`, or `chr()`. String slicing accepts `int64` scalar endpoints and runs in O(n) over the source. It returns a fresh owned str. It is not a view or a byte-indexing operation.
+Aura has no distinct character type and no integer str indexing. A character is a one-character `str`: `text.chars()` returns them in order, `ord(letter)` gives a one-character string's Unicode scalar value as an `int64`, and `chr(code)` turns a scalar value back into a string. String slicing accepts `int64` scalar endpoints and runs in O(n) over the source. It returns a fresh owned str. It is not a view or a byte-indexing operation.
 
 ## Copy And Move Categories
 

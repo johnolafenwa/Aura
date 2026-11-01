@@ -2464,7 +2464,8 @@ fn function_op_arg_layout(op: FunctionOp) -> FunctionOpArgLayout {
         | FunctionOp::RandomSecureBytes
         | FunctionOp::DurationMilliseconds
         | FunctionOp::DurationSeconds
-        | FunctionOp::DurationMinutes => FunctionOpArgLayout::Int64,
+        | FunctionOp::DurationMinutes
+        | FunctionOp::Chr => FunctionOpArgLayout::Int64,
         _ => FunctionOpArgLayout::Boxed,
     }
 }
@@ -2488,10 +2489,11 @@ fn function_op_result_layout(op: FunctionOp) -> FunctionOpResultLayout {
     match op {
         FunctionOp::YieldNow | FunctionOp::Sleep => FunctionOpResultLayout::Unit,
         FunctionOp::Cancelled => FunctionOpResultLayout::Scalar(ScalarKind::Bool),
-        FunctionOp::RandomSecureInt | FunctionOp::MonotonicTimeMs => {
+        FunctionOp::RandomSecureInt | FunctionOp::MonotonicTimeMs | FunctionOp::Ord => {
             FunctionOpResultLayout::Scalar(ScalarKind::Int64)
         }
         FunctionOp::FsExists => FunctionOpResultLayout::BoxedBool,
+        FunctionOp::Chr => FunctionOpResultLayout::Boxed(Some(Type::named("str"))),
         FunctionOp::Abs
         | FunctionOp::Min
         | FunctionOp::Max

@@ -93,3 +93,4 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 65. [ADR-0065: Collection reduction builtins](0065-collection-reduction-builtins.md) — Accepted; `sum`, `any`, `all`, and collection and variadic `min`/`max`
 66. [ADR-0066: Sequence builtins, list operators, and slice steps](0066-sequence-builtins-and-list-operators.md) — Accepted; `sorted`, `reversed`, `list`, list `+` and `*`, and `values[start:end:step]`
 67. [ADR-0067: Debug builds and the VS Code debugger](0067-debug-builds-and-the-vs-code-debugger.md) — Accepted; `aura build --debug` writes DWARF, and the extension debugs through `lldb-dap`
+68. [ADR-0068: Character builtins and string `min`/`max`](0068-character-builtins-and-string-extremes.md) — Accepted; `ord`, `chr`, `str.chars()`, and `min`/`max` of strings
