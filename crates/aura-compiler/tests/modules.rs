@@ -936,3 +936,27 @@ public class Stats:
         assert_eq!(output.stdout, expected, "{name}");
     }
 }
+
+#[test]
+fn trap_in_an_imported_module_points_at_that_module() {
+    let temp = TempDir::new("aura-modules-trap-location");
+    temp.write(
+        "lib.au",
+        "public def first(xs: list[int64]) -> int64:\n    return xs[5]\n",
+    );
+    let main_source = "from lib import first\n\ndef main():\n    print(first([1, 2]))\n";
+    let main_path = temp.write("main.au", main_source);
+    let error = run_path(&main_path).expect_err("index 5 of a two-element list traps");
+    let main_display = main_path.display().to_string();
+    let rendered = error.render_with_source(&main_display, main_source);
+    assert!(
+        rendered.contains("lib.au:2:15") && rendered.contains("return xs[5]"),
+        "{rendered}"
+    );
+    let structured = error.structured(&main_display);
+    assert!(structured
+        .primary_span
+        .expect("trap has a span")
+        .path
+        .ends_with("lib.au"));
+}

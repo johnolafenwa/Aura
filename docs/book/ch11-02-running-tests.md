@@ -42,9 +42,9 @@ ok tests/cart_test.au::test_formats_refunds
 ok tests/cart_test.au::test_average_price
 FAILED tests/cart_test.au::test_average_of_empty_cart
 error[AU4004]: division by zero
- --> tests/cart_test.au:18:12
+ --> src/cart.au:18:12
    |
-18 | 
+18 |     return subtotal(prices) // prices.len()
    |            ^
   = note: Aura call chain (innermost first): cart::average_cents at 17:8 -> test_average_of_empty_cart at 28:1
 ok tests/smoke.au
@@ -63,13 +63,9 @@ called from `test_average_of_empty_cart`. Functions from other modules are
 shown with their module name, so you can tell your test code from the code
 under test at a glance.
 
-You may have noticed something odd about the `-->` line, though. The trap
-happened at line 18, column 12 of `src/cart.au`, which is the `//` in
-`average_cents`. But the diagnostic names `tests/cart_test.au` and prints that
-file's line 18, which happens to be blank. This is a known defect in Aura 0.11:
-when a trap happens inside an imported module, the location shows the right
-line and column but the wrong file. Until it's fixed, trust the call chain for
-the function and use the line number in that function's file.
+The `-->` line points into `src/cart.au`, not the test file: the trap happened
+inside `average_cents`, so that's the file and line Aura shows you, even though
+the test that called it lives in `tests/cart_test.au`.
 
 ### Deciding what the right answer is
 
@@ -204,9 +200,9 @@ $ aura test -k average
 ok tests/cart_test.au::test_average_price
 FAILED tests/cart_test.au::test_average_of_empty_cart
 error[AU4004]: division by zero
- --> tests/cart_test.au:18:12
+ --> src/cart.au:18:12
    |
-18 | 
+18 |     return subtotal(prices) // prices.len()
    |            ^
   = note: Aura call chain (innermost first): cart::average_cents at 17:8 -> test_average_of_empty_cart at 28:1
 1 passed; 1 failed
