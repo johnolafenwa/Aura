@@ -359,6 +359,7 @@ fn function_decl(name: &str, return_type: &str) -> FunctionDecl {
         decorators: Vec::new(),
         doc: None,
         contracts: Vec::new(),
+        spec: false,
     }
 }
 

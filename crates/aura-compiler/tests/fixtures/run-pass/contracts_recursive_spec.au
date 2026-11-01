@@ -1,0 +1,11 @@
+spec def total(xs: list[int64], i: int64) -> int64:
+    return 0 if i >= len(xs) else xs[i] + total(xs, i + 1)
+
+
+def f(xs: list[int64]) -> int64:
+    ensures result == total(xs, 0)
+    return sum(xs)
+
+
+def main():
+    print(f([1, 2, 3]))

@@ -1081,6 +1081,9 @@ struct FunctionChecker<'a> {
     /// Set while an argument bound to a `mut` union parameter is typed: the
     /// declared union is exposed whole, so refinements do not apply.
     suppress_narrowing: Rc<std::cell::Cell<bool>>,
+    /// Set while a contract condition or a `spec def` body is typed: only
+    /// there may a `spec def` be named.
+    in_spec: Rc<std::cell::Cell<bool>>,
     /// Owned lambda captures the current lambda body mutates in place (C2).
     mutated_captures: Rc<RefCell<BTreeSet<String>>>,
     /// The index expression currently typed as a place read: the object of
@@ -2133,6 +2136,7 @@ impl<'a> FunctionChecker<'a> {
             active_match_borrow_places: Rc::new(RefCell::new(Vec::new())),
             mutable_iteration_places: Rc::new(RefCell::new(Vec::new())),
             suppress_narrowing: Rc::new(std::cell::Cell::new(false)),
+            in_spec: Rc::new(std::cell::Cell::new(false)),
             mutated_captures: Rc::new(RefCell::new(BTreeSet::new())),
             index_place_read: Rc::new(std::cell::Cell::new(None)),
             index_owned_read: Rc::new(std::cell::Cell::new(None)),
@@ -2192,6 +2196,7 @@ impl<'a> FunctionChecker<'a> {
             narrowed_reads: self.narrowed_reads.clone(),
             type_param_calls: self.type_param_calls.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
+            in_spec: self.in_spec.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
@@ -2236,6 +2241,7 @@ impl<'a> FunctionChecker<'a> {
             narrowed_reads: self.narrowed_reads.clone(),
             type_param_calls: self.type_param_calls.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
+            in_spec: self.in_spec.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
@@ -2276,6 +2282,7 @@ impl<'a> FunctionChecker<'a> {
             narrowed_reads: self.narrowed_reads.clone(),
             type_param_calls: self.type_param_calls.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
+            in_spec: self.in_spec.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
@@ -2316,6 +2323,7 @@ impl<'a> FunctionChecker<'a> {
             narrowed_reads: self.narrowed_reads.clone(),
             type_param_calls: self.type_param_calls.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
+            in_spec: self.in_spec.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
@@ -3120,6 +3128,9 @@ impl<'a> FunctionChecker<'a> {
             );
         }
 
+        if function.spec {
+            return checker.check_spec_function(function, &mut locals, &return_type);
+        }
         checker.check_contracts(function, &locals, &return_type)?;
         let flow = checker.check_block(&function.body, &mut locals, &return_type, 0, true)?;
         if return_type != Type::Unit && flow != BlockFlow::AlwaysReturns {
@@ -6880,6 +6891,7 @@ impl<'a> FunctionChecker<'a> {
         expected: Option<&Type>,
     ) -> Result<Type> {
         reject_initializer_member(expr)?;
+        self.reject_spec_reference(expr, locals)?;
         let actual = self.type_of_expr_hint_uncontracted(expr, locals, expected)?;
         if let Some(expected) = expected {
             self.enforce_callable_destination(expr, expected, &actual)?;

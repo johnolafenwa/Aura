@@ -571,6 +571,53 @@ Elsewhere they are ordinary names, so `requires = 1` and the call
 `requires(x)` keep their meaning. Write a space before a parenthesis that
 starts a condition: `requires (a or b) and c`.
 
+### `old`, quantifiers, and `spec def`
+
+Inside `ensures`, `old(expr)` is the value `expr` had on entry, after the
+`requires` checks. `expr` reads a parameter or `self`, or a field, element,
+or slice of one. The function keeps a copy, so `expr` must have a Copy type
+or be a `str`, list, dict, set, or `Array`.
+
+`forall(x in collection, condition)` is true when `condition` holds for
+every element, and `exists(x in collection, condition)` when it holds for
+at least one. The binding may be a tuple, as in `forall((i, x) in
+enumerate(xs), ...)`, and the collection may be a `range`.
+
+A `spec def` is a helper for conditions. Its body is one `return` of a
+condition-style expression, it takes no `mut` parameters, and it may call
+other `spec def` functions, itself included. Only contract clauses and
+other `spec def` bodies may call or name it.
+
+```aura
+spec def is_sorted(xs: list[int64]) -> bool:
+    return forall(i in range(len(xs) - 1), xs[i] <= xs[i + 1])
+
+
+def insert_sorted(xs: mut list[int64], x: int64):
+    requires is_sorted(xs)
+    ensures is_sorted(xs)
+    ensures len(xs) == len(old(xs)) + 1
+    ensures exists(y in xs, y == x)
+    mut i = len(xs)
+    xs.append(x)
+    while i > 0 and xs[i - 1] > x:
+        invariant 0 <= i and i < len(xs)
+        decreases i
+        previous = xs[i - 1]
+        xs[i] = previous
+        i -= 1
+    xs[i] = x
+
+
+def main():
+    mut xs = [1, 3, 5]
+    insert_sorted(xs, 4)
+    print(xs)  # [1, 3, 4, 5]
+```
+
+`old`, `forall`, and `exists` are special only inside clauses and `spec def`
+bodies, and `spec` is a keyword only before `def`.
+
 ### Loop invariants and `decreases`
 
 A loop can state what stays true while it runs, with `invariant` clauses at
@@ -666,8 +713,7 @@ These forms are not available yet and report `AU2048`:
 - a parameter named `result` in a function with `ensures`
 - clauses on the methods of a trait implementation
 
-`old(...)`, `forall`, `exists`, and `spec def` helper functions are planned
-next, followed by `aura verify`, which proves clauses
+`spec def` methods and contracts on trait methods are planned next, followed by `aura verify`, which proves clauses
 before the program runs. See the
 [verification design](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/23-verification-design-checkpoint.md).
 

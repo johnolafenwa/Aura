@@ -14,7 +14,7 @@ use super::{
     BTreeMap, Diagnostic, Expr, ExprKind, FunctionChecker, FunctionDecl, HashMap, LocalBinding,
     Result, Type,
 };
-use crate::ast::{ComprehensionOutput, ContractClause, ContractKind, FormatPart};
+use crate::ast::{ComprehensionOutput, ContractClause, ContractKind, FormatPart, OldValue};
 use aura_core::ops::ReceiverKind;
 
 const CODE: &str = "AU2048";
@@ -114,10 +114,150 @@ impl FunctionChecker<'_> {
             let mut scope = locals.clone();
             if clause.kind == ContractKind::Ensures {
                 scope.insert(RESULT_NAME.to_string(), result_binding(return_type.clone()));
+                for old in &clause.olds {
+                    let ty = self.check_old_value(function, old, locals)?;
+                    scope.insert(old.name.clone(), result_binding(ty));
+                }
             }
             self.check_clause_condition(clause, &mut scope)?;
         }
         Ok(())
+    }
+
+    /// Checks one `old(expr)`: a pure read of a parameter or `self`, or of
+    /// a field or element of one, whose value can be copied on entry.
+    fn check_old_value(
+        &self,
+        function: &FunctionDecl,
+        old: &OldValue,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Result<Type> {
+        let reads_parameter = old_root(&old.expr).is_some_and(|root| {
+            root == "self" || function.params.iter().any(|param| param.name == root)
+        });
+        if !reads_parameter {
+            return Err(Diagnostic::coded_at(
+                CODE,
+                old.expr.span,
+                "`old` reads a parameter or `self`, or a field or element of one",
+            ));
+        }
+        self.reject_impure(&old.expr, "an `old` value", &mut Vec::new())?;
+        let ty = self.with_spec(|| self.type_of_expr(&old.expr, &mut locals.clone()))?;
+        let copyable = self.is_copy_type(&ty)
+            || matches!(&ty, Type::Named(name, _) if matches!(name.as_str(), "str" | "list" | "dict" | "set" | "Array"));
+        if !copyable {
+            return Err(Diagnostic::coded_at(
+                CODE,
+                old.expr.span,
+                format!(
+                    "`old` keeps a copy of its value, so it takes a Copy type, `str`, or a list, dict, set, or Array, not `{ty}`"
+                ),
+            ));
+        }
+        if !self.is_copy_type(&ty) {
+            self.reject_rng_duplication("`old`", &ty, old.expr.span)?;
+        }
+        Ok(ty)
+    }
+
+    /// Checks a `spec def`: a module function whose body is one `return`
+    /// of a pure expression, with no `mut` parameters and no clauses.
+    pub(super) fn check_spec_function(
+        &self,
+        function: &FunctionDecl,
+        locals: &mut HashMap<String, LocalBinding>,
+        return_type: &Type,
+    ) -> Result<()> {
+        if let Some(param) = function.params.iter().find(|param| {
+            locals
+                .get(&param.name)
+                .is_some_and(|binding| binding.passing == ReceiverKind::BorrowMut)
+        }) {
+            return Err(Diagnostic::coded_at(
+                CODE,
+                param.span,
+                format!("a `spec def` cannot take `mut` parameter `{}`", param.name),
+            ));
+        }
+        if let Some(clause) = function.contracts.first() {
+            return Err(Diagnostic::coded_at(
+                CODE,
+                clause.span,
+                "a `spec def` cannot declare contract clauses yet",
+            ));
+        }
+        let [crate::ast::Stmt::Return(crate::ast::ReturnStmt {
+            value: Some(value),
+            view: None,
+            ..
+        })] = function.body.as_slice()
+        else {
+            return Err(Diagnostic::coded_at(
+                CODE,
+                function.span,
+                "a `spec def` body is one `return` of a pure expression, after an optional docstring",
+            ));
+        };
+        self.reject_impure(value, "a `spec def` body", &mut Vec::new())?;
+        self.with_spec(|| {
+            self.check_block(&function.body, locals, return_type, 0, true)
+                .map(|_| ())
+        })
+    }
+
+    /// Runs `check` with `spec def` references allowed.
+    fn with_spec<T>(&self, check: impl FnOnce() -> Result<T>) -> Result<T> {
+        let outer = self.in_spec.replace(true);
+        let result = check();
+        self.in_spec.set(outer);
+        result
+    }
+
+    /// Rejects naming a `spec def` outside a contract clause or another
+    /// `spec def` body.
+    pub(super) fn reject_spec_reference(
+        &self,
+        expr: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        if self.in_spec.get() {
+            return Ok(());
+        }
+        let name = match &expr.kind {
+            ExprKind::Name(name) => name,
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Name(name) => name,
+                _ => return Ok(()),
+            },
+            _ => return Ok(()),
+        };
+        if locals.contains_key(name) || !self.is_spec_function(name) {
+            return Ok(());
+        }
+        Err(Diagnostic::coded_at(
+            CODE,
+            expr.span,
+            format!(
+                "`{name}` is a `spec def`; only contract clauses and other `spec def` bodies may use it"
+            ),
+        ))
+    }
+
+    fn is_spec_function(&self, name: &str) -> bool {
+        self.resolve_function_info(name)
+            .is_some_and(|function| function.decl.spec)
+    }
+
+    /// [`reject_impure_condition`] with this module's `spec def` functions
+    /// allowed.
+    fn reject_impure<'e>(
+        &self,
+        expr: &'e Expr,
+        what: &str,
+        receivers: &mut Vec<&'e Expr>,
+    ) -> Result<()> {
+        reject_impure_condition(expr, what, receivers, &|name| self.is_spec_function(name))
     }
 
     /// Checks the clauses of `kinds` at the top of a loop body against the
@@ -161,18 +301,28 @@ impl FunctionChecker<'_> {
         scope: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
         let mut receivers = Vec::new();
-        reject_impure_condition(&clause.condition, clause.kind, &mut receivers)?;
-        let (expected, what) = match clause.kind {
+        let what = format!(
+            "{} `{}` condition",
+            if clause.kind == ContractKind::Invariant {
+                "an"
+            } else {
+                "a"
+            },
+            clause.kind.keyword()
+        );
+        self.reject_impure(&clause.condition, &what, &mut receivers)?;
+        let (expected, noun) = match clause.kind {
             ContractKind::Decreases => (Type::named("int64"), "measure"),
             _ => (Type::named("bool"), "condition"),
         };
-        let actual = self.type_of_expr_hint(&clause.condition, scope, Some(&expected))?;
+        let actual =
+            self.with_spec(|| self.type_of_expr_hint(&clause.condition, scope, Some(&expected)))?;
         if actual != expected {
             return Err(Diagnostic::coded_at(
                 "AU2002",
                 clause.condition.span,
                 format!(
-                    "{} `{}` {what} must be `{expected}`, found `{actual}`",
+                    "{} `{}` {noun} must be `{expected}`, found `{actual}`",
                     if clause.kind == ContractKind::Invariant {
                         "an"
                     } else {
@@ -185,11 +335,11 @@ impl FunctionChecker<'_> {
         // A method allowed by name must also be a builtin's: a user type's
         // method of the same name may change state.
         for receiver in receivers {
-            let ty = self.type_of_expr(receiver, scope)?;
+            let ty = self.with_spec(|| self.type_of_expr(receiver, scope))?;
             if !has_builtin_methods(&ty) {
                 return Err(impure(
                     receiver,
-                    clause.kind,
+                    &what,
                     &format!("a method call on `{ty}`, which may change program state,"),
                 ));
             }
@@ -237,17 +387,25 @@ fn result_binding(ty: Type) -> LocalBinding {
     }
 }
 
-fn impure(expr: &Expr, kind: ContractKind, what: &str) -> Diagnostic {
+fn impure(expr: &Expr, context: &str, what: &str) -> Diagnostic {
     Diagnostic::coded_at(
         CODE,
         expr.span,
-        format!(
-            "{} `{}` condition must not change program state; {what} is not allowed here",
-            if kind == ContractKind::Invariant { "an" } else { "a" },
-            kind.keyword()
-        ),
+        format!("{context} must not change program state; {what} is not allowed here"),
     )
-    .with_help("conditions may read values and call pure builtins such as `len`, `min`, `all`, and read-only methods such as `contains`")
+    .with_help("conditions may read values and call pure builtins such as `len`, `min`, `all`, read-only methods such as `contains`, and `spec def` functions")
+}
+
+/// The parameter or `self` an `old` path starts from.
+fn old_root(expr: &Expr) -> Option<&str> {
+    match &expr.kind {
+        ExprKind::Name(name) => Some(name),
+        ExprKind::Member { object, .. }
+        | ExprKind::Index { object, .. }
+        | ExprKind::Slice { object, .. } => old_root(object),
+        ExprKind::Group(inner) => old_root(inner),
+        _ => None,
+    }
 }
 
 /// Rejects a condition that could change program state.
@@ -256,12 +414,13 @@ fn impure(expr: &Expr, kind: ContractKind, what: &str) -> Diagnostic {
 /// receiver so the caller can check that it has a builtin type.
 fn reject_impure_condition<'e>(
     expr: &'e Expr,
-    kind: ContractKind,
+    kind: &str,
     receivers: &mut Vec<&'e Expr>,
+    is_spec: &dyn Fn(&str) -> bool,
 ) -> Result<()> {
     macro_rules! check {
         ($expr:expr) => {
-            reject_impure_condition($expr, kind, receivers)
+            reject_impure_condition($expr, kind, receivers, is_spec)
         };
     }
     match &expr.kind {
@@ -358,7 +517,21 @@ fn reject_impure_condition<'e>(
         ExprKind::IsNone { value, .. } => check!(value),
         ExprKind::Call { callee, args } => {
             let allowed = match &callee.kind {
-                ExprKind::Name(name) => PURE_FUNCTIONS.contains(&name.as_str()),
+                ExprKind::Name(name) if name == "old" => {
+                    return Err(Diagnostic::coded_at(
+                        CODE,
+                        expr.span,
+                        "`old(...)` names a value on entry; it is allowed only in an `ensures` condition, around a parameter or a field or element of one",
+                    ));
+                }
+                ExprKind::Name(name) if name == "forall" || name == "exists" => {
+                    return Err(Diagnostic::coded_at(
+                        CODE,
+                        expr.span,
+                        format!("write `{name}(name in collection, condition)`"),
+                    ));
+                }
+                ExprKind::Name(name) => PURE_FUNCTIONS.contains(&name.as_str()) || is_spec(name),
                 ExprKind::Member { object, field } => {
                     check!(object)?;
                     receivers.push(object);

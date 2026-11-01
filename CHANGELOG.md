@@ -28,6 +28,10 @@ in this file.
   after every construction and on entry to and return from each `public`
   method that takes `mut self`. The method name `__invariant__` is now
   reserved.
+- Contract conditions can use `old(expr)` in `ensures` for a parameter's
+  value on entry, `forall(x in xs, condition)` and `exists(...)`, and
+  `spec def` helper functions, which only contracts and other `spec def`
+  bodies may call.
 - **Incompatible:** `ord` and `chr` are now reserved builtin names, so a
   module-level function with either name is rejected with `AU2007`.
 

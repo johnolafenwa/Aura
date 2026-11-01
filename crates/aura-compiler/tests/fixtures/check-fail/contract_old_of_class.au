@@ -1,0 +1,6 @@
+class C:
+    n: int64
+
+def f(c: C) -> int64:
+    ensures old(c).n > 0
+    return 1

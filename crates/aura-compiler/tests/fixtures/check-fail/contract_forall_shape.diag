@@ -1,0 +1,5 @@
+error[AU2048]: write `forall(name in collection, condition)`
+ --> crates/aura-compiler/tests/fixtures/check-fail/contract_forall_shape.au:2:14
+  |
+2 |     requires forall(xs, true)
+  |              ^

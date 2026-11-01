@@ -78,7 +78,110 @@ fn class_invariant_method(
         decorators: Vec::new(),
         doc: None,
         contracts: invariants,
+        spec: false,
     }
+}
+
+/// Rewrites each `forall(x in xs, condition)` into `all([condition for x
+/// in xs])`, and each `exists(...)` into `any(...)`, innermost first. A
+/// call of another shape is left for the checker to reject.
+pub(crate) fn rewrite_quantifiers(expr: &mut Expr) {
+    expr.for_each_child_mut(&mut rewrite_quantifiers);
+    let span = expr.span;
+    let ExprKind::Call { callee, args } = &mut expr.kind else {
+        return;
+    };
+    let reduction = match &callee.kind {
+        ExprKind::Name(name) if name == "forall" => "all",
+        ExprKind::Name(name) if name == "exists" => "any",
+        _ => return,
+    };
+    let [binding, condition] = args.as_slice() else {
+        return;
+    };
+    if binding.name.is_some() || condition.name.is_some() {
+        return;
+    }
+    let ExprKind::Membership {
+        value,
+        container,
+        negated: false,
+        ..
+    } = &binding.value.kind
+    else {
+        return;
+    };
+    let Some(target) = quantifier_target(value) else {
+        return;
+    };
+    let comprehension = Expr {
+        kind: ExprKind::Comprehension {
+            output: ComprehensionOutput::List(Box::new(condition.value.clone())),
+            clauses: vec![crate::ast::ComprehensionClause {
+                target,
+                iterable: (**container).clone(),
+                filters: Vec::new(),
+                span: binding.value.span,
+            }],
+        },
+        span: binding.value.span,
+    };
+    *expr = Expr {
+        kind: ExprKind::Call {
+            callee: Box::new(Expr {
+                kind: ExprKind::Name(reduction.to_string()),
+                span: callee.span,
+            }),
+            args: vec![Argument {
+                name: None,
+                value: comprehension,
+                span: binding.span,
+            }],
+        },
+        span,
+    };
+}
+
+/// The binding of a quantifier: a name, or a tuple of names.
+fn quantifier_target(expr: &Expr) -> Option<BindingTarget> {
+    match &expr.kind {
+        ExprKind::Name(name) => Some(BindingTarget::Name {
+            name: name.clone(),
+            span: expr.span,
+        }),
+        ExprKind::Tuple(items) => {
+            let elements = items
+                .iter()
+                .map(quantifier_target)
+                .collect::<Option<Vec<_>>>()?;
+            Some(BindingTarget::Tuple {
+                elements,
+                span: expr.span,
+            })
+        }
+        ExprKind::Group(inner) => quantifier_target(inner),
+        _ => None,
+    }
+}
+
+/// Replaces each `old(expr)` with a hidden name and records `expr`, which
+/// the function evaluates on entry.
+fn rewrite_olds(expr: &mut Expr, olds: &mut Vec<crate::ast::OldValue>) {
+    if let ExprKind::Call { callee, args } = &expr.kind {
+        if matches!(&callee.kind, ExprKind::Name(name) if name == "old")
+            && args.len() == 1
+            && args[0].name.is_none()
+        {
+            let name = format!("old value {}:{}", expr.span.line, expr.span.column);
+            olds.push(crate::ast::OldValue {
+                name: name.clone(),
+                expr: args[0].value.clone(),
+            });
+            expr.kind = ExprKind::Name(name);
+            return;
+        }
+    }
+    expr.for_each_child_mut(&mut |child| rewrite_olds(child, olds));
 }
 
 /// Where a run of contract clauses appears.
@@ -413,6 +516,7 @@ impl Parser {
                 || self.at_keyword_enum()
                 || self.at_keyword_extern()
                 || self.at_keyword_def()
+                || self.at_spec_def_start()
                 || self.at_keyword_trait()
                 || self.at_keyword_impl()
             {
@@ -439,7 +543,11 @@ impl Parser {
             TokenKind::Identifier(_) => {
                 matches!(self.peek_kind(1), Some(TokenKind::Equal | TokenKind::Colon))
             }
-            TokenKind::KwPublic => matches!(self.peek_kind(1), Some(TokenKind::Identifier(_))),
+            TokenKind::KwPublic => {
+                matches!(self.peek_kind(1), Some(TokenKind::Identifier(_)))
+                    && !(matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "spec")
+                        && matches!(self.peek_kind(2), Some(TokenKind::KwDef)))
+            }
             _ => false,
         }
     }
@@ -488,6 +596,19 @@ impl Parser {
             self.parse_extern_item(public)
         } else if self.at_keyword_def() {
             Ok(Item::Function(self.parse_function(public)?))
+        } else if self.at_spec_def_start() {
+            self.bump();
+            let mut function = self.parse_function(public)?;
+            function.spec = true;
+            for stmt in &mut function.body {
+                if let Stmt::Return(ReturnStmt {
+                    value: Some(value), ..
+                }) = stmt
+                {
+                    rewrite_quantifiers(value);
+                }
+            }
+            Ok(Item::Function(function))
         } else if self.at_keyword_trait() {
             Ok(Item::Trait(self.parse_trait(public)?))
         } else if self.at_keyword_impl() {
@@ -498,6 +619,12 @@ impl Parser {
         } else {
             Err(self.error_here("expected `class`, `enum`, `extern`, `def`, `trait`, or `impl`"))
         }
+    }
+
+    /// `spec def`: `spec` is a keyword only before `def`.
+    fn at_spec_def_start(&self) -> bool {
+        matches!(self.current_kind(), TokenKind::Identifier(name) if name == "spec")
+            && matches!(self.peek_kind(1), Some(TokenKind::KwDef))
     }
 
     fn at_type_alias_start(&self) -> bool {
@@ -782,6 +909,13 @@ impl Parser {
         let mut methods = Vec::new();
         let mut invariants = Vec::new();
         while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
+            if self.at_spec_def_start() {
+                return Err(Diagnostic::coded_at(
+                    "AU2048",
+                    self.current_span(),
+                    "a `spec def` is a module-level function; `spec def` methods are not available yet",
+                ));
+            }
             if let Some(kind) = self.at_contract_clause() {
                 if kind != ContractKind::Invariant {
                     return Err(wrong_place_contract_error(
@@ -1107,6 +1241,7 @@ impl Parser {
             decorators: Vec::new(),
             doc,
             contracts,
+            spec: false,
         })
     }
 
@@ -1274,6 +1409,7 @@ impl Parser {
             decorators: Vec::new(),
             doc,
             contracts: Vec::new(),
+            spec: false,
         })
     }
 
@@ -2313,12 +2449,19 @@ impl Parser {
                 .map_or(span.line, |token| token.span.line);
             self.expect_statement_terminator()?;
             let text = self.clause_text(kind, span.line, end_line);
+            let mut condition = condition;
+            rewrite_quantifiers(&mut condition);
+            let mut olds = Vec::new();
+            if kind == ContractKind::Ensures {
+                rewrite_olds(&mut condition, &mut olds);
+            }
             Ok(ContractClause {
                 kind,
                 condition,
                 span,
                 text,
                 end_line,
+                olds,
             })
         }
     }

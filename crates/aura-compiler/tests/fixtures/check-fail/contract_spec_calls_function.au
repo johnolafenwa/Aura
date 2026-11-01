@@ -1,0 +1,5 @@
+def g() -> int64:
+    return 1
+
+spec def pos(x: int64) -> bool:
+    return x > g()

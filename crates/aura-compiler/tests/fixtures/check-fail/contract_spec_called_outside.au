@@ -1,0 +1,5 @@
+spec def pos(x: int64) -> bool:
+    return x > 0
+
+def main():
+    print(pos(1))

@@ -7628,6 +7628,7 @@ fn function_decl(name: &str) -> FunctionDecl {
         decorators: Vec::new(),
         doc: None,
         contracts: Vec::new(),
+        spec: false,
     }
 }
 
@@ -32008,6 +32009,96 @@ fn class_invariants_check_against_self_and_builtin_receivers_only() {
     ] {
         let error = crate::check_source(source).expect_err(source);
         assert_eq!(error.code, code, "{source}: {}", error.message);
+        assert!(error.message.contains(message), "{source}: {}", error.message);
+    }
+}
+
+#[test]
+fn old_values_and_spec_functions_check_in_spec_contexts_only() {
+    crate::check_source(concat!(
+        "spec def is_sorted(xs: list[int64]) -> bool:\n",
+        "    \"\"\"Sorted.\"\"\"\n",
+        "    return forall(i in range(len(xs) - 1), xs[i] <= xs[i + 1])\n",
+        "\n",
+        "spec def total(xs: list[int64], i: int64) -> int64:\n",
+        "    return 0 if i >= len(xs) else xs[i] + total(xs, i + 1)\n",
+        "\n",
+        "class Box:\n",
+        "    items: list[int64]\n",
+        "    label: str\n",
+        "    invariant is_sorted(self.items)\n",
+        "\n",
+        "    def push(mut self, x: int64):\n",
+        "        ensures len(self.items) == len(old(self.items)) + 1\n",
+        "        ensures old(self.label) == self.label and old(self.items[0:1]) == self.items[0:1]\n",
+        "        self.items.append(x)\n",
+        "\n",
+        "def f(xs: list[int64], n: own int64) -> int64:\n",
+        "    requires is_sorted(xs)\n",
+        "    ensures result == total(xs, 0) + old(n) - n\n",
+        "    mut i = 0\n",
+        "    while i < len(xs):\n",
+        "        invariant is_sorted(xs) and exists(x in xs, x == xs[0])\n",
+        "        i += 1\n",
+        "    return sum(xs)\n",
+    ))
+    .expect("spec functions and old values check");
+    for (source, message) in [
+        (
+            "spec def pos(x: int64) -> bool:\n    return x > 0\n\ndef main():\n    print(pos(1))\n",
+            "`pos` is a `spec def`; only contract clauses and other `spec def` bodies may use it",
+        ),
+        (
+            "spec def pos(x: int64) -> bool:\n    return x > 0\n\ndef main():\n    f = pos\n",
+            "`pos` is a `spec def`",
+        ),
+        (
+            "spec def pos(x: int64) -> bool:\n    y = x\n    return y > 0\n",
+            "a `spec def` body is one `return`",
+        ),
+        (
+            "spec def pos(xs: mut list[int64]) -> bool:\n    return len(xs) > 0\n",
+            "a `spec def` cannot take `mut` parameter `xs`",
+        ),
+        (
+            "spec def pos(x: int64) -> bool:\n    requires x > 0\n    return x > 0\n",
+            "a `spec def` cannot declare contract clauses yet",
+        ),
+        (
+            "def g() -> int64:\n    return 1\n\nspec def pos(x: int64) -> bool:\n    return x > g()\n",
+            "a `spec def` body must not change program state",
+        ),
+        (
+            "def f(x: int64):\n    requires old(x) > 0\n    pass\n",
+            "allowed only in an `ensures` condition",
+        ),
+        (
+            "def f(x: int64) -> int64:\n    ensures old(result) > 0\n    return x\n",
+            "`old` reads a parameter or `self`",
+        ),
+        (
+            "def f(x: int64) -> int64:\n    ensures old(x + 1) > 0\n    return x\n",
+            "`old` reads a parameter or `self`",
+        ),
+        (
+            "def f(xs: list[int64]) -> int64:\n    ensures old(xs.copy()) == xs\n    return 1\n",
+            "`old` reads a parameter or `self`",
+        ),
+        (
+            "def g() -> int64:\n    return 0\n\ndef f(xs: list[int64]) -> int64:\n    ensures old((xs)[g()]) == 1\n    return 1\n",
+            "an `old` value must not change program state",
+        ),
+        (
+            "class C:\n    n: int64\n\ndef f(c: C) -> int64:\n    ensures old(c).n > 0\n    return 1\n",
+            "takes a Copy type, `str`, or a list, dict, set, or Array, not `C`",
+        ),
+        (
+            "def f(xs: list[int64]):\n    requires forall(xs, true)\n    pass\n",
+            "write `forall(name in collection, condition)`",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err(source);
+        assert_eq!(error.code, "AU2048", "{source}: {}", error.message);
         assert!(error.message.contains(message), "{source}: {}", error.message);
     }
 }

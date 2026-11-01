@@ -5283,3 +5283,69 @@ fn class_invariants_become_a_hidden_checking_method() {
         assert!(error.message.contains(message), "{source}: {}", error.message);
     }
 }
+
+#[test]
+fn quantifiers_old_values_and_spec_functions_parse() {
+    let module = crate::parser::parse(concat!(
+        "public spec def sorted_pairs(xs: list[int64]) -> bool:\n",
+        "    return forall((i, x) in enumerate(xs), exists(y in xs, y >= x) and i >= 0)\n",
+        "\n",
+        "def f(xs: mut list[int64], spec: int64) -> int64:\n",
+        "    ensures len(xs) == len(old(xs)) and old(xs[0]) >= 0\n",
+        "    ensures forall(x in xs, x > 0, extra=1) or forall(xs, true) or forall(x not in xs, true)\n",
+        "    return spec\n",
+    ))
+    .expect("V1c forms parse");
+    let Item::Function(spec_fn) = &module.items[0] else {
+        panic!("a spec function");
+    };
+    assert!(spec_fn.spec && spec_fn.public);
+    let Stmt::Return(ReturnStmt {
+        value: Some(value), ..
+    }) = &spec_fn.body[0]
+    else {
+        panic!("a return");
+    };
+    let ExprKind::Call { callee, args } = &value.kind else {
+        panic!("`forall` became a call to `all`");
+    };
+    assert!(matches!(&callee.kind, ExprKind::Name(name) if name == "all"));
+    let ExprKind::Comprehension { clauses, output } = &args[0].value.kind else {
+        panic!("over a list comprehension");
+    };
+    assert!(matches!(
+        &clauses[0].target,
+        BindingTarget::Tuple { elements, .. } if elements.len() == 2
+    ));
+    let ComprehensionOutput::List(condition) = output else {
+        panic!("a list comprehension");
+    };
+    let ExprKind::Binary { left, .. } = &condition.kind else {
+        panic!("the condition keeps its shape");
+    };
+    assert!(
+        matches!(&left.kind, ExprKind::Call { callee, .. } if matches!(&callee.kind, ExprKind::Name(name) if name == "any"))
+    );
+
+    let Item::Function(function) = &module.items[1] else {
+        panic!("a function");
+    };
+    assert!(!function.spec, "`spec` as a parameter name is ordinary");
+    let olds = &function.contracts[0].olds;
+    assert_eq!(olds.len(), 2);
+    assert!(olds[0].name.starts_with("old value "));
+    assert!(matches!(&olds[1].expr.kind, ExprKind::Index { .. }));
+    assert_eq!(
+        function.contracts[0].text,
+        "len(xs) == len(old(xs)) and old(xs[0]) >= 0"
+    );
+    // Quantifiers of other shapes stay calls for the checker to reject.
+    let rendered = format!("{:?}", function.contracts[1].condition);
+    assert_eq!(rendered.matches("\"forall\"").count(), 3, "{rendered}");
+
+    let error = crate::parser::parse(
+        "class C:\n    n: int64\n\n    spec def p(self) -> bool:\n        return true\n",
+    )
+    .expect_err("spec methods are rejected");
+    assert_eq!(error.code, "AU2048");
+}

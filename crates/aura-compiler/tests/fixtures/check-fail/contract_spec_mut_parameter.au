@@ -1,0 +1,2 @@
+spec def pos(xs: mut list[int64]) -> bool:
+    return len(xs) > 0

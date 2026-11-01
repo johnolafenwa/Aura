@@ -275,6 +275,7 @@ fn function_info(
             decorators: Vec::new(),
             doc: None,
             contracts: Vec::new(),
+            spec: false,
         },
         signature: FunctionSignature {
             params: lowered_params,
@@ -324,6 +325,7 @@ fn generic_function_info(
             decorators: Vec::new(),
             doc: None,
             contracts: Vec::new(),
+            spec: false,
         },
         signature: FunctionSignature {
             params: lowered_params,

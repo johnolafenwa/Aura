@@ -1,0 +1,8 @@
+error[AU4009]: `ensures` clause failed: `len(xs) == len(old(xs)) + 1`
+ --> crates/aura-compiler/tests/fixtures/run-fail/contract_old_ensures_fails.au:2:13
+  |
+2 |     ensures len(xs) == len(old(xs)) + 1
+  |             ^
+  = note: left = 3
+  = note: right = 2
+  = note: Aura call chain (innermost first): push_twice at 1:1 -> main at 7:1

@@ -488,6 +488,10 @@
           "match": "^\\s*(requires|ensures|invariant|decreases)(?=\\s+[^\\s=:,.)\\]])"
         },
         {
+          "name": "storage.modifier.spec.aura",
+          "match": "\\bspec(?=\\s+def\\b)"
+        },
+        {
           "name": "keyword.control.aura",
           "match": "\\b(import|return|assert|if|elif|else|while|for|in|match|case|with|try|lambda|and|or|not|break|continue|pass|impl|as)\\b"
         },

@@ -1,0 +1,12 @@
+spec def all_positive(xs: list[int64]) -> bool:
+    return forall(x in xs, x > 0)
+
+
+def total(xs: list[int64]) -> int64:
+    requires all_positive(xs)
+    return sum(xs)
+
+
+def main():
+    print(total([1, 2]))
+    print(total([3, -1]))

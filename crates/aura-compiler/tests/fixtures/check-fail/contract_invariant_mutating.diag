@@ -3,4 +3,4 @@ error[AU2048]: an `invariant` condition must not change program state; a call to
   |
 4 |         invariant xs.pop() > 0
   |                      ^
-  = help: conditions may read values and call pure builtins such as `len`, `min`, `all`, and read-only methods such as `contains`
+  = help: conditions may read values and call pure builtins such as `len`, `min`, `all`, read-only methods such as `contains`, and `spec def` functions

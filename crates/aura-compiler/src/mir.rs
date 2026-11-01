@@ -13910,6 +13910,17 @@ impl<'a> Lowerer<'a> {
             self.lower_stmts(&function.body);
             return;
         }
+        // Each `old(expr)` is a copy of `expr` taken after the entry checks.
+        let olds = function
+            .contracts
+            .iter()
+            .flat_map(|clause| clause.olds.iter())
+            .map(|old| (old.name.clone(), self.lower_old_value(&old.expr)))
+            .collect::<std::collections::HashMap<_, _>>();
+        let has_olds = !olds.is_empty();
+        if has_olds {
+            self.scoped_names.push(olds);
+        }
         let return_type = self.return_type.clone();
         let return_place = self.new_typed_temp(return_type.clone());
         let exit = self.new_block("ensures");
@@ -13935,11 +13946,51 @@ impl<'a> Lowerer<'a> {
         )]));
         self.lower_contract_checks(function, crate::ast::ContractKind::Ensures);
         self.scoped_names.pop();
+        if has_olds {
+            self.scoped_names.pop();
+        }
         if let Some(class) = &guarded {
             self.emit_class_invariant_check("self", class);
         }
         let value = self.move_place_for_type(return_place, &return_type);
         self.terminate(Terminator::Return(value));
+    }
+
+    /// Copies the value `expr` has now into a new local: a Copy value as
+    /// is, a string or collection by copying it.
+    fn lower_old_value(&mut self, expr: &Expr) -> String {
+        let ty = self
+            .infer_expr_type(expr)
+            .expect("a checked `old` value has a type");
+        let value = match &ty {
+            Type::Named(name, _) if matches!(name.as_str(), "list" | "dict" | "set" | "Array") => {
+                let copy = Expr {
+                    kind: ExprKind::Call {
+                        callee: Box::new(Expr {
+                            kind: ExprKind::Member {
+                                object: Box::new(expr.clone()),
+                                field: "copy".to_string(),
+                            },
+                            span: expr.span,
+                        }),
+                        args: Vec::new(),
+                    },
+                    span: expr.span,
+                };
+                self.lower_expr(&copy)
+            }
+            Type::Named(name, _) if name == "str" => {
+                let value = self.lower_expr(expr);
+                self.emit_str_clone(value)
+            }
+            _ => self.lower_expr(expr),
+        };
+        let place = self.new_typed_temp(ty);
+        self.emit(Instruction::Assign {
+            target: place.clone(),
+            value: Rvalue::Use(value),
+        });
+        place
     }
 
     /// Checks each clause of `kind` in source order.

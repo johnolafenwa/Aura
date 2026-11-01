@@ -301,6 +301,10 @@ pub struct FunctionDecl {
     /// source order. They are part of the signature, not body statements.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub contracts: Vec<ContractClause>,
+    /// `spec def`: a pure helper that only contract clauses and other
+    /// `spec def` bodies may call.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub spec: bool,
 }
 
 /// The hidden method that checks a class's `invariant` clauses. The parser
@@ -357,6 +361,132 @@ pub struct ContractClause {
     /// The line the condition ends on.
     #[serde(skip)]
     pub end_line: usize,
+    /// Each `old(expr)` in an `ensures` condition, in source order. The
+    /// parser replaces the call with a hidden name that holds the value
+    /// `expr` had on entry.
+    #[serde(skip)]
+    pub olds: Vec<OldValue>,
+}
+
+/// One `old(expr)` of an `ensures` clause.
+#[derive(Clone, Debug)]
+pub struct OldValue {
+    /// The hidden name that replaced the call. It cannot be written in
+    /// source.
+    pub name: String,
+    pub expr: Expr,
+}
+
+impl Expr {
+    /// Calls `visit` on each direct child expression, in source order.
+    pub fn for_each_child_mut(&mut self, visit: &mut dyn FnMut(&mut Expr)) {
+        match &mut self.kind {
+            ExprKind::Name(_)
+            | ExprKind::Int(_)
+            | ExprKind::DurationNanos(_)
+            | ExprKind::BuiltinOmitted
+            | ExprKind::Float(_)
+            | ExprKind::Bool(_)
+            | ExprKind::String(_) => {}
+            ExprKind::FString(parts) => {
+                for part in parts {
+                    match part {
+                        FormatPart::Literal(_) => {}
+                        FormatPart::Expr(expr) | FormatPart::Formatted { expr, .. } => visit(expr),
+                    }
+                }
+            }
+            ExprKind::Tuple(items) | ExprKind::List(items) | ExprKind::Set(items) => {
+                items.iter_mut().for_each(visit)
+            }
+            ExprKind::Map(entries) => {
+                for entry in entries {
+                    visit(&mut entry.key);
+                    visit(&mut entry.value);
+                }
+            }
+            ExprKind::Comprehension { output, clauses } => {
+                match output {
+                    ComprehensionOutput::List(value) | ComprehensionOutput::Set(value) => {
+                        visit(value)
+                    }
+                    ComprehensionOutput::Map { key, value } => {
+                        visit(key);
+                        visit(value);
+                    }
+                }
+                for clause in clauses {
+                    visit(&mut clause.iterable);
+                    clause.filters.iter_mut().for_each(&mut *visit);
+                }
+            }
+            ExprKind::Unary { expr, .. }
+            | ExprKind::Cast { expr, .. }
+            | ExprKind::Specialize { expr, .. }
+            | ExprKind::Try(expr)
+            | ExprKind::Group(expr) => visit(expr),
+            ExprKind::Binary { left, right, .. } => {
+                visit(left);
+                visit(right);
+            }
+            ExprKind::Conditional {
+                then_expr,
+                condition,
+                else_expr,
+            } => {
+                visit(then_expr);
+                visit(condition);
+                visit(else_expr);
+            }
+            ExprKind::Lambda { body, .. } => visit(body),
+            ExprKind::Call { callee, args } => {
+                visit(callee);
+                for arg in args {
+                    visit(&mut arg.value);
+                }
+            }
+            ExprKind::Member { object, .. } => visit(object),
+            ExprKind::Index { object, index } => {
+                visit(object);
+                visit(index);
+            }
+            ExprKind::Slice {
+                object, start, end, ..
+            } => {
+                visit(object);
+                if let Some(start) = start {
+                    visit(start);
+                }
+                if let Some(end) = end {
+                    visit(end);
+                }
+            }
+            ExprKind::Match {
+                scrutinee, arms, ..
+            } => {
+                visit(scrutinee);
+                for arm in arms {
+                    if let Some(guard) = &mut arm.guard {
+                        visit(guard);
+                    }
+                    visit(&mut arm.value);
+                }
+            }
+            ExprKind::Membership {
+                value, container, ..
+            } => {
+                visit(value);
+                visit(container);
+            }
+            ExprKind::CompareChain { first, links } => {
+                visit(first);
+                for link in links {
+                    visit(&mut link.operand);
+                }
+            }
+            ExprKind::IsNone { value, .. } => visit(value),
+        }
+    }
 }
 
 /// One `@expression` line above a module-level function.

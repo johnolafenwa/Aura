@@ -1,0 +1,5 @@
+class C:
+    n: int64
+
+    spec def pos(self) -> bool:
+        return self.n > 0

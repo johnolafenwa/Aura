@@ -255,8 +255,12 @@ class's `invariant` lines into a hidden `__invariant__(self)` method that
 construction sites, `__init__` callers, and public `mut self` methods (on
 entry and exit) call, so the check always runs in the class's module.
 Condition purity now also requires a method call's receiver to have a
-builtin type. `spec def` and `old` follow in V1c, and the contracts manual
-page in V1d.
+builtin type. V1c adds `old(expr)` (the parser replaces each call with a
+hidden name; the function copies the value after its entry checks),
+`forall`/`exists` (rewritten to `all`/`any` over a list comprehension), and
+module-level `spec def` helpers (one pure `return`, no `mut` parameters,
+usable only in clauses and other spec bodies). V1d moves the material into
+its own manual page.
 
 V1 needs each stage's full local gates, coverage floors, and interpreter and
 native parity, like every other batch. V1 also adds a fixture family of

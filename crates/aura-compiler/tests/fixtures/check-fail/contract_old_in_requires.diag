@@ -1,0 +1,5 @@
+error[AU2048]: `old(...)` names a value on entry; it is allowed only in an `ensures` condition, around a parameter or a field or element of one
+ --> crates/aura-compiler/tests/fixtures/check-fail/contract_old_in_requires.au:2:14
+  |
+2 |     requires old(x) > 0
+  |              ^
