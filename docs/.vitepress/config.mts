@@ -1,10 +1,13 @@
 import { defineConfig } from 'vitepress'
 import { AURA_LANGUAGE, AURA_LANGUAGE_LABEL } from './aura-language.mjs'
 import { AURA_RELEASE, resolveImplementationCommit } from './release-metadata.mjs'
+import { bookSidebar } from './book-sidebar.mjs'
+import { fileURLToPath } from 'node:url'
 
 const base = process.env.VITEPRESS_BASE ?? '/'
 const implementationCommit = resolveImplementationCommit()
 const proposalStem = 'auro' + 'ra_language_proposal.md'
+const bookDirectory = fileURLToPath(new URL('../book', import.meta.url))
 
 export default defineConfig({
   title: 'Aura',
@@ -20,7 +23,7 @@ export default defineConfig({
   },
   head: [['link', { rel: 'icon', type: 'image/svg+xml', href: `${base}aura-mark.svg` }]],
   cleanUrls: true,
-  srcExclude: [proposalStem, 'ml_systems_support_plan.md', 'testing_strategy.md'],
+  srcExclude: [proposalStem, 'ml_systems_support_plan.md', 'testing_strategy.md', 'book/STYLE.md', 'book/OUTLINE.md'],
   lastUpdated: true,
   markdown: {
     lineNumbers: true,
@@ -42,6 +45,7 @@ export default defineConfig({
     },
     nav: [
       { text: 'Install', link: '/install/' },
+      { text: 'Book', link: '/book/' },
       { text: 'Learn', link: '/learn/' },
       { text: 'Manual', link: '/manual/' },
       { text: 'Downloads', link: '/downloads' },
@@ -50,6 +54,7 @@ export default defineConfig({
       { text: 'GitHub', link: 'https://github.com/johnolafenwa/Aura' }
     ],
     sidebar: {
+      '/book/': bookSidebar(bookDirectory),
       '/install/': [
         {
           text: 'Install Aura',

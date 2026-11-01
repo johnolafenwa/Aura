@@ -88,6 +88,7 @@ fn every_example_and_tutorial_program_formats_idempotently() {
     let mut pages = Vec::new();
     collect_sources(&root.join("tutorials"), "md", &mut pages);
     collect_sources(&root.join("docs/manual"), "md", &mut pages);
+    collect_sources(&root.join("docs/book"), "md", &mut pages);
     for page in &pages {
         let markdown = std::fs::read_to_string(page).unwrap();
         for (position, block) in aura_blocks(&markdown).iter().enumerate() {

@@ -72,6 +72,17 @@ def _ordered_markdown(directory: Path) -> Iterable[Path]:
     return sorted(paths, key=lambda path: (path.name != "index.md", path.name))
 
 
+def _book_markdown(directory: Path) -> Iterable[Path]:
+    """The book in reading order; its writing guides are not published."""
+    if not directory.exists():
+        return []
+    names = {path.name: path for path in directory.glob("*.md")}
+    front = [names[name] for name in ("index.md", "foreword.md") if name in names]
+    chapters = sorted(path for name, path in names.items() if name.startswith("ch"))
+    appendices = sorted(path for name, path in names.items() if name.startswith("appendix-"))
+    return front + chapters + appendices
+
+
 def discover_sources(root: Path) -> List[Source]:
     candidates: List[Path] = []
     for relative in ("README.md", "docs/index.md", "docs/positioning.md", "docs/downloads.md"):
@@ -80,6 +91,7 @@ def discover_sources(root: Path) -> List[Source]:
             candidates.append(path)
     candidates.extend(_ordered_markdown(root / "docs/install"))
     candidates.extend(_ordered_markdown(root / "docs/manual"))
+    candidates.extend(_book_markdown(root / "docs/book"))
     candidates.extend(_ordered_markdown(root / "docs/learn"))
     candidates.extend(_ordered_markdown(root / "tutorials"))
 
@@ -132,6 +144,7 @@ def _summary(sources: List[Source]) -> str:
         ("Project", lambda source: source.relative == Path("README.md") or source.relative.parent == Path("docs")),
         ("Install Aura", lambda source: source.relative.parts[:2] == ("docs", "install")),
         ("Language Manual", lambda source: source.relative.parts[:2] == ("docs", "manual")),
+        ("The Aura Programming Language", lambda source: source.relative.parts[:2] == ("docs", "book")),
         ("Learn Aura", lambda source: source.relative.parts[:2] == ("docs", "learn")),
         ("Tutorials", lambda source: source.relative.parts[:1] == ("tutorials",)),
     ]
