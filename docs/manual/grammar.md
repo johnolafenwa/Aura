@@ -120,6 +120,7 @@ Ordinary and triple-quoted strings accept the same escapes:
 | --- | --- |
 | `\n` | line feed |
 | `\t` | tab character in the decoded value |
+| `\r` | carriage return |
 | `\"` | double quote |
 | `\'` | single quote |
 | `\\` | backslash |
@@ -759,7 +760,8 @@ The iteration modifier depends on the iterable:
 | Range | Yields independent copy `int64` values | Rejected, because there is no place or ownership transfer to modify |
 
 The iterable position also recognizes two compiler-known call shapes,
-`enumerate(expression)` and `zip(expression, expression)`. They are not
+`enumerate(expression)`, `enumerate(expression, start)` (also spelled
+`start=`), and `zip(expression, expression)`. They are not
 values and have no production outside this position. Static semantics rejects
 either name elsewhere. A user declaration of the name shadows the loop form.
 Explicit ownership modifiers are rejected for both, because they iterate with

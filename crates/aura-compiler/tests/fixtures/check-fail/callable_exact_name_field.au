@@ -1,4 +1,4 @@
-type Destination = def(int64) -> int64
+type Destination = def(other: int64) -> int64
 type Source = def(value: int64) -> int64
 
 def target(value: int64) -> int64:

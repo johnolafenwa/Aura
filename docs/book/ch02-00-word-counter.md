@@ -329,19 +329,19 @@ the whole dictionary. Let's run it:
 ```console
 $ aura run src/main.au < poem.txt
 error[AU3002]: cannot move borrowed value `word`
- --> src/main.au:10:32
+ --> src/main.au:12:32
    |
-10 |                         counts[word] += 1
+12 |                         counts[word] = 1
    |                                ^
   = related src/main.au:8:21: value is borrowed here
   = help: take `word` as `own str` when ownership is required, or call `.clone()` to consume an independent copy
-  = fix: replace src/main.au:10:36-10:36 with `.clone()`
+  = fix: replace src/main.au:12:36-12:36 with `.clone()`
 ```
 
 This error is our first meeting with *ownership*, the idea at the heart of
 Aura, and it deserves a careful read. The message says we tried to *move* a
 *borrowed* value, `word`. The primary location is the `word` inside
-`counts[word]` on line 10. The `related` line points at line 8, column 21,
+`counts[word] = 1` on line 12. The `related` line points at line 8, column 21,
 which is the `word` in `for word in line.split_whitespace()`, and says that
 is where the value is borrowed.
 
@@ -350,8 +350,9 @@ and the owner is responsible for cleaning the value up when it is no longer
 needed. The list that `split_whitespace()` returns owns its strings. When a
 `for` loop walks over a list, it doesn't take the strings out of it; it
 *borrows* each one in turn, which means `word` lets us look at a string that
-still belongs to the list. That's fine for reading, and `word in counts` only
-reads.
+still belongs to the list. That's fine for reading. `word in counts` only
+reads, and so does `counts[word] += 1`, which changes the count of a key that
+is already there.
 
 Storing a key in a dictionary is different. Once the dictionary has the
 string, the dictionary has to own it, because it will keep it long after this

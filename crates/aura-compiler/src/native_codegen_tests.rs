@@ -8397,10 +8397,15 @@ def main() -> int32:
                         value: Operand::Int(3),
                         writeback_place: None,
                     },
+                    MirArg {
+                        name: None,
+                        value: Operand::Int(4),
+                        writeback_place: None,
+                    },
                 ],
                 type_args: Default::default(),
             }),
-            "expected `range()` to take at most 2 argument(s)",
+            "expected `range()` to take at most 3 argument(s)",
         ),
         (
             "range too many mixed args",
@@ -8430,7 +8435,7 @@ def main() -> int32:
                 ],
                 type_args: Default::default(),
             }),
-            "expected `range()` to take at most 2 argument(s)",
+            "expected `range()` to take at most 3 argument(s)",
         ),
         (
             "range bad named arg",

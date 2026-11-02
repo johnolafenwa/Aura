@@ -7,6 +7,23 @@ in this file.
 
 ## Unreleased
 
+- `range` takes an optional third `step` argument: `range(0, 10, 2)` counts
+  by twos and `range(10, 0, -1)` counts down. A zero step stops the program
+  with `AU4001`.
+- `enumerate(xs, start=1)` (or `enumerate(xs, 1)`) counts from `start`
+  instead of zero.
+- New `eprint(value)` builtin: renders like `print` and writes the line to
+  standard error. `eprint` is now a reserved builtin name (`AU2007` for a
+  top-level `def eprint`).
+- Strings accept the `\r` (carriage return) escape.
+- A written function type with an unnamed slot, such as `def(int64) -> bool`,
+  accepts a function whatever its parameter is called, so
+  `check: def(int64) -> bool = is_slow` no longer needs an adapter. Named
+  slots still require the same name.
+- A lambda passed to a generic parameter such as `f: def(T) -> U` now infers
+  `U` from its body.
+- `counts[key] += 1` and the other compound assignments on a `dict[str, V]`
+  or `dict[bytes, V]` index borrow the key instead of moving it.
 - Documentation: *The Aura Programming Language*, a new book at `/book/`,
   replaces the Learn track and the `tutorials/` directory. Old `/learn/`
   links no longer resolve; start at `/book/`.

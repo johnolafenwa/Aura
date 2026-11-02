@@ -208,9 +208,11 @@ Think about what the dictionary needs. When `name` isn't already a key,
 entry's key from now on, for as long as the entry exists. It can't borrow
 the key from our loop, because `name` is gone by the next iteration. So
 assigning through an index *moves the key in*, along with the value. The
-compiler applies that rule to every indexed assignment on a dictionary, even
-when the key happens to be present already, so `best[name] += 1` would move
-`name` too. The same goes for line 16, the `Missing` arm: on either path,
+compiler applies that rule to every plain indexed assignment on a
+dictionary, even when the key happens to be present already. (A compound
+assignment such as `best[name] += 1` is different: it can only update an
+entry that exists, so it borrows a `str` key instead.) The same goes for
+line 16, the `Missing` arm: on either path,
 `name` has been handed to `best` by the time we reach line 17.
 
 Lookups are different. `best.get(name)`, `name in scores`, and `scores[name]`

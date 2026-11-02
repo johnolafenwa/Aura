@@ -14869,10 +14869,10 @@ fn step8d_validator_rejects_forged_named_ops() {
     let mut range = baseline.clone();
     let args = forge_print_op(&mut range, RuntimeOp::Function(FunctionOp::Range));
     let extra = args[0].clone();
-    args.extend([extra.clone(), extra]);
+    args.extend([extra.clone(), extra.clone(), extra]);
     assert_public_boundaries_reject(
         &range,
-        "invalid MIR runtime operation `Function.Range` in `main`: expected `range()` to take at most 2 argument(s), found 3",
+        "invalid MIR runtime operation `Function.Range` in `main`: expected `range()` to take at most 3 argument(s), found 4",
     );
     let mut start_only = baseline.clone();
     let args = forge_print_op(&mut start_only, RuntimeOp::Function(FunctionOp::Range));

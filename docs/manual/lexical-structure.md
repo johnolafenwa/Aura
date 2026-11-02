@@ -348,6 +348,7 @@ Both quote styles produce a `str` and support the same escapes:
 | --- | --- |
 | `\n` | Line feed |
 | `\t` | Tab |
+| `\r` | Carriage return |
 | `\"` | Double quote |
 | `\'` | Single quote |
 | `\\` | Backslash |

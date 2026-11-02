@@ -11150,7 +11150,11 @@ fn direct_runtime_scalar_and_concurrency_helpers_cover_remaining_surface() {
     );
     assert_eq!(
         super::aura_direct_value_type_matches(
-            boxed_value(Value::Range(RangeValue { start: 1, end: 4 })),
+            boxed_value(Value::Range(RangeValue {
+                start: 1,
+                end: 4,
+                step: 1
+            })),
             b"Range".as_ptr(),
             "Range".len(),
         ),
@@ -13813,18 +13817,15 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                 let range = boxed_value(Value::Range(RangeValue {
                     start: i128::from(i64::MAX) + 1,
                     end: 0,
+                    step: 1,
                 }));
                 super::aura_direct_range_current(range);
             }
-            "range-end-type" => {
-                super::aura_direct_range_end(int_value(1));
+            "range-has-next-type" => {
+                super::aura_direct_range_has_next(int_value(1));
             }
-            "range-end-overflow" => {
-                let range = boxed_value(Value::Range(RangeValue {
-                    start: 0,
-                    end: i128::from(i64::MAX) + 1,
-                }));
-                super::aura_direct_range_end(range);
+            "range-zero-step" => {
+                super::aura_direct_range_new_step(0, 3, 0);
             }
             "range-advance-type" => {
                 super::aura_direct_range_advance(int_value(1));
@@ -15086,8 +15087,8 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "range-current-overflow",
             "range start is outside host i64 bounds",
         ),
-        ("range-end-type", "expected `Range`, found `integer`"),
-        ("range-end-overflow", "range end is outside host i64 bounds"),
+        ("range-has-next-type", "expected `Range`, found `integer`"),
+        ("range-zero-step", "`range` step must not be zero"),
         ("range-advance-type", "expected `Range`, found `integer`"),
         ("vec-len-type", "expected `list`, found `integer`"),
         ("vec-push-type", "expected `list`, found `integer`"),
@@ -15843,7 +15844,11 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
         "random.Rng",
     );
     assert_eq!(
-        value_type_name(Value::Range(RangeValue { start: 1, end: 2 })),
+        value_type_name(Value::Range(RangeValue {
+            start: 1,
+            end: 2,
+            step: 1
+        })),
         "Range"
     );
     assert_eq!(
@@ -15922,7 +15927,11 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
         aura_core::types::Type::named("Duration")
     );
     assert_eq!(
-        inferred_collection_type(&Value::Range(RangeValue { start: 1, end: 2 })),
+        inferred_collection_type(&Value::Range(RangeValue {
+            start: 1,
+            end: 2,
+            step: 1
+        })),
         aura_core::types::Type::named("Range")
     );
     assert_eq!(
@@ -20799,14 +20808,18 @@ fn native_runtime_boxing_range_and_condition_helpers_cover_remaining_valid_paths
     );
     assert_eq!(
         expect_string(super::aura_direct_stringify_value(super::boxed_value(
-            Value::Range(RangeValue { start: 2, end: 4 },)
+            Value::Range(RangeValue {
+                start: 2,
+                end: 4,
+                step: 1
+            },)
         ))),
         "range(2, 4)"
     );
 
     let range = super::aura_direct_range_new(2, 5);
     assert_eq!(super::aura_direct_range_current(range), 2);
-    assert_eq!(super::aura_direct_range_end(range), 5);
+    assert_eq!(super::aura_direct_range_has_next(range), 1);
     match unsafe { take_value(super::aura_direct_range_advance(range)) } {
         Value::Range(advanced) => {
             assert_eq!(advanced.start, 3);
@@ -20814,6 +20827,17 @@ fn native_runtime_boxing_range_and_condition_helpers_cover_remaining_valid_paths
         }
         other => panic!("expected advanced range, found {:?}", other),
     }
+    let down = super::aura_direct_range_new_step(5, 2, -3);
+    assert_eq!(super::aura_direct_range_has_next(down), 1);
+    let down = super::aura_direct_range_advance(down);
+    assert_eq!(super::aura_direct_range_current(down), 2);
+    assert_eq!(super::aura_direct_range_has_next(down), 0);
+    assert_eq!(
+        expect_string(super::aura_direct_stringify_value(down)),
+        "range(2, 2, -3)"
+    );
+    // `eprint` renders its text and writes the line to standard error.
+    super::aura_direct_eprint_str(string_value("eprint from the runtime test"));
 
     assert_eq!(super::aura_direct_unbox_i64(int_value(9)), 9);
     assert_eq!(super::aura_direct_unbox_f64(float_value(1.5)), 1.5);

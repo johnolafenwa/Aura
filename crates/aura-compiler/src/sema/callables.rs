@@ -10,7 +10,7 @@ use super::{
     LocalBinding, Param, ParamMode, PlacePath, ReceiverKind, Result, TraitBound, Type, TypeRef,
 };
 use aura_core::types::{
-    ClosureCallKind, ClosureCapture, ClosureCaptureMode, ClosureId, ClosureInfo,
+    CallableType, ClosureCallKind, ClosureCapture, ClosureCaptureMode, ClosureId, ClosureInfo,
     FunctionParamContract,
 };
 
@@ -475,7 +475,9 @@ pub(crate) fn check_callable_positions(
     // Preserve the more specific explanations for restrictions that even an
     // explicit adapter cannot perform.
     check_callable_adapter_positions(expected, actual)?;
-    if expected.identical_contract(actual) {
+    if expected.identical_contract(actual)
+        || expected.identical_contract(&with_unnamed_slots_admitted(expected, actual))
+    {
         return Ok(());
     }
     same_callable_contracts(expected, actual)?;
@@ -489,6 +491,118 @@ pub(crate) fn check_callable_positions(
     Err(format!(
         "{difference} differs: expected `{expected}`, found `{actual}`"
     ))
+}
+
+/// `actual` with each slot that `expected` writes as an unnamed positional
+/// slot (`def(int64) -> bool`) given that shape: no name and the expected
+/// default availability. A caller of such a slot can only pass it by
+/// position, so the source's own parameter name never matters, and a
+/// default it declares is simply never used. Result types are relaxed the
+/// same way; parameter types stay exact.
+fn with_unnamed_slots_admitted(expected: &Type, actual: &Type) -> Type {
+    fn relax(
+        expected: &[FunctionParamContract],
+        actual: &[FunctionParamContract],
+    ) -> Vec<FunctionParamContract> {
+        actual
+            .iter()
+            .zip(expected)
+            .map(|(actual, expected)| {
+                if expected.name.is_empty() && !expected.keyword_only && !actual.keyword_only {
+                    FunctionParamContract {
+                        name: String::new(),
+                        has_default: expected.has_default && actual.has_default,
+                        ..actual.clone()
+                    }
+                } else {
+                    actual.clone()
+                }
+            })
+            .collect()
+    }
+    let callable = |expected_params: &[FunctionParamContract],
+                    expected_return: &Type,
+                    actual_params: &[FunctionParamContract],
+                    actual_return: &Type| {
+        if expected_params.len() != actual_params.len() {
+            return None;
+        }
+        Some((
+            relax(expected_params, actual_params),
+            Box::new(with_unnamed_slots_admitted(expected_return, actual_return)),
+        ))
+    };
+    let Some((expected_params, expected_return)) = callable_parts(expected) else {
+        return actual.clone();
+    };
+    match actual {
+        Type::Function {
+            params: actual_params,
+            return_type: actual_return,
+        } => match callable(
+            expected_params,
+            expected_return,
+            actual_params,
+            actual_return,
+        ) {
+            Some((params, return_type)) => Type::Function {
+                params,
+                return_type,
+            },
+            None => actual.clone(),
+        },
+        Type::Closure {
+            params: actual_params,
+            return_type: actual_return,
+            captures,
+            call_kind,
+        } => match callable(
+            expected_params,
+            expected_return,
+            actual_params,
+            actual_return,
+        ) {
+            Some((params, return_type)) => Type::Closure {
+                params: Box::new(params),
+                return_type,
+                captures: captures.clone(),
+                call_kind: *call_kind,
+            },
+            None => actual.clone(),
+        },
+        Type::Callable(actual_callable) if matches!(expected, Type::Callable(_)) => {
+            match callable(
+                expected_params,
+                expected_return,
+                &actual_callable.params,
+                &actual_callable.return_type,
+            ) {
+                Some((params, return_type)) => Type::Callable(Box::new(CallableType {
+                    params,
+                    return_type: *return_type,
+                    ..(**actual_callable).clone()
+                })),
+                None => actual.clone(),
+            }
+        }
+        _ => actual.clone(),
+    }
+}
+
+fn callable_parts(ty: &Type) -> Option<(&[FunctionParamContract], &Type)> {
+    match ty {
+        Type::Function {
+            params,
+            return_type,
+        } => Some((params, return_type)),
+        Type::Closure {
+            params,
+            return_type,
+            ..
+        } => Some((params, return_type)),
+        Type::Callable(callable) => Some((&callable.params, &callable.return_type)),
+        _ => None,
+    }
 }
 
 fn callable_slot_difference(left: &FunctionParamContract, right: &FunctionParamContract) -> String {
@@ -1441,6 +1555,14 @@ impl<'a> FunctionChecker<'a> {
         }
 
         let expected_return = expected_signature.and_then(|(_, return_type)| return_type);
+        // A result written with a type parameter the call still has to infer,
+        // as in `map[U](f: def(T) -> U)`, is not a hint: the body's own type
+        // binds the parameter when the call unifies the lambda's type.
+        let expected_return = expected_return.filter(|expected| {
+            let mut named = BTreeSet::new();
+            super::types::collect_type_params_from_type(expected, &mut named);
+            named.iter().all(|name| self.type_params.contains_key(name))
+        });
         self.reject_mutable_returned_view_value(body, &mut lambda_locals, false)?;
         self.reject_owned_view_value(body, &mut lambda_locals, "an owned lambda result")?;
         // Owned captures mutated by the body make the closure Mutable (C2);
@@ -2358,8 +2480,25 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
             }
+            // A callable contract is enforced against the parameter type once
+            // the call has inferred it (below), not against a hint that still
+            // names this callee's unresolved type parameters.
+            let hint_names_callee_params = {
+                let mut named = BTreeSet::new();
+                super::types::collect_type_params_from_type(&hinted_expected, &mut named);
+                named.iter().any(|name| callee_type_params.contains(name))
+            };
             let actual = if let Some(argument) = argument {
-                match self.type_of_expr_hint(&argument.value, locals, Some(&hinted_expected)) {
+                let typed = if hint_names_callee_params {
+                    self.type_of_expr_hint_uncontracted(
+                        &argument.value,
+                        locals,
+                        Some(&hinted_expected),
+                    )
+                } else {
+                    self.type_of_expr_hint(&argument.value, locals, Some(&hinted_expected))
+                };
+                match typed {
                     // A whole list place supplies a `Span[T]` parameter by a
                     // call-duration whole-range loan (ADR-0061, B1).
                     Ok(Type::Named(name, element))

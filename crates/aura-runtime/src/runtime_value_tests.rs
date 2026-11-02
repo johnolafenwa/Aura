@@ -6713,7 +6713,14 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
         "Array",
     );
     assert_source_type(Value::Duration(5), "Duration");
-    assert_source_type(Value::Range(RangeValue { start: 1, end: 3 }), "Range");
+    assert_source_type(
+        Value::Range(RangeValue {
+            start: 1,
+            end: 3,
+            step: 1,
+        }),
+        "Range",
+    );
     assert_source_type(
         Value::ModuleNamespace(ModuleNamespaceValue {
             path: "pkg.tools".to_string(),
@@ -11958,7 +11965,11 @@ fn value_equality_and_render_cover_collection_shapes() {
         path: "pkg.tools".to_string(),
     }));
     assert_value_equals_clone(Value::Duration(5));
-    assert_value_equals_clone(Value::Range(RangeValue { start: 1, end: 4 }));
+    assert_value_equals_clone(Value::Range(RangeValue {
+        start: 1,
+        end: 4,
+        step: 1,
+    }));
     assert_eq!(Value::Unit.render(), "None");
     assert_value_equals_clone(Value::Unit);
     assert_ne!(Value::Unit, Value::Bool(false));
@@ -11973,7 +11984,12 @@ fn value_equality_and_render_cover_collection_shapes() {
         "Status.Done(2)"
     );
     assert_eq!(
-        Value::Range(RangeValue { start: 1, end: 4 }).render(),
+        Value::Range(RangeValue {
+            start: 1,
+            end: 4,
+            step: 1
+        })
+        .render(),
         "range(1, 4)"
     );
 }

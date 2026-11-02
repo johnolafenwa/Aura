@@ -2487,7 +2487,9 @@ enum FunctionOpResultLayout {
 fn function_op_result_layout(op: FunctionOp) -> FunctionOpResultLayout {
     let unknown = || Type::named("Unknown");
     match op {
-        FunctionOp::YieldNow | FunctionOp::Sleep => FunctionOpResultLayout::Unit,
+        FunctionOp::YieldNow | FunctionOp::Sleep | FunctionOp::Eprint => {
+            FunctionOpResultLayout::Unit
+        }
         FunctionOp::Cancelled => FunctionOpResultLayout::Scalar(ScalarKind::Bool),
         FunctionOp::RandomSecureInt | FunctionOp::MonotonicTimeMs | FunctionOp::Ord => {
             FunctionOpResultLayout::Scalar(ScalarKind::Int64)
@@ -8305,10 +8307,12 @@ impl<'a> FunctionCompiler<'a> {
 
     fn compile_range(&mut self, args: &[MirArg]) -> std::result::Result<ValueRef, String> {
         let int_ty = DirectType::Scalar(ScalarKind::Int64);
-        // MIR binds one argument to `stop` and two to `start, stop`.
-        let (start_arg, stop_arg) = match args {
-            [stop] => (None, stop),
-            [start, stop] => (Some(start), stop),
+        // MIR binds one argument to `stop`, two to `start, stop`, and three
+        // to `start, stop, step`.
+        let (start_arg, stop_arg, step_arg) = match args {
+            [stop] => (None, stop, None),
+            [start, stop] => (Some(start), stop, None),
+            [start, stop, step] => (Some(start), stop, Some(step)),
             _ => {
                 return Err(
                     "direct backend expected `range()` to receive a `stop` argument".to_string(),
@@ -8327,10 +8331,20 @@ impl<'a> FunctionCompiler<'a> {
         };
         let stop = self.load_operand(&stop_arg.value)?;
         let stop = self.coerce_value(stop, &int_ty)?;
-        let inst = self.builder.call(
-            self.runtime[RuntimeFn::RangeNew],
-            &[start.values[0], stop.values[0]],
-        );
+        let inst = if let Some(argument) = step_arg {
+            let step = self.load_operand(&argument.value)?;
+            let step = self.coerce_value(step, &int_ty)?;
+            self.builder.call(
+                self.runtime[RuntimeFn::RangeNewStep],
+                &[start.values[0], stop.values[0], step.values[0]],
+            )
+        } else {
+            // `range_new` cannot fail, so the common forms skip the step check.
+            self.builder.call(
+                self.runtime[RuntimeFn::RangeNew],
+                &[start.values[0], stop.values[0]],
+            )
+        };
         Ok(self.owned_opaque_result(inst.results, Type::named("Range")))
     }
 
@@ -8348,15 +8362,14 @@ impl<'a> FunctionCompiler<'a> {
         };
         let range = self.load_place(iterable_place)?;
         let range = self.ensure_opaque(range)?;
-        let current_inst = self
+        // A stepped range can step past `int64` max, so the cursor is read
+        // only once the range says it has another element.
+        let has_next_inst = self
             .builder
-            .call(self.runtime[RuntimeFn::RangeCurrent], &[range.values[0]]);
-        let current = current_inst.results[0];
-        let end_inst = self
-            .builder
-            .call(self.runtime[RuntimeFn::RangeEnd], &[range.values[0]]);
-        let end = end_inst.results[0];
-        let has_next = self.builder.icmp(IntCC::SignedLessThan, current, end);
+            .call(self.runtime[RuntimeFn::RangeHasNext], &[range.values[0]]);
+        let has_next = has_next_inst.results[0];
+        let zero = self.builder.iconst(types::I64, 0);
+        let has_next = self.builder.icmp(IntCC::NotEqual, has_next, zero);
 
         let next_block = self.builder.create_block();
         let body_block = self.compiled_block(body_label)?;
@@ -8365,6 +8378,10 @@ impl<'a> FunctionCompiler<'a> {
             .brif(has_next, next_block, &[], exit_block, &[]);
 
         self.builder.switch_to_block(next_block);
+        let current_inst = self
+            .builder
+            .call(self.runtime[RuntimeFn::RangeCurrent], &[range.values[0]]);
+        let current = current_inst.results[0];
         let binding_ty = self.type_of_place(binding)?;
         self.store_place(
             binding,

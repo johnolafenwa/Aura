@@ -1,4 +1,4 @@
-error[AU2015]: callable contract mismatch: positional parameter 1 differs from parameter `value` in its name; use the explicit adapter `Destination(target)`
+error[AU2015]: callable contract mismatch: parameter `value` would be renamed to `other`; renaming requires an explicit wrapper
  --> crates/aura-compiler/tests/fixtures/check-fail/callable_exact_name_alias.au:8:29
   |
 8 |     callback: Destination = target

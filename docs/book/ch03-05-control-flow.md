@@ -158,15 +158,23 @@ Python:
 def main():
     cities = ["Oslo", "Lagos", "Lima"]
     for index, city in enumerate(cities):
-        print(f"{index + 1}. {city}")
+        print(f"{index}: {city}")
+    for number, city in enumerate(cities, start=1):
+        print(f"{number}. {city}")
 ```
 
 ```console
 $ aura run src/main.au
+0: Oslo
+1: Lagos
+2: Lima
 1. Oslo
 2. Lagos
 3. Lima
 ```
+
+`enumerate` counts from 0 unless you give it a `start`, as the second loop
+does.
 
 `zip(first, second)` walks two lists side by side in the same way.
 
@@ -202,27 +210,29 @@ $ aura run src/main.au
 ```
 
 A range whose start is not below its stop is empty, so `range(3, 0)` runs
-zero times and prints nothing. To count down, wrap the range in `reversed`.
-What Aura's `range` doesn't have yet is Python's third argument, the step:
+zero times and prints nothing. To count by something other than one, give
+`range` a third argument, the step. A negative step counts down:
 
-```aura check-fail:AU2004
+```aura
 def main():
-    for n in range(0, 10, 2):
+    for n in range(0, 10, 4):
+        print(n)
+    for n in range(3, 0, -1):
         print(n)
 ```
 
 ```console
 $ aura run src/main.au
-error[AU2004]: `range` expects 1 or 2 arguments, found 3
- --> src/main.au:2:14
-  |
-2 |     for n in range(0, 10, 2):
-  |              ^
+0
+4
+8
+3
+2
+1
 ```
 
-This is a gap in the current preview rather than a design decision. Until it
-is filled, use a `while` loop with the step written out, as the `celsius`
-loop above did, or multiply: `for i in range(5):` with `n = i * 2` inside.
+The stop is still left out, whichever way the range counts. A step of zero
+would never get anywhere, so `range` stops the program if it is given one.
 
 Python's `for ... else` and `while ... else` clauses don't exist in Aura
 either. An `else:` after a loop is a syntax error. If you need to know

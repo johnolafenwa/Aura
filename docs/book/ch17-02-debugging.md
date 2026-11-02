@@ -34,8 +34,9 @@ which call to `summarize` it was. Here it is obvious from reading `main`, but
 in a real program the empty list might have come from a file, a network
 response, or a filter three functions away. The cheapest next step is often
 to print. `print` writes to standard output; if your program's output is
-being read by another tool, the `log` module writes one JSON record per call
-to standard error instead, which keeps diagnostic noise out of the data:
+being read by another tool, `eprint` writes the same text to standard error
+instead, and the `log` module writes one JSON record per call to standard
+error, which keeps diagnostic noise out of the data:
 
 ```aura
 import log

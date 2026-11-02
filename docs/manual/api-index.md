@@ -14,7 +14,8 @@ message evaluation, `AU4001`, cleanup, and matching behavior across backends.
 | API | Signature | Behavior |
 | --- | --- | --- |
 | `print` | `print(value) -> None` | Renders `value` and writes it with a newline. |
-| `range` | `range(stop: int64) -> Range`; `range(start: int64, stop: int64) -> Range` | Integer range that excludes the end value. |
+| `eprint` | `eprint(value) -> None` | Renders `value` as `print` does and writes it with a newline to standard error. |
+| `range` | `range(stop: int64) -> Range`; `range(start: int64, stop: int64) -> Range`; `range(start: int64, stop: int64, step: int64) -> Range` | Integer range that excludes the end value. A `step` counts by that amount; a negative step counts down; a zero step stops the program. |
 | `cancelled` | `cancelled() -> bool` | Returns whether the current task is cancelled. |
 | `yield_now` | `yield_now() -> None` | Yields the current lightweight task to the scheduler. |
 | `sleep` | `sleep(duration: Duration) -> None` | Suspends the current task through the scheduler. |

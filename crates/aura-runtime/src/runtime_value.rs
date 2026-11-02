@@ -3887,6 +3887,19 @@ pub struct MapValue {
 pub struct RangeValue {
     pub start: i128,
     pub end: i128,
+    /// Never zero: `range(...)` stops the program on a zero step.
+    pub step: i128,
+}
+
+impl RangeValue {
+    /// Whether `start` is still before `end` in the direction of `step`.
+    pub fn has_next(&self) -> bool {
+        if self.step > 0 {
+            self.start < self.end
+        } else {
+            self.start > self.end
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -8892,7 +8905,15 @@ impl Value {
                         Value::Duration(value) => rendered.push_str(&render_duration(*value)),
                         Value::Rng(_) => rendered.push_str("<rng>"),
                         Value::Range(range) => {
-                            rendered.push_str(&format!("range({}, {})", range.start, range.end));
+                            if range.step == 1 {
+                                rendered
+                                    .push_str(&format!("range({}, {})", range.start, range.end));
+                            } else {
+                                rendered.push_str(&format!(
+                                    "range({}, {}, {})",
+                                    range.start, range.end, range.step
+                                ));
+                            }
                         }
                         Value::ModuleNamespace(namespace) => {
                             rendered.push_str(&format!("<module {}>", namespace.path));

@@ -2125,7 +2125,8 @@ function_ops! {
         ListEmpty => ("list", VecEmpty),
         DictEmpty => ("dict", MapEmpty),
         SetEmpty => ("set", SetEmpty),
-        Range => ("range", RangeNew),
+        Range => ("range", RangeNewStep),
+        Eprint => ("eprint", EprintStr),
         QueueNew => ("Queue", ChannelNew),
         TaskGroupNew => ("TaskGroup", TaskGroupNew),
         Cancelled => ("cancelled", Cancelled),
@@ -2331,7 +2332,7 @@ impl FunctionOp {
             Range => Type::named("Range"),
             TaskGroupNew => Type::named("TaskGroup"),
             Cancelled => Type::named("bool"),
-            YieldNow | Sleep => Type::Unit,
+            YieldNow | Sleep | Eprint => Type::Unit,
             Select => {
                 let mut queue_payload = None;
                 let mut task_result = None;

@@ -7725,6 +7725,25 @@ pub extern "C-unwind" fn aura_direct_range_new(start: i64, end: i64) -> *mut Opa
         boxed_value(Value::Range(RangeValue {
             start: start as i128,
             end: end as i128,
+            step: 1,
+        }))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_range_new_step(
+    start: i64,
+    end: i64,
+    step: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        if step == 0 {
+            runtime_error("`range` step must not be zero");
+        }
+        boxed_value(Value::Range(RangeValue {
+            start: start as i128,
+            end: end as i128,
+            step: step as i128,
         }))
     })
 }
@@ -7744,12 +7763,9 @@ pub extern "C-unwind" fn aura_direct_range_current(range: *mut OpaqueValue) -> i
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_range_end(range: *mut OpaqueValue) -> i64 {
+pub extern "C-unwind" fn aura_direct_range_has_next(range: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| match unsafe { value_ref(range) } {
-        Value::Range(range) => match i64::try_from(range.end) {
-            Ok(end) => end,
-            Err(_) => runtime_error("range end is outside host i64 bounds"),
-        },
+        Value::Range(range) => i64::from(range.has_next()),
         other => runtime_error(format!(
             "expected `Range`, found `{}`",
             value_type_name(other)
@@ -7761,8 +7777,9 @@ pub extern "C-unwind" fn aura_direct_range_end(range: *mut OpaqueValue) -> i64 {
 pub extern "C-unwind" fn aura_direct_range_advance(range: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| match unsafe { value_ref(range) } {
         Value::Range(range) => boxed_value(Value::Range(RangeValue {
-            start: range.start + 1,
+            start: range.start + range.step,
             end: range.end,
+            step: range.step,
         })),
         other => runtime_error(format!(
             "expected `Range`, found `{}`",
@@ -11896,6 +11913,18 @@ pub extern "C-unwind" fn aura_direct_print_value(value: *mut OpaqueValue) {
         let mut rendered = render_direct_value(value);
         rendered.push('\n');
         write_stdout(&rendered);
+    })
+}
+
+/// `eprint`: the program already rendered the value to `text`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_eprint_str(text: *mut OpaqueValue) {
+    task_runtime_boundary(|| {
+        let mut rendered = render_direct_value(text);
+        rendered.push('\n');
+        let mut stderr = io::stderr().lock();
+        let _ = stderr.write_all(rendered.as_bytes());
+        let _ = stderr.flush();
     })
 }
 

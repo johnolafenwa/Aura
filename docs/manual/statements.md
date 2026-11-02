@@ -262,6 +262,7 @@ Maintained iterable forms include:
 | --- | --- |
 | `for i in range(n):` | Yields `int64` values from zero up to `n`, excluding `n`. |
 | `for i in range(start, end):` | Yields `int64` values from `start` up to `end`, excluding `end`. |
+| `for i in range(start, end, step):` | Yields `start`, `start + step`, and so on while the value is before `end` in the direction of `step`. A negative step counts down. A zero step stops the program. |
 | `for value in values:` | Retains the list and yields shared access for non-copy elements. |
 | `for value in own values:` | Consumes the list and yields owned elements. |
 | `for value in mut values:` | Binds each element as a mutable element view. Writes land in the list at once. The iterable place must be mutable. |
@@ -269,6 +270,7 @@ Maintained iterable forms include:
 | `for value in own set:` | Consumes the set and yields owned elements. |
 | `for value in queue:` | Receives queue items under the scheduler-aware queue iteration contract. |
 | `for index, value in enumerate(seq):` | Yields `(int64, element)` pairs, counting positions from zero. |
+| `for number, value in enumerate(seq, start=1):` | Counts from `start` instead of zero. |
 | `for left, right in zip(first, second):` | Yields one pair per shared position and stops at the shorter sequence. |
 | `for value in iterator:` | Consumes an `iter.Iterator[T]` implementation and yields each owned item. |
 | `for value in mut iterator:` | Borrows a mutable `iter.Iterator[T]` place and yields each owned item, leaving the iterator usable afterwards. |
@@ -309,7 +311,7 @@ Both forms read their operands by position, so each operand must be a `list[T]` 
 - Every operand stays shared-borrowed and frozen for the whole loop.
 - A non-copy element binding is a shared borrow and cannot be moved out.
 
-`enumerate` takes exactly one operand and `zip` takes exactly two, both positionally. Any other arity, or a named argument, reports `AU2004`.
+`enumerate` takes exactly one operand and `zip` takes exactly two, both positionally. `enumerate` also takes an optional `start`, second or as `start=`, which must widen losslessly to `int64` (`AU2002` otherwise); the count begins there instead of at zero. Any other arity, or another named argument, reports `AU2004`.
 
 `zip` stops as soon as any operand has no value at the current position. It performs `min(len(first), len(second))` iterations and never observes the tail of the longer sequence.
 

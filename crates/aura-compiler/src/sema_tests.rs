@@ -4535,9 +4535,9 @@ def main():
             "`enumerate` iterates over the bare-loop shared default; write `for ... in enumerate(...):` without an ownership modifier",
         ),
         (
-            "def main():\n    mut values = list[int32]()\n    for index, value in enumerate(values, values):\n        print(index)\n",
+            "def main():\n    mut values = list[int32]()\n    for index, value in enumerate(values, 0, values):\n        print(index)\n",
             "AU2004",
-            "`enumerate` takes 1 iterable, found 2",
+            "`enumerate` takes 1 iterable, found 3",
         ),
         (
             "def main():\n    mut values = list[int32]()\n    for first, second in zip(values):\n        print(first)\n",
@@ -23743,7 +23743,7 @@ def main():
     positional: int32 = selected(3)
 "#,
     )
-    .expect_err("a bare written contract cannot implicitly restrict either branch");
+    .expect("an unnamed written contract admits either branch");
 
     let named = crate::check_source(
         r#"
@@ -23759,8 +23759,7 @@ def main():
 "#,
     )
     .expect_err("a written positional-only contract exposes no names");
-    assert_eq!(named.code, "AU2015");
-    assert!(named.message.contains("default availability"));
+    assert_eq!(named.code, "AU2004");
 }
 
 #[test]
@@ -24112,7 +24111,7 @@ def main():
     from_field: int32 = holder.callback(5)
 "#,
     )
-    .expect_err("bare storage requires the complete contract without implicit restriction");
+    .expect("an unnamed written slot admits any parameter name in storage");
 
     crate::check_source(
         r#"
@@ -31177,30 +31176,28 @@ def main():
     step: Unary = increment
     print(step(4))
 "#;
-    let error = crate::check_source(source).expect_err("bare restriction must fail");
-    assert_eq!(error.code, "AU2015");
-    assert!(error.message.contains("name"));
-    assert!(error.message.contains("Unary(increment)"));
+    // An unnamed slot admits the name and drops the default.
+    crate::check_source(source).expect("an unnamed slot admits a named, defaulted parameter");
     crate::check_source(&source.replace("= increment\n", "= Unary(increment)\n"))
         .expect("the explicit thin adapter remains valid");
+    let named = source.replace("def(int64)", "def(count: int64)");
+    let error = crate::check_source(&named).expect_err("a named slot cannot rename");
+    assert_eq!(error.code, "AU2015");
+    assert!(error.message.contains("renamed"));
 
     let specialized = "type Unary = def(own int64) -> int64\ndef identity[T](value: own T) -> T:\n    return value\ndef main():\n    step: Unary = identity[int64]\n    print(step(4))\n";
-    let error = crate::check_source(specialized).expect_err("specialized contracts stay named");
-    assert_eq!(error.code, "AU2015");
-    assert!(error.message.contains("Unary(identity[int64])"));
+    crate::check_source(specialized).expect("specialized contracts fill an unnamed slot");
     crate::check_source(&specialized.replace("= identity[int64]", "= Unary(identity[int64])"))
-        .expect("the suggested specialized adapter is accepted");
+        .expect("the specialized adapter is accepted");
 }
 
 #[test]
 fn bare_bound_method_restrictions_require_owned_callable_adapters() {
     let source = "class Counter:\n    value: int64\n    def scaled(self, factor: int64) -> int64:\n        return self.value * factor\ndef main():\n    counter = Counter(value=2)\n    selected: def(int64) -> int64 = counter.scaled\n    print(selected(3))\n";
-    let error =
-        crate::check_source(source).expect_err("a bound method keeps its declared parameter name");
+    crate::check_source(source).expect("an unnamed slot admits a bound method's named parameter");
+    let renamed = source.replace("def(int64)", "def(other: int64)");
+    let error = crate::check_source(&renamed).expect_err("a named slot cannot rename");
     assert_eq!(error.code, "AU2015");
-    assert!(error
-        .message
-        .contains("type Adapter = Callable[def(int64) -> int64]"));
     let positive = source.replace(
         "selected: def(int64) -> int64 = counter.scaled",
         "selected = Restricted(counter.scaled)",
@@ -31211,7 +31208,7 @@ fn bare_bound_method_restrictions_require_owned_callable_adapters() {
 
 #[test]
 fn explicit_specialization_ast_keeps_the_same_callable_adapter_diagnostic() {
-    let source = "type Step = def(own int64) -> int64\ndef identity[T](value: own T) -> T:\n    return value\ndef main():\n    step: Step = identity[int64]\n    print(step(1))\n";
+    let source = "type Step = def(other: own int64) -> int64\ndef identity[T](value: own T) -> T:\n    return value\ndef main():\n    step: Step = identity[int64]\n    print(step(1))\n";
     let indexed = crate::check_source(source).expect_err("bare contract restriction");
     let mut module = crate::parse_source(source).unwrap();
     let call = crate::parser::parse_expression("identity[int64](1)").unwrap();
@@ -31234,7 +31231,7 @@ fn explicit_specialization_ast_keeps_the_same_callable_adapter_diagnostic() {
     let specialized = check(module).expect_err("equivalent explicit specialization contract");
     assert_eq!(specialized.code, indexed.code);
     assert_eq!(specialized.message, indexed.message);
-    assert!(specialized.message.contains("Step(identity[int64])"));
+    assert!(specialized.message.contains("renamed"));
 }
 
 #[test]
@@ -32194,4 +32191,178 @@ fn imported_generic_unit_variants_take_expected_type_arguments() {
         "            pass\n",
     ))
     .expect("the expected type supplies `T`");
+}
+
+#[test]
+fn design_batch_additions_check_and_reject_through_the_library() {
+    // enumerate's start, in a loop and in a comprehension, must be an index
+    // integer.
+    crate::check_source(
+        "def main():\n    for n, name in enumerate([\"a\"], start=1):\n        print(n)\n    pairs = [(n, x) for n, x in enumerate([5], 10)]\n    print(pairs)\n",
+    )
+    .expect("an integer enumerate start should check");
+    let error = crate::check_source(
+        "def main():\n    for n, name in enumerate([\"a\"], start=\"1\"):\n        print(n)\n",
+    )
+    .expect_err("a str enumerate start should be rejected");
+    assert_eq!(error.code, "AU2002");
+    assert!(error.message.contains("`enumerate` start"));
+    let error = crate::check_source(
+        "def main():\n    pairs = [(n, x) for n, x in enumerate([5], start=\"1\")]\n    print(pairs)\n",
+    )
+    .expect_err("a str comprehension enumerate start should be rejected");
+    assert!(error.message.contains("`enumerate` start"));
+
+    // range takes one to three arguments.
+    crate::check_source("def main():\n    for i in range(10, 0, -2):\n        print(i)\n")
+        .expect("a stepped range should check");
+    let error = crate::check_source("def main():\n    print(range(1, 2, 3, 4))\n")
+        .expect_err("a fourth range argument should be rejected");
+    assert!(
+        error.message.contains("1 to 3 arguments"),
+        "{}",
+        error.message
+    );
+
+    // eprint renders like print.
+    crate::check_source("def main():\n    eprint(f\"{1} {[2]}\")\n    eprint(3)\n")
+        .expect("eprint should check");
+
+    // A named slot still requires the same parameter name.
+    let error = crate::check_source(
+        "def is_slow(ms: int64) -> bool:\n    return ms > 100\n\ndef main():\n    f: def(limit: int64) -> bool = is_slow\n    print(f(limit=150))\n",
+    )
+    .expect_err("a renamed parameter should not fill a named slot");
+    assert_eq!(error.code, "AU2015");
+
+    // Compound assignment on a str-keyed dict index borrows the key.
+    crate::check_source(
+        "def main():\n    mut counts: dict[str, int64] = {\"rain\": 1}\n    word = \"rain\"\n    counts[word] *= 10\n    print(word)\n    print(counts)\n",
+    )
+    .expect("a compound index assignment should borrow a str key");
+}
+
+#[test]
+fn named_callable_slots_keep_every_contract_diagnostic() {
+    // Unnamed slots admit closures, packed callables, and functions whatever
+    // their parameter names.
+    crate::check_source(
+        "type Named = Callable[def(value: int64) -> int64]\ntype Bare = Callable[def(int64) -> int64]\n\ndef inc(value: int64) -> int64:\n    return value + 1\n\ndef main():\n    n = 3\n    g: def(value: int64) -> int64 = lambda value: value + n\n    f: def(int64) -> int64 = g\n    print(f(1))\n    a = Named(inc)\n    b: Bare = a\n    print(b(4))\n    h: def(int64) -> int64 = inc\n    print(h(2))\n",
+    )
+    .expect("unnamed slots admit any parameter name");
+    let cases: [(&str, &str); 12] = [
+        (
+            "def inc(value: int64) -> int64:\n    return value\n\ndef main():\n    c: Callable[def(int64) -> int64] = inc\n",
+            "becomes `Callable[def(int64) -> int64]` only through an explicit `Callable(...)`",
+        ),
+        (
+            "def main():\n    c: Callable[def(int64) -> int64] = lambda x: x\n",
+            "a lambda becomes `Callable[def(int64) -> int64]` only through an explicit",
+        ),
+        (
+            "def inc(value: int64) -> int64:\n    return value\n\ndef main():\n    c: TaskCallable[def(int64) -> int64] = inc\n",
+            "explicit `TaskCallable(...)` constructor call",
+        ),
+        (
+            "def inc(value: int64) -> int64:\n    return value\n\ndef main():\n    k: def(int64, int64) -> int64 = inc\n",
+            "expected 2 parameters, found 1",
+        ),
+        (
+            "type Unary = def(value: int64) -> int64\ndef increment(value: int64 = 1) -> int64:\n    return value + 1\ndef main():\n    step: Unary = increment\n    print(step(4))\n",
+            "use the explicit adapter `Unary(increment)`",
+        ),
+        (
+            "class Counter:\n    value: int64\n    def scaled(self, factor: int64 = 2) -> int64:\n        return self.value * factor\ndef main():\n    counter = Counter(value=2)\n    selected: def(factor: int64) -> int64 = counter.scaled\n    print(selected(3))\n",
+            "declare `type Adapter = Callable[def(factor: int64) -> int64]`",
+        ),
+        (
+            "def first(value: int32 = 1) -> int32:\n    return value\ndef second(value: int32 = 2) -> int32:\n    return value\ndef main():\n    selected: def(value: int32) -> int32 = first if true else second\n    print(selected(3))\n",
+            "default availability",
+        ),
+        (
+            "type Named = Callable[def(value: int64 = ...) -> int64]\ntype Plain = Callable[def(value: int64) -> int64]\n\ndef inc(value: int64 = 1) -> int64:\n    return value + 1\n\ndef main():\n    a = Named(inc)\n    b: Plain = a\n    print(b(4))\n",
+            "use the explicit adapter `Plain(a)`",
+        ),
+        (
+            "def main():\n    n = 3\n    g: def(value: int64) -> int64 = lambda value: value + n\n    f: def(other: int64) -> int64 = g\n    print(f(1))\n",
+            "would be renamed to `other`",
+        ),
+        (
+            "def main():\n    f: def(value: int64) -> int64 = lambda other: other\n",
+            "must be named `value`",
+        ),
+        (
+            "def main():\n    f: def(value: int64 = ...) -> int64 = lambda value: value\n",
+            "a lambda cannot promise the default",
+        ),
+        (
+            "def main():\n    f: def(*, value: int64) -> int64 = lambda value: value\n",
+            "keyword-only boundary",
+        ),
+    ];
+    for (source, expected) in cases {
+        let error = crate::check_source(source).expect_err(source);
+        assert_eq!(error.code, "AU2015", "{source}");
+        assert!(
+            error.message.contains(expected),
+            "{source}\n{}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn unnamed_callable_slots_admit_named_closures_and_reject_other_arity() {
+    let slot = |name: &str| FunctionParamContract {
+        keyword_only: false,
+        name: name.to_string(),
+        ty: Type::named("int64"),
+        passing: ReceiverKind::Borrow,
+        has_default: false,
+    };
+    let closure = |params: Vec<FunctionParamContract>| Type::Closure {
+        params: Box::new(params),
+        return_type: Box::new(Type::named("int64")),
+        captures: Box::new(Vec::new()),
+        call_kind: ClosureCallKind::Repeatable,
+    };
+    // An unnamed closure slot takes a closure whatever its parameter name.
+    callables::check_callable_positions(&closure(vec![slot("")]), &closure(vec![slot("value")]))
+        .expect("an unnamed closure slot admits a named closure");
+    // A named slot still keeps the name in the contract.
+    callables::check_callable_positions(
+        &closure(vec![slot("other")]),
+        &closure(vec![slot("value")]),
+    )
+    .expect_err("a named closure slot keeps the parameter name");
+    // A different arity is never admitted.
+    callables::check_callable_positions(
+        &closure(vec![slot("")]),
+        &closure(vec![slot("a"), slot("b")]),
+    )
+    .expect_err("a two-parameter closure does not fit a one-parameter slot");
+    let function = Type::Function {
+        params: vec![slot("")],
+        return_type: Box::new(Type::named("int64")),
+    };
+    callables::check_callable_positions(
+        &function,
+        &Type::Function {
+            params: vec![slot("a"), slot("b")],
+            return_type: Box::new(Type::named("int64")),
+        },
+    )
+    .expect_err("a two-parameter function does not fit a one-parameter slot");
+
+    // A packed callable keeps its arity, too.
+    let error = crate::check_source(
+        "type Pair = Callable[def(a: int64, b: int64) -> int64]\ntype One = Callable[def(int64) -> int64]\ndef add(a: int64, b: int64) -> int64:\n    return a + b\ndef main():\n    p = Pair(add)\n    o: One = p\n",
+    )
+    .expect_err("a two-parameter packed callable does not fit a one-parameter slot");
+    assert_eq!(error.code, "AU2015");
+    assert!(
+        error.message.contains("expected 1 parameter, found 2"),
+        "{}",
+        error.message
+    );
 }

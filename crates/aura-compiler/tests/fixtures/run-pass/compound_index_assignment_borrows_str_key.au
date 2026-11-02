@@ -1,0 +1,11 @@
+def main():
+    mut counts: dict[str, int64] = {}
+    for raw in "the rain the plain the".split_whitespace():
+        if raw in counts:
+            counts[raw] += 1
+        else:
+            counts[raw.clone()] = 1
+    word = "rain"
+    counts[word] *= 10
+    print(word)
+    print(counts)

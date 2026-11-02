@@ -1,0 +1,6 @@
+def is_slow(ms: int64) -> bool:
+    return ms > 100
+
+def main():
+    f: def(limit: int64) -> bool = is_slow
+    print(f(limit=150))

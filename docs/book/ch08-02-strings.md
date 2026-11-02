@@ -346,11 +346,10 @@ The triple-quoted string keeps its text exactly as written, newlines
 included, and the final newline doesn't produce an empty last line. Notice,
 too, that a printed list of strings shows them without quotation marks.
 
-While we're on literals: the usual escapes `\n`, `\t`, `\\`, `\"`, and `\'`
-work in ordinary strings, along with `\0`, `\xHH`, and `\u{...}`. A Python
-habit that doesn't carry over is `\r`, which isn't a supported escape; the
-compiler reports `AU1001` for it, and you can write `\x0d` if you need a
-carriage return. A string with an `r` prefix, such as `r"C:\grades"`, treats
+While we're on literals: the usual escapes `\n`, `\t`, `\r`, `\\`, `\"`, and
+`\'` work in ordinary strings, along with `\0`, `\xHH`, and `\u{...}`. Any
+other backslash sequence is an error (`AU1001`) rather than a literal
+backslash, so a typo can't slip through. A string with an `r` prefix, such as `r"C:\grades"`, treats
 backslashes as ordinary characters.
 
 ## Building strings

@@ -4108,3 +4108,12 @@ def main() -> None:
         assert!(has(name.as_bytes()), "debug info names `{name}`");
     }
 }
+
+#[test]
+fn eprint_writes_to_stderr_and_leaves_stdout_alone() {
+    let output = run_source(
+        "def main():\n    eprint(f\"warn {1}\")\n    print(\"out\")\n    eprint([2, 3])\n",
+    )
+    .expect("eprint should run");
+    assert_eq!(output.stdout, "out\n");
+}

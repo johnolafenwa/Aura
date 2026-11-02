@@ -211,7 +211,7 @@ public def summarize(text: str, min_level: Level) -> Summary:
         by_service={},
         errors_by_service={},
     )
-    for index, line in enumerate(text.lines()):
+    for number, line in enumerate(text.lines(), start=1):
         if line.trim() == "":
             continue
         match records.parse_line(line):
@@ -219,7 +219,7 @@ public def summarize(text: str, min_level: Level) -> Summary:
                 if rank(record.level) >= rank(min_level):
                     summary.add(record)
             case Err(error):
-                summary.skipped.append(Skipped(line=index + 1, reason=records.describe(error)))
+                summary.skipped.append(Skipped(line=number, reason=records.describe(error)))
     return summary
 ```
 
@@ -415,11 +415,11 @@ def main() -> int32:
                 case Ok(_):
                     return 0
                 case Err(error):
-                    print(f"logscan: cannot read {settings.path}: {explain(error)}")
+                    eprint(f"logscan: cannot read {settings.path}: {explain(error)}")
                     return 1
         case Err(error):
-            print(f"logscan: {config.describe(error)}")
-            print("usage: logscan <path> [--min-level LEVEL]")
+            eprint(f"logscan: {config.describe(error)}")
+            eprint("usage: logscan <path> [--min-level LEVEL]")
             return 2
 ```
 

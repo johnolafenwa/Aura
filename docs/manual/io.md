@@ -6,7 +6,7 @@ The `io` module covers standard input and output. It also defines `io.Error`, th
 import io
 ```
 
-The top-level `print(value)` builtin is not part of `io`. It renders a value and writes a newline, for simple line output. `float32` and `float64` values print in their own shortest decimal spelling that round-trips. That spelling keeps a decimal marker on integral values and preserves `-0.0`. Use `io.write(...)` and `io.flush()` when you need control over output, such as for a prompt or a protocol.
+The top-level `print(value)` builtin is not part of `io`. It renders a value and writes a newline, for simple line output. Its partner `eprint(value)` renders the same way and writes the line to standard error, for messages that shouldn't mix with a program's output. `float32` and `float64` values print in their own shortest decimal spelling that round-trips. That spelling keeps a decimal marker on integral values and preserves `-0.0`. Use `io.write(...)` and `io.flush()` when you need control over output, such as for a prompt or a protocol.
 
 ## Standard Streams
 

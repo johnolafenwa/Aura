@@ -1000,6 +1000,8 @@ struct LoopForm<'a> {
     #[allow(dead_code)]
     span: crate::diag::Span,
     iterables: Vec<&'a Expr>,
+    /// `enumerate(xs, start)` or `enumerate(xs, start=n)`: the first index.
+    start: Option<&'a Expr>,
 }
 
 /// The element type an index-addressable collection yields in a lockstep loop.
@@ -3336,6 +3338,16 @@ impl<'a> FunctionChecker<'a> {
         {
             return Ok(None);
         }
+        // `enumerate` also takes an optional `start`, second or by name.
+        let (args, start) = match (kind, args.as_slice()) {
+            (LoopFormKind::Enumerate, [iterable, start])
+                if iterable.name.is_none()
+                    && matches!(start.name.as_deref(), None | Some("start")) =>
+            {
+                (std::slice::from_ref(iterable), Some(&start.value))
+            }
+            _ => (args.as_slice(), None),
+        };
         let arity = kind.arity();
         if args.len() != arity {
             return Err(Diagnostic::coded_at(
@@ -3362,7 +3374,21 @@ impl<'a> FunctionChecker<'a> {
             name: kind.name(),
             span: iterable.span,
             iterables: args.iter().map(|argument| &argument.value).collect(),
+            start,
         }))
+    }
+
+    /// Checks `enumerate`'s `start`, which must widen to `int64` as a
+    /// `range` bound does.
+    fn check_loop_form_start(
+        &self,
+        form: &LoopForm<'_>,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        if let Some(start) = form.start {
+            self.check_index_domain_type(start, start.span, "`enumerate` start", locals)?;
+        }
+        Ok(())
     }
 
     /// Checks `for ... in enumerate(xs):` and `for ... in zip(xs, ys):`. Both
@@ -3412,6 +3438,7 @@ impl<'a> FunctionChecker<'a> {
             element_types.push(element_ty);
         }
 
+        self.check_loop_form_start(&form, locals)?;
         let binding_ty = Type::Tuple(element_types);
         let binding_passing = if any_non_copy {
             ReceiverKind::Borrow
@@ -3495,6 +3522,7 @@ impl<'a> FunctionChecker<'a> {
                 any_non_copy = any_non_copy || !self.is_copy_type(&element_ty);
                 element_types.push(element_ty);
             }
+            self.check_loop_form_start(&form, locals)?;
             (
                 Type::Tuple(element_types),
                 if any_non_copy {
@@ -5202,7 +5230,11 @@ impl<'a> FunctionChecker<'a> {
                 &mut index_borrowed_places,
             )?;
             self.reject_retained_access_overlap(&retained_target, &index_borrowed_places)?;
-            self.consume_direct_read_expr(index, locals)?;
+            // `counts[name] += 1` reads an existing entry, so it only borrows a
+            // `str` or `bytes` key; lowering clones it for the write back.
+            if !(assign.op.is_some() && compound_index_borrows_key(&object_ty)) {
+                self.consume_direct_read_expr(index, locals)?;
+            }
             let index_moved_accesses = self.newly_moved_place_accesses(
                 &locals_before_index,
                 locals,
@@ -10734,7 +10766,7 @@ impl<'a> FunctionChecker<'a> {
                         }
                         Ok(object_ty)
                     }
-                    BuiltinFunction::Print => {
+                    BuiltinFunction::Print | BuiltinFunction::Eprint => {
                         let value_arg = required_ordered_arg(
                             &ordered_args,
                             0,
@@ -16832,4 +16864,13 @@ fn type_mentions_type_param(ty: &Type, name: &str) -> bool {
             .any(|member| type_mentions_type_param(member, name)),
         _ => false,
     }
+}
+
+/// Whether a compound assignment on an index of `object_ty` borrows the key
+/// instead of moving it: a dict whose key is `str` or `bytes`.
+pub(crate) fn compound_index_borrows_key(object_ty: &Type) -> bool {
+    matches!(
+        map_key_value_types(object_ty),
+        Some((Type::Named(name, args), _)) if args.is_empty() && matches!(name.as_str(), "str" | "bytes")
+    )
 }

@@ -195,11 +195,16 @@ fn builtin_function_metadata_and_binding_surface_are_stable() {
 
     let range_error = BuiltinFunction::Range
         .bind_args(
-            &[dummy_arg(None), dummy_arg(None), dummy_arg(None)],
+            &[
+                dummy_arg(None),
+                dummy_arg(None),
+                dummy_arg(None),
+                dummy_arg(None),
+            ],
             Span::new(1, 1),
         )
         .unwrap_err();
-    assert!(range_error.message.contains("expects 1 or 2 arguments"));
+    assert!(range_error.message.contains("expects 1 to 3 arguments"));
 
     let wait_one_arg_input = [dummy_arg(None)];
     let wait_any_one_arg = BuiltinFunction::WaitAny
