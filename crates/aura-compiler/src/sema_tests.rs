@@ -32383,3 +32383,16 @@ fn prelude_names_are_imported_only_where_a_module_needs_them() {
         .expect_err("Result has no unwrap");
     assert!(error.message.contains("`unwrap`"), "{}", error.message);
 }
+
+#[test]
+fn an_unused_result_is_an_error_unless_discarded_with_underscore() {
+    let error = crate::check_source("def main():\n    parse_int64(\"4\")\n")
+        .expect_err("a dropped Result should be rejected");
+    assert_eq!(error.code, "AU2018");
+    crate::check_source("_ = parse_int64(\"1\")\n_ = parse_int64(\"2\")\nprint(\"top\")\n")
+        .expect("`_ =` may repeat at module level");
+    crate::check_source(
+        "def main():\n    _ = parse_int64(\"4\")\n    _ = parse_int64(\"5\")\n    _ = 3\n",
+    )
+    .expect("`_ =` may repeat in a function");
+}
