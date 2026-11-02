@@ -94,6 +94,7 @@ fn hash_nodes(root: &Value, hasher: &mut impl Hasher, budget: &mut usize) {
             Value::Range(range) => {
                 range.start.hash(hasher);
                 range.end.hash(hasher);
+                range.step.hash(hasher);
             }
             Value::ModuleNamespace(namespace) => namespace.path.hash(hasher),
             Value::Function(function) => function.name.hash(hasher),

@@ -354,6 +354,8 @@ If an indirect-call default traps, the diagnostic uses the public target name an
 
 A bare annotation, parameter pass, field or element store, alias binding, return, or branch join must preserve the value's complete callable contract. A difference reports `AU2015` and describes the differing slot, kind, or obligation. A written destination does not restrict the value implicitly.
 
+The one exception is an unnamed slot. A written type such as `def(int64) -> bool` can only be called positionally, so at every destination its unnamed, positional slot admits a value whose parameter has any name, or a default the destination does not promise: `check: def(int64) -> bool = is_slow` holds for `def is_slow(ms: int64) -> bool`. A named slot, as in `def(limit: int64) -> bool`, still requires the same name.
+
 Inference never invents a common contract. Each of these rules reports `AU2015` with the differing slot when it fails:
 
 - Rebinding a local must satisfy the contract the local already has.
@@ -363,7 +365,7 @@ Inference never invents a common contract. Each of these rules reports `AU2015` 
 
 ### Adapters
 
-A safe restriction requires an explicit adapter. For example, declare `type Unary = def(int64) -> int64` and write `Unary(double)` to hide `double`'s parameter name. An adapter may:
+A safe restriction requires an explicit adapter, such as `type Unary = def(int64) -> int64` with `Unary(double)`. An adapter may:
 
 - hide exposed names
 - drop default availability

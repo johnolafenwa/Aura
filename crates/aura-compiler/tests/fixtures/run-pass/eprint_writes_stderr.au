@@ -1,0 +1,14 @@
+class Point:
+    x: int64
+    y: int64
+
+impl Display for Point:
+    def display(self) -> str:
+        return f"({self.x}, {self.y})"
+
+def main():
+    print("out")
+    eprint("err line")
+    eprint(42)
+    eprint(Point(x=1, y=2))
+    eprint([1, 2])

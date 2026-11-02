@@ -341,7 +341,11 @@ fn runtime_member_type_identifies_every_backend_independent_payload_kind() {
         Some(Type::named("random.Rng"))
     );
     assert_eq!(
-        runtime_member_type(&Value::Range(RangeValue { start: 0, end: 2 })),
+        runtime_member_type(&Value::Range(RangeValue {
+            start: 0,
+            end: 2,
+            step: 1
+        })),
         Some(Type::named("Range"))
     );
     let signature = Type::Function {

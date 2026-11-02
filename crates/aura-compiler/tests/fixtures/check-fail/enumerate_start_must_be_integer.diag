@@ -1,0 +1,5 @@
+error[AU2002]: `enumerate` start must have type `int64` or a losslessly narrower integer type, found `str`
+ --> crates/aura-compiler/tests/fixtures/check-fail/enumerate_start_must_be_integer.au:2:48
+  |
+2 |     for number, name in enumerate(["a"], start="1"):
+  |                                                ^

@@ -216,27 +216,15 @@ would have to change.
 ## Numbering the lines
 
 When `logscan` skips a line, the user will want to know which one. Users count
-lines from 1, as editors and `grep -n` do. A Python programmer reaches for
-`enumerate(lines, start=1)`:
+lines from 1, as editors and `grep -n` do, while `enumerate` counts from 0. As
+in Python, `enumerate` takes a `start` to count from instead:
 
 ```aura fragment
     for number, line in enumerate(text.lines(), start=1):
 ```
 
-```console
-$ aura check src/main.au
-error[AU2004]: `enumerate` takes 1 iterable, found 2
- --> src/main.au:46:25
-   |
-46 |     for number, line in enumerate(text.lines(), start=1):
-   |                         ^
-```
-
-Aura's `enumerate` takes exactly one argument and always counts from zero. The
-fix is one line of arithmetic inside the loop, `number = index + 1`, which you
-can see in Listing 12-9. You'll meet a handful of small gaps like this when you
-bring Python habits along. Each one is caught at the call, before the program
-runs, with a message that says what the function expected.
+The first line is now number 1, and nothing inside the loop has to adjust the
+count. You can see it in place in Listing 12-9.
 
 ## Using the parser
 
@@ -291,8 +279,7 @@ def parse_line(line: str) -> Record | None:
 
 def run(path: str) -> Result[None, io.Error]:
     text = try fs.read_to_string(path)
-    for index, line in enumerate(text.lines()):
-        number = index + 1
+    for number, line in enumerate(text.lines(), start=1):
         match parse_line(line):
             case Record as record:
                 print(f"{number}: {record.level} {record.service}")

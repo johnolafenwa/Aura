@@ -5869,7 +5869,7 @@ impl<'a> AnalysisBuilder<'a> {
                 let builtin_loop_form = !self.program.functions.contains_key(name)
                     && !self.program.classes.contains_key(name)
                     && !self.program.enums.contains_key(name);
-                if builtin_loop_form && name == "enumerate" && args.len() == 1 {
+                if builtin_loop_form && name == "enumerate" && matches!(args.len(), 1 | 2) {
                     let element_ty = self.infer_lockstep_element_type(&args[0].value, scope)?;
                     return Some(Type::Tuple(vec![Type::named("int64"), element_ty]));
                 }
@@ -8099,7 +8099,7 @@ fn reduction_element_type(ty: &Type) -> Option<Type> {
 
 fn builtin_function_return_type(name: &str) -> Option<Type> {
     match BuiltinFunction::from_name(name)? {
-        BuiltinFunction::Print => Some(Type::Unit),
+        BuiltinFunction::Print | BuiltinFunction::Eprint => Some(Type::Unit),
         BuiltinFunction::Range => Some(Type::named("Range")),
         BuiltinFunction::Cancelled => Some(Type::named("bool")),
         BuiltinFunction::YieldNow => Some(Type::Unit),

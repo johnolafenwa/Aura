@@ -228,6 +228,28 @@ fn equality_obligation_rejections_are_identical_across_forced_backends() {
 }
 
 #[test]
+fn eprint_writes_to_stderr_on_both_backends() {
+    let root = repo_root();
+    let fixture = "crates/aura-compiler/tests/fixtures/run-pass/eprint_writes_stderr.au";
+    let cache = TempDir::new("aura-eprint-cache");
+    for backend in ["mir", "direct"] {
+        let output = Command::new(aura_bin())
+            .current_dir(&root)
+            .env("AURA_CACHE_DIR", &cache.path)
+            .args(["run", "--backend", backend, fixture])
+            .output()
+            .unwrap_or_else(|error| panic!("forced {backend} command should start: {error}"));
+        assert!(output.status.success(), "{backend} run failed");
+        assert_eq!(normalize(&output.stdout), "out", "{backend} stdout");
+        let stderr = normalize(&output.stderr);
+        assert!(
+            stderr.ends_with("err line\n42\n(1, 2)\n[1, 2]"),
+            "{backend} stderr:\n{stderr}"
+        );
+    }
+}
+
+#[test]
 #[ignore = "full forced-backend fixture matrix; invoked by npm run test:backend-parity"]
 fn forced_mir_and_direct_backends_match_every_runtime_fixture() {
     // Phase 4 landed the `run` backend selector, so both sides of the matrix

@@ -171,9 +171,13 @@ fn adr0061_element_place_segments_round_trip_keys_and_refuse_invalid_encodings()
         );
     }
     assert_eq!(
-        super::entry_key_segment(&Value::Range(RangeValue { start: 0, end: 1 }))
-            .unwrap_err()
-            .message,
+        super::entry_key_segment(&Value::Range(RangeValue {
+            start: 0,
+            end: 1,
+            step: 1
+        }))
+        .unwrap_err()
+        .message,
         "dict entry loans cannot encode key `range(0, 1)`"
     );
 }
@@ -6677,7 +6681,11 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
         Some(Type::named("Duration"))
     );
     assert_eq!(
-        MirRuntime::infer_value_type(&Value::Range(RangeValue { start: 1, end: 3 })),
+        MirRuntime::infer_value_type(&Value::Range(RangeValue {
+            start: 1,
+            end: 3,
+            step: 1
+        })),
         Some(Type::named("Range"))
     );
 
@@ -9944,7 +9952,11 @@ fn mir_runtime_builtin_call_surface_covers_named_and_error_paths() {
                 &mut env,
             )
             .expect("named range call should succeed"),
-        Value::Range(RangeValue { start: 0, end: 3 })
+        Value::Range(RangeValue {
+            start: 0,
+            end: 3,
+            step: 1
+        })
     );
     assert!(matches!(
         runtime
@@ -13292,7 +13304,14 @@ fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
         },
     ])
     .expect("range should build");
-    assert_eq!(range, Value::Range(RangeValue { start: 2, end: 5 }));
+    assert_eq!(
+        range,
+        Value::Range(RangeValue {
+            start: 2,
+            end: 5,
+            step: 1
+        })
+    );
     let named_range = build_range(vec![EvaluatedMirArg {
         ty: None,
         name: Some("stop".to_string()),
@@ -13300,7 +13319,14 @@ fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
         writeback_place: None,
     }])
     .expect("named stop should build range from zero");
-    assert_eq!(named_range, Value::Range(RangeValue { start: 0, end: 3 }));
+    assert_eq!(
+        named_range,
+        Value::Range(RangeValue {
+            start: 0,
+            end: 3,
+            step: 1
+        })
+    );
     let range_error = build_range(vec![EvaluatedMirArg {
         ty: None,
         name: Some("unknown".to_string()),
@@ -13326,7 +13352,11 @@ fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
     .expect("named start and stop should build range");
     assert_eq!(
         named_start_stop_range,
-        Value::Range(RangeValue { start: 4, end: 9 })
+        Value::Range(RangeValue {
+            start: 4,
+            end: 9,
+            step: 1
+        })
     );
     let non_int_range_error = build_range(vec![EvaluatedMirArg {
         ty: None,
@@ -13357,11 +13387,39 @@ fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
             value: Value::Int(IntegerValue::from_signed(3)),
             writeback_place: None,
         },
+        EvaluatedMirArg {
+            ty: None,
+            name: None,
+            value: Value::Int(IntegerValue::from_signed(4)),
+            writeback_place: None,
+        },
     ])
-    .expect_err("range should reject more than two positional arguments");
+    .expect_err("range should reject more than three positional arguments");
     assert!(too_many_range_args
         .message
-        .contains("takes at most two arguments"));
+        .contains("takes at most three arguments"));
+    let zero_step_range = build_range(vec![
+        EvaluatedMirArg {
+            ty: None,
+            name: None,
+            value: Value::Int(IntegerValue::from_signed(0)),
+            writeback_place: None,
+        },
+        EvaluatedMirArg {
+            ty: None,
+            name: None,
+            value: Value::Int(IntegerValue::from_signed(3)),
+            writeback_place: None,
+        },
+        EvaluatedMirArg {
+            ty: None,
+            name: Some("step".to_string()),
+            value: Value::Int(IntegerValue::from_signed(0)),
+            writeback_place: None,
+        },
+    ])
+    .expect_err("range should reject a zero step");
+    assert!(zero_step_range.message.contains("step must not be zero"));
     let missing_stop_range = build_range(vec![EvaluatedMirArg {
         ty: None,
         name: Some("start".to_string()),
@@ -17894,7 +17952,11 @@ fn mir_runtime_terminator_and_cleanup_helpers_cover_branch_and_error_paths() {
     env.define_typed(
         "iter",
         Type::named("Range"),
-        Value::Range(RangeValue { start: 0, end: 2 }),
+        Value::Range(RangeValue {
+            start: 0,
+            end: 2,
+            step: 1,
+        }),
     );
     env.define_typed(
         "item",

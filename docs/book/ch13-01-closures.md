@@ -45,11 +45,12 @@ body and the name left out: `def(ms: int64) -> bool`. You can use a function
 type anywhere a type is allowed, including a parameter, a class field, or a
 list's element type as in `checks`.
 
-The parameter name is part of the type. That may be surprising if you come
-from languages where only the parameter types matter, so let's see what
-happens if we leave it out:
+When you write a function type yourself, you choose how much of that
+description to keep. `def(int64) -> bool` leaves the name out, and it accepts
+any function that takes one `int64` and returns a `bool`, whatever it calls its
+parameter:
 
-```aura check-fail:AU2015
+```aura
 def is_slow(ms: int64) -> bool:
     return ms > 100
 
@@ -58,24 +59,14 @@ def main():
     print(check(250))
 ```
 
-```console
-$ aura run slow.au
-error[AU2015]: callable contract mismatch: positional parameter 1 differs from parameter `ms` in its name; declare `type Adapter = def(int64) -> bool` and use `Adapter(is_slow)`
- --> slow.au:5:33
-  |
-5 |     check: def(int64) -> bool = is_slow
-  |                                 ^
-  = help: preserve identical complete contracts at bare destinations; apply safe restrictions through an explicit thin alias or owned callable constructor such as `Alias(function)`
-```
-
 Aura calls the full description of how a function may be called its
 *contract*: the parameter names, their modes and types, any defaults, and the
-result. `is_slow` can be called as `is_slow(ms=250)`, but a `def(int64) -> bool`
-could only be called positionally, so storing one as the other would quietly
-throw away part of the contract. The compiler won't do that implicitly. If you
-want a value without the name, the message tells you how to ask for it: define
-`type Adapter = def(int64) -> bool` and write `Adapter(is_slow)`. In practice
-you usually don't need to write the type at all. `check = is_slow` infers the
+result. A type with an unnamed slot can only be called positionally, as
+`check(250)`, so the name `ms` simply never comes up. If you do write a name,
+as in `def(limit: int64) -> bool`, the name becomes part of the contract:
+callers may write `check(limit=250)`, so the function you store has to call
+its parameter `limit` too, and `is_slow` is rejected with `AU2015`. In practice
+you often don't need to write the type at all. `check = is_slow` infers the
 complete contract, names and all.
 
 Named functions like these are *thin* function values: a pointer to code, with

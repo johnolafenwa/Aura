@@ -630,14 +630,23 @@ fn validate_format_parts(
     Ok(())
 }
 
-/// The parameters a call of `op` with `args` binds. `range` with one
-/// argument binds it to `stop` unless it names `start`, as in the checker.
+/// The parameters a call of `op` with `args` binds. `range` picks its
+/// shape as the checker does: three arguments or a named `step` bind
+/// `start, stop, step`; two arguments or a named `start` bind `start, stop`;
+/// one argument binds `stop`.
 fn bound_params(op: RuntimeOp, args: &[MirArg]) -> Vec<CallableParam<'static>> {
     match op {
-        RuntimeOp::Function(FunctionOp::Range)
-            if args.len() == 1 && args[0].name.as_deref() != Some("start") =>
-        {
-            vec![CallableParam::required("stop")]
+        RuntimeOp::Function(FunctionOp::Range) => {
+            let names = |name: &str| args.iter().any(|arg| arg.name.as_deref() == Some(name));
+            let mut params = op.params();
+            if args.len() >= 3 || names("step") {
+                params
+            } else if args.len() == 2 || names("start") {
+                params.truncate(2);
+                params
+            } else {
+                vec![CallableParam::required("stop")]
+            }
         }
         _ => op.params(),
     }

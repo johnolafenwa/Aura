@@ -323,7 +323,7 @@ for value in jobs:
 | --- | --- | --- |
 | `cancelled` | `cancelled() -> bool` | Returns `true` when the current task has been asked to cancel. |
 | `yield_now` | `yield_now() -> None` | Yields the current lightweight task so other runnable work can proceed. |
-| `sleep` | `sleep(duration: Duration) -> None` | Suspends the current task for at least `duration`, unless cancellation wakes it first. |
+| `sleep` | `sleep(duration: Duration) -> None` | Suspends the current task for at least `duration`, unless cancellation wakes it first. In a task that is already cancelled it returns at once, every time, so a loop that sleeps must also check `cancelled()` to stop. |
 | `select` | `select(source, ...) -> SelectOutcome[Q, T]` | Waits on one or more positional `Queue[Q]`, `Task[T]`, or relative-`Duration` sources. Cancellation wins. Otherwise the lowest ready source index wins. |
 | `wait_any` | `wait_any(tasks: list[Task[T]], timeout: Duration = ...) -> WaitAny[T]` | Waits for the first task outcome or the timeout. For a non-repeatable `T`, consumes the list and abandons the unchosen observation rights. `wait_any([])` returns `TimedOut` immediately. |
 | `wait_all` | `wait_all(tasks: list[Task[T]], timeout: Duration = ...) -> WaitAll[T]` | Waits until every task is ready, one task errors, the timeout expires, or cancellation interrupts the wait. For a non-repeatable `T`, consumes the list. |

@@ -148,9 +148,14 @@ The check is a length test before the index:
 
 ```aura fragment
     if args.len() < 1:
-        print("usage: logscan <path>")
+        eprint("usage: logscan <path>")
         return 2
 ```
+
+`eprint` is `print`'s partner for messages meant for a person rather than for
+the next program in a pipeline. It renders its argument the same way but writes
+the line to standard error, so a script that reads `logscan`'s output never
+mistakes a usage message for data.
 
 By convention, status 2 means the command was used incorrectly, as opposed to
 status 1 for a run that started and then failed. Many Unix tools follow that
@@ -176,7 +181,7 @@ import sys
 def main() -> int32:
     args = sys.args()
     if args.len() < 1:
-        print("usage: logscan <path>")
+        eprint("usage: logscan <path>")
         return 2
     view path = args[0]
     text = try fs.read_to_string(path)
@@ -222,14 +227,14 @@ def run(path: str) -> Result[None, io.Error]:
 def main() -> int32:
     args = sys.args()
     if args.len() < 1:
-        print("usage: logscan <path>")
+        eprint("usage: logscan <path>")
         return 2
     view path = args[0]
     match run(path):
         case Ok(_):
             return 0
         case Err(error):
-            print(f"logscan: cannot read {path}: {error}")
+            eprint(f"logscan: cannot read {path}: {error}")
             return 1
 ```
 
@@ -300,10 +305,8 @@ Each failure gets its own exit status and a line that names the file. The
 error text itself is still the raw enum value, `io.Error.NotFound`. That is
 accurate, and a programmer reads it without trouble, but someone who only wants
 their report deserves "no such file". We'll fix that in the last section of
-the chapter, along with the fact that these messages go to standard output.
-(Aura 0.11 has no call for writing plain text to standard error; the `log`
-module writes there, but only as JSON records. The exit status is what tells a
-script that the run failed.)
+the chapter. The messages themselves go to standard error, through `eprint`,
+and the exit status is what tells a script that the run failed.
 
 Notice what we did not have to do. We never checked whether `fs.read_to_string`
 succeeded before using `text`, because `try` made that impossible to forget:

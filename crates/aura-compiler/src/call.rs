@@ -349,6 +349,11 @@ const RANGE_START_STOP_PARAMS: [BuiltinParam; 2] = [
     builtin_param!(required, "start", ReceiverKind::Borrow),
     builtin_param!(required, "stop", ReceiverKind::Borrow),
 ];
+const RANGE_START_STOP_STEP_PARAMS: [BuiltinParam; 3] = [
+    builtin_param!(required, "start", ReceiverKind::Borrow),
+    builtin_param!(required, "stop", ReceiverKind::Borrow),
+    builtin_param!(required, "step", ReceiverKind::Borrow),
+];
 const ABS_PARAMS: [BuiltinParam; 1] = [builtin_param!(required, "value", ReceiverKind::Borrow)];
 const MIN_MAX_PARAMS: [BuiltinParam; 2] = [
     builtin_param!(required, "left", ReceiverKind::Borrow),
@@ -540,6 +545,7 @@ const RNG_SHUFFLE_PARAMS: [BuiltinParam; 1] =
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BuiltinFunction {
     Print,
+    Eprint,
     Range,
     Cancelled,
     YieldNow,
@@ -574,6 +580,7 @@ pub enum BuiltinFunction {
 
 pub const ALL_BUILTIN_FUNCTIONS: &[BuiltinFunction] = &[
     BuiltinFunction::Print,
+    BuiltinFunction::Eprint,
     BuiltinFunction::Range,
     BuiltinFunction::Cancelled,
     BuiltinFunction::YieldNow,
@@ -606,6 +613,7 @@ impl BuiltinFunction {
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "print" => Some(Self::Print),
+            "eprint" => Some(Self::Eprint),
             "range" => Some(Self::Range),
             "cancelled" => Some(Self::Cancelled),
             "yield_now" => Some(Self::YieldNow),
@@ -640,6 +648,7 @@ impl BuiltinFunction {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Print => "print",
+            Self::Eprint => "eprint",
             Self::Range => "range",
             Self::Cancelled => "cancelled",
             Self::YieldNow => "yield_now",
@@ -673,7 +682,8 @@ impl BuiltinFunction {
     pub const fn detail(self) -> &'static str {
         match self {
             Self::Print => "print(value) -> None",
-            Self::Range => "range(stop: int64) -> Range; range(start: int64, stop: int64) -> Range",
+            Self::Eprint => "eprint(value) -> None",
+            Self::Range => "range(stop: int64) -> Range; range(start: int64, stop: int64) -> Range; range(start: int64, stop: int64, step: int64) -> Range",
             Self::Cancelled => "cancelled() -> bool",
             Self::YieldNow => "yield_now() -> None",
             Self::Sleep => "sleep(duration: Duration) -> None",
@@ -718,8 +728,11 @@ impl BuiltinFunction {
     pub const fn docs(self) -> &'static str {
         match self {
             Self::Print => "Writes a value followed by a newline.",
+            Self::Eprint => {
+                "Writes a value followed by a newline to standard error, rendered as `print` renders it."
+            }
             Self::Range => {
-                "Builds an integer range from 0 up to, but not including, `stop`, or from `start` up to, but not including, `stop`."
+                "Builds an integer range from 0 up to, but not including, `stop`, or from `start` up to, but not including, `stop`. A third `step` argument counts by that amount instead of 1; a negative step counts down, and a zero step stops the program."
             }
             Self::Cancelled => "Returns true when the current task has been cancelled.",
             Self::YieldNow => {
@@ -792,15 +805,23 @@ impl BuiltinFunction {
                 self.call_shape().bind_args("`select`", args, span)
             }
             Self::Range => {
-                if args.len() > 2 {
+                if args.len() > 3 {
                     return Err(Diagnostic::at(
                         span,
-                        format!("`range` expects 1 or 2 arguments, found {}", args.len()),
+                        format!("`range` expects 1 to 3 arguments, found {}", args.len()),
                     ));
                 }
+                let use_three_arg_signature =
+                    args.len() == 3 || args.iter().any(|arg| arg.name.as_deref() == Some("step"));
                 let use_two_arg_signature =
                     args.len() == 2 || args.iter().any(|arg| arg.name.as_deref() == Some("start"));
-                if use_two_arg_signature {
+                if use_three_arg_signature {
+                    BuiltinCallShape::fixed(
+                        &RANGE_START_STOP_STEP_PARAMS,
+                        CallConvention::PositionalOrNamed,
+                    )
+                    .bind_args("`range`", args, span)
+                } else if use_two_arg_signature {
                     BuiltinCallShape::fixed(
                         &RANGE_START_STOP_PARAMS,
                         CallConvention::PositionalOrNamed,
@@ -876,14 +897,15 @@ impl BuiltinFunction {
             Self::SliceStep => {
                 BuiltinCallShape::fixed(&SLICE_STEP_PARAMS, CallConvention::PositionalOnly)
             }
-            Self::Print | Self::Len | Self::Str => {
+            Self::Print | Self::Eprint | Self::Len | Self::Str => {
                 BuiltinCallShape::fixed(&PRINT_PARAMS, CallConvention::PositionalOrNamed)
             }
             // Argument binding chooses the one- or two-argument shape, while
             // capability metadata is identical for both signatures.
-            Self::Range => {
-                BuiltinCallShape::fixed(&RANGE_START_STOP_PARAMS, CallConvention::PositionalOrNamed)
-            }
+            Self::Range => BuiltinCallShape::fixed(
+                &RANGE_START_STOP_STEP_PARAMS,
+                CallConvention::PositionalOrNamed,
+            ),
             Self::Cancelled | Self::YieldNow => {
                 BuiltinCallShape::fixed(&NO_BUILTIN_PARAMS, CallConvention::PositionalOnly)
             }

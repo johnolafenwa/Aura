@@ -1,0 +1,24 @@
+def count(r: Range) -> int64:
+    mut sum: int64 = 0
+    for value in r:
+        sum += 1
+    return sum
+
+def main():
+    for value in range(1, 10, 3):
+        print(value)
+    for value in range(10, 0, -4):
+        print(f"down {value}")
+    for value in range(5, 5, 2):
+        print(f"never {value}")
+    for value in range(0, 5, -1):
+        print(f"never {value}")
+    step = 2
+    for value in range(0, 7, step):
+        print(f"var {value}")
+    print(range(0, 9, 3))
+    print(range(0, 9))
+    print(count(range(9223372036854775800, 9223372036854775807, 5)))
+    print(sum(range(0, 100, 10)))
+    print(list(range(6, 0, -2)))
+    print(len(list(range(0, 10, 4))))

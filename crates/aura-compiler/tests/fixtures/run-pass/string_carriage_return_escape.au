@@ -1,0 +1,5 @@
+def main():
+    text = "a\rb"
+    print(len(text))
+    print(text == "a\x0db")
+    print(ord("\r"))

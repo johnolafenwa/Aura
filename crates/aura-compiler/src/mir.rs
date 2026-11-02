@@ -2289,9 +2289,15 @@ impl<'a> MirLoanValidationContext<'a> {
                         &type_params,
                         &mut substitutions,
                     ) && actual.passing == expected.passing
-                        && actual.name == expected.name
                         && actual.keyword_only == expected.keyword_only
-                        && actual.has_default == expected.has_default
+                        && if expected.name.is_empty() && !expected.keyword_only {
+                            // An unnamed positional slot admits any name, and
+                            // a default the caller can never rely on.
+                            !expected.has_default || actual.has_default
+                        } else {
+                            actual.name == expected.name
+                                && actual.has_default == expected.has_default
+                        }
                 });
         let return_matches = crate::sema::type_pattern_matches(
             &expected_return,
@@ -14559,6 +14565,27 @@ impl<'a> Lowerer<'a> {
                 Some(Type::Named(name, args)) if name == "Array" && args.len() == 1 => {
                     self.lower_array_coordinate_expr(index)
                 }
+                // The checker lets a compound assignment borrow a `str` or
+                // `bytes` key, so the write back stores a clone of it.
+                Some(object_ty)
+                    if assign.op.is_some()
+                        && crate::sema::compound_index_borrows_key(object_ty) =>
+                {
+                    let cloned = Expr {
+                        kind: ExprKind::Call {
+                            callee: Box::new(Expr {
+                                kind: ExprKind::Member {
+                                    object: index.clone(),
+                                    field: "clone".to_string(),
+                                },
+                                span: index.span,
+                            }),
+                            args: Vec::new(),
+                        },
+                        span: index.span,
+                    };
+                    self.lower_expr_for_owned_value(&cloned, index_ty.as_ref())
+                }
                 _ => self.lower_expr_for_owned_value(index, index_ty.as_ref()),
             };
             let (read_index, set_index) = if assign.op.is_some() {
@@ -18044,7 +18071,10 @@ impl<'a> Lowerer<'a> {
 
     /// Recognizes the checked `enumerate`/`zip` loop forms. The checker has
     /// already rejected every other shape, so this only has to classify.
-    fn lockstep_loop_iterables<'e>(&self, iterable: &'e Expr) -> Option<(bool, Vec<&'e Expr>)> {
+    fn lockstep_loop_iterables<'e>(
+        &self,
+        iterable: &'e Expr,
+    ) -> Option<(bool, Vec<&'e Expr>, Option<&'e Expr>)> {
         let ExprKind::Call { callee, args } = &iterable.kind else {
             return None;
         };
@@ -18059,9 +18089,15 @@ impl<'a> Lowerer<'a> {
         if self.program.functions.contains_key(name) {
             return None;
         }
+        // The checker allows `enumerate(xs, start)` and `start=` only.
+        let (args, start) = match args.as_slice() {
+            [iterable, start] if enumerated => (std::slice::from_ref(iterable), Some(&start.value)),
+            _ => (args.as_slice(), None),
+        };
         Some((
             enumerated,
             args.iter().map(|argument| &argument.value).collect(),
+            start,
         ))
     }
 
@@ -18074,6 +18110,7 @@ impl<'a> Lowerer<'a> {
         for_stmt: &crate::ast::ForStmt,
         enumerated: bool,
         iterables: &[&Expr],
+        start: Option<&Expr>,
         checked_binding: Option<&ComprehensionClauseInfo>,
         lower_body: &mut dyn FnMut(&mut Self),
     ) {
@@ -18115,6 +18152,16 @@ impl<'a> Lowerer<'a> {
                 (object, receiver_place, element_ty, span_range)
             })
             .collect::<Vec<_>>();
+        // `enumerate`'s `start` is evaluated once, after the iterable.
+        let start = start.map(|start| {
+            let value = self.lower_index_domain_expr(start);
+            let place = self.new_typed_temp(Type::named("int64"));
+            self.emit(Instruction::Assign {
+                target: place.clone(),
+                value: Rvalue::Use(value),
+            });
+            place
+        });
 
         let index = self.new_typed_temp(Type::named("int64"));
         self.emit(Instruction::Assign {
@@ -18128,9 +18175,20 @@ impl<'a> Lowerer<'a> {
         let mut element_types = Vec::with_capacity(sources.len() + 1);
         if enumerated {
             let position = self.new_typed_temp(Type::named("int64"));
+            let value = match &start {
+                // The count can pass `int64` max for a start near it.
+                Some(start) => Rvalue::Binary {
+                    op: BinaryOp::Add,
+                    left: Operand::Place(start.clone()),
+                    right: Operand::Place(index.clone()),
+                    span: for_stmt.span,
+                    trap: ArithmeticTrap::Overflow,
+                },
+                None => Rvalue::Use(Operand::Place(index.clone())),
+            };
             self.emit(Instruction::Assign {
                 target: position.clone(),
-                value: Rvalue::Use(Operand::Place(index.clone())),
+                value,
             });
             element_operands.push(Operand::Place(position));
             element_types.push(Type::named("int64"));
@@ -18289,11 +18347,14 @@ impl<'a> Lowerer<'a> {
         checked_binding: Option<&ComprehensionClauseInfo>,
         lower_body: &mut dyn FnMut(&mut Self),
     ) {
-        if let Some((enumerated, iterables)) = self.lockstep_loop_iterables(&for_stmt.iterable) {
+        if let Some((enumerated, iterables, start)) =
+            self.lockstep_loop_iterables(&for_stmt.iterable)
+        {
             self.lower_lockstep_for_with_body(
                 for_stmt,
                 enumerated,
                 &iterables,
+                start,
                 checked_binding,
                 lower_body,
             );
@@ -23389,14 +23450,36 @@ impl<'a> Lowerer<'a> {
             // delegation, so they lower to the member call and the rendering
             // the language already has rather than to new runtime entry points.
             ExprKind::Name(name)
-                if (name == "len" || name == "str")
+                if (name == "len" || name == "str" || name == "eprint")
                     && !self.program.functions.contains_key(name)
                     && self.resolve_class_info(name).is_none() =>
             {
                 let argument = args
                     .first()
-                    .expect("`len` and `str` bind exactly one argument before lowering");
-                if name == "len" {
+                    .expect("`len`, `str`, and `eprint` bind exactly one argument before lowering");
+                if name == "eprint" {
+                    // `eprint` renders as `str` does, then writes the text.
+                    let value = self.lower_expr_at_sequence_point(&argument.value, None);
+                    let text = self.new_typed_temp(Type::named("str"));
+                    self.emit(Instruction::Assign {
+                        target: text.clone(),
+                        value: Rvalue::FormatString {
+                            parts: vec![MirFormatPart::Value(value)],
+                        },
+                    });
+                    self.emit(Instruction::Assign {
+                        target: temp.clone(),
+                        value: Rvalue::Call {
+                            callee: CallTarget::Name(name.clone()),
+                            args: vec![MirArg {
+                                name: None,
+                                value: Operand::MovePlace(text),
+                                writeback_place: None,
+                            }],
+                            type_args: Default::default(),
+                        },
+                    });
+                } else if name == "len" {
                     let object = self.lower_expr_at_sequence_point(&argument.value, None);
                     let receiver_place = match &object {
                         Operand::Place(place) | Operand::MovePlace(place) => Some(place.clone()),

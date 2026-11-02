@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: parameter `ms` would be renamed to `limit`; renaming requires an explicit wrapper
+ --> crates/aura-compiler/tests/fixtures/check-fail/named_callable_slot_still_requires_matching_name.au:5:36
+  |
+5 |     f: def(limit: int64) -> bool = is_slow
+  |                                    ^
+  = help: preserve identical complete contracts at bare destinations; apply safe restrictions through an explicit thin alias or owned callable constructor such as `Alias(function)`

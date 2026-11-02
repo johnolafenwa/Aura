@@ -1,0 +1,13 @@
+def main():
+    names = ["ada", "grace", "linus"]
+    for number, name in enumerate(names, start=1):
+        print(f"{number}. {name}")
+    for number, name in enumerate(names, 10):
+        print(f"{number}: {name}")
+    offset: int32 = -2
+    for number, name in enumerate(names, start=offset):
+        if number == -1:
+            continue
+        print(f"{number} {name}")
+    labels = [f"{n}={name}" for n, name in enumerate(names, start=100)]
+    print(labels)

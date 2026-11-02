@@ -4535,9 +4535,9 @@ def main():
             "`enumerate` iterates over the bare-loop shared default; write `for ... in enumerate(...):` without an ownership modifier",
         ),
         (
-            "def main():\n    mut values = list[int32]()\n    for index, value in enumerate(values, values):\n        print(index)\n",
+            "def main():\n    mut values = list[int32]()\n    for index, value in enumerate(values, 0, values):\n        print(index)\n",
             "AU2004",
-            "`enumerate` takes 1 iterable, found 2",
+            "`enumerate` takes 1 iterable, found 3",
         ),
         (
             "def main():\n    mut values = list[int32]()\n    for first, second in zip(values):\n        print(first)\n",
@@ -23743,7 +23743,7 @@ def main():
     positional: int32 = selected(3)
 "#,
     )
-    .expect_err("a bare written contract cannot implicitly restrict either branch");
+    .expect("an unnamed written contract admits either branch");
 
     let named = crate::check_source(
         r#"
@@ -23759,8 +23759,7 @@ def main():
 "#,
     )
     .expect_err("a written positional-only contract exposes no names");
-    assert_eq!(named.code, "AU2015");
-    assert!(named.message.contains("default availability"));
+    assert_eq!(named.code, "AU2004");
 }
 
 #[test]
@@ -24112,7 +24111,7 @@ def main():
     from_field: int32 = holder.callback(5)
 "#,
     )
-    .expect_err("bare storage requires the complete contract without implicit restriction");
+    .expect("an unnamed written slot admits any parameter name in storage");
 
     crate::check_source(
         r#"
@@ -31177,30 +31176,28 @@ def main():
     step: Unary = increment
     print(step(4))
 "#;
-    let error = crate::check_source(source).expect_err("bare restriction must fail");
-    assert_eq!(error.code, "AU2015");
-    assert!(error.message.contains("name"));
-    assert!(error.message.contains("Unary(increment)"));
+    // An unnamed slot admits the name and drops the default.
+    crate::check_source(source).expect("an unnamed slot admits a named, defaulted parameter");
     crate::check_source(&source.replace("= increment\n", "= Unary(increment)\n"))
         .expect("the explicit thin adapter remains valid");
+    let named = source.replace("def(int64)", "def(count: int64)");
+    let error = crate::check_source(&named).expect_err("a named slot cannot rename");
+    assert_eq!(error.code, "AU2015");
+    assert!(error.message.contains("renamed"));
 
     let specialized = "type Unary = def(own int64) -> int64\ndef identity[T](value: own T) -> T:\n    return value\ndef main():\n    step: Unary = identity[int64]\n    print(step(4))\n";
-    let error = crate::check_source(specialized).expect_err("specialized contracts stay named");
-    assert_eq!(error.code, "AU2015");
-    assert!(error.message.contains("Unary(identity[int64])"));
+    crate::check_source(specialized).expect("specialized contracts fill an unnamed slot");
     crate::check_source(&specialized.replace("= identity[int64]", "= Unary(identity[int64])"))
-        .expect("the suggested specialized adapter is accepted");
+        .expect("the specialized adapter is accepted");
 }
 
 #[test]
 fn bare_bound_method_restrictions_require_owned_callable_adapters() {
     let source = "class Counter:\n    value: int64\n    def scaled(self, factor: int64) -> int64:\n        return self.value * factor\ndef main():\n    counter = Counter(value=2)\n    selected: def(int64) -> int64 = counter.scaled\n    print(selected(3))\n";
-    let error =
-        crate::check_source(source).expect_err("a bound method keeps its declared parameter name");
+    crate::check_source(source).expect("an unnamed slot admits a bound method's named parameter");
+    let renamed = source.replace("def(int64)", "def(other: int64)");
+    let error = crate::check_source(&renamed).expect_err("a named slot cannot rename");
     assert_eq!(error.code, "AU2015");
-    assert!(error
-        .message
-        .contains("type Adapter = Callable[def(int64) -> int64]"));
     let positive = source.replace(
         "selected: def(int64) -> int64 = counter.scaled",
         "selected = Restricted(counter.scaled)",
@@ -31211,7 +31208,7 @@ fn bare_bound_method_restrictions_require_owned_callable_adapters() {
 
 #[test]
 fn explicit_specialization_ast_keeps_the_same_callable_adapter_diagnostic() {
-    let source = "type Step = def(own int64) -> int64\ndef identity[T](value: own T) -> T:\n    return value\ndef main():\n    step: Step = identity[int64]\n    print(step(1))\n";
+    let source = "type Step = def(other: own int64) -> int64\ndef identity[T](value: own T) -> T:\n    return value\ndef main():\n    step: Step = identity[int64]\n    print(step(1))\n";
     let indexed = crate::check_source(source).expect_err("bare contract restriction");
     let mut module = crate::parse_source(source).unwrap();
     let call = crate::parser::parse_expression("identity[int64](1)").unwrap();
@@ -31234,7 +31231,7 @@ fn explicit_specialization_ast_keeps_the_same_callable_adapter_diagnostic() {
     let specialized = check(module).expect_err("equivalent explicit specialization contract");
     assert_eq!(specialized.code, indexed.code);
     assert_eq!(specialized.message, indexed.message);
-    assert!(specialized.message.contains("Step(identity[int64])"));
+    assert!(specialized.message.contains("renamed"));
 }
 
 #[test]

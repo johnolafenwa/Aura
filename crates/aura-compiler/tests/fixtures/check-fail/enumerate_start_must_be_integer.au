@@ -1,0 +1,3 @@
+def main():
+    for number, name in enumerate(["a"], start="1"):
+        print(number)

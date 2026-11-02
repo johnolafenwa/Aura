@@ -4012,9 +4012,13 @@ impl MirRuntime {
                 let next = loop_state
                     .entry(block_label.to_string())
                     .or_insert(range.start);
-                if *next < range.end {
+                let cursor = RangeValue {
+                    start: *next,
+                    ..range
+                };
+                if cursor.has_next() {
                     let current = *next;
-                    *next += 1;
+                    *next += cursor.step;
                     env.write_place(binding, Value::Int(IntegerValue::from_signed(current)))?;
                     Ok(BlockOutcome::Goto(body_label.clone()))
                 } else {
@@ -4928,6 +4932,17 @@ impl MirRuntime {
             if poll_cancellation(&self.cancellation) {
                 panic::panic_any(TaskCancelledSignal);
             }
+            return Ok(Value::Unit);
+        }
+        if name == "eprint" {
+            let values = evaluate_named_args(args, env)?;
+            let bound = bind_builtin_args(&["value"], values)?;
+            let Value::String(text) = &bound[0].value else {
+                return Err(Diagnostic::new("MIR `eprint` expects rendered text"));
+            };
+            use std::io::Write as _;
+            let mut stderr = std::io::stderr().lock();
+            let _ = writeln!(stderr, "{text}");
             return Ok(Value::Unit);
         }
         if name == "print" {
@@ -11819,6 +11834,7 @@ fn collect_type_params_from_type(ty: &Type, collected: &mut std::collections::BT
 fn build_range(args: Vec<EvaluatedMirArg>) -> Result<Value> {
     let mut start = None;
     let mut stop = None;
+    let mut step = None;
     let mut next_positional = 0;
 
     for argument in args {
@@ -11831,6 +11847,7 @@ fn build_range(args: Vec<EvaluatedMirArg>) -> Result<Value> {
         match name.as_deref() {
             Some("start") => start = Some(value),
             Some("stop") => stop = Some(value),
+            Some("step") => step = Some(value),
             Some(other) => {
                 return Err(Diagnostic::new(format!(
                     "unknown MIR `range` argument `{}`",
@@ -11843,8 +11860,10 @@ fn build_range(args: Vec<EvaluatedMirArg>) -> Result<Value> {
                 } else if next_positional == 1 {
                     start = stop.take();
                     stop = Some(value);
+                } else if next_positional == 2 {
+                    step = Some(value);
                 } else {
-                    return Err(Diagnostic::new("`range` takes at most two arguments"));
+                    return Err(Diagnostic::new("`range` takes at most three arguments"));
                 }
                 next_positional += 1;
             }
@@ -11856,6 +11875,15 @@ fn build_range(args: Vec<EvaluatedMirArg>) -> Result<Value> {
         (None, Some(stop)) => (IntegerValue::zero(), stop),
         _ => return Err(Diagnostic::new("`range` requires `stop` in MIR runtime")),
     };
+    let step = match step {
+        Some(step) => step.as_i128().ok_or_else(|| {
+            Diagnostic::new("`range` step must fit in signed index space in MIR runtime")
+        })?,
+        None => 1,
+    };
+    if step == 0 {
+        return Err(Diagnostic::new("`range` step must not be zero"));
+    }
 
     Ok(Value::Range(RangeValue {
         start: start.as_i128().ok_or_else(|| {
@@ -11864,6 +11892,7 @@ fn build_range(args: Vec<EvaluatedMirArg>) -> Result<Value> {
         end: stop.as_i128().ok_or_else(|| {
             Diagnostic::new("`range` stop must fit in signed index space in MIR runtime")
         })?,
+        step,
     }))
 }
 

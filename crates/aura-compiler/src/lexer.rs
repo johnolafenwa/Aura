@@ -405,6 +405,7 @@ fn decode_escape(
     match escaped {
         'n' => Ok(('\n', escape_start + 1)),
         't' => Ok(('\t', escape_start + 1)),
+        'r' => Ok(('\r', escape_start + 1)),
         '"' => Ok(('"', escape_start + 1)),
         '\'' => Ok(('\'', escape_start + 1)),
         '\\' => Ok(('\\', escape_start + 1)),

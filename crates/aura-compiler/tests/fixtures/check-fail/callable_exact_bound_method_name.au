@@ -4,5 +4,5 @@ class Counter:
         return self.value * factor
 def main():
     counter = Counter(value=2)
-    selected: def(int64) -> int64 = counter.scaled
+    selected: def(other: int64) -> int64 = counter.scaled
     print(selected(3))

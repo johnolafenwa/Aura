@@ -149,14 +149,14 @@ def summarize(text: str) -> Summary:
         by_service={},
         errors_by_service={},
     )
-    for index, line in enumerate(text.lines()):
+    for number, line in enumerate(text.lines(), start=1):
         if line.trim() == "":
             continue
         match parse_line(line):
             case Record as record:
                 summary.add(record)
             case None:
-                summary.skipped.append(index + 1)
+                summary.skipped.append(number)
     return summary
 ```
 
@@ -370,14 +370,14 @@ def summarize(text: str) -> Summary:
         by_service={},
         errors_by_service={},
     )
-    for index, line in enumerate(text.lines()):
+    for number, line in enumerate(text.lines(), start=1):
         if line.trim() == "":
             continue
         match parse_line(line):
             case Record as record:
                 summary.add(record)
             case None:
-                summary.skipped.append(index + 1)
+                summary.skipped.append(number)
     return summary
 
 def level_name(level: Level) -> str:
@@ -422,14 +422,14 @@ def run(path: str) -> Result[None, io.Error]:
 def main() -> int32:
     args = sys.args()
     if args.len() < 1:
-        print("usage: logscan <path>")
+        eprint("usage: logscan <path>")
         return 2
     view path = args[0]
     match run(path):
         case Ok(_):
             return 0
         case Err(error):
-            print(f"logscan: cannot read {path}: {error}")
+            eprint(f"logscan: cannot read {path}: {error}")
             return 1
 ```
 
