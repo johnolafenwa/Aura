@@ -32250,7 +32250,19 @@ fn named_callable_slots_keep_every_contract_diagnostic() {
         "type Named = Callable[def(value: int64) -> int64]\ntype Bare = Callable[def(int64) -> int64]\n\ndef inc(value: int64) -> int64:\n    return value + 1\n\ndef main():\n    n = 3\n    g: def(value: int64) -> int64 = lambda value: value + n\n    f: def(int64) -> int64 = g\n    print(f(1))\n    a = Named(inc)\n    b: Bare = a\n    print(b(4))\n    h: def(int64) -> int64 = inc\n    print(h(2))\n",
     )
     .expect("unnamed slots admit any parameter name");
-    let cases: [(&str, &str); 9] = [
+    let cases: [(&str, &str); 12] = [
+        (
+            "def inc(value: int64) -> int64:\n    return value\n\ndef main():\n    c: Callable[def(int64) -> int64] = inc\n",
+            "becomes `Callable[def(int64) -> int64]` only through an explicit `Callable(...)`",
+        ),
+        (
+            "def main():\n    c: Callable[def(int64) -> int64] = lambda x: x\n",
+            "a lambda becomes `Callable[def(int64) -> int64]` only through an explicit",
+        ),
+        (
+            "def inc(value: int64) -> int64:\n    return value\n\ndef main():\n    c: TaskCallable[def(int64) -> int64] = inc\n",
+            "explicit `TaskCallable(...)` constructor call",
+        ),
         (
             "def inc(value: int64) -> int64:\n    return value\n\ndef main():\n    k: def(int64, int64) -> int64 = inc\n",
             "expected 2 parameters, found 1",
