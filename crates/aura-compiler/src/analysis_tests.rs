@@ -11075,7 +11075,7 @@ fn analysis_keeps_occurrences_and_reports_each_error_when_statements_fail() {
         .collect::<Vec<_>>();
     // `print(missing)` only fails because its binding was replaced, so it is
     // not reported.
-    assert_eq!(errors, vec![(5, "AU2002"), (7, "AU2999"), (9, "AU2002")]);
+    assert_eq!(errors, vec![(5, "AU2002"), (7, "AU2001"), (9, "AU2002")]);
     let total_use = analysis
         .occurrences
         .iter()

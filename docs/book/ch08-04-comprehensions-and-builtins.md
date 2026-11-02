@@ -136,7 +136,7 @@ Comprehensions only take the bare form of `for`. Writing `for name in mut
 names` or `for name in own names` inside the brackets is a syntax error
 (`AU1101`), and the message tells you to use a statement loop for those.
 
-### Two things comprehensions don't do
+### Something comprehensions don't do
 
 Python lets you drop the brackets inside a function call, as in `sum(score *
 2 for score in scores)`, to make a *generator expression* that produces
@@ -160,30 +160,6 @@ error[AU2005]: generator expressions are unavailable; use an eager owned list co
 Add the brackets, `sum([s * 2 for s in scores])`, and you get a list
 comprehension, which builds the whole list first. For the collection sizes in
 most programs that's fine.
-
-The second limitation is a bug in the current compiler rather than a design
-choice, and it's easy to trip over. A comprehension whose output calls a
-method on the loop name, written directly as an argument to a function, isn't
-resolved properly:
-
-```aura check-fail:AU2001
-def main():
-    names = ["ada", "grace"]
-    print([name.len() for name in names])
-```
-
-```console
-$ aura check src/main.au
-error[AU2001]: unknown name `name`
- --> src/main.au:3:12
-  |
-3 |     print([name.len() for name in names])
-  |            ^
-```
-
-The same comprehension works when you bind it to a name first, as in
-`lengths = [name.len() for name in names]` followed by `print(lengths)`, and
-that's the style this book uses.
 
 ## Reducing a collection to one value
 

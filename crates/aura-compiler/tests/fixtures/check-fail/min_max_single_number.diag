@@ -3,4 +3,4 @@ error[AU2002]: `min(...)` expects a list, set, Range, or Array of numbers, or a 
   |
 2 |     print(min(3))
   |               ^
-  = help: `min` reduces a collection of one numeric type; pass two or more numbers to compare values directly
+  = help: `min` reduces a collection of one numeric type or of `str`; pass two or more numbers to compare values directly
