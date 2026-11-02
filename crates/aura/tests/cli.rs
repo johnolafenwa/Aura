@@ -2662,7 +2662,7 @@ def main() -> int32:
 #[test]
 fn mir_and_forced_direct_support_one_thousand_simultaneously_suspended_tasks() {
     let source = r#"def suspend(started: Queue[int32], release: Queue[int32]):
-    started.put(1)
+    _ = started.put(1)
     match release.get():
         case QueueReceive.Item(_):
             pass
@@ -2803,15 +2803,14 @@ def consume(q: Queue[int32], totals: Queue[int32]) -> None:
             case QueueReceive.Item(_):
                 received += 1
             case QueueReceive.Closed:
-                totals.put(received)
+                _ = totals.put(received)
                 return
             case QueueReceive.TimedOut:
                 pass
             case QueueReceive.Cancelled:
-                totals.put(received)
+                _ = totals.put(received)
                 return
-    totals.put(received)
-
+    _ = totals.put(received)
 def main() -> int32:
     q = Queue[int32](capacity=64)
     totals = Queue[int32](capacity=4)
@@ -2871,15 +2870,13 @@ def burn_cpu() -> None:
 
 def produce(q: Queue[int64], base: int64) -> None:
     for offset in range(250):
-        q.put(base + offset)
-
+        _ = q.put(base + offset)
 def consume(q: Queue[int64], totals: Queue[int32]) -> None:
     mut received: int32 = 0
     for value in q:
         if value >= 0:
             received += 1
-    totals.put(received)
-
+    _ = totals.put(received)
 def main() -> int32:
     q = Queue[int64](capacity=64)
     totals = Queue[int32](capacity=4)
@@ -2953,7 +2950,7 @@ def main() -> int32:
 #[test]
 fn task_group_join_does_not_treat_the_joining_parent_as_a_queue_waker() {
     let source = r#"def fill_without_consumer(q: Queue[int32]) -> None:
-    q.put(1)
+    _ = q.put(1)
     match own q.put(2):
         case Result.Ok(_):
             print("unexpected send")
@@ -2991,7 +2988,7 @@ fn task_group_join_tracks_queue_handles_received_after_task_start() {
 ) -> None:
     match own handoff.get():
         case QueueReceive.Item(q):
-            ready.put(1)
+            _ = ready.put(1)
             sleep(100ms)
             mut received: int32 = 0
             while received < 2:
@@ -2999,30 +2996,28 @@ fn task_group_join_tracks_queue_handles_received_after_task_start() {
                     case QueueReceive.Item(_):
                         received += 1
                     case QueueReceive.Closed:
-                        totals.put(received)
+                        _ = totals.put(received)
                         return
                     case QueueReceive.TimedOut:
                         pass
                     case QueueReceive.Cancelled:
-                        totals.put(received)
+                        _ = totals.put(received)
                         return
-            totals.put(received)
+            _ = totals.put(received)
         case _:
-            totals.put(-10000)
-
+            _ = totals.put(-10000)
 def send_second(q: Queue[int32]) -> None:
-    q.put(2)
-
+    _ = q.put(2)
 def main() -> int32:
     q = Queue[int32](capacity=1)
-    q.put(1)
+    _ = q.put(1)
     handoff = Queue[Queue[int32]](capacity=1)
     ready = Queue[int32](capacity=1)
     totals = Queue[int32](capacity=1)
 
     with TaskGroup() as outer:
         outer.start_soon(delayed_consumer, handoff, ready, totals)
-        handoff.put(q)
+        _ = handoff.put(q)
         ready.get()
 
         with TaskGroup() as producer:
@@ -3046,9 +3041,8 @@ def main() -> int32:
 fn task_group_join_detects_cross_join_cycles_after_multiple_cleanup_probes() {
     let source = r#"def producer(q: Queue[int32], signal: Queue[int32]) -> None:
     sleep(20ms)
-    q.put(1)
-    signal.put(1)
-
+    _ = q.put(1)
+    _ = signal.put(1)
 def consumer(signal: Queue[int32]) -> None:
     sleep(20ms)
     signal.get()
@@ -3064,7 +3058,7 @@ def parent_b(q: Queue[int32], signal: Queue[int32]) -> None:
 
 def main() -> int32:
     q = Queue[int32](capacity=1)
-    q.put(0)
+    _ = q.put(0)
     signal = Queue[int32]()
     with TaskGroup() as outer:
         outer.start_soon(parent_a, q, signal)
@@ -3669,7 +3663,7 @@ def write_marker() -> Result[None, io.Error]:
 
 def main():
     print("USER_CODE_RAN")
-    write_marker()
+    _ = write_marker()
 "#;
     let (temp, source_path) = write_temp_source("aura-invalid-blocking-pool-configuration", source);
     let standalone_path = temp.path().join("standalone");
@@ -4769,7 +4763,7 @@ import net
 
 def serve(path: own str, addresses: Queue[str]) -> Result[None, io.Error]:
     with server = try net.http_listen("127.0.0.1:0"):
-        addresses.put(try server.local_addr())
+        _ = addresses.put(try server.local_addr())
         mut req = try server.accept(timeout=5s)
         body = try fs.read_to_string(path)
         try req.respond_text(200, body, {{}})
@@ -4814,7 +4808,7 @@ import net
 
 def serve(addresses: Queue[str]) -> Result[None, io.Error]:
     with listener = try net.http_listen("127.0.0.1:0"):
-        addresses.put(try listener.local_addr())
+        _ = addresses.put(try listener.local_addr())
         mut request = try listener.accept(timeout=5s)
         try request.respond_text(200, "", {"Content-Length": "16777217"})
         return Result.Ok(None)
@@ -10136,7 +10130,7 @@ def main() -> int32:
         print_opt(value)
 
     jobs = Queue[int32 | None]()
-    jobs.put(None)
+    _ = jobs.put(None)
     print_opt(jobs.get_or(99))
 
     item = Wrap(value=[None])
@@ -12398,7 +12392,7 @@ import net
 
 def serve_udp(addresses: Queue[str]) -> Result[str, io.Error]:
     with server_socket = try net.udp_bind("127.0.0.1:0"):
-        addresses.put(try server_socket.local_addr())
+        _ = addresses.put(try server_socket.local_addr())
         match own try server_socket.recv_from(1024, timeout=1s):
             case net.UdpDatagram as packet:
                 text = try packet.text()
@@ -12409,7 +12403,7 @@ def serve_udp(addresses: Queue[str]) -> Result[str, io.Error]:
 
 def serve_http(addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.http_listen("127.0.0.1:0"):
-        addresses.put(try server_listener.local_addr())
+        _ = addresses.put(try server_listener.local_addr())
         exchange = try server_listener.accept(timeout=1s)
         with request = exchange:
             method = request.method()
@@ -12426,7 +12420,7 @@ def serve_http(addresses: Queue[str]) -> Result[None, io.Error]:
 
 def serve_http_bytes(addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.http_listen("127.0.0.1:0"):
-        addresses.put(try server_listener.local_addr())
+        _ = addresses.put(try server_listener.local_addr())
         exchange = try server_listener.accept(timeout=1s)
         with request = exchange:
             body = request.body_bytes()
@@ -12435,7 +12429,7 @@ def serve_http_bytes(addresses: Queue[str]) -> Result[None, io.Error]:
 
 def serve_ws(addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.websocket_listen("127.0.0.1:0"):
-        addresses.put(try server_listener.local_addr())
+        _ = addresses.put(try server_listener.local_addr())
         socket = try server_listener.accept(timeout=1s)
         with server_socket = socket:
             match own try server_socket.recv_text(timeout=1s):
@@ -12580,7 +12574,7 @@ def worker() -> int32:
 
 def main() -> int32:
     jobs = Queue[int32]()
-    jobs.put(5)
+    _ = jobs.put(5)
     queue_opt = jobs.poll()
     match queue_opt:
         case Poll.Ready(value):
@@ -12680,8 +12674,7 @@ fn with_task_group_joins_start_soon_before_scope_exit() {
     let source = r#"
 def producer(jobs: Queue[int32]) -> None:
     sleep(20ms)
-    jobs.put(9)
-
+    _ = jobs.put(9)
 def main() -> int32:
     jobs = Queue[int32]()
     with TaskGroup() as group:
@@ -12706,11 +12699,9 @@ def argument(label: str, value: int32) -> int32:
     return value
 
 def publish_sum(values: Queue[int32], left: int32, right: int32) -> None:
-    values.put(left + right)
-
+    _ = values.put(left + right)
 def publish(values: Queue[int32], value: int32) -> None:
-    values.put(value)
-
+    _ = values.put(value)
 def main() -> int32:
     values = Queue[int32]()
     with TaskGroup() as group:
@@ -12970,8 +12961,7 @@ import sys
 def sleep_then_report(progress: Queue[int64]) -> None:
     started_at = sys.monotonic_time_ms()
     sleep(10ms)
-    progress.put(sys.monotonic_time_ms() - started_at)
-
+    _ = progress.put(sys.monotonic_time_ms() - started_at)
 def run_hot_loop() -> None:
     started_at = sys.monotonic_time_ms()
     while true:
@@ -12979,8 +12969,7 @@ def run_hot_loop() -> None:
             return
 
 def report_queue_progress(started_at: int64, progress: Queue[int64]) -> None:
-    progress.put(sys.monotonic_time_ms() - started_at)
-
+    _ = progress.put(sys.monotonic_time_ms() - started_at)
 def main() -> int32:
     timer_progress = Queue[int64]()
     queue_progress = Queue[int64]()
@@ -13023,14 +13012,14 @@ def accept_then_report(
     progress: Queue[int64]
 ) -> Result[None, io.Error]:
     with server_listener = try net.listen("127.0.0.1:0"):
-        addresses.put(try server_listener.local_addr())
+        _ = addresses.put(try server_listener.local_addr())
         started_at = sys.monotonic_time_ms()
         match own server_listener.accept(timeout=1s):
             case Result.Ok(stream):
                 with accepted_stream = stream:
-                    progress.put(sys.monotonic_time_ms() - started_at)
+                    _ = progress.put(sys.monotonic_time_ms() - started_at)
             case Result.Err(_):
-                progress.put(-1)
+                _ = progress.put(-1)
     return Result.Ok(None)
 
 def connect_after_delay(address: str) -> None:
@@ -13341,7 +13330,7 @@ def main() -> int32:
 fn queue_iteration_exits_when_a_sibling_task_fails() {
     let source = r#"
 def producer(q: Queue[int32]):
-    q.put(1)
+    _ = q.put(1)
     values = [1]
     _ = values[99]
 
@@ -13369,9 +13358,8 @@ def main() -> int32:
 fn queue_iteration_exits_when_task_group_producers_return_cleanly() {
     let source = r#"
 def producer(q: Queue[int32]):
-    q.put(1)
-    q.put(2)
-
+    _ = q.put(1)
+    _ = q.put(2)
 def main() -> int32:
     q: Queue[int32] = Queue[int32]()
     with TaskGroup() as g:
@@ -13839,7 +13827,7 @@ fn queue_iteration_waits_for_standalone_task_group_producers() {
     let source = r#"
 def producer(jobs: Queue[int32]) -> None:
     sleep(1ms)
-    jobs.put(7)
+    _ = jobs.put(7)
     jobs.close()
 
 def main() -> int32:
@@ -14059,7 +14047,7 @@ import net
 
 def serve_unix(path: own str, ready: Queue[bool]) -> Result[None, io.Error]:
     with server_listener = try net.unix_listen(path):
-        ready.put(true)
+        _ = ready.put(true)
         stream = try server_listener.accept(timeout=1s)
         with server_stream = stream:
             match own try server_stream.read_line(timeout=1s):
@@ -14071,7 +14059,7 @@ def serve_unix(path: own str, ready: Queue[bool]) -> Result[None, io.Error]:
 
 def serve_tls(cert_path: own str, key_path: own str, addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.tls_listen("127.0.0.1:0", cert_path, key_path):
-        addresses.put(try server_listener.local_addr())
+        _ = addresses.put(try server_listener.local_addr())
         stream = try server_listener.accept(timeout=2s)
         with server_stream = stream:
             match own try server_stream.read_line(timeout=2s):
@@ -15514,7 +15502,7 @@ fn typed_select_nonrepeatable_task_delivery_matches_with_four_workers() {
 fn typed_select_pending_queue_task_deadline_and_cancellation_match_with_four_workers() {
     let source = r#"def publish(queue: Queue[int32], value: int32) -> int32:
     sleep(2ms)
-    queue.put(value)
+    _ = queue.put(value)
     return value
 
 def finish(value: int32) -> int32:
@@ -15599,8 +15587,8 @@ def main():
 
     first = Queue[int32]()
     second = Queue[int32]()
-    first.put(1)
-    second.put(2)
+    _ = first.put(1)
+    _ = second.put(2)
     print(select(observe("first", first), observe("second", second)))
     print(second.get())
 
@@ -15720,8 +15708,7 @@ def choose_transform(use_increment: bool) -> def(int32) -> int32:
     return Unary(increment) if use_increment else Unary(double)
 
 def publish(values: Queue[int32], value: int32) -> None:
-    values.put(value)
-
+    _ = values.put(value)
 def empty[T]() -> T | None:
     return None
 

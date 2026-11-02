@@ -5,7 +5,7 @@ def produce(
 ) -> int32:
     for sequence_index in range(item_count):
         sequence: int32 = sequence_index as int32
-        jobs.put(producer * 1000 + sequence)
+        _ = jobs.put(producer * 1000 + sequence)
     return item_count
 
 def consume(
@@ -19,17 +19,17 @@ def consume(
             case QueueReceive.Item(ticket):
                 match jobs.get(timeout=5s):
                     case QueueReceive.Item(encoded):
-                        receipts.put(ticket * 10000 + encoded)
-                        turns.put(ticket + 1)
+                        _ = receipts.put(ticket * 10000 + encoded)
+                        _ = turns.put(ticket + 1)
                         consumed += 1
                     case QueueReceive.Closed:
-                        turns.put(ticket)
+                        _ = turns.put(ticket)
                         return consumed
                     case QueueReceive.TimedOut:
-                        turns.put(ticket)
+                        _ = turns.put(ticket)
                         return -1
                     case QueueReceive.Cancelled:
-                        turns.put(ticket)
+                        _ = turns.put(ticket)
                         return -2
             case QueueReceive.Closed:
                 return -3
@@ -57,7 +57,7 @@ def main() -> int32:
     jobs = Queue[int32](capacity=32)
     turns = Queue[int32](capacity=1)
     receipts = Queue[int32]()
-    turns.put(0)
+    _ = turns.put(0)
 
     with TaskGroup() as tasks:
         consumer_a = tasks.start(consume, jobs, turns, receipts)

@@ -7,10 +7,10 @@ def argument(label: str, value: int32) -> int32:
     return value
 
 def publish_sum(values: Queue[int32], left: int32, right: int32) -> None:
-    values.put(left + right)
+    _ = values.put(left + right)
 
 def publish(values: Queue[int32], value: int32) -> None:
-    values.put(value)
+    _ = values.put(value)
 
 def main() -> int32:
     values = Queue[int32]()

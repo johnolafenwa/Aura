@@ -49,7 +49,7 @@ def main():
     print(sums[1])
 
     jobs = Queue[int64]()
-    jobs.put(7)
+    _ = jobs.put(7)
     jobs.close()
     received: list[int64] = [job * 2 for job in jobs]
     print(received[0])

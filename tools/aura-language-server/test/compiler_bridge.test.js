@@ -2027,7 +2027,7 @@ test("compiler bridge teaches conditional task consumption and Queue Transfer", 
     "def inspect(task: own Task[str], tasks: own list[Task[str]], queue: Queue[str]):",
     "    print(task.poll())",
     "    print(wait_all(tasks))",
-    '    queue.put("hello")',
+    '    _ = queue.put("hello")',
     ""
   ].join("\n");
 

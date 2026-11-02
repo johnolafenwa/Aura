@@ -1,0 +1,14 @@
+def save(path: str) -> Result[None, str]:
+    print(f"saving {path}")
+    return Result.Err("disk full")
+
+def main():
+    _ = save("a.conf")
+    _ = save("b.conf")
+    jobs = Queue[int64]()
+    _ = jobs.put(1)
+    jobs.close()
+    _ = jobs.put(2)
+    for job in jobs:
+        print(job)
+    _ = 5

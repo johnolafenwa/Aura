@@ -7,7 +7,7 @@ def send(queue: Queue[str] | None, message: str) -> bool:
         case None:
             return false
         case Queue[str] as found:
-            found.put(message.clone())
+            _ = found.put(message.clone())
             return true
 
 def main():

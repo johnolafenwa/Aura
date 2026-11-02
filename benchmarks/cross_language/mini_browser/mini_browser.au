@@ -545,7 +545,7 @@ def page_number(path: str) -> int64:
 def serve(addresses: Queue[str], total: int64) -> Result[int64, io.Error]:
     mut served = 0
     with listener = try net.http_listen("127.0.0.1:0"):
-        addresses.put(try listener.local_addr())
+        _ = addresses.put(try listener.local_addr())
         mut running = true
         while running:
             exchange = try listener.accept()

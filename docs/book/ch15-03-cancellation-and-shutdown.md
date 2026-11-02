@@ -274,8 +274,8 @@ def main():
     jobs = Queue[int64]()
     with group = TaskGroup():
         group.start_soon(worker, jobs)
-        jobs.put(1)
-        jobs.put(2)
+        _ = jobs.put(1)
+        _ = jobs.put(2)
         sleep(50ms)
         group.cancel()
     print("group closed")
@@ -333,9 +333,9 @@ silence:
 ```aura
 def produce(results: Queue[str]):
     sleep(30ms)
-    results.put("first result")
+    _ = results.put("first result")
     sleep(500ms)
-    results.put("late result")
+    _ = results.put("late result")
     results.close()
 
 def main():

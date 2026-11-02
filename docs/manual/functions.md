@@ -166,13 +166,13 @@ Maintained builtin functions and methods use the same binding rules. Their param
 ```aura
 import process
 
-process.run(["/bin/echo", "hi"], stdout=process.pipe(), group=true)
+_ = process.run(["/bin/echo", "hi"], stdout=process.pipe(), group=true)
 ```
 
 ```aura
 import net
 
-net.http_request_text_timeout(method="POST", url="http://127.0.0.1:8080/jobs", body="{}", headers={}, timeout=2s)
+_ = net.http_request_text_timeout(method="POST", url="http://127.0.0.1:8080/jobs", body="{}", headers={}, timeout=2s)
 ```
 
 The module pages and the [API Index](/manual/api-index) are authoritative for builtin parameter names, defaults, and return types.

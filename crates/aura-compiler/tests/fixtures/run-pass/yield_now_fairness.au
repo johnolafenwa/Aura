@@ -1,5 +1,5 @@
 def yielding_worker(gate: Queue[int32], completed: Queue[int32]) -> int32:
-    gate.put(1)
+    _ = gate.put(1)
     mut attempts = 0
     while attempts < 1000:
         yield_now()
@@ -17,7 +17,7 @@ def yielding_worker(gate: Queue[int32], completed: Queue[int32]) -> int32:
 def ready_sibling(gate: Queue[int32], completed: Queue[int32]) -> int32:
     match gate.get():
         case QueueReceive.Item(_):
-            completed.put(42)
+            _ = completed.put(42)
             return 0
         case QueueReceive.Closed:
             return -2

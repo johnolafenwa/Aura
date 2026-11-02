@@ -173,7 +173,19 @@ queue.close()
 counter.increment()
 ```
 
-The expression is fully evaluated, including its moves, mutations, I/O, and runtime failures. Its value is then discarded. A discarded `Result` is not propagated implicitly. Use `try` or `match` when a failure must affect control flow.
+The expression is fully evaluated, including its moves, mutations, I/O, and runtime failures. Its value is then discarded.
+
+An expression statement whose value is a `Result` is rejected with `AU2018`, because the error it may hold would be lost. Handle it with `try` or `match`, or discard it on purpose with `_ = expression`. `_` binds no name, so the form can repeat:
+
+```aura
+def main():
+    jobs = Queue[int64]()
+    _ = jobs.put(1)
+    _ = jobs.put(2)
+    jobs.close()
+    for job in jobs:
+        print(job)
+```
 
 ## `return`
 

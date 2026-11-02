@@ -42,7 +42,7 @@ def run_process_examples() -> Result[None, process.Error]:
 def main() -> int32:
     jobs = Queue[int32]()
     print(jobs.get_or(7, timeout=1ms))
-    jobs.put(4)
+    _ = jobs.put(4)
     print(jobs.get_or(7))
     print(jobs.poll(timeout=1ms))
 

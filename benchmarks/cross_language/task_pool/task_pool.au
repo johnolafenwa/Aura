@@ -21,18 +21,18 @@ def mix(value: int64) -> int64:
 
 def produce(jobs: Queue[int64], n: int64):
     for i in range(n):
-        jobs.put(i)
+        _ = jobs.put(i)
     jobs.close()
 
 
 def worker(jobs: Queue[int64], results: Queue[int64]):
     for job in jobs:
-        results.put(mix(job))
+        _ = results.put(mix(job))
 
 
 def source(out: Queue[str], n: int64):
     for i in range(n):
-        out.put(f"order-{i}:{i * 7919 % 10007}")
+        _ = out.put(f"order-{i}:{i * 7919 % 10007}")
     out.close()
 
 
@@ -41,7 +41,7 @@ def parse(lines: Queue[str], out: Queue[int64]):
         fields = line.split(":")
         match parse_int64(fields[1]):
             case Result.Ok(value):
-                out.put(value + fields[0].len())
+                _ = out.put(value + fields[0].len())
             case Result.Err(_):
                 pass
     out.close()
@@ -49,7 +49,7 @@ def parse(lines: Queue[str], out: Queue[int64]):
 
 def transform(values: Queue[int64], out: Queue[int64]):
     for value in values:
-        out.put(mix(value))
+        _ = out.put(mix(value))
     out.close()
 
 

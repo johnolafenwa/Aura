@@ -3,7 +3,7 @@ def worker(
     release: Queue[int32],
     value: int32
 ) -> int32:
-    ready.put(value)
+    _ = ready.put(value)
     match release.get(timeout=2s):
         case QueueReceive.Item(_):
             return value * 10
@@ -51,10 +51,10 @@ def main():
         wait_until_ready(ready)
         wait_until_ready(ready)
 
-        release.put(1)
-        release.put(1)
-        release.put(1)
-        release.put(1)
+        _ = release.put(1)
+        _ = release.put(1)
+        _ = release.put(1)
+        _ = release.put(1)
 
         print_result(first)
         print_result(second)

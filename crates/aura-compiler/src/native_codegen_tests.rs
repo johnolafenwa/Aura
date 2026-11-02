@@ -13562,7 +13562,7 @@ fn type_parameter_collection_walks_callable_and_closure_contracts() {
 fn direct_cleanup_of_a_known_resource_type_uses_its_own_close_entry() {
     let source = r#"
 def worker(events: Queue[str]):
-    events.put("done")
+    _ = events.put("done")
     events.close()
 
 def main() -> int32:
@@ -13917,7 +13917,7 @@ def main():
     flags = [true, false]
     points = [Point(x=1, y=0.5), Point(x=2, y=1.5)]
     queue = Queue[Point]()
-    queue.put(points[1])
+    _ = queue.put(points[1])
     match queue.get():
         case QueueReceive.Item(p):
             print(p.x + numbers[2])
@@ -14882,7 +14882,7 @@ fn direct_lookup_slots_reject_every_other_use() {
 const QUEUE_SLOT_SOURCE: &str = r#"
 def produce(jobs: Queue[int64], n: int64):
     for i in range(n):
-        jobs.put(i)
+        _ = jobs.put(i)
     jobs.close()
 
 
@@ -14894,7 +14894,7 @@ def main() -> int32:
         for job in jobs:
             total += job
     others = Queue[int64]()
-    others.put(3)
+    _ = others.put(3)
     match others.get():
         case QueueReceive.Item(value):
             total += value

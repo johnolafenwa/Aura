@@ -58,7 +58,7 @@ def serve(addresses: Queue[str], sessions: int64) -> Result[int64, io.Error]:
     mut store: dict[str, str] = {}
     mut served = 0
     with listener = try net.listen("127.0.0.1:0"):
-        addresses.put(try listener.local_addr())
+        _ = addresses.put(try listener.local_addr())
         for _ in range(sessions):
             with conn = try listener.accept():
                 while true:

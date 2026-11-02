@@ -7,12 +7,12 @@ def sum_squares(jobs: Queue[int32]) -> int32:
 
 def main() -> int32:
     jobs = Queue[int32]()
-    jobs.put(1)
-    jobs.put(2)
-    jobs.put(3)
-    jobs.put(4)
-    jobs.put(5)
-    jobs.put(6)
+    _ = jobs.put(1)
+    _ = jobs.put(2)
+    _ = jobs.put(3)
+    _ = jobs.put(4)
+    _ = jobs.put(5)
+    _ = jobs.put(6)
     jobs.close()
 
     with group = TaskGroup():

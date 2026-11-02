@@ -12,7 +12,7 @@ def main():
     events = Queue[int64]()
     indices = range(2)
     for index in indices:
-        events.put(index)
+        _ = events.put(index)
     with supervisor = process.supervisor():
         match supervisor.start(name="worker", command=["/bin/true"], group=false):
             case Result.Ok(started):

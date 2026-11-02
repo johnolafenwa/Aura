@@ -3,7 +3,7 @@ def answer() -> int32:
 
 def main() -> int32:
     messages = Queue[str]()
-    messages.put("queued")
+    _ = messages.put("queued")
 
     print(select(messages, 0ms))
 

@@ -3,7 +3,7 @@ import net
 
 def serve(addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.listen("127.0.0.1:0"):
-        addresses.put(try server_listener.local_addr())
+        _ = addresses.put(try server_listener.local_addr())
         stream = try server_listener.accept(timeout=5s)
         with server_stream = stream:
             payload = try server_stream.read_exact(4, timeout=5s)

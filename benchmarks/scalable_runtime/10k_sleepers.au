@@ -2,7 +2,7 @@ import io
 
 
 def sleeper(ready: Queue[int32]):
-    ready.put(1)
+    _ = ready.put(1)
     sleep(1m)
 
 

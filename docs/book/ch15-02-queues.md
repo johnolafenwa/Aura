@@ -16,7 +16,7 @@ main task one at a time:
 ```aura
 def produce(documents: own list[str], lines: Queue[str]):
     for text in own documents:
-        lines.put(text)
+        _ = lines.put(text)
     lines.close()
 
 def main():
@@ -44,7 +44,10 @@ total: 10
 
 `Queue[str]()` creates an empty queue of strings. We pass it to `produce` along
 with the documents. `produce` puts each document on the queue and then calls
-`close()` to say that nothing more is coming. Meanwhile the main task runs a
+`close()` to say that nothing more is coming. `put` returns a `Result`, which
+is an `Err` holding the value if the queue has already been closed. Nobody
+closes `lines` before `produce` is done with it, so we discard that `Result`
+with `_ =`, the way [Chapter 9](/book/ch09-03-to-trap-or-not) showed. Meanwhile the main task runs a
 `for` loop over the queue, which takes values out as they arrive and ends once
 the queue has been closed and emptied.
 
@@ -93,7 +96,7 @@ here. The compiler says so if you try:
 ```aura check-fail:AU3004
 def main():
     jobs = Queue[str]()
-    jobs.put("index")
+    _ = jobs.put("index")
     jobs.close()
     for job in own jobs:
         print(job)
@@ -123,7 +126,7 @@ watch it with a queue that holds one value:
 ```aura
 def produce(jobs: Queue[int64]):
     for n in range(4):
-        jobs.put(n)
+        _ = jobs.put(n)
         print(f"put {n}")
     jobs.close()
 
@@ -230,7 +233,7 @@ that long, and a `get` waits for a value at most that long:
 ```aura
 def main():
     jobs = Queue[str](capacity=1)
-    jobs.put("index")
+    _ = jobs.put("index")
     match jobs.put("render", timeout=50ms):
         case Result.Ok(_):
             print("queued")
@@ -324,8 +327,8 @@ waits forever for a value that will never arrive.
 
 ```aura
 def produce(jobs: Queue[int64]):
-    jobs.put(1)
-    jobs.put(2)
+    _ = jobs.put(1)
+    _ = jobs.put(2)
     assert false, "producer broke"
     jobs.close()
 

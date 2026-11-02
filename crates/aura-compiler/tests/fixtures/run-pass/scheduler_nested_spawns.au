@@ -1,20 +1,20 @@
 def child(events: Queue[str], label: own str, value: int32) -> int32:
-    events.put(label)
+    _ = events.put(label)
     return value
 
 def cleanup_after_release(events: Queue[str], release: Queue[int32]) -> None:
     match release.get():
         case QueueReceive.Item(_):
-            events.put("cleanup")
+            _ = events.put("cleanup")
         case QueueReceive.Closed:
-            events.put("cleanup-closed")
+            _ = events.put("cleanup-closed")
         case QueueReceive.TimedOut:
-            events.put("cleanup-timed-out")
+            _ = events.put("cleanup-timed-out")
         case QueueReceive.Cancelled:
-            events.put("cleanup-cancelled")
+            _ = events.put("cleanup-cancelled")
 
 def nested_parent(events: Queue[str]) -> int32:
-    events.put("parent-start")
+    _ = events.put("parent-start")
     release = Queue[int32]()
     mut total: int32 = 0
 
@@ -23,11 +23,11 @@ def nested_parent(events: Queue[str]) -> int32:
         second = children.start(child, events, "child-second", 22)
         children.start_soon(cleanup_after_release, events, release)
 
-        events.put("parent-wait")
+        _ = events.put("parent-wait")
         match first.result(timeout=2s):
             case TaskResult.Ready(value):
                 total += value
-                events.put("parent-after-first")
+                _ = events.put("parent-after-first")
             case TaskResult.Error(_):
                 return -1
             case TaskResult.TimedOut:
@@ -38,7 +38,7 @@ def nested_parent(events: Queue[str]) -> int32:
         match second.result(timeout=2s):
             case TaskResult.Ready(value):
                 total += value
-                events.put("parent-after-second")
+                _ = events.put("parent-after-second")
             case TaskResult.Error(_):
                 return -4
             case TaskResult.TimedOut:
@@ -46,10 +46,10 @@ def nested_parent(events: Queue[str]) -> int32:
             case TaskResult.Cancelled:
                 return -6
 
-        release.put(1)
-        events.put("parent-leaving-scope")
+        _ = release.put(1)
+        _ = events.put("parent-leaving-scope")
 
-    events.put("parent-joined")
+    _ = events.put("parent-joined")
     return total
 
 def next_event(events: Queue[str]) -> str:

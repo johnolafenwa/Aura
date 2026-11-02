@@ -5743,7 +5743,7 @@ def main() -> int32:
 fn d6_builtin_retention_metadata_controls_observable_consumption() {
     for source in [
         "def main() -> int32:\n    mut values = list[str]()\n    text = \"owned\"\n    values.append(text)\n    print(text)\n    return 0\n",
-        "def main() -> int32:\n    jobs = Queue[str]()\n    text = \"owned\"\n    jobs.put(text)\n    print(text)\n    return 0\n",
+        "def main() -> int32:\n    jobs = Queue[str]()\n    text = \"owned\"\n    _ = jobs.put(text)\n    print(text)\n    return 0\n",
     ] {
         let error = crate::check_source(source)
             .expect_err("retaining builtins should consume non-copy arguments");
@@ -5762,7 +5762,7 @@ def keep_after_remove() -> int32:
     return 0
 
 def keep_after_write(file: mut fs.File, text: str):
-    file.write_all(text)
+    _ = file.write_all(text)
     print(text)
 "#,
     )
@@ -22468,7 +22468,7 @@ fn range_is_transfer_without_becoming_copy() {
     crate::check_source(
         r#"
 def echo(values: own Range, output: Queue[Range]) -> Range:
-    output.put(values)
+    _ = output.put(values)
     return range(4, 7)
 
 def keep_handle(output: Queue[Range]) -> Queue[Range]:
@@ -22786,7 +22786,7 @@ def launch():
 import random
 
 def send(queue: Queue[random.Rng], value: own random.Rng):
-    queue.put(value)
+    _ = queue.put(value)
 "#,
     )
     .expect_err("put must reject a non-Transfer payload even on an external handle");
@@ -23166,12 +23166,12 @@ class Envelope:
     value: random.Rng
 
 def send(queue: Queue[Envelope], value: own Envelope):
-    queue.try_put(value)
+    _ = queue.try_put(value)
 "#,
     )
     .expect_err("try_put transports its payload and must enforce structural Transfer");
     assert_eq!(rejected.code, "AU3008");
-    assert_eq!(rejected.span, Some(Span::new(8, 11)));
+    assert_eq!(rejected.span, Some(Span::new(8, 15)));
     assert!(rejected.message.contains("Queue payload `Envelope`"));
     assert!(
         rejected
@@ -27753,7 +27753,7 @@ def main():
     jobs = Queue[int64]()
     value = 1
     view alias = value
-    jobs.put(alias)
+    _ = jobs.put(alias)
 "#,
     )
     .expect_err("a view of a Copy value is still not Transfer");

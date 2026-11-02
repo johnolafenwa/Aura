@@ -3,7 +3,7 @@ import net
 
 def serve(addresses: Queue[str]) -> Result[None, io.Error]:
     with server = try net.listen("127.0.0.1:0"):
-        addresses.put(try server.local_addr())
+        _ = addresses.put(try server.local_addr())
         with stream = try server.accept():
             message = try stream.read_line()
             match own message:

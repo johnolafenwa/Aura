@@ -87,7 +87,7 @@ def route(
 def serve(addresses: Queue[str], requests: int64) -> Result[int64, io.Error]:
     mut items: dict[int64, json.Value] = {}
     with listener = try net.http_listen("127.0.0.1:0"):
-        addresses.put(try listener.local_addr())
+        _ = addresses.put(try listener.local_addr())
         for _ in range(requests):
             exchange = try listener.accept()
             with request = exchange:

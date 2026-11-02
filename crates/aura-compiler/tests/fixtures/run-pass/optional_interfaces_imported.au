@@ -18,7 +18,7 @@ def main():
     print(describe())
     print(describe(value=9))
     queue = Queue[int64]()
-    queue.put(11)
+    _ = queue.put(11)
     match poll_first(queue):
         case Poll.Ready(value):
             print(value)

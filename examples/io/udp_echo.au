@@ -3,7 +3,7 @@ import net
 
 def serve_udp(addresses: Queue[str]) -> Result[str, io.Error]:
     with server_socket = try net.udp_bind("127.0.0.1:0"):
-        addresses.put(try server_socket.local_addr())
+        _ = addresses.put(try server_socket.local_addr())
         match try server_socket.recv_from(1024, timeout=5s):
             case net.UdpDatagram as packet:
                 text = try packet.text()

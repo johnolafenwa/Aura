@@ -207,7 +207,7 @@ const TASKS: &str = r#"
 def wait_holding(ready: Queue[int64], gate: Queue[int64], marker: int64) -> int64:
     scene = build(marker)
     shape = Shape.Named(scene.name.clone(), Shape.Path(scene.points.copy()))
-    ready.put(marker)
+    _ = ready.put(marker)
     match gate.get(timeout=5s):
         case QueueReceive.Item(value):
             return value
@@ -225,7 +225,7 @@ def wait_holding(ready: Queue[int64], gate: Queue[int64], marker: int64) -> int6
 def sleep_holding(ready: Queue[int64], marker: int64) -> int64:
     scene = build(marker)
     parsed: Result[Scene, str] = Result.Ok(build(marker + 1))
-    ready.put(marker)
+    _ = ready.put(marker)
     sleep(5s)
     match parsed:
         case Result.Ok(other):
@@ -235,7 +235,7 @@ def sleep_holding(ready: Queue[int64], marker: int64) -> int64:
 
 def fail_holding(ready: Queue[int64], marker: int64) -> int64:
     scene = build(marker)
-    ready.put(marker)
+    _ = ready.put(marker)
     shape = Shape.Path(scene.points.copy())
     assert scene.points.len() == 5, "task failure with values alive"
     return area(shape)

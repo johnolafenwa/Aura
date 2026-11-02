@@ -1,6 +1,6 @@
 def main():
     values = Queue[int64]()
-    values.put(41)
+    _ = values.put(41)
     mut total: int64 = 1
 
     match select(values):

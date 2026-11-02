@@ -95,3 +95,4 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 67. [ADR-0067: Debug builds and the VS Code debugger](0067-debug-builds-and-the-vs-code-debugger.md) — Accepted; `aura build --debug` writes DWARF, and the extension debugs through `lldb-dap`
 68. [ADR-0068: Character builtins and string `min`/`max`](0068-character-builtins-and-string-extremes.md) — Accepted; `ord`, `chr`, `str.chars()`, and `min`/`max` of strings
 69. [ADR-0069: The builtin prelude](0069-builtin-prelude.md) — Accepted; `Ord`, `Add`, and `From` with builtin implementations, and `Result` methods
+70. [ADR-0070: An unused `Result` is an error](0070-unused-results-are-errors.md) — Accepted; `AU2018`, and `_ = expr` discards on purpose

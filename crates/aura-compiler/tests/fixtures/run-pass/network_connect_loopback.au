@@ -4,7 +4,7 @@ import net
 
 def serve_tcp(addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.listen("127.0.0.1:0"):
-        addresses.put(try server_listener.local_addr())
+        _ = addresses.put(try server_listener.local_addr())
         stream = try server_listener.accept(timeout=2s)
         with server_stream = stream:
             match try server_stream.read_line(timeout=2s):
@@ -16,7 +16,7 @@ def serve_tcp(addresses: Queue[str]) -> Result[None, io.Error]:
 
 def serve_unix(path: str, ready: Queue[bool]) -> Result[None, io.Error]:
     with server_listener = try net.unix_listen(path):
-        ready.put(true)
+        _ = ready.put(true)
         stream = try server_listener.accept(timeout=2s)
         with server_stream = stream:
             match try server_stream.read_line(timeout=2s):

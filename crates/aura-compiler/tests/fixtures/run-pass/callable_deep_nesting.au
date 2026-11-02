@@ -37,5 +37,5 @@ def main():
 
 def lambda_free_producer(events: Queue[int64]) -> None:
     tripler = make_scaler(3)
-    events.put(tripler(2))
+    _ = events.put(tripler(2))
     events.close()

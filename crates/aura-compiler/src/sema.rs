@@ -4331,7 +4331,10 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 Stmt::Expr(expr_stmt) => {
-                    self.type_of_expr(&expr_stmt.expr, locals)?;
+                    let ty = self.type_of_expr(&expr_stmt.expr, locals)?;
+                    if !expr_stmt.discarded {
+                        reject_unused_result(&expr_stmt.expr, &ty)?;
+                    }
                     self.reject_mutable_returned_view_value(&expr_stmt.expr, locals, false)?;
                     self.consume_value_expr(&expr_stmt.expr, locals)?;
                 }
@@ -16869,6 +16872,22 @@ fn type_mentions_type_param(ty: &Type, name: &str) -> bool {
 
 /// Whether a compound assignment on an index of `object_ty` borrows the key
 /// instead of moving it: a dict whose key is `str` or `bytes`.
+/// A `Result` that an expression statement drops would hide its error, so
+/// the statement must use it, or discard it on purpose with `_ = ...`.
+fn reject_unused_result(expr: &Expr, ty: &Type) -> Result<()> {
+    match ty {
+        Type::Named(name, args) if name == "Result" && args.len() == 2 => {
+            Err(Diagnostic::coded_at(
+                "AU2018",
+                expr.span,
+                format!("this `{ty}` is never used, so an error would go unnoticed"),
+            )
+            .with_help("handle it with `match` or `try`, or discard it on purpose with `_ = ...`"))
+        }
+        _ => Ok(()),
+    }
+}
+
 pub(crate) fn compound_index_borrows_key(object_ty: &Type) -> bool {
     matches!(
         map_key_value_types(object_ty),

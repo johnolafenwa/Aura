@@ -9,10 +9,10 @@ enum NestedQueues:
 def produce(queues: own NestedQueues) -> int32:
     match own queues:
         case NestedQueues.Bundle(bundle):
-            bundle.vector[0].put(1)
+            _ = bundle.vector[0].put(1)
             for queue in bundle.unique:
-                queue.put(2)
-            bundle.mapping["queue"].put(3)
+                _ = queue.put(2)
+            _ = bundle.mapping["queue"].put(3)
     return 7
 
 def main() -> int32:

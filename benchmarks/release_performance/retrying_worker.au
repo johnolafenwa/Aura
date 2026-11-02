@@ -22,7 +22,7 @@ def flush_stdout() -> bool:
 
 def serve(addresses: Queue[str]) -> Result[int32, io.Error]:
     with server = try net.http_listen("127.0.0.1:0"):
-        addresses.put(try server.local_addr())
+        _ = addresses.put(try server.local_addr())
         mut request_index: int32 = 0
 
         while request_index < 112:

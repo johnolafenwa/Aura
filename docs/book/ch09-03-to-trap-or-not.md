@@ -175,11 +175,11 @@ When you're unsure, these questions usually settle it:
    use an `assert` with a message that explains the broken assumption.
 4. Is a missing value normal and not an error at all? Return `T | None`, or, for collection lookups, use the `Lookup` that `get` gives you.
 
-One honest warning before we move on. Aura makes you handle a `Result` before
-you can use the value inside it, but it doesn't currently stop you from calling
-a function that returns `Result[None, str]` and ignoring the result entirely:
+One more rule keeps errors from slipping away. A `Result` can't simply be
+dropped. Calling a function that returns `Result[None, str]` and ignoring what
+comes back is an error:
 
-```aura
+```aura check-fail:AU2018
 def save(path: str) -> Result[None, str]:
     return Result.Err(f"disk full while writing {path}")
 
@@ -189,13 +189,20 @@ def main():
 ```
 
 ```console
-$ aura run src/main.au
-saved
+$ aura check src/main.au
+error[AU2018]: this `Result[None, str]` is never used, so an error would go unnoticed
+ --> src/main.au:5:5
+  |
+5 |     save("settings.conf")
+  |     ^
+  = help: handle it with `match` or `try`, or discard it on purpose with `_ = ...`
 ```
 
-The error was dropped without a word. When a function returns a `Result` only
-to report failure, make sure every call site matches on it or passes it on with
-`try`.
+Without this rule the program would print `saved` and the error would vanish
+without a word. Usually the fix is to `match` on the result or pass it on with
+`try`. When you really don't care whether the call worked, say so with
+`_ = save("settings.conf")`. The `_ =` costs three characters and tells the
+next reader that ignoring the error was a decision, not an oversight.
 
 ## Summary
 
@@ -211,7 +218,7 @@ and `Lookup` separates "not there" from "there, but `None`".
 
 You've seen generic types several times now without our stopping to explain
 them: `Result[T, E]` works for any `T` and `E`, `Lookup[T]` for any `T`, and
-the `From` conversion was a trait we declared ourselves. [Chapter
+`From` is a trait. [Chapter
 10](/book/ch10-00-generics-traits-conversions) explains how to write generic
 code of your own, how traits describe what a type can do, and how Aura converts
 between types without ever doing it behind your back.

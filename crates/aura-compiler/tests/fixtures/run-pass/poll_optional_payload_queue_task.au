@@ -5,8 +5,8 @@ def maybe(value: int64) -> int64 | None:
 
 def main():
     queue = Queue[int64 | None]()
-    queue.put(None)
-    queue.put(3)
+    _ = queue.put(None)
+    _ = queue.put(3)
     match queue.poll():
         case Poll.Ready(item):
             print(f"ready none? {item is None}")

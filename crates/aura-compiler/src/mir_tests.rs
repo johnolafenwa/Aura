@@ -5135,7 +5135,7 @@ fn every_ordinary_for_form_uses_a_fresh_scoped_target_slot() {
         r#"
 def main():
     jobs = Queue[str]()
-    jobs.put("queue")
+    _ = jobs.put("queue")
     jobs.close()
     mut labels = set[str]()
     labels.add("set")
@@ -5804,7 +5804,7 @@ def main():
     copied_tags: list[str] = [tag.clone() for tag in tags]
 
     pairs = Queue[(str, str)]()
-    pairs.put(("queue", "-tuple"))
+    _ = pairs.put(("queue", "-tuple"))
     pairs.close()
     joined: list[str] = [left + right for left, right in pairs]
 
@@ -7508,8 +7508,8 @@ fn typed_select_queue_and_deadline_outcomes_execute_through_mir() {
 def main():
     first = Queue[str]()
     second = Queue[str]()
-    first.put("first")
-    second.put("second")
+    _ = first.put("first")
+    _ = second.put("second")
     print(select(first, second))
     print(second.get())
 
@@ -7617,13 +7617,13 @@ import process
 import net
 
 def supervise(supervisor: mut process.Supervisor, name: own str, command: own list[str], cwd: own (str | None), environment: own dict[str, str], stdin: own process.Stdio, stdout: own process.Stdio, stderr: own process.Stdio, restart: own process.RestartPolicy, backoff: own Duration, max_restarts: own int32, group: own bool):
-    supervisor.start(name=name, command=command, cwd=cwd, env=environment, stdin=stdin, stdout=stdout, stderr=stderr, restart=restart, backoff=backoff, max_restarts=max_restarts, group=group)
+    _ = supervisor.start(name=name, command=command, cwd=cwd, env=environment, stdin=stdin, stdout=stdout, stderr=stderr, restart=restart, backoff=backoff, max_restarts=max_restarts, group=group)
 
 def respond_text(exchange: mut net.HttpExchange, status: int32, text: own str, headers: own dict[str, str]):
-    exchange.respond_text(status=status, text=text, headers=headers)
+    _ = exchange.respond_text(status=status, text=text, headers=headers)
 
 def respond_bytes(exchange: mut net.HttpExchange, status: int32, bytes: own list[uint8], headers: own dict[str, str]):
-    exchange.respond_bytes(status=status, bytes=bytes, headers=headers)
+    _ = exchange.respond_bytes(status=status, bytes=bytes, headers=headers)
 "#,
     )
     .expect("retained process and HTTP builtin arguments should lower");
@@ -10064,7 +10064,7 @@ def main() -> int32:
     counts["a"] += 5
     seen = {"a", "b"}
     jobs = Queue[int32]()
-    jobs.put(1)
+    _ = jobs.put(1)
     if true and not false:
         counter.value += values[0]
     match "ok":

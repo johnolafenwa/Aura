@@ -6649,6 +6649,7 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
     let expr_stmt = crate::ast::Stmt::Expr(crate::ast::ExprStmt {
         expr: expr(ExprKind::Int(1)),
         span: Span::new(19, 9),
+        discarded: false,
     });
     assert_eq!(stmt_start_line(&break_stmt), 17);
     assert_eq!(stmt_start_line(&continue_stmt), 18);

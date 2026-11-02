@@ -82,7 +82,7 @@ def main() -> int32:
             r#"
 def main() -> int32:
     queue = Queue[int32]()
-    queue.put(1, timeout=Duration.ms(-1))
+    _ = queue.put(1, timeout=Duration.ms(-1))
     return 0
 "#,
         ),

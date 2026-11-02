@@ -1,5 +1,5 @@
 def worker(value: own str, output: Queue[str]):
-    output.put(value)
+    _ = output.put(value)
 
 def main() -> int32:
     output = Queue[str]()

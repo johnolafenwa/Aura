@@ -709,8 +709,10 @@ assert-statement     = "assert", non-tuple-expression,
 pass-statement       = "pass", NEWLINE ;
 break-statement      = "break", NEWLINE ;
 continue-statement   = "continue", NEWLINE ;
-expression-statement = expression, statement-end ;
+expression-statement = [ "_", "=" ], expression, statement-end ;
 ```
+
+`_ = expression` is an expression statement that discards its value on purpose. It binds no name, and it may repeat in one scope.
 
 Assignment targets follow these rules:
 

@@ -29,7 +29,7 @@ def main():
     print(seen.len())
 
     queue: Queue[int32 | None] = Queue[int32 | None](4)
-    queue.put(6)
-    queue.put(None)
+    _ = queue.put(6)
+    _ = queue.put(None)
     print(describe(queue.get_or(7)))
     print(describe(queue.get_or(None)))

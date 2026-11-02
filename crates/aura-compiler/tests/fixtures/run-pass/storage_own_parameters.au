@@ -5,7 +5,7 @@ def store(values: mut list[str], unique: mut set[str], labels: mut dict[str, str
     values.append(vec_value)
     unique.add(set_value)
     labels[map_key] = map_value
-    output.try_put(queue_value)
+    _ = output.try_put(queue_value)
     return Box(value=field_value)
 
 def main() -> int32:
