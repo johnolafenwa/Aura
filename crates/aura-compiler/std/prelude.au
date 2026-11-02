@@ -1,0 +1,403 @@
+# The builtin prelude: names every module sees without an import (ADR-0069).
+# The compiler checks this file as module `prelude` and imports a name from it
+# into a module that uses the name without declaring or importing its own.
+
+
+public trait Ord[Rhs]:
+    """Ordering against `Rhs`. `<`, `<=`, `>`, and `>=` call these methods
+    when no builtin comparison applies, as on a type parameter."""
+    def lt(self, rhs: Rhs) -> bool
+    def le(self, rhs: Rhs) -> bool
+    def gt(self, rhs: Rhs) -> bool
+    def ge(self, rhs: Rhs) -> bool
+
+
+public trait Add[Rhs, Out]:
+    """Addition with `Rhs`, producing `Out`. `+` and `+=` call `add` when no
+    builtin addition applies."""
+    def add(self, rhs: Rhs) -> Out
+
+
+public trait From[Source]:
+    """A conversion from `Source`. `try` uses it to convert an error type."""
+    def from(value: own Source) -> Self
+
+
+public trait ResultMethods[T, E]:
+    """Methods on `Result[T, E]`."""
+    def is_ok(self) -> bool
+    def is_err(self) -> bool
+    def unwrap_or(own self, default: own T) -> T
+    def map[U](own self, f: def(T) -> U) -> Result[U, E]
+    def map_err[F](own self, f: def(E) -> F) -> Result[T, F]
+
+
+impl[T, E] ResultMethods[T, E] for Result[T, E]:
+    def is_ok(self) -> bool:
+        match self:
+            case Ok(_):
+                return true
+            case Err(_):
+                return false
+
+    def is_err(self) -> bool:
+        match self:
+            case Ok(_):
+                return false
+            case Err(_):
+                return true
+
+    def unwrap_or(own self, default: own T) -> T:
+        match own self:
+            case Ok(value):
+                return value
+            case Err(_):
+                return default
+
+    def map[U](own self, f: def(T) -> U) -> Result[U, E]:
+        match own self:
+            case Ok(value):
+                return Ok(f(value))
+            case Err(error):
+                return Err(error)
+
+    def map_err[F](own self, f: def(E) -> F) -> Result[T, F]:
+        match own self:
+            case Ok(value):
+                return Ok(value)
+            case Err(error):
+                return Err(f(error))
+
+
+impl Ord[int8] for int8:
+    def lt(self, rhs: int8) -> bool:
+        return self < rhs
+
+    def le(self, rhs: int8) -> bool:
+        return self <= rhs
+
+    def gt(self, rhs: int8) -> bool:
+        return self > rhs
+
+    def ge(self, rhs: int8) -> bool:
+        return self >= rhs
+
+
+impl Ord[int16] for int16:
+    def lt(self, rhs: int16) -> bool:
+        return self < rhs
+
+    def le(self, rhs: int16) -> bool:
+        return self <= rhs
+
+    def gt(self, rhs: int16) -> bool:
+        return self > rhs
+
+    def ge(self, rhs: int16) -> bool:
+        return self >= rhs
+
+
+impl Ord[int32] for int32:
+    def lt(self, rhs: int32) -> bool:
+        return self < rhs
+
+    def le(self, rhs: int32) -> bool:
+        return self <= rhs
+
+    def gt(self, rhs: int32) -> bool:
+        return self > rhs
+
+    def ge(self, rhs: int32) -> bool:
+        return self >= rhs
+
+
+impl Ord[int64] for int64:
+    def lt(self, rhs: int64) -> bool:
+        return self < rhs
+
+    def le(self, rhs: int64) -> bool:
+        return self <= rhs
+
+    def gt(self, rhs: int64) -> bool:
+        return self > rhs
+
+    def ge(self, rhs: int64) -> bool:
+        return self >= rhs
+
+
+impl Ord[uint8] for uint8:
+    def lt(self, rhs: uint8) -> bool:
+        return self < rhs
+
+    def le(self, rhs: uint8) -> bool:
+        return self <= rhs
+
+    def gt(self, rhs: uint8) -> bool:
+        return self > rhs
+
+    def ge(self, rhs: uint8) -> bool:
+        return self >= rhs
+
+
+impl Ord[uint16] for uint16:
+    def lt(self, rhs: uint16) -> bool:
+        return self < rhs
+
+    def le(self, rhs: uint16) -> bool:
+        return self <= rhs
+
+    def gt(self, rhs: uint16) -> bool:
+        return self > rhs
+
+    def ge(self, rhs: uint16) -> bool:
+        return self >= rhs
+
+
+impl Ord[uint32] for uint32:
+    def lt(self, rhs: uint32) -> bool:
+        return self < rhs
+
+    def le(self, rhs: uint32) -> bool:
+        return self <= rhs
+
+    def gt(self, rhs: uint32) -> bool:
+        return self > rhs
+
+    def ge(self, rhs: uint32) -> bool:
+        return self >= rhs
+
+
+impl Ord[uint64] for uint64:
+    def lt(self, rhs: uint64) -> bool:
+        return self < rhs
+
+    def le(self, rhs: uint64) -> bool:
+        return self <= rhs
+
+    def gt(self, rhs: uint64) -> bool:
+        return self > rhs
+
+    def ge(self, rhs: uint64) -> bool:
+        return self >= rhs
+
+
+impl Ord[float32] for float32:
+    def lt(self, rhs: float32) -> bool:
+        return self < rhs
+
+    def le(self, rhs: float32) -> bool:
+        return self <= rhs
+
+    def gt(self, rhs: float32) -> bool:
+        return self > rhs
+
+    def ge(self, rhs: float32) -> bool:
+        return self >= rhs
+
+
+impl Ord[float64] for float64:
+    def lt(self, rhs: float64) -> bool:
+        return self < rhs
+
+    def le(self, rhs: float64) -> bool:
+        return self <= rhs
+
+    def gt(self, rhs: float64) -> bool:
+        return self > rhs
+
+    def ge(self, rhs: float64) -> bool:
+        return self >= rhs
+
+
+impl Ord[str] for str:
+    def lt(self, rhs: str) -> bool:
+        return self < rhs
+
+    def le(self, rhs: str) -> bool:
+        return self <= rhs
+
+    def gt(self, rhs: str) -> bool:
+        return self > rhs
+
+    def ge(self, rhs: str) -> bool:
+        return self >= rhs
+
+
+impl Add[int8, int8] for int8:
+    def add(self, rhs: int8) -> int8:
+        return self + rhs
+
+
+impl Add[int16, int16] for int16:
+    def add(self, rhs: int16) -> int16:
+        return self + rhs
+
+
+impl Add[int32, int32] for int32:
+    def add(self, rhs: int32) -> int32:
+        return self + rhs
+
+
+impl Add[int64, int64] for int64:
+    def add(self, rhs: int64) -> int64:
+        return self + rhs
+
+
+impl Add[uint8, uint8] for uint8:
+    def add(self, rhs: uint8) -> uint8:
+        return self + rhs
+
+
+impl Add[uint16, uint16] for uint16:
+    def add(self, rhs: uint16) -> uint16:
+        return self + rhs
+
+
+impl Add[uint32, uint32] for uint32:
+    def add(self, rhs: uint32) -> uint32:
+        return self + rhs
+
+
+impl Add[uint64, uint64] for uint64:
+    def add(self, rhs: uint64) -> uint64:
+        return self + rhs
+
+
+impl Add[float32, float32] for float32:
+    def add(self, rhs: float32) -> float32:
+        return self + rhs
+
+
+impl Add[float64, float64] for float64:
+    def add(self, rhs: float64) -> float64:
+        return self + rhs
+
+
+impl Add[str, str] for str:
+    def add(self, rhs: str) -> str:
+        return self + rhs
+
+
+impl From[int8] for int16:
+    def from(value: own int8) -> int16:
+        return value as int16
+
+
+impl From[int8] for int32:
+    def from(value: own int8) -> int32:
+        return value as int32
+
+
+impl From[int8] for int64:
+    def from(value: own int8) -> int64:
+        return value as int64
+
+
+impl From[int16] for int32:
+    def from(value: own int16) -> int32:
+        return value as int32
+
+
+impl From[int16] for int64:
+    def from(value: own int16) -> int64:
+        return value as int64
+
+
+impl From[int32] for int64:
+    def from(value: own int32) -> int64:
+        return value as int64
+
+
+impl From[uint8] for uint16:
+    def from(value: own uint8) -> uint16:
+        return value as uint16
+
+
+impl From[uint8] for uint32:
+    def from(value: own uint8) -> uint32:
+        return value as uint32
+
+
+impl From[uint8] for uint64:
+    def from(value: own uint8) -> uint64:
+        return value as uint64
+
+
+impl From[uint16] for uint32:
+    def from(value: own uint16) -> uint32:
+        return value as uint32
+
+
+impl From[uint16] for uint64:
+    def from(value: own uint16) -> uint64:
+        return value as uint64
+
+
+impl From[uint32] for uint64:
+    def from(value: own uint32) -> uint64:
+        return value as uint64
+
+
+impl From[uint8] for int16:
+    def from(value: own uint8) -> int16:
+        return value as int16
+
+
+impl From[uint8] for int32:
+    def from(value: own uint8) -> int32:
+        return value as int32
+
+
+impl From[uint8] for int64:
+    def from(value: own uint8) -> int64:
+        return value as int64
+
+
+impl From[uint16] for int32:
+    def from(value: own uint16) -> int32:
+        return value as int32
+
+
+impl From[uint16] for int64:
+    def from(value: own uint16) -> int64:
+        return value as int64
+
+
+impl From[uint32] for int64:
+    def from(value: own uint32) -> int64:
+        return value as int64
+
+
+impl From[int8] for float64:
+    def from(value: own int8) -> float64:
+        return value as float64
+
+
+impl From[int16] for float64:
+    def from(value: own int16) -> float64:
+        return value as float64
+
+
+impl From[int32] for float64:
+    def from(value: own int32) -> float64:
+        return value as float64
+
+
+impl From[uint8] for float64:
+    def from(value: own uint8) -> float64:
+        return value as float64
+
+
+impl From[uint16] for float64:
+    def from(value: own uint16) -> float64:
+        return value as float64
+
+
+impl From[uint32] for float64:
+    def from(value: own uint32) -> float64:
+        return value as float64
+
+
+impl From[float32] for float64:
+    def from(value: own float32) -> float64:
+        return value as float64

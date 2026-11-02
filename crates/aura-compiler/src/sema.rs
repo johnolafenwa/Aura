@@ -20,6 +20,7 @@ pub(crate) use types::closure_call_kind_for;
 mod display;
 pub(crate) use display::{is_prelude_display, DISPLAY_METHOD, DISPLAY_TRAIT};
 mod iterator_loops;
+mod prelude;
 mod property_reads;
 #[cfg(test)]
 mod property_reads_tests;

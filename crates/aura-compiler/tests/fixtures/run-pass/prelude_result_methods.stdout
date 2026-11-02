@@ -1,0 +1,6 @@
+true
+true
+-1
+Result.Ok(8)
+Result.Err(29)
+ADA

@@ -260,7 +260,9 @@ The first is `From`, which you met in [Chapter
 into another. Nothing about it is specific to errors. `From[Source]` has a
 single method, `from`, with no `self`: it takes a `Source` and returns a value
 of the implementing type. A method with no `self` is called an *associated
-method*, and you call it on the type, as in `Money.from(12)`.
+method*, and you call it on the type, as in `Money.from(12)`. `From` is in
+the prelude, along with implementations for the lossless numeric widenings,
+such as `int32` into `int64` and any integer of 32 bits or fewer into `float64`.
 
 The second is a trait we'll define ourselves for parsing text into a value. Its
 method also has no `self`, and returns `Result[Self, str]`, where `Self` means
@@ -269,9 +271,6 @@ method also has no `self`, and returns `Result[Self, str]`, where `Self` means
 *Filename: src/main.au*
 
 ```aura
-trait From[Source]:
-    def from(value: own Source) -> Self
-
 trait Parse:
     def parse(text: str) -> Result[Self, str]
 

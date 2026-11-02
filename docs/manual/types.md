@@ -330,6 +330,15 @@ result: Result[int32, str] = Result.Ok(42)
 failure: Result[int32, str] = Result.Err("bad number")
 ```
 
+`Result[T, E]` has five methods from the builtin prelude (ADR-0069). `is_ok()` and `is_err()` read the value through shared access. `unwrap_or(default)` returns the `Ok` payload or `default`. `map(f)` applies `f` to an `Ok` payload, and `map_err(f)` applies `f` to an `Err` payload, passing the other variant through. `unwrap_or`, `map`, and `map_err` consume the `Result`. There is no `unwrap`.
+
+```aura
+def main():
+    print(parse_int64("12").is_ok())
+    print(parse_int64("x").unwrap_or(0))
+    print(parse_int64("4").map(lambda n: n * 2))
+```
+
 Bare `None` on its own is the unit value and renders as `None`. It becomes an optional only where a `T | None` annotation, parameter, result, or other expected type applies. An unannotated `count = 5` is a plain `int64`. To keep the optional type, write `count: int64 | None = 5`. A function declared `-> T | None` returns absence with an explicit `return None`.
 
 A bare union parameter borrows a member argument for the call. The argument can be any place a bare member parameter accepts: a local, a field, a list element, a dictionary entry, a loop binding, or a view. The callee reads the caller's value through the union, so nothing is copied or moved:

@@ -1,0 +1,7 @@
+public def biggest[T: Ord[T]](a: own T, b: own T) -> T:
+    if a > b:
+        return a
+    return b
+
+public def safe(r: own Result[int64, str]) -> int64:
+    return r.unwrap_or(0)

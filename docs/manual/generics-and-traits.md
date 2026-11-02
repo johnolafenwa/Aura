@@ -488,7 +488,7 @@ Builtin rules come first:
 - `/` on equal integer operands is rejected with the integer-division teaching diagnostic. It is not dispatched to `Div.div`. `/` still requests `Div.div` for an applicable non-numeric user type.
 - The divisor-sign rule for `%` describes builtin numeric remainder. `Mod.mod` on a user type has the semantics of that implementation.
 
-These declarations show the maintained generic shapes:
+`Ord`, `Add`, and `From` are declared in the builtin prelude, which every module sees without an import (ADR-0069). The prelude implements `Ord[t]` and `Add[t, t]` for every integer type, `float32`, `float64`, and `str`, and `From` for the lossless widenings: a narrower integer into a wider one of the same signedness, an unsigned integer into a wider signed one, and any integer of 32 bits or fewer or `float32` into `float64`. A module that declares or imports its own trait with one of these names uses its own declaration, and the prelude's is not visible in that module. The other operator traits are not predeclared; a module declares them with these shapes:
 
 ```aura
 trait Add[Rhs, Out]:
@@ -589,7 +589,7 @@ When `try` propagates `Result[T, SourceError]` from a function that returns `Res
 - If the error types are equal, no trait is needed.
 - Otherwise the checker looks for an applicable `impl From[SourceError] for TargetError` that contains `from`.
 
-The conventional contract is:
+The prelude declares the contract:
 
 ```aura
 trait From[Source]:

@@ -402,14 +402,10 @@ error[AU2999]: unsupported operands for binary expression: `Money`
 ```
 
 When no builtin rule applies, Aura turns `a + b` into a call to the `add`
-method of a trait named `Add`. Unlike `Display`, the operator traits aren't
-predeclared, so a module that wants one declares it with the shape the compiler
-expects:
+method of a trait named `Add`. Like `Display`, `Add` is in the prelude, so we
+only have to implement it:
 
 ```aura
-trait Add[Rhs, Out]:
-    def add(self, rhs: Rhs) -> Out
-
 copy class Money:
     cents: int64
 
@@ -446,8 +442,9 @@ plus a `Money` is a `Money`". Once that exists, `book + coffee` calls our
 
 The other operators follow the same pattern: `Sub`, `Mul`, `Div`, `FloorDiv`,
 and `Mod` for `-`, `*`, `/`, `//`, and `%`, `Neg` and `Not` for unary `-` and
-`not`, and `Ord` for the comparisons `<`, `<=`, `>`, and `>=`. The
-[Manual](/manual/generics-and-traits) lists each trait's exact shape. Two
+`not`, and `Ord` for the comparisons `<`, `<=`, `>`, and `>=`. Only `Add`
+and `Ord` are in the prelude; a module that wants one of the others declares
+it, with the shape the [Manual](/manual/generics-and-traits) lists. Two
 things stay fixed: `==` and `!=` always use Aura's builtin structural equality,
 and `and` and `or` can't be overloaded.
 
@@ -455,57 +452,14 @@ and `and` and `or` can't be overloaded.
 
 We now have everything `largest` needs. Its body uses `>`, and `>` on a type
 parameter is a call to `Ord.gt`. So the bound we want is `T: Ord[T]`: "a `T`
-can be compared with another `T`". Let's write it, and call it with integers
-first:
-
-```aura check-fail:AU2002
-trait Ord[Rhs]:
-    def lt(self, rhs: Rhs) -> bool
-    def le(self, rhs: Rhs) -> bool
-    def gt(self, rhs: Rhs) -> bool
-    def ge(self, rhs: Rhs) -> bool
-
-def largest[T: Ord[T]](values: own list[T]) -> T | None:
-    mut rest = values
-    if rest.len() == 0:
-        return None
-    mut best = rest.pop()
-    while rest.len() > 0:
-        candidate = rest.pop()
-        if candidate > best:
-            best = candidate
-    return best
-
-def main():
-    print(largest([3, 9, 4]))
-```
-
-```console
-$ aura check src/main.au
-error[AU2002]: type `int64` does not implement trait `Ord[int64]`
- --> src/main.au:19:11
-   |
-19 |     print(largest([3, 9, 4]))
-   |           ^
-```
-
-The body compiles now. The error moved to the call, which is where the bound
-puts it. The message may surprise you, because `3 < 9` obviously works. But
-integer comparison is a builtin rule, not an implementation of our `Ord` trait,
-and the bound asks for the trait. Traits can be implemented for builtin types
-as well as your own, so we can supply one. While we're at it, we'll give
-`largest` an empty-list answer of `None` instead of trapping on `pop`, and
-implement `Ord` for `Money`:
+can be compared with another `T`". `Ord` is in the prelude too, and the
+prelude implements it for the numeric types and `str`. While we're at it,
+we'll give `largest` an empty-list answer of `None` instead of trapping on
+`pop`, and implement `Ord` for `Money`:
 
 *Filename: src/main.au*
 
 ```aura
-trait Ord[Rhs]:
-    def lt(self, rhs: Rhs) -> bool
-    def le(self, rhs: Rhs) -> bool
-    def gt(self, rhs: Rhs) -> bool
-    def ge(self, rhs: Rhs) -> bool
-
 copy class Money:
     cents: int64
 
@@ -525,19 +479,6 @@ impl Ord[Money] for Money:
 
     def ge(self, rhs: Money) -> bool:
         return self.cents >= rhs.cents
-
-impl Ord[int64] for int64:
-    def lt(self, rhs: int64) -> bool:
-        return self < rhs
-
-    def le(self, rhs: int64) -> bool:
-        return self <= rhs
-
-    def gt(self, rhs: int64) -> bool:
-        return self > rhs
-
-    def ge(self, rhs: int64) -> bool:
-        return self >= rhs
 
 def largest[T: Ord[T]](values: own list[T]) -> T | None:
     mut rest = values
@@ -559,24 +500,26 @@ def announce[T: Ord[T] + Display](values: own list[T]):
 
 def main():
     print(largest([3, 9, 4]))
+    print(largest(["pear", "fig", "plum"]))
     announce([Money(cents=1300), Money(cents=450), Money(cents=1700)])
     empty: list[Money] = []
     announce(empty)
 ```
 
-<span class="caption">Listing 10-8: A generic `largest` bounded by `Ord`, used with integers and with `Money`</span>
+<span class="caption">Listing 10-8: A generic `largest` bounded by `Ord`, used with integers, strings, and `Money`</span>
 
 ```console
 $ aura run src/main.au
 9
+plum
 largest: $17.00
 nothing to compare
 ```
 
-One function now serves both types, and the signature says exactly what it
-needs. Inside `impl Ord[int64] for int64`, `self < rhs` uses the builtin
-integer comparison, so there's no recursion. Builtin rules always take
-precedence over trait dispatch.
+One function now serves all three types, and the signature says exactly what
+it needs. Inside `impl Ord[Money] for Money`, `self.cents < rhs.cents`
+compares two integers with the builtin rule, so there's no recursion. Builtin
+rules always take precedence over trait dispatch.
 
 `announce` shows the `+` form of bounds: it calls `largest`, which needs
 `Ord[T]`, and prints the winner, which needs `Display`. Its bound states both.
@@ -585,11 +528,11 @@ The `Display` bound is a real requirement, not a formality. `announce([3, 9,
 because integers print through a builtin rule rather than through a `Display`
 implementation.
 
-That's a fair amount of code to make integers comparable, and it's an honest
-cost of Aura 0.11: the operator traits are a protocol the compiler recognizes,
-not a library of ready-made implementations for the builtin types. In practice
-you'll mostly write bounds like `Ord[T]` for your own domain types, where you
-have to say what "larger" means anyway.
+If a module declares its own trait named `Ord`, `Add`, or `From`, that
+declaration wins inside the module and the prelude's is out of the picture
+there. That keeps older code that declared these traits itself working, but
+the builtin types then have no implementations of your version until you
+write them.
 
 ## Limits worth knowing
 

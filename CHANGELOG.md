@@ -24,6 +24,16 @@ in this file.
   `U` from its body.
 - `counts[key] += 1` and the other compound assignments on a `dict[str, V]`
   or `dict[bytes, V]` index borrow the key instead of moving it.
+- A builtin prelude (ADR-0069) declares `Ord`, `Add`, and `From` for every
+  module and implements `Ord` and `Add` for the numeric types and `str`, and
+  `From` for the lossless numeric widenings, so `largest[T: Ord[T]]` works on
+  `int64` and `str` with no declarations. A module that declares its own
+  trait with one of these names keeps it.
+- `Result` has `is_ok()`, `is_err()`, `unwrap_or(default)`, `map(f)`, and
+  `map_err(f)`.
+- Fixed: a generic function that returns a type parameter from every arm of
+  a `match` failed to build natively with "unsupported value coercion from
+  `None`".
 - Documentation: *The Aura Programming Language*, a new book at `/book/`,
   replaces the Learn track and the `tutorials/` directory. Old `/learn/`
   links no longer resolve; start at `/book/`.

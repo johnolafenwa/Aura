@@ -1,0 +1,13 @@
+
+def parse(text: str) -> Result[int64, str]:
+    return parse_int64(text)
+
+def main():
+    r = parse("12")
+    print(r.is_ok())
+    print(parse("x").is_err())
+    print(parse("x").unwrap_or(-1))
+    print(parse("4").map(lambda n: n * 2))
+    print(parse("q").map_err(lambda e: len(e)))
+    name: Result[str, str] = Ok("ada")
+    print(name.map(lambda s: s.to_upper()).unwrap_or("none"))

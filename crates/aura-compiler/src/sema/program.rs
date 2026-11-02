@@ -474,6 +474,24 @@ pub struct FunctionSignature {
 pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Result<Program> {
     let mut module = module;
     let mut context = context;
+    // A prelude name is imported only into a module that needs it: a check
+    // that fails for want of one (an unknown `Ord`, `Add`, or `From`, or a
+    // `Result` method) is retried with that name imported from `prelude`.
+    loop {
+        let error = match check_with_context_unprefaced(module.clone(), context.clone()) {
+            Ok(program) => return Ok(program),
+            Err(error) => error,
+        };
+        let Some(name) = super::prelude::missing_name(&error, &module, &context) else {
+            return Err(error);
+        };
+        super::prelude::import_name(&mut module, &mut context, name)?;
+    }
+}
+
+fn check_with_context_unprefaced(module: Module, context: ModuleContext) -> Result<Program> {
+    let mut module = module;
+    let mut context = context;
     let decorated = super::decorators::expand(&mut module)?;
     let derived = super::json_derive::expand(&mut module, &mut context)?;
     super::iterator_loops::check_with_iterator_loops(module, context, |module, context| {

@@ -1,0 +1,8 @@
+from prelude_traits_across_modules_support.helpers import biggest, safe
+
+def main():
+    print(biggest(3, 8))
+    print(biggest("a", "b"))
+    print(safe(Result.Ok(4)))
+    e: Result[int64, str] = Result.Err("x")
+    print(e.is_err())

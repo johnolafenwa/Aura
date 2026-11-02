@@ -1,0 +1,44 @@
+copy class Money:
+    cents: int64
+
+impl Display for Money:
+    def display(self) -> str:
+        return f"${self.cents // 100}.{self.cents % 100:02}"
+
+impl Ord[Money] for Money:
+    def lt(self, rhs: Money) -> bool:
+        return self.cents < rhs.cents
+    def le(self, rhs: Money) -> bool:
+        return self.cents <= rhs.cents
+    def gt(self, rhs: Money) -> bool:
+        return self.cents > rhs.cents
+    def ge(self, rhs: Money) -> bool:
+        return self.cents >= rhs.cents
+
+def largest[T: Ord[T]](values: own list[T]) -> T | None:
+    mut rest = values
+    if rest.len() == 0:
+        return None
+    mut best = rest.pop()
+    while rest.len() > 0:
+        candidate = rest.pop()
+        if candidate > best:
+            best = candidate
+    return best
+
+def total[T: Add[T, T]](a: T, b: T) -> T:
+    return a + b
+
+def widen[T: From[int32]](value: int32) -> T:
+    return T.from(value)
+
+def main():
+    print(largest([3, 9, 4]))
+    print(largest(["pear", "apple", "zebra"]))
+    print(largest([Money(cents=1300), Money(cents=1700)]))
+    print(total(2, 5))
+    print(total("ab", "cd"))
+    wide: int64 = widen(7 as int32)
+    print(wide)
+    f: float64 = widen(7 as int32)
+    print(f)

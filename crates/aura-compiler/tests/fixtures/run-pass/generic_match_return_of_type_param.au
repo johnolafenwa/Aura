@@ -1,0 +1,12 @@
+def value_or[T, E](result: own Result[T, E], fallback: own T) -> T:
+    match own result:
+        case Result.Ok(value):
+            return value
+        case Result.Err(_):
+            return fallback
+
+def main():
+    good: Result[int64, str] = Result.Ok(5)
+    bad: Result[int64, str] = Result.Err("no")
+    print(value_or(good, 0))
+    print(value_or(bad, 9))
