@@ -485,8 +485,18 @@ impl Substitution<'_> {
             local.ty = self.ty(&local.ty);
         }
         out.return_type = self.ty(&out.return_type);
+        // The template's fall-off-the-end return was lowered for a type
+        // parameter, as `None`. The checker proves it unreachable for a
+        // non-`None` result, but the copy still has to type-check, so it
+        // returns the default the copy's own result type lowers to.
+        let generic_result = matches!(function.return_type, Type::TypeParam(_));
         for block in &mut out.blocks {
             self.block(block)?;
+            if generic_result && out.return_type != Type::Unit {
+                if let Terminator::Return(operand @ Operand::Unit) = &mut block.terminator {
+                    *operand = super::default_return_operand(&out.return_type);
+                }
+            }
         }
         Ok(out)
     }

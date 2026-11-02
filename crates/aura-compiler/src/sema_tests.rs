@@ -32366,3 +32366,20 @@ fn unnamed_callable_slots_admit_named_closures_and_reject_other_arity() {
         error.message
     );
 }
+
+#[test]
+fn prelude_names_are_imported_only_where_a_module_needs_them() {
+    crate::check_source(
+        "def largest[T: Ord[T]](a: own T, b: own T) -> T:\n    if a > b:\n        return a\n    return b\n\ndef total[T: Add[T, T]](a: T, b: T) -> T:\n    return a + b\n\ndef widen[T: From[int32]](value: int32) -> T:\n    return T.from(value)\n\ndef main():\n    print(largest(3, 9))\n    print(largest(\"a\", \"b\"))\n    print(total(2, 5))\n    wide: int64 = widen(7 as int32)\n    print(wide)\n    parsed = parse_int64(\"4\")\n    print(parsed.is_ok())\n    print(parse_int64(\"x\").unwrap_or(0))\n",
+    )
+    .expect("prelude traits and Result methods should check without imports");
+    // A module's own `Ord` wins over the prelude's.
+    crate::check_source(
+        "trait Ord[Rhs]:\n    def rank(self) -> int64\n\ndef main():\n    print(1)\n",
+    )
+    .expect("a module may declare its own Ord");
+    // A method the prelude does not provide still fails.
+    let error = crate::check_source("def main():\n    print(parse_int64(\"4\").unwrap())\n")
+        .expect_err("Result has no unwrap");
+    assert!(error.message.contains("`unwrap`"), "{}", error.message);
+}

@@ -296,6 +296,16 @@ cannot be represented or allocated traps with `AU4005`. Malformed data returns
 | `set.reserve` | `reserve(additional: int64) -> None` | Makes room for at least `len() + additional` values. |
 | `set[T].with_capacity` | `with_capacity(minimum: int64) -> set[T]` | Creates an empty set with at least the requested capacity. |
 
+### Result[T, E]
+
+| Name | Signature | Notes |
+| --- | --- | --- |
+| `Result.is_ok` | `is_ok() -> bool` | True for `Ok`. Reads through shared access. |
+| `Result.is_err` | `is_err() -> bool` | True for `Err`. Reads through shared access. |
+| `Result.unwrap_or` | `unwrap_or(own self, default: own T) -> T` | The `Ok` payload, or `default`. |
+| `Result.map` | `map[U](own self, f: def(T) -> U) -> Result[U, E]` | Applies `f` to an `Ok` payload. |
+| `Result.map_err` | `map_err[F](own self, f: def(E) -> F) -> Result[T, F]` | Applies `f` to an `Err` payload. |
+
 ## Concurrency
 
 [Concurrency](/manual/concurrency) covers structured concurrency.

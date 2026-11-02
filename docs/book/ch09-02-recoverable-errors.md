@@ -243,6 +243,41 @@ This `main` returns nothing, so a failed parse would have nowhere to go. At the
 top of the program there's no caller left to pass the error to, which is why
 `main` uses `match` and decides for itself.
 
+## Methods for the common cases
+
+Some decisions about a `Result` are so common that writing out the `match`
+every time gets old. `Result` has five methods for them:
+
+```aura
+def main():
+    port = parse_int64("9000")
+    print(port.is_ok())
+    print(parse_int64("nine").is_err())
+    print(parse_int64("nine").unwrap_or(8080))
+    print(parse_int64("21").map(lambda n: n * 2))
+    print(parse_int64("nine").map_err(lambda message: message.len()))
+```
+
+```console
+$ aura run src/main.au
+true
+true
+8080
+Result.Ok(42)
+Result.Err(29)
+```
+
+`is_ok` and `is_err` answer the yes-or-no question and leave the `Result`
+alone. `unwrap_or` gives back the `Ok` value, or the default you pass when the
+`Result` is an `Err`. `map` changes the `Ok` value with a function and passes
+an `Err` through untouched; `map_err` does the opposite. The last three
+consume the `Result`, because its value moves out.
+
+There's no `unwrap` that stops the program on an `Err`. If an error really
+should end the program, write the `match` and trap in the `Err` arm with an
+`assert`, as in [the previous section](/book/ch09-01-traps). The
+place where the program can stop is then visible in the code.
+
 ## An error type of our own
 
 So far every error has been a `str`. Strings are fine for a quick program, but
@@ -338,13 +373,9 @@ helper compiles.
 The second way is to teach Aura how to turn a `str` into a `ConfigError`, so
 `try` can do the conversion for us. When the error types differ, `try` looks
 for an implementation of a trait named `From` whose source is the inner error
-type. Aura doesn't predeclare `From`, so a module that wants this conversion
-declares the trait itself and then implements it:
+type. `From` is in the prelude, so all we write is the implementation:
 
 ```aura
-trait From[Source]:
-    def from(value: own Source) -> Self
-
 enum ConfigError:
     MissingEquals(int64)
     BadNumber(int64, str)

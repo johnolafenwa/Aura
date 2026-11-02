@@ -1,0 +1,15 @@
+trait Ord[Rhs]:
+    def rank(self) -> int64
+
+copy class Card:
+    value: int64
+
+impl Ord[Card] for Card:
+    def rank(self) -> int64:
+        return self.value
+
+def best[T: Ord[T]](a: T) -> int64:
+    return a.rank()
+
+def main():
+    print(best(Card(value=4)))

@@ -15,11 +15,13 @@ use std::collections::BTreeMap;
 
 const JSON_SOURCE: &str = include_str!("../std/json.au");
 const ITER_SOURCE: &str = include_str!("../std/iter.au");
+const PRELUDE_SOURCE: &str = include_str!("../std/prelude.au");
 
 fn module_source(name: &str) -> Option<&'static str> {
     match name {
         "json" => Some(JSON_SOURCE),
         "iter" => Some(ITER_SOURCE),
+        "prelude" => Some(PRELUDE_SOURCE),
         _ => None,
     }
 }

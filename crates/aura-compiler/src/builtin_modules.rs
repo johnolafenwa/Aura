@@ -2320,6 +2320,9 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
         "json" => Some(json_namespace()),
         // `Step` and `Iterator` are Aura source in `std/iter.au`.
         "iter" => Some(function_only_namespace("iter", Vec::new())),
+        // The prelude's traits and implementations are Aura source in
+        // `std/prelude.au`.
+        "prelude" => Some(function_only_namespace("prelude", Vec::new())),
         "toml" => Some(serialization_namespace(name)),
         "log" | "metrics" | "trace" => Some(telemetry_namespace(name)),
         _ => None,
@@ -2452,6 +2455,7 @@ pub(crate) fn is_builtin_root_module(name: &str) -> bool {
             | "bytes"
             | "json"
             | "iter"
+            | "prelude"
             | "toml"
             | "log"
             | "metrics"
@@ -2469,7 +2473,7 @@ pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespac
 pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
     [
         "io", "fs", "net", "process", "random", "control", "sys", "path", "math", "bytes", "json",
-        "iter", "toml", "log", "metrics", "trace",
+        "iter", "prelude", "toml", "log", "metrics", "trace",
     ]
     .into_iter()
     .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))
