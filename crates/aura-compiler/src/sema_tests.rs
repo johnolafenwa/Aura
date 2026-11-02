@@ -32192,3 +32192,52 @@ fn imported_generic_unit_variants_take_expected_type_arguments() {
     ))
     .expect("the expected type supplies `T`");
 }
+
+#[test]
+fn design_batch_additions_check_and_reject_through_the_library() {
+    // enumerate's start, in a loop and in a comprehension, must be an index
+    // integer.
+    crate::check_source(
+        "def main():\n    for n, name in enumerate([\"a\"], start=1):\n        print(n)\n    pairs = [(n, x) for n, x in enumerate([5], 10)]\n    print(pairs)\n",
+    )
+    .expect("an integer enumerate start should check");
+    let error = crate::check_source(
+        "def main():\n    for n, name in enumerate([\"a\"], start=\"1\"):\n        print(n)\n",
+    )
+    .expect_err("a str enumerate start should be rejected");
+    assert_eq!(error.code, "AU2002");
+    assert!(error.message.contains("`enumerate` start"));
+    let error = crate::check_source(
+        "def main():\n    pairs = [(n, x) for n, x in enumerate([5], start=\"1\")]\n    print(pairs)\n",
+    )
+    .expect_err("a str comprehension enumerate start should be rejected");
+    assert!(error.message.contains("`enumerate` start"));
+
+    // range takes one to three arguments.
+    crate::check_source("def main():\n    for i in range(10, 0, -2):\n        print(i)\n")
+        .expect("a stepped range should check");
+    let error = crate::check_source("def main():\n    print(range(1, 2, 3, 4))\n")
+        .expect_err("a fourth range argument should be rejected");
+    assert!(
+        error.message.contains("1 to 3 arguments"),
+        "{}",
+        error.message
+    );
+
+    // eprint renders like print.
+    crate::check_source("def main():\n    eprint(f\"{1} {[2]}\")\n    eprint(3)\n")
+        .expect("eprint should check");
+
+    // A named slot still requires the same parameter name.
+    let error = crate::check_source(
+        "def is_slow(ms: int64) -> bool:\n    return ms > 100\n\ndef main():\n    f: def(limit: int64) -> bool = is_slow\n    print(f(limit=150))\n",
+    )
+    .expect_err("a renamed parameter should not fill a named slot");
+    assert_eq!(error.code, "AU2015");
+
+    // Compound assignment on a str-keyed dict index borrows the key.
+    crate::check_source(
+        "def main():\n    mut counts: dict[str, int64] = {\"rain\": 1}\n    word = \"rain\"\n    counts[word] *= 10\n    print(word)\n    print(counts)\n",
+    )
+    .expect("a compound index assignment should borrow a str key");
+}

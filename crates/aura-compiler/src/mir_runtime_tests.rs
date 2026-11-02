@@ -13398,6 +13398,24 @@ fn mir_runtime_range_and_type_substitution_helpers_cover_remaining_paths() {
     assert!(too_many_range_args
         .message
         .contains("takes at most three arguments"));
+    let huge_step_range = build_range(vec![
+        EvaluatedMirArg {
+            ty: None,
+            name: None,
+            value: Value::Int(IntegerValue::from_signed(3)),
+            writeback_place: None,
+        },
+        EvaluatedMirArg {
+            ty: None,
+            name: Some("step".to_string()),
+            value: Value::Int(IntegerValue::from_literal(u128::MAX)),
+            writeback_place: None,
+        },
+    ])
+    .expect_err("range should reject a step outside signed index space");
+    assert!(huge_step_range
+        .message
+        .contains("step must fit in signed index space"));
     let zero_step_range = build_range(vec![
         EvaluatedMirArg {
             ty: None,

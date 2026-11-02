@@ -20836,6 +20836,8 @@ fn native_runtime_boxing_range_and_condition_helpers_cover_remaining_valid_paths
         expect_string(super::aura_direct_stringify_value(down)),
         "range(2, 2, -3)"
     );
+    // `eprint` renders its text and writes the line to standard error.
+    super::aura_direct_eprint_str(string_value("eprint from the runtime test"));
 
     assert_eq!(super::aura_direct_unbox_i64(int_value(9)), 9);
     assert_eq!(super::aura_direct_unbox_f64(float_value(1.5)), 1.5);
