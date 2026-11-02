@@ -250,6 +250,33 @@ fn eprint_writes_to_stderr_on_both_backends() {
 }
 
 #[test]
+fn a_failing_child_cancels_its_siblings_on_both_backends() {
+    let root = repo_root();
+    let fixture =
+        "crates/aura-compiler/tests/fixtures/run-fail/task_group_failure_cancels_siblings.au";
+    let cache = TempDir::new("aura-sibling-cancel-cache");
+    for backend in ["mir", "direct"] {
+        let output = Command::new(aura_bin())
+            .current_dir(&root)
+            .env("AURA_CACHE_DIR", &cache.path)
+            .args(["run", "--backend", backend, fixture])
+            .output()
+            .unwrap_or_else(|error| panic!("forced {backend} command should start: {error}"));
+        assert!(!output.status.success(), "{backend} run should fail");
+        assert_eq!(
+            normalize(&output.stdout),
+            "sibling cancelled",
+            "{backend} stdout"
+        );
+        let stderr = normalize(&output.stderr);
+        assert!(
+            stderr.contains("error[AU4001]: worker broke"),
+            "{backend} stderr:\n{stderr}"
+        );
+    }
+}
+
+#[test]
 #[ignore = "full forced-backend fixture matrix; invoked by npm run test:backend-parity"]
 fn forced_mir_and_direct_backends_match_every_runtime_fixture() {
     // Phase 4 landed the `run` backend selector, so both sides of the matrix

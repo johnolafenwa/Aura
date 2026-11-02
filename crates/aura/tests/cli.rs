@@ -13823,7 +13823,7 @@ def main() -> int32:
 }
 
 #[test]
-fn queue_iteration_waits_for_standalone_task_group_producers() {
+fn queue_iteration_waits_for_task_group_producers_inside_the_block() {
     let source = r#"
 def producer(jobs: Queue[int32]) -> None:
     sleep(1ms)
@@ -13832,16 +13832,16 @@ def producer(jobs: Queue[int32]) -> None:
 
 def main() -> int32:
     jobs: Queue[int32] = Queue[int32]()
-    group = TaskGroup()
-    group.start(producer, jobs)
-    for job in jobs:
-        print(job)
+    with group = TaskGroup():
+        group.start(producer, jobs)
+        for job in jobs:
+            print(job)
     print("done")
     return 0
 "#;
 
     assert_run_and_direct_source_stdout_with_timeout(
-        "aura-queue-iteration-standalone-task-group",
+        "aura-queue-iteration-task-group-block",
         source,
         std::time::Duration::from_secs(30),
         "7\ndone\n",

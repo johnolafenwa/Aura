@@ -1,0 +1,9 @@
+def work():
+    print("child finished")
+
+def launch():
+    group = TaskGroup()
+    group.start_soon(work)
+
+def main():
+    launch()

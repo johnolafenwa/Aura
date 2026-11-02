@@ -16674,6 +16674,8 @@ fn checker_builtin_function_success_surface_infers_expected_types() {
             None,
         ),
     ] {
+        // A `TaskGroup()` call is legal only as the `with` item being checked.
+        checker.with_task_group_call.set(Some(span));
         assert_eq!(
             checker
                 .type_of_call(&callee, &args, span, &mut locals, expected_hint.as_ref())

@@ -1,0 +1,19 @@
+def failing():
+    sleep(10ms)
+    assert false, "worker broke"
+
+def patient():
+    mut steps = 0
+    while not cancelled() and steps < 400:
+        sleep(5ms)
+        steps += 1
+    if cancelled():
+        print("sibling cancelled")
+    else:
+        print("sibling ran to the end")
+
+def main():
+    with group = TaskGroup():
+        group.start_soon(patient)
+        group.start_soon(failing)
+    print("unreachable")

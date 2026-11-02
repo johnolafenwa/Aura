@@ -90,7 +90,7 @@ into an unlimited wait.
 
 ## TaskGroup
 
-Construct a group with `TaskGroup()` and normally bind it with `with`:
+A group is created only as a `with` item. `TaskGroup()` anywhere else is rejected with `AU2019`, so leaving the block always waits for every child, and no child outlives the block that started it. A helper that starts tasks takes the group as a `mut TaskGroup` parameter:
 
 ```aura fragment
 with group = TaskGroup():
@@ -99,12 +99,12 @@ with group = TaskGroup():
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| constructor | `TaskGroup()` | Creates a task group resource. |
+| constructor | `TaskGroup()` | Creates a task group resource. Valid only as a `with` item (`AU2019`). |
 | `start` | `start(function, own ...) -> Task[T]` | Requires every capture and the result to be `Transfer`. Starts the specialized target and returns its handle. |
 | `start_soon` | `start_soon(function, own ...) -> None` | Requires every capture and the result to be `Transfer`. Starts the specialized target without returning a handle. |
 | `start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` | Same `Transfer` rules, with an explicit guarded stack-capacity request. Returns the handle. |
 | `start_soon_with_stack` | `start_soon_with_stack(bytes: int64, function, own ...) -> None` | Same `Transfer` rules, with an explicit guarded stack-capacity request. Returns no handle. |
-| `cancel` | `cancel() -> None` | Signals cancellation to child tasks. |
+| `cancel` | `cancel() -> None` | Signals cancellation to child tasks. A child failure does the same. |
 
 `Transfer` is the compiler-derived property of a value that may cross a task
 or Queue boundary. [Typing Rules](#typing-rules) lists which types have it.
@@ -223,6 +223,10 @@ live wait graph has no reachable waker.
 A queue wait therefore stays joinable while another live task can send to,
 receive from, or close that queue. The task performing the join does not count
 as a waker for its own children.
+
+The first child failure cancels the group, as `cancel()` would, so its
+siblings observe cancellation at their next wait or `cancelled()` check. This
+happens whether or not the parent later reads the failure.
 
 A failure already observed through its `Task` result is not raised a second
 time. An unread child failure aborts the group scope and wakes dependent queue

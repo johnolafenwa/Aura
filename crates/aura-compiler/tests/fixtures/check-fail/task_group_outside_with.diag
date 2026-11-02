@@ -1,0 +1,6 @@
+error[AU2019]: a `TaskGroup` must be created as a `with` item
+ --> crates/aura-compiler/tests/fixtures/check-fail/task_group_outside_with.au:5:13
+  |
+5 |     group = TaskGroup()
+  |             ^
+  = help: write `with group = TaskGroup():` so the block waits for every task the group starts
