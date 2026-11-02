@@ -32398,3 +32398,16 @@ fn an_unused_result_is_an_error_unless_discarded_with_underscore() {
     )
     .expect("`_ =` may repeat in a function");
 }
+
+#[test]
+fn a_task_group_is_created_only_as_a_with_item() {
+    let error = crate::check_source(
+        "def work():\n    print(1)\n\ndef main():\n    group = TaskGroup()\n    group.start_soon(work)\n",
+    )
+    .expect_err("a bare TaskGroup should be rejected");
+    assert_eq!(error.code, "AU2019");
+    crate::check_source(
+        "def work():\n    print(1)\n\ndef main():\n    with group = TaskGroup():\n        group.start_soon(work)\n    with TaskGroup() as other:\n        other.start_soon(work)\n",
+    )
+    .expect("a TaskGroup as a with item should check");
+}
