@@ -32241,3 +32241,60 @@ fn design_batch_additions_check_and_reject_through_the_library() {
     )
     .expect("a compound index assignment should borrow a str key");
 }
+
+#[test]
+fn named_callable_slots_keep_every_contract_diagnostic() {
+    // Unnamed slots admit closures, packed callables, and functions whatever
+    // their parameter names.
+    crate::check_source(
+        "type Named = Callable[def(value: int64) -> int64]\ntype Bare = Callable[def(int64) -> int64]\n\ndef inc(value: int64) -> int64:\n    return value + 1\n\ndef main():\n    n = 3\n    g: def(value: int64) -> int64 = lambda value: value + n\n    f: def(int64) -> int64 = g\n    print(f(1))\n    a = Named(inc)\n    b: Bare = a\n    print(b(4))\n    h: def(int64) -> int64 = inc\n    print(h(2))\n",
+    )
+    .expect("unnamed slots admit any parameter name");
+    let cases: [(&str, &str); 9] = [
+        (
+            "def inc(value: int64) -> int64:\n    return value\n\ndef main():\n    k: def(int64, int64) -> int64 = inc\n",
+            "expected 2 parameters, found 1",
+        ),
+        (
+            "type Unary = def(value: int64) -> int64\ndef increment(value: int64 = 1) -> int64:\n    return value + 1\ndef main():\n    step: Unary = increment\n    print(step(4))\n",
+            "use the explicit adapter `Unary(increment)`",
+        ),
+        (
+            "class Counter:\n    value: int64\n    def scaled(self, factor: int64 = 2) -> int64:\n        return self.value * factor\ndef main():\n    counter = Counter(value=2)\n    selected: def(factor: int64) -> int64 = counter.scaled\n    print(selected(3))\n",
+            "declare `type Adapter = Callable[def(factor: int64) -> int64]`",
+        ),
+        (
+            "def first(value: int32 = 1) -> int32:\n    return value\ndef second(value: int32 = 2) -> int32:\n    return value\ndef main():\n    selected: def(value: int32) -> int32 = first if true else second\n    print(selected(3))\n",
+            "default availability",
+        ),
+        (
+            "type Named = Callable[def(value: int64 = ...) -> int64]\ntype Plain = Callable[def(value: int64) -> int64]\n\ndef inc(value: int64 = 1) -> int64:\n    return value + 1\n\ndef main():\n    a = Named(inc)\n    b: Plain = a\n    print(b(4))\n",
+            "use the explicit adapter `Plain(a)`",
+        ),
+        (
+            "def main():\n    n = 3\n    g: def(value: int64) -> int64 = lambda value: value + n\n    f: def(other: int64) -> int64 = g\n    print(f(1))\n",
+            "would be renamed to `other`",
+        ),
+        (
+            "def main():\n    f: def(value: int64) -> int64 = lambda other: other\n",
+            "must be named `value`",
+        ),
+        (
+            "def main():\n    f: def(value: int64 = ...) -> int64 = lambda value: value\n",
+            "a lambda cannot promise the default",
+        ),
+        (
+            "def main():\n    f: def(*, value: int64) -> int64 = lambda value: value\n",
+            "keyword-only boundary",
+        ),
+    ];
+    for (source, expected) in cases {
+        let error = crate::check_source(source).expect_err(source);
+        assert_eq!(error.code, "AU2015", "{source}");
+        assert!(
+            error.message.contains(expected),
+            "{source}\n{}",
+            error.message
+        );
+    }
+}
