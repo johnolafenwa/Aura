@@ -32310,3 +32310,59 @@ fn named_callable_slots_keep_every_contract_diagnostic() {
         );
     }
 }
+
+#[test]
+fn unnamed_callable_slots_admit_named_closures_and_reject_other_arity() {
+    let slot = |name: &str| FunctionParamContract {
+        keyword_only: false,
+        name: name.to_string(),
+        ty: Type::named("int64"),
+        passing: ReceiverKind::Borrow,
+        has_default: false,
+    };
+    let closure = |params: Vec<FunctionParamContract>| Type::Closure {
+        params: Box::new(params),
+        return_type: Box::new(Type::named("int64")),
+        captures: Box::new(Vec::new()),
+        call_kind: ClosureCallKind::Repeatable,
+    };
+    // An unnamed closure slot takes a closure whatever its parameter name.
+    callables::check_callable_positions(&closure(vec![slot("")]), &closure(vec![slot("value")]))
+        .expect("an unnamed closure slot admits a named closure");
+    // A named slot still keeps the name in the contract.
+    callables::check_callable_positions(
+        &closure(vec![slot("other")]),
+        &closure(vec![slot("value")]),
+    )
+    .expect_err("a named closure slot keeps the parameter name");
+    // A different arity is never admitted.
+    callables::check_callable_positions(
+        &closure(vec![slot("")]),
+        &closure(vec![slot("a"), slot("b")]),
+    )
+    .expect_err("a two-parameter closure does not fit a one-parameter slot");
+    let function = Type::Function {
+        params: vec![slot("")],
+        return_type: Box::new(Type::named("int64")),
+    };
+    callables::check_callable_positions(
+        &function,
+        &Type::Function {
+            params: vec![slot("a"), slot("b")],
+            return_type: Box::new(Type::named("int64")),
+        },
+    )
+    .expect_err("a two-parameter function does not fit a one-parameter slot");
+
+    // A packed callable keeps its arity, too.
+    let error = crate::check_source(
+        "type Pair = Callable[def(a: int64, b: int64) -> int64]\ntype One = Callable[def(int64) -> int64]\ndef add(a: int64, b: int64) -> int64:\n    return a + b\ndef main():\n    p = Pair(add)\n    o: One = p\n",
+    )
+    .expect_err("a two-parameter packed callable does not fit a one-parameter slot");
+    assert_eq!(error.code, "AU2015");
+    assert!(
+        error.message.contains("expected 1 parameter, found 2"),
+        "{}",
+        error.message
+    );
+}
