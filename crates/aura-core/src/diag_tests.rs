@@ -298,6 +298,13 @@ fn runtime_frames_capture_once_clone_and_render_without_polluting_notes() {
     assert_eq!(diagnostic.clone(), diagnostic);
 
     let structured = diagnostic.structured("/fallback.au");
+    assert_eq!(
+        structured
+            .primary_span
+            .as_ref()
+            .map(|span| span.path.as_str()),
+        Some("/workspace/worker.au")
+    );
     assert_eq!(structured.call_frames[0].span.path, "/workspace/worker.au");
     assert_eq!(
         structured.task_ancestry[0].spawn_span.path,
@@ -331,8 +338,12 @@ fn runtime_frames_capture_once_clone_and_render_without_polluting_notes() {
         .find("help: check the collection length")
         .expect("help should render");
     let edit = rendered
-        .find("fix: replace /fallback.au:3:18-3:19 with `0`")
-        .expect("edit should render");
+        .find("fix: replace /workspace/worker.au:3:18-3:19 with `0`")
+        .expect("edit should render against the trapping frame's file");
+    assert!(
+        rendered.contains(" --> /workspace/worker.au:3:18"),
+        "{rendered}"
+    );
     assert!(
         semantic_note < call_chain
             && call_chain < task_entry

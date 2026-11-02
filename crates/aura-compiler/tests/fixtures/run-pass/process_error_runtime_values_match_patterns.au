@@ -1,0 +1,26 @@
+import process
+
+def name_of(error: process.Error) -> str:
+    match error:
+        case process.Error.NoCommand:
+            return "no command"
+        case process.Error.Spawn(message):
+            return "spawn failed"
+        case _:
+            return "other"
+
+def main() -> int32:
+    empty: list[str] = []
+    match process.run(empty):
+        case Result.Ok(_):
+            return 1
+        case Result.Err(error):
+            print(error)
+            print(error == process.Error.NoCommand)
+            print(name_of(error))
+    match process.run(["/nonexistent/aura-missing-program"]):
+        case Result.Ok(_):
+            return 1
+        case Result.Err(error):
+            print(name_of(error))
+    return 0

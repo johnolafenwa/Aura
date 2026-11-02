@@ -1,5 +1,6 @@
-error[AU2999]: files cannot mix top-level statements, including declarations, with an explicit `main` function
+error[AU2999]: files cannot mix top-level statements with an explicit `main` function
  --> crates/aura-compiler/tests/fixtures/check-fail/assert_top_level_with_main_rejected.au:3:1
   |
 3 | def main():
   | ^
+  = help: imports, constants, and declarations can sit beside `main`; move the top-level statements into `main`

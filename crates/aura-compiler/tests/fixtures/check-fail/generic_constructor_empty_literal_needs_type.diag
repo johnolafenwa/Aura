@@ -1,0 +1,6 @@
+error[AU2002]: cannot infer type parameter `T` for class constructor `Stack` from an empty literal
+ --> crates/aura-compiler/tests/fixtures/check-fail/generic_constructor_empty_literal_needs_type.au:5:21
+  |
+5 |     s = Stack(items=[])
+  |                     ^
+  = help: annotate the binding, as in `value: Stack[...] = ...`, or write the type arguments on the constructor

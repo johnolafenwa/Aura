@@ -9650,7 +9650,7 @@ fn validate_function_loan_flow(
                         let declared_type = context.place_type(function, place)?;
                         let enum_type = match declared_type {
                             Some(Type::Named(name, args))
-                                if name == enum_name
+                                if mir_enum_type_has_runtime_name(&name, enum_name)
                                     && (context.enums.contains_key(enum_name)
                                         || !context.classes.contains_key(enum_name)) =>
                             {
@@ -13417,11 +13417,12 @@ impl<'a> Lowerer<'a> {
         &mut self,
         ending: &BTreeSet<String>,
         body_endings: &BTreeSet<String>,
-    ) -> (BTreeMap<String, String>, BTreeSet<String>) {
-        let saved = (
-            self.view_sources.clone(),
-            self.returned_view_descriptors.clone(),
-        );
+    ) -> BranchLoanState {
+        let saved = BranchLoanState {
+            view_sources: self.view_sources.clone(),
+            returned_view_descriptors: self.returned_view_descriptors.clone(),
+            loan_scopes: self.loan_scopes.clone(),
+        };
         for loan in ending
             .iter()
             .rev()
@@ -13434,8 +13435,13 @@ impl<'a> Lowerer<'a> {
         saved
     }
 
-    fn restore_branch_loan_state(&mut self, saved: (BTreeMap<String, String>, BTreeSet<String>)) {
-        (self.view_sources, self.returned_view_descriptors) = saved;
+    /// Restores the loans live before a branch. A statement nested in the
+    /// branch may end a loan on its own paths; a sibling branch still holds
+    /// it and must end it on its own exits.
+    fn restore_branch_loan_state(&mut self, saved: BranchLoanState) {
+        self.view_sources = saved.view_sources;
+        self.returned_view_descriptors = saved.returned_view_descriptors;
+        self.loan_scopes = saved.loan_scopes;
     }
 
     fn is_collection_expr(&self, expr: &Expr) -> bool {
@@ -20075,8 +20081,16 @@ impl<'a> Lowerer<'a> {
                     });
                     return Operand::Place(temp);
                 }
-                let left_ty = self.infer_expr_type(left);
-                let right_ty = self.infer_expr_type(right);
+                // A numeric literal against an `Array[dtype]` operand takes the
+                // array's dtype, as the checker typed it (`arr + 5`).
+                let array_dtype = |ty: Option<Type>| match ty {
+                    Some(Type::Named(name, mut args)) if name == "Array" && args.len() == 1 => {
+                        args.pop()
+                    }
+                    other => other,
+                };
+                let left_ty = array_dtype(self.infer_expr_type(left));
+                let right_ty = array_dtype(self.infer_expr_type(right));
                 let shared_equality_expected = matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
                     .then(|| self.infer_equality_hint(left, right))
                     .flatten();
@@ -26657,60 +26671,66 @@ impl<'a> Lowerer<'a> {
                                 explicit_type_args,
                             );
                         }
-                        self.resolve_function_info(name).map(|function| {
-                            if let Some(type_args) = explicit_type_args {
-                                let substitutions = function
-                                    .decl
-                                    .type_params
-                                    .iter()
-                                    .cloned()
-                                    .zip(
-                                        type_args
-                                            .iter()
-                                            .map(|ty| self.lower_type_ref_with_provenance(ty)),
+                        self.resolve_function_info(name)
+                            .map(|function| {
+                                if let Some(type_args) = explicit_type_args {
+                                    let substitutions = function
+                                        .decl
+                                        .type_params
+                                        .iter()
+                                        .cloned()
+                                        .zip(
+                                            type_args
+                                                .iter()
+                                                .map(|ty| self.lower_type_ref_with_provenance(ty)),
+                                        )
+                                        .collect();
+                                    substitute_type(&function.signature.return_type, &substitutions)
+                                } else {
+                                    let ordered_args = bind_call_arguments(
+                                        name,
+                                        &callable_params_from_decl(&function.decl.params),
+                                        args,
+                                        callee.span,
+                                        CallConvention::PositionalOrNamed,
                                     )
-                                    .collect();
-                                substitute_type(&function.signature.return_type, &substitutions)
-                            } else {
-                                let ordered_args = bind_call_arguments(
-                                    name,
-                                    &callable_params_from_decl(&function.decl.params),
-                                    args,
-                                    callee.span,
-                                    CallConvention::PositionalOrNamed,
-                                )
-                                .ok();
-                                let type_params = function
-                                    .decl
-                                    .type_params
-                                    .iter()
-                                    .cloned()
-                                    .collect::<BTreeSet<_>>();
-                                let mut substitutions = std::collections::HashMap::new();
-                                if let Some(ordered_args) = ordered_args {
-                                    for (bound_arg, expected) in ordered_args
-                                        .into_iter()
-                                        .zip(function.signature.params.iter())
-                                    {
-                                        let Some(argument) = bound_arg else {
-                                            continue;
-                                        };
-                                        let Some(actual_ty) = self.infer_expr_type(&argument.value)
-                                        else {
-                                            continue;
-                                        };
-                                        let actual_ty = inference_shape(actual_ty, expected);
-                                        let _ = crate::sema::type_pattern_matches(
-                                            expected,
-                                            &actual_ty,
-                                            &type_params,
-                                            &mut substitutions,
-                                        );
+                                    .ok();
+                                    let type_params = function
+                                        .decl
+                                        .type_params
+                                        .iter()
+                                        .cloned()
+                                        .collect::<BTreeSet<_>>();
+                                    let mut substitutions = std::collections::HashMap::new();
+                                    if let Some(ordered_args) = ordered_args {
+                                        for (bound_arg, expected) in ordered_args
+                                            .into_iter()
+                                            .zip(function.signature.params.iter())
+                                        {
+                                            let Some(argument) = bound_arg else {
+                                                continue;
+                                            };
+                                            let Some(actual_ty) =
+                                                self.infer_expr_type(&argument.value)
+                                            else {
+                                                continue;
+                                            };
+                                            let actual_ty = inference_shape(actual_ty, expected);
+                                            let _ = crate::sema::type_pattern_matches(
+                                                expected,
+                                                &actual_ty,
+                                                &type_params,
+                                                &mut substitutions,
+                                            );
+                                        }
                                     }
+                                    substitute_type(&function.signature.return_type, &substitutions)
                                 }
-                                substitute_type(&function.signature.return_type, &substitutions)
-                            }
-                        })
+                            })
+                            .or_else(|| {
+                                self.resolve_extern_function_info(name)
+                                    .map(|function| function.signature.return_type.clone())
+                            })
                     }
                     ExprKind::Member { object, field } => {
                         let receiver_type = match &object.kind {
@@ -27829,7 +27849,11 @@ impl<'a> Lowerer<'a> {
 
     fn is_non_owning_place_expr(&self, expr: &Expr) -> bool {
         match &expr.kind {
-            ExprKind::Name(name) => self.non_owning_roots.contains(name),
+            // A module constant is shared storage: a local bound to it
+            // shares the value, as a local bound to a borrowed parameter does.
+            ExprKind::Name(name) => {
+                self.non_owning_roots.contains(name) || self.resolve_constant_info(name).is_some()
+            }
             ExprKind::Group(inner) => self.is_non_owning_place_expr(inner),
             ExprKind::Member { object, .. } => self.is_non_owning_place_expr(object),
             ExprKind::Index { object, .. } => self.is_non_owning_place_expr(object),
@@ -28456,6 +28480,35 @@ fn is_builtin_module_name(module_name: &str) -> bool {
         .map(str::to_string)
         .collect::<Vec<_>>();
     crate::builtin_modules::builtin_module_namespace(&module_path).is_some()
+}
+
+/// The lowering's view of the loans live at the start of a branch.
+struct BranchLoanState {
+    view_sources: BTreeMap<String, String>,
+    returned_view_descriptors: BTreeSet<String>,
+    loan_scopes: Vec<Vec<String>>,
+}
+
+/// Whether a match arm's runtime enum name names the declared enum type.
+/// Host enums of builtin modules, such as `process.ExitStatus`, keep their
+/// bare runtime names (`ExitStatus`) in match arms; see
+/// `mir_runtime_enum_name`.
+fn mir_enum_type_has_runtime_name(declared: &str, runtime: &str) -> bool {
+    if declared == runtime {
+        return true;
+    }
+    let Some((module_path, item_name)) = declared.rsplit_once('.') else {
+        return false;
+    };
+    if item_name != runtime {
+        return false;
+    }
+    let module_path = module_path
+        .split('.')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    crate::builtin_modules::builtin_module_namespace(&module_path)
+        .is_some_and(|namespace| namespace.enums.contains_key(item_name))
 }
 
 fn mir_runtime_enum_name(program: &Program, enum_info: &crate::sema::EnumInfo) -> String {

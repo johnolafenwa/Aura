@@ -1651,6 +1651,21 @@ impl Parser {
     }
 
     fn parse_stmt(&mut self) -> Result<Stmt> {
+        if let TokenKind::Identifier(keyword) = self.current_kind() {
+            if matches!(keyword.as_str(), "const" | "let" | "var")
+                && matches!(self.peek_kind(1), Some(TokenKind::Identifier(_)))
+                && matches!(self.peek_kind(2), Some(TokenKind::Equal | TokenKind::Colon))
+            {
+                return Err(Diagnostic::coded_at(
+                    "AU1101",
+                    self.current_span(),
+                    format!("Aura has no `{keyword}` keyword"),
+                )
+                .with_help(
+                    "write the binding as `name = value`: it is immutable unless declared `mut name = value`, and a binding above the first top-level statement is a module constant",
+                ));
+            }
+        }
         self.enter_recursion("statement")?;
         let result = self.parse_stmt_inner();
         self.exit_recursion();

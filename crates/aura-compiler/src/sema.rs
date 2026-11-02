@@ -1406,12 +1406,22 @@ impl<'a> FunctionChecker<'a> {
             );
         }
         match self.rng_clone_safety(ty) {
-            RngCloneSafety::Safe if container == "dict" => format!(
-                "cannot implicitly copy `{ty}` out of a dict index; use `view value = table[key]` for shared access, `table[key].clone()` for an explicit cloned owner, or `remove(key)` to transfer ownership"
-            ),
-            RngCloneSafety::Safe => format!(
-                "cannot implicitly copy `{ty}` out of a list index; use `view value = items[index]` for shared access, `items[index].clone()` for an explicit cloned owner, or `pop(index)` or `set(index, value)` to transfer ownership"
-            ),
+            RngCloneSafety::Safe if container == "dict" => match self.explicit_copy_method(ty) {
+                Some(method) => format!(
+                    "cannot implicitly copy `{ty}` out of a dict index; use `view value = table[key]` for shared access, `table[key].{method}()` for an explicit copy, or `remove(key)` to transfer ownership"
+                ),
+                None => format!(
+                    "cannot implicitly copy `{ty}` out of a dict index; use `view value = table[key]` for shared access, or `remove(key)` to transfer ownership"
+                ),
+            },
+            RngCloneSafety::Safe => match self.explicit_copy_method(ty) {
+                Some(method) => format!(
+                    "cannot implicitly copy `{ty}` out of a list index; use `view value = items[index]` for shared access, `items[index].{method}()` for an explicit copy, or `pop(index)` or `set(index, value)` to transfer ownership"
+                ),
+                None => format!(
+                    "cannot implicitly copy `{ty}` out of a list index; use `view value = items[index]` for shared access, or `pop(index)` or `set(index, value)` to transfer ownership"
+                ),
+            },
             RngCloneSafety::ContainsRng => {
                 let reason = Self::non_cloneable_rng_reason(ty);
                 format!(
@@ -4919,6 +4929,17 @@ impl<'a> FunctionChecker<'a> {
                             self.apply_narrowing(&when_false, &mut baseline_locals);
                         }
                         self.merge_control_flow_moves(locals, &[&baseline_locals, &body_locals]);
+                    }
+                    // `while true:` with no `break` of its own never reaches
+                    // the next statement: it only leaves by returning or
+                    // trapping. As the last statement it ends the block the
+                    // way a `return` does, so no dead `return` is needed
+                    // after it.
+                    if stmt_index + 1 == body.len()
+                        && self.const_bool_value(&while_stmt.condition) == Some(true)
+                        && !block_contains_break(&while_stmt.body)
+                    {
+                        flow = BlockFlow::AlwaysReturns;
                     }
                 }
                 Stmt::Break(break_stmt) => {
@@ -8999,6 +9020,24 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 
+    /// The method that makes an independent owned copy of a value:
+    /// collections spell it `copy()`, strings and other cloneable builtins
+    /// `clone()`. User classes have neither.
+    fn explicit_copy_method(&self, ty: &Type) -> Option<&'static str> {
+        match ty {
+            Type::Named(name, _) if matches!(name.as_str(), "list" | "dict" | "set") => {
+                Some("copy")
+            }
+            Type::Named(name, _)
+                if self.resolve_class_info(name).is_some()
+                    || self.resolve_enum_info(name).is_some() =>
+            {
+                None
+            }
+            _ => Some("clone"),
+        }
+    }
+
     fn type_of_binary(
         &self,
         span: crate::diag::Span,
@@ -9707,6 +9746,30 @@ impl<'a> FunctionChecker<'a> {
             }
 
             let hinted_field_ty = substitute_type(&field_info.ty, &substitutions);
+            // An empty literal gives no element type, so a class parameter it
+            // stands for would stay unresolved and reach the runtime.
+            let empty_literal = matches!(
+                &argument.value.kind,
+                ExprKind::List(elements) | ExprKind::Set(elements) if elements.is_empty()
+            ) || matches!(&argument.value.kind, ExprKind::Map(entries) if entries.is_empty());
+            if empty_literal {
+                if let Some(type_param) = class.decl.type_params.iter().find(|type_param| {
+                    !substitutions.contains_key(*type_param)
+                        && type_mentions_type_param(&hinted_field_ty, type_param)
+                }) {
+                    return Err(Diagnostic::coded_at(
+                        "AU2002",
+                        argument.value.span,
+                        format!(
+                            "cannot infer type parameter `{type_param}` for class constructor `{constructor_name}` from an empty literal"
+                        ),
+                    )
+                    .with_help(format!(
+                        "annotate the binding, as in `value: {}[...] = ...`, or write the type arguments on the constructor",
+                        class.decl.name
+                    )));
+                }
+            }
             if self
                 .direct_view_value_kind(&argument.value, locals)?
                 .is_some()
@@ -10540,10 +10603,14 @@ impl<'a> FunctionChecker<'a> {
                                     }
                                 ),
                             )
-                            .with_help(format!(
-                                "`{}` reduces a collection of one numeric type; pass two or more numbers to compare values directly",
-                                builtin.name()
-                            ))),
+                            .with_help(if builtin == BuiltinFunction::Sum {
+                                "`sum` adds up a collection of one numeric type; to join strings, use `\"\".join(values)`".to_string()
+                            } else {
+                                format!(
+                                    "`{}` reduces a collection of one numeric type or of `str`; pass two or more numbers to compare values directly",
+                                    builtin.name()
+                                )
+                            })),
                         }
                     }
                     BuiltinFunction::Sum | BuiltinFunction::Any | BuiltinFunction::All => {
@@ -11913,6 +11980,19 @@ impl<'a> FunctionChecker<'a> {
                                 expected,
                             );
                         }
+                    }
+                    if namespace.all_functions.contains_key(field)
+                        || namespace.all_extern_functions.contains_key(field)
+                        || namespace.all_classes.contains_key(field)
+                    {
+                        return Err(Diagnostic::coded_at(
+                            "AU2001",
+                            span,
+                            format!("item `{field}` is private in module `{module_path}`"),
+                        )
+                        .with_help(format!(
+                            "mark `{field}` as `public` in `{module_path}` to call it from another module"
+                        )));
                     }
                     return Err(Diagnostic::coded_at(
                         "AU2001",
@@ -15720,6 +15800,9 @@ impl<'a> FunctionChecker<'a> {
                             expected,
                         )
                     }
+                    _ if matches!(&base_callee.kind, ExprKind::Name(name) if locals.contains_key(name)) => {
+                        Err(Diagnostic::at(span, "unsupported call target"))
+                    }
                     _ => Err(self.unsupported_call_target_diagnostic(callee, span)),
                 }
             }
@@ -16735,3 +16818,18 @@ impl<'a> FunctionChecker<'a> {
 #[cfg(test)]
 #[path = "sema_tests.rs"]
 mod tests;
+
+fn type_mentions_type_param(ty: &Type, name: &str) -> bool {
+    match ty {
+        Type::TypeParam(param) => param == name,
+        Type::Named(_, args) => args.iter().any(|arg| type_mentions_type_param(arg, name)),
+        Type::Tuple(elements) => elements
+            .iter()
+            .any(|element| type_mentions_type_param(element, name)),
+        Type::Union(union) => union
+            .members
+            .iter()
+            .any(|member| type_mentions_type_param(member, name)),
+        _ => false,
+    }
+}

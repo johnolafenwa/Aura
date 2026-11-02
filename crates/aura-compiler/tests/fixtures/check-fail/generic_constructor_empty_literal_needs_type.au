@@ -1,0 +1,6 @@
+class Stack[T]:
+    items: list[T]
+
+def main():
+    s = Stack(items=[])
+    print(len(s.items))

@@ -1,0 +1,10 @@
+# An integer literal next to an Array takes the array's dtype.
+def main():
+    prices = Array[float64].from_list([1.5, 2.0], [2])
+    print(prices + 5)
+    print(10 - prices)
+    print(prices / 2)
+    small = Array[float32].from_list([1.0, 2.0], [2])
+    print(small * 3)
+    counts = Array[int32].from_list([1, 2], [2])
+    print(counts + 1)

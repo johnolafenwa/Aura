@@ -1,0 +1,13 @@
+type Handler = Callable[def(line: str) -> int64]
+
+def traced(f: own Handler) -> Handler:
+    return Handler(lambda [own f] line: f(line))
+
+@traced
+def field_count(line: str) -> int64:
+    return line.split_whitespace().len()
+
+def main():
+    copy = field_count
+    print(copy("a b"))
+    print(field_count("a b c"))

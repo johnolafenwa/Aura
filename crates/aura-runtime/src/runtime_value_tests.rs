@@ -4462,7 +4462,7 @@ fn injected_supervisor_backoff_overflow_becomes_a_failed_event() {
     );
     assert_eq!(
         event.payloads[1].render(),
-        "Error.Io(io.Error.InvalidInput)"
+        "process.Error.Io(io.Error.InvalidInput)"
     );
     assert_eq!(event.payloads[2], Value::Int(IntegerValue::from_signed(3)));
 }
@@ -4476,7 +4476,7 @@ fn supervisor_wait_or_none_deadline_overflow_is_a_typed_error() {
     let Value::EnumVariant(process_error) = error else {
         panic!("wait_or_none deadline overflow should return process.Error.Io")
     };
-    assert_eq!(process_error.enum_name, "Error");
+    assert_eq!(process_error.enum_name, "process.Error");
     assert_eq!(process_error.variant_name, "Io");
     assert_eq!(process_error.payloads.len(), 1);
     assert_eq!(process_error.payloads[0].render(), "io.Error.InvalidInput");
@@ -4494,7 +4494,7 @@ fn supervisor_wait_or_none_deadline_overflow_is_a_typed_error() {
     );
     assert_eq!(
         event.payloads[1].render(),
-        "Error.Io(io.Error.InvalidInput)"
+        "process.Error.Io(io.Error.InvalidInput)"
     );
     assert_eq!(event.payloads[2], Value::Int(IntegerValue::from_signed(0)));
 }
@@ -6392,7 +6392,7 @@ fn async_and_process_result_helpers_render_expected_variants() {
     let spawn_error = process_error_spawn("missing executable".to_string());
     assert_variant(
         spawn_error.clone(),
-        "Error",
+        "process.Error",
         "Spawn",
         vec![Value::String("missing executable".to_string().into())],
     );
@@ -6438,9 +6438,24 @@ fn async_and_process_result_helpers_render_expected_variants() {
         Vec::new(),
     );
 
-    assert_variant(process_error_no_command(), "Error", "NoCommand", Vec::new());
-    assert_variant(process_error_timed_out(), "Error", "TimedOut", Vec::new());
-    assert_variant(process_error_cancelled(), "Error", "Cancelled", Vec::new());
+    assert_variant(
+        process_error_no_command(),
+        "process.Error",
+        "NoCommand",
+        Vec::new(),
+    );
+    assert_variant(
+        process_error_timed_out(),
+        "process.Error",
+        "TimedOut",
+        Vec::new(),
+    );
+    assert_variant(
+        process_error_cancelled(),
+        "process.Error",
+        "Cancelled",
+        Vec::new(),
+    );
 }
 
 #[test]
@@ -6993,7 +7008,7 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
     let error = timed_out_child
         .wait_ok(Some(StdDuration::ZERO), None)
         .expect_err("wait_ok should surface timeouts");
-    assert_eq!(error.render(), "Error.TimedOut");
+    assert_eq!(error.render(), "process.Error.TimedOut");
     timed_out_child.close();
 
     let cancelled_child = ProcessChildValue::spawn(
@@ -7016,7 +7031,7 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
     let error = cancelled_child
         .wait_ok(Some(StdDuration::from_secs(2)), Some(&cancellation))
         .expect_err("wait_ok should surface cancellation");
-    assert_eq!(error.render(), "Error.Cancelled");
+    assert_eq!(error.render(), "process.Error.Cancelled");
     cancelled_child.close();
 
     #[cfg(unix)]
@@ -12468,14 +12483,14 @@ fn process_child_helpers_cover_empty_command_and_cancellation_edges() {
         child
             .wait_or_none(Some(StdDuration::from_secs(1)), Some(&cancellation))
             .expect_err("cancelled wait_or_none should return a process error"),
-        "Error",
+        "process.Error",
         "Cancelled",
     );
     assert_variant(
         child
             .wait_ok(Some(StdDuration::from_secs(1)), Some(&cancellation))
             .expect_err("cancelled wait_ok should return a process error"),
-        "Error",
+        "process.Error",
         "Cancelled",
     );
     child.close();
@@ -12712,7 +12727,7 @@ fn process_supervisor_wait_or_none_and_stop_cover_public_outcomes() {
     let cancelled = running
         .wait_or_none(Some(StdDuration::from_secs(2)), Some(&cancellation))
         .expect_err("cancelled supervisor wait should return a process error");
-    assert_eq!(cancelled.render(), "Error.Cancelled");
+    assert_eq!(cancelled.render(), "process.Error.Cancelled");
     running
         .stop()
         .expect("supervisor stop should close children");
@@ -13008,7 +13023,7 @@ fn supervisor_rejects_zero_backoff_when_restart_is_enabled() {
     let Value::EnumVariant(variant) = error else {
         panic!("process supervisor start should return a process.Error variant");
     };
-    assert_eq!(variant.enum_name, "Error");
+    assert_eq!(variant.enum_name, "process.Error");
     assert_eq!(variant.variant_name, "Io");
     assert_eq!(variant.payloads.len(), 1);
     assert_eq!(variant.payloads[0].render(), "io.Error.InvalidInput");
@@ -13035,7 +13050,7 @@ fn supervisor_start_preserves_spawn_failures_in_the_typed_error_carrier() {
     let Value::EnumVariant(variant) = error else {
         panic!("process supervisor start should return a process.Error variant");
     };
-    assert_eq!(variant.enum_name, "Error");
+    assert_eq!(variant.enum_name, "process.Error");
     assert_eq!(variant.variant_name, "Spawn");
     assert_eq!(variant.payloads.len(), 1);
     assert!(matches!(&variant.payloads[0], Value::String(message) if !message.is_empty()));
@@ -13158,7 +13173,7 @@ fn supervisor_reports_restart_spawn_failure_after_executable_disappears() {
     );
     assert_eq!(
         failed.payloads[1].render().split('(').next(),
-        Some("Error.Spawn")
+        Some("process.Error.Spawn")
     );
     assert_eq!(failed.payloads[2], Value::Int(IntegerValue::from_signed(1)));
     assert!(supervisor.is_empty());

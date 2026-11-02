@@ -1004,3 +1004,35 @@ fn ffi_nullable_handle_engine_marshals_null_and_non_null_shim_results_after_writ
         "FFI argument 1 expected nullable opaque handle, but received opaque handle"
     );
 }
+
+#[test]
+fn owned_match_on_a_nullable_handle_result_binds_the_handle() {
+    let temp = TempDir::new("aura-ffi-nullable-match");
+    let main_path = write_checked_ffi_package(
+        &temp,
+        r#"extern "C" opaque class Block
+
+extern "C" def malloc(size: uint64) -> Block | None
+extern "C" def free(block: own Block) -> None
+
+def main():
+    match own malloc(16):
+        case Block as block:
+            free(block)
+            print("freed")
+        case None:
+            print("out of memory")
+    stored = malloc(32)
+    match own stored:
+        case Block as block:
+            free(block)
+            print("freed again")
+        case None:
+            print("out of memory")
+"#,
+        true,
+    );
+    let output = aura_compiler::run_path(&main_path)
+        .expect("matching an extern `Handle | None` result should lower and run");
+    assert_eq!(output.stdout, "freed\nfreed again\n");
+}

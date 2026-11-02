@@ -3279,26 +3279,57 @@ impl<'a> FunctionChecker<'a> {
                 Ok(())
             }
             ExprKind::Comprehension { output, clauses } => {
-                for clause in clauses {
+                // Everything after the first iterable runs with the clause
+                // targets in scope. Those per-item bindings are not places of
+                // the enclosing call, so only places rooted outside them count.
+                let mut scoped = locals.clone();
+                let mut bound = BTreeSet::new();
+                let mut inner = Vec::new();
+                for (index, clause) in clauses.iter().enumerate() {
+                    let sink = if index == 0 { &mut *places } else { &mut inner };
                     self.collect_expr_call_places(
                         &clause.iterable,
-                        locals,
-                        places,
+                        &scoped,
+                        sink,
                         include_consumed,
                     )?;
+                    let (body, _) = self.bind_comprehension_clause(clause, &mut scoped.clone())?;
+                    scoped = body;
+                    collect_binding_target_names(&clause.target, &mut bound);
                     for filter in &clause.filters {
-                        self.collect_expr_call_places(filter, locals, places, include_consumed)?;
+                        self.collect_expr_call_places(
+                            filter,
+                            &scoped,
+                            &mut inner,
+                            include_consumed,
+                        )?;
                     }
                 }
                 match output {
                     ComprehensionOutput::List(value) | ComprehensionOutput::Set(value) => {
-                        self.collect_expr_call_places(value, locals, places, include_consumed)
+                        self.collect_expr_call_places(
+                            value,
+                            &scoped,
+                            &mut inner,
+                            include_consumed,
+                        )?;
                     }
                     ComprehensionOutput::Map { key, value } => {
-                        self.collect_expr_call_places(key, locals, places, include_consumed)?;
-                        self.collect_expr_call_places(value, locals, places, include_consumed)
+                        self.collect_expr_call_places(key, &scoped, &mut inner, include_consumed)?;
+                        self.collect_expr_call_places(
+                            value,
+                            &scoped,
+                            &mut inner,
+                            include_consumed,
+                        )?;
                     }
                 }
+                places.extend(
+                    inner
+                        .into_iter()
+                        .filter(|place| !bound.contains(place.path.root.as_str())),
+                );
+                Ok(())
             }
             ExprKind::FString(parts) => {
                 for part in parts {
@@ -4358,5 +4389,22 @@ impl<'a> FunctionChecker<'a> {
             return;
         }
         self.active_match_borrow_places.borrow_mut().pop();
+    }
+}
+
+fn collect_binding_target_names<'a>(
+    target: &'a crate::ast::BindingTarget,
+    names: &mut BTreeSet<&'a str>,
+) {
+    match target {
+        crate::ast::BindingTarget::Name { name, .. }
+        | crate::ast::BindingTarget::Rest { name, .. } => {
+            names.insert(name.as_str());
+        }
+        crate::ast::BindingTarget::Tuple { elements, .. } => {
+            for element in elements {
+                collect_binding_target_names(element, names);
+            }
+        }
     }
 }

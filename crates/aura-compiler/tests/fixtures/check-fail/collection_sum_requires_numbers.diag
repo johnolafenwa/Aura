@@ -3,4 +3,4 @@ error[AU2002]: `sum(...)` expects a list, set, Range, or Array of numbers, found
   |
 3 |     print(sum(names))
   |               ^
-  = help: `sum` reduces a collection of one numeric type; pass two or more numbers to compare values directly
+  = help: `sum` adds up a collection of one numeric type; to join strings, use `"".join(values)`

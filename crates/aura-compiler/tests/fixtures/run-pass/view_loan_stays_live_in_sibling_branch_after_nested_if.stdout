@@ -1,0 +1,6 @@
+a
+b
+Result.Ok(warn)
+Result.Err(ConfigError.MissingValue(--level))
+Result.Err(ConfigError.UnknownFlag(-x))
+Result.Ok(none)

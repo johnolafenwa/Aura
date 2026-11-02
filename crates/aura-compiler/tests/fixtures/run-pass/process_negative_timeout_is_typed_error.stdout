@@ -1,5 +1,5 @@
 omitted: completed
 zero: expired
-Error.TimedOut
+process.Error.TimedOut
 negative: invalid
-Error.Io(io.Error.InvalidInput)
+process.Error.Io(io.Error.InvalidInput)

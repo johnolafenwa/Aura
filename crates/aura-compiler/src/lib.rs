@@ -1179,6 +1179,41 @@ fn qualify_type_param_call_for_export(
     }
 }
 
+/// Whether `name` is a type this module declares. A name brought in with
+/// `from other import Name` also sits in the module's tables, but it belongs
+/// to `other` and is qualified through the imported namespaces instead.
+fn program_declares_type(program: &Program, name: &str) -> bool {
+    let declared_here = |module_name: &str| module_name == program.module_name;
+    program
+        .classes
+        .get(name)
+        .is_some_and(|info| declared_here(&info.module_name))
+        || program
+            .enums
+            .get(name)
+            .is_some_and(|info| declared_here(&info.module_name))
+        || program
+            .traits
+            .get(name)
+            .is_some_and(|info| declared_here(&info.module_name))
+        || program
+            .opaque_handles
+            .get(name)
+            .is_some_and(|info| declared_here(&info.module_name))
+}
+
+/// The declaring module of a class or enum this module brought in with
+/// `from other import Name`.
+fn imported_type_module(program: &Program, name: &str) -> Option<String> {
+    let module_name = program
+        .classes
+        .get(name)
+        .map(|info| &info.module_name)
+        .or_else(|| program.enums.get(name).map(|info| &info.module_name))
+        .or_else(|| program.traits.get(name).map(|info| &info.module_name))?;
+    (module_name != &program.module_name && !module_name.is_empty()).then(|| module_name.clone())
+}
+
 fn qualify_export_type(program: &Program, ty: &sema::Type) -> sema::Type {
     match ty {
         sema::Type::Union(union) => {
@@ -1198,15 +1233,14 @@ fn qualify_export_type(program: &Program, ty: &sema::Type) -> sema::Type {
             if name.contains('.') || is_builtin_export_type(name) {
                 return sema::Type::Named(name.clone(), qualified_args);
             }
-            if program.classes.contains_key(name)
-                || program.enums.contains_key(name)
-                || program.traits.contains_key(name)
-                || program.opaque_handles.contains_key(name)
-            {
+            if program_declares_type(program, name) {
                 return sema::Type::Named(
                     format!("{}.{}", program.module_name, name),
                     qualified_args,
                 );
+            }
+            if let Some(module_name) = imported_type_module(program, name) {
+                return sema::Type::Named(format!("{module_name}.{name}"), qualified_args);
             }
             let mut found = None;
             let mut ambiguous = false;
@@ -1330,11 +1364,12 @@ fn qualify_export_type_ref(program: &Program, type_ref: &ast::TypeRef) -> ast::T
             if name.contains('.') || name == "str" || is_builtin_export_type(name) {
                 return qualified;
             }
-            if program.classes.contains_key(name)
-                || program.enums.contains_key(name)
-                || program.traits.contains_key(name)
-            {
+            if program_declares_type(program, name) && !program.opaque_handles.contains_key(name) {
                 *name = format!("{}.{}", program.module_name, name);
+                return qualified;
+            }
+            if let Some(module_name) = imported_type_module(program, name) {
+                *name = format!("{module_name}.{name}");
                 return qualified;
             }
             let mut found = None;

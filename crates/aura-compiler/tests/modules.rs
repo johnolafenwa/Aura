@@ -196,7 +196,7 @@ def main() -> int32:
     let error = check_path(&invalid_path)
         .expect_err("a from-import alias must not also bind the target name");
     assert!(
-        error.message.contains("unsupported call target"),
+        error.message.contains("unknown function `twice`"),
         "unexpected diagnostic: {}",
         error.message
     );
@@ -898,4 +898,65 @@ def main():
     // local with the same name must not replace them.
     let output = run_path(&main_path).expect("module defaults should run");
     assert_eq!(output.stdout, "4\n6\n7\n100\n");
+}
+
+#[test]
+fn from_imported_class_in_a_method_signature_matches_across_three_modules() {
+    let temp = TempDir::new("aura-modules-reexported-signature-type");
+    temp.write("a.au", "public class Record:\n    public level: str\n");
+    temp.write(
+        "b.au",
+        r#"from a import Record
+
+public class Stats:
+    public count: int64
+
+    public def add(mut self, record: Record):
+        self.count += 1
+"#,
+    );
+    for (name, source) in [
+        (
+            "from_both.au",
+            "from a import Record\nfrom b import Stats\n\ndef main():\n    mut stats = Stats(count=0)\n    stats.add(Record(level=\"info\"))\n    print(stats.count)\n",
+        ),
+        (
+            "module_import.au",
+            "from b import Stats\nimport a\n\ndef main():\n    mut stats = Stats(count=0)\n    stats.add(a.Record(level=\"info\"))\n    print(stats.count)\n",
+        ),
+        (
+            "only_stats.au",
+            "from b import Stats\n\ndef main():\n    mut stats = Stats(count=2)\n    print(stats.count)\n",
+        ),
+    ] {
+        let main_path = temp.write(name, source);
+        let output = run_path(&main_path)
+            .unwrap_or_else(|error| panic!("{name} should run: {}", error.message));
+        let expected = if name == "only_stats.au" { "2\n" } else { "1\n" };
+        assert_eq!(output.stdout, expected, "{name}");
+    }
+}
+
+#[test]
+fn trap_in_an_imported_module_points_at_that_module() {
+    let temp = TempDir::new("aura-modules-trap-location");
+    temp.write(
+        "lib.au",
+        "public def first(xs: list[int64]) -> int64:\n    return xs[5]\n",
+    );
+    let main_source = "from lib import first\n\ndef main():\n    print(first([1, 2]))\n";
+    let main_path = temp.write("main.au", main_source);
+    let error = run_path(&main_path).expect_err("index 5 of a two-element list traps");
+    let main_display = main_path.display().to_string();
+    let rendered = error.render_with_source(&main_display, main_source);
+    assert!(
+        rendered.contains("lib.au:2:15") && rendered.contains("return xs[5]"),
+        "{rendered}"
+    );
+    let structured = error.structured(&main_display);
+    assert!(structured
+        .primary_span
+        .expect("trap has a span")
+        .path
+        .ends_with("lib.au"));
 }

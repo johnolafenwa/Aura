@@ -60,7 +60,7 @@ def main() -> int32:
     for _ in 0..2 {
         assert_eq!(
             lines.next(),
-            Some("Result.Err(Error.Io(io.Error.InvalidInput))")
+            Some("Result.Err(process.Error.Io(io.Error.InvalidInput))")
         );
     }
     assert_eq!(lines.next(), None);

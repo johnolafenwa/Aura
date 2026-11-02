@@ -113,8 +113,8 @@ config: ok
 notes: missing
 greeting: ok
 listing: failed (ExitStatus.Exited(2))
-slow: error (Error.TimedOut)
-typo: error (Error.Spawn(No such file or directory (os error 2)))
+slow: error (process.Error.TimedOut)
+typo: error (process.Error.Spawn(No such file or directory (os error 2)))
 ```
 
 There are three different kinds of failure here, and the types keep them
@@ -317,7 +317,7 @@ def main():
 
 ```console
 $ aura run forgetful.au
-Result.Err(Error.TimedOut)
+Result.Err(process.Error.TimedOut)
 ```
 
 `sort` is still waiting for more input, and we are waiting for its output.
@@ -434,7 +434,7 @@ def main():
 
 ```console
 $ aura run names.au
-Error.Other(supervisor already manages a child named `sleeper`)
+process.Error.Other(supervisor already manages a child named `sleeper`)
 SupervisorEvent.Restarted(broken, ExitStatus.Exited(1), 1)
 SupervisorEvent.Restarted(broken, ExitStatus.Exited(1), 2)
 SupervisorEvent.Exited(broken, ExitStatus.Exited(1), 2)

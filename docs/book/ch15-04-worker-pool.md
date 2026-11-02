@@ -261,7 +261,6 @@ def collect(results: Queue[Count], group: TaskGroup) -> int64:
                 return total
             case QueueReceive.Cancelled:
                 return total
-    return total
 
 def main():
     documents = [
@@ -305,9 +304,10 @@ The collecting loop moved into a function, `collect`, and uses
 pool is finished" (`Closed`) apart from "the pool has gone quiet" (`TimedOut`).
 On a timeout, it calls `group.cancel()`. `collect` only borrows the group, the
 same way `start_reports` did in [Section 15.1](/book/ch15-01-tasks-and-task-groups);
-the group still belongs to `main`'s block. (The `return total` after the
-`while true` loop can never run, but the current compiler reports
-``function `collect` is missing a return`` without it, so we keep it.)
+the group still belongs to `main`'s block.
+`collect` needs no `return` after its `while true` loop: the loop has no
+`break`, so the compiler knows it only ends through one of the `return`
+statements inside it.
 
 The workers check `cancelled()` after each job, so a worker whose job was cut
 short by cancellation doesn't send a meaningless result.

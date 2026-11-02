@@ -383,7 +383,7 @@ error[AU2002]: lambda parameter types require an expected `def(...) -> ...` cont
   |
 2 |     to_kelvin = lambda celsius: celsius + 273.15
   |                 ^
-  = help: add a `def(...) -> ...` annotation to the immutable local, or pass the lambda directly to a callback parameter
+  = help: annotate the binding with a `def(...) -> ...` type, or pass the lambda directly to a callback parameter
 ```
 
 The second lambda also uses `offset`, a binding from the surrounding

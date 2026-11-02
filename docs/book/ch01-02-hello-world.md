@@ -100,11 +100,12 @@ def main():
 
 ```console
 $ aura run mixed.au
-error[AU2999]: files cannot mix top-level statements, including declarations, with an explicit `main` function
+error[AU2999]: files cannot mix top-level statements with an explicit `main` function
  --> mixed.au:3:1
   |
 3 | def main():
   | ^
+  = help: imports, constants, and declarations can sit beside `main`; move the top-level statements into `main`
 ```
 
 This is our first compiler error, so let's read it carefully. The first line
@@ -125,9 +126,9 @@ before it ran any of it. Nothing was printed, not even `starting up`. A
 program with an error like this never starts. Delete `mixed.au` before moving
 on.
 
-Despite the "including declarations" in the message, other `def` functions
-and constants such as `LIMIT = 10` are fine next to `main`, and we will write
-plenty of files like that. It is statements that *do* something at the top
+As the help line says, other `def` functions and constants such as
+`LIMIT = 10` are fine next to `main`, and we will write plenty of files like
+that. It is statements that *do* something at the top
 level, like this `print` call, that clash with it.
 
 ## Exit codes

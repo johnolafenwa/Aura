@@ -272,23 +272,12 @@ def run_job(job: Job) -> Report:
         backoff = backoff * 2
 ```
 
-```console
-$ aura check src/main.au
-error[AU2999]: function `run_job` is missing a return
- --> src/main.au:91:1
-   |
-91 | def run_job(job: Job) -> Report:
-   | ^
-```
-
-We can see that the loop never ends except through one of the two `return`
-statements, but the compiler does not treat `while true` as special. It sees
-a loop whose condition could, in principle, become false, and a path after
-the loop that falls off the end of a function that promised a `Report`. We
-could argue with that, but the error points at a real weakness in the code:
-the "give up" decision is buried inside a match arm, two levels down. It reads
-better as the loop's own exit. Let's remember the last error, `break` when we
-are out of attempts, and build the failure report once, after the loop:
+This compiles. The loop has no `break`, so the compiler knows the only ways
+out of it are the two `return` statements, and it doesn't ask for a `return`
+after the loop. But the code has a real weakness: the "give up" decision is
+buried inside a match arm, two levels down. It reads better as the loop's own
+exit. Let's remember the last error, `break` when we are out of attempts, and
+build the failure report once, after the loop:
 
 ```aura fragment
 def run_job(job: Job) -> Report:
@@ -405,7 +394,7 @@ $ time aura run src/main.au
   flaky: attempt 2 failed (ExitStatus.Exited(1): not yet (run 2)), retrying in 200ms
 [FAIL] broken (115 ms, 2 attempts) ExitStatus.Exited(3): about to fail
 [ok  ] flaky (332 ms, 3 attempts) worked on run 3
-[FAIL] slow (5005 ms) Error.TimedOut
+[FAIL] slow (5005 ms) process.Error.TimedOut
 5 jobs, 2 failed
 
 real	0m5.143s
@@ -446,7 +435,7 @@ $ time aura run src/main.au
   flaky: attempt 2 failed (ExitStatus.Exited(1): not yet (run 2)), retrying in 200ms
 [FAIL] broken (118 ms, 2 attempts) ExitStatus.Exited(3): about to fail
 [ok  ] flaky (333 ms, 3 attempts) worked on run 3
-[FAIL] slow (2215 ms) Error.TimedOut
+[FAIL] slow (2215 ms) process.Error.TimedOut
 5 jobs, 2 failed
 
 real	0m2.355s
@@ -861,7 +850,7 @@ $ ./target/jobrunner --workers 2
 [ok  ] flaky (323 ms, 3 attempts) worked on run 3
   broken: attempt 1 failed (ExitStatus.Exited(3): about to fail), retrying in 100ms
 [FAIL] broken (115 ms, 2 attempts) ExitStatus.Exited(3): about to fail
-[FAIL] slow (2210 ms) Error.TimedOut
+[FAIL] slow (2210 ms) process.Error.TimedOut
 5 jobs, 2 failed, 0 cancelled
 ```
 

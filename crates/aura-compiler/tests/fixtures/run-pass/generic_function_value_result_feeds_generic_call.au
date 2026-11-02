@@ -1,0 +1,32 @@
+# Calling a function-typed parameter whose result type is the enclosing
+# function's type parameter, directly as an argument of another generic call.
+import json
+
+class Point:
+    x: int64
+    y: int64
+
+impl json.Codec for Point
+
+type Step[A, R] = Callable[def(args: A) -> R]
+
+def shift(args: Point) -> Point:
+    return Point(x=args.x + 1, y=args.y)
+
+def encode_after[A: json.Codec, R: json.Codec](f: Step[A, R], value: own A) -> Result[json.Value, str]:
+    return Ok(json.encode(f(value)))
+
+def first[T](items: own list[T]) -> T:
+    mut owned = items
+    return owned.pop(0)
+
+def wrap[A, R](f: def(args: A) -> R, value: own A) -> list[R]:
+    return [first([f(value)])]
+
+def main():
+    match encode_after(Step[Point, Point](shift), Point(x=1, y=2)):
+        case Ok(value):
+            print(json.dumps(value))
+        case Err(message):
+            print(message)
+    print(wrap(shift, Point(x=5, y=0))[0].x)

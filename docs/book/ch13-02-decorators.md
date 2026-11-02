@@ -636,8 +636,7 @@ def services(args: ServicesArgs) -> Services:
 def run[A: json.Codec, R: json.Codec](f: Tool[A, R], args: own json.Value) -> Result[json.Value, str]:
     match own json.decode[A](args):
         case Ok(decoded):
-            result = f(decoded)
-            return Ok(json.encode(result))
+            return Ok(json.encode(f(decoded)))
         case Err(error):
             return Err(f"bad arguments: {error}")
 
@@ -695,12 +694,10 @@ tool by name and hands it, with the still-undecoded `args`, to `run`.
 bounds `A: json.Codec` and `R: json.Codec` say that both must have codecs. The
 type arguments are inferred from the tool we pass: `run(count, call.args)`
 fixes `A = CountArgs` and `R = Count`. So `json.decode[A](args)` decodes the
-arguments as exactly the class `count` expects, and `json.encode(result)`
-encodes whatever it returned. `f` is a bare parameter, so `run` borrows the
-decorated binding for the call and leaves it in place for the next one.
-(Writing `json.encode(f(decoded))` on one line fails to infer `encode`'s type
-parameter in Aura 0.11, with `AU2002`; binding the result to `result` first,
-as the listing does, gives the compiler the type it needs.)
+arguments as exactly the class `count` expects, and
+`json.encode(f(decoded))` encodes whatever the tool returned. `f` is a bare
+parameter, so `run` borrows the decorated binding for the call and leaves it
+in place for the next one.
 
 Each successful call prints `call count` or `call services` before its result.
 Those lines come from `traced`, and neither tool contains any tracing code. The

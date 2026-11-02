@@ -761,7 +761,10 @@ impl Diagnostic {
     }
 
     pub fn structured(&self, path: &str) -> StructuredDiagnostic {
-        let path = self.render_path.as_deref().unwrap_or(path).to_string();
+        let path = match self.trap_module_path(path) {
+            Some(frame_path) => display_source_path(frame_path),
+            None => self.render_path.as_deref().unwrap_or(path).to_string(),
+        };
         StructuredDiagnostic {
             code: self.code.clone(),
             severity: self.severity,
@@ -836,10 +839,33 @@ impl Diagnostic {
         self.partial_stdout.as_deref()
     }
 
+    /// A runtime trap inside a function from another module carries that
+    /// module's file on its innermost Aura frame. Returns that file when it
+    /// is not the file the caller is rendering against.
+    fn trap_module_path(&self, path: &str) -> Option<&str> {
+        if self.render_path.is_some() || self.span.is_none() {
+            return None;
+        }
+        let frame_path = self.call_frames.first()?.span.path.as_deref()?;
+        if same_source_file(frame_path, path) {
+            return None;
+        }
+        Some(frame_path)
+    }
+
     pub fn render_with_source(&self, path: &str, source: &str) -> String {
-        let (path, source) = match (&self.render_path, &self.render_source) {
-            (Some(render_path), Some(render_source)) => {
+        let trap_module = self.trap_module_path(path).map(|frame_path| {
+            (
+                display_source_path(frame_path),
+                std::fs::read_to_string(frame_path).unwrap_or_default(),
+            )
+        });
+        let (path, source) = match (&self.render_path, &self.render_source, &trap_module) {
+            (Some(render_path), Some(render_source), _) => {
                 (render_path.as_str(), render_source.as_str())
+            }
+            (_, _, Some((module_path, module_source))) => {
+                (module_path.as_str(), module_source.as_str())
             }
             _ => (path, source),
         };
@@ -981,6 +1007,37 @@ fn stable_code_for_message(message: &str) -> &'static str {
     } else {
         "AU2999"
     }
+}
+
+fn same_source_file(left: &str, right: &str) -> bool {
+    if left == right {
+        return true;
+    }
+    // One side may be the caller's relative spelling of the other.
+    let (left_path, right_path) = (std::path::Path::new(left), std::path::Path::new(right));
+    if (left_path.is_absolute() && right_path.is_relative() && left_path.ends_with(right_path))
+        || (right_path.is_absolute() && left_path.is_relative() && right_path.ends_with(left_path))
+    {
+        return true;
+    }
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+/// Shows a frame's absolute path relative to the working directory when it
+/// lies under it, the way users name the files they pass to `aura`.
+fn display_source_path(path: &str) -> String {
+    std::env::current_dir()
+        .ok()
+        .and_then(|current| {
+            std::path::Path::new(path)
+                .strip_prefix(&current)
+                .ok()
+                .map(|relative| relative.display().to_string())
+        })
+        .unwrap_or_else(|| path.to_string())
 }
 
 fn render_annotated(path: &str, source: &str, span: Span, code: &str, message: &str) -> String {

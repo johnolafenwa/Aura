@@ -767,7 +767,7 @@ ancestry.
 
 `aura run` defaults to `mir` for the interactive edit-run path. `aura build`
 always uses native direct emission. Maintained measurements put a cold miss at about 1.3
-seconds. A native hello-world executable is 927,888 bytes on Linux x86-64; the
+seconds. A native hello-world executable is 973,016 bytes on Linux x86-64; the
 [Performance](/manual/performance#executable-size) chapter has the size table. Each cache hit reads, hashes, and privately materializes the
 artifact. Workloads dominated by programs seen once, including CI, still pay
 the cold path on every program.
