@@ -1,6 +1,15 @@
 # Task Board
 
-Last updated: 2026-11-01
+Last updated: 2026-11-03
+
+## Release 0.12.0-preview (complete)
+
+- Cut from `main` after #216: contracts (V1), `for` over user iterators
+  (9b), the prelude, unused `Result` as `AU2018`, `TaskGroup` only in
+  `with`, and the book. No performance work; instruction counts match
+  0.11.0. Published 2026-11-03 (tag `238a5080` on `56b36db8`, release
+  run `41658873064`). Details are in
+  `2026-11-03-v0.12.0-preview-release.md`.
 
 ## Rewrite the docs as a book (in progress)
 

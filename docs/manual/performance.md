@@ -190,7 +190,7 @@ diagnostic-grade.
 | `dict_build_get`: 20,000 `str` keys, 200,000 `get` calls | 18.47 s | 0.31 s | 0.032 s |
 | `set_insert_contains`: 20,000 inserts, 200,000 `in` tests | 24.69 s | 0.038 s | 0.008 s |
 | `int_list_sum`: `for` over 100,000 `int64` values, 20 times | 1.96 s | 0.048 s | 0.048 s |
-| `string_list_scan`: 10,000 `str` compared, 100 times | 1.60 s | 0.11 s | 0.018 s |
+| `string_list_scan`: 10,000 `str` compared, 100 times | 1.60 s | 0.110 s | 0.018 s |
 | `record_field_reads`: `doc.get("age")` on 5,000 dicts, 20 times | 0.80 s | 0.15 s | 0.007 s |
 
 Before is `5f68c34`. After is the Batch 7a runtime changes. The programs live
@@ -499,6 +499,20 @@ seconds here instead of 20.9 and `regex_match` 7.4x instead of 8.6x.
 ran 26% faster, `json_roundtrip` 21%, and `template_render` 18%. Aura
 is still slower than Python on `csv_aggregate`, `docdb`, `file_io`,
 `json_roundtrip`, and `template_render`.
+
+Aura 0.12.0 is a language release with no performance work. Measured
+against the published 0.11.0 archive on 3 November 2026, both compilers
+execute the same instructions on every program, within 0.1% (`task_pool`
+1.6% fewer), 88.3 billion in all at the bench size. Wall times, in the
+same two passes on a busier container, are within run-to-run spread:
+
+| Measure | Aura 0.11.0 | Aura 0.12.0 |
+| --- | ---: | ---: |
+| All 30 programs, wall time | 19.7 s | 19.9 s |
+| Median Aura / Rust, wall time | 3.7x | 3.8x |
+| Median Aura / Python 3.13, wall time | 0.45x | 0.46x |
+| Programs faster than Python | 24 | 24 |
+| Programs above 8x Rust | 0 | 0 |
 
 ### Per-Call Attribution
 

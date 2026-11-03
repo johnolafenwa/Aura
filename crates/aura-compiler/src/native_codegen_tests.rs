@@ -2104,6 +2104,83 @@ def main() -> int32:
     assert!(!object.is_empty());
 }
 
+const RECURSIVE_TASK_SOURCE: &str = r#"
+def fib(n: int64) -> int64:
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+def worker(n: int64) -> int64:
+    return fib(n)
+
+def main() -> int32:
+    with TaskGroup() as group:
+        task = group.start(worker, 8)
+        match task.result():
+            case TaskResult.Ready(result):
+                return result as int32
+            case _:
+                return 1
+"#;
+
+#[test]
+fn native_recursive_entry_is_a_call_safepoint_when_tasks_can_run() {
+    let mir = lower_source_to_mir(RECURSIVE_TASK_SOURCE)
+        .expect("concurrent recursive source should lower to MIR");
+    assert!(
+        !mir.functions.iter().any(|function| {
+            function.blocks.iter().any(|block| {
+                block
+                    .instructions
+                    .iter()
+                    .any(|instruction| matches!(instruction, Instruction::Safepoint))
+            })
+        }),
+        "the fixture must have no loop safepoint"
+    );
+    let object = emit_host_object(&mir).expect("concurrent recursive source should compile");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aura_direct_yield_now")),
+        "a recursive entry must call the scheduler when its fuel runs out: {referenced:?}"
+    );
+
+    let plain = RECURSIVE_TASK_SOURCE.replace("fib(n - 1) + fib(n - 2)", "n - 1");
+    let mir = lower_source_to_mir(&plain).expect("concurrent plain source should lower to MIR");
+    let object = emit_host_object(&mir).expect("concurrent plain source should compile");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        !referenced
+            .iter()
+            .any(|symbol| symbol.contains("aura_direct_yield_now")),
+        "an entry of a function on no call cycle carries no safepoint: {referenced:?}"
+    );
+}
+
+#[test]
+fn native_call_safepoint_elides_runtime_call_when_no_sibling_can_run() {
+    let source = r#"
+def fib(n: int64) -> int64:
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+def main() -> int32:
+    return fib(8) as int32
+"#;
+    let mir = lower_source_to_mir(source).expect("sequential recursive source should lower");
+    let object = emit_host_object(&mir).expect("sequential recursive source should compile");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        !referenced
+            .iter()
+            .any(|symbol| symbol.contains("aura_direct_yield_now")),
+        "a module with no task start must elide call safepoints: {referenced:?}"
+    );
+}
+
 #[test]
 fn native_loop_safepoint_elides_runtime_call_when_no_sibling_can_run() {
     let source = r#"

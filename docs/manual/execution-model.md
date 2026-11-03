@@ -4,7 +4,7 @@ This chapter defines the runtime behavior that `aura run` and built programs sha
 
 ## Maintained Execution Paths
 
-Aura 0.11 has one checked source language and two runtime representations:
+Aura 0.12 has one checked source language and two runtime representations:
 
 - `aura run` lowers the entry package to MIR, Aura's mid-level intermediate representation, and executes it in the MIR runtime.
 - A native direct build lowers MIR-compatible program structure to native code linked with the direct runtime.
@@ -22,7 +22,7 @@ After checking succeeds, an entry module runs in one of two modes:
 1. If it has executable top-level statements, those statements execute in their stored source order. The file cannot also declare a local `main`.
 2. Otherwise, a local `main()` is called when present. It returns `None` or `int32`.
 
-An imported function named `main` is not an entrypoint. In Aura 0.11, importing a module does not execute its top-level statements as a side effect.
+An imported function named `main` is not an entrypoint. In Aura 0.12, importing a module does not execute its top-level statements as a side effect.
 
 For `aura run`, a returned `int32` is passed to the host process as the requested exit status. `None` means success. A built native program follows the same entry result contract.
 
@@ -436,18 +436,20 @@ Aura exposes no worker identity or affinity API. Task execution is multicore. Id
 
 Queue and Task handles are the maintained cross-worker communication surface. Every other capture and result is owned `Transfer` data, which keeps the boundary share-nothing. Cancellation and diagnostic context are installed per task and stay isolated across workers.
 
-### Loop Safepoints
+### Loop And Call Safepoints
 
 The compiler inserts a cooperative scheduling check on every semantic loop backedge. Reaching the ordinary tail of a `while` or `for` body passes the backedge, and so does `continue`. `break`, `return`, and other exits that leave the loop do not. These checks let a tight loop eventually return to the scheduler, so ready timers, Queue operations, and socket work are not starved indefinitely.
 
-A loop safepoint is not preemption, and it does not inspect cancellation. A single long iteration can still delay every sibling pinned to the same worker until the body reaches its backedge. Long straight-line CPU work with no loop or scheduler operation can do the same.
+Recursion has no backedge, so the entry of every function that lies on a call cycle is a safepoint too. A function lies on a call cycle when it calls itself, directly or through other functions. The compiler finds the cycles conservatively: a call through a function value, a dynamic method, or a builtin that may call back into Aura code is assumed to reach every function that escapes as a value, a method, or a `Display` implementation. Deep recursion with no loop, such as a naive `fib`, therefore returns to the scheduler like a loop does. Entries of functions that are not on a cycle carry no check.
+
+A safepoint is not preemption, and it does not inspect cancellation. A single long iteration or a long call that is not recursive can still delay every sibling pinned to the same worker until it reaches a backedge or a recursive entry. Long straight-line CPU work with no loop, recursion, or scheduler operation can do the same.
 
 - Use `cancelled()` when the task must observe cancellation.
 - Use `yield_now()` when the program needs an explicit scheduling point between chosen chunks.
 
 Neither automatic nor explicit yielding specifies which ready local task runs next.
 
-MIR execution amortizes the cooperative yield with 8 units of function-local loop fuel. Direct native code uses 4,096 units and replenishes the fuel after yielding. A program proven to have no possible sibling Aura task elides the runtime check entirely. These backend strategies may produce different valid interleavings. Scheduling order is not observable language order.
+MIR execution amortizes the cooperative yield with 8 units of function-local loop fuel, and yields at every recursive entry below a task's first call, since an interpreted call costs far more than a yield. Direct native code uses 4,096 units of function-local loop fuel, kept in a register, and 4,096 units of per-task call fuel, kept in the task's frame stack. Each replenishes its fuel after yielding. A program proven to have no possible sibling Aura task elides both checks entirely. These backend strategies may produce different valid interleavings. Scheduling order is not observable language order.
 
 ### `yield_now()`
 
@@ -525,7 +527,7 @@ The runtime has three process-global service pools besides the scheduler workers
 
 A job owns its protocol state for one bounded, nonblocking library step. The coroutine waits for the state to return before it observes cancellation or waits for descriptor readiness again. So a protocol state is never abandoned with two owners, and no resource mutex stays held across the worker wait. Reactor readiness, absolute deadlines, and cancellation stay scheduler-side concerns.
 
-The protocol-step pool is lazily initialized and shared by every lightweight scheduler. Its workers intentionally live until process exit. Aura 0.11 has no protocol-pool shutdown or join surface. The non-Unix WebSocket fallback keeps its compatibility path.
+The protocol-step pool is lazily initialized and shared by every lightweight scheduler. Its workers intentionally live until process exit. Aura 0.12 has no protocol-pool shutdown or join surface. The non-Unix WebSocket fallback keeps its compatibility path.
 
 **Generic blocking-I/O pool.** Resolver, listener-bind, and file reads use this pool. A TCP connect to a literal socket address such as `127.0.0.1:8080` skips it: the connect starts nonblocking and the task waits on the reactor. TLS asset bytes are read here before PEM parsing and rustls construction run on protocol workers. PEM is the text encoding used for certificates and keys.
 
@@ -542,7 +544,7 @@ A task reserves capacity before it makes the fallible owned copy of its parse so
 
 The dependency-owned recursive parser runs on the service stack. Runtime materialization, JSON-aware cloning and rendering, and dump conversion and emission use iterative traversals. The direct backend waits for admission without value-table access. It then holds read access only long enough to copy the source, and releases it before submission and completion waiting.
 
-The bounded `json.is_valid` and `json.parse_string_map` operations stay caller-side and do not use this service. Codec workers are process-lifetime. Aura 0.11 has no shutdown or configuration surface for them.
+The bounded `json.is_valid` and `json.parse_string_map` operations stay caller-side and do not use this service. Codec workers are process-lifetime. Aura 0.12 has no shutdown or configuration surface for them.
 
 ## Task Groups And Failure Observation
 
@@ -554,7 +556,7 @@ The bounded `json.is_valid` and `json.parse_string_map` operations stay caller-s
 - A task failure observed through its `Task` result does not also abort the group as unread.
 - An unread child failure aborts the group scope. It wakes Queue iteration and waits that depend on that group.
 
-Cancellation is cooperative. Pure CPU code observes cancellation through `cancelled()`. `yield_now()` is a scheduling point but does not inspect cancellation, and neither do compiler-inserted loop safepoints. Scheduler-aware blocking operations receive cancellation context directly.
+Cancellation is cooperative. Pure CPU code observes cancellation through `cancelled()`. `yield_now()` is a scheduling point but does not inspect cancellation, and neither do compiler-inserted loop and call safepoints. Scheduler-aware blocking operations receive cancellation context directly.
 
 Queue reachability is based on live tasks known to hold `Queue` handles. It does not use an elapsed-time threshold.
 
@@ -611,7 +613,7 @@ Pure expression evaluation, ordinary control flow, and collection operations are
 - operating-system secure random output
 - the exact wording of host operating-system errors
 
-An explicitly seeded `random.Rng` is deterministic. Its xoshiro256** sequence, integer and float mapping, and shuffle order are fixed for Aura 0.3.x, 0.4.x, 0.5.x, 0.6.x, 0.7.x, 0.8.x, 0.9.x, 0.10.x, and 0.11.x. [Randomness Module](/manual/randomness) specifies them. Secure random calls are external effects and never draw from that stream.
+An explicitly seeded `random.Rng` is deterministic. Its xoshiro256** sequence, integer and float mapping, and shuffle order are fixed for Aura 0.3.x, 0.4.x, 0.5.x, 0.6.x, 0.7.x, 0.8.x, 0.9.x, 0.10.x, 0.11.x, and 0.12.x. [Randomness Module](/manual/randomness) specifies them. Secure random calls are external effects and never draw from that stream.
 
 Aura converts host effects into typed values and ordering primitives where practical. It does not pretend the host environment is deterministic.
 
