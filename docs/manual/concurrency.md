@@ -33,6 +33,9 @@ Aura 0.12 task scheduling is cooperative across pinned workers:
   therefore lets ready timers, Queue operations, and socket work on the same
   worker proceed.
 - `break` and `return` leave the loop without taking that check.
+- The entry of every function on a call cycle, such as a function that calls
+  itself, takes the same check, so deep recursion with no loop also lets
+  same-worker work proceed.
 - A single long loop body or long straight-line CPU work can still delay
   sibling tasks pinned to the same worker.
 - The inserted check does not inspect cancellation. A task that must stop on
@@ -701,7 +704,7 @@ Both MIR execution and direct native generation support:
 - Queue operations and iteration
 - typed heterogeneous `select`
 - wait helpers, sleep, and cancellation
-- compiler-inserted loop safepoints
+- compiler-inserted loop and call safepoints
 - user-trait dispatch on `Queue[T]`, `Task[T]`, and `TaskGroup` for method
   names that do not collide with builtin members
 
@@ -709,10 +712,11 @@ Builtin handle member names keep builtin dispatch on both backends. Default
 and explicit guarded stack requests use the same scheduler allocation path on
 both backends.
 
-The loop safepoints differ in frequency. MIR checks each backedge and yields
-every 8 backedges. Native code uses 4,096 units of function-local fuel between
-yields when sibling tasks are possible. It skips the check when the program
-proves that no sibling task can exist.
+The safepoints differ in frequency. MIR checks each backedge and yields
+every 8 backedges, and yields at every recursive entry below a task's first call. Native code uses
+4,096 units of function-local loop fuel and 4,096 units of per-task call fuel
+between yields when sibling tasks are possible. It skips both checks when the
+program proves that no sibling task can exist.
 
 The scheduler and runtime surface and the complete diagnostics are pinned by
 parity tests. Both backends therefore share the persistent reactor, the timer
@@ -776,7 +780,7 @@ These features are implemented:
 - sleep and cooperative cancellation
 - task-result observation and multi-task waits
 - computed Duration arithmetic
-- compiler-inserted loop-backedge safepoints
+- compiler-inserted loop-backedge and recursive-call safepoints
 - persistent reactor registrations, heap-managed deadlines, and direct Queue,
   task-completion, and blocking-pool wakeups
 - guarded 768 KiB coroutine stacks and the stack-override methods

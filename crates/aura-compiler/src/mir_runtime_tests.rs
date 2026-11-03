@@ -23722,3 +23722,65 @@ fn mir_slice_step_internal_abi_rejects_malformed_operands_and_objects() {
         assert_eq!(error.span, Some(Span::new(3, 4)));
     }
 }
+
+#[test]
+fn mir_recursive_entries_are_call_safepoints_only_when_tasks_can_run() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def fib(n: int64) -> int64:
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+def worker(n: int64) -> int64:
+    return fib(n)
+
+def main() -> int32:
+    with TaskGroup() as group:
+        task = group.start(worker, 8)
+        match task.result():
+            case TaskResult.Ready(result):
+                return result as int32
+            case _:
+                return 1
+"#,
+    )
+    .expect("concurrent recursive source should lower");
+    let fib = module
+        .functions
+        .iter()
+        .find(|function| function.name == "fib")
+        .cloned()
+        .expect("fib should lower");
+    let mut runtime = MirRuntime::new(
+        module,
+        Arc::new(Mutex::new(String::new())),
+        CancellationContext::default(),
+    );
+    assert!(runtime.safepoints_enabled);
+    assert!(runtime.recursive_functions.is_none());
+    // A task's own first call is not a safepoint.
+    runtime.call_depth = 1;
+    runtime.call_safepoint(&fib);
+    assert!(runtime.recursive_functions.is_none());
+    // Outside a task the yield returns at once.
+    runtime.call_depth = 2;
+    runtime.call_safepoint(&fib);
+    let recursive = runtime
+        .recursive_functions
+        .clone()
+        .expect("the first call finds the recursive functions");
+    assert!(recursive.contains("fib"));
+    assert!(!recursive.contains("worker"));
+    runtime.call_safepoint(&fib);
+    assert!(Arc::ptr_eq(
+        &recursive,
+        runtime.recursive_functions.as_ref().unwrap()
+    ));
+
+    let mut sequential = test_runtime();
+    assert!(!sequential.safepoints_enabled);
+    sequential.call_depth = 2;
+    sequential.call_safepoint(&fib);
+    assert!(sequential.recursive_functions.is_none());
+}

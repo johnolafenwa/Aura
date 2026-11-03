@@ -169,7 +169,10 @@ use enum_layouts::{celled_enum_layout, registered_enum_layout};
 pub use enum_layouts::{
     register_enum_layout, EnumLayout, EnumLayoutCell, TypedPayloads, FIRST_ENUM_ACCESS,
 };
-pub use frame_stack::{direct_frame_stack_layout, DirectFrameStack, DirectFrameStackLayout};
+pub use frame_stack::{
+    direct_frame_stack_layout, DirectFrameStack, DirectFrameStackLayout,
+    DIRECT_CALL_SAFEPOINT_INTERVAL,
+};
 use frame_stack::{
     DIRECT_FRAME_FLAG_PENDING_SINKS, DIRECT_FRAME_FLAG_RETURNED_VIEWS, DIRECT_MAX_CALL_DEPTH,
 };

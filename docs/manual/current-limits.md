@@ -147,7 +147,7 @@ The foreign function interface (FFI) is at version 0.
 - Aura task code runs on pinned cooperative scheduler workers. The default count is the available parallelism reported by the host. The `AURA_WORKERS=<positive integer>` override selects an explicit count.
 - A child is assigned to a worker when it is spawned and keeps that worker for its lifetime. Coroutine stacks never migrate, and the runtime does not steal work between workers.
 - A positive `AURA_WORKERS` value may exceed the host's available-core count. Empty, zero, signed, whitespace-padded, nonnumeric, and overflowing values are rejected before execution with `AU4006` and ``invalid AURA_WORKERS value `<raw>`: expected a positive integer``.
-- Scheduling is cooperative, not preemptive. The compiler checks every loop backedge and eventually yields from a tight loop, but only to runnable work assigned to that task's worker.
+- Scheduling is cooperative, not preemptive. The compiler checks every loop backedge and the entry of every function on a call cycle, and eventually yields from a tight loop or deep recursion, but only to runnable work assigned to that task's worker.
 - One long loop body or long straight-line computation can still delay siblings pinned to the same worker. The automatic checks do not inspect cancellation.
 - Queue and Task handles are the maintained cross-worker communication surface. All other task captures and results must be owned `Transfer` values, which keeps a share-nothing boundary.
 - A task's cancellation and diagnostic context stay isolated from work running on other workers.

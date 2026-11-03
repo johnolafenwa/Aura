@@ -201,6 +201,29 @@ still proves cooperative safepoint progress on one worker, even though
 multicore is the default. Other non-multicore workloads explicitly remove any
 ambient `AURA_WORKERS` override, so they measure the production default.
 
+### `sleeper-vs-recursion` (probe)
+
+`sleeper_vs_recursion.au` is a manual probe; the host runner does not run it.
+One task sleeps 1 ms a hundred times and records its worst lateness while a
+sibling computes naive `fib(35)`, which recurses without a loop. Any progress
+for the sleeper must come from the call safepoints at the entries of
+recursive functions. Run it on one worker:
+
+```bash
+./target/release/aura build --backend direct \
+  -o target/scalable-runtime-benchmarks/sleeper-vs-recursion \
+  benchmarks/scalable_runtime/sleeper_vs_recursion.au
+AURA_WORKERS=1 target/scalable-runtime-benchmarks/sleeper-vs-recursion
+```
+
+```text
+SAMPLE recursion_ms fib35 <elapsed_ms>
+SAMPLE worst_sleep_lateness_ms 1 <worst_ms>
+DONE recursion_starvation
+```
+
+The Batch 8 step 8d gate is a worst lateness under 10 ms.
+
 ### `cpu-scaling`
 
 The program is built once and invoked with either `1` or `4` as its sole

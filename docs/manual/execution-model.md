@@ -432,18 +432,20 @@ Aura exposes no worker identity or affinity API. Task execution is multicore. Pr
 
 Queue and Task handles are the maintained cross-worker communication surface. Every other capture and result is owned `Transfer` data, which keeps the boundary share-nothing. Cancellation and diagnostic context are installed per task and stay isolated across workers.
 
-### Loop Safepoints
+### Loop And Call Safepoints
 
 The compiler inserts a cooperative scheduling check on every semantic loop backedge. Reaching the ordinary tail of a `while` or `for` body passes the backedge, and so does `continue`. `break`, `return`, and other exits that leave the loop do not. These checks let a tight loop eventually return to the scheduler, so ready timers, Queue operations, and socket work are not starved indefinitely.
 
-A loop safepoint is not preemption, and it does not inspect cancellation. A single long iteration can still delay every sibling pinned to the same worker until the body reaches its backedge. Long straight-line CPU work with no loop or scheduler operation can do the same.
+Recursion has no backedge, so the entry of every function that lies on a call cycle is a safepoint too. A function lies on a call cycle when it calls itself, directly or through other functions. The compiler finds the cycles conservatively: a call through a function value, a dynamic method, or a builtin that may call back into Aura code is assumed to reach every function that escapes as a value, a method, or a `Display` implementation. Deep recursion with no loop, such as a naive `fib`, therefore returns to the scheduler like a loop does. Entries of functions that are not on a cycle carry no check.
+
+A safepoint is not preemption, and it does not inspect cancellation. A single long iteration or a long call that is not recursive can still delay every sibling pinned to the same worker until it reaches a backedge or a recursive entry. Long straight-line CPU work with no loop, recursion, or scheduler operation can do the same.
 
 - Use `cancelled()` when the task must observe cancellation.
 - Use `yield_now()` when the program needs an explicit scheduling point between chosen chunks.
 
 Neither automatic nor explicit yielding specifies which ready local task runs next.
 
-MIR execution amortizes the cooperative yield with 8 units of function-local loop fuel. Direct native code uses 4,096 units and replenishes the fuel after yielding. A program proven to have no possible sibling Aura task elides the runtime check entirely. These backend strategies may produce different valid interleavings. Scheduling order is not observable language order.
+MIR execution amortizes the cooperative yield with 8 units of function-local loop fuel, and yields at every recursive entry below a task's first call, since an interpreted call costs far more than a yield. Direct native code uses 4,096 units of function-local loop fuel, kept in a register, and 4,096 units of per-task call fuel, kept in the task's frame stack. Each replenishes its fuel after yielding. A program proven to have no possible sibling Aura task elides both checks entirely. These backend strategies may produce different valid interleavings. Scheduling order is not observable language order.
 
 ### `yield_now()`
 
@@ -550,7 +552,7 @@ The bounded `json.is_valid` and `json.parse_string_map` operations stay caller-s
 - A task failure observed through its `Task` result does not also abort the group as unread.
 - An unread child failure aborts the group scope. It wakes Queue iteration and waits that depend on that group.
 
-Cancellation is cooperative. Pure CPU code observes cancellation through `cancelled()`. `yield_now()` is a scheduling point but does not inspect cancellation, and neither do compiler-inserted loop safepoints. Scheduler-aware blocking operations receive cancellation context directly.
+Cancellation is cooperative. Pure CPU code observes cancellation through `cancelled()`. `yield_now()` is a scheduling point but does not inspect cancellation, and neither do compiler-inserted loop and call safepoints. Scheduler-aware blocking operations receive cancellation context directly.
 
 Queue reachability is based on live tasks known to hold `Queue` handles. It does not use an elapsed-time threshold.
 
