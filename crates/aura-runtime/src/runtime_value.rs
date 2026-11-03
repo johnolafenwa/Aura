@@ -4851,9 +4851,9 @@ pub fn allocate_lightweight_task_stack(
 /// A task stack together with the capacity it was requested with. The pool
 /// hands a stack only to a request of exactly that capacity, so reuse never
 /// changes the accepted stack contract.
-struct PooledTaskStack {
-    stack: DefaultStack,
-    size: usize,
+pub(crate) struct PooledTaskStack {
+    pub(crate) stack: DefaultStack,
+    pub(crate) size: usize,
 }
 
 /// Most stacks one worker keeps for reuse.
@@ -4904,7 +4904,7 @@ pub fn task_stack_pool_len() -> usize {
         .unwrap_or(0)
 }
 
-fn take_pooled_task_stack(size: usize) -> std::result::Result<PooledTaskStack, Diagnostic> {
+pub(crate) fn take_pooled_task_stack(size: usize) -> std::result::Result<PooledTaskStack, Diagnostic> {
     #[cfg(test)]
     let injected_failure = FAIL_NEXT_LIGHTWEIGHT_TASK_STACK_ALLOCATION.with(|fail| fail.get());
     #[cfg(not(test))]
@@ -4926,7 +4926,7 @@ fn take_pooled_task_stack(size: usize) -> std::result::Result<PooledTaskStack, D
 
 /// Returns a finished task's stack to this thread's pool, or unmaps it when
 /// the pool is full or the thread is exiting.
-fn recycle_task_stack(entry: PooledTaskStack) {
+pub(crate) fn recycle_task_stack(entry: PooledTaskStack) {
     let mut entry = Some(entry);
     let _ = TASK_STACK_POOL.try_with(|pool| {
         if let Ok(mut pool) = pool.try_borrow_mut() {
