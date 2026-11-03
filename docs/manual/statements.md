@@ -372,8 +372,54 @@ def main():
 - `Step` is an ordinary generic enum, so code may also call `next` and
   `match` its result directly.
 
-Comprehensions, `enumerate`, and `zip` do not take iterator sources yet, and
-loop clauses (`invariant`) on an iterator loop report `AU2048` for now.
+- `invariant` clauses on an iterator loop are checked once per item, after
+  the target is bound.
+- `Iterator[T]` also provides `collect(own self) -> list[T]`, which drains
+  the iterator into a list.
+
+`for` loops over `enumerate(iterator)` and `zip(first, second)` with two
+iterators stay lazy: each iteration calls `next` on each operand in order,
+and the loop ends at the first `Step.End`. So an endless iterator may be
+zipped with a finite one. `enumerate` counts from `start` as it does over a
+list, and each item arrives owned. `zip` of a list or set with an iterator
+reports `AU2002`; zip two iterators, or call `.collect()` on the iterator to
+zip two lists.
+
+```aura
+from iter import Generator
+
+
+def naturals() -> Generator[int64]:
+    mut n = 0
+    while true:
+        yield n
+        n += 1
+
+
+def words() -> Generator[str]:
+    yield "ant"
+    yield "bee"
+
+
+def main():
+    for n, w in zip(naturals(), words()):
+        print(f"{n} {w}")  # 0 ant, then 1 bee
+    for i, w in enumerate(words(), start=1):
+        print(f"{i}: {w}")  # 1: ant, then 2: bee
+```
+
+A comprehension builds its whole result at once, so an iterator source,
+including an `enumerate` or `zip` operand, is collected into a list first,
+as if written `source.collect()`. The clause then reads the list's elements
+as shared values, the same as a list source, so a non-copy element that the
+result stores needs `.clone()`:
+
+```aura fragment
+print([len(w) for w in words()])  # [3, 3]
+print({w.clone(): i for i, w in enumerate(words())})  # {ant: 0, bee: 1}
+```
+
+An endless iterator in a comprehension never finishes collecting.
 
 ### Generator Functions
 

@@ -1129,7 +1129,20 @@ impl<'a> FunctionChecker<'a> {
             .flatten()
         {
             for bound in self.trait_bound_closure(bound, &self_ty) {
-                if let Some(trait_info) = self.traits.get(&bound.trait_name) {
+                // A default method of an imported trait is checked in the
+                // importer, which may know the trait only by a qualified
+                // name: fall back to the one trait declared with this name.
+                let trait_info = self.traits.get(&bound.trait_name).or_else(|| {
+                    let mut named = self
+                        .traits
+                        .values()
+                        .filter(|info| info.decl.name == bound.trait_name);
+                    let first = named.next()?;
+                    named
+                        .all(|other| other.module_name == first.module_name)
+                        .then_some(first)
+                });
+                if let Some(trait_info) = trait_info {
                     if let Some(method) = trait_info.methods.get(method_name) {
                         let trait_substitutions = self_type_substitutions(
                             &trait_info.decl,

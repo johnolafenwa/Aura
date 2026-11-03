@@ -116,6 +116,14 @@ The semantic interface stays 20, and the native cache format stays `v10`.
   once. A trap in the body is a trap of the caller's task, and the call
   chain names the generator. A body may sleep, receive from a `Queue`, or do
   file I/O; the wait suspends the calling task. Misuse reports `AU2049`.
+- Comprehensions, `invariant` clauses, `enumerate`, and `zip` take
+  iterator sources. `for` loops over `enumerate(it)` and `zip(a, b)` of two
+  iterators stay lazy, so an endless generator can be zipped with a finite
+  one; a comprehension collects its iterator source first. `Iterator[T]`
+  gains `collect(own self) -> list[T]`. `zip` of a collection with an
+  iterator reports `AU2002`.
+- Fixed: `for x in value.method():` where `method` takes `own self` reported
+  a false "use of moved value" on the receiver.
 - A unit variant of an imported generic enum, such as `opt.Opt.Nothing`,
   now takes its type arguments from the expected type, as an unqualified
   variant already did. It used to report a return type mismatch.

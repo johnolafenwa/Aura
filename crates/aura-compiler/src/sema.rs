@@ -3429,8 +3429,14 @@ impl<'a> FunctionChecker<'a> {
             element_types.push(Type::named("int64"));
         }
         let mut any_non_copy = false;
+        let mut iterator_operands = 0;
         for iterable in &form.iterables {
             let iterable_ty = self.type_of_expr(iterable, locals)?;
+            if let Some(item_ty) = self.iterator_item_type(&iterable_ty) {
+                iterator_operands += 1;
+                element_types.push(item_ty);
+                continue;
+            }
             let Some(element_ty) = lockstep_element_type(&iterable_ty) else {
                 return Err(Diagnostic::coded_at(
                     "AU2002",
@@ -3450,6 +3456,39 @@ impl<'a> FunctionChecker<'a> {
 
         self.check_loop_form_start(&form, locals)?;
         let binding_ty = Type::Tuple(element_types);
+        if iterator_operands > 0 {
+            if iterator_operands != form.iterables.len() {
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    form.span,
+                    "`zip` cannot pair a collection with an iterator",
+                )
+                .with_help(
+                    "zip two iterators, or call `.collect()` on the iterator to zip two lists",
+                ));
+            }
+            // The loop consumes each iterator and owns every item it
+            // yields; the rewrite spells it with the iterators' `next`.
+            let mut body_locals = locals.clone();
+            self.bind_target(
+                &for_stmt.target,
+                &binding_ty,
+                ReceiverKind::Value,
+                false,
+                &mut body_locals,
+                "loop",
+            )?;
+            self.check_loop_clauses(&for_stmt.contracts, ALL_LOOP_CLAUSES, &body_locals, true)?;
+            self.check_block(
+                &for_stmt.body,
+                &mut body_locals,
+                return_type,
+                loop_depth + 1,
+                allow_return,
+            )?;
+            iterator_loops::discover_lockstep_loop(self.module_name, for_stmt.span);
+            return Ok(());
+        }
         let binding_passing = if any_non_copy {
             ReceiverKind::Borrow
         } else {
@@ -3516,18 +3555,31 @@ impl<'a> FunctionChecker<'a> {
             let mut any_non_copy = false;
             for iterable in &form.iterables {
                 let iterable_ty = self.type_of_expr(iterable, locals)?;
-                let Some(element_ty) = lockstep_element_type(&iterable_ty) else {
-                    return Err(Diagnostic::coded_at(
-                            "AU2002",
-                            iterable.span,
-                            format!(
-                                "`{}` requires a `list[T]` or `set[T]` iterable, found `{}`",
-                                form.name, iterable_ty
-                            ),
-                        )
-                        .with_help(
-                            "these comprehension forms read collections by position; use a plain clause for a `Range` or `Queue[T]`",
-                        ));
+                // A user iterator operand is collected into a list first.
+                let element_ty = match lockstep_element_type(&iterable_ty) {
+                    Some(element_ty) => element_ty,
+                    None => match self.iterator_item_type(&iterable_ty) {
+                        Some(item_ty) => {
+                            iterator_loops::discover_comprehension_source(
+                                self.module_name,
+                                iterable.span,
+                            );
+                            item_ty
+                        }
+                        None => {
+                            return Err(Diagnostic::coded_at(
+                                "AU2002",
+                                iterable.span,
+                                format!(
+                                    "`{}` requires a `list[T]` or `set[T]` iterable, found `{}`",
+                                    form.name, iterable_ty
+                                ),
+                            )
+                            .with_help(
+                                "these comprehension forms read collections by position; use a plain clause for a `Range` or `Queue[T]`",
+                            ));
+                        }
+                    },
                 };
                 any_non_copy = any_non_copy || !self.is_copy_type(&element_ty);
                 element_types.push(element_ty);
@@ -3564,13 +3616,21 @@ impl<'a> FunctionChecker<'a> {
                         (element_ty, passing, false)
                     }
                     _ if self.iterator_item_type(&iterable_ty).is_some() => {
-                        return Err(Diagnostic::coded_at(
-                            "AU2002",
+                        // The rewrite collects the source into a list first;
+                        // until then the clause binds owned items.
+                        iterator_loops::discover_comprehension_source(
+                            self.module_name,
                             clause.iterable.span,
-                            format!(
-                                "a comprehension cannot iterate the iterator `{iterable_ty}` yet; collect its items with a `for` loop"
-                            ),
-                        ));
+                        );
+                        let item_ty = self
+                            .iterator_item_type(&iterable_ty)
+                            .expect("the guard found an item type");
+                        let passing = if self.is_copy_type(&item_ty) {
+                            ReceiverKind::Value
+                        } else {
+                            ReceiverKind::Borrow
+                        };
+                        (item_ty, passing, false)
                     }
                     _ => {
                         return Err(Diagnostic::coded_at(
@@ -4304,6 +4364,14 @@ impl<'a> FunctionChecker<'a> {
                 Stmt::Destructure(destructure) => self.check_destructure(destructure, locals)?,
                 Stmt::Pass(_) => {}
                 Stmt::Assert(assert_stmt) => {
+                    if let Some(clause) = &assert_stmt.clause {
+                        self.check_loop_clauses(
+                            std::slice::from_ref(clause.as_ref()),
+                            &[ContractKind::Invariant],
+                            locals,
+                            true,
+                        )?;
+                    }
                     let condition_ty = self.type_of_expr(&assert_stmt.condition, locals)?;
                     self.reject_mutable_returned_view_value(&assert_stmt.condition, locals, false)?;
                     if condition_ty != Type::named("bool") {

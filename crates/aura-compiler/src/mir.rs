@@ -13711,7 +13711,12 @@ impl<'a> Lowerer<'a> {
                 true
             }
             Stmt::Assert(assert_stmt) => {
-                self.lower_assert(assert_stmt);
+                match &assert_stmt.clause {
+                    Some(clause) => {
+                        self.lower_clause_checks(std::slice::from_ref(clause.as_ref()), clause.kind)
+                    }
+                    None => self.lower_assert(assert_stmt),
+                }
                 true
             }
             Stmt::Return(return_stmt) => {
@@ -14052,6 +14057,7 @@ impl<'a> Lowerer<'a> {
                 span,
             }),
             span: condition.span,
+            clause: None,
         };
         let assert_kind = match kind {
             crate::ast::ContractKind::Requires => AssertKind::Requires,
