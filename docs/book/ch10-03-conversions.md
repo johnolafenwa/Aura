@@ -356,7 +356,7 @@ because a list of strings says nothing about which type to parse into. As with
 `parse_all[int64]` is rejected until someone writes `impl Parse for int64`.
 
 Calling an associated method through a type parameter has a few restrictions in
-Aura 0.11. The call has to be in a module-level function, not in a method, and
+Aura 0.12. The call has to be in a module-level function, not in a method, and
 a function that makes it can't be started directly as a task. The
 [Manual](/manual/generics-and-traits) lists them.
 
