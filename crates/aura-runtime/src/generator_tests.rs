@@ -196,3 +196,36 @@ fn a_stack_that_cannot_be_reserved_fails_the_first_resume() {
         "{error:?}"
     );
 }
+
+#[test]
+fn closing_a_fresh_generator_ends_it_without_running_the_body() {
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let generator = counting(2, log.clone());
+    generator.close().expect("close");
+    assert!(!generator.resume().expect("a closed generator has ended"));
+    assert!(log.borrow().is_empty(), "the body never ran");
+}
+
+#[test]
+fn a_generator_resumes_only_on_the_thread_that_made_it() {
+    let generator = GeneratorValue::new(|| Ok(()), DIRECT_GENERATOR_STACK_BYTES, true, None);
+    let error = std::thread::spawn(move || generator.resume().expect_err("another thread"))
+        .join()
+        .expect("the thread finishes");
+    assert!(error.message.contains("outside the task"), "{error:?}");
+}
+
+#[test]
+fn dropping_a_suspended_generator_without_unwinding_resets_its_stack() {
+    let generator = GeneratorValue::new(
+        || {
+            generator_yield(int(1))?;
+            Ok(())
+        },
+        DIRECT_GENERATOR_STACK_BYTES,
+        false,
+        None,
+    );
+    assert!(generator.resume().expect("resume"));
+    super::without_generator_drop_close(|| drop(generator));
+}

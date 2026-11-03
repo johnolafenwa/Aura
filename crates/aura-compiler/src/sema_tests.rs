@@ -32439,3 +32439,21 @@ fn a_task_group_is_created_only_as_a_with_item() {
     )
     .expect("a TaskGroup as a with item should check");
 }
+
+#[test]
+fn generator_error_mapping_keeps_unrelated_diagnostics() {
+    let params = generators::GeneratorParams::default();
+    let unplaced = Diagnostic::new("`__aura_generator_yield` failed");
+    assert_eq!(
+        params.map_error(unplaced).message,
+        "`__aura_generator_yield` failed"
+    );
+    let span = Span { line: 1, column: 1 };
+    let other_yield = Diagnostic::at(span, "function `__aura_generator_yield` takes 1 argument");
+    assert_eq!(
+        params.map_error(other_yield).message,
+        "`yield` takes 1 argument"
+    );
+    let borrowed = Diagnostic::coded_at("AU3002", span, "`x` is borrowed");
+    assert_eq!(params.map_error(borrowed).message, "`x` is borrowed");
+}

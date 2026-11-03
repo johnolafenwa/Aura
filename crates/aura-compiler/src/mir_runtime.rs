@@ -6525,11 +6525,9 @@ impl MirRuntime {
             "start" => {
                 let mut bound = bind_builtin_args(&["body"], values)?;
                 let body = bound.remove(0).value;
+                // The checker types these helpers' arguments.
                 let Value::Function(body) = body else {
-                    return Err(Diagnostic::new(format!(
-                        "MIR generator start expected a closure, found `{}`",
-                        body.render()
-                    )));
+                    unreachable!("a generator starts from its body closure");
                 };
                 let function = self
                     .functions
@@ -6569,10 +6567,7 @@ impl MirRuntime {
             "resume" | "take" | "close" => {
                 let bound = bind_builtin_args(&["handle"], values)?;
                 let Value::Generator(generator) = &bound[0].value else {
-                    return Err(Diagnostic::new(format!(
-                        "MIR generator helper expected a generator, found `{}`",
-                        bound[0].value.render()
-                    )));
+                    unreachable!("a generator helper takes a generator");
                 };
                 match operation {
                     "resume" => self
@@ -6584,9 +6579,7 @@ impl MirRuntime {
                         .map(|()| Value::Unit),
                 }
             }
-            _ => Err(Diagnostic::new(format!(
-                "unknown generator helper `iter.__aura_generator_{operation}`"
-            ))),
+            _ => unreachable!("unknown generator helper `{operation}`"),
         }
     }
 

@@ -117,15 +117,10 @@ pub(super) fn expand(module: &mut Module, context: &mut ModuleContext) -> Result
             "the `iter` module cannot declare generator functions",
         ));
     }
-    let Some(namespace) = crate::builtin_sources::importable_builtin_namespace(&[
+    let namespace = crate::builtin_sources::importable_builtin_namespace(&[
         super::iterator_loops::ITER_MODULE.to_string(),
-    ]) else {
-        return Err(Diagnostic::coded_at(
-            CODE,
-            first_span,
-            "cannot load the `iter` module",
-        ));
-    };
+    ])
+    .expect("the builtin `iter` module is importable");
     context
         .imported_bindings
         .insert(ITER_ALIAS.to_string(), ImportedBinding::Module(namespace));

@@ -4117,6 +4117,21 @@ fn eprint_writes_to_stderr_and_leaves_stdout_alone() {
 }
 
 #[test]
+fn a_consumer_trap_closes_its_paused_generator_first_on_the_interpreter() {
+    let error = run_source(include_str!(
+        "../tests/fixtures/run-fail/generator_caller_trap.au"
+    ))
+    .expect_err("the consumer traps");
+    assert_eq!(error.message, "assertion failed");
+    assert_eq!(
+        error.partial_stdout.as_deref(),
+        Some(include_str!(
+            "../tests/fixtures/run-fail/generator_caller_trap.stdout"
+        ))
+    );
+}
+
+#[test]
 fn generator_bodies_wait_on_the_interpreter() {
     let output = run_source(include_str!(
         "../tests/fixtures/run-pass/generator_waits.au"
