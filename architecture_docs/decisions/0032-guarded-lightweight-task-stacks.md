@@ -245,6 +245,15 @@ massive-concurrency claim follows from this decision.
 
 ## Future extension: Task stack reuse
 
+*Implemented in Batch 8 (steps 8a and 8e, see
+[ADR-0072](0072-task-placement-and-stack-reuse.md)).* Each worker keeps a pool
+of finished stacks for children of the same requested size, and a stack
+returns to the pool of the worker that handed it out. Guard pages and the
+256 KiB to 64 MiB override API are unchanged. Spawn-then-join went from 119 to
+about 7 microseconds per task on 4 workers and from 22 to 5 on one worker
+(Linux container); a reused stack costs no `mmap`, `mprotect`, or `munmap`.
+The text below is the original scope.
+
 Batch 8 will evaluate a bounded pool of freed guard-protected coroutine stacks.
 The 7 September 2026 spawn-and-join baseline is 98.692417 ms for 10,000 Aura
 children, or **9.869 microseconds per task**, against tokio's 3.395167 ms,

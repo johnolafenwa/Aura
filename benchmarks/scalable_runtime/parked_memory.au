@@ -1,0 +1,48 @@
+# Task memory probe (Batch 8 step 8f). Parks N sleepers and reports resident
+# bytes per parked task from /proc/self/status (Linux only).
+import fs
+import sys
+
+
+def rss_kb() -> int64:
+    match own fs.read_to_string("/proc/self/status"):
+        case Result.Ok(text):
+            for line in text.split("\n"):
+                if line.starts_with("VmRSS"):
+                    for part in line.split(" "):
+                        match parse_int64(part):
+                            case Result.Ok(v):
+                                return v
+                            case Result.Err(_):
+                                pass
+            return -1
+        case Result.Err(_):
+            return -1
+
+
+def sleeper(ready: Queue[int32]):
+    _ = ready.put(1)
+    sleep(1m)
+
+
+def main():
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            before = rss_kb()
+            ready = Queue[int32]()
+            with TaskGroup() as group:
+                for _ in range(n):
+                    group.start_soon(sleeper, ready)
+                mut parked: int64 = 0
+                while parked < n:
+                    match ready.get():
+                        case QueueReceive.Item(_):
+                            parked += 1
+                        case _:
+                            pass
+                after = rss_kb()
+                print(f"n={n} before_kb={before} parked_kb={after} bytes_per_task={(after - before) * 1024 // n}")
+                sleep(3s)
+                group.cancel()
+        case Result.Err(_):
+            pass

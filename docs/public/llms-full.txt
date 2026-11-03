@@ -9272,7 +9272,7 @@ A child starts out on its parent's worker. The newest child waits in that worker
 
 A task binds to the worker that first runs it. From then on its coroutine stack and frames never migrate, so only tasks that have not started move between workers. While every worker is busy, a worker runs one of its own queued children that has waited 100 milliseconds alongside its other tasks, at most once per 100 milliseconds, so children of a program whose workers all run endless tasks still start.
 
-A finished task's guarded stack returns to the pool of the worker that handed it out, which keeps up to 32 stacks and 32 MiB of reserved address space for later children of the same stack size. Reuse keeps the guard page and the requested capacity.
+A finished task's guarded stack returns to the pool of the worker that handed it out, for later children of the same stack size. Reuse keeps the guard page and the requested capacity. While the worker has work, its pool keeps up to 1,024 stacks and 1 GiB of reserved address space, so a burst of task exits, such as a cancelled group, does not unmap each stack; when the worker goes idle it trims the pool back to 32 stacks and 32 MiB, a few at a time.
 
 A worker with no ready task spins for up to 50 microseconds, watching for a notification from another worker, before it blocks in its poller. It skips the spin while one of its tasks waits on a descriptor. A notification wakes a blocked poller with a system call; a worker that is still running drains its notifications before it blocks, so notifying it needs no system call.
 
