@@ -5,7 +5,7 @@
 
 def produce(out: Queue[str], n: int64):
     for i in range(n):
-        out.put(f"line-{i}")
+        _ = out.put(f"line-{i}")
     out.close()
 
 
@@ -20,11 +20,11 @@ def main() -> int32:
     print(seen)
 
     numbers = Queue[int64]()
-    numbers.put(10)
-    numbers.put(20)
+    _ = numbers.put(10)
+    _ = numbers.put(20)
     numbers.close()
     # A put to a closed queue drops its value.
-    numbers.put(30)
+    _ = numbers.put(30)
     mut total = 0
     for _ in range(4):
         match numbers.get():
@@ -35,7 +35,7 @@ def main() -> int32:
     print(total)
 
     words = Queue[str]()
-    words.put("kept")
+    _ = words.put("kept")
     match words.get():
         case QueueReceive.Item(word):
             print(word)

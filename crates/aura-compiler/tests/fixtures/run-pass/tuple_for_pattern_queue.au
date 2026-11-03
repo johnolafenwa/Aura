@@ -12,7 +12,7 @@ def main():
             print("wrong")
 
     jobs = Queue[(int64, str)]()
-    jobs.put((3, "queue"))
+    _ = jobs.put((3, "queue"))
     jobs.close()
     for label, value in jobs:
         print(f"{label}:{value}")

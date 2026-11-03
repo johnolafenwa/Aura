@@ -52,7 +52,7 @@ def next_light(light: Light) -> Light:
 
 
 def count_in_task(depth: int64, out: Queue[int64]):
-    out.put(count(make(depth)))
+    _ = out.put(count(make(depth)))
 
 
 def main() -> int32:

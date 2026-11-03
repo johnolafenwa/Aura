@@ -1,0 +1,4 @@
+q = Queue[int64]()
+_ = q.put(1)
+_ = q.put(2)
+print("x")

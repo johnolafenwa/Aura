@@ -10,7 +10,7 @@ def choose_worker(use_compute: bool) -> def(int32) -> int32:
     return Unary(compute) if use_compute else Unary(increment)
 
 def publish(values: Queue[int32], value: int32) -> None:
-    values.put(value)
+    _ = values.put(value)
 
 def empty[T]() -> T | None:
     return None

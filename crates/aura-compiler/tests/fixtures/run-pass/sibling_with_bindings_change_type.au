@@ -33,7 +33,7 @@ class Label:
 
 def points_worker(input: Queue[Point], output: Queue[int64]):
     for p in input:
-        output.put(p.x + p.y)
+        _ = output.put(p.x + p.y)
     output.close()
 
 
@@ -42,7 +42,7 @@ def orders_worker(input: Queue[Order], output: Queue[int64]):
         mut total = order.id + order.tags.len()
         for p in order.points:
             total += p.x * p.y
-        output.put(total)
+        _ = output.put(total)
     output.close()
 
 
@@ -69,7 +69,7 @@ def main():
         group.start_soon(points_worker, input, output)
         consumer = group.start(drain, output)
         for i in range(20):
-            input.put(Point(x=i, y=2 * i))
+            _ = input.put(Point(x=i, y=2 * i))
         input.close()
         match consumer.result():
             case TaskResult.Ready(v):
@@ -82,7 +82,7 @@ def main():
         group.start_soon(orders_worker, input, output)
         consumer = group.start(drain, output)
         for i in range(20):
-            input.put(
+            _ = input.put(
                 Order(id=i, tags=["a", "b"], points=[Point(x=i, y=1), Point(x=2, y=i)])
             )
         input.close()

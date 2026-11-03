@@ -16,7 +16,7 @@ class Probe:
 
 def worker(inbox: Queue[int32], results: Queue[str]):
     probe = Probe("waiting", inbox)
-    results.put(f"{probe.label}: {probe.outcome}")
+    _ = results.put(f"{probe.label}: {probe.outcome}")
 
 def main():
     inbox = Queue[int32]()

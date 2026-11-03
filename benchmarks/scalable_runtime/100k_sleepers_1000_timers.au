@@ -3,7 +3,7 @@ import sys
 
 
 def sleeper(ready: Queue[int32]):
-    ready.put(1)
+    _ = ready.put(1)
     sleep(1m)
 
 
@@ -14,12 +14,12 @@ def timer(
     armed: Queue[int64],
     samples: Queue[int64]
 ):
-    prepared.put(index)
+    _ = prepared.put(index)
 
     match release.get():
         case QueueReceive.Item(_):
             start_ms: int64 = sys.monotonic_time_ms()
-            armed.put(start_ms)
+            _ = armed.put(start_ms)
             sleep(10ms)
 
             elapsed_ms: int64 = sys.monotonic_time_ms() - start_ms
@@ -27,7 +27,7 @@ def timer(
             if overshoot_ms < 0:
                 overshoot_ms = 0
 
-            samples.put(overshoot_ms)
+            _ = samples.put(overshoot_ms)
         case QueueReceive.Closed:
             pass
         case QueueReceive.TimedOut:
@@ -90,7 +90,7 @@ def main() -> int32:
                     return 1
 
         for token in range(1000):
-            timer_release.put(token as int32)
+            _ = timer_release.put(token as int32)
 
         mut armed_count: int32 = 0
         mut min_start_ms: int64 = 0

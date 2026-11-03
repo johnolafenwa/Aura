@@ -43,7 +43,7 @@ def complete_after_blocking_io() -> int32:
             return -1
 
 def observe_cancellation(started: Queue[int32]) -> int32:
-    started.put(1)
+    _ = started.put(1)
     sleep(5s)
     if cancelled():
         return 5
@@ -74,11 +74,11 @@ def main() -> int32:
                 return 11
             case TaskResult.Cancelled:
                 return 12
-        receive_queue.put(11)
+        _ = receive_queue.put(11)
         print_result("queue-receive", receiver.result(timeout=2s))
 
         send_queue = Queue[int32](capacity=1)
-        send_queue.put(1)
+        _ = send_queue.put(1)
         sender = group.start(send_one, send_queue)
         match sender.result(timeout=100ms):
             case TaskResult.TimedOut:
@@ -122,7 +122,7 @@ def main() -> int32:
                 return 27
             case TaskResult.Cancelled:
                 return 28
-        release.put(1)
+        _ = release.put(1)
         print_result("task-completion", completed.result(timeout=2s))
 
         timer = group.start(complete_after_timer)

@@ -44,7 +44,7 @@ def point_echo(input: Queue[Point], output: Queue[(int64, Point)]):
     mut count = 0
     for p in input:
         count += 1
-        output.put((count, Point(x=p.y, y=p.x)))
+        _ = output.put((count, Point(x=p.y, y=p.x)))
     output.close()
 
 def order_echo(input: Queue[Order], output: Queue[Order]):
@@ -52,14 +52,14 @@ def order_echo(input: Queue[Order], output: Queue[Order]):
         mut kept = order
         kept.points.append(Point(x=kept.id, y=kept.id))
         kept.tags.append("seen")
-        output.put(kept)
+        _ = output.put(kept)
     output.close()
 
 def shape_names(input: Queue[Shape], output: Queue[str]):
     while true:
         match input.get():
             case QueueReceive.Item(shape):
-                output.put(describe(shape))
+                _ = output.put(describe(shape))
             case QueueReceive.Closed:
                 break
             case _:
@@ -113,7 +113,7 @@ def main():
         points_out = Queue[(int64, Point)](capacity=2)
         group.start_soon(point_echo, points_in, points_out)
         for i in range(5):
-            points_in.put(Point(x=i, y=10 * i))
+            _ = points_in.put(Point(x=i, y=10 * i))
         points_in.close()
         for count, p in points_out:
             print(f"point {count}: {p.x},{p.y}")
@@ -123,7 +123,7 @@ def main():
         orders_out = Queue[Order]()
         group.start_soon(order_echo, orders_in, orders_out)
         for i in range(3):
-            orders_in.put(make_order(i))
+            _ = orders_in.put(make_order(i))
         orders_in.close()
         for order in orders_out:
             print(f"order {order.id}: {order_total(order)} {order.tags} {order.points.len()}")
@@ -133,7 +133,7 @@ def main():
         names_out = Queue[str]()
         group.start_soon(shape_names, shapes_in, names_out)
         for i in range(4):
-            shapes_in.put(pick_shape(i))
+            _ = shapes_in.put(pick_shape(i))
         shapes_in.close()
         for name in names_out:
             print(name)
@@ -141,9 +141,9 @@ def main():
     with TaskGroup() as group:
         outcomes = Queue[Result[Point, str]]()
         reader = group.start(results_of, outcomes)
-        outcomes.put(Result.Ok(Point(x=1, y=2)))
-        outcomes.put(Result.Err("bad"))
-        outcomes.put(Result.Ok(Point(x=3, y=4)))
+        _ = outcomes.put(Result.Ok(Point(x=1, y=2)))
+        _ = outcomes.put(Result.Err("bad"))
+        _ = outcomes.put(Result.Ok(Point(x=3, y=4)))
         outcomes.close()
         match reader.result():
             case TaskResult.Ready(text):
@@ -191,9 +191,9 @@ def main():
 
     near = Queue[Point]()
     far = Queue[Point]()
-    far.put(Point(x=8, y=9))
+    _ = far.put(Point(x=8, y=9))
     show_selected(select(near, far))
-    near.put(Point(x=10, y=11))
+    _ = near.put(Point(x=10, y=11))
     near.close()
     show_selected(select(near, far))
     show_selected(select(near))

@@ -3,7 +3,7 @@ def worker(out: Queue[int32]):
     while i < 3:
         if cancelled():
             return
-        out.put(i)
+        _ = out.put(i)
         i += 1
 
 def main() -> int32:

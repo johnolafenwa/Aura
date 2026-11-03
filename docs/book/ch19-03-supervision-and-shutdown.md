@@ -745,13 +745,13 @@ def print_report(report: Report):
 
 def produce(jobs: own list[Job], queue: Queue[Job]):
     for job in own jobs:
-        queue.put(job)
+        _ = queue.put(job)
     queue.close()
 
 
 def work(queue: Queue[Job], reports: Queue[Report]):
     for job in queue:
-        reports.put(run_job(job))
+        _ = reports.put(run_job(job))
 
 
 class Options:

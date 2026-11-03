@@ -183,6 +183,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "context manager protocol",
     },
     DiagnosticCodeInfo {
+        code: "AU2018",
+        band: "names/types",
+        title: "unused result",
+    },
+    DiagnosticCodeInfo {
         code: "AU2040",
         band: "names/types",
         title: "invalid class pattern",

@@ -3,7 +3,7 @@ import net
 
 def serve_http(addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.http_listen("127.0.0.1:0"):
-        addresses.put(try server_listener.local_addr())
+        _ = addresses.put(try server_listener.local_addr())
         exchange = try server_listener.accept(timeout=5s)
         with request = exchange:
             method = request.method()

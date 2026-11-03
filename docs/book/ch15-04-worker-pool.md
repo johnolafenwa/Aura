@@ -34,7 +34,7 @@ def count_words(job: own Job) -> int64:
 def produce(documents: own list[str], jobs: Queue[Job]):
     mut id = 0
     for text in own documents:
-        jobs.put(Job(id=id, text=text))
+        _ = jobs.put(Job(id=id, text=text))
         id += 1
     jobs.close()
 
@@ -42,7 +42,7 @@ def work(name: str, jobs: Queue[Job], results: Queue[Count]):
     for job in jobs:
         id = job.id
         words = count_words(job)
-        results.put(Count(id=id, words=words, worker=name.clone()))
+        _ = results.put(Count(id=id, words=words, worker=name.clone()))
 
 def run_workers(count: int64, jobs: Queue[Job], results: Queue[Count]):
     with workers = TaskGroup():
@@ -228,7 +228,7 @@ def count_words(job: own Job) -> int64:
 def produce(documents: own list[str], jobs: Queue[Job]):
     mut id = 0
     for text in own documents:
-        jobs.put(Job(id=id, text=text))
+        _ = jobs.put(Job(id=id, text=text))
         id += 1
     jobs.close()
 
@@ -238,7 +238,7 @@ def work(name: str, jobs: Queue[Job], results: Queue[Count]):
         words = count_words(job)
         if cancelled():
             return
-        results.put(Count(id=id, words=words, worker=name.clone()))
+        _ = results.put(Count(id=id, words=words, worker=name.clone()))
 
 def run_workers(count: int64, jobs: Queue[Job], results: Queue[Count]):
     with workers = TaskGroup():

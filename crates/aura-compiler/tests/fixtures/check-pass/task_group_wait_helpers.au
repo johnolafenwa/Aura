@@ -7,7 +7,7 @@ def worker_slow(value: int32) -> int32:
     return value * 2
 
 def announce(queue: Queue[str]) -> None:
-    queue.put("ready")
+    _ = queue.put("ready")
 
 def print_string_receive(value: own QueueReceive[str]):
     match own value:

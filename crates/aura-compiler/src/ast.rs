@@ -911,6 +911,9 @@ pub struct ContinueStmt {
 pub struct ExprStmt {
     pub expr: Expr,
     pub span: Span,
+    /// Written `_ = expr`: the value is dropped on purpose, which an unused
+    /// `Result` requires.
+    pub discarded: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]

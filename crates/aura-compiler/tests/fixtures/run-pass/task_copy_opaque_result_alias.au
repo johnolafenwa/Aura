@@ -24,7 +24,7 @@ def main() -> int32:
 
         match queue_task.result():
             case TaskResult.Ready(value):
-                value.put(9)
+                _ = value.put(9)
             case TaskResult.Error(_message):
                 return 5
             case TaskResult.Cancelled:

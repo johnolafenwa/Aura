@@ -1,0 +1,6 @@
+error[AU2018]: this `Result[None, str]` is never used, so an error would go unnoticed
+ --> crates/aura-compiler/tests/fixtures/check-fail/unused_result_is_an_error.au:5:5
+  |
+5 |     save("settings.conf")
+  |     ^
+  = help: handle it with `match` or `try`, or discard it on purpose with `_ = ...`

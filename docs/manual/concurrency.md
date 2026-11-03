@@ -374,7 +374,7 @@ also respond to cancellation.
 ```aura
 def main() -> int32:
     messages = Queue[str]()
-    messages.put("ready")
+    _ = messages.put("ready")
     print(select(messages, 0ms))
     return 0
 ```

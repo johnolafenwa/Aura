@@ -123,7 +123,7 @@ def worker(value: int32) -> int32:
     return value + 1
 
 def produce(queue: Queue[int32]) -> None:
-    queue.put(11)
+    _ = queue.put(11)
     queue.close()
 
 def summarize[T: Labelled](value: T) -> str:

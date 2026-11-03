@@ -1,7 +1,7 @@
 def main() -> int32:
     jobs = Queue[int32]()
-    jobs.put(1)
-    jobs.put(2)
+    _ = jobs.put(1)
+    _ = jobs.put(2)
     jobs.close()
 
     for job in jobs:

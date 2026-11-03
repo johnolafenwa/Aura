@@ -5,7 +5,7 @@ def observe(label: str, queue: Queue[int32]) -> Queue[int32]:
 def main():
     first = Queue[int32]()
     second = Queue[int32]()
-    first.put(1)
-    second.put(2)
+    _ = first.put(1)
+    _ = second.put(2)
     print(select(observe("first", first), observe("second", second)))
     print(second.get())

@@ -2,4 +2,4 @@ import process
 
 def main():
     with supervisor = process.supervisor():
-        supervisor.start(name="job", command=["/bin/true"], cwd=None)
+        _ = supervisor.start(name="job", command=["/bin/true"], cwd=None)

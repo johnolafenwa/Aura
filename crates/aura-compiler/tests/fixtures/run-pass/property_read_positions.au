@@ -47,7 +47,7 @@ def pick[T](value: own T) -> T:
     return value
 
 def produce(events: Queue[int64], amount: int64) -> None:
-    events.put(amount)
+    _ = events.put(amount)
 
 def main():
     counter = Counter(start=2, names=["a", "b", "c", "d"])

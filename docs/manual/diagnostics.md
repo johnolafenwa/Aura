@@ -88,6 +88,7 @@ String and format-specification diagnostics are described under
 | `AU2015` | callable contract mismatch | A callable whose complete contract differs from the one its destination requires. | Match the contract, or restrict it with an explicit adapter or constructor. |
 | `AU2016` | initializer declaration | An `__init__` without a bare `self` receiver, with its own type parameters, with a result other than `None`, with `return value`, or declared in a trait. | Write `def __init__(self, ...)` with no result, and move fallible construction into a named factory. |
 | `AU2017` | context manager protocol | A `with` item that is not a context manager, a manager method of the wrong shape, or an exit `Result` the enclosing function cannot return. | Declare `__exit__(mut self)` with a valid result, or return a compatible `Result` from the enclosing function. |
+| `AU2018` | unused result | An expression statement whose value is a `Result`. | Handle it with `try` or `match`, or discard it on purpose with `_ = expression`. |
 | `AU2040` | invalid class pattern | A class pattern with a positional, unknown, private, repeated, or method field, a class that does not match the scrutinee, a tested field whose type differs between the union specializations the pattern matches, or a `match mut` class pattern. | Name stored fields visible here, once each, as `field=pattern`. Select one specialization with a type pattern such as `case Box[int64] as box:`. |
 | `AU2041` | invalid rest pattern or target | A `*` rest element outside a tuple or sequence, a second rest element, too few positions for the fixed elements, a `*name` that covers no positions, or a sequence pattern in `match mut` or `match own`. | Keep one rest element per tuple or sequence, and use `*_` when it may cover nothing. |
 | `AU2042` | invalid docstring or documentation limit | A triple-quoted string in a class, enum, trait, or `impl` body outside a documentation position, or documentation over a size limit. | Move the string to the first slot or directly after a field, or shorten the documentation. |
@@ -221,6 +222,18 @@ def main():
 
 Add `def __exit__(mut self) -> None` to the class, or move the item out of
 the `with` header.
+
+**`AU2018` unused result.** An expression statement drops its value, and a
+dropped `Result` would hide its error. `queue.put(value)` returns one, as do
+`process.run(...)` and the network calls.
+
+```aura check-fail:AU2018
+def main():
+    parse_int64("12")
+```
+
+Use the value with `try` or `match`, or write `_ = parse_int64("12")` when
+the outcome really does not matter.
 
 **`AU2042` invalid docstring or documentation limit.** The parser reports
 `AU2042` in these cases:

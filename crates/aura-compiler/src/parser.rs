@@ -540,6 +540,8 @@ impl Parser {
 
     fn at_module_constant_start(&self) -> bool {
         match self.current_kind() {
+            // `_ = expr` discards a value; it is a statement, not a constant.
+            TokenKind::Identifier(name) if name == "_" => false,
             TokenKind::Identifier(_) => {
                 matches!(self.peek_kind(1), Some(TokenKind::Equal | TokenKind::Colon))
             }
@@ -1717,6 +1719,10 @@ impl Parser {
             self.parse_view_stmt()
         } else if self.at_simple(&TokenKind::Star) || self.is_destructure_assignment_stmt() {
             self.parse_destructure_stmt()
+        } else if matches!(self.current_kind(), TokenKind::Identifier(name) if name == "_")
+            && matches!(self.peek_kind(1), Some(TokenKind::Equal))
+        {
+            self.parse_discard_stmt()
         } else if self.is_assignment_stmt() {
             self.parse_assign_stmt()
         } else {
@@ -2381,7 +2387,25 @@ impl Parser {
         let span = self.current_span();
         let expr = self.parse_expr()?;
         self.expect_statement_terminator()?;
-        Ok(Stmt::Expr(ExprStmt { expr, span }))
+        Ok(Stmt::Expr(ExprStmt {
+            expr,
+            span,
+            discarded: false,
+        }))
+    }
+
+    /// `_ = expr` evaluates `expr` and drops its value on purpose.
+    fn parse_discard_stmt(&mut self) -> Result<Stmt> {
+        let span = self.current_span();
+        self.bump();
+        self.expect_simple(TokenKind::Equal)?;
+        let expr = self.parse_expr()?;
+        self.expect_statement_terminator()?;
+        Ok(Stmt::Expr(ExprStmt {
+            expr,
+            span,
+            discarded: true,
+        }))
     }
 
     /// Parses an indented body whose first statement slot may hold a

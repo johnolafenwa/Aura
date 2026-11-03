@@ -1,6 +1,6 @@
 def main():
     queue = Queue[int64]()
-    queue.put(1)
+    _ = queue.put(1)
     match queue.get_or_none():
         case Poll.Ready(value):
             print(value)

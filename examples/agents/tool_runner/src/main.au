@@ -77,10 +77,10 @@ def connect_tools() -> Result[int64, ToolError]:
 
 
 def stream_events(events: Queue[str]) -> None:
-    events.put("stream started")
-    events.put("token tools")
-    events.put("token ready")
-    events.put("stream finished")
+    _ = events.put("stream started")
+    _ = events.put("token tools")
+    _ = events.put("token ready")
+    _ = events.put("stream finished")
     events.close()
 
 

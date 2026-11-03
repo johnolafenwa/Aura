@@ -14,7 +14,7 @@ def worker_blocked(value: int32, release: Queue[int32]) -> int32:
             return value * 2
 
 def announce(queue: Queue[str]) -> None:
-    queue.put("ready")
+    _ = queue.put("ready")
 
 def print_string_receive(value: own QueueReceive[str]):
     match own value:
@@ -99,7 +99,7 @@ def main() -> int32:
         task_list.append(group.start(worker_fast, 3))
         print_string_receive(started.get(timeout=20ms))
         print_any(wait_any(task_list, timeout=20ms))
-        release.put(1)
+        _ = release.put(1)
         print_all(wait_all(task_list, timeout=20ms))
         print_task_result(task_list[0].result(timeout=20ms))
 

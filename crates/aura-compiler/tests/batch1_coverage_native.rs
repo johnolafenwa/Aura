@@ -389,7 +389,7 @@ fn native_backend_rejects_malformed_terminators_and_unary_operands() {
 // select
 // ---------------------------------------------------------------------------
 
-const SELECT: &str = "def main():\n    first = Queue[str]()\n    second = Queue[str]()\n    first.put(\"one\")\n    outcome = select(first, second)\n    match own outcome:\n        case SelectOutcome.Queue(index, _):\n            print(index)\n        case _:\n            print(\"other\")\n";
+const SELECT: &str = "def main():\n    first = Queue[str]()\n    second = Queue[str]()\n    _ = first.put(\"one\")\n    outcome = select(first, second)\n    match own outcome:\n        case SelectOutcome.Queue(index, _):\n            print(index)\n        case _:\n            print(\"other\")\n";
 
 fn select_source_temporaries(function: &mut Value) -> Vec<String> {
     named_call_mut(function, "select")["args"]

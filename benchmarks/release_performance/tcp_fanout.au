@@ -22,7 +22,7 @@ def flush_stdout() -> bool:
 
 def serve_one(index: int32, addresses: Queue[str]) -> Result[int32, io.Error]:
     with listener = try net.listen("127.0.0.1:0"):
-        addresses.put(try listener.local_addr())
+        _ = addresses.put(try listener.local_addr())
         stream = try listener.accept(timeout=5s)
         with socket = stream:
             match try socket.read_line(timeout=5s):

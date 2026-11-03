@@ -3,7 +3,7 @@ def consume(value: own str):
 
 def main() -> int32:
     jobs = Queue[str]()
-    jobs.put("one")
+    _ = jobs.put("one")
     jobs.close()
 
     for job in jobs:

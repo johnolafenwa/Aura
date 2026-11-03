@@ -74,7 +74,7 @@ import net
 
 def serve(addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.listen("127.0.0.1:0"):
-        addresses.put(try server_listener.local_addr())
+        _ = addresses.put(try server_listener.local_addr())
         socket = try server_listener.accept()
         with server_stream = socket:
             line = try server_stream.read_line()
@@ -348,7 +348,7 @@ import net
 
 def serve_udp(addresses: Queue[str]) -> Result[str, io.Error]:
     with server_socket = try net.udp_bind("127.0.0.1:0"):
-        addresses.put(try server_socket.local_addr())
+        _ = addresses.put(try server_socket.local_addr())
         match own try server_socket.recv_from(1024, timeout=1s):
             case net.UdpDatagram as packet:
                 text = try packet.text()
@@ -359,7 +359,7 @@ def serve_udp(addresses: Queue[str]) -> Result[str, io.Error]:
 
 def serve_http(addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.http_listen("127.0.0.1:0"):
-        addresses.put(try server_listener.local_addr())
+        _ = addresses.put(try server_listener.local_addr())
         exchange = try server_listener.accept(timeout=1s)
         with request = exchange:
             method = request.method()
@@ -375,7 +375,7 @@ def serve_http(addresses: Queue[str]) -> Result[None, io.Error]:
 
 def serve_http_bytes(addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.http_listen("127.0.0.1:0"):
-        addresses.put(try server_listener.local_addr())
+        _ = addresses.put(try server_listener.local_addr())
         exchange = try server_listener.accept(timeout=1s)
         with request = exchange:
             body = request.body_bytes()
@@ -384,7 +384,7 @@ def serve_http_bytes(addresses: Queue[str]) -> Result[None, io.Error]:
 
 def serve_ws(addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.websocket_listen("127.0.0.1:0"):
-        addresses.put(try server_listener.local_addr())
+        _ = addresses.put(try server_listener.local_addr())
         socket = try server_listener.accept(timeout=1s)
         with server_socket = socket:
             match own try server_socket.recv_text(timeout=1s):
@@ -555,7 +555,7 @@ import net
 
 def serve_unix(path: str, ready: Queue[bool]) -> Result[None, io.Error]:
     with server_listener = try net.unix_listen(path):
-        ready.put(true)
+        _ = ready.put(true)
         stream = try server_listener.accept(timeout=1s)
         with server_stream = stream:
             match own try server_stream.read_line(timeout=1s):
@@ -567,7 +567,7 @@ def serve_unix(path: str, ready: Queue[bool]) -> Result[None, io.Error]:
 
 def serve_tls(cert_path: str, key_path: str, addresses: Queue[str]) -> Result[None, io.Error]:
     with server_listener = try net.tls_listen("127.0.0.1:0", cert_path, key_path):
-        addresses.put(try server_listener.local_addr())
+        _ = addresses.put(try server_listener.local_addr())
         stream = try server_listener.accept(timeout=2s)
         with server_stream = stream:
             match own try server_stream.read_line(timeout=2s):

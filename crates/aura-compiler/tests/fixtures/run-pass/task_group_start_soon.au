@@ -1,5 +1,5 @@
 def producer(out: Queue[int32]):
-    out.put(9)
+    _ = out.put(9)
     out.close()
 
 def main() -> int32:

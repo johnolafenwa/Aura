@@ -72,7 +72,7 @@ import net
 
 def serve(addresses: Queue[str]) -> Result[None, io.Error]:
     with listener = try net.listen("127.0.0.1:0"):
-        addresses.put(try listener.local_addr())
+        _ = addresses.put(try listener.local_addr())
         with stream = try listener.accept(timeout=5s):
             match try stream.read_line(timeout=5s):
                 case str as name:

@@ -3,7 +3,7 @@ def wait_for_release(
     release: Queue[int32],
     marker: int32
 ) -> int32:
-    ready.put(marker)
+    _ = ready.put(marker)
     match release.get(timeout=5s):
         case QueueReceive.Item(_):
             return marker
@@ -54,7 +54,7 @@ def observe_cancellation(
     ready: Queue[int32],
     marker: int32
 ) -> int32:
-    ready.put(marker)
+    _ = ready.put(marker)
     sleep(5s)
     if cancelled():
         return marker
@@ -81,8 +81,8 @@ def main() -> int32:
             return 10
         if not wait_until_ready(failure_ready):
             return 11
-        failure_release.put(1)
-        failure_release.put(1)
+        _ = failure_release.put(1)
+        _ = failure_release.put(1)
         print(error_contains(alpha, "alpha-worker-failure"))
         print(error_contains(beta, "beta-worker-failure"))
 

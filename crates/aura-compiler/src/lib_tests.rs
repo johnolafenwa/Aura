@@ -3343,10 +3343,9 @@ fn cancellation_wakes_sleep_tasks_promptly() {
     let source = format!(
         r#"
 def sleeper(started: Queue[str], finished: Queue[str]) -> None:
-    started.put("sleep")
+    _ = started.put("sleep")
     sleep({blocked_sleep_ms}ms)
-    finished.put("sleep")
-
+    _ = finished.put("sleep")
 def wait_for_one(queue: Queue[str]):
     while true:
         match queue.get():
@@ -3389,7 +3388,7 @@ fn cancellation_wakes_queue_wait_tasks_promptly() {
     let source = format!(
         r#"
 def waiter(started: Queue[str], jobs: Queue[int32], finished: Queue[str]) -> None:
-    started.put("wait")
+    _ = started.put("wait")
     while not cancelled():
         match jobs.get(timeout={blocked_wait_ms}ms):
             case QueueReceive.Item(_):
@@ -3400,8 +3399,7 @@ def waiter(started: Queue[str], jobs: Queue[int32], finished: Queue[str]) -> Non
                 pass
             case QueueReceive.Cancelled:
                 pass
-    finished.put("wait")
-
+    _ = finished.put("wait")
 def wait_for_one(queue: Queue[str]):
     while true:
         match queue.get():
@@ -3655,7 +3653,7 @@ fn lightweight_tasks_scale_to_thousands_of_waiting_tasks() {
 import fs
 
 def sleeper(started: Queue[int32]) -> None:
-    started.put(1)
+    _ = started.put(1)
     while not cancelled():
         sleep(10s)
 

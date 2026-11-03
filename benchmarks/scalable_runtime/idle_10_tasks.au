@@ -2,12 +2,12 @@ import io
 
 
 def queue_waiter(ready: Queue[int32], blocked: Queue[int32]):
-    ready.put(1)
+    _ = ready.put(1)
     blocked.get()
 
 
 def timer_waiter(ready: Queue[int32]):
-    ready.put(1)
+    _ = ready.put(1)
     sleep(1m)
 
 

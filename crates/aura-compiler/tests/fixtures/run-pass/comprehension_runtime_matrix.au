@@ -30,7 +30,7 @@ def main():
     print(copied_tags)
 
     pairs = Queue[(str, str)]()
-    pairs.put(("queue", "-tuple"))
+    _ = pairs.put(("queue", "-tuple"))
     pairs.close()
     joined: list[str] = [
         left + right
@@ -82,7 +82,7 @@ def main():
     print(ordered[5])
 
     messages = Queue[str]()
-    messages.put("received")
+    _ = messages.put("received")
     messages.close()
     received: list[str] = [message for message in messages]
     print(received)
@@ -98,7 +98,7 @@ def main():
     print(recursive)
 
     closures = Queue[str]()
-    closures.put("captured")
+    _ = closures.put("captured")
     closures.close()
     invoked: list[str] = [
         (lambda: message)()

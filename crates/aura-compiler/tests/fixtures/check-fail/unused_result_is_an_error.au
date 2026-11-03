@@ -1,0 +1,6 @@
+def save(path: str) -> Result[None, str]:
+    return Result.Err(f"disk full while writing {path}")
+
+def main():
+    save("settings.conf")
+    print("saved")

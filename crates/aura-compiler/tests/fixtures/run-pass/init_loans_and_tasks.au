@@ -14,7 +14,7 @@ def bump(value: mut int64):
     value += 10
 
 def worker(results: Queue[int64], value: int64):
-    results.put(value * 2)
+    _ = results.put(value * 2)
 
 class Ledger:
     items: list[int64]

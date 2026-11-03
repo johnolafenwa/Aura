@@ -7,6 +7,11 @@ in this file.
 
 ## Unreleased
 
+- **Breaking:** an expression statement whose value is a `Result` is now an
+  error (`AU2018`), so a failure can't be dropped by accident. Handle the
+  `Result` with `try` or `match`, or discard it on purpose with
+  `_ = expression`. `_ = ...` binds no name and may repeat. Calls such as
+  `queue.put(value)` that used to stand alone need `_ =` (ADR-0070).
 - `range` takes an optional third `step` argument: `range(0, 10, 2)` counts
   by twos and `range(10, 0, -1)` counts down. A zero step stops the program
   with `AU4001`.

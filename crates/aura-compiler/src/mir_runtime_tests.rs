@@ -20766,8 +20766,7 @@ def main():
 
         pending_task = group.start(wait_for_release)
         print(pending_task.poll())
-        release.put(7)
-
+        _ = release.put(7)
     print("cleanup-complete")
 "#,
     )

@@ -11,7 +11,7 @@ def make_number() -> int32:
     return 7
 
 def relay_range(values: own Range, output: Queue[Range]) -> Range:
-    output.put(values)
+    _ = output.put(values)
     return range(4, 7)
 
 def summarize(
@@ -33,7 +33,7 @@ def summarize(
     match own envelope:
         case Envelope.Payload(payload):
             pair_name, pair_value = payload.pair
-            output.put(payload.label)
+            _ = output.put(payload.label)
             return f"{pair_name}:{payload.values.len()}:{payload.groups.len()}:{total + pair_value}"
 
 def main() -> int32:
