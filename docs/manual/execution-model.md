@@ -416,9 +416,13 @@ Scheduler abandonment marks the remaining task cancelled and releases scheduler-
 
 ### Workers
 
-Aura lightweight tasks run on cooperative scheduler workers, and each task is pinned to one worker. By default, the runtime uses the available parallelism the host reports. The `AURA_WORKERS=<positive integer>` environment override selects an explicit count.
+Aura lightweight tasks run on cooperative scheduler workers, and each task is pinned to one worker once it first runs. By default, the runtime uses the available parallelism the host reports. The `AURA_WORKERS=<positive integer>` environment override selects an explicit count.
 
-Each child receives a stable worker assignment when it is spawned. Its coroutine stack never migrates, and the runtime does not steal tasks between workers.
+A child starts out on its parent's worker. The newest child waits in that worker's private slot, so a parent that starts a child and waits for it at once keeps both on one core. An older child waits in the worker's stealable queue. A worker with nothing to run takes half of another worker's queued children before it spins and blocks, and a worker that queues a child while another is blocked wakes one. A newest child that its worker has not picked up within 20 microseconds, as when its parent blocks the thread in a foreign call, can also be taken.
+
+A task binds to the worker that first runs it. From then on its coroutine stack and frames never migrate, so only tasks that have not started move between workers. While every worker is busy, a worker runs one of its own queued children that has waited 100 milliseconds alongside its other tasks, at most once per 100 milliseconds, so children of a program whose workers all run endless tasks still start.
+
+A finished task's guarded stack returns to the pool of the worker that handed it out, which keeps up to 32 stacks and 32 MiB of reserved address space for later children of the same stack size. Reuse keeps the guard page and the requested capacity.
 
 A worker with no ready task spins for up to 50 microseconds, watching for a notification from another worker, before it blocks in its poller. It skips the spin while one of its tasks waits on a descriptor. A notification wakes a blocked poller with a system call; a worker that is still running drains its notifications before it blocks, so notifying it needs no system call.
 
@@ -428,7 +432,7 @@ Queue waits, task waits, sleep, nonblocking sockets, and scheduler-integrated I/
 
 Scheduling order among multiple ready tasks is not specified. Neither is completion order among independent tasks, or program-output order. Coordinate through queues, task results, cancellation, and other documented synchronization, not timing assumptions.
 
-Aura exposes no worker identity or affinity API. Task execution is multicore. Preemption and work stealing are unavailable, and speedup depends on the workload.
+Aura exposes no worker identity or affinity API. Task execution is multicore. Idle workers steal children that have not started; a started task never moves, and there is no preemption, so speedup depends on the workload.
 
 Queue and Task handles are the maintained cross-worker communication surface. Every other capture and result is owned `Transfer` data, which keeps the boundary share-nothing. Cancellation and diagnostic context are installed per task and stay isolated across workers.
 
@@ -493,7 +497,7 @@ Worker traps and checked Duration overflow propagate as runtime diagnostics. Can
 
 Starting a task first copies or moves every argument into task-owned capture storage. The child then applies the target's declared parameter capability to that capture. A bare parameter borrows it, and an `own` parameter consumes it. Mutable targets are rejected statically.
 
-Task captures, results, and Queue payloads must also pass the structural `Transfer` check before the child is admitted to its spawn-time pinned worker.
+Task captures, results, and Queue payloads must also pass the structural `Transfer` check before the child is admitted to the worker that first runs it.
 
 Starting a child from a running task does not mutate the live scheduler through an alias. The runtime first prepares the child's guarded stack and task state. Then it transfers that prepared request to the scheduler for admission. If preparation fails, the start fails synchronously before a handle is returned, and no child is admitted.
 

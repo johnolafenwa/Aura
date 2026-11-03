@@ -20764,7 +20764,11 @@ def main():
         optional_error_task = group.start(optional_fail)
         print(optional_error_task.poll(timeout=1s))
 
-        pending_task = group.start(wait_for_release)
+    # The failures above cancel `group`, so the pending child gets a group
+    # of its own; otherwise a worker that runs it before `poll()` would see
+    # the cancellation and return the default.
+    with pending_group = TaskGroup():
+        pending_task = pending_group.start(wait_for_release)
         print(pending_task.poll())
         _ = release.put(7)
     print("cleanup-complete")

@@ -432,6 +432,12 @@ impl RuntimeReactor {
     /// descriptor learns of readiness only from the poller, so while one is
     /// armed this returns at once.
     pub fn spin_for_notification(&self, budget: Duration) {
+        self.spin_for_notification_or(budget, || false);
+    }
+
+    /// Like `spin_for_notification`, but also stops as soon as `stop`
+    /// returns true, which the scheduler uses to notice work it can steal.
+    pub fn spin_for_notification_or(&self, budget: Duration, mut stop: impl FnMut() -> bool) {
         #[cfg(unix)]
         if !self.key_fds.is_empty() {
             return;
@@ -447,7 +453,7 @@ impl RuntimeReactor {
                 }
                 std::hint::spin_loop();
             }
-            if start.elapsed() >= budget {
+            if stop() || start.elapsed() >= budget {
                 return;
             }
         }
