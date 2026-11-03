@@ -163,6 +163,10 @@ times are medians of 3 runs; this container's timings vary by about 10%.
 | 8e: `cancel()` to last exit, 1,000 parked children, 4 workers / 1 worker | 60 / 15 ms | 8-12 / 7 ms |
 | 8f: resident bytes per parked sleeper (10,000) | 7,670 | 7,260 |
 
+The Safety workflow (thread sanitizer over the scheduler tests, address
+sanitizer over the native runtime, and fuzzing) passed on steps 8a to 8f
+(run 41674143817).
+
 Of a parked task's 7.3 KB, 4 KB is the one touched page of its stack. The
 rest is the task's records: task state, the coroutine record, the native
 runtime state with its 16-entry frame stack, and its wait registration.
