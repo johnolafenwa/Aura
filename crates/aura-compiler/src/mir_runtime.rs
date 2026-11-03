@@ -3641,9 +3641,13 @@ impl MirRuntime {
     /// Yields at an entry of `function` when it lies on a call cycle, so
     /// deep recursion with no loop yields like a loop does. An interpreted
     /// call costs far more than a yield, so the interpreter keeps no call
-    /// fuel. Like a loop safepoint, it does not observe cancellation.
+    /// fuel. A task's own first call never yields: the call graph is
+    /// conservative and counts most task entry functions, and a child that
+    /// gave its turn back before its first operation would let a parent
+    /// cancel it before it started. Like a loop safepoint, it does not
+    /// observe cancellation.
     fn call_safepoint(&mut self, function: &MirFunction) {
-        if !self.safepoints_enabled {
+        if !self.safepoints_enabled || self.call_depth <= 1 {
             return;
         }
         let module = &self.module;

@@ -23759,7 +23759,12 @@ def main() -> int32:
     );
     assert!(runtime.safepoints_enabled);
     assert!(runtime.recursive_functions.is_none());
+    // A task's own first call is not a safepoint.
+    runtime.call_depth = 1;
+    runtime.call_safepoint(&fib);
+    assert!(runtime.recursive_functions.is_none());
     // Outside a task the yield returns at once.
+    runtime.call_depth = 2;
     runtime.call_safepoint(&fib);
     let recursive = runtime
         .recursive_functions
@@ -23775,6 +23780,7 @@ def main() -> int32:
 
     let mut sequential = test_runtime();
     assert!(!sequential.safepoints_enabled);
+    sequential.call_depth = 2;
     sequential.call_safepoint(&fib);
     assert!(sequential.recursive_functions.is_none());
 }

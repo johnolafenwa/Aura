@@ -445,7 +445,7 @@ A safepoint is not preemption, and it does not inspect cancellation. A single lo
 
 Neither automatic nor explicit yielding specifies which ready local task runs next.
 
-MIR execution amortizes the cooperative yield with 8 units of function-local loop fuel, and yields at every recursive entry, since an interpreted call costs far more than a yield. Direct native code uses 4,096 units of function-local loop fuel, kept in a register, and 4,096 units of per-task call fuel, kept in the task's frame stack. Each replenishes its fuel after yielding. A program proven to have no possible sibling Aura task elides both checks entirely. These backend strategies may produce different valid interleavings. Scheduling order is not observable language order.
+MIR execution amortizes the cooperative yield with 8 units of function-local loop fuel, and yields at every recursive entry below a task's first call, since an interpreted call costs far more than a yield. Direct native code uses 4,096 units of function-local loop fuel, kept in a register, and 4,096 units of per-task call fuel, kept in the task's frame stack. Each replenishes its fuel after yielding. A program proven to have no possible sibling Aura task elides both checks entirely. These backend strategies may produce different valid interleavings. Scheduling order is not observable language order.
 
 ### `yield_now()`
 

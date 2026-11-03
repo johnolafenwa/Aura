@@ -713,7 +713,7 @@ and explicit guarded stack requests use the same scheduler allocation path on
 both backends.
 
 The safepoints differ in frequency. MIR checks each backedge and yields
-every 8 backedges, and yields at every recursive entry. Native code uses
+every 8 backedges, and yields at every recursive entry below a task's first call. Native code uses
 4,096 units of function-local loop fuel and 4,096 units of per-task call fuel
 between yields when sibling tasks are possible. It skips both checks when the
 program proves that no sibling task can exist.

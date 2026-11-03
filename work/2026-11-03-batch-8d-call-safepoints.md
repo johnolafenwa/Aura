@@ -21,7 +21,8 @@ worker is not starved.
   the frame stack had the same instruction count on a 100M-iteration loop
   in a task but ran 5.3x longer (246 ms against 46 ms), because the
   counter's store-to-load chain serializes the loop.
-- The MIR interpreter yields at every recursive entry. Its scheduler polls
+- The MIR interpreter yields at every recursive entry below a task's first
+  call. Its scheduler polls
   timers once every 64 ready turns, and a debug-build interpreted call
   costs about 190 us, so any call fuel left timers starved for 100 ms in
   the CLI test.
