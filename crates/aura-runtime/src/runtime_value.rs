@@ -8521,8 +8521,13 @@ impl LightweightTaskScheduler {
                 if found {
                     // The last searcher to find work wakes a parked worker
                     // when more is queued, so parallelism keeps ramping up.
+                    // That includes children too young to steal yet: a
+                    // parked worker sleeps without a timeout, and a child
+                    // pushed while this worker searched woke no one, so if
+                    // this worker's new task blocks its thread, no one would
+                    // come back for them.
                     if workers.searching.fetch_sub(1, Ordering::SeqCst) == 1
-                        && workers.has_stealable_work(worker_index)
+                        && workers.has_waiting_children(worker_index)
                     {
                         workers.wake_parked_worker(worker_index);
                     }
