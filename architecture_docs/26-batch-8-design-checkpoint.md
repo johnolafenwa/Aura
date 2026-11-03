@@ -92,6 +92,11 @@ units, so it runs about 2.9x longer than it needs to.
   and inaccessible. A reused stack is not zeroed: no Aura value can read a
   dead frame, and the interpreter's headroom probe uses the stack bounds,
   not its contents. Stacks above the bound are unmapped as today.
+  *Amended in 8e:* the busy bound is 1,024 stacks and 1 GiB, and an idle
+  worker trims back to 32 stacks and 32 MiB, 16 stacks per pass. With only
+  32 kept, a cancelled group of 1,000 parked children unmapped about 970
+  stacks, and the TLB shootdowns made cancellation 4x slower on 4 workers
+  than on one.
 - C2. A process-wide pool. Rejected: one lock on every spawn and exit.
 
 ## D. Preemption

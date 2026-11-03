@@ -97,3 +97,4 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 69. [ADR-0069: The builtin prelude](0069-builtin-prelude.md) — Accepted; `Ord`, `Add`, and `From` with builtin implementations, and `Result` methods
 70. [ADR-0070: An unused `Result` is an error](0070-unused-results-are-errors.md) — Accepted; `AU2018`, and `_ = expr` discards on purpose
 71. [ADR-0071: Task groups live in `with`, and a child failure cancels the group](0071-task-groups-in-with-and-failure-cancellation.md) — Accepted; `AU2019`, and asyncio-style sibling cancellation
+72. [ADR-0072: Task placement, stealing, and stack reuse](0072-task-placement-and-stack-reuse.md) — Accepted; local-first spawn, stealing of tasks that have not run, per-worker stack pools
