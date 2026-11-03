@@ -1,8 +1,7 @@
 # Batch 8 Design Checkpoint: Multicore Runtime
 
-Status: **Proposed 2026-11-03.** The defaults below are recommendations for
-the owner to ratify. Implementation starts on the defaults, since each step
-is reversible until a release ships it.
+Status: **Ratified 2026-11-03.** The owner approved every default below
+("Approve all").
 
 Batch 8 in the [roadmap](14-priority-roadmap.md#priority-batches) covers load
 balancing and work stealing, preemption latency, cancellation
@@ -86,7 +85,10 @@ units, so it runs about 2.9x longer than it needs to.
 
 - **C1. A bounded per-worker pool (default).** When a coroutine ends, its
   worker keeps the stack for the next child of the same size, up to 32 stacks
-  per worker and 32 MiB of reserved address space. Guard pages stay mapped
+  per worker and 32 MiB of reserved address space. A stack returns to the
+  pool of the worker that handed it out, so a worker whose children are
+  stolen still reuses their stacks; an `munmap` in a process with threads on
+  several cores costs a TLB shootdown on each of them. Guard pages stay mapped
   and inaccessible. A reused stack is not zeroed: no Aura value can read a
   dead frame, and the interpreter's headroom probe uses the stack bounds,
   not its contents. Stacks above the bound are unmapped as today.

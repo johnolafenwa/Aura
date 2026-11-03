@@ -21,8 +21,9 @@ execution through the same worker-thread architecture.
 The runtime rejects an empty, zero, signed, whitespace-padded, nonnumeric, or
 overflowing value with `AU4006` before execution starts.
 
-Each child gets a stable worker assignment when it is spawned. Its coroutine
-stack never migrates, and the runtime performs no work stealing. MIR execution
+Each child starts on its parent's worker. An idle worker may steal a child
+that has not started yet; once a task first runs, its coroutine stack never
+migrates. MIR execution
 and direct native execution share this contract. MIR is the compiler's
 mid-level intermediate representation, which `aura run` executes.
 
@@ -549,8 +550,8 @@ its source binding.
 
 Tasks run on cooperative pinned workers, as described in
 [Workers And Scheduling](#workers-and-scheduling). Starting a child stores its
-captures in task-owned storage and gives it a stable worker assignment for its
-whole lifetime.
+captures in task-owned storage. The child keeps the worker that first runs it
+for its whole lifetime.
 
 **Group exit** observes or joins children, as described in
 [Scope Exit](#scope-exit). It propagates an unread child failure. Host elapsed

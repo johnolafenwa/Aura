@@ -1270,7 +1270,8 @@ message evaluation, `AU4001`, cleanup, and matching behavior across backends.
 | API | Signature | Behavior |
 | --- | --- | --- |
 | `print` | `print(value) -> None` | Renders `value` and writes it with a newline. |
-| `range` | `range(stop: int64) -> Range`; `range(start: int64, stop: int64) -> Range` | Integer range that excludes the end value. |
+| `eprint` | `eprint(value) -> None` | Renders `value` as `print` does and writes it with a newline to standard error. |
+| `range` | `range(stop: int64) -> Range`; `range(start: int64, stop: int64) -> Range`; `range(start: int64, stop: int64, step: int64) -> Range` | Integer range that excludes the end value. A `step` counts by that amount; a negative step counts down; a zero step stops the program. |
 | `cancelled` | `cancelled() -> bool` | Returns whether the current task is cancelled. |
 | `yield_now` | `yield_now() -> None` | Yields the current lightweight task to the scheduler. |
 | `sleep` | `sleep(duration: Duration) -> None` | Suspends the current task through the scheduler. |
@@ -1551,6 +1552,16 @@ cannot be represented or allocated traps with `AU4005`. Malformed data returns
 | `set.reserve` | `reserve(additional: int64) -> None` | Makes room for at least `len() + additional` values. |
 | `set[T].with_capacity` | `with_capacity(minimum: int64) -> set[T]` | Creates an empty set with at least the requested capacity. |
 
+### Result[T, E]
+
+| Name | Signature | Notes |
+| --- | --- | --- |
+| `Result.is_ok` | `is_ok() -> bool` | True for `Ok`. Reads through shared access. |
+| `Result.is_err` | `is_err() -> bool` | True for `Err`. Reads through shared access. |
+| `Result.unwrap_or` | `unwrap_or(own self, default: own T) -> T` | The `Ok` payload, or `default`. |
+| `Result.map` | `map[U](own self, f: def(T) -> U) -> Result[U, E]` | Applies `f` to an `Ok` payload. |
+| `Result.map_err` | `map_err[F](own self, f: def(E) -> F) -> Result[T, F]` | Applies `f` to an `Err` payload. |
+
 ## Concurrency
 
 [Concurrency](/manual/concurrency) covers structured concurrency.
@@ -1567,7 +1578,7 @@ cannot be represented or allocated traps with `AU4005`. Malformed data returns
 | `Task.result` | `result(timeout: Duration = ...) -> TaskResult[T]` | Waits for the task outcome. When `T` is non-repeatable, it consumes the observation right. |
 | `Task.poll` | `poll(timeout: Duration = ...) -> Poll[T]` | Returns `Poll.Ready(value)`, or `Poll.Unavailable` on failure, timeout, cancellation, or no result right away. When `T` is non-repeatable, it consumes the observation right, even on `Unavailable`. |
 | `Task.result_or` | `result_or(default: own T, timeout: Duration = ...) -> T` | Returns the value or the fallback. When `T` is non-repeatable, it consumes the observation right. |
-| `TaskGroup()` | `TaskGroup()` | Creates a task group resource. |
+| `TaskGroup()` | `TaskGroup()` | Creates a task group resource. Valid only as a `with` item. |
 | `TaskGroup.start` | `start(function, own ...) -> Task[T]` | Every capture and the result must be `Transfer`. The target may be inferred or explicit, as `function[Types]` or `Type.associated_method[Types]`. The child runs on the guarded 768 KiB default stack. |
 | `TaskGroup.start_soon` | `start_soon(function, own ...) -> None` | Same Transfer and target rules as `start`, without returning a handle. |
 | `TaskGroup.start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` | Same Transfer and target rules as `start`, with an explicit guarded stack request of 256 KiB..64 MiB. |
@@ -3598,7 +3609,7 @@ ancestry.
 
 `aura run` defaults to `mir` for the interactive edit-run path. `aura build`
 always uses native direct emission. Maintained measurements put a cold miss at about 1.3
-seconds. A native hello-world executable is 927,888 bytes on Linux x86-64; the
+seconds. A native hello-world executable is 973,016 bytes on Linux x86-64; the
 [Performance](/manual/performance#executable-size) chapter has the size table. Each cache hit reads, hashes, and privately materializes the
 artifact. Workloads dominated by programs seen once, including CI, still pay
 the cold path on every program.
@@ -4950,8 +4961,9 @@ execution through the same worker-thread architecture.
 The runtime rejects an empty, zero, signed, whitespace-padded, nonnumeric, or
 overflowing value with `AU4006` before execution starts.
 
-Each child gets a stable worker assignment when it is spawned. Its coroutine
-stack never migrates, and the runtime performs no work stealing. MIR execution
+Each child starts on its parent's worker. An idle worker may steal a child
+that has not started yet; once a task first runs, its coroutine stack never
+migrates. MIR execution
 and direct native execution share this contract. MIR is the compiler's
 mid-level intermediate representation, which `aura run` executes.
 
@@ -5019,7 +5031,7 @@ into an unlimited wait.
 
 ## TaskGroup
 
-Construct a group with `TaskGroup()` and normally bind it with `with`:
+A group is created only as a `with` item. `TaskGroup()` anywhere else is rejected with `AU2019`, so leaving the block always waits for every child, and no child outlives the block that started it. A helper that starts tasks takes the group as a `mut TaskGroup` parameter:
 
 ```aura fragment
 with group = TaskGroup():
@@ -5028,12 +5040,12 @@ with group = TaskGroup():
 
 | API | Signature | Contract |
 | --- | --- | --- |
-| constructor | `TaskGroup()` | Creates a task group resource. |
+| constructor | `TaskGroup()` | Creates a task group resource. Valid only as a `with` item (`AU2019`). |
 | `start` | `start(function, own ...) -> Task[T]` | Requires every capture and the result to be `Transfer`. Starts the specialized target and returns its handle. |
 | `start_soon` | `start_soon(function, own ...) -> None` | Requires every capture and the result to be `Transfer`. Starts the specialized target without returning a handle. |
 | `start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` | Same `Transfer` rules, with an explicit guarded stack-capacity request. Returns the handle. |
 | `start_soon_with_stack` | `start_soon_with_stack(bytes: int64, function, own ...) -> None` | Same `Transfer` rules, with an explicit guarded stack-capacity request. Returns no handle. |
-| `cancel` | `cancel() -> None` | Signals cancellation to child tasks. |
+| `cancel` | `cancel() -> None` | Signals cancellation to child tasks. A child failure does the same. |
 
 `Transfer` is the compiler-derived property of a value that may cross a task
 or Queue boundary. [Typing Rules](#typing-rules) lists which types have it.
@@ -5153,6 +5165,10 @@ A queue wait therefore stays joinable while another live task can send to,
 receive from, or close that queue. The task performing the join does not count
 as a waker for its own children.
 
+The first child failure cancels the group, as `cancel()` would, so its
+siblings observe cancellation at their next wait or `cancelled()` check. This
+happens whether or not the parent later reads the failure.
+
 A failure already observed through its `Task` result is not raised a second
 time. An unread child failure aborts the group scope and wakes dependent queue
 and task waits.
@@ -5252,7 +5268,7 @@ for value in jobs:
 | --- | --- | --- |
 | `cancelled` | `cancelled() -> bool` | Returns `true` when the current task has been asked to cancel. |
 | `yield_now` | `yield_now() -> None` | Yields the current lightweight task so other runnable work can proceed. |
-| `sleep` | `sleep(duration: Duration) -> None` | Suspends the current task for at least `duration`, unless cancellation wakes it first. |
+| `sleep` | `sleep(duration: Duration) -> None` | Suspends the current task for at least `duration`, unless cancellation wakes it first. In a task that is already cancelled it returns at once, every time, so a loop that sleeps must also check `cancelled()` to stop. |
 | `select` | `select(source, ...) -> SelectOutcome[Q, T]` | Waits on one or more positional `Queue[Q]`, `Task[T]`, or relative-`Duration` sources. Cancellation wins. Otherwise the lowest ready source index wins. |
 | `wait_any` | `wait_any(tasks: list[Task[T]], timeout: Duration = ...) -> WaitAny[T]` | Waits for the first task outcome or the timeout. For a non-repeatable `T`, consumes the list and abandons the unchosen observation rights. `wait_any([])` returns `TimedOut` immediately. |
 | `wait_all` | `wait_all(tasks: list[Task[T]], timeout: Duration = ...) -> WaitAll[T]` | Waits until every task is ready, one task errors, the timeout expires, or cancellation interrupts the wait. For a non-repeatable `T`, consumes the list. |
@@ -5303,7 +5319,7 @@ also respond to cancellation.
 ```aura
 def main() -> int32:
     messages = Queue[str]()
-    messages.put("ready")
+    _ = messages.put("ready")
     print(select(messages, 0ms))
     return 0
 ```
@@ -5474,8 +5490,8 @@ its source binding.
 
 Tasks run on cooperative pinned workers, as described in
 [Workers And Scheduling](#workers-and-scheduling). Starting a child stores its
-captures in task-owned storage and gives it a stable worker assignment for its
-whole lifetime.
+captures in task-owned storage. The child keeps the worker that first runs it
+for its whole lifetime.
 
 **Group exit** observes or joins children, as described in
 [Scope Exit](#scope-exit). It propagates an unread child failure. Host elapsed
@@ -6789,7 +6805,7 @@ The foreign function interface (FFI) is at version 0.
 ### Scheduling
 
 - Aura task code runs on pinned cooperative scheduler workers. The default count is the available parallelism reported by the host. The `AURA_WORKERS=<positive integer>` override selects an explicit count.
-- A child is assigned to a worker when it is spawned and keeps that worker for its lifetime. Coroutine stacks never migrate, and the runtime does not steal work between workers.
+- A task keeps the worker that first runs it for its lifetime. Idle workers steal only children that have not started; a started task's coroutine stack never migrates, so a worker that took several long tasks cannot hand one off later.
 - A positive `AURA_WORKERS` value may exceed the host's available-core count. Empty, zero, signed, whitespace-padded, nonnumeric, and overflowing values are rejected before execution with `AU4006` and ``invalid AURA_WORKERS value `<raw>`: expected a positive integer``.
 - Scheduling is cooperative, not preemptive. The compiler checks every loop backedge and eventually yields from a tight loop, but only to runnable work assigned to that task's worker.
 - One long loop body or long straight-line computation can still delay siblings pinned to the same worker. The automatic checks do not inspect cancellation.
@@ -7040,6 +7056,8 @@ String and format-specification diagnostics are described under
 | `AU2015` | callable contract mismatch | A callable whose complete contract differs from the one its destination requires. | Match the contract, or restrict it with an explicit adapter or constructor. |
 | `AU2016` | initializer declaration | An `__init__` without a bare `self` receiver, with its own type parameters, with a result other than `None`, with `return value`, or declared in a trait. | Write `def __init__(self, ...)` with no result, and move fallible construction into a named factory. |
 | `AU2017` | context manager protocol | A `with` item that is not a context manager, a manager method of the wrong shape, or an exit `Result` the enclosing function cannot return. | Declare `__exit__(mut self)` with a valid result, or return a compatible `Result` from the enclosing function. |
+| `AU2018` | unused result | An expression statement whose value is a `Result`. | Handle it with `try` or `match`, or discard it on purpose with `_ = expression`. |
+| `AU2019` | task group outside `with` | A `TaskGroup()` call that is not the item of a `with` statement. | Write `with group = TaskGroup():`, and pass the group to helpers as `mut TaskGroup`. |
 | `AU2040` | invalid class pattern | A class pattern with a positional, unknown, private, repeated, or method field, a class that does not match the scrutinee, a tested field whose type differs between the union specializations the pattern matches, or a `match mut` class pattern. | Name stored fields visible here, once each, as `field=pattern`. Select one specialization with a type pattern such as `case Box[int64] as box:`. |
 | `AU2041` | invalid rest pattern or target | A `*` rest element outside a tuple or sequence, a second rest element, too few positions for the fixed elements, a `*name` that covers no positions, or a sequence pattern in `match mut` or `match own`. | Keep one rest element per tuple or sequence, and use `*_` when it may cover nothing. |
 | `AU2042` | invalid docstring or documentation limit | A triple-quoted string in a class, enum, trait, or `impl` body outside a documentation position, or documentation over a size limit. | Move the string to the first slot or directly after a field, or shorten the documentation. |
@@ -7173,6 +7191,18 @@ def main():
 
 Add `def __exit__(mut self) -> None` to the class, or move the item out of
 the `with` header.
+
+**`AU2018` unused result.** An expression statement drops its value, and a
+dropped `Result` would hide its error. `queue.put(value)` returns one, as do
+`process.run(...)` and the network calls.
+
+```aura check-fail:AU2018
+def main():
+    parse_int64("12")
+```
+
+Use the value with `try` or `match`, or write `_ = parse_int64("12")` when
+the outcome really does not matter.
 
 **`AU2042` invalid docstring or documentation limit.** The parser reports
 `AU2042` in these cases:
@@ -9236,9 +9266,13 @@ Scheduler abandonment marks the remaining task cancelled and releases scheduler-
 
 ### Workers
 
-Aura lightweight tasks run on cooperative scheduler workers, and each task is pinned to one worker. By default, the runtime uses the available parallelism the host reports. The `AURA_WORKERS=<positive integer>` environment override selects an explicit count.
+Aura lightweight tasks run on cooperative scheduler workers, and each task is pinned to one worker once it first runs. By default, the runtime uses the available parallelism the host reports. The `AURA_WORKERS=<positive integer>` environment override selects an explicit count.
 
-Each child receives a stable worker assignment when it is spawned. Its coroutine stack never migrates, and the runtime does not steal tasks between workers.
+A child starts out on its parent's worker. The newest child waits in that worker's private slot, so a parent that starts a child and waits for it at once keeps both on one core. An older child waits in the worker's stealable queue. A worker with nothing to run takes half of another worker's queued children before it spins and blocks, and a worker that queues a child while another is blocked wakes one. A newest child that its worker has not picked up within 20 microseconds, as when its parent blocks the thread in a foreign call, can also be taken.
+
+A task binds to the worker that first runs it. From then on its coroutine stack and frames never migrate, so only tasks that have not started move between workers. While every worker is busy, a worker runs one of its own queued children that has waited 100 milliseconds alongside its other tasks, at most once per 100 milliseconds, so children of a program whose workers all run endless tasks still start.
+
+A finished task's guarded stack returns to the pool of the worker that handed it out, which keeps up to 32 stacks and 32 MiB of reserved address space for later children of the same stack size. Reuse keeps the guard page and the requested capacity.
 
 A worker with no ready task spins for up to 50 microseconds, watching for a notification from another worker, before it blocks in its poller. It skips the spin while one of its tasks waits on a descriptor. A notification wakes a blocked poller with a system call; a worker that is still running drains its notifications before it blocks, so notifying it needs no system call.
 
@@ -9248,7 +9282,7 @@ Queue waits, task waits, sleep, nonblocking sockets, and scheduler-integrated I/
 
 Scheduling order among multiple ready tasks is not specified. Neither is completion order among independent tasks, or program-output order. Coordinate through queues, task results, cancellation, and other documented synchronization, not timing assumptions.
 
-Aura exposes no worker identity or affinity API. Task execution is multicore. Preemption and work stealing are unavailable, and speedup depends on the workload.
+Aura exposes no worker identity or affinity API. Task execution is multicore. Idle workers steal children that have not started; a started task never moves, and there is no preemption, so speedup depends on the workload.
 
 Queue and Task handles are the maintained cross-worker communication surface. Every other capture and result is owned `Transfer` data, which keeps the boundary share-nothing. Cancellation and diagnostic context are installed per task and stay isolated across workers.
 
@@ -9311,7 +9345,7 @@ Worker traps and checked Duration overflow propagate as runtime diagnostics. Can
 
 Starting a task first copies or moves every argument into task-owned capture storage. The child then applies the target's declared parameter capability to that capture. A bare parameter borrows it, and an `own` parameter consumes it. Mutable targets are rejected statically.
 
-Task captures, results, and Queue payloads must also pass the structural `Transfer` check before the child is admitted to its spawn-time pinned worker.
+Task captures, results, and Queue payloads must also pass the structural `Transfer` check before the child is admitted to the worker that first runs it.
 
 Starting a child from a running task does not mutate the live scheduler through an alias. The runtime first prepares the child's guarded stack and task state. Then it transfers that prepared request to the scheduler for admission. If preparation fails, the start fails synchronously before a handle is returned, and no child is admitted.
 
@@ -11484,13 +11518,13 @@ Maintained builtin functions and methods use the same binding rules. Their param
 ```aura
 import process
 
-process.run(["/bin/echo", "hi"], stdout=process.pipe(), group=true)
+_ = process.run(["/bin/echo", "hi"], stdout=process.pipe(), group=true)
 ```
 
 ```aura
 import net
 
-net.http_request_text_timeout(method="POST", url="http://127.0.0.1:8080/jobs", body="{}", headers={}, timeout=2s)
+_ = net.http_request_text_timeout(method="POST", url="http://127.0.0.1:8080/jobs", body="{}", headers={}, timeout=2s)
 ```
 
 The module pages and the [API Index](/manual/api-index) are authoritative for builtin parameter names, defaults, and return types.
@@ -11672,6 +11706,8 @@ If an indirect-call default traps, the diagnostic uses the public target name an
 
 A bare annotation, parameter pass, field or element store, alias binding, return, or branch join must preserve the value's complete callable contract. A difference reports `AU2015` and describes the differing slot, kind, or obligation. A written destination does not restrict the value implicitly.
 
+The one exception is an unnamed slot. A written type such as `def(int64) -> bool` can only be called positionally, so at every destination its unnamed, positional slot admits a value whose parameter has any name, or a default the destination does not promise: `check: def(int64) -> bool = is_slow` holds for `def is_slow(ms: int64) -> bool`. A named slot, as in `def(limit: int64) -> bool`, still requires the same name.
+
 Inference never invents a common contract. Each of these rules reports `AU2015` with the differing slot when it fails:
 
 - Rebinding a local must satisfy the contract the local already has.
@@ -11681,7 +11717,7 @@ Inference never invents a common contract. Each of these rules reports `AU2015` 
 
 ### Adapters
 
-A safe restriction requires an explicit adapter. For example, declare `type Unary = def(int64) -> int64` and write `Unary(double)` to hide `double`'s parameter name. An adapter may:
+A safe restriction requires an explicit adapter, such as `type Unary = def(int64) -> int64` with `Unary(double)`. An adapter may:
 
 - hide exposed names
 - drop default availability
@@ -12456,7 +12492,7 @@ Builtin rules come first:
 - `/` on equal integer operands is rejected with the integer-division teaching diagnostic. It is not dispatched to `Div.div`. `/` still requests `Div.div` for an applicable non-numeric user type.
 - The divisor-sign rule for `%` describes builtin numeric remainder. `Mod.mod` on a user type has the semantics of that implementation.
 
-These declarations show the maintained generic shapes:
+`Ord`, `Add`, and `From` are declared in the builtin prelude, which every module sees without an import (ADR-0069). The prelude implements `Ord[t]` and `Add[t, t]` for every integer type, `float32`, `float64`, and `str`, and `From` for the lossless widenings: a narrower integer into a wider one of the same signedness, an unsigned integer into a wider signed one, and any integer of 32 bits or fewer or `float32` into `float64`. A module that declares or imports its own trait with one of these names uses its own declaration, and the prelude's is not visible in that module. The other operator traits are not predeclared; a module declares them with these shapes:
 
 ```aura
 trait Add[Rhs, Out]:
@@ -12557,7 +12593,7 @@ When `try` propagates `Result[T, SourceError]` from a function that returns `Res
 - If the error types are equal, no trait is needed.
 - Otherwise the checker looks for an applicable `impl From[SourceError] for TargetError` that contains `from`.
 
-The conventional contract is:
+The prelude declares the contract:
 
 ```aura
 trait From[Source]:
@@ -12815,6 +12851,7 @@ Ordinary and triple-quoted strings accept the same escapes:
 | --- | --- |
 | `\n` | line feed |
 | `\t` | tab character in the decoded value |
+| `\r` | carriage return |
 | `\"` | double quote |
 | `\'` | single quote |
 | `\\` | backslash |
@@ -13403,8 +13440,10 @@ assert-statement     = "assert", non-tuple-expression,
 pass-statement       = "pass", NEWLINE ;
 break-statement      = "break", NEWLINE ;
 continue-statement   = "continue", NEWLINE ;
-expression-statement = expression, statement-end ;
+expression-statement = [ "_", "=" ], expression, statement-end ;
 ```
+
+`_ = expression` is an expression statement that discards its value on purpose. It binds no name, and it may repeat in one scope.
 
 Assignment targets follow these rules:
 
@@ -13454,7 +13493,8 @@ The iteration modifier depends on the iterable:
 | Range | Yields independent copy `int64` values | Rejected, because there is no place or ownership transfer to modify |
 
 The iterable position also recognizes two compiler-known call shapes,
-`enumerate(expression)` and `zip(expression, expression)`. They are not
+`enumerate(expression)`, `enumerate(expression, start)` (also spelled
+`start=`), and `zip(expression, expression)`. They are not
 values and have no production outside this position. Static semantics rejects
 either name elsewhere. A user declaration of the name shadows the loop form.
 Explicit ownership modifiers are rejected for both, because they iterate with
@@ -13945,7 +13985,7 @@ The `io` module covers standard input and output. It also defines `io.Error`, th
 import io
 ```
 
-The top-level `print(value)` builtin is not part of `io`. It renders a value and writes a newline, for simple line output. `float32` and `float64` values print in their own shortest decimal spelling that round-trips. That spelling keeps a decimal marker on integral values and preserves `-0.0`. Use `io.write(...)` and `io.flush()` when you need control over output, such as for a prompt or a protocol.
+The top-level `print(value)` builtin is not part of `io`. It renders a value and writes a newline, for simple line output. Its partner `eprint(value)` renders the same way and writes the line to standard error, for messages that shouldn't mix with a program's output. `float32` and `float64` values print in their own shortest decimal spelling that round-trips. That spelling keeps a decimal marker on integral values and preserves `-0.0`. Use `io.write(...)` and `io.flush()` when you need control over output, such as for a prompt or a protocol.
 
 ## Standard Streams
 
@@ -15234,6 +15274,7 @@ Both quote styles produce a `str` and support the same escapes:
 | --- | --- |
 | `\n` | Line feed |
 | `\t` | Tab |
+| `\r` | Carriage return |
 | `\"` | Double quote |
 | `\'` | Single quote |
 | `\\` | Backslash |
@@ -20564,7 +20605,19 @@ queue.close()
 counter.increment()
 ```
 
-The expression is fully evaluated, including its moves, mutations, I/O, and runtime failures. Its value is then discarded. A discarded `Result` is not propagated implicitly. Use `try` or `match` when a failure must affect control flow.
+The expression is fully evaluated, including its moves, mutations, I/O, and runtime failures. Its value is then discarded.
+
+An expression statement whose value is a `Result` is rejected with `AU2018`, because the error it may hold would be lost. Handle it with `try` or `match`, or discard it on purpose with `_ = expression`. `_` binds no name, so the form can repeat:
+
+```aura
+def main():
+    jobs = Queue[int64]()
+    _ = jobs.put(1)
+    _ = jobs.put(2)
+    jobs.close()
+    for job in jobs:
+        print(job)
+```
 
 ## `return`
 
@@ -20653,6 +20706,7 @@ Maintained iterable forms include:
 | --- | --- |
 | `for i in range(n):` | Yields `int64` values from zero up to `n`, excluding `n`. |
 | `for i in range(start, end):` | Yields `int64` values from `start` up to `end`, excluding `end`. |
+| `for i in range(start, end, step):` | Yields `start`, `start + step`, and so on while the value is before `end` in the direction of `step`. A negative step counts down. A zero step stops the program. |
 | `for value in values:` | Retains the list and yields shared access for non-copy elements. |
 | `for value in own values:` | Consumes the list and yields owned elements. |
 | `for value in mut values:` | Binds each element as a mutable element view. Writes land in the list at once. The iterable place must be mutable. |
@@ -20660,6 +20714,7 @@ Maintained iterable forms include:
 | `for value in own set:` | Consumes the set and yields owned elements. |
 | `for value in queue:` | Receives queue items under the scheduler-aware queue iteration contract. |
 | `for index, value in enumerate(seq):` | Yields `(int64, element)` pairs, counting positions from zero. |
+| `for number, value in enumerate(seq, start=1):` | Counts from `start` instead of zero. |
 | `for left, right in zip(first, second):` | Yields one pair per shared position and stops at the shorter sequence. |
 | `for value in iterator:` | Consumes an `iter.Iterator[T]` implementation and yields each owned item. |
 | `for value in mut iterator:` | Borrows a mutable `iter.Iterator[T]` place and yields each owned item, leaving the iterator usable afterwards. |
@@ -20700,7 +20755,7 @@ Both forms read their operands by position, so each operand must be a `list[T]` 
 - Every operand stays shared-borrowed and frozen for the whole loop.
 - A non-copy element binding is a shared borrow and cannot be moved out.
 
-`enumerate` takes exactly one operand and `zip` takes exactly two, both positionally. Any other arity, or a named argument, reports `AU2004`.
+`enumerate` takes exactly one operand and `zip` takes exactly two, both positionally. `enumerate` also takes an optional `start`, second or as `start=`, which must widen losslessly to `int64` (`AU2002` otherwise); the count begins there instead of at zero. Any other arity, or another named argument, reports `AU2004`.
 
 `zip` stops as soon as any operand has no value at the current position. It performs `min(len(first), len(second))` iterations and never observes the tail of the longer sequence.
 
@@ -21760,7 +21815,7 @@ There is no `Channel`, statement-form `select`, bare `spawn`, or detached task. 
 Task bodies run on pinned cooperative scheduler workers on both maintained backends.
 
 - The default worker count is the available parallelism reported by the host. The provisional `AURA_WORKERS=<positive integer>` override selects an explicit count.
-- A child receives a stable worker assignment when it is spawned. Its coroutine stack never migrates, and work is not stolen.
+- A child starts on its parent's worker, and an idle worker may steal it before it first runs. Once a task runs, its coroutine stack never migrates.
 - `yield_now()` yields only to runnable work on the same worker.
 - Compiler-inserted checks on every loop backedge keep a tight loop from starving ready timers, Queue operations, and sockets on the same worker indefinitely. Ordinary loop tails and `continue` take part. `break` and `return` bypass the backedge.
 - The checks do not inspect cancellation. One long loop body can still delay same-worker siblings.
@@ -22408,6 +22463,15 @@ missing: str | None = None
 
 result: Result[int32, str] = Result.Ok(42)
 failure: Result[int32, str] = Result.Err("bad number")
+```
+
+`Result[T, E]` has five methods from the builtin prelude (ADR-0069). `is_ok()` and `is_err()` read the value through shared access. `unwrap_or(default)` returns the `Ok` payload or `default`. `map(f)` applies `f` to an `Ok` payload, and `map_err(f)` applies `f` to an `Err` payload, passing the other variant through. `unwrap_or`, `map`, and `map_err` consume the `Result`. There is no `unwrap`.
+
+```aura
+def main():
+    print(parse_int64("12").is_ok())
+    print(parse_int64("x").unwrap_or(0))
+    print(parse_int64("4").map(lambda n: n * 2))
 ```
 
 Bare `None` on its own is the unit value and renders as `None`. It becomes an optional only where a `T | None` annotation, parameter, result, or other expected type applies. An unannotated `count = 5` is a plain `int64`. To keep the optional type, write `count: int64 | None = 5`. A function declared `-> T | None` returns absence with an explicit `return None`.
@@ -23162,11 +23226,12 @@ def main():
 
 ```console
 $ aura run mixed.au
-error[AU2999]: files cannot mix top-level statements, including declarations, with an explicit `main` function
+error[AU2999]: files cannot mix top-level statements with an explicit `main` function
  --> mixed.au:3:1
   |
 3 | def main():
   | ^
+  = help: imports, constants, and declarations can sit beside `main`; move the top-level statements into `main`
 ```
 
 This is our first compiler error, so let's read it carefully. The first line
@@ -23187,9 +23252,9 @@ before it ran any of it. Nothing was printed, not even `starting up`. A
 program with an error like this never starts. Delete `mixed.au` before moving
 on.
 
-Despite the "including declarations" in the message, other `def` functions
-and constants such as `LIMIT = 10` are fine next to `main`, and we will write
-plenty of files like that. It is statements that *do* something at the top
+As the help line says, other `def` functions and constants such as
+`LIMIT = 10` are fine next to `main`, and we will write plenty of files like
+that. It is statements that *do* something at the top
 level, like this `print` call, that clash with it.
 
 ## Exit codes
@@ -24011,19 +24076,19 @@ the whole dictionary. Let's run it:
 ```console
 $ aura run src/main.au < poem.txt
 error[AU3002]: cannot move borrowed value `word`
- --> src/main.au:10:32
+ --> src/main.au:12:32
    |
-10 |                         counts[word] += 1
+12 |                         counts[word] = 1
    |                                ^
   = related src/main.au:8:21: value is borrowed here
   = help: take `word` as `own str` when ownership is required, or call `.clone()` to consume an independent copy
-  = fix: replace src/main.au:10:36-10:36 with `.clone()`
+  = fix: replace src/main.au:12:36-12:36 with `.clone()`
 ```
 
 This error is our first meeting with *ownership*, the idea at the heart of
 Aura, and it deserves a careful read. The message says we tried to *move* a
 *borrowed* value, `word`. The primary location is the `word` inside
-`counts[word]` on line 10. The `related` line points at line 8, column 21,
+`counts[word] = 1` on line 12. The `related` line points at line 8, column 21,
 which is the `word` in `for word in line.split_whitespace()`, and says that
 is where the value is borrowed.
 
@@ -24032,8 +24097,9 @@ and the owner is responsible for cleaning the value up when it is no longer
 needed. The list that `split_whitespace()` returns owns its strings. When a
 `for` loop walks over a list, it doesn't take the strings out of it; it
 *borrows* each one in turn, which means `word` lets us look at a string that
-still belongs to the list. That's fine for reading, and `word in counts` only
-reads.
+still belongs to the list. That's fine for reading. `word in counts` only
+reads, and so does `counts[word] += 1`, which changes the count of a key that
+is already there.
 
 Storing a key in a dictionary is different. Once the dictionary has the
 string, the dictionary has to own it, because it will keep it long after this
@@ -25871,7 +25937,7 @@ error[AU2002]: lambda parameter types require an expected `def(...) -> ...` cont
   |
 2 |     to_kelvin = lambda celsius: celsius + 273.15
   |                 ^
-  = help: add a `def(...) -> ...` annotation to the immutable local, or pass the lambda directly to a callback parameter
+  = help: annotate the binding with a `def(...) -> ...` type, or pass the lambda directly to a callback parameter
 ```
 
 The second lambda also uses `offset`, a binding from the surrounding
@@ -26248,15 +26314,23 @@ Python:
 def main():
     cities = ["Oslo", "Lagos", "Lima"]
     for index, city in enumerate(cities):
-        print(f"{index + 1}. {city}")
+        print(f"{index}: {city}")
+    for number, city in enumerate(cities, start=1):
+        print(f"{number}. {city}")
 ```
 
 ```console
 $ aura run src/main.au
+0: Oslo
+1: Lagos
+2: Lima
 1. Oslo
 2. Lagos
 3. Lima
 ```
+
+`enumerate` counts from 0 unless you give it a `start`, as the second loop
+does.
 
 `zip(first, second)` walks two lists side by side in the same way.
 
@@ -26292,27 +26366,29 @@ $ aura run src/main.au
 ```
 
 A range whose start is not below its stop is empty, so `range(3, 0)` runs
-zero times and prints nothing. To count down, wrap the range in `reversed`.
-What Aura's `range` doesn't have yet is Python's third argument, the step:
+zero times and prints nothing. To count by something other than one, give
+`range` a third argument, the step. A negative step counts down:
 
-```aura check-fail:AU2004
+```aura
 def main():
-    for n in range(0, 10, 2):
+    for n in range(0, 10, 4):
+        print(n)
+    for n in range(3, 0, -1):
         print(n)
 ```
 
 ```console
 $ aura run src/main.au
-error[AU2004]: `range` expects 1 or 2 arguments, found 3
- --> src/main.au:2:14
-  |
-2 |     for n in range(0, 10, 2):
-  |              ^
+0
+4
+8
+3
+2
+1
 ```
 
-This is a gap in the current preview rather than a design decision. Until it
-is filled, use a `while` loop with the step written out, as the `celsius`
-loop above did, or multiply: `for i in range(5):` with `n = i * 2` inside.
+The stop is still left out, whichever way the range counts. A step of zero
+would never get anywhere, so `range` stops the program if it is given one.
 
 Python's `for ... else` and `while ... else` clauses don't exist in Aura
 either. An `else:` after a loop is a syntax error. If you need to know
@@ -27506,7 +27582,7 @@ def main():
 
 ```console
 $ aura check src/main.au
-error[AU3005]: cannot implicitly copy `str` out of a list index; use `view value = items[index]` for shared access, `items[index].clone()` for an explicit cloned owner, or `pop(index)` or `set(index, value)` to transfer ownership
+error[AU3005]: cannot implicitly copy `str` out of a list index; use `view value = items[index]` for shared access, `items[index].clone()` for an explicit copy, or `pop(index)` or `set(index, value)` to transfer ownership
  --> src/main.au:3:13
   |
 3 |     first = names[0]
@@ -32424,11 +32500,10 @@ The triple-quoted string keeps its text exactly as written, newlines
 included, and the final newline doesn't produce an empty last line. Notice,
 too, that a printed list of strings shows them without quotation marks.
 
-While we're on literals: the usual escapes `\n`, `\t`, `\\`, `\"`, and `\'`
-work in ordinary strings, along with `\0`, `\xHH`, and `\u{...}`. A Python
-habit that doesn't carry over is `\r`, which isn't a supported escape; the
-compiler reports `AU1001` for it, and you can write `\x0d` if you need a
-carriage return. A string with an `r` prefix, such as `r"C:\grades"`, treats
+While we're on literals: the usual escapes `\n`, `\t`, `\r`, `\\`, `\"`, and
+`\'` work in ordinary strings, along with `\0`, `\xHH`, and `\u{...}`. Any
+other backslash sequence is an error (`AU1001`) rather than a literal
+backslash, so a typo can't slip through. A string with an `r` prefix, such as `r"C:\grades"`, treats
 backslashes as ordinary characters.
 
 ## Building strings
@@ -32740,9 +32815,11 @@ Think about what the dictionary needs. When `name` isn't already a key,
 entry's key from now on, for as long as the entry exists. It can't borrow
 the key from our loop, because `name` is gone by the next iteration. So
 assigning through an index *moves the key in*, along with the value. The
-compiler applies that rule to every indexed assignment on a dictionary, even
-when the key happens to be present already, so `best[name] += 1` would move
-`name` too. The same goes for line 16, the `Missing` arm: on either path,
+compiler applies that rule to every plain indexed assignment on a
+dictionary, even when the key happens to be present already. (A compound
+assignment such as `best[name] += 1` is different: it can only update an
+entry that exists, so it borrows a `str` key instead.) The same goes for
+line 16, the `Missing` arm: on either path,
 `name` has been handed to `best` by the time we reach line 17.
 
 Lookups are different. `best.get(name)`, `name in scores`, and `scores[name]`
@@ -33060,7 +33137,7 @@ Comprehensions only take the bare form of `for`. Writing `for name in mut
 names` or `for name in own names` inside the brackets is a syntax error
 (`AU1101`), and the message tells you to use a statement loop for those.
 
-### Two things comprehensions don't do
+### Something comprehensions don't do
 
 Python lets you drop the brackets inside a function call, as in `sum(score *
 2 for score in scores)`, to make a *generator expression* that produces
@@ -33084,30 +33161,6 @@ error[AU2005]: generator expressions are unavailable; use an eager owned list co
 Add the brackets, `sum([s * 2 for s in scores])`, and you get a list
 comprehension, which builds the whole list first. For the collection sizes in
 most programs that's fine.
-
-The second limitation is a bug in the current compiler rather than a design
-choice, and it's easy to trip over. A comprehension whose output calls a
-method on the loop name, written directly as an argument to a function, isn't
-resolved properly:
-
-```aura check-fail:AU2001
-def main():
-    names = ["ada", "grace"]
-    print([name.len() for name in names])
-```
-
-```console
-$ aura check src/main.au
-error[AU2001]: unknown name `name`
- --> src/main.au:3:12
-  |
-3 |     print([name.len() for name in names])
-  |            ^
-```
-
-The same comprehension works when you bind it to a name first, as in
-`lengths = [name.len() for name in names]` followed by `print(lengths)`, and
-that's the style this book uses.
 
 ## Reducing a collection to one value
 
@@ -34417,6 +34470,41 @@ This `main` returns nothing, so a failed parse would have nowhere to go. At the
 top of the program there's no caller left to pass the error to, which is why
 `main` uses `match` and decides for itself.
 
+## Methods for the common cases
+
+Some decisions about a `Result` are so common that writing out the `match`
+every time gets old. `Result` has five methods for them:
+
+```aura
+def main():
+    port = parse_int64("9000")
+    print(port.is_ok())
+    print(parse_int64("nine").is_err())
+    print(parse_int64("nine").unwrap_or(8080))
+    print(parse_int64("21").map(lambda n: n * 2))
+    print(parse_int64("nine").map_err(lambda message: message.len()))
+```
+
+```console
+$ aura run src/main.au
+true
+true
+8080
+Result.Ok(42)
+Result.Err(29)
+```
+
+`is_ok` and `is_err` answer the yes-or-no question and leave the `Result`
+alone. `unwrap_or` gives back the `Ok` value, or the default you pass when the
+`Result` is an `Err`. `map` changes the `Ok` value with a function and passes
+an `Err` through untouched; `map_err` does the opposite. The last three
+consume the `Result`, because its value moves out.
+
+There's no `unwrap` that stops the program on an `Err`. If an error really
+should end the program, write the `match` and trap in the `Err` arm with an
+`assert`, as in [the previous section](/book/ch09-01-traps). The
+place where the program can stop is then visible in the code.
+
 ## An error type of our own
 
 So far every error has been a `str`. Strings are fine for a quick program, but
@@ -34512,13 +34600,9 @@ helper compiles.
 The second way is to teach Aura how to turn a `str` into a `ConfigError`, so
 `try` can do the conversion for us. When the error types differ, `try` looks
 for an implementation of a trait named `From` whose source is the inner error
-type. Aura doesn't predeclare `From`, so a module that wants this conversion
-declares the trait itself and then implements it:
+type. `From` is in the prelude, so all we write is the implementation:
 
 ```aura
-trait From[Source]:
-    def from(value: own Source) -> Self
-
 enum ConfigError:
     MissingEquals(int64)
     BadNumber(int64, str)
@@ -34886,11 +34970,11 @@ When you're unsure, these questions usually settle it:
    use an `assert` with a message that explains the broken assumption.
 4. Is a missing value normal and not an error at all? Return `T | None`, or, for collection lookups, use the `Lookup` that `get` gives you.
 
-One honest warning before we move on. Aura makes you handle a `Result` before
-you can use the value inside it, but it doesn't currently stop you from calling
-a function that returns `Result[None, str]` and ignoring the result entirely:
+One more rule keeps errors from slipping away. A `Result` can't simply be
+dropped. Calling a function that returns `Result[None, str]` and ignoring what
+comes back is an error:
 
-```aura
+```aura check-fail:AU2018
 def save(path: str) -> Result[None, str]:
     return Result.Err(f"disk full while writing {path}")
 
@@ -34900,13 +34984,20 @@ def main():
 ```
 
 ```console
-$ aura run src/main.au
-saved
+$ aura check src/main.au
+error[AU2018]: this `Result[None, str]` is never used, so an error would go unnoticed
+ --> src/main.au:5:5
+  |
+5 |     save("settings.conf")
+  |     ^
+  = help: handle it with `match` or `try`, or discard it on purpose with `_ = ...`
 ```
 
-The error was dropped without a word. When a function returns a `Result` only
-to report failure, make sure every call site matches on it or passes it on with
-`try`.
+Without this rule the program would print `saved` and the error would vanish
+without a word. Usually the fix is to `match` on the result or pass it on with
+`try`. When you really don't care whether the call worked, say so with
+`_ = save("settings.conf")`. The `_ =` costs three characters and tells the
+next reader that ignoring the error was a decision, not an oversight.
 
 ## Summary
 
@@ -34922,7 +35013,7 @@ and `Lookup` separates "not there" from "there, but `None`".
 
 You've seen generic types several times now without our stopping to explain
 them: `Result[T, E]` works for any `T` and `E`, `Lookup[T]` for any `T`, and
-the `From` conversion was a trait we declared ourselves. [Chapter
+`From` is a trait. [Chapter
 10](/book/ch10-00-generics-traits-conversions) explains how to write generic
 code of your own, how traits describe what a type can do, and how Aura converts
 between types without ever doing it behind your back.
@@ -35757,14 +35848,10 @@ error[AU2999]: unsupported operands for binary expression: `Money`
 ```
 
 When no builtin rule applies, Aura turns `a + b` into a call to the `add`
-method of a trait named `Add`. Unlike `Display`, the operator traits aren't
-predeclared, so a module that wants one declares it with the shape the compiler
-expects:
+method of a trait named `Add`. Like `Display`, `Add` is in the prelude, so we
+only have to implement it:
 
 ```aura
-trait Add[Rhs, Out]:
-    def add(self, rhs: Rhs) -> Out
-
 copy class Money:
     cents: int64
 
@@ -35801,8 +35888,9 @@ plus a `Money` is a `Money`". Once that exists, `book + coffee` calls our
 
 The other operators follow the same pattern: `Sub`, `Mul`, `Div`, `FloorDiv`,
 and `Mod` for `-`, `*`, `/`, `//`, and `%`, `Neg` and `Not` for unary `-` and
-`not`, and `Ord` for the comparisons `<`, `<=`, `>`, and `>=`. The
-[Manual](/manual/generics-and-traits) lists each trait's exact shape. Two
+`not`, and `Ord` for the comparisons `<`, `<=`, `>`, and `>=`. Only `Add`
+and `Ord` are in the prelude; a module that wants one of the others declares
+it, with the shape the [Manual](/manual/generics-and-traits) lists. Two
 things stay fixed: `==` and `!=` always use Aura's builtin structural equality,
 and `and` and `or` can't be overloaded.
 
@@ -35810,57 +35898,14 @@ and `and` and `or` can't be overloaded.
 
 We now have everything `largest` needs. Its body uses `>`, and `>` on a type
 parameter is a call to `Ord.gt`. So the bound we want is `T: Ord[T]`: "a `T`
-can be compared with another `T`". Let's write it, and call it with integers
-first:
-
-```aura check-fail:AU2002
-trait Ord[Rhs]:
-    def lt(self, rhs: Rhs) -> bool
-    def le(self, rhs: Rhs) -> bool
-    def gt(self, rhs: Rhs) -> bool
-    def ge(self, rhs: Rhs) -> bool
-
-def largest[T: Ord[T]](values: own list[T]) -> T | None:
-    mut rest = values
-    if rest.len() == 0:
-        return None
-    mut best = rest.pop()
-    while rest.len() > 0:
-        candidate = rest.pop()
-        if candidate > best:
-            best = candidate
-    return best
-
-def main():
-    print(largest([3, 9, 4]))
-```
-
-```console
-$ aura check src/main.au
-error[AU2002]: type `int64` does not implement trait `Ord[int64]`
- --> src/main.au:19:11
-   |
-19 |     print(largest([3, 9, 4]))
-   |           ^
-```
-
-The body compiles now. The error moved to the call, which is where the bound
-puts it. The message may surprise you, because `3 < 9` obviously works. But
-integer comparison is a builtin rule, not an implementation of our `Ord` trait,
-and the bound asks for the trait. Traits can be implemented for builtin types
-as well as your own, so we can supply one. While we're at it, we'll give
-`largest` an empty-list answer of `None` instead of trapping on `pop`, and
-implement `Ord` for `Money`:
+can be compared with another `T`". `Ord` is in the prelude too, and the
+prelude implements it for the numeric types and `str`. While we're at it,
+we'll give `largest` an empty-list answer of `None` instead of trapping on
+`pop`, and implement `Ord` for `Money`:
 
 *Filename: src/main.au*
 
 ```aura
-trait Ord[Rhs]:
-    def lt(self, rhs: Rhs) -> bool
-    def le(self, rhs: Rhs) -> bool
-    def gt(self, rhs: Rhs) -> bool
-    def ge(self, rhs: Rhs) -> bool
-
 copy class Money:
     cents: int64
 
@@ -35880,19 +35925,6 @@ impl Ord[Money] for Money:
 
     def ge(self, rhs: Money) -> bool:
         return self.cents >= rhs.cents
-
-impl Ord[int64] for int64:
-    def lt(self, rhs: int64) -> bool:
-        return self < rhs
-
-    def le(self, rhs: int64) -> bool:
-        return self <= rhs
-
-    def gt(self, rhs: int64) -> bool:
-        return self > rhs
-
-    def ge(self, rhs: int64) -> bool:
-        return self >= rhs
 
 def largest[T: Ord[T]](values: own list[T]) -> T | None:
     mut rest = values
@@ -35914,24 +35946,26 @@ def announce[T: Ord[T] + Display](values: own list[T]):
 
 def main():
     print(largest([3, 9, 4]))
+    print(largest(["pear", "fig", "plum"]))
     announce([Money(cents=1300), Money(cents=450), Money(cents=1700)])
     empty: list[Money] = []
     announce(empty)
 ```
 
-<span class="caption">Listing 10-8: A generic `largest` bounded by `Ord`, used with integers and with `Money`</span>
+<span class="caption">Listing 10-8: A generic `largest` bounded by `Ord`, used with integers, strings, and `Money`</span>
 
 ```console
 $ aura run src/main.au
 9
+plum
 largest: $17.00
 nothing to compare
 ```
 
-One function now serves both types, and the signature says exactly what it
-needs. Inside `impl Ord[int64] for int64`, `self < rhs` uses the builtin
-integer comparison, so there's no recursion. Builtin rules always take
-precedence over trait dispatch.
+One function now serves all three types, and the signature says exactly what
+it needs. Inside `impl Ord[Money] for Money`, `self.cents < rhs.cents`
+compares two integers with the builtin rule, so there's no recursion. Builtin
+rules always take precedence over trait dispatch.
 
 `announce` shows the `+` form of bounds: it calls `largest`, which needs
 `Ord[T]`, and prints the winner, which needs `Display`. Its bound states both.
@@ -35940,11 +35974,11 @@ The `Display` bound is a real requirement, not a formality. `announce([3, 9,
 because integers print through a builtin rule rather than through a `Display`
 implementation.
 
-That's a fair amount of code to make integers comparable, and it's an honest
-cost of Aura 0.11: the operator traits are a protocol the compiler recognizes,
-not a library of ready-made implementations for the builtin types. In practice
-you'll mostly write bounds like `Ord[T]` for your own domain types, where you
-have to say what "larger" means anyway.
+If a module declares its own trait named `Ord`, `Add`, or `From`, that
+declaration wins inside the module and the prelude's is out of the picture
+there. That keeps older code that declared these traits itself working, but
+the builtin types then have no implementations of your version until you
+write them.
 
 ## Limits worth knowing
 
@@ -36247,7 +36281,9 @@ The first is `From`, which you met in [Chapter
 into another. Nothing about it is specific to errors. `From[Source]` has a
 single method, `from`, with no `self`: it takes a `Source` and returns a value
 of the implementing type. A method with no `self` is called an *associated
-method*, and you call it on the type, as in `Money.from(12)`.
+method*, and you call it on the type, as in `Money.from(12)`. `From` is in
+the prelude, along with implementations for the lossless numeric widenings,
+such as `int32` into `int64` and any integer of 32 bits or fewer into `float64`.
 
 The second is a trait we'll define ourselves for parsing text into a value. Its
 method also has no `self`, and returns `Result[Self, str]`, where `Self` means
@@ -36256,9 +36292,6 @@ method also has no `self`, and returns `Result[Self, str]`, where `Self` means
 *Filename: src/main.au*
 
 ```aura
-trait From[Source]:
-    def from(value: own Source) -> Self
-
 trait Parse:
     def parse(text: str) -> Result[Self, str]
 
@@ -36754,9 +36787,9 @@ ok tests/cart_test.au::test_formats_refunds
 ok tests/cart_test.au::test_average_price
 FAILED tests/cart_test.au::test_average_of_empty_cart
 error[AU4004]: division by zero
- --> tests/cart_test.au:18:12
+ --> src/cart.au:18:12
    |
-18 | 
+18 |     return subtotal(prices) // prices.len()
    |            ^
   = note: Aura call chain (innermost first): cart::average_cents at 17:8 -> test_average_of_empty_cart at 28:1
 ok tests/smoke.au
@@ -36775,13 +36808,9 @@ called from `test_average_of_empty_cart`. Functions from other modules are
 shown with their module name, so you can tell your test code from the code
 under test at a glance.
 
-You may have noticed something odd about the `-->` line, though. The trap
-happened at line 18, column 12 of `src/cart.au`, which is the `//` in
-`average_cents`. But the diagnostic names `tests/cart_test.au` and prints that
-file's line 18, which happens to be blank. This is a known defect in Aura 0.11:
-when a trap happens inside an imported module, the location shows the right
-line and column but the wrong file. Until it's fixed, trust the call chain for
-the function and use the line number in that function's file.
+The `-->` line points into `src/cart.au`, not the test file: the trap happened
+inside `average_cents`, so that's the file and line Aura shows you, even though
+the test that called it lives in `tests/cart_test.au`.
 
 ### Deciding what the right answer is
 
@@ -36916,9 +36945,9 @@ $ aura test -k average
 ok tests/cart_test.au::test_average_price
 FAILED tests/cart_test.au::test_average_of_empty_cart
 error[AU4004]: division by zero
- --> tests/cart_test.au:18:12
+ --> src/cart.au:18:12
    |
-18 | 
+18 |     return subtotal(prices) // prices.len()
    |            ^
   = note: Aura call chain (innermost first): cart::average_cents at 17:8 -> test_average_of_empty_cart at 28:1
 1 passed; 1 failed
@@ -37626,7 +37655,7 @@ The compiler refuses:
 
 ```console
 $ aura run src/main.au -- app.log
-error[AU3005]: cannot implicitly copy `str` out of a list index; use `view value = items[index]` for shared access, `items[index].clone()` for an explicit cloned owner, or `pop(index)` or `set(index, value)` to transfer ownership
+error[AU3005]: cannot implicitly copy `str` out of a list index; use `view value = items[index]` for shared access, `items[index].clone()` for an explicit copy, or `pop(index)` or `set(index, value)` to transfer ownership
  --> src/main.au:5:12
   |
 5 |     path = args[0]
@@ -37689,9 +37718,14 @@ The check is a length test before the index:
 
 ```aura fragment
     if args.len() < 1:
-        print("usage: logscan <path>")
+        eprint("usage: logscan <path>")
         return 2
 ```
+
+`eprint` is `print`'s partner for messages meant for a person rather than for
+the next program in a pipeline. It renders its argument the same way but writes
+the line to standard error, so a script that reads `logscan`'s output never
+mistakes a usage message for data.
 
 By convention, status 2 means the command was used incorrectly, as opposed to
 status 1 for a run that started and then failed. Many Unix tools follow that
@@ -37717,7 +37751,7 @@ import sys
 def main() -> int32:
     args = sys.args()
     if args.len() < 1:
-        print("usage: logscan <path>")
+        eprint("usage: logscan <path>")
         return 2
     view path = args[0]
     text = try fs.read_to_string(path)
@@ -37763,14 +37797,14 @@ def run(path: str) -> Result[None, io.Error]:
 def main() -> int32:
     args = sys.args()
     if args.len() < 1:
-        print("usage: logscan <path>")
+        eprint("usage: logscan <path>")
         return 2
     view path = args[0]
     match run(path):
         case Ok(_):
             return 0
         case Err(error):
-            print(f"logscan: cannot read {path}: {error}")
+            eprint(f"logscan: cannot read {path}: {error}")
             return 1
 ```
 
@@ -37841,10 +37875,8 @@ Each failure gets its own exit status and a line that names the file. The
 error text itself is still the raw enum value, `io.Error.NotFound`. That is
 accurate, and a programmer reads it without trouble, but someone who only wants
 their report deserves "no such file". We'll fix that in the last section of
-the chapter, along with the fact that these messages go to standard output.
-(Aura 0.11 has no call for writing plain text to standard error; the `log`
-module writes there, but only as JSON records. The exit status is what tells a
-script that the run failed.)
+the chapter. The messages themselves go to standard error, through `eprint`,
+and the exit status is what tells a script that the run failed.
 
 Notice what we did not have to do. We never checked whether `fs.read_to_string`
 succeeded before using `text`, because `try` made that impossible to forget:
@@ -38075,27 +38107,15 @@ would have to change.
 ## Numbering the lines
 
 When `logscan` skips a line, the user will want to know which one. Users count
-lines from 1, as editors and `grep -n` do. A Python programmer reaches for
-`enumerate(lines, start=1)`:
+lines from 1, as editors and `grep -n` do, while `enumerate` counts from 0. As
+in Python, `enumerate` takes a `start` to count from instead:
 
 ```aura fragment
     for number, line in enumerate(text.lines(), start=1):
 ```
 
-```console
-$ aura check src/main.au
-error[AU2004]: `enumerate` takes 1 iterable, found 2
- --> src/main.au:46:25
-   |
-46 |     for number, line in enumerate(text.lines(), start=1):
-   |                         ^
-```
-
-Aura's `enumerate` takes exactly one argument and always counts from zero. The
-fix is one line of arithmetic inside the loop, `number = index + 1`, which you
-can see in Listing 12-9. You'll meet a handful of small gaps like this when you
-bring Python habits along. Each one is caught at the call, before the program
-runs, with a message that says what the function expected.
+The first line is now number 1, and nothing inside the loop has to adjust the
+count. You can see it in place in Listing 12-9.
 
 ## Using the parser
 
@@ -38150,8 +38170,7 @@ def parse_line(line: str) -> Record | None:
 
 def run(path: str) -> Result[None, io.Error]:
     text = try fs.read_to_string(path)
-    for index, line in enumerate(text.lines()):
-        number = index + 1
+    for number, line in enumerate(text.lines(), start=1):
         match parse_line(line):
             case Record as record:
                 print(f"{number}: {record.level} {record.service}")
@@ -38360,14 +38379,14 @@ def summarize(text: str) -> Summary:
         by_service={},
         errors_by_service={},
     )
-    for index, line in enumerate(text.lines()):
+    for number, line in enumerate(text.lines(), start=1):
         if line.trim() == "":
             continue
         match parse_line(line):
             case Record as record:
                 summary.add(record)
             case None:
-                summary.skipped.append(index + 1)
+                summary.skipped.append(number)
     return summary
 ```
 
@@ -38581,14 +38600,14 @@ def summarize(text: str) -> Summary:
         by_service={},
         errors_by_service={},
     )
-    for index, line in enumerate(text.lines()):
+    for number, line in enumerate(text.lines(), start=1):
         if line.trim() == "":
             continue
         match parse_line(line):
             case Record as record:
                 summary.add(record)
             case None:
-                summary.skipped.append(index + 1)
+                summary.skipped.append(number)
     return summary
 
 def level_name(level: Level) -> str:
@@ -38633,14 +38652,14 @@ def run(path: str) -> Result[None, io.Error]:
 def main() -> int32:
     args = sys.args()
     if args.len() < 1:
-        print("usage: logscan <path>")
+        eprint("usage: logscan <path>")
         return 2
     view path = args[0]
     match run(path):
         case Ok(_):
             return 0
         case Err(error):
-            print(f"logscan: cannot read {path}: {error}")
+            eprint(f"logscan: cannot read {path}: {error}")
             return 1
 ```
 
@@ -38899,7 +38918,7 @@ public def summarize(text: str, min_level: Level) -> Summary:
         by_service={},
         errors_by_service={},
     )
-    for index, line in enumerate(text.lines()):
+    for number, line in enumerate(text.lines(), start=1):
         if line.trim() == "":
             continue
         match records.parse_line(line):
@@ -38907,7 +38926,7 @@ public def summarize(text: str, min_level: Level) -> Summary:
                 if rank(record.level) >= rank(min_level):
                     summary.add(record)
             case Err(error):
-                summary.skipped.append(Skipped(line=index + 1, reason=records.describe(error)))
+                summary.skipped.append(Skipped(line=number, reason=records.describe(error)))
     return summary
 ```
 
@@ -38919,13 +38938,9 @@ without looking anywhere else.
 
 This module uses both import forms: `import records` for the functions and for
 `Record`, which it names as `records.Record`, and `from records import Level`
-for the type it uses everywhere. Aura 0.11 makes the qualified form more than
-a matter of taste here. When a *method* signature names a type that its module
-brought in with `from ... import`, a third module that imports the class with
-`from stats import Summary` fails to resolve that type, and reports
-``unknown type `stats.Record` `` at an unrelated line. Naming the type through
-its module, as `records.Record`, avoids it. Plain functions and fields are not
-affected.
+for the type it uses everywhere. Which form to use is mostly a matter of
+taste: `records.Record` tells a reader at the point of use where the type comes
+from, while `Level` reads better in the many places that compare levels.
 
 ## The report module
 
@@ -39107,11 +39122,11 @@ def main() -> int32:
                 case Ok(_):
                     return 0
                 case Err(error):
-                    print(f"logscan: cannot read {settings.path}: {explain(error)}")
+                    eprint(f"logscan: cannot read {settings.path}: {explain(error)}")
                     return 1
         case Err(error):
-            print(f"logscan: {config.describe(error)}")
-            print("usage: logscan <path> [--min-level LEVEL]")
+            eprint(f"logscan: {config.describe(error)}")
+            eprint("usage: logscan <path> [--min-level LEVEL]")
             return 2
 ```
 
@@ -39562,11 +39577,12 @@ body and the name left out: `def(ms: int64) -> bool`. You can use a function
 type anywhere a type is allowed, including a parameter, a class field, or a
 list's element type as in `checks`.
 
-The parameter name is part of the type. That may be surprising if you come
-from languages where only the parameter types matter, so let's see what
-happens if we leave it out:
+When you write a function type yourself, you choose how much of that
+description to keep. `def(int64) -> bool` leaves the name out, and it accepts
+any function that takes one `int64` and returns a `bool`, whatever it calls its
+parameter:
 
-```aura check-fail:AU2015
+```aura
 def is_slow(ms: int64) -> bool:
     return ms > 100
 
@@ -39575,24 +39591,14 @@ def main():
     print(check(250))
 ```
 
-```console
-$ aura run slow.au
-error[AU2015]: callable contract mismatch: positional parameter 1 differs from parameter `ms` in its name; declare `type Adapter = def(int64) -> bool` and use `Adapter(is_slow)`
- --> slow.au:5:33
-  |
-5 |     check: def(int64) -> bool = is_slow
-  |                                 ^
-  = help: preserve identical complete contracts at bare destinations; apply safe restrictions through an explicit thin alias or owned callable constructor such as `Alias(function)`
-```
-
 Aura calls the full description of how a function may be called its
 *contract*: the parameter names, their modes and types, any defaults, and the
-result. `is_slow` can be called as `is_slow(ms=250)`, but a `def(int64) -> bool`
-could only be called positionally, so storing one as the other would quietly
-throw away part of the contract. The compiler won't do that implicitly. If you
-want a value without the name, the message tells you how to ask for it: define
-`type Adapter = def(int64) -> bool` and write `Adapter(is_slow)`. In practice
-you usually don't need to write the type at all. `check = is_slow` infers the
+result. A type with an unnamed slot can only be called positionally, as
+`check(250)`, so the name `ms` simply never comes up. If you do write a name,
+as in `def(limit: int64) -> bool`, the name becomes part of the contract:
+callers may write `check(limit=250)`, so the function you store has to call
+its parameter `limit` too, and `is_slow` is rejected with `AU2015`. In practice
+you often don't need to write the type at all. `check = is_slow` infers the
 complete contract, names and all.
 
 Named functions like these are *thin* function values: a pointer to code, with
@@ -39658,7 +39664,7 @@ error[AU2002]: lambda parameter types require an expected `def(...) -> ...` cont
   |
 3 |     is_slow = lambda ms: ms > limit
   |               ^
-  = help: add a `def(...) -> ...` annotation to the immutable local, or pass the lambda directly to a callback parameter
+  = help: annotate the binding with a `def(...) -> ...` type, or pass the lambda directly to a callback parameter
 ```
 
 Aura doesn't guess a parameter's type from how the body uses it. `ms > limit`
@@ -40763,8 +40769,7 @@ def services(args: ServicesArgs) -> Services:
 def run[A: json.Codec, R: json.Codec](f: Tool[A, R], args: own json.Value) -> Result[json.Value, str]:
     match own json.decode[A](args):
         case Ok(decoded):
-            result = f(decoded)
-            return Ok(json.encode(result))
+            return Ok(json.encode(f(decoded)))
         case Err(error):
             return Err(f"bad arguments: {error}")
 
@@ -40822,12 +40827,10 @@ tool by name and hands it, with the still-undecoded `args`, to `run`.
 bounds `A: json.Codec` and `R: json.Codec` say that both must have codecs. The
 type arguments are inferred from the tool we pass: `run(count, call.args)`
 fixes `A = CountArgs` and `R = Count`. So `json.decode[A](args)` decodes the
-arguments as exactly the class `count` expects, and `json.encode(result)`
-encodes whatever it returned. `f` is a bare parameter, so `run` borrows the
-decorated binding for the call and leaves it in place for the next one.
-(Writing `json.encode(f(decoded))` on one line fails to infer `encode`'s type
-parameter in Aura 0.11, with `AU2002`; binding the result to `result` first,
-as the listing does, gives the compiler the type it needs.)
+arguments as exactly the class `count` expects, and
+`json.encode(f(decoded))` encodes whatever the tool returned. `f` is a bare
+parameter, so `run` borrows the decorated binding for the call and leaves it
+in place for the next one.
 
 Each successful call prints `call count` or `call services` before its result.
 Those lines come from `traced`, and neither tool contains any tracing code. The
@@ -42200,15 +42203,13 @@ doc 1: 2 words
 all reports done
 ```
 
-### Always open a group with `with`
+### A group always lives in a `with`
 
-The current compiler accepts a `TaskGroup()` that isn't bound with `with`, and
-that is a hole you should know about. Such a group has no block, so nothing
-waits for its tasks:
+A `TaskGroup` can only be created as the item of a `with`. If you try to keep
+one in an ordinary variable, the compiler stops you:
 
-```aura
+```aura check-fail:AU2019
 def work():
-    sleep(100ms)
     print("child finished")
 
 def launch():
@@ -42218,20 +42219,25 @@ def launch():
 
 def main():
     launch()
-    print("back in main")
 ```
 
 ```console
-$ aura run src/main.au
-launch returning
-back in main
+$ aura check src/main.au
+error[AU2019]: a `TaskGroup` must be created as a `with` item
+ --> src/main.au:5:13
+  |
+5 |     group = TaskGroup()
+  |             ^
+  = help: write `with group = TaskGroup():` so the block waits for every task the group starts
 ```
 
-`launch` returned with its task still running, and when `main` finished, the
-runtime abandoned the task before it could print. As we saw at the end of
-[Chapter 14](/book/ch14-02-resource-managers), an abandoned task's `with` exits
-don't run either. Every guarantee in this chapter assumes the group is opened
-with `with`, so always write it that way.
+The rule is what makes the guarantees in this chapter hold. A group without a
+block would have nowhere to wait, so `launch` could return with its task
+still running, and when `main` finished, the runtime would abandon that task
+before it printed anything. Tying every group to a `with` block means that a
+task can never outlive the block that started it. Code that needs to start
+tasks in a helper, like `start_reports` above, takes the group as a `mut
+TaskGroup` parameter from the caller's `with`.
 
 ## Starting several tasks
 
@@ -42468,15 +42474,17 @@ printed and then forgotten. In Aura, a failure always reaches some code that can
 see it: the code reading the result, or failing that, the block that owns the
 task.
 
-### A failure doesn't cancel the siblings
+### A failure cancels the siblings
 
-There's one more detail worth testing, because it differs from Python's
-`asyncio.TaskGroup`. When one child fails and nobody reads its result, what
-happens to its siblings?
+There's one more detail worth testing. When one child fails, what happens to
+its siblings?
 
 ```aura
 def slow():
     sleep(2s)
+    if cancelled():
+        print("slow child cancelled")
+        return
     print("slow child finished")
 
 def bad():
@@ -42491,28 +42499,33 @@ def main():
 
 ```console
 $ time aura run src/main.au
-slow child finished
+slow child cancelled
 error[AU4001]: bad child
- --> src/main.au:6:5
+ --> src/main.au:9:5
   |
-6 |     assert false, "bad child"
+9 |     assert false, "bad child"
   |     ^
-  = note: Aura call chain (innermost first): bad at 5:1
-  = note: Aura task entry: bad at 5:1
-  = note: Aura task ancestry (youngest first): bad spawned from main at 11:15
+  = note: Aura call chain (innermost first): bad at 8:1
+  = note: Aura task entry: bad at 8:1
+  = note: Aura task ancestry (youngest first): bad spawned from main at 14:15
 
-real	0m2.046s
-user	0m0.294s
-sys	0m0.022s
+real	0m0.061s
+user	0m0.055s
+sys	0m0.010s
 ```
 
-`bad` traps almost immediately, but the program takes two seconds: the group
-let `slow` run to completion and then reported the failure. In Python,
-`asyncio.TaskGroup` cancels the remaining tasks as soon as one raises. Aura's
-group does not cancel on its own. If you want "one failure stops everyone", you
-observe the failure and call `group.cancel()` yourself, which is what
-[Section 15.3](/book/ch15-03-cancellation-and-shutdown) is about. The upside is
-that cancellation in Aura always comes from a line of code you can point to.
+`bad` traps almost immediately, and the program finishes just as fast. The
+first child to fail cancels its group, so `slow` doesn't sit out its two
+seconds: its `sleep` returns at once, `cancelled()` is true, and it stops.
+Then the block reports the failure. This is the rule Python's
+`asyncio.TaskGroup` and the Trio library follow too. A group is usually doing
+one job split into parts, and once one part has failed, the job has failed, so
+there is no point letting the other parts run on.
+
+Cancellation in Aura is a request, not a forced stop. A child notices it when
+it waits (a `sleep`, a queue receive, a task result) or when it checks
+`cancelled()`, as `slow` does. [Section 15.3](/book/ch15-03-cancellation-and-shutdown)
+covers it in detail.
 
 ## What can cross into a task
 
@@ -42629,7 +42642,7 @@ main task one at a time:
 ```aura
 def produce(documents: own list[str], lines: Queue[str]):
     for text in own documents:
-        lines.put(text)
+        _ = lines.put(text)
     lines.close()
 
 def main():
@@ -42657,7 +42670,10 @@ total: 10
 
 `Queue[str]()` creates an empty queue of strings. We pass it to `produce` along
 with the documents. `produce` puts each document on the queue and then calls
-`close()` to say that nothing more is coming. Meanwhile the main task runs a
+`close()` to say that nothing more is coming. `put` returns a `Result`, which
+is an `Err` holding the value if the queue has already been closed. Nobody
+closes `lines` before `produce` is done with it, so we discard that `Result`
+with `_ =`, the way [Chapter 9](/book/ch09-03-to-trap-or-not) showed. Meanwhile the main task runs a
 `for` loop over the queue, which takes values out as they arrive and ends once
 the queue has been closed and emptied.
 
@@ -42706,7 +42722,7 @@ here. The compiler says so if you try:
 ```aura check-fail:AU3004
 def main():
     jobs = Queue[str]()
-    jobs.put("index")
+    _ = jobs.put("index")
     jobs.close()
     for job in own jobs:
         print(job)
@@ -42736,7 +42752,7 @@ watch it with a queue that holds one value:
 ```aura
 def produce(jobs: Queue[int64]):
     for n in range(4):
-        jobs.put(n)
+        _ = jobs.put(n)
         print(f"put {n}")
     jobs.close()
 
@@ -42843,7 +42859,7 @@ that long, and a `get` waits for a value at most that long:
 ```aura
 def main():
     jobs = Queue[str](capacity=1)
-    jobs.put("index")
+    _ = jobs.put("index")
     match jobs.put("render", timeout=50ms):
         case Result.Ok(_):
             print("queued")
@@ -42937,8 +42953,8 @@ waits forever for a value that will never arrive.
 
 ```aura
 def produce(jobs: Queue[int64]):
-    jobs.put(1)
-    jobs.put(2)
+    _ = jobs.put(1)
+    _ = jobs.put(2)
     assert false, "producer broke"
     jobs.close()
 
@@ -43260,8 +43276,8 @@ def main():
     jobs = Queue[int64]()
     with group = TaskGroup():
         group.start_soon(worker, jobs)
-        jobs.put(1)
-        jobs.put(2)
+        _ = jobs.put(1)
+        _ = jobs.put(2)
         sleep(50ms)
         group.cancel()
     print("group closed")
@@ -43319,9 +43335,9 @@ silence:
 ```aura
 def produce(results: Queue[str]):
     sleep(30ms)
-    results.put("first result")
+    _ = results.put("first result")
     sleep(500ms)
-    results.put("late result")
+    _ = results.put("late result")
     results.close()
 
 def main():
@@ -43507,7 +43523,7 @@ def count_words(job: own Job) -> int64:
 def produce(documents: own list[str], jobs: Queue[Job]):
     mut id = 0
     for text in own documents:
-        jobs.put(Job(id=id, text=text))
+        _ = jobs.put(Job(id=id, text=text))
         id += 1
     jobs.close()
 
@@ -43515,7 +43531,7 @@ def work(name: str, jobs: Queue[Job], results: Queue[Count]):
     for job in jobs:
         id = job.id
         words = count_words(job)
-        results.put(Count(id=id, words=words, worker=name.clone()))
+        _ = results.put(Count(id=id, words=words, worker=name.clone()))
 
 def run_workers(count: int64, jobs: Queue[Job], results: Queue[Count]):
     with workers = TaskGroup():
@@ -43701,7 +43717,7 @@ def count_words(job: own Job) -> int64:
 def produce(documents: own list[str], jobs: Queue[Job]):
     mut id = 0
     for text in own documents:
-        jobs.put(Job(id=id, text=text))
+        _ = jobs.put(Job(id=id, text=text))
         id += 1
     jobs.close()
 
@@ -43711,7 +43727,7 @@ def work(name: str, jobs: Queue[Job], results: Queue[Count]):
         words = count_words(job)
         if cancelled():
             return
-        results.put(Count(id=id, words=words, worker=name.clone()))
+        _ = results.put(Count(id=id, words=words, worker=name.clone()))
 
 def run_workers(count: int64, jobs: Queue[Job], results: Queue[Count]):
     with workers = TaskGroup():
@@ -43734,7 +43750,6 @@ def collect(results: Queue[Count], group: TaskGroup) -> int64:
                 return total
             case QueueReceive.Cancelled:
                 return total
-    return total
 
 def main():
     documents = [
@@ -43778,9 +43793,10 @@ The collecting loop moved into a function, `collect`, and uses
 pool is finished" (`Closed`) apart from "the pool has gone quiet" (`TimedOut`).
 On a timeout, it calls `group.cancel()`. `collect` only borrows the group, the
 same way `start_reports` did in [Section 15.1](/book/ch15-01-tasks-and-task-groups);
-the group still belongs to `main`'s block. (The `return total` after the
-`while true` loop can never run, but the current compiler reports
-``function `collect` is missing a return`` without it, so we keep it.)
+the group still belongs to `main`'s block.
+`collect` needs no `return` after its `while true` loop: the loop has no
+`break`, so the compiler knows it only ends through one of the `return`
+statements inside it.
 
 The workers check `cancelled()` after each job, so a worker whose job was cut
 short by cancellation doesn't send a meaningless result.
@@ -44635,8 +44651,8 @@ config: ok
 notes: missing
 greeting: ok
 listing: failed (ExitStatus.Exited(2))
-slow: error (Error.TimedOut)
-typo: error (Error.Spawn(No such file or directory (os error 2)))
+slow: error (process.Error.TimedOut)
+typo: error (process.Error.Spawn(No such file or directory (os error 2)))
 ```
 
 There are three different kinds of failure here, and the types keep them
@@ -44839,7 +44855,7 @@ def main():
 
 ```console
 $ aura run forgetful.au
-Result.Err(Error.TimedOut)
+Result.Err(process.Error.TimedOut)
 ```
 
 `sort` is still waiting for more input, and we are waiting for its output.
@@ -44956,7 +44972,7 @@ def main():
 
 ```console
 $ aura run names.au
-Error.Other(supervisor already manages a child named `sleeper`)
+process.Error.Other(supervisor already manages a child named `sleeper`)
 SupervisorEvent.Restarted(broken, ExitStatus.Exited(1), 1)
 SupervisorEvent.Restarted(broken, ExitStatus.Exited(1), 2)
 SupervisorEvent.Exited(broken, ExitStatus.Exited(1), 2)
@@ -45067,7 +45083,7 @@ import net
 
 def serve(addresses: Queue[str]) -> Result[None, io.Error]:
     with listener = try net.listen("127.0.0.1:0"):
-        addresses.put(try listener.local_addr())
+        _ = addresses.put(try listener.local_addr())
         with stream = try listener.accept(timeout=5s):
             match try stream.read_line(timeout=5s):
                 case str as name:
@@ -46231,8 +46247,9 @@ which call to `summarize` it was. Here it is obvious from reading `main`, but
 in a real program the empty list might have come from a file, a network
 response, or a filter three functions away. The cheapest next step is often
 to print. `print` writes to standard output; if your program's output is
-being read by another tool, the `log` module writes one JSON record per call
-to standard error instead, which keeps diagnostic noise out of the data:
+being read by another tool, `eprint` writes the same text to standard error
+instead, and the `log` module writes one JSON record per call to standard
+error, which keeps diagnostic noise out of the data:
 
 ```aura
 import log
@@ -47334,10 +47351,10 @@ def run_job(job: Job):
 
 ```console
 $ aura run src/main.au
-greet: could not start: Error.Spawn(No such file or directory (os error 2))
-count: could not start: Error.Spawn(No such file or directory (os error 2))
-nap: could not start: Error.Spawn(No such file or directory (os error 2))
-broken: could not start: Error.Spawn(No such file or directory (os error 2))
+greet: could not start: process.Error.Spawn(No such file or directory (os error 2))
+count: could not start: process.Error.Spawn(No such file or directory (os error 2))
+nap: could not start: process.Error.Spawn(No such file or directory (os error 2))
+broken: could not start: process.Error.Spawn(No such file or directory (os error 2))
 ```
 
 The operating system went looking for a program literally named
@@ -48252,23 +48269,12 @@ def run_job(job: Job) -> Report:
         backoff = backoff * 2
 ```
 
-```console
-$ aura check src/main.au
-error[AU2999]: function `run_job` is missing a return
- --> src/main.au:91:1
-   |
-91 | def run_job(job: Job) -> Report:
-   | ^
-```
-
-We can see that the loop never ends except through one of the two `return`
-statements, but the compiler does not treat `while true` as special. It sees
-a loop whose condition could, in principle, become false, and a path after
-the loop that falls off the end of a function that promised a `Report`. We
-could argue with that, but the error points at a real weakness in the code:
-the "give up" decision is buried inside a match arm, two levels down. It reads
-better as the loop's own exit. Let's remember the last error, `break` when we
-are out of attempts, and build the failure report once, after the loop:
+This compiles. The loop has no `break`, so the compiler knows the only ways
+out of it are the two `return` statements, and it doesn't ask for a `return`
+after the loop. But the code has a real weakness: the "give up" decision is
+buried inside a match arm, two levels down. It reads better as the loop's own
+exit. Let's remember the last error, `break` when we are out of attempts, and
+build the failure report once, after the loop:
 
 ```aura fragment
 def run_job(job: Job) -> Report:
@@ -48385,7 +48391,7 @@ $ time aura run src/main.au
   flaky: attempt 2 failed (ExitStatus.Exited(1): not yet (run 2)), retrying in 200ms
 [FAIL] broken (115 ms, 2 attempts) ExitStatus.Exited(3): about to fail
 [ok  ] flaky (332 ms, 3 attempts) worked on run 3
-[FAIL] slow (5005 ms) Error.TimedOut
+[FAIL] slow (5005 ms) process.Error.TimedOut
 5 jobs, 2 failed
 
 real	0m5.143s
@@ -48426,7 +48432,7 @@ $ time aura run src/main.au
   flaky: attempt 2 failed (ExitStatus.Exited(1): not yet (run 2)), retrying in 200ms
 [FAIL] broken (118 ms, 2 attempts) ExitStatus.Exited(3): about to fail
 [ok  ] flaky (333 ms, 3 attempts) worked on run 3
-[FAIL] slow (2215 ms) Error.TimedOut
+[FAIL] slow (2215 ms) process.Error.TimedOut
 5 jobs, 2 failed
 
 real	0m2.355s
@@ -48726,12 +48732,12 @@ def print_report(report: Report):
 
 def produce(jobs: own list[Job], queue: Queue[Job]):
     for job in own jobs:
-        queue.put(job)
+        _ = queue.put(job)
     queue.close()
 
 def work(queue: Queue[Job], reports: Queue[Report]):
     for job in queue:
-        reports.put(run_job(job))
+        _ = reports.put(run_job(job))
 
 class Options:
     path: str
@@ -48826,7 +48832,7 @@ $ ./target/jobrunner --workers 2
 [ok  ] flaky (323 ms, 3 attempts) worked on run 3
   broken: attempt 1 failed (ExitStatus.Exited(3): about to fail), retrying in 100ms
 [FAIL] broken (115 ms, 2 attempts) ExitStatus.Exited(3): about to fail
-[FAIL] slow (2210 ms) Error.TimedOut
+[FAIL] slow (2210 ms) process.Error.TimedOut
 5 jobs, 2 failed, 0 cancelled
 ```
 
@@ -50374,7 +50380,7 @@ def main():
 
 ```console
 $ aura check index.au
-error[AU3005]: cannot implicitly copy `str` out of a list index; use `view value = items[index]` for shared access, `items[index].clone()` for an explicit cloned owner, or `pop(index)` or `set(index, value)` to transfer ownership
+error[AU3005]: cannot implicitly copy `str` out of a list index; use `view value = items[index]` for shared access, `items[index].clone()` for an explicit copy, or `pop(index)` or `set(index, value)` to transfer ownership
  --> index.au:3:13
   |
 3 |     first = names[0]
