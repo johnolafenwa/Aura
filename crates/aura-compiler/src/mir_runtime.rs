@@ -3700,6 +3700,7 @@ impl MirRuntime {
                         // trapping child call already published.
                         env.loans.clear();
                         return Err(self.unwind_cleanups_after_trap(
+                            Some(function),
                             &mut cleanup_stack,
                             env,
                             error,
@@ -3719,7 +3720,12 @@ impl MirRuntime {
                 Err(error) => {
                     let error = self.annotate_runtime_trap_once(error);
                     env.loans.clear();
-                    return Err(self.unwind_cleanups_after_trap(&mut cleanup_stack, env, error));
+                    return Err(self.unwind_cleanups_after_trap(
+                        Some(function),
+                        &mut cleanup_stack,
+                        env,
+                        error,
+                    ));
                 }
             };
             match outcome {
@@ -4186,7 +4192,7 @@ impl MirRuntime {
                 Err(error) => {
                     let error = self.annotate_runtime_trap_once(error);
                     env.loans.clear();
-                    return Err(self.unwind_cleanups_after_trap(cleanup_stack, env, error));
+                    return Err(self.unwind_cleanups_after_trap(None, cleanup_stack, env, error));
                 }
             }
         }
@@ -4198,16 +4204,26 @@ impl MirRuntime {
     /// too cannot replace it, and every exit below that one still runs.
     fn unwind_cleanups_after_trap(
         &mut self,
+        function: Option<&MirFunction>,
         cleanup_stack: &mut CleanupStack,
         env: &mut Env,
         error: Diagnostic,
     ) -> Diagnostic {
-        // A generator the frame owns closes first, as the native backend
-        // runs a suspended body's exits before its caller's.
+        // A generator a local of the frame owns closes first, as the native
+        // backend runs a suspended body's exits before its caller's. The
+        // receiver and parameters stay: the caller may write them back.
+        // A trap in an exit (no `function`) leaves the frame's generators to
+        // the frame's own drop.
         let generators = env
             .values
             .iter()
-            .filter(|(_, value)| owns_generator(value))
+            .filter(|(name, value)| {
+                function.is_some_and(|function| {
+                    name.as_str() != "self"
+                        && !function.params.iter().any(|param| &param.name == *name)
+                })
+                && owns_generator(value)
+            })
             .map(|(name, _)| name.clone())
             .collect::<Vec<_>>();
         for name in generators {
