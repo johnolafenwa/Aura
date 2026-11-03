@@ -20186,8 +20186,25 @@ fn the_task_stack_pool_keeps_a_bounded_number_of_stacks_and_bytes() {
     assert_eq!(pool.stacks.len(), super::TASK_STACK_POOL_MAX_STACKS);
     assert_eq!(pool.bytes, super::TASK_STACK_POOL_MAX_STACKS * size);
 
+    // An idle worker trims back to the idle bound one batch at a time.
+    let mut batches = 0;
+    while pool.above_idle_bound() {
+        let surplus = pool.trim_for_idle();
+        assert!(!surplus.is_empty());
+        assert!(surplus.len() <= super::TASK_STACK_POOL_TRIM_BATCH);
+        batches += 1;
+    }
+    assert_eq!(pool.stacks.len(), super::TASK_STACK_POOL_IDLE_STACKS);
+    assert_eq!(pool.bytes, super::TASK_STACK_POOL_IDLE_STACKS * size);
+    assert_eq!(
+        batches,
+        (super::TASK_STACK_POOL_MAX_STACKS - super::TASK_STACK_POOL_IDLE_STACKS)
+            .div_ceil(super::TASK_STACK_POOL_TRIM_BATCH)
+    );
+    assert!(pool.trim_for_idle().is_empty());
+
     let mut large = super::TaskStackPool::default();
-    let large_size = 16 * 1024 * 1024;
+    let large_size = 512 * 1024 * 1024;
     for _ in 0..3 {
         let stack = super::allocate_lightweight_task_stack(large_size).expect("stack");
         let _ = large.give(super::PooledTaskStack {
@@ -20201,6 +20218,10 @@ fn the_task_stack_pool_keeps_a_bounded_number_of_stacks_and_bytes() {
     assert!(large.take(size).is_none());
     assert!(large.take(large_size).is_some());
     assert_eq!(large.bytes, large_size);
+    // The idle bound is in bytes too: one large stack is above it.
+    assert!(large.above_idle_bound());
+    assert_eq!(large.trim_for_idle().len(), 1);
+    assert_eq!(large.bytes, 0);
 }
 
 fn prepared_test_task() -> super::PreparedLightweightTask {
