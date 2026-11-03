@@ -4221,8 +4221,7 @@ impl MirRuntime {
                 function.is_some_and(|function| {
                     name.as_str() != "self"
                         && !function.params.iter().any(|param| &param.name == *name)
-                })
-                && owns_generator(value)
+                }) && owns_generator(value)
             })
             .map(|(name, _)| name.clone())
             .collect::<Vec<_>>();
