@@ -422,8 +422,10 @@ def main():
 - `Generator[T]` cannot be copied or cloned, and it is not Transfer: it runs
   only on the task that created it (`AU3008`).
 
-Scheduler waits inside a generator body (a `Queue` receive, a sleep, file
-I/O) are not supported yet.
+- The body may wait like any task code: a `Queue` receive, a `sleep`, or
+  file I/O suspends the task that called `next` until the wait ends, and
+  cancelling that task wakes the wait as it would wake one in the task's own
+  code.
 
 ### Range Iteration
 

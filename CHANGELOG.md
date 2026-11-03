@@ -87,8 +87,8 @@ in this file.
   interpreter and native builds. `Generator[T]` implements `Iterator[T]`, so
   `for` loops take it, and `close()` stops it with its `with` exits run
   once. A trap in the body is a trap of the caller's task, and the call
-  chain names the generator. Misuse reports `AU2049`. Waits inside a
-  generator body come in a later step.
+  chain names the generator. A body may sleep, receive from a `Queue`, or do
+  file I/O; the wait suspends the calling task. Misuse reports `AU2049`.
 - A unit variant of an imported generic enum, such as `opt.Opt.Nothing`,
   now takes its type arguments from the expected type, as an unqualified
   variant already did. It used to report a return type mismatch.

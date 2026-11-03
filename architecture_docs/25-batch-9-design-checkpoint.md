@@ -221,8 +221,11 @@ New codes are assigned in the step that needs them and registered in
   thread and task. `close` resumes the body with `yield` returning false.
   The interpreter runs the body in a forked `MirRuntime` that shares the
   program; the native body's frame-stack entries move out while it is
-  suspended (`GeneratorHooks`). Scheduler waits already trampoline through
-  `yield_current_lightweight_task`, which a trap's task exit uses too. A
+  suspended (`GeneratorHooks`). Scheduler waits (9c-3) trampoline through
+  `yield_current_lightweight_task`: a body's wait suspends the generator,
+  and `resume` performs it on the task stack and hands the wake reason
+  back. A trap's task exit takes the same path. Cancellation needs nothing
+  more, since a cancelled wait wakes exactly as in task code. A
   diagnostic shows the body frame under the generator's name and drops the
   packing closure and `Generator.next` frames. Deviation: a dropped
   suspended generator closes when its last owner releases it, which is the
