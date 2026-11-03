@@ -22,7 +22,7 @@ use crate::diag::RuntimeCallFrame;
 pub(super) const DIRECT_MAX_CALL_DEPTH: usize = 256;
 
 /// The entries a stack holds before it moves them to the heap.
-pub(super) const DIRECT_FRAME_STACK_INLINE_ENTRIES: usize = 64;
+pub(super) const DIRECT_FRAME_STACK_INLINE_ENTRIES: usize = 16;
 
 /// The low bit of an entry that holds a boxed frame record instead of a
 /// descriptor. Both are 8-byte aligned, so the bit is free.
