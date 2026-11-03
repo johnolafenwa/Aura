@@ -154,7 +154,8 @@ times are medians of 3 runs; this container's timings vary by about 10%.
 | 8a: stack syscalls when a stack is reused | `mmap`, `mprotect`, `munmap` per task | none |
 | 8b: spawn then join, per task, 4 workers / 1 worker | 119 us / 22 us | 7.6 us / 4.6 us (1.7x) |
 | 8b: imbalance probe (ideal 234 ms) | 686 ms | 256-395 ms, usually 1.1x ideal |
-| 8b: `task_pool` at 4 workers vs 1 worker | 0.93 s vs 0.75 s | 0.45 s vs 0.75 s |
+| 8b: `task_pool 200000`, 4 workers / 1 worker | 1.06-1.53 s / 0.75 s | 0.60-0.87 s / 0.59-0.74 s: about even, gate not clearly met |
+| `task_pool 100000` (suite size), 4 workers | 0.93 s | 0.45 s |
 | 8c: `pubsub_broker` / `kv_server` / `http_api` | 4.38 / 3.64 / 0.61 s | 1.37 / 0.83 / 0.49 s |
 | 8c: 30-program suite, total Aura time | 26.4 s | 19.1 s; no program executes more instructions |
 | 8d: worst 1 ms sleep lateness beside `fib(35)`, 1 worker | 137-187 ms | 1-7 ms |
