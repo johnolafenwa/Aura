@@ -4897,10 +4897,22 @@ pub(crate) struct PooledTaskStack {
     home: Option<Arc<Mutex<TaskStackPool>>>,
 }
 
-/// Most stacks one worker keeps for reuse.
-const TASK_STACK_POOL_MAX_STACKS: usize = 32;
+/// Most stacks one worker keeps for reuse while it has work. A burst of
+/// task exits, such as a cancelled group of parked children, returns every
+/// stack here instead of unmapping each one: in a process with threads on
+/// several cores each `munmap` waits for a TLB shootdown on all of them.
+const TASK_STACK_POOL_MAX_STACKS: usize = 1024;
 /// Most reserved address space, in bytes, one worker's pool keeps.
-const TASK_STACK_POOL_MAX_BYTES: usize = 32 * 1024 * 1024;
+const TASK_STACK_POOL_MAX_BYTES: usize = 1024 * 1024 * 1024;
+/// What an idle worker trims its pool back to, so the touched pages of a
+/// burst's stacks do not stay resident after it.
+const TASK_STACK_POOL_IDLE_STACKS: usize = 32;
+const TASK_STACK_POOL_IDLE_BYTES: usize = 32 * 1024 * 1024;
+/// Most stacks an idle worker unmaps before it next polls, which bounds how
+/// long trimming can delay a wake, and how long it polls before the next
+/// batch.
+const TASK_STACK_POOL_TRIM_BATCH: usize = 16;
+const TASK_STACK_POOL_TRIM_INTERVAL: StdDuration = StdDuration::from_millis(1);
 
 /// Stacks of finished tasks that this thread keeps for the next task of the
 /// same capacity. A stack enters only after its coroutine has ended, so no
@@ -4936,6 +4948,45 @@ impl TaskStackPool {
         self.stacks.push(entry);
         None
     }
+
+    /// Takes out up to `TASK_STACK_POOL_TRIM_BATCH` of the oldest stacks
+    /// above the idle bound.
+    fn trim_for_idle(&mut self) -> Vec<PooledTaskStack> {
+        let mut surplus = 0;
+        let mut bytes = self.bytes;
+        while surplus < TASK_STACK_POOL_TRIM_BATCH
+            && surplus < self.stacks.len()
+            && (self.stacks.len() - surplus > TASK_STACK_POOL_IDLE_STACKS
+                || bytes > TASK_STACK_POOL_IDLE_BYTES)
+        {
+            bytes -= self.stacks[surplus].size;
+            surplus += 1;
+        }
+        self.bytes = bytes;
+        self.stacks.drain(..surplus).collect()
+    }
+
+    fn above_idle_bound(&self) -> bool {
+        self.stacks.len() > TASK_STACK_POOL_IDLE_STACKS || self.bytes > TASK_STACK_POOL_IDLE_BYTES
+    }
+}
+
+/// Unmaps a batch of this thread's pooled stacks above the idle bound.
+/// Returns whether stacks above it remain, so the caller can come back
+/// before it blocks for long.
+pub(crate) fn trim_idle_task_stack_pool() -> bool {
+    TASK_STACK_POOL
+        .try_with(|pool| {
+            let (surplus, remaining) = {
+                let mut pool = lock_mutex(pool);
+                let surplus = pool.trim_for_idle();
+                (surplus, pool.above_idle_bound())
+            };
+            // Unmap outside the lock, so other workers can return stacks.
+            drop(surplus);
+            remaining
+        })
+        .unwrap_or(false)
 }
 
 thread_local! {
@@ -8493,8 +8544,13 @@ impl LightweightTaskScheduler {
             } else {
                 self.reactor.spin_for_notification(WORKER_IDLE_SPIN);
             }
-            let max_wait = (shares_work && workers.has_waiting_children(self.worker_index))
+            let mut max_wait = (shares_work && workers.has_waiting_children(self.worker_index))
                 .then_some(NEWEST_CHILD_STEAL_AGE);
+            if trim_idle_task_stack_pool() {
+                max_wait = Some(max_wait.map_or(TASK_STACK_POOL_TRIM_INTERVAL, |wait| {
+                    wait.min(TASK_STACK_POOL_TRIM_INTERVAL)
+                }));
+            }
             let polled = self.reactor.poll(max_wait);
             if shares_work {
                 workers.unpark(self.worker_index);
