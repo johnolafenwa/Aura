@@ -500,6 +500,20 @@ ran 26% faster, `json_roundtrip` 21%, and `template_render` 18%. Aura
 is still slower than Python on `csv_aggregate`, `docdb`, `file_io`,
 `json_roundtrip`, and `template_render`.
 
+Aura 0.12.0 is a language release with no performance work. Measured
+against the published 0.11.0 archive on 3 November 2026, both compilers
+execute the same instructions on every program, within 0.1% (`task_pool`
+1.6% fewer), 88.3 billion in all at the bench size. Wall times, in the
+same two passes on a busier container, are within run-to-run spread:
+
+| Measure | Aura 0.11.0 | Aura 0.12.0 |
+| --- | ---: | ---: |
+| All 30 programs, wall time | 19.7 s | 19.9 s |
+| Median Aura / Rust, wall time | 3.7x | 3.8x |
+| Median Aura / Python 3.13, wall time | 0.45x | 0.46x |
+| Programs faster than Python | 24 | 24 |
+| Programs above 8x Rust | 0 | 0 |
+
 ### Per-Call Attribution
 
 Eleven symbol-preserving xctrace recordings on the foundations host attribute
