@@ -1,0 +1,3 @@
+from iter import Generator
+def f() -> Generator[int64]:
+    yield

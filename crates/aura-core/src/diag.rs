@@ -238,6 +238,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "invalid contract clause",
     },
     DiagnosticCodeInfo {
+        code: "AU2049",
+        band: "names/types",
+        title: "invalid generator",
+    },
+    DiagnosticCodeInfo {
         code: "AU2999",
         band: "names/types",
         title: "general compile-time rejection",
@@ -348,6 +353,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "contract violated",
     },
     DiagnosticCodeInfo {
+        code: "AU4010",
+        band: "runtime",
+        title: "generator misuse",
+    },
+    DiagnosticCodeInfo {
         code: "AU5001",
         band: "lint",
         title: "unused local binding",
@@ -438,6 +448,46 @@ impl RuntimeSourceSpan {
 pub struct RuntimeCallFrame {
     pub function: String,
     pub span: RuntimeSourceSpan,
+}
+
+/// The name prefix of the function that holds a generator's body.
+pub const GENERATOR_BODY_PREFIX: &str = "__aura_generator_body_";
+
+/// The call frames a diagnostic shows. A generator body's frame is shown
+/// under the generator function's own name, and the frames that only carry
+/// the body (its packing closure and `Generator.next` or `close`) are left
+/// out, so the chain reads `generator -> caller`.
+pub fn visible_call_frames(frames: &[RuntimeCallFrame]) -> Vec<RuntimeCallFrame> {
+    let mut visible = Vec::with_capacity(frames.len());
+    let mut after_body = false;
+    for frame in frames {
+        let (module, name) = match frame.function.rsplit_once("::") {
+            Some((module, name)) => (Some(module), name),
+            None => (None, frame.function.as_str()),
+        };
+        if let Some(generator) = name.strip_prefix(GENERATOR_BODY_PREFIX) {
+            let function = match module {
+                Some(module) => format!("{module}::{generator}"),
+                None => generator.to_string(),
+            };
+            visible.push(RuntimeCallFrame {
+                function,
+                span: frame.span.clone(),
+            });
+            after_body = true;
+            continue;
+        }
+        if after_body
+            && (name.starts_with("__lambda_")
+                || frame.function.starts_with("Iterator for iter.Generator.")
+                || frame.function.starts_with("iter::Generator."))
+        {
+            continue;
+        }
+        after_body = false;
+        visible.push(frame.clone());
+    }
+    visible
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -809,9 +859,8 @@ impl Diagnostic {
                     applicability: edit.applicability.clone(),
                 })
                 .collect(),
-            call_frames: self
-                .call_frames
-                .iter()
+            call_frames: visible_call_frames(&self.call_frames)
+                .into_iter()
                 .map(|frame| StructuredRuntimeCallFrame {
                     function: frame.function.clone(),
                     span: frame.span.structured(&path),
@@ -899,8 +948,7 @@ impl Diagnostic {
             ));
         }
         if !self.call_frames.is_empty() {
-            let frames = self
-                .call_frames
+            let frames = visible_call_frames(&self.call_frames)
                 .iter()
                 .map(|frame| format!("{} at {}", frame.function, frame.span.start))
                 .collect::<Vec<_>>()

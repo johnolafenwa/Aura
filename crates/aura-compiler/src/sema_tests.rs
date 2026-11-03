@@ -32167,6 +32167,34 @@ fn for_loops_iterate_user_iterators() {
 }
 
 #[test]
+fn generator_functions_check_and_reject_misuse() {
+    let header = "from iter import Generator\n\n";
+    crate::check_source(&format!(
+        "{header}def count(n: int64, label: own str) -> Generator[int64]:\n    print(label)\n    for i in range(n):\n        if i > 5:\n            return\n        yield i\n\ndef main():\n    for x in count(3, \"go\"):\n        print(x)\n"
+    ))
+    .expect("generator functions check");
+    // `yield` alone stays an ordinary name outside generator functions.
+    crate::check_source("def f():\n    yield = 3\n    print(yield)\n").expect("yield is a name");
+
+    for (source, code, message) in [
+        ("def f() -> int64:\n    yield 1\n    return 0\n", "AU2049", "its result type must be `Generator[T]`"),
+        (&format!("{header}def f() -> Generator[int64]:\n    yield 1\n    return 2\n"), "AU2049", "cannot return a value"),
+        (&format!("{header}def f(xs: mut list[int64]) -> Generator[int64]:\n    yield 1\n"), "AU2049", "cannot be `mut`"),
+        (&format!("{header}def f() -> Generator[int64]:\n    yield \"no\"\n"), "AU2002", "the generator yields `int64`, found `str`"),
+        (&format!("{header}def f() -> Generator[int64]:\n    yield\n"), "AU2049", "`yield` needs a value"),
+        (&format!("{header}def f() -> Generator[int64]:\n    ensures true\n    yield 1\n"), "AU2049", "cannot have `ensures` clauses"),
+        (&format!("{header}def f(xs: list[int64]) -> Generator[int64]:\n    yield 1\n"), "AU3002", "generator parameter `xs` must be `own`"),
+        ("class C:\n    def m(self) -> int64:\n        yield 1\n        return 1\n", "AU2049", "not in a method"),
+        ("yield 3\n", "AU2049", "not in top-level statements"),
+        (&format!("{header}def f() -> Generator[int64]:\n    yield 1\n\ndef use(g: own Generator[int64]) -> int64:\n    return 0\n\ndef main():\n    with TaskGroup() as group:\n        group.start(use, f())\n"), "AU3008", "is not Transfer"),
+    ] {
+        let diagnostic = crate::check_source(source).expect_err("the generator is rejected");
+        assert_eq!(diagnostic.code, code, "{source}\n{diagnostic:?}");
+        assert!(diagnostic.message.contains(message), "{source}\n{diagnostic:?}");
+    }
+}
+
+#[test]
 fn imported_generic_unit_variants_take_expected_type_arguments() {
     let diagnostic = crate::check_source(concat!(
         "import iter\n",

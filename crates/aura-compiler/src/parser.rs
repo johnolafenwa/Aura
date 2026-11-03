@@ -1697,6 +1697,8 @@ impl Parser {
             ))
         } else if self.at_simple(&TokenKind::KwReturn) {
             self.parse_return_stmt()
+        } else if self.at_yield_stmt() {
+            self.parse_yield_stmt()
         } else if self.at_simple(&TokenKind::KwAssert) {
             self.parse_assert_stmt()
         } else if self.at_simple(&TokenKind::KwPass) {
@@ -2533,8 +2535,21 @@ impl Parser {
             return None;
         };
         let kind = ContractKind::from_keyword(word)?;
+        self.at_contextual_statement_keyword(word).then_some(kind)
+    }
+
+    /// Whether the current token is `yield` starting a yield statement:
+    /// followed on the same rules as a contract keyword by an expression.
+    fn at_yield_stmt(&self) -> bool {
+        matches!(self.current_kind(), TokenKind::Identifier(word) if word == crate::ast::YIELD_KEYWORD)
+            && self.at_contextual_statement_keyword(crate::ast::YIELD_KEYWORD)
+    }
+
+    fn at_contextual_statement_keyword(&self, word: &str) -> bool {
         let keyword = &self.tokens[self.index];
-        let next = self.tokens.get(self.index + 1)?;
+        let Some(next) = self.tokens.get(self.index + 1) else {
+            return false;
+        };
         let starts_expression = match &next.kind {
             TokenKind::Identifier(_)
             | TokenKind::IntLiteral(_)
@@ -2558,9 +2573,36 @@ impl Parser {
         };
         // `requires [x]` and `requires -x` read as clauses only with a space.
         let spaced = next.span.column > keyword.span.column + word.len();
-        let starts_expression = starts_expression
-            && (spaced || !matches!(next.kind, TokenKind::LBracket | TokenKind::Minus));
-        starts_expression.then_some(kind)
+        starts_expression
+            && (spaced || !matches!(next.kind, TokenKind::LBracket | TokenKind::Minus))
+    }
+
+    /// `yield expr`, kept as a call of the hidden name `yield ` until the
+    /// generator pass rewrites it (see `sema::generators`).
+    fn parse_yield_stmt(&mut self) -> Result<Stmt> {
+        let span = self.current_span();
+        self.bump();
+        let value = self.parse_expr()?;
+        self.expect_statement_terminator()?;
+        let value_span = value.span;
+        Ok(Stmt::Expr(ExprStmt {
+            expr: Expr {
+                kind: ExprKind::Call {
+                    callee: Box::new(Expr {
+                        kind: ExprKind::Name(crate::ast::YIELD_MARKER.to_string()),
+                        span,
+                    }),
+                    args: vec![crate::ast::Argument {
+                        name: None,
+                        value,
+                        span: value_span,
+                    }],
+                },
+                span,
+            },
+            span,
+            discarded: false,
+        }))
     }
 
     /// True when the current token is a plain triple-quoted string that is a

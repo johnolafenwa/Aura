@@ -3046,7 +3046,9 @@ fn direct_host_builtin_ffi_covers_success_and_diagnostic_boundaries() {
             crate::runtime_value::host_builtins::host_builtin_function(name).is_some()
                 || crate::runtime_value::evaluate_bytes_host_builtin_ref(name, &Value::Unit)
                     .is_some()
-                || crate::text_methods::is_bytes_search_builtin(name),
+                || crate::text_methods::is_bytes_search_builtin(name)
+                // The interpreter runs generator bodies itself.
+                || name.starts_with("iter::__aura_generator_"),
             "`{name}` must also reach the MIR interpreter"
         );
     }

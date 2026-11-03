@@ -1,0 +1,41 @@
+# A generator's `with` exits run once: when the body finishes, when
+# `close()` stops it at a `yield`, and when its last owner drops it.
+from iter import Generator
+
+class Tracer:
+    name: str
+
+    def __enter__(mut self) -> None:
+        print("enter " + self.name)
+
+    def __exit__(mut self) -> None:
+        print("exit " + self.name)
+
+def guarded(name: own str, n: int64) -> Generator[int64]:
+    with Tracer(name=name) as t:
+        for i in range(n):
+            yield i
+    print("after with")
+
+def take_first(name: own str) -> int64:
+    mut g = guarded(name, 10)
+    for x in mut g:
+        return x
+    return -1
+
+def main():
+    for x in guarded("full", 2):
+        print(x)
+
+    mut g = guarded("closed", 5)
+    for x in mut g:
+        print(x)
+        if x == 1:
+            break
+    print("closing")
+    g.close()
+    print("closed")
+
+    # The generator is dropped, and so closed, before `take_first` returns.
+    print(take_first("dropped"))
+    print("returned")

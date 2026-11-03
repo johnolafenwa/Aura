@@ -1,0 +1,5 @@
+error[AU2049]: `yield` can only appear in a module-level generator function, not in a method
+ --> crates/aura-compiler/tests/fixtures/check-fail/generator_yield_in_method.au:3:9
+  |
+3 |         yield 1
+  |         ^

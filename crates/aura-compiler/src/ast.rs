@@ -307,6 +307,13 @@ pub struct FunctionDecl {
     pub spec: bool,
 }
 
+/// The contextual keyword of a yield statement.
+pub const YIELD_KEYWORD: &str = "yield";
+
+/// The callee name a parsed `yield value` statement carries until the
+/// generator pass rewrites it. The trailing space keeps source from naming it.
+pub const YIELD_MARKER: &str = "yield ";
+
 /// The hidden method that checks a class's `invariant` clauses. The parser
 /// adds it to every class that declares one; it borrows `self` and checks
 /// each clause on entry.

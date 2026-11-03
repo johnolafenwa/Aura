@@ -12198,7 +12198,7 @@ fn mir_runtime_process_builtins_cover_spawn_timeout_and_cancelled_edges() {
 #[test]
 fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers() {
     let mut runtime = test_runtime();
-    runtime.functions.insert(
+    std::sync::Arc::make_mut(&mut runtime.functions).insert(
         "widget_render".to_string(),
         MirFunction {
             name: "widget_render".to_string(),
@@ -12217,7 +12217,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
             }],
         },
     );
-    runtime.functions.insert(
+    std::sync::Arc::make_mut(&mut runtime.functions).insert(
         "status_label".to_string(),
         MirFunction {
             name: "status_label".to_string(),
@@ -12236,7 +12236,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
             }],
         },
     );
-    runtime.classes.insert(
+    std::sync::Arc::make_mut(&mut runtime.classes).insert(
         "Widget".to_string(),
         MirClass {
             name: "Widget".to_string(),
@@ -12250,7 +12250,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
             copy: false,
         },
     );
-    runtime.trait_impls.push(MirTraitImpl {
+    std::sync::Arc::make_mut(&mut runtime.trait_impls).push(MirTraitImpl {
         trait_name: "Label".to_string(),
         trait_args: Vec::new(),
         for_type: Type::named("Status"),
@@ -12754,7 +12754,7 @@ fn mir_runtime_builtin_error_surface_covers_additional_builtin_branches() {
 #[test]
 fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
     let mut runtime = test_runtime();
-    runtime.classes.insert(
+    std::sync::Arc::make_mut(&mut runtime.classes).insert(
         "Empty".to_string(),
         MirClass {
             name: "Empty".to_string(),
@@ -12764,7 +12764,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
             copy: false,
         },
     );
-    runtime.classes.insert(
+    std::sync::Arc::make_mut(&mut runtime.classes).insert(
         "Broken".to_string(),
         MirClass {
             name: "Broken".to_string(),
@@ -12778,7 +12778,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
             copy: false,
         },
     );
-    runtime.trait_impls.push(MirTraitImpl {
+    std::sync::Arc::make_mut(&mut runtime.trait_impls).push(MirTraitImpl {
         trait_name: "Render".to_string(),
         trait_args: Vec::new(),
         for_type: Type::named("Status"),
@@ -13034,7 +13034,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
 #[test]
 fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
     let mut runtime = test_runtime();
-    runtime.functions.insert(
+    std::sync::Arc::make_mut(&mut runtime.functions).insert(
         "counter_replace".to_string(),
         MirFunction {
             name: "counter_replace".to_string(),
@@ -13068,7 +13068,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
             }],
         },
     );
-    runtime.functions.insert(
+    std::sync::Arc::make_mut(&mut runtime.functions).insert(
         "counter_borrow_only".to_string(),
         MirFunction {
             name: "counter_borrow_only".to_string(),
@@ -13087,7 +13087,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
             }],
         },
     );
-    runtime.functions.insert(
+    std::sync::Arc::make_mut(&mut runtime.functions).insert(
         "status_mark".to_string(),
         MirFunction {
             name: "status_mark".to_string(),
@@ -13115,7 +13115,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
             }],
         },
     );
-    runtime.functions.insert(
+    std::sync::Arc::make_mut(&mut runtime.functions).insert(
         "status_borrow_only".to_string(),
         MirFunction {
             name: "status_borrow_only".to_string(),
@@ -13134,7 +13134,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
             }],
         },
     );
-    runtime.classes.insert(
+    std::sync::Arc::make_mut(&mut runtime.classes).insert(
         "Counter".to_string(),
         MirClass {
             name: "Counter".to_string(),
@@ -13158,7 +13158,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
             copy: false,
         },
     );
-    runtime.trait_impls.push(MirTraitImpl {
+    std::sync::Arc::make_mut(&mut runtime.trait_impls).push(MirTraitImpl {
         trait_name: "Mark".to_string(),
         trait_args: Vec::new(),
         for_type: Type::named("Status"),

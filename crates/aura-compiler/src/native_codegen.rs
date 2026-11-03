@@ -16620,7 +16620,9 @@ fn direct_type_inner(
         Type::Named(name, args) if args.is_empty() && ScalarKind::of_name(name).is_some() => {
             ScalarKind::of_name(name).map(DirectType::Scalar)
         }
-        Type::Named(name, args) if args.is_empty() && name == "random.Rng" => {
+        Type::Named(name, args)
+            if args.is_empty() && (name == "random.Rng" || name == "iter.GeneratorHandle") =>
+        {
             Some(DirectType::Opaque(Type::named(name)))
         }
         Type::Named(name, args) if args.is_empty() => {

@@ -1,0 +1,6 @@
+error[AU2049]: generator parameter `xs` cannot be `mut`: the body runs after `f` returns
+ --> crates/aura-compiler/tests/fixtures/check-fail/generator_mut_param.au:2:7
+  |
+2 | def f(xs: mut list[int64]) -> Generator[int64]:
+  |       ^
+  = help: take the value with `own` and return it from the generator's items

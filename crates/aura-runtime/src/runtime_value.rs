@@ -60,8 +60,14 @@ use crate::runtime_reactor::{
 };
 use aura_core::types::Type;
 
+#[path = "generator.rs"]
+mod generator;
 #[path = "host_builtins.rs"]
 pub mod host_builtins;
+pub use generator::{
+    generator_yield, GeneratorHooks, GeneratorValue, DIRECT_GENERATOR_STACK_BYTES,
+    INTERPRETED_GENERATOR_STACK_BYTES,
+};
 
 type HttpHeaders = Vec<(String, String)>;
 type HttpRequestHead = (usize, String, String, HttpHeaders, HttpBodyFraming);
@@ -306,6 +312,8 @@ pub enum Value {
     UnixStream(UnixStreamValue),
     TlsListener(TlsListenerValue),
     TlsStream(TlsStreamValue),
+    /// A generator frame (Batch 9). Not Transfer and not cloneable.
+    Generator(GeneratorValue),
 }
 
 impl Value {
@@ -5042,6 +5050,7 @@ pub fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>) -> Re
             Value::Map(_) => "dict".to_string(),
             Value::Duration(_) => "Duration".to_string(),
             Value::Rng(_) => "random.Rng".to_string(),
+            Value::Generator(_) => "iter.GeneratorHandle".to_string(),
             Value::Range(_) => "Range".to_string(),
             Value::ModuleNamespace(namespace) => format!("module {}", namespace.path),
             Value::Function(function) => function.signature.to_string(),
@@ -7086,6 +7095,11 @@ where
 }
 
 fn yield_current_lightweight_task(wait: TaskYield) -> Option<RuntimeSchedulerWakeReason> {
+    // A wait inside a generator body goes to the context that resumed it.
+    let wait = match generator::generator_wait(wait) {
+        Ok(reason) => return reason,
+        Err(wait) => wait,
+    };
     // Do not keep the task context's Rc alive on the coroutine stack across a
     // suspension. A generated task may be force-reset at that point, and any
     // stack-owned Rc would be deliberately abandoned with its generated
@@ -8637,6 +8651,7 @@ impl Clone for Value {
             }
             Self::Duration(value) => Self::Duration(*value),
             Self::Rng(value) => Self::Rng(value.clone()),
+            Self::Generator(value) => Self::Generator(value.clone()),
             Self::Range(value) => Self::Range(value.clone()),
             Self::ModuleNamespace(value) => Self::ModuleNamespace(value.clone()),
             Self::Function(value) => Self::Function(value.clone()),
@@ -8687,6 +8702,7 @@ impl PartialEq for Value {
             (Value::Set(left), Value::Set(right)) => left == right,
             (Value::Map(left), Value::Map(right)) => left == right,
             (Value::Rng(left), Value::Rng(right)) => left == right,
+            (Value::Generator(left), Value::Generator(right)) => left == right,
             (Value::Range(left), Value::Range(right)) => left == right,
             (Value::ModuleNamespace(left), Value::ModuleNamespace(right)) => left == right,
             (Value::Function(left), Value::Function(right)) => left == right,
@@ -8904,6 +8920,7 @@ impl Value {
                         }
                         Value::Duration(value) => rendered.push_str(&render_duration(*value)),
                         Value::Rng(_) => rendered.push_str("<rng>"),
+                        Value::Generator(_) => rendered.push_str("<generator>"),
                         Value::Range(range) => {
                             if range.step == 1 {
                                 rendered

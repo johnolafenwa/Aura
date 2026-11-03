@@ -1,0 +1,6 @@
+error[AU2049]: a generator cannot return a value
+ --> crates/aura-compiler/tests/fixtures/check-fail/generator_return_value.au:4:12
+  |
+4 |     return 2
+  |            ^
+  = help: `yield` the value, then use a bare `return` to end the generator

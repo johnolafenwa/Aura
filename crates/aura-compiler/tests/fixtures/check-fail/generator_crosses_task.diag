@@ -1,0 +1,7 @@
+error[AU3008]: task argument `g` cannot cross a task boundary because field `handle` of `Generator` -> a generator runs on the task that created it and is not Transfer
+ --> crates/aura-compiler/tests/fixtures/check-fail/generator_crosses_task.au:8:26
+  |
+8 |         group.start(use, f())
+  |                          ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/generator_crosses_task.au:4:9: task parameter `g` is declared here
+  = help: send owned data made only from Transfer components; keep capabilities and host resources on their owning worker

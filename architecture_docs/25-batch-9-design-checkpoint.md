@@ -208,6 +208,27 @@ New codes are assigned in the step that needs them and registered in
   itself. `own` reports `AU3004`. Comprehensions, `enumerate`/`zip`, and
   loop clauses over iterator sources are deferred to 9d, where the loop
   owns closing the iterator.
+- **9c, part 1 (2026-11-03).** Generator functions on both backends.
+  Before checking, `sema/generators.rs` splits each module-level function
+  that contains `yield` into a private body function
+  (`__aura_generator_body_<name>`, result `None`, each `yield e` rewritten
+  to `if not iter.__aura_generator_yield[T](e): return`) and the function
+  itself, which packs its arguments into an owned closure and returns
+  `iter.__aura_generator[T](...)`. So no MIR instruction is new: the yield
+  is a host builtin call, and lending, retain/release, and `with` cleanup
+  are unchanged. The runtime (`aura-runtime/src/generator.rs`) runs the
+  body closure on a corosensei coroutine of its own (G1), on the caller's
+  thread and task. `close` resumes the body with `yield` returning false.
+  The interpreter runs the body in a forked `MirRuntime` that shares the
+  program; the native body's frame-stack entries move out while it is
+  suspended (`GeneratorHooks`). Scheduler waits already trampoline through
+  `yield_current_lightweight_task`, which a trap's task exit uses too. A
+  diagnostic shows the body frame under the generator's name and drops the
+  packing closure and `Generator.next` frames. Deviation: a dropped
+  suspended generator closes when its last owner releases it, which is the
+  last use on the native backend and the end of the owning call in the
+  interpreter, so the documented guarantee is "no later than the owning
+  function's return". Generator methods are not supported yet.
 
 ## Ratification Record
 

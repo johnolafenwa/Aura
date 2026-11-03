@@ -1,0 +1,6 @@
+error[AU2049]: function `f` uses `yield`, so its result type must be `Generator[T]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/generator_result_type.au:1:12
+  |
+1 | def f() -> int64:
+  |            ^
+  = help: import it with `from iter import Generator` and declare `-> Generator[T]`

@@ -1,0 +1,5 @@
+from iter import Generator
+
+def repeat(text: str, n: int64) -> Generator[str]:
+    for i in range(n):
+        yield text

@@ -1,5 +1,7 @@
-# The builtin `iter` module: the iteration protocol (Batch 9, ADR-0054).
-# The compiler checks this file as module `iter`.
+# The builtin `iter` module: the iteration protocol and generators (Batch 9,
+# ADR-0054). The compiler checks this file as module `iter` and merges its
+# public items with the host part that `builtin_modules.rs` declares.
+import iter
 
 
 public enum Step[T]:
@@ -11,3 +13,31 @@ public enum Step[T]:
 public trait Iterator[T]:
     """A source of items that a `for` loop can consume one at a time."""
     def next(mut self) -> Step[T]
+
+
+public type GeneratorBody = Callable[own def() -> None]
+
+
+public class Generator[T]:
+    """The lazy sequence a generator function returns.
+
+    Each `next` runs the function's body until its next `yield`. The body
+    runs on the task that calls `next`, on a stack of its own.
+    """
+    handle: iter.GeneratorHandle
+
+    public def close(mut self):
+        """Stops the generator. A suspended body runs its cleanup as if it
+        returned at its `yield`. Closing an ended generator does nothing."""
+        iter.__aura_generator_close(self.handle)
+
+
+impl[T] Iterator[T] for Generator[T]:
+    def next(mut self) -> Step[T]:
+        if iter.__aura_generator_resume(self.handle):
+            return Step.Item(iter.__aura_generator_take[T](self.handle))
+        return Step.End
+
+
+public def __aura_generator[T](body: own GeneratorBody) -> Generator[T]:
+    return Generator[T](handle=iter.__aura_generator_start(body))

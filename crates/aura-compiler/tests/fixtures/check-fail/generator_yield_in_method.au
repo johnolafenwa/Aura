@@ -1,0 +1,4 @@
+class C:
+    def m(self) -> int64:
+        yield 1
+        return 1
