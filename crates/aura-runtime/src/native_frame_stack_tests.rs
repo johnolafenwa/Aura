@@ -151,14 +151,17 @@ fn generated_pushes_fill_the_inline_entries_then_the_runtime_grows_the_stack() {
     assert_eq!(stack.get().len(), DIRECT_FRAME_STACK_INLINE_ENTRIES + 1);
     while stack.generated_push(leaf) {}
     assert_eq!(stack.get().len(), 2 * DIRECT_FRAME_STACK_INLINE_ENTRIES);
-    stack
-        .get()
-        .push_descriptor(NonNull::new(leaf.cast_mut()).unwrap());
-    while stack.generated_push(leaf) {}
+    // Each full block sends one push to the runtime, which doubles it.
+    while stack.get().len() < DIRECT_MAX_CALL_DEPTH {
+        stack
+            .get()
+            .push_descriptor(NonNull::new(leaf.cast_mut()).unwrap());
+        while stack.generated_push(leaf) {}
+    }
     assert_eq!(
         stack.get().len(),
         DIRECT_MAX_CALL_DEPTH,
-        "the depth limit stops generated pushes even with room left"
+        "the depth limit stops generated pushes"
     );
     assert_eq!(stack.get().limit(), DIRECT_MAX_CALL_DEPTH);
     assert_eq!(stack.get().depth(), DIRECT_MAX_CALL_DEPTH);
