@@ -188,6 +188,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "unused result",
     },
     DiagnosticCodeInfo {
+        code: "AU2019",
+        band: "names/types",
+        title: "task group outside `with`",
+    },
+    DiagnosticCodeInfo {
         code: "AU2040",
         band: "names/types",
         title: "invalid class pattern",

@@ -322,7 +322,7 @@ cannot be represented or allocated traps with `AU4005`. Malformed data returns
 | `Task.result` | `result(timeout: Duration = ...) -> TaskResult[T]` | Waits for the task outcome. When `T` is non-repeatable, it consumes the observation right. |
 | `Task.poll` | `poll(timeout: Duration = ...) -> Poll[T]` | Returns `Poll.Ready(value)`, or `Poll.Unavailable` on failure, timeout, cancellation, or no result right away. When `T` is non-repeatable, it consumes the observation right, even on `Unavailable`. |
 | `Task.result_or` | `result_or(default: own T, timeout: Duration = ...) -> T` | Returns the value or the fallback. When `T` is non-repeatable, it consumes the observation right. |
-| `TaskGroup()` | `TaskGroup()` | Creates a task group resource. |
+| `TaskGroup()` | `TaskGroup()` | Creates a task group resource. Valid only as a `with` item. |
 | `TaskGroup.start` | `start(function, own ...) -> Task[T]` | Every capture and the result must be `Transfer`. The target may be inferred or explicit, as `function[Types]` or `Type.associated_method[Types]`. The child runs on the guarded 768 KiB default stack. |
 | `TaskGroup.start_soon` | `start_soon(function, own ...) -> None` | Same Transfer and target rules as `start`, without returning a handle. |
 | `TaskGroup.start_with_stack` | `start_with_stack(bytes: int64, function, own ...) -> Task[T]` | Same Transfer and target rules as `start`, with an explicit guarded stack request of 256 KiB..64 MiB. |

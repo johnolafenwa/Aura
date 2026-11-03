@@ -1,6 +1,6 @@
-error[AU3008]: task argument `resource` cannot cross a task boundary because `TaskGroup` is a host resource and is not Transfer
- --> crates/aura-compiler/tests/fixtures/check-fail/task_stored_target_named_resource.au:9:36
-  |
-9 |         task = group.start(target, resource=TaskGroup())
-  |                                    ^
+error[AU3008]: task argument `resource` cannot cross a task boundary because `random.Rng` is a stateful generator and is not Transfer
+ --> crates/aura-compiler/tests/fixtures/check-fail/task_stored_target_named_resource.au:11:36
+   |
+11 |         task = group.start(target, resource=random.Rng(seed=42))
+   |                                    ^
   = help: send owned data made only from Transfer components; keep capabilities and host resources on their owning worker

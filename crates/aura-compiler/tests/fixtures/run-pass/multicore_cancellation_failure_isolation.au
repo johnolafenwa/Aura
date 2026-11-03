@@ -74,16 +74,19 @@ def completed_value(task: Task[int32]) -> int32:
 def main() -> int32:
     failure_ready = Queue[int32]()
     failure_release = Queue[int32]()
-    with TaskGroup() as failures:
-        alpha = failures.start(fail_alpha, failure_ready, failure_release)
-        beta = failures.start(fail_beta, failure_ready, failure_release)
+    # A failure cancels its own group, so each failing task gets a group of
+    # its own and the second failure is still observed.
+    with TaskGroup() as alpha_group:
+        alpha = alpha_group.start(fail_alpha, failure_ready, failure_release)
         if not wait_until_ready(failure_ready):
             return 10
+        _ = failure_release.put(1)
+        print(error_contains(alpha, "alpha-worker-failure"))
+    with TaskGroup() as beta_group:
+        beta = beta_group.start(fail_beta, failure_ready, failure_release)
         if not wait_until_ready(failure_ready):
             return 11
         _ = failure_release.put(1)
-        _ = failure_release.put(1)
-        print(error_contains(alpha, "alpha-worker-failure"))
         print(error_contains(beta, "beta-worker-failure"))
 
     cancellation_ready = Queue[int32]()

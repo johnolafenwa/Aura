@@ -7,6 +7,13 @@ in this file.
 
 ## Unreleased
 
+- **Breaking:** a `TaskGroup` can only be created as a `with` item
+  (`with group = TaskGroup():`). `TaskGroup()` anywhere else is `AU2019`, so
+  no task can outlive the block that started it. Pass the group to helpers as
+  `mut TaskGroup` (ADR-0071).
+- **Breaking:** the first child failure in a `TaskGroup` cancels the group,
+  as `asyncio.TaskGroup` and Trio do. Siblings see cancellation at their next
+  wait or `cancelled()` check instead of running to completion (ADR-0071).
 - **Breaking:** an expression statement whose value is a `Result` is now an
   error (`AU2018`), so a failure can't be dropped by accident. Handle the
   `Result` with `try` or `match`, or discard it on purpose with

@@ -1102,6 +1102,9 @@ struct FunctionChecker<'a> {
     /// Calls that return a `Span[T]` view in a position that binds the
     /// view: `view part = f(...)` and `return view f(...)`.
     bound_span_calls: Rc<RefCell<Vec<crate::diag::Span>>>,
+    /// The span of the `TaskGroup()` call being checked as a `with` item,
+    /// the only place a group may be created.
+    with_task_group_call: Rc<std::cell::Cell<Option<crate::diag::Span>>>,
     rng_clone_obligations: Rc<RefCell<BTreeSet<String>>>,
     array_equality_obligations: Rc<RefCell<BTreeSet<String>>>,
     expr_result_entries: Rc<RefCell<HashMap<usize, ExprResultEntry>>>,
@@ -2155,6 +2158,7 @@ impl<'a> FunctionChecker<'a> {
             index_place_read: Rc::new(std::cell::Cell::new(None)),
             index_owned_read: Rc::new(std::cell::Cell::new(None)),
             bound_span_calls: Rc::new(RefCell::new(Vec::new())),
+            with_task_group_call: Rc::new(std::cell::Cell::new(None)),
             rng_clone_obligations: Rc::new(RefCell::new(BTreeSet::new())),
             array_equality_obligations: Rc::new(RefCell::new(BTreeSet::new())),
             expr_result_entries: Rc::new(RefCell::new(HashMap::new())),
@@ -2215,6 +2219,7 @@ impl<'a> FunctionChecker<'a> {
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
             bound_span_calls: self.bound_span_calls.clone(),
+            with_task_group_call: self.with_task_group_call.clone(),
         }
     }
 
@@ -2260,6 +2265,7 @@ impl<'a> FunctionChecker<'a> {
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
             bound_span_calls: self.bound_span_calls.clone(),
+            with_task_group_call: self.with_task_group_call.clone(),
         }
     }
 
@@ -2301,6 +2307,7 @@ impl<'a> FunctionChecker<'a> {
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
             bound_span_calls: self.bound_span_calls.clone(),
+            with_task_group_call: self.with_task_group_call.clone(),
         }
     }
 
@@ -2342,6 +2349,7 @@ impl<'a> FunctionChecker<'a> {
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
             bound_span_calls: self.bound_span_calls.clone(),
+            with_task_group_call: self.with_task_group_call.clone(),
         }
     }
 
@@ -5019,11 +5027,19 @@ impl<'a> FunctionChecker<'a> {
             ));
         }
 
-        let value_ty = self.type_of_expr(&with_stmt.value, locals)?;
-        self.reject_mutable_returned_view_value(&with_stmt.value, locals, false)?;
-        self.reject_owned_view_value(&with_stmt.value, locals, "a managed `with` resource")?;
-        let shape = self.require_with_manager(&value_ty, with_stmt.span)?;
-        self.consume_value_expr(&with_stmt.value, locals)?;
+        let previous_group_call = self
+            .with_task_group_call
+            .replace(Some(grouped_expr(&with_stmt.value).span));
+        let header = (|| {
+            let value_ty = self.type_of_expr(&with_stmt.value, locals)?;
+            self.reject_mutable_returned_view_value(&with_stmt.value, locals, false)?;
+            self.reject_owned_view_value(&with_stmt.value, locals, "a managed `with` resource")?;
+            let shape = self.require_with_manager(&value_ty, with_stmt.span)?;
+            self.consume_value_expr(&with_stmt.value, locals)?;
+            Ok((value_ty, shape))
+        })();
+        self.with_task_group_call.set(previous_group_call);
+        let (value_ty, shape) = header?;
 
         // A view-returning `__enter__` binds the item name to the entry view.
         // The manager then lives in a hidden managed binding that is the
@@ -10095,6 +10111,22 @@ impl<'a> FunctionChecker<'a> {
         Ok(Type::Named(enum_type_name, resolved_args))
     }
 
+    /// A task group exists only as a `with` item, so leaving the block
+    /// always waits for its children and none can outlive the function.
+    fn require_task_group_in_with(&self, span: crate::diag::Span) -> Result<()> {
+        if self.with_task_group_call.get() == Some(span) {
+            return Ok(());
+        }
+        Err(Diagnostic::coded_at(
+            "AU2019",
+            span,
+            "a `TaskGroup` must be created as a `with` item",
+        )
+        .with_help(
+            "write `with group = TaskGroup():` so the block waits for every task the group starts",
+        ))
+    }
+
     fn type_of_call(
         &self,
         callee: &Expr,
@@ -10327,6 +10359,7 @@ impl<'a> FunctionChecker<'a> {
                     "`TaskGroup` does not take constructor arguments",
                 ));
             }
+            self.require_task_group_in_with(span)?;
             return Ok(Type::named("TaskGroup"));
         }
 
@@ -10450,6 +10483,7 @@ impl<'a> FunctionChecker<'a> {
                         "`TaskGroup` does not take constructor arguments",
                     ));
                 }
+                self.require_task_group_in_with(span)?;
                 return Ok(Type::named("TaskGroup"));
             }
         }

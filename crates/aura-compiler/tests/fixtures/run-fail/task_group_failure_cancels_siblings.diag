@@ -1,0 +1,8 @@
+error[AU4001]: worker broke
+ --> crates/aura-compiler/tests/fixtures/run-fail/task_group_failure_cancels_siblings.au:3:5
+  |
+3 |     assert false, "worker broke"
+  |     ^
+  = note: Aura call chain (innermost first): failing at 1:1
+  = note: Aura task entry: failing at 1:1
+  = note: Aura task ancestry (youngest first): failing spawned from main at 18:15

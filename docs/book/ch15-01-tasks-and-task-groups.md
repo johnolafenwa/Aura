@@ -159,15 +159,13 @@ doc 1: 2 words
 all reports done
 ```
 
-### Always open a group with `with`
+### A group always lives in a `with`
 
-The current compiler accepts a `TaskGroup()` that isn't bound with `with`, and
-that is a hole you should know about. Such a group has no block, so nothing
-waits for its tasks:
+A `TaskGroup` can only be created as the item of a `with`. If you try to keep
+one in an ordinary variable, the compiler stops you:
 
-```aura
+```aura check-fail:AU2019
 def work():
-    sleep(100ms)
     print("child finished")
 
 def launch():
@@ -177,20 +175,25 @@ def launch():
 
 def main():
     launch()
-    print("back in main")
 ```
 
 ```console
-$ aura run src/main.au
-launch returning
-back in main
+$ aura check src/main.au
+error[AU2019]: a `TaskGroup` must be created as a `with` item
+ --> src/main.au:5:13
+  |
+5 |     group = TaskGroup()
+  |             ^
+  = help: write `with group = TaskGroup():` so the block waits for every task the group starts
 ```
 
-`launch` returned with its task still running, and when `main` finished, the
-runtime abandoned the task before it could print. As we saw at the end of
-[Chapter 14](/book/ch14-02-resource-managers), an abandoned task's `with` exits
-don't run either. Every guarantee in this chapter assumes the group is opened
-with `with`, so always write it that way.
+The rule is what makes the guarantees in this chapter hold. A group without a
+block would have nowhere to wait, so `launch` could return with its task
+still running, and when `main` finished, the runtime would abandon that task
+before it printed anything. Tying every group to a `with` block means that a
+task can never outlive the block that started it. Code that needs to start
+tasks in a helper, like `start_reports` above, takes the group as a `mut
+TaskGroup` parameter from the caller's `with`.
 
 ## Starting several tasks
 
@@ -427,15 +430,17 @@ printed and then forgotten. In Aura, a failure always reaches some code that can
 see it: the code reading the result, or failing that, the block that owns the
 task.
 
-### A failure doesn't cancel the siblings
+### A failure cancels the siblings
 
-There's one more detail worth testing, because it differs from Python's
-`asyncio.TaskGroup`. When one child fails and nobody reads its result, what
-happens to its siblings?
+There's one more detail worth testing. When one child fails, what happens to
+its siblings?
 
 ```aura
 def slow():
     sleep(2s)
+    if cancelled():
+        print("slow child cancelled")
+        return
     print("slow child finished")
 
 def bad():
@@ -450,28 +455,33 @@ def main():
 
 ```console
 $ time aura run src/main.au
-slow child finished
+slow child cancelled
 error[AU4001]: bad child
- --> src/main.au:6:5
+ --> src/main.au:9:5
   |
-6 |     assert false, "bad child"
+9 |     assert false, "bad child"
   |     ^
-  = note: Aura call chain (innermost first): bad at 5:1
-  = note: Aura task entry: bad at 5:1
-  = note: Aura task ancestry (youngest first): bad spawned from main at 11:15
+  = note: Aura call chain (innermost first): bad at 8:1
+  = note: Aura task entry: bad at 8:1
+  = note: Aura task ancestry (youngest first): bad spawned from main at 14:15
 
-real	0m2.046s
-user	0m0.294s
-sys	0m0.022s
+real	0m0.061s
+user	0m0.055s
+sys	0m0.010s
 ```
 
-`bad` traps almost immediately, but the program takes two seconds: the group
-let `slow` run to completion and then reported the failure. In Python,
-`asyncio.TaskGroup` cancels the remaining tasks as soon as one raises. Aura's
-group does not cancel on its own. If you want "one failure stops everyone", you
-observe the failure and call `group.cancel()` yourself, which is what
-[Section 15.3](/book/ch15-03-cancellation-and-shutdown) is about. The upside is
-that cancellation in Aura always comes from a line of code you can point to.
+`bad` traps almost immediately, and the program finishes just as fast. The
+first child to fail cancels its group, so `slow` doesn't sit out its two
+seconds: its `sleep` returns at once, `cancelled()` is true, and it stops.
+Then the block reports the failure. This is the rule Python's
+`asyncio.TaskGroup` and the Trio library follow too. A group is usually doing
+one job split into parts, and once one part has failed, the job has failed, so
+there is no point letting the other parts run on.
+
+Cancellation in Aura is a request, not a forced stop. A child notices it when
+it waits (a `sleep`, a queue receive, a task result) or when it checks
+`cancelled()`, as `slow` does. [Section 15.3](/book/ch15-03-cancellation-and-shutdown)
+covers it in detail.
 
 ## What can cross into a task
 

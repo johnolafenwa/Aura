@@ -16029,6 +16029,9 @@ impl TaskGroupValue {
     // the complete task set even when the selected worker is already idle.
     pub fn register_task(&self, task: TaskValue) {
         task.register_group_failure_wake_flag(self.inner.failure_wake_flag.clone());
+        // The first child failure cancels the group, so its siblings stop
+        // instead of running on for a scope that is going to fail anyway.
+        task.register_group_failure_wake_flag(self.inner.cancel_flag.clone());
         task.register_group_completion_wake_flag(self.inner.completion_wake_flag.clone());
         lock_mutex(&self.inner.tasks).push(task);
     }

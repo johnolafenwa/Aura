@@ -8136,7 +8136,8 @@ def main() -> int32:
     line = io.read_line()
     entries = fs.read_dir(".")
     jobs = Queue[int32]()
-    group = TaskGroup()
+    with group = TaskGroup():
+        pass
     ready = cancelled()
     sleep(0ms)
     value = abs(-7)
