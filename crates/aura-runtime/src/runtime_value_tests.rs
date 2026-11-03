@@ -20222,15 +20222,20 @@ fn worker_coordinator_places_steals_and_ages_children_that_have_not_run() {
     // The first child takes the newest slot; the second moves it to the
     // stealable queue.
     workers.place_newest(0, prepared_test_task());
-    assert!(workers.has_waiting_newest(1));
-    assert!(!workers.has_waiting_newest(0));
+    assert!(workers.has_waiting_children(1));
+    assert!(!workers.has_waiting_children(0));
     workers.place_newest(0, prepared_test_task());
     assert_eq!(workers.inboxes[0].queued.load(Ordering::SeqCst), 1);
     assert_eq!(workers.pending_requests.load(Ordering::SeqCst), 2);
-    assert!(workers.has_stealable_work(1));
     assert!(!workers.has_stealable_work(0));
 
-    // A young newest child is not stolen, but a queued one is.
+    // Young children are not stolen; once they have waited, the queued
+    // one goes first.
+    assert!(workers
+        .take_newest(0, Some(Duration::from_secs(60)))
+        .is_none());
+    std::thread::sleep(super::QUEUED_CHILD_STEAL_AGE * 2);
+    assert!(workers.has_stealable_work(1));
     let stolen = workers.steal(1);
     assert_eq!(stolen.len(), 1);
     assert!(workers
