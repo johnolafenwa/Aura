@@ -186,3 +186,13 @@ fn a_bulk_release_discards_a_suspended_generator_without_running_it() {
     });
     assert_eq!(kept, 1, "the body did not run again");
 }
+
+#[test]
+fn a_stack_that_cannot_be_reserved_fails_the_first_resume() {
+    let generator = GeneratorValue::new(|| Ok(()), usize::MAX / 2, true, None);
+    let error = generator.resume().expect_err("no stack");
+    assert!(
+        error.message.contains("cannot allocate a generator stack"),
+        "{error:?}"
+    );
+}

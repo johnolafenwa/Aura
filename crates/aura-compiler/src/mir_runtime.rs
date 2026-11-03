@@ -6531,9 +6531,11 @@ impl MirRuntime {
                         body.render()
                     )));
                 };
-                let function = self.functions.get(&body.name).cloned().ok_or_else(|| {
-                    Diagnostic::new(format!("unknown MIR function `{}`", body.name))
-                })?;
+                let function = self
+                    .functions
+                    .get(&body.name)
+                    .cloned()
+                    .expect("a generator body names a lowered function");
                 let mut supplied = Vec::new();
                 if let Some(environment) = &body.closure_environment {
                     supplied.extend(environment.arguments(&body.name)?.into_iter().map(

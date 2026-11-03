@@ -191,9 +191,11 @@ pub const DIRECT_GENERATOR_STACK_BYTES: usize = 1024 * 1024;
 pub const INTERPRETED_GENERATOR_STACK_BYTES: usize = 16 * 1024 * 1024;
 
 fn lock(state: &Mutex<GeneratorState>) -> MutexGuard<'_, GeneratorState> {
-    state
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    // A body that panicked poisons nothing the state relies on.
+    match state.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
 }
 
 fn generator_error(message: impl Into<String>) -> Diagnostic {
@@ -282,9 +284,11 @@ impl GeneratorValue {
                 }
                 GeneratorStatus::Done => return Ok(false),
                 GeneratorStatus::Failed => {
-                    return Err(state.failure.clone().unwrap_or_else(|| {
-                        generator_error("a generator that failed cannot resume")
-                    }))
+                    // A panicking body records no diagnostic.
+                    return Err(match &state.failure {
+                        Some(failure) => failure.clone(),
+                        None => generator_error("a generator that failed cannot resume"),
+                    });
                 }
                 GeneratorStatus::Fresh => {
                     if matches!(input, GeneratorInput::Close) {
@@ -292,13 +296,15 @@ impl GeneratorValue {
                         state.status = GeneratorStatus::Done;
                         return Ok(false);
                     }
-                    let body = state
-                        .body
-                        .take()
-                        .ok_or_else(|| generator_error("a generator lost its body"))?;
-                    let stack = DefaultStack::new(state.stack_bytes).map_err(|error| {
-                        generator_error(format!("cannot allocate a generator stack: {error}"))
-                    })?;
+                    let body = state.body.take().expect("a fresh generator holds its body");
+                    let stack = match DefaultStack::new(state.stack_bytes) {
+                        Ok(stack) => stack,
+                        Err(error) => {
+                            return Err(generator_error(format!(
+                                "cannot allocate a generator stack: {error}"
+                            )))
+                        }
+                    };
                     state.bounds = Some(task_stack_bounds(&stack));
                     let yielder_cell = state.yielder.clone();
                     Coroutine::with_stack(stack, move |yielder: &GeneratorYielder, _input| {
@@ -309,7 +315,7 @@ impl GeneratorValue {
                 GeneratorStatus::Suspended => state
                     .coroutine
                     .take()
-                    .ok_or_else(|| generator_error("a generator lost its stack"))?,
+                    .expect("a suspended generator holds its stack"),
             }
         };
         let (bounds, yielder) = {

@@ -4117,6 +4117,18 @@ fn eprint_writes_to_stderr_and_leaves_stdout_alone() {
 }
 
 #[test]
+fn generator_bodies_wait_on_the_interpreter() {
+    let output = run_source(include_str!(
+        "../tests/fixtures/run-pass/generator_waits.au"
+    ))
+    .expect("generator waits run");
+    assert_eq!(
+        output.stdout,
+        include_str!("../tests/fixtures/run-pass/generator_waits.stdout")
+    );
+}
+
+#[test]
 fn generators_run_lazily_and_close_on_the_interpreter() {
     let source = concat!(
         "from iter import Generator, Step\n",

@@ -29485,3 +29485,57 @@ fn one_byte_replace_count_and_split_match_the_substring_search() {
         assert_eq!(parts, text.split(from).collect::<Vec<_>>(), "{text}");
     }
 }
+
+#[test]
+fn direct_generator_helpers_drive_a_runtime_generator() {
+    use crate::runtime_value::{GeneratorHooks, GeneratorValue, DIRECT_GENERATOR_STACK_BYTES};
+    let item = |value: i64| Value::Int(IntegerValue::from_signed(i128::from(value)));
+    let generator = GeneratorValue::new(
+        move || {
+            // Closing makes the paused `yield` report false.
+            let more = super::direct_generator_yield(vec![item(7)], None)?;
+            assert_eq!(more, Value::Bool(false));
+            Ok(())
+        },
+        DIRECT_GENERATOR_STACK_BYTES,
+        true,
+        Some(Box::new(super::DirectGeneratorFrames::default())),
+    );
+    let handle = boxed_value(Value::Generator(generator));
+    let args = super::DirectHostArgBuffer {
+        handles: vec![handle as i64],
+    };
+    let call = |name| super::direct_generator_handle(name, &args);
+    assert_eq!(
+        call("iter::__aura_generator_resume").expect("resume"),
+        Value::Bool(true)
+    );
+    assert_eq!(call("iter::__aura_generator_take").expect("take"), item(7));
+    assert_eq!(
+        call("iter::__aura_generator_close").expect("close"),
+        Value::Unit
+    );
+    assert_eq!(
+        call("iter::__aura_generator_resume").expect("ended"),
+        Value::Bool(false)
+    );
+
+    let not_a_generator = boxed_value(Value::Bool(true));
+    let args = super::DirectHostArgBuffer {
+        handles: vec![not_a_generator as i64],
+    };
+    let error = super::direct_generator_handle("iter::__aura_generator_resume", &args)
+        .expect_err("a bool is not a generator");
+    assert!(error.message.contains("expected a generator"), "{error:?}");
+
+    let error = super::direct_generator_start(vec![Value::Bool(true)], None)
+        .expect_err("a bool is not a body");
+    assert!(error.message.contains("one closure argument"), "{error:?}");
+    let error = super::direct_generator_yield(Vec::new(), None).expect_err("yield needs an item");
+    assert!(error.message.contains("one item argument"), "{error:?}");
+
+    // Outside a direct task the frame hooks have no stack to move.
+    let mut frames = super::DirectGeneratorFrames::default();
+    frames.before_resume();
+    frames.after_suspend();
+}
