@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 #[cfg(test)]
 use std::cell::Cell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io;
 use std::panic::{self, AssertUnwindSafe};
 use std::str;
@@ -793,6 +793,9 @@ struct MirRuntime {
     /// (ADR-0052 A9); an injection into an unplanned union is refused.
     union_layouts: Arc<HashMap<String, crate::union_layout::MirUnionLayout>>,
     safepoints_enabled: bool,
+    /// The functions on a call cycle (see `mir::recursion`), found at the
+    /// first call while safepoints are enabled and shared with child tasks.
+    recursive_functions: Option<Arc<HashSet<String>>>,
     functions: HashMap<String, MirFunction>,
     /// Runtime nominal type name to its synthesized `Display` wrapper.
     display_functions: Arc<HashMap<String, String>>,
@@ -2649,6 +2652,7 @@ impl MirRuntime {
             module: Arc::new(module),
             union_layouts,
             safepoints_enabled,
+            recursive_functions: None,
             functions,
             display_functions,
             float32_slots,
@@ -3634,7 +3638,25 @@ impl MirRuntime {
             .collect())
     }
 
+    /// Yields at an entry of `function` when it lies on a call cycle, so
+    /// deep recursion with no loop yields like a loop does. An interpreted
+    /// call costs far more than a yield, so the interpreter keeps no call
+    /// fuel. Like a loop safepoint, it does not observe cancellation.
+    fn call_safepoint(&mut self, function: &MirFunction) {
+        if !self.safepoints_enabled {
+            return;
+        }
+        let module = &self.module;
+        let recursive = self
+            .recursive_functions
+            .get_or_insert_with(|| Arc::new(crate::mir::recursion::recursive_functions(module)));
+        if recursive.contains(&function.name) {
+            yield_now_with_runtime_scheduler();
+        }
+    }
+
     fn execute_function(&mut self, function: &MirFunction, env: &mut Env) -> Result<Value> {
+        self.call_safepoint(function);
         let block_map = function
             .blocks
             .iter()
@@ -6485,6 +6507,7 @@ impl MirRuntime {
         let stdout_sink = self.stdout_sink.clone();
         let program_args = self.program_args.clone();
         let constant_states = self.constant_states.clone();
+        let recursive_functions = self.recursive_functions.clone();
         let function_for_task = function.clone();
         let function_signature = function_value.signature.clone();
         let mut task_ancestry = self.task_ancestry.clone();
@@ -6508,6 +6531,7 @@ impl MirRuntime {
             );
             runtime.constant_states = constant_states;
             runtime.task_ancestry = task_ancestry;
+            runtime.recursive_functions = recursive_functions;
             if is_closure {
                 runtime
                     .call_function_for_target(&function_for_task, None, bound_args, None)

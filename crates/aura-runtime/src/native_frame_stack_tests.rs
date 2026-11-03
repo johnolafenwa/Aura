@@ -2,8 +2,8 @@ use std::ptr::NonNull;
 
 use super::{
     direct_frame_stack_layout, DirectFrameStack, DirectFrameStackLayout,
-    DIRECT_FRAME_FLAG_PENDING_SINKS, DIRECT_FRAME_FLAG_RETURNED_VIEWS,
-    DIRECT_FRAME_STACK_INLINE_ENTRIES, DIRECT_MAX_CALL_DEPTH,
+    DIRECT_CALL_SAFEPOINT_INTERVAL, DIRECT_FRAME_FLAG_PENDING_SINKS,
+    DIRECT_FRAME_FLAG_RETURNED_VIEWS, DIRECT_FRAME_STACK_INLINE_ENTRIES, DIRECT_MAX_CALL_DEPTH,
 };
 use crate::native_runtime::{
     DirectFrameDescriptor, DirectFrameText, DirectRuntimeCallFrame, DirectRuntimeSourceSpan,
@@ -84,11 +84,18 @@ fn the_layout_names_the_header_fields_generated_code_reads() {
             layout.limit_offset,
             layout.floor_offset,
             layout.entries_offset,
+            layout.call_fuel_offset,
         ],
-        [0, 8, 16, 32],
+        [0, 8, 16, 32, 40],
         "generated code relies on the header coming first"
     );
     assert_eq!(DirectFrameStackLayout::ENTRY_BYTES, 8);
+    let mut stack = OwnedStack::new();
+    assert_eq!(
+        stack.get().call_fuel,
+        DIRECT_CALL_SAFEPOINT_INTERVAL,
+        "a task starts with a whole call-safepoint interval"
+    );
 
     let fingerprint = layout.fingerprint();
     assert_eq!(fingerprint, direct_frame_stack_layout().fingerprint());
@@ -107,6 +114,10 @@ fn the_layout_names_the_header_fields_generated_code_reads() {
         },
         DirectFrameStackLayout {
             entries_offset: 1,
+            ..layout
+        },
+        DirectFrameStackLayout {
+            call_fuel_offset: 1,
             ..layout
         },
     ];

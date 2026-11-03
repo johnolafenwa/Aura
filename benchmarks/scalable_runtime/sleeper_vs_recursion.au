@@ -1,0 +1,69 @@
+import sys
+
+
+def fib(n: int64) -> int64:
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+
+def sleeper(armed: Queue[int32], samples: Queue[int64], rounds: int64):
+    _ = armed.put(1)
+    mut worst_ms: int64 = 0
+    mut round: int64 = 0
+    while round < rounds:
+        start_ms: int64 = sys.monotonic_time_ms()
+        sleep(1ms)
+        late_ms: int64 = sys.monotonic_time_ms() - start_ms - 1
+        if late_ms > worst_ms:
+            worst_ms = late_ms
+        round += 1
+    _ = samples.put(worst_ms)
+
+
+def recursion(results: Queue[int64], n: int64):
+    start_ms: int64 = sys.monotonic_time_ms()
+    value: int64 = fib(n)
+    _ = results.put(sys.monotonic_time_ms() - start_ms)
+    if value < 0:
+        print("unreachable")
+
+
+def main() -> int32:
+    armed = Queue[int32]()
+    samples = Queue[int64]()
+    results = Queue[int64]()
+
+    with TaskGroup() as group:
+        group.start_soon(sleeper, armed, samples, 100)
+        match armed.get():
+            case QueueReceive.Item(_):
+                group.start_soon(recursion, results, 35)
+            case QueueReceive.Closed:
+                return 1
+            case QueueReceive.TimedOut:
+                return 1
+            case QueueReceive.Cancelled:
+                return 1
+
+    match results.get():
+        case QueueReceive.Item(elapsed_ms):
+            print(f"SAMPLE recursion_ms fib35 {elapsed_ms}")
+        case QueueReceive.Closed:
+            return 1
+        case QueueReceive.TimedOut:
+            return 1
+        case QueueReceive.Cancelled:
+            return 1
+    match samples.get():
+        case QueueReceive.Item(worst_ms):
+            print(f"SAMPLE worst_sleep_lateness_ms 1 {worst_ms}")
+        case QueueReceive.Closed:
+            return 1
+        case QueueReceive.TimedOut:
+            return 1
+        case QueueReceive.Cancelled:
+            return 1
+
+    print("DONE recursion_starvation")
+    return 0

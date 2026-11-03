@@ -149,7 +149,7 @@ Task bodies run on pinned cooperative scheduler workers on both maintained backe
 - The default worker count is the available parallelism reported by the host. The provisional `AURA_WORKERS=<positive integer>` override selects an explicit count.
 - A child receives a stable worker assignment when it is spawned. Its coroutine stack never migrates, and work is not stolen.
 - `yield_now()` yields only to runnable work on the same worker.
-- Compiler-inserted checks on every loop backedge keep a tight loop from starving ready timers, Queue operations, and sockets on the same worker indefinitely. Ordinary loop tails and `continue` take part. `break` and `return` bypass the backedge.
+- Compiler-inserted checks on every loop backedge keep a tight loop from starving ready timers, Queue operations, and sockets on the same worker indefinitely. Ordinary loop tails and `continue` take part. `break` and `return` bypass the backedge. The entry of every function on a call cycle carries the same check, so deep recursion with no loop yields too.
 - The checks do not inspect cancellation. One long loop body can still delay same-worker siblings.
 - Ordinary tasks request a guarded 768 KiB coroutine stack. Explicit requests may go up to 64 MiB.
 - Waits use persistent descriptor registrations, heap-managed deadlines, and direct Queue, task-completion, and blocking-pool notifications. An idle worker blocks until work, an event, or a deadline, with no periodic tick.
