@@ -56,7 +56,8 @@ use crate::json_codec::{self, JsonCodecError, JsonValue};
 use crate::randomness::{DeterministicRng, InvalidRandomRange};
 use crate::runtime_config::{blocking_io_pool_config, BlockingIoPoolConfig};
 use crate::runtime_reactor::{
-    IoInterest, ReactorHandle, ReactorSubscription, ReactorSubscriptionKey, RuntimeReactor, WaitKey,
+    IdHashMap, IoInterest, ReactorHandle, ReactorSubscription, ReactorSubscriptionKey,
+    RuntimeReactor, WaitKey,
 };
 use aura_core::types::Type;
 
@@ -3947,8 +3948,8 @@ struct ChannelState {
     /// row it made. See [`yield_after_receive`].
     last_receiver: AtomicU64,
     receiver_streak: AtomicU32,
-    recv_reactor_subscribers: Mutex<HashMap<ReactorSubscriptionKey, ReactorRecvSubscription>>,
-    send_reactor_subscribers: Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
+    recv_reactor_subscribers: Mutex<IdHashMap<ReactorSubscriptionKey, ReactorRecvSubscription>>,
+    send_reactor_subscribers: Mutex<IdHashMap<ReactorSubscriptionKey, ReactorSubscription>>,
     runtime_type_name: Mutex<Option<String>>,
     /// A pool thread, not a task, sends this channel's one value: the result
     /// of a blocking-I/O, protocol, or codec job. A task waiting on it is
@@ -3963,14 +3964,14 @@ struct ChannelInner {
 }
 
 struct WeakTaskRegistry {
-    tasks: HashMap<usize, Weak<TaskState>>,
+    tasks: IdHashMap<usize, Weak<TaskState>>,
     next_prune_at: usize,
 }
 
 impl WeakTaskRegistry {
     fn new() -> Self {
         Self {
-            tasks: HashMap::new(),
+            tasks: IdHashMap::default(),
             next_prune_at: 256,
         }
     }
@@ -4089,7 +4090,7 @@ struct TaskState {
     current_wait: Mutex<Option<TaskWaitReachability>>,
     join_dependencies: Mutex<Option<Vec<Weak<TaskState>>>>,
     observed_failure: AtomicBool,
-    completion_reactor_subscribers: Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
+    completion_reactor_subscribers: Mutex<IdHashMap<ReactorSubscriptionKey, ReactorSubscription>>,
     group_failure_wake_flags: Mutex<Vec<Arc<RuntimeWakeSignal>>>,
     group_completion_wake_flags: Mutex<Vec<Arc<RuntimeWakeSignal>>>,
     runtime_type_name: Mutex<Option<String>>,
@@ -4477,14 +4478,14 @@ struct ReactorRecvSubscription {
 #[derive(Default)]
 struct RuntimeWakeSignal {
     value: AtomicBool,
-    reactor_subscribers: Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
+    reactor_subscribers: Mutex<IdHashMap<ReactorSubscriptionKey, ReactorSubscription>>,
 }
 
 impl RuntimeWakeSignal {
     fn new(value: bool) -> Self {
         Self {
             value: AtomicBool::new(value),
-            reactor_subscribers: Mutex::new(HashMap::new()),
+            reactor_subscribers: Mutex::new(IdHashMap::default()),
         }
     }
 
@@ -4509,7 +4510,7 @@ impl RuntimeWakeSignal {
 }
 
 fn subscribe_reactor_target(
-    subscribers: &Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
+    subscribers: &Mutex<IdHashMap<ReactorSubscriptionKey, ReactorSubscription>>,
     subscription: &ReactorSubscription,
 ) {
     lock_mutex(subscribers)
@@ -4518,14 +4519,14 @@ fn subscribe_reactor_target(
 }
 
 fn unsubscribe_reactor_target(
-    subscribers: &Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
+    subscribers: &Mutex<IdHashMap<ReactorSubscriptionKey, ReactorSubscription>>,
     subscription: &ReactorSubscription,
 ) {
     lock_mutex(subscribers).remove(&subscription.identity());
 }
 
 fn wake_reactor_subscribers(
-    subscribers: &Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
+    subscribers: &Mutex<IdHashMap<ReactorSubscriptionKey, ReactorSubscription>>,
 ) {
     let targets = std::mem::take(&mut *lock_mutex(subscribers));
     let mut targets: Vec<_> = targets.into_values().collect();
@@ -5004,6 +5005,11 @@ const QUEUED_CHILD_STARVATION_AGE: StdDuration = StdDuration::from_millis(100);
 /// it. Its own worker normally admits it within microseconds, when the
 /// parent next yields; one that has not by then is likely blocked.
 const NEWEST_CHILD_STEAL_AGE: StdDuration = StdDuration::from_micros(20);
+/// How long an older queued child waits before another worker may take it.
+/// Its own worker usually starts it within microseconds when its tasks
+/// block, which keeps chatty tasks such as queue pipeline stages together;
+/// a child whose worker stays busy for longer moves to an idle worker.
+const QUEUED_CHILD_STEAL_AGE: StdDuration = StdDuration::from_micros(250);
 /// How long an idle worker spins before it blocks in its poller. A queue
 /// hand-off from another worker usually lands within it, so the worker
 /// skips a sleep and its sender the wake syscall.
@@ -7416,7 +7422,7 @@ fn new_lightweight_task_state(result_is_repeatable: bool) -> Arc<TaskState> {
         current_wait: Mutex::new(None),
         join_dependencies: Mutex::new(None),
         observed_failure: AtomicBool::new(false),
-        completion_reactor_subscribers: Mutex::new(HashMap::new()),
+        completion_reactor_subscribers: Mutex::new(IdHashMap::default()),
         group_failure_wake_flags: Mutex::new(Vec::new()),
         group_completion_wake_flags: Mutex::new(Vec::new()),
         runtime_type_name: Mutex::new(None),
@@ -7741,8 +7747,15 @@ impl LightweightWorkerCoordinator {
         self.inboxes.iter().enumerate().any(|(index, inbox)| {
             index != worker_index
                 && inbox.started.load(Ordering::SeqCst)
-                && (inbox.queued.load(Ordering::SeqCst) > 0 || self.newest_is_stealable(inbox))
+                && (self.queued_is_stealable(inbox) || self.newest_is_stealable(inbox))
         })
+    }
+
+    fn queued_is_stealable(&self, inbox: &LightweightWorkerInbox) -> bool {
+        inbox.queued.load(Ordering::SeqCst) > 0
+            && lock_mutex(&inbox.requests)
+                .front()
+                .is_some_and(|oldest| oldest.spawned_at.elapsed() >= QUEUED_CHILD_STEAL_AGE)
     }
 
     fn newest_is_stealable(&self, inbox: &LightweightWorkerInbox) -> bool {
@@ -7752,13 +7765,15 @@ impl LightweightWorkerCoordinator {
                 .is_some_and(|(_, arrived)| arrived.elapsed() >= NEWEST_CHILD_STEAL_AGE)
     }
 
-    /// Whether another worker holds a newest child that may become
-    /// stealable later.
-    fn has_waiting_newest(&self, worker_index: usize) -> bool {
-        self.inboxes
-            .iter()
-            .enumerate()
-            .any(|(index, inbox)| index != worker_index && inbox.has_newest.load(Ordering::SeqCst))
+    /// Whether another worker holds a child that may become stealable
+    /// once it has waited long enough.
+    fn has_waiting_children(&self, worker_index: usize) -> bool {
+        self.inboxes.iter().enumerate().any(|(index, inbox)| {
+            index != worker_index
+                && inbox.started.load(Ordering::SeqCst)
+                && (inbox.has_newest.load(Ordering::SeqCst)
+                    || inbox.queued.load(Ordering::SeqCst) > 0)
+        })
     }
 
     /// Takes half, rounded up, of the first other inbox that holds tasks
@@ -7771,10 +7786,13 @@ impl LightweightWorkerCoordinator {
                 continue;
             }
             let mut requests = lock_mutex(&victim.requests);
-            let take = requests.len().div_ceil(2);
-            if take == 0 {
+            if requests
+                .front()
+                .is_none_or(|oldest| oldest.spawned_at.elapsed() < QUEUED_CHILD_STEAL_AGE)
+            {
                 continue;
             }
+            let take = requests.len().div_ceil(2);
             let stolen: Vec<_> = requests.drain(..take).collect();
             victim.queued.store(requests.len(), Ordering::SeqCst);
             drop(requests);
@@ -8475,7 +8493,7 @@ impl LightweightTaskScheduler {
             } else {
                 self.reactor.spin_for_notification(WORKER_IDLE_SPIN);
             }
-            let max_wait = (shares_work && workers.has_waiting_newest(self.worker_index))
+            let max_wait = (shares_work && workers.has_waiting_children(self.worker_index))
                 .then_some(NEWEST_CHILD_STEAL_AGE);
             let polled = self.reactor.poll(max_wait);
             if shares_work {
@@ -10478,8 +10496,8 @@ impl ChannelValue {
                 receiver_tasks: Mutex::new(WeakTaskRegistry::new()),
                 last_receiver: AtomicU64::new(u64::MAX),
                 receiver_streak: AtomicU32::new(0),
-                recv_reactor_subscribers: Mutex::new(HashMap::new()),
-                send_reactor_subscribers: Mutex::new(HashMap::new()),
+                recv_reactor_subscribers: Mutex::new(IdHashMap::default()),
+                send_reactor_subscribers: Mutex::new(IdHashMap::default()),
                 runtime_type_name: Mutex::new(None),
                 host_completion,
             }),
@@ -16788,7 +16806,7 @@ impl TaskValue {
             current_wait: Mutex::new(None),
             join_dependencies: Mutex::new(None),
             observed_failure: AtomicBool::new(false),
-            completion_reactor_subscribers: Mutex::new(HashMap::new()),
+            completion_reactor_subscribers: Mutex::new(IdHashMap::default()),
             group_failure_wake_flags: Mutex::new(Vec::new()),
             group_completion_wake_flags: Mutex::new(Vec::new()),
             runtime_type_name: Mutex::new(None),
