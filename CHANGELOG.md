@@ -7,6 +7,33 @@ in this file.
 
 ## Unreleased
 
+## VS Code extension 0.12.0 — 2026-11-03
+
+- Highlights the contract clauses `requires`, `ensures`, `invariant`, and
+  `decreases`, the `spec def` modifier, and the new builtins `eprint`,
+  `ord`, and `chr`. Bundles language server 0.12.0; the semantic interface
+  version stays 20.
+
+## 0.12.0 — 2026-11-03 (technical preview)
+
+Aura 0.12.0 adds contracts, iteration over your own types, a builtin
+prelude, and a stricter task and error model. Functions, loops, and classes
+can declare `requires`, `ensures`, `invariant`, and `decreases` clauses that
+are checked at run time (verification V1), and a `for` loop iterates any
+type that implements the new `iter.Iterator[T]` trait. The prelude gives
+every module `Ord`, `Add`, and `From`, and `Result` gains `is_ok`,
+`unwrap_or`, `map`, and friends. New builtins `ord`, `chr`, `eprint`, and
+`str.chars()` arrive, `range` takes a step, and *The Aura Programming
+Language* book replaces the Learn track and tutorials. Breaking: an unused
+`Result` is an error (`AU2018`; discard one with `_ = expression`), a
+`TaskGroup` can only be a `with` item (`AU2019`), and the first child failure
+cancels its siblings. `ord`, `chr`, and `eprint` are now builtin names.
+There is no performance work in this release: measured against 0.11.0 on
+the Linux measurement host, the 30
+[cross-language programs](benchmarks/cross_language/README.md) execute the
+same instructions, and the median program stays near 3.8 times Rust's time.
+The semantic interface stays 20, and the native cache format stays `v10`.
+
 - **Breaking:** a `TaskGroup` can only be created as a `with` item
   (`with group = TaskGroup():`). `TaskGroup()` anywhere else is `AU2019`, so
   no task can outlive the block that started it. Pass the group to helpers as
