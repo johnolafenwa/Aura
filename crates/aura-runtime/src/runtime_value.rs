@@ -4082,7 +4082,6 @@ pub struct TlsStreamValue {
 
 struct TaskState {
     handle: Mutex<TaskHandle>,
-    ready: Condvar,
     lightweight: bool,
     result_is_repeatable: bool,
     result_observation_claimed: AtomicBool,
@@ -4597,6 +4596,9 @@ struct LightweightTaskRecord {
     /// task runs so the interpreter can refuse a call that would hit the
     /// allocator's guard region.
     stack_bounds: TaskStackBounds,
+    /// The capacity the stack was requested with, so the stack can return
+    /// to the pool once the coroutine has ended.
+    stack_size: usize,
 }
 
 /// The writable extent of one lightweight task's coroutine stack.
@@ -4760,7 +4762,7 @@ type LightweightTaskEntry =
 
 struct PreparedLightweightTask {
     state: Arc<TaskState>,
-    stack: DefaultStack,
+    stack: PooledTaskStack,
     cancellation: Option<CancellationContext>,
     entry: LightweightTaskEntry,
     forced_exit_cleanup: Option<Box<dyn FnOnce() + Send>>,
@@ -4844,6 +4846,94 @@ pub fn allocate_lightweight_task_stack(
             format!("failed to allocate Aura task stack: {error}"),
         )
     })
+}
+
+/// A task stack together with the capacity it was requested with. The pool
+/// hands a stack only to a request of exactly that capacity, so reuse never
+/// changes the accepted stack contract.
+struct PooledTaskStack {
+    stack: DefaultStack,
+    size: usize,
+}
+
+/// Most stacks one worker keeps for reuse.
+const TASK_STACK_POOL_MAX_STACKS: usize = 32;
+/// Most reserved address space, in bytes, one worker's pool keeps.
+const TASK_STACK_POOL_MAX_BYTES: usize = 32 * 1024 * 1024;
+
+/// Stacks of finished tasks that this thread keeps for the next task of the
+/// same capacity. A stack enters only after its coroutine has ended, so no
+/// frame on it is live; its guard page stays mapped and inaccessible. The
+/// contents are not cleared, since no Aura value can read a dead frame.
+#[derive(Default)]
+struct TaskStackPool {
+    stacks: Vec<PooledTaskStack>,
+    bytes: usize,
+}
+
+impl TaskStackPool {
+    fn take(&mut self, size: usize) -> Option<DefaultStack> {
+        let index = self.stacks.iter().rposition(|entry| entry.size == size)?;
+        let entry = self.stacks.swap_remove(index);
+        self.bytes -= entry.size;
+        Some(entry.stack)
+    }
+
+    /// Keeps `stack` unless the pool is full, in which case the caller's
+    /// value drops and unmaps it.
+    fn give(&mut self, entry: PooledTaskStack) -> Option<PooledTaskStack> {
+        if self.stacks.len() >= TASK_STACK_POOL_MAX_STACKS
+            || self.bytes.saturating_add(entry.size) > TASK_STACK_POOL_MAX_BYTES
+        {
+            return Some(entry);
+        }
+        self.bytes += entry.size;
+        self.stacks.push(entry);
+        None
+    }
+}
+
+thread_local! {
+    static TASK_STACK_POOL: RefCell<TaskStackPool> = RefCell::new(TaskStackPool::default());
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn task_stack_pool_len() -> usize {
+    TASK_STACK_POOL
+        .try_with(|pool| pool.borrow().stacks.len())
+        .unwrap_or(0)
+}
+
+fn take_pooled_task_stack(size: usize) -> std::result::Result<PooledTaskStack, Diagnostic> {
+    #[cfg(test)]
+    let injected_failure = FAIL_NEXT_LIGHTWEIGHT_TASK_STACK_ALLOCATION.with(|fail| fail.get());
+    #[cfg(not(test))]
+    let injected_failure = false;
+    if !injected_failure {
+        let reused = TASK_STACK_POOL
+            .try_with(|pool| pool.borrow_mut().take(size))
+            .ok()
+            .flatten();
+        if let Some(stack) = reused {
+            return Ok(PooledTaskStack { stack, size });
+        }
+    }
+    Ok(PooledTaskStack {
+        stack: allocate_lightweight_task_stack(size)?,
+        size,
+    })
+}
+
+/// Returns a finished task's stack to this thread's pool, or unmaps it when
+/// the pool is full or the thread is exiting.
+fn recycle_task_stack(entry: PooledTaskStack) {
+    let mut entry = Some(entry);
+    let _ = TASK_STACK_POOL.try_with(|pool| {
+        if let Ok(mut pool) = pool.try_borrow_mut() {
+            entry = pool.give(entry.take().expect("the stack is still owned"));
+        }
+    });
+    drop(entry);
 }
 
 pub const MAX_FILESYSTEM_READ_BYTES: usize = 256 * 1024 * 1024;
@@ -7261,7 +7351,6 @@ impl TaskWaitRegistration {
 fn new_lightweight_task_state(result_is_repeatable: bool) -> Arc<TaskState> {
     Arc::new(TaskState {
         handle: Mutex::new(TaskHandle::Running),
-        ready: Condvar::new(),
         lightweight: true,
         result_is_repeatable,
         result_observation_claimed: AtomicBool::new(false),
@@ -7285,7 +7374,6 @@ fn complete_lightweight_task_state(task_state: &Arc<TaskState>, result: TaskExec
     {
         let mut state = lock_mutex(&task_state.handle);
         *state = TaskHandle::Completed(result.clone());
-        task_state.ready.notify_all();
     }
     wake_reactor_subscribers(&task_state.completion_reactor_subscribers);
     notify_group_failure_wake_flags(task_state, &result);
@@ -7303,7 +7391,7 @@ fn cancel_unadmitted_lightweight_task(request: PreparedLightweightTask) -> Optio
     } = request;
     drop(entry);
     drop(cancellation);
-    drop(stack);
+    recycle_task_stack(stack);
     let cleanup_panic = forced_exit_cleanup.and_then(|cleanup| {
         panic::catch_unwind(AssertUnwindSafe(cleanup))
             .err()
@@ -7325,7 +7413,7 @@ fn prepare_lightweight_task(
     entry: LightweightTaskEntry,
     forced_exit_cleanup: Option<Box<dyn FnOnce() + Send>>,
 ) -> std::result::Result<(TaskValue, PreparedLightweightTask), Diagnostic> {
-    let stack = allocate_lightweight_task_stack(stack_size.unwrap_or(LIGHTWEIGHT_TASK_STACK_SIZE))?;
+    let stack = take_pooled_task_stack(stack_size.unwrap_or(LIGHTWEIGHT_TASK_STACK_SIZE))?;
     let state = new_lightweight_task_state(result_is_repeatable);
     let task = TaskValue {
         inner: state.clone(),
@@ -7645,8 +7733,9 @@ impl LightweightTaskScheduler {
             task_state: Arc::downgrade(&request.state),
             registered_queue_roles: RefCell::new(Vec::new()),
         });
-        let stack_bounds = task_stack_bounds(&request.stack);
-        let coroutine = Coroutine::with_stack(request.stack, move |yielder, _| {
+        let stack_bounds = task_stack_bounds(&request.stack.stack);
+        let stack_size = request.stack.size;
+        let coroutine = Coroutine::with_stack(request.stack.stack, move |yielder, _| {
             let context_was_installed = with_current_lightweight_task_context(|context| {
                 context.yielder.set(yielder as *const _);
             })
@@ -7666,6 +7755,7 @@ impl LightweightTaskScheduler {
                 coroutine,
                 forced_exit_cleanup: request.forced_exit_cleanup,
                 stack_bounds,
+                stack_size,
             },
         );
         self.ready
@@ -7768,10 +7858,12 @@ impl LightweightTaskScheduler {
                 // child work. Admit those requests before retiring the parent.
                 self.drain_spawn_requests();
                 self.complete_task(task_id, &record.state, result);
+                retire_lightweight_task_record(record);
             }
             CoroutineResult::Return(result) => {
                 record.context.yielder.set(std::ptr::null());
                 self.complete_task(task_id, &record.state, result);
+                retire_lightweight_task_record(record);
             }
         }
     }
@@ -8054,7 +8146,32 @@ impl LightweightTaskScheduler {
         }
         self.drain_spawn_requests();
         self.complete_task(task_id, &record.state, TaskExecutionResult::Cancelled);
+        retire_lightweight_task_record(record);
     }
+}
+
+/// Drops a finished task's record in field order and returns its stack to
+/// this worker's pool once the coroutine has ended.
+fn retire_lightweight_task_record(record: LightweightTaskRecord) {
+    let LightweightTaskRecord {
+        state,
+        context,
+        coroutine,
+        forced_exit_cleanup,
+        stack_bounds: _,
+        stack_size,
+    } = record;
+    drop(state);
+    drop(context);
+    if coroutine.done() {
+        recycle_task_stack(PooledTaskStack {
+            stack: coroutine.into_stack(),
+            size: stack_size,
+        });
+    } else {
+        drop(coroutine);
+    }
+    drop(forced_exit_cleanup);
 }
 
 impl Drop for LightweightTaskScheduler {
@@ -16271,7 +16388,6 @@ impl TaskValue {
     ) -> Self {
         let inner = Arc::new(TaskState {
             handle: Mutex::new(TaskHandle::Running),
-            ready: Condvar::new(),
             lightweight: false,
             result_is_repeatable,
             result_observation_claimed: AtomicBool::new(false),
@@ -16296,7 +16412,6 @@ impl TaskValue {
             wake_reactor_subscribers(&state.completion_reactor_subscribers);
             notify_group_failure_wake_flags(&state, &result);
             notify_group_completion_wake_flags(&state);
-            state.ready.notify_all();
             notify_runtime_scheduler_if_started();
         });
         Self { inner }
