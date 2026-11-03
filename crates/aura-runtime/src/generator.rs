@@ -140,7 +140,10 @@ impl Drop for GeneratorValue {
     /// body's `with` exits run. A failure there has no caller to reach: the
     /// direct backend reports a trap itself, and the interpreter drops it.
     fn drop(&mut self) {
-        if Arc::strong_count(&self.inner) != 1 || std::thread::panicking() {
+        if Arc::strong_count(&self.inner) != 1
+            || std::thread::panicking()
+            || DROP_CLOSE_SUSPENDED.with(Cell::get) > 0
+        {
             return;
         }
         let suspended = {
@@ -151,6 +154,26 @@ impl Drop for GeneratorValue {
             let _ = self.close();
         }
     }
+}
+
+thread_local! {
+    /// Nonzero while a finished task's values are released in bulk. Its
+    /// generators are then discarded without running their bodies, whose
+    /// values the same release covers.
+    static DROP_CLOSE_SUSPENDED: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Runs `work` with dropped generators discarded instead of closed.
+pub fn without_generator_drop_close<T>(work: impl FnOnce() -> T) -> T {
+    struct Resume;
+    impl Drop for Resume {
+        fn drop(&mut self) {
+            DROP_CLOSE_SUSPENDED.with(|count| count.set(count.get() - 1));
+        }
+    }
+    DROP_CLOSE_SUSPENDED.with(|count| count.set(count.get() + 1));
+    let _resume = Resume;
+    work()
 }
 
 thread_local! {

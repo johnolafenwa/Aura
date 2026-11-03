@@ -174,3 +174,15 @@ fn hooks_run_around_every_resume() {
     drop(generator);
     drop(keep);
 }
+
+#[test]
+fn a_bulk_release_discards_a_suspended_generator_without_running_it() {
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let generator = counting(5, log.clone());
+    assert!(generator.resume().expect("resume"));
+    let kept = super::without_generator_drop_close(|| {
+        drop(generator);
+        log.borrow().len()
+    });
+    assert_eq!(kept, 1, "the body did not run again");
+}

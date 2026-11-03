@@ -65,7 +65,7 @@ use crate::runtime_value::{
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
     task_result_timed_out, try_array_buffer, try_clone_array_containing_value, wait_all_cancelled,
     wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_error,
-    wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
+    wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler, without_generator_drop_close,
     yield_now_with_runtime_scheduler, ArrayBinaryOp, ArrayDType, ArrayReduction, ArrayValue,
     CancellationContext, ChannelValue, CleanupTrapSignal, ClosureCaptureValue, ClosureEnvironment,
     DictEntries, EnumVariantValue, FfiHandleValue, FileValue, FloatPowerWidth, FunctionValue,
@@ -1119,13 +1119,17 @@ fn discard_current_direct_task_runtime_state() {
 fn release_direct_task_runtime_state(mut state: Box<DirectTaskRuntimeState>) {
     let owned_values = state.owned_values_mut().take_all();
     drop(state);
-    for (address, count) in owned_values {
-        for _ in 0..count {
-            unsafe {
-                release_untracked_value(address as *mut OpaqueValue);
+    // The task is gone, so a generator it still owns cannot resume: the
+    // same release covers the values its suspended body holds.
+    without_generator_drop_close(|| {
+        for (address, count) in owned_values {
+            for _ in 0..count {
+                unsafe {
+                    release_untracked_value(address as *mut OpaqueValue);
+                }
             }
         }
-    }
+    });
 }
 
 fn next_direct_cleanup_id(state: &mut DirectTaskRuntimeState) -> i64 {

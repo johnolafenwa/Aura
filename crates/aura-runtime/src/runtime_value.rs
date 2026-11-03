@@ -65,8 +65,8 @@ mod generator;
 #[path = "host_builtins.rs"]
 pub mod host_builtins;
 pub use generator::{
-    generator_yield, GeneratorHooks, GeneratorValue, DIRECT_GENERATOR_STACK_BYTES,
-    INTERPRETED_GENERATOR_STACK_BYTES,
+    generator_yield, without_generator_drop_close, GeneratorHooks, GeneratorValue,
+    DIRECT_GENERATOR_STACK_BYTES, INTERPRETED_GENERATOR_STACK_BYTES,
 };
 
 type HttpHeaders = Vec<(String, String)>;

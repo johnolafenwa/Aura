@@ -4202,6 +4202,17 @@ impl MirRuntime {
         env: &mut Env,
         error: Diagnostic,
     ) -> Diagnostic {
+        // A generator the frame owns closes first, as the native backend
+        // runs a suspended body's exits before its caller's.
+        let generators = env
+            .values
+            .iter()
+            .filter(|(_, value)| owns_generator(value))
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        for name in generators {
+            drop(env.values.remove(&name));
+        }
         let mut exit_failures = Vec::new();
         while let Some((place, action)) = cleanup_stack.pop() {
             if let Ok(Some(failure)) = self.run_cleanup_place(&place, &action, env, true) {
@@ -11013,6 +11024,15 @@ fn array_coordinates_from_runtime(value: &Value) -> Result<Box<[i64]>> {
         .map(coordinate)
         .collect::<Vec<_>>()
         .into_boxed_slice())
+}
+
+/// Whether `value` is a generator handle or a `Generator[T]` holding one.
+fn owns_generator(value: &Value) -> bool {
+    match value {
+        Value::Generator(_) => true,
+        Value::Instance(instance) => instance.class_name == "iter.Generator",
+        _ => false,
+    }
 }
 
 fn evaluate_named_args(args: &[MirArg], env: &mut Env) -> Result<Vec<EvaluatedMirArg>> {
