@@ -1,0 +1,38 @@
+# Spawn-then-join probe (Batch 8). Starts N children one at a time and joins
+# each before the next, then starts N and joins them all.
+import sys
+
+
+def value(x: int64) -> int64:
+    return x
+
+
+def main():
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            mut total: int64 = 0
+            start = sys.monotonic_time_ms()
+            with TaskGroup() as group:
+                for i in range(n):
+                    t = group.start(value, i)
+                    match t.result():
+                        case TaskResult.Ready(v):
+                            total += v
+                        case _:
+                            pass
+            serial = sys.monotonic_time_ms() - start
+            start2 = sys.monotonic_time_ms()
+            with TaskGroup() as group:
+                mut handles: list[Task[int64]] = []
+                for i in range(n):
+                    handles.append(group.start(value, i))
+                for h in handles:
+                    match h.result():
+                        case TaskResult.Ready(v):
+                            total += v
+                        case _:
+                            pass
+            batch = sys.monotonic_time_ms() - start2
+            print(f"total={total} serial_ms={serial} batch_ms={batch}")
+        case Result.Err(_):
+            print("usage")

@@ -29483,3 +29483,40 @@ fn one_byte_replace_count_and_split_match_the_substring_search() {
         assert_eq!(parts, text.split(from).collect::<Vec<_>>(), "{text}");
     }
 }
+
+#[test]
+fn function_signatures_decode_once_per_descriptor_and_the_cache_stays_bounded() {
+    use super::{
+        decoded_function_signature, FUNCTION_SIGNATURE_CACHE, FUNCTION_SIGNATURE_CACHE_LIMIT,
+    };
+    use aura_core::types::Type;
+
+    let signature = Type::Function {
+        params: Vec::new(),
+        return_type: Box::new(Type::Unit),
+    };
+    let descriptor = aura_core::type_descriptor::encode(&signature);
+    FUNCTION_SIGNATURE_CACHE.with(|cache| cache.borrow_mut().clear());
+    let first = decoded_function_signature(descriptor.as_ptr(), descriptor.len());
+    let second = decoded_function_signature(descriptor.as_ptr(), descriptor.len());
+    assert_eq!(first, signature);
+    assert_eq!(second, signature);
+    assert_eq!(
+        FUNCTION_SIGNATURE_CACHE.with(|cache| cache.borrow().len()),
+        1
+    );
+
+    let descriptors = (0..FUNCTION_SIGNATURE_CACHE_LIMIT + 4)
+        .map(|_| descriptor.clone())
+        .collect::<Vec<_>>();
+    for descriptor in &descriptors {
+        assert_eq!(
+            decoded_function_signature(descriptor.as_ptr(), descriptor.len()),
+            signature
+        );
+    }
+    assert!(
+        FUNCTION_SIGNATURE_CACHE.with(|cache| cache.borrow().len())
+            <= FUNCTION_SIGNATURE_CACHE_LIMIT
+    );
+}

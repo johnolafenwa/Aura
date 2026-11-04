@@ -92,6 +92,11 @@ units, so it runs about 2.9x longer than it needs to.
   and inaccessible. A reused stack is not zeroed: no Aura value can read a
   dead frame, and the interpreter's headroom probe uses the stack bounds,
   not its contents. Stacks above the bound are unmapped as today.
+  *Amended in 8e:* the busy bound is 1,024 stacks and 1 GiB, and an idle
+  worker trims back to 32 stacks and 32 MiB, 16 stacks per pass. With only
+  32 kept, a cancelled group of 1,000 parked children unmapped about 970
+  stacks, and the TLB shootdowns made cancellation 4x slower on 4 workers
+  than on one.
 - C2. A process-wide pool. Rejected: one lock on every spawn and exit.
 
 ## D. Preemption
@@ -138,3 +143,30 @@ code and run in parallel; 8b builds on 8a.
 | 8e | Cancellation delivery (E1) | cancel-to-finish of a parked child on another worker measured and bounded |
 | 8f | Task memory (F1) | bytes per parked task reported before and after |
 | 8g | Docs (execution model, ADR-0032 update, a placement ADR), re-measure, roadmap row | all gates reported |
+
+## Results
+
+Linux container, 4 vCPU, all steps together against main @ e8d7349. Wall
+times are medians of 3 runs; this container's timings vary by about 10%.
+
+| Gate | Before | After |
+| --- | --- | --- |
+| 8a: stack syscalls when a stack is reused | `mmap`, `mprotect`, `munmap` per task | none |
+| 8b: spawn then join, per task, 4 workers / 1 worker | 119 us / 22 us | 7.6 us / 4.6 us (1.7x) |
+| 8b: imbalance probe (ideal 234 ms) | 686 ms | 256-395 ms, usually 1.1x ideal |
+| 8b: `task_pool 200000`, 4 workers / 1 worker | 1.06-1.53 s / 0.75 s | 0.60-0.87 s / 0.59-0.74 s: about even, gate not clearly met |
+| `task_pool 100000` (suite size), 4 workers | 0.93 s | 0.45 s |
+| 8c: `pubsub_broker` / `kv_server` / `http_api` | 4.38 / 3.64 / 0.61 s | 1.37 / 0.83 / 0.49 s |
+| 8c: 30-program suite, total Aura time | 26.4 s | 19.1 s; no program executes more instructions |
+| 8d: worst 1 ms sleep lateness beside `fib(35)`, 1 worker | 137-187 ms | 1-7 ms |
+| 8d: `fib30` instructions | 104,276,818 | 104,273,665 |
+| 8e: `cancel()` to last exit, 1,000 parked children, 4 workers / 1 worker | 60 / 15 ms | 8-12 / 7 ms |
+| 8f: resident bytes per parked sleeper (10,000) | 7,670 | 7,260 |
+
+The Safety workflow (thread sanitizer over the scheduler tests, address
+sanitizer over the native runtime, and fuzzing) passed on steps 8a to 8f
+(run 41674143817).
+
+Of a parked task's 7.3 KB, 4 KB is the one touched page of its stack. The
+rest is the task's records: task state, the coroutine record, the native
+runtime state with its 16-entry frame stack, and its wait registration.

@@ -56,7 +56,8 @@ use crate::json_codec::{self, JsonCodecError, JsonValue};
 use crate::randomness::{DeterministicRng, InvalidRandomRange};
 use crate::runtime_config::{blocking_io_pool_config, BlockingIoPoolConfig};
 use crate::runtime_reactor::{
-    IoInterest, ReactorHandle, ReactorSubscription, ReactorSubscriptionKey, RuntimeReactor, WaitKey,
+    IdHashMap, IoInterest, ReactorHandle, ReactorSubscription, ReactorSubscriptionKey,
+    RuntimeReactor, WaitKey,
 };
 use aura_core::types::Type;
 
@@ -3947,8 +3948,8 @@ struct ChannelState {
     /// row it made. See [`yield_after_receive`].
     last_receiver: AtomicU64,
     receiver_streak: AtomicU32,
-    recv_reactor_subscribers: Mutex<HashMap<ReactorSubscriptionKey, ReactorRecvSubscription>>,
-    send_reactor_subscribers: Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
+    recv_reactor_subscribers: Mutex<IdHashMap<ReactorSubscriptionKey, ReactorRecvSubscription>>,
+    send_reactor_subscribers: Mutex<IdHashMap<ReactorSubscriptionKey, ReactorSubscription>>,
     runtime_type_name: Mutex<Option<String>>,
     /// A pool thread, not a task, sends this channel's one value: the result
     /// of a blocking-I/O, protocol, or codec job. A task waiting on it is
@@ -3963,14 +3964,14 @@ struct ChannelInner {
 }
 
 struct WeakTaskRegistry {
-    tasks: HashMap<usize, Weak<TaskState>>,
+    tasks: IdHashMap<usize, Weak<TaskState>>,
     next_prune_at: usize,
 }
 
 impl WeakTaskRegistry {
     fn new() -> Self {
         Self {
-            tasks: HashMap::new(),
+            tasks: IdHashMap::default(),
             next_prune_at: 256,
         }
     }
@@ -4089,7 +4090,7 @@ struct TaskState {
     current_wait: Mutex<Option<TaskWaitReachability>>,
     join_dependencies: Mutex<Option<Vec<Weak<TaskState>>>>,
     observed_failure: AtomicBool,
-    completion_reactor_subscribers: Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
+    completion_reactor_subscribers: Mutex<IdHashMap<ReactorSubscriptionKey, ReactorSubscription>>,
     group_failure_wake_flags: Mutex<Vec<Arc<RuntimeWakeSignal>>>,
     group_completion_wake_flags: Mutex<Vec<Arc<RuntimeWakeSignal>>>,
     runtime_type_name: Mutex<Option<String>>,
@@ -4477,14 +4478,14 @@ struct ReactorRecvSubscription {
 #[derive(Default)]
 struct RuntimeWakeSignal {
     value: AtomicBool,
-    reactor_subscribers: Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
+    reactor_subscribers: Mutex<IdHashMap<ReactorSubscriptionKey, ReactorSubscription>>,
 }
 
 impl RuntimeWakeSignal {
     fn new(value: bool) -> Self {
         Self {
             value: AtomicBool::new(value),
-            reactor_subscribers: Mutex::new(HashMap::new()),
+            reactor_subscribers: Mutex::new(IdHashMap::default()),
         }
     }
 
@@ -4509,7 +4510,7 @@ impl RuntimeWakeSignal {
 }
 
 fn subscribe_reactor_target(
-    subscribers: &Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
+    subscribers: &Mutex<IdHashMap<ReactorSubscriptionKey, ReactorSubscription>>,
     subscription: &ReactorSubscription,
 ) {
     lock_mutex(subscribers)
@@ -4518,14 +4519,14 @@ fn subscribe_reactor_target(
 }
 
 fn unsubscribe_reactor_target(
-    subscribers: &Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
+    subscribers: &Mutex<IdHashMap<ReactorSubscriptionKey, ReactorSubscription>>,
     subscription: &ReactorSubscription,
 ) {
     lock_mutex(subscribers).remove(&subscription.identity());
 }
 
 fn wake_reactor_subscribers(
-    subscribers: &Mutex<HashMap<ReactorSubscriptionKey, ReactorSubscription>>,
+    subscribers: &Mutex<IdHashMap<ReactorSubscriptionKey, ReactorSubscription>>,
 ) {
     let targets = std::mem::take(&mut *lock_mutex(subscribers));
     let mut targets: Vec<_> = targets.into_values().collect();
@@ -4896,10 +4897,22 @@ pub(crate) struct PooledTaskStack {
     home: Option<Arc<Mutex<TaskStackPool>>>,
 }
 
-/// Most stacks one worker keeps for reuse.
-const TASK_STACK_POOL_MAX_STACKS: usize = 32;
+/// Most stacks one worker keeps for reuse while it has work. A burst of
+/// task exits, such as a cancelled group of parked children, returns every
+/// stack here instead of unmapping each one: in a process with threads on
+/// several cores each `munmap` waits for a TLB shootdown on all of them.
+const TASK_STACK_POOL_MAX_STACKS: usize = 1024;
 /// Most reserved address space, in bytes, one worker's pool keeps.
-const TASK_STACK_POOL_MAX_BYTES: usize = 32 * 1024 * 1024;
+const TASK_STACK_POOL_MAX_BYTES: usize = 1024 * 1024 * 1024;
+/// What an idle worker trims its pool back to, so the touched pages of a
+/// burst's stacks do not stay resident after it.
+const TASK_STACK_POOL_IDLE_STACKS: usize = 32;
+const TASK_STACK_POOL_IDLE_BYTES: usize = 32 * 1024 * 1024;
+/// Most stacks an idle worker unmaps before it next polls, which bounds how
+/// long trimming can delay a wake, and how long it polls before the next
+/// batch.
+const TASK_STACK_POOL_TRIM_BATCH: usize = 16;
+const TASK_STACK_POOL_TRIM_INTERVAL: StdDuration = StdDuration::from_millis(1);
 
 /// Stacks of finished tasks that this thread keeps for the next task of the
 /// same capacity. A stack enters only after its coroutine has ended, so no
@@ -4935,6 +4948,45 @@ impl TaskStackPool {
         self.stacks.push(entry);
         None
     }
+
+    /// Takes out up to `TASK_STACK_POOL_TRIM_BATCH` of the oldest stacks
+    /// above the idle bound.
+    fn trim_for_idle(&mut self) -> Vec<PooledTaskStack> {
+        let mut surplus = 0;
+        let mut bytes = self.bytes;
+        while surplus < TASK_STACK_POOL_TRIM_BATCH
+            && surplus < self.stacks.len()
+            && (self.stacks.len() - surplus > TASK_STACK_POOL_IDLE_STACKS
+                || bytes > TASK_STACK_POOL_IDLE_BYTES)
+        {
+            bytes -= self.stacks[surplus].size;
+            surplus += 1;
+        }
+        self.bytes = bytes;
+        self.stacks.drain(..surplus).collect()
+    }
+
+    fn above_idle_bound(&self) -> bool {
+        self.stacks.len() > TASK_STACK_POOL_IDLE_STACKS || self.bytes > TASK_STACK_POOL_IDLE_BYTES
+    }
+}
+
+/// Unmaps a batch of this thread's pooled stacks above the idle bound.
+/// Returns whether stacks above it remain, so the caller can come back
+/// before it blocks for long.
+pub(crate) fn trim_idle_task_stack_pool() -> bool {
+    TASK_STACK_POOL
+        .try_with(|pool| {
+            let (surplus, remaining) = {
+                let mut pool = lock_mutex(pool);
+                let surplus = pool.trim_for_idle();
+                (surplus, pool.above_idle_bound())
+            };
+            // Unmap outside the lock, so other workers can return stacks.
+            drop(surplus);
+            remaining
+        })
+        .unwrap_or(false)
 }
 
 thread_local! {
@@ -5004,6 +5056,11 @@ const QUEUED_CHILD_STARVATION_AGE: StdDuration = StdDuration::from_millis(100);
 /// it. Its own worker normally admits it within microseconds, when the
 /// parent next yields; one that has not by then is likely blocked.
 const NEWEST_CHILD_STEAL_AGE: StdDuration = StdDuration::from_micros(20);
+/// How long an older queued child waits before another worker may take it.
+/// Its own worker usually starts it within microseconds when its tasks
+/// block, which keeps chatty tasks such as queue pipeline stages together;
+/// a child whose worker stays busy for longer moves to an idle worker.
+const QUEUED_CHILD_STEAL_AGE: StdDuration = StdDuration::from_micros(250);
 /// How long an idle worker spins before it blocks in its poller. A queue
 /// hand-off from another worker usually lands within it, so the worker
 /// skips a sleep and its sender the wake syscall.
@@ -7416,7 +7473,7 @@ fn new_lightweight_task_state(result_is_repeatable: bool) -> Arc<TaskState> {
         current_wait: Mutex::new(None),
         join_dependencies: Mutex::new(None),
         observed_failure: AtomicBool::new(false),
-        completion_reactor_subscribers: Mutex::new(HashMap::new()),
+        completion_reactor_subscribers: Mutex::new(IdHashMap::default()),
         group_failure_wake_flags: Mutex::new(Vec::new()),
         group_completion_wake_flags: Mutex::new(Vec::new()),
         runtime_type_name: Mutex::new(None),
@@ -7741,8 +7798,15 @@ impl LightweightWorkerCoordinator {
         self.inboxes.iter().enumerate().any(|(index, inbox)| {
             index != worker_index
                 && inbox.started.load(Ordering::SeqCst)
-                && (inbox.queued.load(Ordering::SeqCst) > 0 || self.newest_is_stealable(inbox))
+                && (self.queued_is_stealable(inbox) || self.newest_is_stealable(inbox))
         })
+    }
+
+    fn queued_is_stealable(&self, inbox: &LightweightWorkerInbox) -> bool {
+        inbox.queued.load(Ordering::SeqCst) > 0
+            && lock_mutex(&inbox.requests)
+                .front()
+                .is_some_and(|oldest| oldest.spawned_at.elapsed() >= QUEUED_CHILD_STEAL_AGE)
     }
 
     fn newest_is_stealable(&self, inbox: &LightweightWorkerInbox) -> bool {
@@ -7752,13 +7816,15 @@ impl LightweightWorkerCoordinator {
                 .is_some_and(|(_, arrived)| arrived.elapsed() >= NEWEST_CHILD_STEAL_AGE)
     }
 
-    /// Whether another worker holds a newest child that may become
-    /// stealable later.
-    fn has_waiting_newest(&self, worker_index: usize) -> bool {
-        self.inboxes
-            .iter()
-            .enumerate()
-            .any(|(index, inbox)| index != worker_index && inbox.has_newest.load(Ordering::SeqCst))
+    /// Whether another worker holds a child that may become stealable
+    /// once it has waited long enough.
+    fn has_waiting_children(&self, worker_index: usize) -> bool {
+        self.inboxes.iter().enumerate().any(|(index, inbox)| {
+            index != worker_index
+                && inbox.started.load(Ordering::SeqCst)
+                && (inbox.has_newest.load(Ordering::SeqCst)
+                    || inbox.queued.load(Ordering::SeqCst) > 0)
+        })
     }
 
     /// Takes half, rounded up, of the first other inbox that holds tasks
@@ -7771,10 +7837,13 @@ impl LightweightWorkerCoordinator {
                 continue;
             }
             let mut requests = lock_mutex(&victim.requests);
-            let take = requests.len().div_ceil(2);
-            if take == 0 {
+            if requests
+                .front()
+                .is_none_or(|oldest| oldest.spawned_at.elapsed() < QUEUED_CHILD_STEAL_AGE)
+            {
                 continue;
             }
+            let take = requests.len().div_ceil(2);
             let stolen: Vec<_> = requests.drain(..take).collect();
             victim.queued.store(requests.len(), Ordering::SeqCst);
             drop(requests);
@@ -8452,8 +8521,13 @@ impl LightweightTaskScheduler {
                 if found {
                     // The last searcher to find work wakes a parked worker
                     // when more is queued, so parallelism keeps ramping up.
+                    // That includes children too young to steal yet: a
+                    // parked worker sleeps without a timeout, and a child
+                    // pushed while this worker searched woke no one, so if
+                    // this worker's new task blocks its thread, no one would
+                    // come back for them.
                     if workers.searching.fetch_sub(1, Ordering::SeqCst) == 1
-                        && workers.has_stealable_work(worker_index)
+                        && workers.has_waiting_children(worker_index)
                     {
                         workers.wake_parked_worker(worker_index);
                     }
@@ -8475,8 +8549,13 @@ impl LightweightTaskScheduler {
             } else {
                 self.reactor.spin_for_notification(WORKER_IDLE_SPIN);
             }
-            let max_wait = (shares_work && workers.has_waiting_newest(self.worker_index))
+            let mut max_wait = (shares_work && workers.has_waiting_children(self.worker_index))
                 .then_some(NEWEST_CHILD_STEAL_AGE);
+            if trim_idle_task_stack_pool() {
+                max_wait = Some(max_wait.map_or(TASK_STACK_POOL_TRIM_INTERVAL, |wait| {
+                    wait.min(TASK_STACK_POOL_TRIM_INTERVAL)
+                }));
+            }
             let polled = self.reactor.poll(max_wait);
             if shares_work {
                 workers.unpark(self.worker_index);
@@ -10478,8 +10557,8 @@ impl ChannelValue {
                 receiver_tasks: Mutex::new(WeakTaskRegistry::new()),
                 last_receiver: AtomicU64::new(u64::MAX),
                 receiver_streak: AtomicU32::new(0),
-                recv_reactor_subscribers: Mutex::new(HashMap::new()),
-                send_reactor_subscribers: Mutex::new(HashMap::new()),
+                recv_reactor_subscribers: Mutex::new(IdHashMap::default()),
+                send_reactor_subscribers: Mutex::new(IdHashMap::default()),
                 runtime_type_name: Mutex::new(None),
                 host_completion,
             }),
@@ -16788,7 +16867,7 @@ impl TaskValue {
             current_wait: Mutex::new(None),
             join_dependencies: Mutex::new(None),
             observed_failure: AtomicBool::new(false),
-            completion_reactor_subscribers: Mutex::new(HashMap::new()),
+            completion_reactor_subscribers: Mutex::new(IdHashMap::default()),
             group_failure_wake_flags: Mutex::new(Vec::new()),
             group_completion_wake_flags: Mutex::new(Vec::new()),
             runtime_type_name: Mutex::new(None),
