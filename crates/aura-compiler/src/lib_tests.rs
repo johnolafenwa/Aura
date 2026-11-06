@@ -4115,3 +4115,92 @@ fn eprint_writes_to_stderr_and_leaves_stdout_alone() {
     .expect("eprint should run");
     assert_eq!(output.stdout, "out\n");
 }
+
+#[test]
+fn a_consumer_trap_closes_its_paused_generator_first_on_the_interpreter() {
+    let error = run_source(include_str!(
+        "../tests/fixtures/run-fail/generator_caller_trap.au"
+    ))
+    .expect_err("the consumer traps");
+    assert_eq!(error.message, "assertion failed");
+    assert_eq!(
+        error.partial_stdout.as_deref(),
+        Some(include_str!(
+            "../tests/fixtures/run-fail/generator_caller_trap.stdout"
+        ))
+    );
+}
+
+#[test]
+fn generator_bodies_wait_on_the_interpreter() {
+    let output = run_source(include_str!(
+        "../tests/fixtures/run-pass/generator_waits.au"
+    ))
+    .expect("generator waits run");
+    assert_eq!(
+        output.stdout,
+        include_str!("../tests/fixtures/run-pass/generator_waits.stdout")
+    );
+}
+
+#[test]
+fn generators_run_lazily_and_close_on_the_interpreter() {
+    let source = concat!(
+        "from iter import Generator, Step\n",
+        "\n",
+        "class Tracer:\n",
+        "    def __enter__(mut self) -> None:\n",
+        "        print(\"enter\")\n",
+        "\n",
+        "    def __exit__(mut self) -> None:\n",
+        "        print(\"exit\")\n",
+        "\n",
+        "def count(n: int64) -> Generator[int64]:\n",
+        "    print(\"start\")\n",
+        "    with Tracer() as t:\n",
+        "        for i in range(n):\n",
+        "            yield i\n",
+        "\n",
+        "def main():\n",
+        "    mut g = count(3)\n",
+        "    print(\"made\")\n",
+        "    match g.next():\n",
+        "        case Step.Item(v):\n",
+        "            print(v)\n",
+        "        case _:\n",
+        "            pass\n",
+        "    g.close()\n",
+        "    g.close()\n",
+        "    match g.next():\n",
+        "        case Step.Item(v):\n",
+        "            print(v)\n",
+        "        case _:\n",
+        "            print(\"end\")\n",
+        "    for x in count(2):\n",
+        "        print(x)\n",
+    );
+    let output = run_source(source).expect("generators run");
+    assert_eq!(
+        output.stdout,
+        "made\nstart\nenter\n0\nexit\nend\nstart\nenter\n0\n1\nexit\n"
+    );
+
+    let trap = run_source(concat!(
+        "from iter import Generator\n",
+        "\n",
+        "def bad() -> Generator[int64]:\n",
+        "    yield 1\n",
+        "    assert false, \"broke\"\n",
+        "\n",
+        "def main():\n",
+        "    for x in bad():\n",
+        "        print(x)\n",
+    ))
+    .expect_err("the body traps");
+    assert!(trap.message.contains("broke"), "{trap:?}");
+    let chain = aura_core::diag::visible_call_frames(&trap.call_frames)
+        .into_iter()
+        .map(|frame| frame.function)
+        .collect::<Vec<_>>();
+    assert_eq!(chain, ["bad", "main"], "{trap:?}");
+}

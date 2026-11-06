@@ -1,0 +1,8 @@
+error[AU4001]: too far
+ --> crates/aura-compiler/tests/fixtures/run-fail/generator_body_trap.au:5:5
+  |
+5 |     assert i < 2, "too far"
+  |     ^
+  = note: left = 2
+  = note: right = 2
+  = note: Aura call chain (innermost first): check at 4:1 -> risky at 7:1 -> main at 12:1

@@ -60,6 +60,7 @@ pub fn runtime_member_type(value: &Value) -> Option<Type> {
         )),
         Value::Duration(_) => Some(Type::named("Duration")),
         Value::Rng(_) => Some(Type::named("random.Rng")),
+        Value::Generator(_) => Some(Type::named("iter.GeneratorHandle")),
         Value::Range(_) => Some(Type::named("Range")),
         Value::Function(function) => Some(function.signature.clone()),
         Value::Unit => Some(Type::Unit),

@@ -44,8 +44,8 @@ use crate::runtime_value::{
     current_lightweight_task_cancellation, current_lightweight_task_id, current_task_native_slot,
     decode_process_restart_policy, decode_process_stdio, divmod_numeric_values,
     embedded_nominal_runtime_type_name, fail_current_lightweight_task, float_floor_divmod,
-    float_power, flush_buffered_files, format_runtime_value_with, host_builtins, io_error,
-    io_read_line, is_clone_leaf, json_array_metadata_is_exact, json_dumps_runtime,
+    float_power, flush_buffered_files, format_runtime_value_with, generator_yield, host_builtins,
+    io_error, io_read_line, is_clone_leaf, json_array_metadata_is_exact, json_dumps_runtime,
     json_int_metadata_is_exact, json_object_metadata_is_exact, json_parse_inline,
     json_parse_owned_to_runtime, lookup_found, lookup_missing, nominal_runtime_base_name,
     optional_absent, optional_bytes_value, optional_named, optional_present, optional_str_value,
@@ -66,18 +66,19 @@ use crate::runtime_value::{
     task_group_cleanup_should_cancel, task_result_cancelled, task_result_error, task_result_ready,
     task_result_timed_out, try_array_buffer, try_clone_array_containing_value, wait_all_cancelled,
     wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_error,
-    wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
+    wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler, without_generator_drop_close,
     yield_now_with_runtime_scheduler, ArrayBinaryOp, ArrayDType, ArrayReduction, ArrayValue,
     CancellationContext, ChannelValue, CleanupTrapSignal, ClosureCaptureValue, ClosureEnvironment,
     DictEntries, EnumVariantValue, FfiHandleValue, FileValue, FloatPowerWidth, FunctionValue,
-    HttpListenerValue, HttpResponseValue, InstanceFields, InstanceValue, IntegerArithmeticMode,
-    LightweightTaskFailureSignal, MapValue, ProcessChildValue, ProcessChildWaitStatus,
-    ProcessCompletedValue, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
-    RecvValueResult, RngValue, RuntimeName, RuntimeSchedulerWakeReason, SendValueError,
-    SetElements, SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus,
-    TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpSocketValue,
-    UnixListenerValue, UnixStreamValue, Value, VariantPayloads, VecValue, WebSocketListenerValue,
-    WebSocketValue, DIRECT_RUNTIME_TYPE_FIELD, DIRECT_RUNTIME_TYPE_SEPARATOR,
+    GeneratorHooks, GeneratorValue, HttpListenerValue, HttpResponseValue, InstanceFields,
+    InstanceValue, IntegerArithmeticMode, LightweightTaskFailureSignal, MapValue,
+    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessSupervisorValue,
+    ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue, RuntimeName,
+    RuntimeSchedulerWakeReason, SendValueError, SetElements, SetValue, TaskCancelledSignal,
+    TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue,
+    TlsStreamValue, TupleValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
+    VariantPayloads, VecValue, WebSocketListenerValue, WebSocketValue,
+    DIRECT_GENERATOR_STACK_BYTES, DIRECT_RUNTIME_TYPE_FIELD, DIRECT_RUNTIME_TYPE_SEPARATOR,
 };
 use crate::text_methods;
 use aura_core::ops::{BinaryOp, ReceiverKind, UnaryOp};
@@ -1122,13 +1123,17 @@ fn discard_current_direct_task_runtime_state() {
 fn release_direct_task_runtime_state(mut state: Box<DirectTaskRuntimeState>) {
     let owned_values = state.owned_values_mut().take_all();
     drop(state);
-    for (address, count) in owned_values {
-        for _ in 0..count {
-            unsafe {
-                release_untracked_value(address as *mut OpaqueValue);
+    // The task is gone, so a generator it still owns cannot resume: the
+    // same release covers the values its suspended body holds.
+    without_generator_drop_close(|| {
+        for (address, count) in owned_values {
+            for _ in 0..count {
+                unsafe {
+                    release_untracked_value(address as *mut OpaqueValue);
+                }
             }
         }
-    }
+    });
 }
 
 fn next_direct_cleanup_id(state: &mut DirectTaskRuntimeState) -> i64 {
@@ -3480,6 +3485,18 @@ pub const DYNAMIC_HOST_ABI: &[DynamicHostAbi] = &[
         name: "str.from_bytes",
         params: &[borrowed("bytes")],
     },
+    DynamicHostAbi {
+        name: "iter::__aura_generator_resume",
+        params: &[borrowed("handle")],
+    },
+    DynamicHostAbi {
+        name: "iter::__aura_generator_take",
+        params: &[borrowed("handle")],
+    },
+    DynamicHostAbi {
+        name: "iter::__aura_generator_close",
+        params: &[borrowed("handle")],
+    },
 ];
 
 /// The ABI of a dynamic host builtin, or `None` for every other name.
@@ -5130,6 +5147,7 @@ fn value_type_name(value: impl Borrow<Value>) -> String {
         Value::Map(_) => "dict".to_string(),
         Value::Duration(_) => "Duration".to_string(),
         Value::Rng(_) => "random.Rng".to_string(),
+        Value::Generator(_) => "iter.GeneratorHandle".to_string(),
         Value::Range(_) => "Range".to_string(),
         Value::ModuleNamespace(namespace) => format!("module {}", namespace.path),
         Value::Function(function) => function.signature.to_string(),
@@ -5192,6 +5210,7 @@ fn inferred_collection_type(value: &Value) -> Type {
         ),
         Value::Duration(_) => Type::named("Duration"),
         Value::Rng(_) => Type::named("random.Rng"),
+        Value::Generator(_) => Type::named("iter.GeneratorHandle"),
         Value::Range(_) => Type::named("Range"),
         Value::Function(function) => function.signature.clone(),
         Value::FfiHandle(handle) => Type::named(handle.type_name()),
@@ -12575,6 +12594,7 @@ pub extern "C-unwind" fn aura_direct_value_type_matches(
             Value::ProcessSupervisor(_) => expected == "process.Supervisor",
             Value::Duration(_) => expected == "Duration",
             Value::Rng(_) => expected == "random.Rng",
+            Value::Generator(_) => expected == "iter.GeneratorHandle",
             Value::Range(_) => expected == "Range",
             Value::Bool(_) => expected == "bool",
             Value::Float(_) => expected == "float64" || expected == "float32",
@@ -14169,6 +14189,97 @@ host_builtin_entries! {
     borrowed "bytes::starts_with" => aura_host_bytes_starts_with(|args| direct_bytes_search("bytes::starts_with", args));
     borrowed "bytes::ends_with" => aura_host_bytes_ends_with(|args| direct_bytes_search("bytes::ends_with", args));
     borrowed "bytes::find" => aura_host_bytes_find(|args| direct_bytes_search("bytes::find", args));
+    owned "iter::__aura_generator_start" => aura_host_iter_generator_start(direct_generator_start);
+    owned "iter::__aura_generator_yield" => aura_host_iter_generator_yield(direct_generator_yield);
+    borrowed "iter::__aura_generator_resume" => aura_host_iter_generator_resume(|args| direct_generator_handle("iter::__aura_generator_resume", args));
+    borrowed "iter::__aura_generator_take" => aura_host_iter_generator_take(|args| direct_generator_handle("iter::__aura_generator_take", args));
+    borrowed "iter::__aura_generator_close" => aura_host_iter_generator_close(|args| direct_generator_handle("iter::__aura_generator_close", args));
+}
+
+/// Moves a generator body's frame-stack entries out of the task's stack
+/// while the body is suspended, so the caller's calls stay on top.
+#[derive(Default)]
+struct DirectGeneratorFrames {
+    base: usize,
+    saved: Vec<usize>,
+}
+
+impl GeneratorHooks for DirectGeneratorFrames {
+    fn before_resume(&mut self) {
+        let Some(stack) = current_direct_frame_stack() else {
+            return;
+        };
+        // SAFETY: the stack belongs to the running task, which is the
+        // generator's owner; nothing else uses it during the hook.
+        let stack = unsafe { &mut *stack.as_ptr() };
+        self.base = stack.entry_count();
+        stack.restore_entries(mem::take(&mut self.saved));
+    }
+
+    fn after_suspend(&mut self) {
+        let Some(stack) = current_direct_frame_stack() else {
+            return;
+        };
+        // SAFETY: as in `before_resume`.
+        let stack = unsafe { &mut *stack.as_ptr() };
+        self.saved = stack.take_entries_from(self.base);
+    }
+}
+
+fn direct_generator_start(
+    mut args: Vec<Value>,
+    _program_args: Option<&[String]>,
+) -> std::result::Result<Value, Diagnostic> {
+    let body = args
+        .pop()
+        .filter(|body| matches!(body, Value::Function(_)))
+        .ok_or_else(|| Diagnostic::new("generator start expects one closure argument"))?;
+    let run = move || {
+        let function = untracked_boxed_value(body, None);
+        let result = aura_direct_function_call(function, std::ptr::null_mut(), 0);
+        if !result.is_null() {
+            unregister_direct_owned_value(result);
+            // SAFETY: the call returned an owned box.
+            unsafe { release_untracked_value(result) };
+        }
+        // SAFETY: the box was created above and nothing else holds it.
+        unsafe { release_untracked_value(function) };
+        Ok(())
+    };
+    Ok(Value::Generator(GeneratorValue::new(
+        run,
+        DIRECT_GENERATOR_STACK_BYTES,
+        false,
+        Some(Box::new(DirectGeneratorFrames::default())),
+    )))
+}
+
+fn direct_generator_yield(
+    mut args: Vec<Value>,
+    _program_args: Option<&[String]>,
+) -> std::result::Result<Value, Diagnostic> {
+    let item = args
+        .pop()
+        .ok_or_else(|| Diagnostic::new("`yield` expects one item argument"))?;
+    generator_yield(item).map(Value::Bool)
+}
+
+fn direct_generator_handle(
+    name: &'static str,
+    args: &DirectHostArgBuffer,
+) -> std::result::Result<Value, Diagnostic> {
+    let generator = args.with_borrow(name, 0, |value| match value {
+        Value::Generator(generator) => Ok(generator.clone()),
+        other => Err(Diagnostic::new(format!(
+            "`{name}` expected a generator, found `{}`",
+            value_type_name(other)
+        ))),
+    })?;
+    match name {
+        "iter::__aura_generator_resume" => generator.resume().map(Value::Bool),
+        "iter::__aura_generator_take" => generator.take_item(),
+        _ => generator.close().map(|()| Value::Unit),
+    }
 }
 
 /// The exported entry generated code calls for a host builtin.

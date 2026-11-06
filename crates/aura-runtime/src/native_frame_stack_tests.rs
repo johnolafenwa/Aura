@@ -266,3 +266,37 @@ fn the_floor_restarts_the_depth_without_dropping_entries() {
     assert_eq!(deep.get().depth(), DIRECT_MAX_CALL_DEPTH);
     assert_eq!(deep.get().len(), 2 * DIRECT_MAX_CALL_DEPTH);
 }
+
+#[test]
+fn a_suspended_generator_takes_its_entries_out_and_puts_them_back() {
+    let mut stack = OwnedStack::new();
+    let caller = descriptor(b"caller");
+    let body = descriptor(b"body");
+    stack
+        .get()
+        .push_descriptor(NonNull::new(caller.cast_mut()).unwrap());
+    let base = stack.get().entry_count();
+    assert!(stack.get().take_entries_from(base).is_empty());
+
+    stack
+        .get()
+        .push_descriptor(NonNull::new(body.cast_mut()).unwrap());
+    stack.get().push_owned(owned_frame("helper"));
+    let saved = stack.get().take_entries_from(base);
+    assert_eq!(saved.len(), 2);
+    assert_eq!(innermost_names(&mut stack), ["caller"]);
+    assert_eq!(
+        stack.get().flags(),
+        0,
+        "the owned record left with the body"
+    );
+
+    stack.get().restore_entries(saved);
+    assert_eq!(innermost_names(&mut stack), ["helper", "body", "caller"]);
+    assert_ne!(stack.get().flags(), 0, "the owned record came back");
+    assert!(stack.get().pop_call());
+    assert!(stack.get().pop_call());
+    assert_eq!(stack.get().flags(), 0);
+    stack.get().restore_entries(Vec::new());
+    assert_eq!(innermost_names(&mut stack), ["caller"]);
+}

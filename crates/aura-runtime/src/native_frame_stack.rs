@@ -147,6 +147,46 @@ impl DirectFrameStack {
         unsafe { std::slice::from_raw_parts(self.block(), self.len) }
     }
 
+    /// The number of entries in use, including those below the floor.
+    pub(super) fn entry_count(&self) -> usize {
+        self.len
+    }
+
+    /// Removes the entries at and above `base`, outermost first, so a
+    /// suspended generator body can carry them until it resumes.
+    pub(super) fn take_entries_from(&mut self, base: usize) -> Vec<usize> {
+        let base = base.max(self.floor);
+        if self.len <= base {
+            return Vec::new();
+        }
+        let words = self.words()[base..].to_vec();
+        self.len = base;
+        let owned = words
+            .iter()
+            .filter(|word| *word & DIRECT_OWNED_FRAME_TAG != 0)
+            .count();
+        if owned > 0 {
+            self.owned_frames -= owned;
+            self.update_flags();
+        }
+        words
+    }
+
+    /// Pushes entries [`DirectFrameStack::take_entries_from`] removed.
+    pub(super) fn restore_entries(&mut self, words: Vec<usize>) {
+        let mut owned = 0;
+        for word in words {
+            if word & DIRECT_OWNED_FRAME_TAG != 0 {
+                owned += 1;
+            }
+            self.push_word(word);
+        }
+        if owned > 0 {
+            self.owned_frames += owned;
+            self.update_flags();
+        }
+    }
+
     /// Pushes a descriptor's address.
     pub(super) fn push_descriptor(&mut self, descriptor: NonNull<DirectFrameDescriptor>) {
         self.push_word(descriptor.as_ptr() as usize);

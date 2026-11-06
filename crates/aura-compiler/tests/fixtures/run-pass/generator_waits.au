@@ -1,0 +1,79 @@
+# Scheduler waits inside a generator body (Batch 9 step 9c): sleeps, queue
+# receives, file I/O, and cancellation, including through a nested generator.
+import fs
+from iter import Generator
+
+class Tracer:
+    name: str
+
+    def __enter__(mut self) -> None:
+        print("enter " + self.name)
+
+    def __exit__(mut self) -> None:
+        print("exit " + self.name)
+
+def ticks(n: int64) -> Generator[int64]:
+    for i in range(n):
+        sleep(1ms)
+        yield i
+
+def producer(q: Queue[int64]):
+    for i in range(3):
+        _ = q.put(i)
+    q.close()
+
+def drain(q: own Queue[int64]) -> Generator[int64]:
+    while true:
+        match q.get():
+            case QueueReceive.Item(v):
+                yield v
+            case _:
+                return
+
+def lines(path: own str) -> Generator[str]:
+    match fs.read_to_string(path):
+        case Ok(text):
+            for line in own text.split("\n"):
+                yield line
+        case _:
+            return
+
+def slow() -> Generator[int64]:
+    with Tracer(name="slow") as t:
+        yield 1
+        sleep(5s)
+        yield 2
+
+def scaled() -> Generator[int64]:
+    for x in slow():
+        yield x * 10
+
+def worker(started: Queue[str]):
+    for x in scaled():
+        print(x)
+        _ = started.put("go")
+
+def main():
+    for t in ticks(3):
+        print(t)
+
+    q = Queue[int64]()
+    with TaskGroup() as group:
+        group.start(producer, q)
+        for v in drain(q):
+            print(f"got {v}")
+
+    path = "generator_waits.txt"
+    _ = fs.write_string(path, "a\nb")
+    for line in lines(path.clone()):
+        print(line)
+    _ = fs.remove_file(path)
+
+    # Cancelling the task wakes the sleep inside the nested generator, as it
+    # would wake a sleep in the task's own code.
+    started = Queue[str]()
+    with TaskGroup() as group:
+        group.start(worker, started)
+        _ = started.get()
+        group.cancel()
+    print("cancelled")

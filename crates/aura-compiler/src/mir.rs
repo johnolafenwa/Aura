@@ -6260,7 +6260,7 @@ fn validated_transfer_failure(
                 return None;
             }
             if crate::sema::is_builtin_io_resource_type(name, args)
-                || (name == "random.Rng" && args.is_empty())
+                || ((name == "random.Rng" || name == "iter.GeneratorHandle") && args.is_empty())
             {
                 return Some(format!("`{ty}` is a host resource"));
             }

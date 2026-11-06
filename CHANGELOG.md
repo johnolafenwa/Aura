@@ -108,6 +108,14 @@ The semantic interface stays 20, and the native cache format stays `v10`.
   implements `Iterator[T]`: the bare form consumes the iterator, and
   `for x in mut it:` borrows it so a later loop can continue where a
   `break` left off.
+- Generator functions: a module-level function declared `-> Generator[T]`
+  (from `iter`) may `yield` values. Calling it runs nothing; each `next`
+  runs the body to its next `yield` on a stack of its own, on both the
+  interpreter and native builds. `Generator[T]` implements `Iterator[T]`, so
+  `for` loops take it, and `close()` stops it with its `with` exits run
+  once. A trap in the body is a trap of the caller's task, and the call
+  chain names the generator. A body may sleep, receive from a `Queue`, or do
+  file I/O; the wait suspends the calling task. Misuse reports `AU2049`.
 - A unit variant of an imported generic enum, such as `opt.Opt.Nothing`,
   now takes its type arguments from the expected type, as an unqualified
   variant already did. It used to report a return type mismatch.

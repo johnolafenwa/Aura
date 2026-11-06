@@ -1,0 +1,5 @@
+error[AU2002]: `yield` value type mismatch: the generator yields `int64`, found `str`
+ --> crates/aura-compiler/tests/fixtures/check-fail/generator_yield_type.au:3:11
+  |
+3 |     yield "no"
+  |           ^

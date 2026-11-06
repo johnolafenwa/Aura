@@ -1,0 +1,6 @@
+error[AU2049]: `yield` needs a value
+ --> crates/aura-compiler/tests/fixtures/check-fail/generator_bare_yield.au:3:5
+  |
+3 |     yield
+  |     ^
+  = help: write `yield value`, or a bare `return` to end the generator

@@ -375,6 +375,58 @@ def main():
 Comprehensions, `enumerate`, and `zip` do not take iterator sources yet, and
 loop clauses (`invariant`) on an iterator loop report `AU2048` for now.
 
+### Generator Functions
+
+A function whose body contains a `yield` statement is a generator function.
+Its declared result must be `Generator[T]` from the `iter` module, and each
+`yield value` hands one `T` to the caller. `Generator[T]` implements
+`Iterator[T]`, so a `for` loop takes it like any other iterator:
+
+```aura
+from iter import Generator
+
+
+def countdown(n: int64) -> Generator[int64]:
+    mut i = n
+    while i > 0:
+        yield i
+        i -= 1
+
+
+def main():
+    for x in countdown(3):
+        print(x)  # 3, then 2, then 1
+```
+
+- Calling a generator function runs none of its body. The first `next`
+  starts it, and it runs until the next `yield`, a bare `return`, or the end
+  of the body. A finished generator returns `Step.End` from every later
+  `next`.
+- `return value` reports `AU2049`; a bare `return` ends the generator. So
+  does a `yield` outside a module-level generator function (in a method or
+  in top-level statements), a `yield` with no value, and a result type that
+  is not `Generator[T]`. A `yield` whose value is not a `T` reports
+  `AU2002`.
+- The body runs after the call returns, so it cannot borrow the caller's
+  values. A parameter that is not a copy type must be `own` (`AU3002`), and
+  a `mut` parameter reports `AU2049`.
+- `close(mut self)` stops a generator. If the body is waiting at a `yield`,
+  that `yield` ends the body as a bare `return` would, so its `with` exits
+  run once, in reverse order. Closing a generator that has not started or
+  has finished does nothing, and `next` returns `Step.End` afterwards.
+- A generator that is dropped while waiting at a `yield` is closed no later
+  than the return of the function that owned it. Call `close()` when the
+  exits must run at a particular point.
+- A trap in the body is a trap of the task that called `next`. The call
+  chain names the generator function, then the caller.
+- `Generator[T]` cannot be copied or cloned, and it is not Transfer: it runs
+  only on the task that created it (`AU3008`).
+
+- The body may wait like any task code: a `Queue` receive, a `sleep`, or
+  file I/O suspends the task that called `next` until the wait ends, and
+  cancelling that task wakes the wait as it would wake one in the task's own
+  code.
+
 ### Range Iteration
 
 Range iteration accepts only the bare form. Every yielded `int64` is an independent copy. `mut` has no place to write back through, and `own` has nothing to transfer. Either modifier reports `AU3004`. The diagnostic explains that ownership modifiers do not apply to these copy values and suggests `for item in range(...):`.
