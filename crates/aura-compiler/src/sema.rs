@@ -7151,6 +7151,16 @@ impl<'a> FunctionChecker<'a> {
                         .chain(self.type_names.imported_aliases.values())
                         .find(|alias| alias.target.identical_contract(&adapter_type))
                         .map(|alias| alias.decl.name.as_str());
+                    fn type_args_spelling(types: Result<Vec<Type>>) -> String {
+                        match types {
+                            Ok(types) => {
+                                let names: Vec<String> =
+                                    types.iter().map(ToString::to_string).collect();
+                                names.join(", ")
+                            }
+                            Err(_) => "...".to_owned(),
+                        }
+                    }
                     fn spelling(checker: &FunctionChecker<'_>, expr: &Expr) -> String {
                         match &expr.kind {
                             ExprKind::Name(name) => name.clone(),
@@ -7161,26 +7171,12 @@ impl<'a> FunctionChecker<'a> {
                             ExprKind::Index { object, index } => format!(
                                 "{}[{}]",
                                 spelling(checker, object),
-                                checker
-                                    .explicit_type_args_from_index(index)
-                                    .map(|types| types
-                                        .iter()
-                                        .map(ToString::to_string)
-                                        .collect::<Vec<_>>()
-                                        .join(", "))
-                                    .unwrap_or_else(|_| "...".to_owned())
+                                type_args_spelling(checker.explicit_type_args_from_index(index))
                             ),
                             ExprKind::Specialize { expr, type_args } => format!(
                                 "{}[{}]",
                                 spelling(checker, expr),
-                                checker
-                                    .lower_explicit_type_args(type_args)
-                                    .map(|types| types
-                                        .iter()
-                                        .map(ToString::to_string)
-                                        .collect::<Vec<_>>()
-                                        .join(", "))
-                                    .unwrap_or_else(|_| "...".to_owned())
+                                type_args_spelling(checker.lower_explicit_type_args(type_args))
                             ),
                             _ => "value".to_owned(),
                         }

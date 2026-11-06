@@ -32291,7 +32291,7 @@ fn named_callable_slots_keep_every_contract_diagnostic() {
         "type Named = Callable[def(value: int64) -> int64]\ntype Bare = Callable[def(int64) -> int64]\n\ndef inc(value: int64) -> int64:\n    return value + 1\n\ndef main():\n    n = 3\n    g: def(value: int64) -> int64 = lambda value: value + n\n    f: def(int64) -> int64 = g\n    print(f(1))\n    a = Named(inc)\n    b: Bare = a\n    print(b(4))\n    h: def(int64) -> int64 = inc\n    print(h(2))\n",
     )
     .expect("unnamed slots admit any parameter name");
-    let cases: [(&str, &str); 12] = [
+    let cases: [(&str, &str); 13] = [
         (
             "def inc(value: int64) -> int64:\n    return value\n\ndef main():\n    c: Callable[def(int64) -> int64] = inc\n",
             "becomes `Callable[def(int64) -> int64]` only through an explicit `Callable(...)`",
@@ -32311,6 +32311,10 @@ fn named_callable_slots_keep_every_contract_diagnostic() {
         (
             "type Unary = def(value: int64) -> int64\ndef increment(value: int64 = 1) -> int64:\n    return value + 1\ndef main():\n    step: Unary = increment\n    print(step(4))\n",
             "use the explicit adapter `Unary(increment)`",
+        ),
+        (
+            "type Unary = def(value: int64) -> int64\ndef pick[T](value: int64 = 1) -> int64:\n    return value\ndef main():\n    step: Unary = pick[str]\n    print(step(4))\n",
+            "use the explicit adapter `Unary(pick[str])`",
         ),
         (
             "class Counter:\n    value: int64\n    def scaled(self, factor: int64 = 2) -> int64:\n        return self.value * factor\ndef main():\n    counter = Counter(value=2)\n    selected: def(factor: int64) -> int64 = counter.scaled\n    print(selected(3))\n",

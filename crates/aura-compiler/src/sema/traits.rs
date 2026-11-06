@@ -1114,6 +1114,23 @@ impl<'a> FunctionChecker<'a> {
             .map(|(_, method)| method)
     }
 
+    /// The one trait declared with this short name, when every trait of
+    /// that name comes from the same module.
+    fn only_trait_named(&self, name: &str) -> Option<&TraitInfo> {
+        let mut found: Option<&TraitInfo> = None;
+        for info in self.traits.values() {
+            if info.decl.name != name {
+                continue;
+            }
+            match found {
+                Some(first) if first.module_name != info.module_name => return None,
+                Some(_) => {}
+                None => found = Some(info),
+            }
+        }
+        found
+    }
+
     /// The bound method and the name of the trait that declares it.
     pub(super) fn trait_method_from_type_param_with_trait(
         &self,
@@ -1132,16 +1149,10 @@ impl<'a> FunctionChecker<'a> {
                 // A default method of an imported trait is checked in the
                 // importer, which may know the trait only by a qualified
                 // name: fall back to the one trait declared with this name.
-                let trait_info = self.traits.get(&bound.trait_name).or_else(|| {
-                    let mut named = self
-                        .traits
-                        .values()
-                        .filter(|info| info.decl.name == bound.trait_name);
-                    let first = named.next()?;
-                    named
-                        .all(|other| other.module_name == first.module_name)
-                        .then_some(first)
-                });
+                let trait_info = match self.traits.get(&bound.trait_name) {
+                    Some(info) => Some(info),
+                    None => self.only_trait_named(&bound.trait_name),
+                };
                 if let Some(trait_info) = trait_info {
                     if let Some(method) = trait_info.methods.get(method_name) {
                         let trait_substitutions = self_type_substitutions(
