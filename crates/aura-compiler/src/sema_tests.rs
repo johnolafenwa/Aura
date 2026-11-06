@@ -32457,3 +32457,26 @@ fn generator_error_mapping_keeps_unrelated_diagnostics() {
     let borrowed = Diagnostic::coded_at("AU3002", span, "`x` is borrowed");
     assert_eq!(params.map_error(borrowed).message, "`x` is borrowed");
 }
+
+#[test]
+fn the_iter_module_cannot_declare_generator_functions() {
+    let module = crate::parse_source("def count() -> Generator[int64]:\n    yield 1\n")
+        .expect("the generator parses");
+    let diagnostic = check_with_context(
+        module,
+        ModuleContext {
+            module_name: "iter".to_string(),
+            imported_bindings: BTreeMap::new(),
+            module_registry: BTreeMap::new(),
+            is_entry_module: false,
+        },
+    )
+    .expect_err("iter cannot hold generators");
+    assert_eq!(diagnostic.code, "AU2049", "{diagnostic:?}");
+    assert!(
+        diagnostic
+            .message
+            .contains("cannot declare generator functions"),
+        "{diagnostic:?}"
+    );
+}

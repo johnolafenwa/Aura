@@ -229,3 +229,9 @@ fn dropping_a_suspended_generator_without_unwinding_resets_its_stack() {
     assert!(generator.resume().expect("resume"));
     super::without_generator_drop_close(|| drop(generator));
 }
+
+#[test]
+fn a_scheduler_wait_outside_a_generator_goes_back_to_the_task() {
+    let wait = super::super::TaskYield::YieldNow;
+    assert!(super::generator_wait(wait).is_err(), "no body is running");
+}
