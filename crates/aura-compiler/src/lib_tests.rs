@@ -4144,6 +4144,38 @@ fn generator_bodies_wait_on_the_interpreter() {
 }
 
 #[test]
+fn bounded_iterator_type_params_loop_and_match_on_the_interpreter() {
+    let source = concat!(
+        "from iter import Generator, Iterator, Step\n",
+        "\n",
+        "def total[I: Iterator[int64]](it: own I) -> int64:\n",
+        "    mut sum = 0\n",
+        "    for x in it:\n",
+        "        sum += x\n",
+        "    return sum\n",
+        "\n",
+        "def first[I: Iterator[int64]](it: own I) -> int64:\n",
+        "    mut src = it\n",
+        "    match own src.next():\n",
+        "        case Item(x):\n",
+        "            return x\n",
+        "        case _:\n",
+        "            return -1\n",
+        "\n",
+        "def count(n: int64) -> Generator[int64]:\n",
+        "    for i in range(n):\n",
+        "        yield i\n",
+        "\n",
+        "def main():\n",
+        "    print(total(count(4)))\n",
+        "    print(first(count(0)))\n",
+        "    print(first(count(3)))\n",
+    );
+    let output = run_source(source).expect("bounded iterator loops run");
+    assert_eq!(output.stdout, "6\n-1\n0\n");
+}
+
+#[test]
 fn generators_run_lazily_and_close_on_the_interpreter() {
     let source = concat!(
         "from iter import Generator, Step\n",

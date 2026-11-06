@@ -27,6 +27,12 @@ class Bag:
     def take(own self) -> list[str]:
         return self.items
 
+def total[I: Iterator[int64]](it: own I) -> int64:
+    mut sum = 0
+    for x in it:
+        sum += x
+    return sum
+
 def main():
     # Comprehensions collect an iterator source first.
     print([x * x for x in Countdown(n=4)])
@@ -63,3 +69,4 @@ def main():
     bag = Bag(items=["x", "y"])
     for item in bag.take():
         print(item)
+    print(total(Countdown(n=4)))

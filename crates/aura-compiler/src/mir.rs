@@ -27151,11 +27151,18 @@ impl<'a> Lowerer<'a> {
                                 )
                             });
                         }
-                        self.trait_method_for_receiver(&receiver_type, field).map(
-                            |(method, substitutions)| {
+                        if let Some((method, substitutions)) =
+                            self.trait_method_for_receiver(&receiver_type, field)
+                        {
+                            return Some(substitute_type(
+                                &method.signature.return_type,
+                                &substitutions,
+                            ));
+                        }
+                        self.bounded_trait_method_for_receiver(&receiver_type, field)
+                            .map(|(_, _, method, substitutions)| {
                                 substitute_type(&method.signature.return_type, &substitutions)
-                            },
-                        )
+                            })
                     }
                     _ => None,
                 }
