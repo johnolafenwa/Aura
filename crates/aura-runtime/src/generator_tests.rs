@@ -235,3 +235,51 @@ fn a_scheduler_wait_outside_a_generator_goes_back_to_the_task() {
     let wait = super::super::TaskYield::YieldNow;
     assert!(super::generator_wait(wait).is_err(), "no body is running");
 }
+
+#[test]
+fn a_finished_generator_returns_its_stack_to_the_task_stack_pool() {
+    // An unusual size, so other tests' stacks never match it.
+    let size = DIRECT_GENERATOR_STACK_BYTES + 7 * 4096;
+    let pooled = || {
+        super::super::TASK_STACK_POOL.with(|pool| {
+            super::super::lock_mutex(pool)
+                .stacks
+                .iter()
+                .filter(|entry| entry.size == size)
+                .count()
+        })
+    };
+    let run = |yields: bool| {
+        let generator = GeneratorValue::new(
+            move || {
+                if yields {
+                    generator_yield(int(1))?;
+                }
+                Ok(())
+            },
+            size,
+            true,
+            None,
+        );
+        while generator.resume().expect("resume") {}
+    };
+    run(false);
+    assert_eq!(pooled(), 1, "the ended body's stack is pooled");
+    run(true);
+    assert_eq!(pooled(), 1, "the next generator reused it");
+
+    // A generator dropped while suspended is unwound, then pooled.
+    let generator = GeneratorValue::new(
+        || {
+            generator_yield(int(1))?;
+            Ok(())
+        },
+        size,
+        true,
+        None,
+    );
+    assert!(generator.resume().expect("resume"));
+    assert_eq!(pooled(), 0, "the running body holds the stack");
+    super::without_generator_drop_close(|| drop(generator));
+    assert_eq!(pooled(), 1);
+}

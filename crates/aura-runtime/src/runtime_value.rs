@@ -5029,6 +5029,31 @@ pub(crate) fn take_pooled_task_stack(
     })
 }
 
+/// Where a pooled stack goes back to once the coroutine that runs on it is
+/// done. Generators keep it beside their coroutine, which owns the stack.
+pub(crate) struct TaskStackReturn {
+    size: usize,
+    home: Option<Arc<Mutex<TaskStackPool>>>,
+}
+
+impl PooledTaskStack {
+    pub(crate) fn into_parts(self) -> (DefaultStack, TaskStackReturn) {
+        let Self { stack, size, home } = self;
+        (stack, TaskStackReturn { size, home })
+    }
+}
+
+impl TaskStackReturn {
+    /// Returns `stack`, whose coroutine must be done, to its pool.
+    pub(crate) fn recycle(self, stack: DefaultStack) {
+        recycle_task_stack(PooledTaskStack {
+            stack,
+            size: self.size,
+            home: self.home,
+        });
+    }
+}
+
 /// Returns a finished task's stack to the pool it came from, or unmaps it
 /// when that pool is full.
 pub(crate) fn recycle_task_stack(mut entry: PooledTaskStack) {
