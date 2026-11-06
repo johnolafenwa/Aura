@@ -7173,11 +7173,6 @@ impl<'a> FunctionChecker<'a> {
                                 spelling(checker, object),
                                 type_args_spelling(checker.explicit_type_args_from_index(index))
                             ),
-                            ExprKind::Specialize { expr, type_args } => format!(
-                                "{}[{}]",
-                                spelling(checker, expr),
-                                type_args_spelling(checker.lower_explicit_type_args(type_args))
-                            ),
                             _ => "value".to_owned(),
                         }
                     }
