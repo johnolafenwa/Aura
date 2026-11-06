@@ -1,0 +1,40 @@
+# Cancellation probe (Batch 8 step 8e). Parks 1,000 children on their own
+# queues, cancels the group, and reports the time from cancel() to the last
+# child exit and to group exit, averaged over 5 rounds.
+import sys
+
+
+def parked(q: Queue[int64], done: Queue[int64]) -> int64:
+    match q.get():
+        case QueueReceive.Item(v):
+            return v
+        case _:
+            _ = done.put(sys.monotonic_time_ms())
+            return 0
+
+
+def main():
+    mut cancel_to_last_ms: int64 = 0
+    mut cancel_to_exit_ms: int64 = 0
+    for round in range(5):
+        q = Queue[int64](capacity=1)
+        done = Queue[int64](capacity=2000)
+        mut start: int64 = 0
+        with TaskGroup() as group:
+            for _ in range(1000):
+                own_q = Queue[int64](capacity=1)
+                group.start_soon(parked, own_q, done)
+            sleep(20ms)
+            start = sys.monotonic_time_ms()
+            group.cancel()
+        cancel_to_exit_ms += sys.monotonic_time_ms() - start
+        mut last: int64 = 0
+        for _ in range(1000):
+            match done.get():
+                case QueueReceive.Item(t):
+                    if t > last:
+                        last = t
+                case _:
+                    pass
+        cancel_to_last_ms += last - start
+    print(f"cancel_to_last_child_ms={cancel_to_last_ms // 5} cancel_to_exit_ms={cancel_to_exit_ms // 5}")

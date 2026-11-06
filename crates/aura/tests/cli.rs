@@ -12998,6 +12998,61 @@ def main() -> int32:
 }
 
 #[test]
+fn recursive_call_safepoints_prevent_timer_and_queue_starvation() {
+    let hot_recursion_millis = hosted_ci_timing_millis(100);
+    let max_latency_millis = hosted_ci_timing_millis(50);
+    // `burn` recurses until the deadline passes and has no loop, so only the
+    // safepoint at the entry of a recursive function can yield.
+    let source = format!(
+        r#"
+import sys
+
+def sleep_then_report(progress: Queue[int64]) -> None:
+    started_at = sys.monotonic_time_ms()
+    sleep(10ms)
+    _ = progress.put(sys.monotonic_time_ms() - started_at)
+
+def burn(depth: int64, deadline: int64) -> bool:
+    if depth == 0:
+        return sys.monotonic_time_ms() >= deadline
+    if burn(depth - 1, deadline):
+        return true
+    return burn(depth - 1, deadline)
+
+def run_hot_recursion() -> None:
+    _ = burn(32, sys.monotonic_time_ms() + {hot_recursion_millis})
+
+def report_queue_progress(started_at: int64, progress: Queue[int64]) -> None:
+    _ = progress.put(sys.monotonic_time_ms() - started_at)
+def main() -> int32:
+    timer_progress = Queue[int64]()
+    queue_progress = Queue[int64]()
+    started_at = sys.monotonic_time_ms()
+
+    with TaskGroup() as group:
+        group.start(sleep_then_report, timer_progress)
+        # A debug build of the interpreter needs a deep stack for 32 calls.
+        group.start_with_stack(67108864, run_hot_recursion)
+        group.start(report_queue_progress, started_at, queue_progress)
+
+        queue_latency = queue_progress.get_or(-1, timeout=1s)
+        timer_latency = timer_progress.get_or(-1, timeout=1s)
+        print(queue_latency >= 0 and queue_latency <= {max_latency_millis})
+        print(timer_latency >= 10 and timer_latency <= {max_latency_millis})
+    return 0
+"#
+    );
+
+    assert_run_and_direct_source_stdout_with_timeout_and_workers(
+        "aura-recursive-call-safepoints",
+        &source,
+        std::time::Duration::from_secs(10),
+        "true\ntrue\n",
+        Some(1),
+    );
+}
+
+#[test]
 fn loop_backedge_safepoints_prevent_socket_readiness_starvation() {
     let hot_loop_millis = hosted_ci_timing_millis(200);
     let max_latency_millis = hosted_ci_timing_millis(100);

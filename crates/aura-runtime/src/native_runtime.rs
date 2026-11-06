@@ -36,6 +36,7 @@ use crate::integer::{
 };
 use crate::list_elements::{ElementRefMut, ListElements};
 use crate::randomness::{self, SecureRandomError};
+use crate::runtime_reactor::IdHashMap;
 use crate::runtime_value::{
     append_string_checked, append_text_checked_with, cancel_current_lightweight_task_boundary,
     cast_numeric_value, claim_task_result_observations, clear_current_task_native_slot,
@@ -170,7 +171,10 @@ use enum_layouts::{celled_enum_layout, registered_enum_layout};
 pub use enum_layouts::{
     register_enum_layout, EnumLayout, EnumLayoutCell, TypedPayloads, FIRST_ENUM_ACCESS,
 };
-pub use frame_stack::{direct_frame_stack_layout, DirectFrameStack, DirectFrameStackLayout};
+pub use frame_stack::{
+    direct_frame_stack_layout, DirectFrameStack, DirectFrameStackLayout,
+    DIRECT_CALL_SAFEPOINT_INTERVAL,
+};
 use frame_stack::{
     DIRECT_FRAME_FLAG_PENDING_SINKS, DIRECT_FRAME_FLAG_RETURNED_VIEWS, DIRECT_MAX_CALL_DEPTH,
 };
@@ -6010,6 +6014,40 @@ pub extern "C-unwind" fn aura_direct_box_bool(value: i64) -> *mut OpaqueValue {
     task_runtime_boundary(|| boxed_value(Value::Bool(value != 0)))
 }
 
+/// Most decoded function signatures, keyed by the address and length of
+/// their descriptor. Descriptors are constants of the program image, so an
+/// address names one descriptor for the life of the process; a task start
+/// builds a function value each time and would otherwise decode it again.
+pub(crate) const FUNCTION_SIGNATURE_CACHE_LIMIT: usize = 256;
+
+thread_local! {
+    pub(crate) static FUNCTION_SIGNATURE_CACHE: RefCell<IdHashMap<(usize, usize), Type>> =
+        RefCell::new(IdHashMap::default());
+}
+
+pub(crate) fn decoded_function_signature(signature_ptr: *const u8, signature_len: usize) -> Type {
+    let key = (signature_ptr as usize, signature_len);
+    if let Some(signature) =
+        FUNCTION_SIGNATURE_CACHE.with(|cache| cache.borrow().get(&key).cloned())
+    {
+        return signature;
+    }
+    let signature = aura_core::type_descriptor::decode(&decode_bytes(signature_ptr, signature_len))
+        .unwrap_or_else(|error| {
+            runtime_error(format!(
+                "direct runtime received invalid function signature metadata: {error}"
+            ))
+        });
+    FUNCTION_SIGNATURE_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= FUNCTION_SIGNATURE_CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(key, signature.clone());
+    });
+    signature
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_function_value(
     thunk_ptr: i64,
@@ -6027,13 +6065,7 @@ pub extern "C-unwind" fn aura_direct_function_value(
         if thunk_ptr == 0 {
             runtime_error("direct runtime received a null function thunk");
         }
-        let signature =
-            aura_core::type_descriptor::decode(&decode_bytes(signature_ptr, signature_len))
-                .unwrap_or_else(|error| {
-                    runtime_error(format!(
-                        "direct runtime received invalid function signature metadata: {error}"
-                    ))
-                });
+        let signature = decoded_function_signature(signature_ptr, signature_len);
         boxed_value(Value::Function(Box::new(FunctionValue {
             name: decode_bytes(name_ptr, name_len),
             signature,
@@ -6120,21 +6152,30 @@ pub extern "C-unwind" fn aura_direct_function_bind_defaults(
     transfer_defaults: i64,
 ) {
     task_runtime_boundary(|| {
-        let function = match unsafe { value_ref(function) } {
-            Value::Function(function) => function,
-            other => runtime_error(format!(
-                "indirect call expected a function value, found `{}`",
-                value_type_name(&other)
-            )),
+        // Read only the binder and the capture count; the binder runs Aura
+        // code, so it must not run under a borrow of the function value.
+        let (binder_ptr, capture_count) = unsafe {
+            with_value(function, |value| match value {
+                Value::Function(function) => (
+                    function.direct_default_binder.unwrap_or_else(|| {
+                        runtime_error("direct function value has no native default binder")
+                    }),
+                    function
+                        .closure_environment
+                        .as_ref()
+                        .map(|environment| environment.capture_count()),
+                ),
+                other => runtime_error(format!(
+                    "indirect call expected a function value, found `{}`",
+                    value_type_name(other)
+                )),
+            })
         };
-        let binder_ptr = function
-            .direct_default_binder
-            .unwrap_or_else(|| runtime_error("direct function value has no native default binder"));
         let binder: unsafe extern "C-unwind" fn(*mut i64, usize, i64) =
             unsafe { std::mem::transmute(binder_ptr as usize) };
         let arg_count = usize::try_from(arg_count)
             .unwrap_or_else(|_| runtime_error("invalid indirect-call arg count"));
-        let Some(environment) = &function.closure_environment else {
+        let Some(capture_count) = capture_count else {
             unsafe { binder(args, arg_count, transfer_defaults) };
             return;
         };
@@ -6143,7 +6184,6 @@ pub extern "C-unwind" fn aura_direct_function_bind_defaults(
         // bound method forwards the method's defaults (C6). Bind through a
         // capture-offset shadow buffer so the environment is never exposed
         // to the caller's public argument buffer.
-        let capture_count = environment.capture_count();
         let mut shadow = vec![0i64; capture_count + arg_count];
         unsafe {
             std::ptr::copy_nonoverlapping(args, shadow.as_mut_ptr().add(capture_count), arg_count);
@@ -19172,8 +19212,8 @@ pub unsafe extern "C-unwind" fn aura_direct_start_task_function_with_frames(
     spawn_line: i64,
     spawn_column: i64,
 ) -> *mut OpaqueValue {
-    let (thunk_ptr, task_function, task_path, task_entry_span, closure_captures) =
-        match unsafe { value_ref(function) } {
+    let (thunk_ptr, task_function, task_path, task_entry_span, closure_captures) = unsafe {
+        with_value(function, |value| match value {
             Value::Function(function) => {
                 let captures = function
                     .closure_environment
@@ -19198,7 +19238,8 @@ pub unsafe extern "C-unwind" fn aura_direct_start_task_function_with_frames(
                 "task starting expected a function value, found `{}`",
                 value_type_name(other)
             )),
-        };
+        })
+    };
     let parent_function =
         match unsafe { DirectFrameText::validate_static(parent_function_ptr, parent_function_len) }
         {

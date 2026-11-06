@@ -21,18 +21,22 @@ execution through the same worker-thread architecture.
 The runtime rejects an empty, zero, signed, whitespace-padded, nonnumeric, or
 overflowing value with `AU4006` before execution starts.
 
-Each child gets a stable worker assignment when it is spawned. Its coroutine
-stack never migrates, and the runtime performs no work stealing. MIR execution
+Each child starts on its parent's worker. An idle worker may steal a child
+that has not started yet; once a task first runs, its coroutine stack never
+migrates. MIR execution
 and direct native execution share this contract. MIR is the compiler's
 mid-level intermediate representation, which `aura run` executes.
 
-Aura 0.11 task scheduling is cooperative across pinned workers:
+Aura 0.12 task scheduling is cooperative across pinned workers:
 
 - The compiler inserts a scheduling check on every loop backedge. This
   includes the ordinary end of the loop body and `continue`. A tight loop
   therefore lets ready timers, Queue operations, and socket work on the same
   worker proceed.
 - `break` and `return` leave the loop without taking that check.
+- The entry of every function on a call cycle, such as a function that calls
+  itself, takes the same check, so deep recursion with no loop also lets
+  same-worker work proceed.
 - A single long loop body or long straight-line CPU work can still delay
   sibling tasks pinned to the same worker.
 - The inserted check does not inspect cancellation. A task that must stop on
@@ -549,8 +553,8 @@ its source binding.
 
 Tasks run on cooperative pinned workers, as described in
 [Workers And Scheduling](#workers-and-scheduling). Starting a child stores its
-captures in task-owned storage and gives it a stable worker assignment for its
-whole lifetime.
+captures in task-owned storage. The child keeps the worker that first runs it
+for its whole lifetime.
 
 **Group exit** observes or joins children, as described in
 [Scope Exit](#scope-exit). It propagates an unread child failure. Host elapsed
@@ -701,7 +705,7 @@ Both MIR execution and direct native generation support:
 - Queue operations and iteration
 - typed heterogeneous `select`
 - wait helpers, sleep, and cancellation
-- compiler-inserted loop safepoints
+- compiler-inserted loop and call safepoints
 - user-trait dispatch on `Queue[T]`, `Task[T]`, and `TaskGroup` for method
   names that do not collide with builtin members
 
@@ -709,10 +713,11 @@ Builtin handle member names keep builtin dispatch on both backends. Default
 and explicit guarded stack requests use the same scheduler allocation path on
 both backends.
 
-The loop safepoints differ in frequency. MIR checks each backedge and yields
-every 8 backedges. Native code uses 4,096 units of function-local fuel between
-yields when sibling tasks are possible. It skips the check when the program
-proves that no sibling task can exist.
+The safepoints differ in frequency. MIR checks each backedge and yields
+every 8 backedges, and yields at every recursive entry below a task's first call. Native code uses
+4,096 units of function-local loop fuel and 4,096 units of per-task call fuel
+between yields when sibling tasks are possible. It skips both checks when the
+program proves that no sibling task can exist.
 
 The scheduler and runtime surface and the complete diagnostics are pinned by
 parity tests. Both backends therefore share the persistent reactor, the timer
@@ -776,7 +781,7 @@ These features are implemented:
 - sleep and cooperative cancellation
 - task-result observation and multi-task waits
 - computed Duration arithmetic
-- compiler-inserted loop-backedge safepoints
+- compiler-inserted loop-backedge and recursive-call safepoints
 - persistent reactor registrations, heap-managed deadlines, and direct Queue,
   task-completion, and blocking-pool wakeups
 - guarded 768 KiB coroutine stacks and the stack-override methods
@@ -810,7 +815,7 @@ One bounded, nonblocking service step at a time owns the protocol state. The
 state is returned before the coroutine observes cancellation or resumes
 reactor waiting. The process-global pool starts lazily, is shared by all
 lightweight schedulers, and lives until process exit. It intentionally has no
-0.11 runtime shutdown or join API. The non-Unix WebSocket fallback keeps its
+0.12 runtime shutdown or join API. The non-Unix WebSocket fallback keeps its
 compatibility path.
 
 Plain socket and reactor operations stay on the scheduler side. Resolver,

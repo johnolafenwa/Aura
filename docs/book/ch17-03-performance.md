@@ -12,8 +12,9 @@ measurement with its workload, machine, compiler commit, and raw data.
 
 A word about the measurements made for this chapter. They ran on a Linux
 x86-64 container with four cores, shared with other work, using a release
-build of the Aura 0.11 compiler. A shared machine is noisy, so treat each
-number as a rough size rather than a benchmark result. The comparisons
+build of the Aura compiler (0.11.0-dev at the time of writing). A shared
+machine is noisy, so treat each number as a rough size rather than a
+benchmark result. The comparisons
 within one setup, and the advice that follows from them, are what to take
 away.
 

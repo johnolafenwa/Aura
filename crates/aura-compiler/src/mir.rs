@@ -28694,6 +28694,9 @@ pub(crate) mod layout;
 #[path = "mir_methods.rs"]
 pub(crate) mod methods;
 
+#[path = "mir_recursion.rs"]
+pub(crate) mod recursion;
+
 pub(crate) use ownership_check::validate_ownership;
 
 /// Why a module failed the checks every execution boundary runs.

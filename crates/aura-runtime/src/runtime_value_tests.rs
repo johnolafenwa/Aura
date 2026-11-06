@@ -20139,3 +20139,159 @@ fn closing_a_file_the_disk_cannot_take_yet_leaves_the_worker_to_other_tasks() {
         "the close wrote the buffer"
     );
 }
+
+#[test]
+fn a_finished_task_stack_is_reused_by_the_next_task_of_the_same_capacity() {
+    let mut scheduler = super::LightweightTaskScheduler::new();
+    let before = super::task_stack_pool_len();
+    let first = scheduler
+        .spawn_task(None, || Ok(Value::Bool(true)))
+        .expect("the first task should be admitted");
+    scheduler.resume_task(1, super::RuntimeSchedulerWakeReason::Ready);
+    assert!(first.completed_result().is_some());
+    assert_eq!(super::task_stack_pool_len(), before + 1);
+
+    // A different capacity never receives the pooled stack.
+    let other = scheduler
+        .spawn_task_with_stack(None, Some(512 * 1024), || Ok(Value::Unit))
+        .expect("a task with an explicit stack should be admitted");
+    assert_eq!(super::task_stack_pool_len(), before + 1);
+    scheduler.resume_task(2, super::RuntimeSchedulerWakeReason::Ready);
+    assert!(other.completed_result().is_some());
+    assert_eq!(super::task_stack_pool_len(), before + 2);
+
+    let second = scheduler
+        .spawn_task(None, || Ok(Value::Bool(false)))
+        .expect("the second task should be admitted");
+    assert_eq!(super::task_stack_pool_len(), before + 1);
+    scheduler.resume_task(3, super::RuntimeSchedulerWakeReason::Ready);
+    match second.completed_result() {
+        Some(TaskExecutionResult::Ready(Ok(Value::Bool(false)))) => {}
+        other => panic!("unexpected reused-stack result: {other:?}"),
+    }
+}
+
+#[test]
+fn the_task_stack_pool_keeps_a_bounded_number_of_stacks_and_bytes() {
+    let mut pool = super::TaskStackPool::default();
+    let size = 256 * 1024;
+    for _ in 0..super::TASK_STACK_POOL_MAX_STACKS + 4 {
+        let stack = super::allocate_lightweight_task_stack(size).expect("stack");
+        let _ = pool.give(super::PooledTaskStack {
+            stack,
+            size,
+            home: None,
+        });
+    }
+    assert_eq!(pool.stacks.len(), super::TASK_STACK_POOL_MAX_STACKS);
+    assert_eq!(pool.bytes, super::TASK_STACK_POOL_MAX_STACKS * size);
+
+    // An idle worker trims back to the idle bound one batch at a time.
+    let mut batches = 0;
+    while pool.above_idle_bound() {
+        let surplus = pool.trim_for_idle();
+        assert!(!surplus.is_empty());
+        assert!(surplus.len() <= super::TASK_STACK_POOL_TRIM_BATCH);
+        batches += 1;
+    }
+    assert_eq!(pool.stacks.len(), super::TASK_STACK_POOL_IDLE_STACKS);
+    assert_eq!(pool.bytes, super::TASK_STACK_POOL_IDLE_STACKS * size);
+    assert_eq!(
+        batches,
+        (super::TASK_STACK_POOL_MAX_STACKS - super::TASK_STACK_POOL_IDLE_STACKS)
+            .div_ceil(super::TASK_STACK_POOL_TRIM_BATCH)
+    );
+    assert!(pool.trim_for_idle().is_empty());
+
+    let mut large = super::TaskStackPool::default();
+    let large_size = 512 * 1024 * 1024;
+    for _ in 0..3 {
+        let stack = super::allocate_lightweight_task_stack(large_size).expect("stack");
+        let _ = large.give(super::PooledTaskStack {
+            stack,
+            size: large_size,
+            home: None,
+        });
+    }
+    assert_eq!(large.stacks.len(), 2);
+    assert!(large.bytes <= super::TASK_STACK_POOL_MAX_BYTES);
+    assert!(large.take(size).is_none());
+    assert!(large.take(large_size).is_some());
+    assert_eq!(large.bytes, large_size);
+    // The idle bound is in bytes too: one large stack is above it.
+    assert!(large.above_idle_bound());
+    assert_eq!(large.trim_for_idle().len(), 1);
+    assert_eq!(large.bytes, 0);
+}
+
+fn prepared_test_task() -> super::PreparedLightweightTask {
+    let (_task, request) =
+        super::prepare_lightweight_task(None, None, true, Box::new(|| Ok(Value::Unit)), None)
+            .expect("a test task should be prepared");
+    request
+}
+
+#[test]
+fn worker_coordinator_places_steals_and_ages_children_that_have_not_run() {
+    use std::time::Duration;
+    let workers = super::LightweightWorkerCoordinator::new(3);
+    for inbox in &workers.inboxes {
+        inbox.started.store(true, Ordering::SeqCst);
+    }
+    assert!(workers.all_workers_busy());
+
+    // The first child takes the newest slot; the second moves it to the
+    // stealable queue.
+    workers.place_newest(0, prepared_test_task());
+    assert!(workers.has_waiting_children(1));
+    assert!(!workers.has_waiting_children(0));
+    workers.place_newest(0, prepared_test_task());
+    assert_eq!(workers.inboxes[0].queued.load(Ordering::SeqCst), 1);
+    assert_eq!(workers.pending_requests.load(Ordering::SeqCst), 2);
+    assert!(!workers.has_stealable_work(0));
+
+    // Young children are not stolen; once they have waited, the queued
+    // one goes first.
+    assert!(workers
+        .take_newest(0, Some(Duration::from_secs(60)))
+        .is_none());
+    std::thread::sleep(super::QUEUED_CHILD_STEAL_AGE * 2);
+    assert!(workers.has_stealable_work(1));
+    let stolen = workers.steal(1);
+    assert_eq!(stolen.len(), 1);
+    assert!(workers
+        .take_newest(0, Some(Duration::from_secs(60)))
+        .is_none());
+    std::thread::sleep(super::NEWEST_CHILD_STEAL_AGE * 2);
+    assert!(workers.newest_is_stealable(&workers.inboxes[0]));
+    let stolen_newest = workers.steal(2);
+    assert_eq!(stolen_newest.len(), 1);
+    assert_eq!(workers.pending_requests.load(Ordering::SeqCst), 0);
+
+    // A worker that has not started is never a victim.
+    workers.inboxes[0].started.store(false, Ordering::SeqCst);
+    workers.push_request(0, prepared_test_task());
+    assert!(!workers.has_stealable_work(1));
+    assert!(workers.steal(1).is_empty());
+    workers.inboxes[0].started.store(true, Ordering::SeqCst);
+
+    // The starvation path takes only a child that has waited long enough.
+    assert!(workers
+        .take_request_older_than(0, Duration::from_secs(60))
+        .is_none());
+    assert!(workers.take_request_older_than(0, Duration::ZERO).is_some());
+    assert!(workers.take_request_older_than(0, Duration::ZERO).is_none());
+
+    // Parking is counted once and cleared by whoever wakes the worker.
+    workers.park(2);
+    workers.park(2);
+    assert!(!workers.all_workers_busy());
+    assert_eq!(workers.parked_workers.load(Ordering::SeqCst), 1);
+    workers.wake_parked_worker(0);
+    assert_eq!(workers.parked_workers.load(Ordering::SeqCst), 0);
+    assert!(!workers.unpark(2));
+
+    for request in stolen.into_iter().chain(stolen_newest) {
+        assert!(super::cancel_unadmitted_lightweight_task(request).is_none());
+    }
+}

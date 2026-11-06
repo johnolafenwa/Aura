@@ -16,6 +16,7 @@ use crate::native_backend::{
 };
 use crate::native_runtime::{
     encode_direct_ffi_call_spec, DirectFfiCallSpec, DirectFfiParam, DirectFfiType,
+    DIRECT_CALL_SAFEPOINT_INTERVAL,
 };
 use crate::runtime_abi::{
     frame_stack_layout, ownership_layout, AbiType, RuntimeFn, RuntimeTable, FRAME_STACK_ENTRY_BYTES,
@@ -646,6 +647,9 @@ struct NativeCodegen<'a> {
     explicit_locals: HashMap<String, crate::mir::ownership::ExplicitLocals>,
     reachable_blocks: HashMap<String, HashSet<String>>,
     safepoints_enabled: bool,
+    /// The functions on a call cycle, whose entries count the task's call
+    /// fuel (see `mir::recursion`). Empty when safepoints are elided.
+    recursive_functions: HashSet<String>,
     program_path: String,
     program_source: String,
     /// Whether the object is a debug build, which describes each function
@@ -867,6 +871,11 @@ impl<'a> NativeCodegen<'a> {
         // for a loop to starve. Keep explicit MIR markers for portability, but
         // elide their native fast-path cost for provably sequential programs.
         let safepoints_enabled = !collect_task_start_targets(module, &reachable_blocks).is_empty();
+        let recursive_functions = if safepoints_enabled {
+            crate::mir::recursion::recursive_functions(module)
+        } else {
+            HashSet::new()
+        };
         let mut classes = HashMap::new();
         for class in &module.classes {
             classes.insert(class.name.clone(), class.clone());
@@ -1007,6 +1016,7 @@ impl<'a> NativeCodegen<'a> {
             explicit_locals: crate::mir::ownership::explicit_locals(module),
             reachable_blocks,
             safepoints_enabled,
+            recursive_functions,
             debug_info: false,
             program_path: program_path.to_string(),
             program_source: program_source.to_string(),
@@ -1230,7 +1240,12 @@ impl<'a> NativeCodegen<'a> {
         let descriptor = builder.symbol_value(types::I64, descriptor);
         // The entry block's code continues after the push, in the block
         // where both of its paths meet.
-        let (body, entered_in_runtime) = emit_frame_push(builder, &runtime_refs, descriptor);
+        let (mut body, entered_in_runtime) = emit_frame_push(builder, &runtime_refs, descriptor);
+        // An entry of a function on a call cycle is a safepoint, so deep
+        // recursion with no loop yields like a loop does.
+        if self.recursive_functions.contains(&function.name) {
+            body = emit_call_safepoint(builder, &runtime_refs);
+        }
         blocks.insert(function.entry.clone(), body);
 
         let mut variable_index = 0usize;
@@ -15657,6 +15672,34 @@ fn emit_release_fast_path(
     builder.seal_block(blocks.done);
     builder.switch_to_block(blocks.done);
     builder.return_(&[]);
+}
+
+/// Counts one recursive entry against the task's call fuel, which its
+/// frame stack holds, and yields to the scheduler when the fuel runs out.
+/// Safepoints do not observe cancellation. Returns the block the code
+/// continues in.
+fn emit_call_safepoint(builder: &mut dyn FunctionBackend, runtime: &RuntimeTable<FuncRef>) -> Blk {
+    let layout = frame_stack_layout();
+    let header = MemFlags::trusted_in(AliasClass::FrameHeader);
+    let stack = builder.call(runtime[RuntimeFn::FrameStack], &[]).results[0];
+    let fuel = builder.load(types::I64, header, stack, layout.call_fuel_offset);
+    let remaining = builder.iadd_imm(fuel, -1);
+    builder.store(header, remaining, stack, layout.call_fuel_offset);
+    let exhausted = builder.icmp_imm(IntCC::Equal, remaining, 0);
+    let (fast_block, slow_block, done) = emit_frame_branch(builder, exhausted);
+
+    builder.switch_to_block(fast_block);
+    builder.jump(done, &[]);
+
+    builder.switch_to_block(slow_block);
+    let interval = builder.iconst(types::I64, DIRECT_CALL_SAFEPOINT_INTERVAL as i64);
+    builder.store(header, interval, stack, layout.call_fuel_offset);
+    builder.call(runtime[RuntimeFn::YieldNow], &[]);
+    builder.jump(done, &[]);
+
+    builder.seal_block(done);
+    builder.switch_to_block(done);
+    done
 }
 
 /// Pops the innermost call's frame record: count one entry fewer, unless
