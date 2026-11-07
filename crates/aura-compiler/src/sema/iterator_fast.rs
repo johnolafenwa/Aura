@@ -48,7 +48,6 @@ const STATE: &str = "__aura_state";
 /// The hidden module alias generated code uses for the builtin `iter`
 /// module (shared with the generator pass).
 const ITER_ALIAS: &str = "__aura_iter";
-const MAX_FAST_FUNCTIONS: usize = 200;
 
 /// The module with the fast forms added and its context, or `None` when
 /// nothing in the module qualifies.
@@ -73,9 +72,6 @@ pub(super) fn expand(module: &Module, context: &ModuleContext) -> Option<(Module
         let Item::Impl(impl_decl) = item else {
             continue;
         };
-        if windows >= MAX_FAST_FUNCTIONS {
-            break;
-        }
         if let Some(advance) = fast_iterator_impl(impl_decl, &classes, &step_names, &mut columns) {
             windows += 1;
             advances.push(advance);
@@ -97,9 +93,6 @@ pub(super) fn expand(module: &Module, context: &ModuleContext) -> Option<(Module
         let Item::Function(function) = item else {
             continue;
         };
-        if windows >= MAX_FAST_FUNCTIONS {
-            break;
-        }
         if let Some(frame) = generator_frame(function, &mut columns) {
             windows += 1;
             frames.extend(frame);
@@ -135,14 +128,13 @@ pub(super) fn expand(module: &Module, context: &ModuleContext) -> Option<(Module
     }
     module.items.extend(frames);
     let mut context = context.clone();
-    if !context.imported_bindings.contains_key(ITER_ALIAS) {
-        let namespace = crate::builtin_sources::importable_builtin_namespace(&[
-            super::iterator_loops::ITER_MODULE.to_string(),
-        ])?;
-        context
-            .imported_bindings
-            .insert(ITER_ALIAS.to_string(), ImportedBinding::Module(namespace));
-    }
+    let namespace = crate::builtin_sources::importable_builtin_namespace(&[
+        super::iterator_loops::ITER_MODULE.to_string(),
+    ])
+    .expect("the builtin `iter` module is importable");
+    context
+        .imported_bindings
+        .insert(ITER_ALIAS.to_string(), ImportedBinding::Module(namespace));
     Some((module, context))
 }
 
@@ -271,13 +263,11 @@ fn fast_iterator_impl(
         return None;
     }
     let class_name = class_name.clone();
-    let next = impl_decl
-        .methods
-        .iter_mut()
-        .find(|method| method.name == super::iterator_loops::ITERATOR_NEXT)?;
-    if next.receiver != Some(ReceiverKind::BorrowMut) || !next.params.is_empty() {
-        return None;
-    }
+    let next = impl_decl.methods.iter_mut().find(|method| {
+        method.name == super::iterator_loops::ITERATOR_NEXT
+            && method.receiver == Some(ReceiverKind::BorrowMut)
+            && method.params.is_empty()
+    })?;
     let mut body = next.body.clone();
     if !rewrite_step_returns(&mut body, step_names) {
         return None;
@@ -308,20 +298,13 @@ fn fast_iterator_impl(
 fn rewrite_step_returns(body: &mut [Stmt], step_names: &StepNames) -> bool {
     body.iter_mut().all(|stmt| match stmt {
         Stmt::Return(ret) => {
-            let Some(value) = &ret.value else {
-                return false;
-            };
-            match step_names.step_value(value) {
-                Some(None) => {
-                    ret.value = Some(name_expr("None", value.span));
-                    true
-                }
-                Some(Some(item)) => {
-                    ret.value = Some(item.clone());
-                    true
-                }
-                None => false,
-            }
+            let rewritten = ret.value.as_ref().and_then(|value| {
+                Some(match step_names.step_value(value)? {
+                    None => name_expr("None", value.span),
+                    Some(item) => item.clone(),
+                })
+            });
+            rewritten.map(|value| ret.value = Some(value)).is_some()
         }
         Stmt::If(if_stmt) => {
             if_stmt
@@ -616,9 +599,8 @@ fn generator_frame(function: &FunctionDecl, columns: &mut usize) -> Option<Vec<I
     };
     for param in &function.params {
         let ty = scalar_name(&param.ty)?;
-        if param.mode == ParamMode::BorrowMut || !layout.declare(&param.name, ty.to_string()) {
-            return None;
-        }
+        (param.mode != ParamMode::BorrowMut && layout.declare(&param.name, ty.to_string()))
+            .then_some(())?;
     }
     if !collect_locals(&function.body, &mut layout, &mut BTreeSet::new()) {
         return None;
@@ -1326,9 +1308,8 @@ impl Fusable {
         for param in &function.params {
             layout.declare(&param.name, scalar_name(&param.ty)?.to_string());
         }
-        if !collect_locals(&function.body, &mut layout, &mut BTreeSet::new()) {
-            return None;
-        }
+        // The frame pass already accepted this body.
+        collect_locals(&function.body, &mut layout, &mut BTreeSet::new()).then_some(())?;
         let fields = layout.locals.keys().cloned().collect::<BTreeSet<_>>();
         let mut yields = 0;
         let mut closed = true;

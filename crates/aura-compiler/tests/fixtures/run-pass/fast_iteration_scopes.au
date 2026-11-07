@@ -1,0 +1,54 @@
+# Loops over a generator inside `with`, with tuple targets and shadowing.
+from iter import Generator
+
+
+def pairs(n: int64) -> Generator[int64]:
+    for a in range(n):
+        yield a
+
+
+def main():
+    for (x) in pairs(2):
+        print(x)
+    mut total = 0
+    for p in pairs(3):
+        with Guard() as g:
+            if p == 1:
+                continue
+            total += p
+    print(total)
+    for p in pairs(4):
+        if p == 2:
+            break
+        print(p)
+    for p in pairs(5):
+        if p < 1:
+            print(p)
+        else:
+            break
+    for p in pairs(5):
+        match p:
+            case 2:
+                break
+            case _:
+                print(p)
+    for p in pairs(5):
+        with Guard() as g:
+            if p == 1:
+                break
+            print(p)
+    for p in pairs(3):
+        for q in range(2):
+            if q == 1:
+                break
+            print(p * 10 + q)
+    else_count = 0
+    print(else_count)
+
+
+class Guard:
+    def __enter__(mut self) -> None:
+        pass
+
+    def __exit__(mut self) -> None:
+        pass
