@@ -1,0 +1,6 @@
+error[AU4002]: integer value `9223372036854775808` does not fit in `int64`
+ --> crates/aura-compiler/tests/fixtures/run-fail/generator_inline_trap.au:9:9
+  |
+9 |         i += 1
+  |         ^
+  = note: Aura call chain (innermost first): climb at 5:1 -> main at 11:1

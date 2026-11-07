@@ -493,6 +493,18 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
 }
 
 fn check_with_context_unprefaced(module: Module, context: ModuleContext) -> Result<Program> {
+    // Fast iteration forms are an optimization: when the module with them
+    // added does not check, the module is checked as written, so its
+    // diagnostics are the ones the author's code earns.
+    if let Some((fast_module, fast_context)) = super::iterator_fast::expand(&module, &context) {
+        if let Ok(program) = check_pipeline(fast_module, fast_context) {
+            return Ok(program);
+        }
+    }
+    check_pipeline(module, context)
+}
+
+fn check_pipeline(module: Module, context: ModuleContext) -> Result<Program> {
     let mut module = module;
     let mut context = context;
     let generators = super::generators::expand(&mut module, &mut context)?;

@@ -928,6 +928,14 @@ impl<'a> NativeCodegen<'a> {
                 "failed to declare function `{}`: {}",
                 function.name
             );
+            // A fast iterator's advance method runs once per loop item, and
+            // inlined into the loop its object stays in registers.
+            if function.name.ends_with(FAST_ADVANCE_SUFFIX)
+                && function.blocks.len() <= FAST_ADVANCE_INLINE_BLOCKS
+                && frameless_leaf(function, &classes)
+            {
+                object.mark_inline(func_id);
+            }
             functions.insert(function.name.clone(), func_id);
             let thunk_signature = thunk_signature();
             let thunk_id = try_or_string_error!(
@@ -1239,8 +1247,14 @@ impl<'a> NativeCodegen<'a> {
         let descriptor = builder.import_data(descriptor);
         let descriptor = builder.symbol_value(types::I64, descriptor);
         // The entry block's code continues after the push, in the block
-        // where both of its paths meet.
-        let (mut body, entered_in_runtime) = emit_frame_push(builder, &runtime_refs, descriptor);
+        // where both of its paths meet. A frameless leaf pushes its record
+        // only on a trap path.
+        let frameless = frameless_leaf(function, &self.classes);
+        let (mut body, entered_in_runtime) = if frameless {
+            (entry, builder.iconst(types::I64, 0))
+        } else {
+            emit_frame_push(builder, &runtime_refs, descriptor)
+        };
         // An entry of a function on a call cycle is a safepoint, so deep
         // recursion with no loop yields like a loop does.
         if self.recursive_functions.contains(&function.name) {
@@ -1668,6 +1682,7 @@ impl<'a> NativeCodegen<'a> {
             function_writeback_types: self.function_writeback_types.clone(),
             current_function_name,
             current_function_path,
+            frameless_descriptor: frameless.then_some(descriptor),
             writeback_locals,
             mutable_param_indices,
             mutable_sink_vars,
@@ -2966,6 +2981,10 @@ struct FunctionCompiler<'a> {
     function_writeback_types: HashMap<String, Vec<DirectType>>,
     current_function_name: String,
     current_function_path: String,
+    /// The frame descriptor of a function that runs without its frame
+    /// record (see `frameless_leaf`), which each trap path pushes before
+    /// the runtime reports the trap.
+    frameless_descriptor: Option<Val>,
     writeback_locals: Vec<(String, DirectType)>,
     mutable_param_indices: HashMap<String, usize>,
     /// The variable that holds each mutable parameter's write-through sink,
@@ -4240,7 +4259,12 @@ impl<'a> FunctionCompiler<'a> {
                     .builder
                     .iconst(types::I64, NATIVE_LOOP_SAFEPOINT_INTERVAL as i64);
                 self.builder.def_var(fuel_variable, reset);
+                // A frameless leaf is on the frame stack while it waits.
+                self.push_frameless_frame();
                 self.builder.call(self.runtime[RuntimeFn::YieldNow], &[]);
+                if self.frameless_descriptor.is_some() {
+                    emit_frame_pop(&mut *self.builder, &self.runtime);
+                }
                 self.builder.jump(continue_block, &[]);
 
                 self.builder.switch_to_block(continue_block);
@@ -4887,7 +4911,9 @@ impl<'a> FunctionCompiler<'a> {
             self.release_root_words(root)?;
         }
         self.release_boxed_copy_roots()?;
-        emit_frame_pop(self.builder, &self.runtime);
+        if self.frameless_descriptor.is_none() {
+            emit_frame_pop(self.builder, &self.runtime);
+        }
         self.builder.return_(&return_values);
         Ok(())
     }
@@ -6055,6 +6081,15 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.block_params(join_block)[0]
     }
 
+    /// On a trap path of a frameless leaf, pushes the frame record the
+    /// function skipped, so the trap's call chain names it.
+    fn push_frameless_frame(&mut self) {
+        if let Some(descriptor) = self.frameless_descriptor {
+            self.builder
+                .call(self.runtime[RuntimeFn::EnterCall], &[descriptor]);
+        }
+    }
+
     /// Continues when `failed` is clear. When it is set, a cold block calls
     /// `function` with `args`, which stops the program.
     fn emit_failure_call(&mut self, failed: Val, function: RuntimeFn, args: &[Val]) {
@@ -6065,6 +6100,7 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(fail_block);
         self.builder.seal_block(fail_block);
         self.builder.set_cold_block(fail_block);
+        self.push_frameless_frame();
         self.builder.call(self.runtime[function], args);
         self.builder.trap(TrapCode::IntegerOverflow);
         self.builder.switch_to_block(continue_block);
@@ -6986,6 +7022,7 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(fail_block);
         // The runtime runs the registered exits after it records this
         // trap as primary, so a trapping exit cannot replace it.
+        self.push_frameless_frame();
         let kind_code = self.builder.iconst(types::I64, kind as i64);
         let op_code = self.builder.iconst(types::I64, op as i64);
         let (line, column) = self.span_values(span);
@@ -10467,6 +10504,7 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.set_cold_block(fail_block);
         // The runtime runs the registered exits after it records this
         // trap as primary, so a trapping exit cannot replace it.
+        self.push_frameless_frame();
         let (line, column) = self.span_values(span);
         if kind == ScalarKind::Int32 && !unsigned {
             self.builder.call(
@@ -15360,6 +15398,110 @@ fn declare_runtime_helper(
         module.mark_task_invariant(handle);
     }
     Ok(handle)
+}
+
+/// Whether `function` can run without a frame record (Batch 9 iterator
+/// speed work): it calls nothing, so no runtime helper and no callee can
+/// read its frame, and it holds only words, so nothing it owns needs the
+/// runtime. Only its trap paths need its frame, and they push it there (see
+/// `push_frameless_frame`). Every local is a scalar, a plain class, or an
+/// inline union of those; every instruction is word arithmetic, a field
+/// read or write, or a plain construction; and no instruction is a
+/// safepoint or a debugger mark, so a `--debug` build keeps every frame.
+/// MIR names a method `Class.method`.
+const FAST_ADVANCE_SUFFIX: &str = ".__aura_advance";
+/// The largest advance method inlined into each loop that calls it.
+const FAST_ADVANCE_INLINE_BLOCKS: usize = 64;
+
+fn frameless_leaf(function: &MirFunction, classes: &HashMap<String, MirClass>) -> bool {
+    fn words_only(ty: &DirectType) -> bool {
+        match ty {
+            DirectType::Scalar(_) | DirectType::PlainClass(_) => true,
+            DirectType::Union(union) => {
+                union.owning.is_empty() && union.members.iter().all(|member| words_only(&member.ty))
+            }
+            DirectType::Callable(_) | DirectType::Opaque(_) => false,
+        }
+    }
+    fn plain_operand(operand: &Operand) -> bool {
+        matches!(
+            operand,
+            Operand::Place(_)
+                | Operand::MovePlace(_)
+                | Operand::Int(_)
+                | Operand::Float(_)
+                | Operand::Bool(_)
+                | Operand::Unit
+        )
+    }
+    if function.name == "main" || function.blocks.is_empty() {
+        return false;
+    }
+    // A call the runtime enters, such as one through a function value,
+    // hands a mutable parameter's write-through sink over in the frame the
+    // runtime pushes. Only a fast iterator's advance method, which only
+    // generated loops call directly, may skip that frame with one.
+    let mutable = function.receiver == Some(MirReceiverKind::BorrowMut)
+        || function
+            .params
+            .iter()
+            .any(|param| param.passing == MirReceiverKind::BorrowMut);
+    if mutable && !function.name.ends_with(FAST_ADVANCE_SUFFIX) {
+        return false;
+    }
+    let locals_are_words = function
+        .local_types
+        .iter()
+        .all(|local| direct_type(&local.ty, classes).is_some_and(|ty| words_only(&ty)))
+        && function
+            .params
+            .iter()
+            .all(|param| direct_type(&param.ty, classes).is_some_and(|ty| words_only(&ty)))
+        && direct_type(&function.return_type, classes).is_some_and(|ty| words_only(&ty));
+    if !locals_are_words {
+        return false;
+    }
+    function.blocks.iter().all(|block| {
+        let instructions = block
+            .instructions
+            .iter()
+            .all(|instruction| match instruction {
+                // A safepoint's slow path pushes the frame around its yield.
+                Instruction::Retain { .. }
+                | Instruction::Release { .. }
+                | Instruction::Safepoint
+                | Instruction::SourceLocation { .. }
+                | Instruction::SourceName { .. } => true,
+                Instruction::Assign { value, .. } => match value {
+                    Rvalue::Use(operand) => plain_operand(operand),
+                    Rvalue::Binary {
+                        op, left, right, ..
+                    } => {
+                        !matches!(
+                            op,
+                            BinaryOp::Div | BinaryOp::FloorDiv | BinaryOp::Mod | BinaryOp::Pow
+                        ) && plain_operand(left)
+                            && plain_operand(right)
+                    }
+                    Rvalue::Unary { value, .. } => plain_operand(value),
+                    Rvalue::UnionTagTest { .. } => true,
+                    Rvalue::UnionTakePayload { .. } => true,
+                    Rvalue::UnionInject { value, .. } => plain_operand(value),
+                    Rvalue::Member { object, .. } => plain_operand(object),
+                    Rvalue::Construct { fields, .. } => {
+                        fields.iter().all(|field| plain_operand(&field.value))
+                    }
+                    _ => false,
+                },
+                _ => false,
+            });
+        instructions
+            && match &block.terminator {
+                Terminator::Return(operand) => plain_operand(operand),
+                Terminator::Goto(_) | Terminator::Branch { .. } => true,
+                _ => false,
+            }
+    })
 }
 
 /// Pushes a call's frame record the way the runtime's frame stack allows:

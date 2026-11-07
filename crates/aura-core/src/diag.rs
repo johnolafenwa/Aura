@@ -11,15 +11,29 @@ pub struct Span {
     pub column: usize,
 }
 
+/// Code the compiler generates from written code (a fast iteration form)
+/// gives each copied expression a span of its own: the written column plus
+/// a multiple of this stride. Rendering shows the written column.
+pub const GENERATED_COLUMN_STRIDE: usize = 1 << 12;
+
 impl Span {
     pub fn new(line: usize, column: usize) -> Self {
         Self { line, column }
+    }
+
+    /// The position as written, for a span of generated code.
+    pub fn written(self) -> Self {
+        Self {
+            line: self.line,
+            column: self.column % GENERATED_COLUMN_STRIDE,
+        }
     }
 }
 
 impl fmt::Display for Span {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.line, self.column)
+        let written = self.written();
+        write!(f, "{}:{}", written.line, written.column)
     }
 }
 
@@ -477,6 +491,23 @@ pub fn visible_call_frames(frames: &[RuntimeCallFrame]) -> Vec<RuntimeCallFrame>
             after_body = true;
             continue;
         }
+        // A simple generator's frame advances under the generator's name,
+        // and a fast iterator's advance method as its `next`.
+        if let Some(advance) = name.strip_suffix(".__aura_advance") {
+            let shown = match advance.strip_prefix("__aura_frame_") {
+                Some(generator) => generator.to_string(),
+                None => format!("Iterator for {advance}.next"),
+            };
+            visible.push(RuntimeCallFrame {
+                function: match module {
+                    Some(module) => format!("{module}::{shown}"),
+                    None => shown,
+                },
+                span: frame.span.clone(),
+            });
+            after_body = false;
+            continue;
+        }
         if after_body
             && (name.starts_with("__lambda_")
                 || frame.function.starts_with("Iterator for iter.Generator.")
@@ -488,6 +519,47 @@ pub fn visible_call_frames(frames: &[RuntimeCallFrame]) -> Vec<RuntimeCallFrame>
         visible.push(frame.clone());
     }
     visible
+}
+
+/// A loop can run a generator's body in place, so a trap there has no frame
+/// of the generator's own. Such code has generated spans; when the trap's
+/// line belongs to a module-level `def` other than the innermost frame's
+/// function, the chain shows that function first, as if it had a frame.
+pub fn name_inlined_generator(frames: &mut Vec<RuntimeCallFrame>, trap: Span, source: &str) {
+    if trap.column < GENERATED_COLUMN_STRIDE {
+        return;
+    }
+    let Some(innermost) = frames.first() else {
+        return;
+    };
+    let lines = source.lines().take(trap.line).collect::<Vec<_>>();
+    let Some((index, name)) = lines.iter().enumerate().rev().find_map(|(index, line)| {
+        let rest = line.strip_prefix("def ")?;
+        let end = rest.find(['(', '['])?;
+        Some((index, rest[..end].trim().to_string()))
+    }) else {
+        return;
+    };
+    let (module, shown) = match innermost.function.rsplit_once("::") {
+        Some((module, shown)) => (Some(module), shown),
+        None => (None, innermost.function.as_str()),
+    };
+    let declared = Span::new(index + 1, 1);
+    if shown == name || innermost.span.start.line == declared.line {
+        return;
+    }
+    let function = match module {
+        Some(module) => format!("{module}::{name}"),
+        None => name,
+    };
+    let path = innermost.span.path.clone();
+    frames.insert(
+        0,
+        RuntimeCallFrame {
+            function,
+            span: RuntimeSourceSpan::point(path, declared),
+        },
+    );
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -829,7 +901,7 @@ impl Diagnostic {
             code: self.code.clone(),
             severity: self.severity,
             message: self.message.clone(),
-            primary_span: self.span.map(|span| StructuredSpan {
+            primary_span: self.span.map(Span::written).map(|span| StructuredSpan {
                 path: path.clone(),
                 start: span,
                 end: Span::new(span.line, span.column.saturating_add(1)),
@@ -935,7 +1007,10 @@ impl Diagnostic {
         for secondary in &self.secondary_spans {
             rendered.push_str(&format!(
                 "\n  = related {}:{}:{}: {}",
-                path, secondary.span.line, secondary.span.column, secondary.label
+                path,
+                secondary.span.line,
+                secondary.span.written().column,
+                secondary.label
             ));
         }
         for note in &self.notes {
@@ -948,7 +1023,11 @@ impl Diagnostic {
             ));
         }
         if !self.call_frames.is_empty() {
-            let frames = visible_call_frames(&self.call_frames)
+            let mut frames = visible_call_frames(&self.call_frames);
+            if let Some(span) = self.span {
+                name_inlined_generator(&mut frames, span, source);
+            }
+            let frames = frames
                 .iter()
                 .map(|frame| format!("{} at {}", frame.function, frame.span.start))
                 .collect::<Vec<_>>()
@@ -1099,6 +1178,7 @@ fn display_source_path(path: &str) -> String {
 }
 
 fn render_annotated(path: &str, source: &str, span: Span, code: &str, message: &str) -> String {
+    let span = span.written();
     let location = format!("{}:{}:{}", path, span.line, span.column);
     let Some(line_text) = source.lines().nth(span.line.saturating_sub(1)) else {
         return format!("error[{}]: {}\n --> {}", code, message, location);

@@ -424,7 +424,7 @@ fn first_yield(body: &[Stmt]) -> Option<Span> {
     None
 }
 
-fn body_yields(body: &[Stmt]) -> bool {
+pub(super) fn body_yields(body: &[Stmt]) -> bool {
     first_yield(body).is_some()
 }
 
