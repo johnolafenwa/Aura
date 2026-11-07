@@ -350,7 +350,7 @@
         },
         {
           "name": "meta.definition.type-alias.aura",
-          "match": "^\\s*(?:(public)\\s+)?(type)\\s+([A-Za-z_][A-Za-z0-9_]*)(?=\\s*(?:\\[|=))",
+          "match": "^\\s*(?:(public)\\s+)?(type)\\s+([A-Za-z_][A-Za-z0-9_]*)(?=\\s*(?:\\[|=|:|$))",
           "captures": {
             "1": {
               "name": "storage.modifier.aura"
@@ -486,6 +486,10 @@
         {
           "name": "keyword.control.contract.aura",
           "match": "^\\s*(requires|ensures|invariant|decreases)(?=\\s+[^\\s=:,.)\\]])"
+        },
+        {
+          "name": "keyword.control.aura",
+          "match": "^\\s*yield(?=\\s+[^\\s=:,.)\\]])"
         },
         {
           "name": "storage.modifier.spec.aura",

@@ -267,6 +267,72 @@ fn call(n: i64, run: bool) -> i64 {
     total
 }
 
+struct Upto {
+    i: i64,
+    n: i64,
+}
+
+impl Iterator for Upto {
+    type Item = i64;
+
+    fn next(&mut self) -> Option<i64> {
+        if self.i == self.n {
+            return None;
+        }
+        self.i += 1;
+        Some(self.i - 1)
+    }
+}
+
+fn iterator_next(n: i64, run: bool) -> i64 {
+    let mut total = 0i64;
+    if run {
+        for i in (Upto { i: 0, n: black_box(n) }) {
+            total += i;
+        }
+    }
+    total
+}
+
+// Rust has no stable generators; a closure iterator is the usual stand-in.
+fn upto(n: i64) -> impl Iterator<Item = i64> {
+    let mut i = 0;
+    std::iter::from_fn(move || {
+        if i < n {
+            i += 1;
+            Some(i - 1)
+        } else {
+            None
+        }
+    })
+}
+
+fn generator_next(n: i64, run: bool) -> i64 {
+    let mut total = 0i64;
+    if run {
+        for i in upto(black_box(n)) {
+            total += i;
+        }
+    }
+    total
+}
+
+fn generator_start(n: i64, run: bool) -> i64 {
+    let mut total = 0i64;
+    if run {
+        for i in 0..n {
+            for x in upto(black_box(1)) {
+                total += x + i;
+            }
+        }
+    } else {
+        for i in 0..n {
+            total += black_box(i);
+        }
+    }
+    total
+}
+
 fn probe(operation: &str, n: i64, run: bool) -> i64 {
     match operation {
         "while_step" => while_step(n, run),
@@ -284,6 +350,9 @@ fn probe(operation: &str, n: i64, run: bool) -> i64 {
         "field_write" => field_write(n, run),
         "enum_match" => enum_match(n, run),
         "call" => call(n, run),
+        "iterator_next" => iterator_next(n, run),
+        "generator_next" => generator_next(n, run),
+        "generator_start" => generator_start(n, run),
         _ => -1,
     }
 }

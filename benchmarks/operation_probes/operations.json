@@ -73,5 +73,20 @@
     "count": 100000,
     "plan_step": "4a",
     "measures": "calling a two-argument `int64` function that LLVM inlines, against the same arithmetic written in the loop"
+  },
+  "iterator_next": {
+    "count": 100000,
+    "plan_step": "9f",
+    "measures": "one step of a `for` loop over a user `Iterator[int64]` class, adding the item to a total"
+  },
+  "generator_next": {
+    "count": 100000,
+    "plan_step": "9f",
+    "measures": "one `yield` and resume of a generator in a `for` loop, adding the item to a total"
+  },
+  "generator_start": {
+    "count": 10000,
+    "plan_step": "9f",
+    "measures": "creating a one-item generator, running it to its end, and dropping it"
   }
 }
