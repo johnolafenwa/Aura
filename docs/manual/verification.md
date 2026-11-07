@@ -170,5 +170,18 @@ models, are planned. See the
 ## Trust
 
 A check counts as proved only when the solver answers that no input breaks
-it. Every check stays in the program at run time: `aura verify` adds proof,
-and does not yet remove checks.
+it. `aura verify` itself removes nothing: every check stays in the program.
+
+`aura build --remove-proved-checks` builds a native binary without the list
+bounds checks of element reads and element borrows (`view x = xs[i]`) that
+the verifier proves can never fail, and prints how many it removed. It runs
+the verifier first, so it needs a solver, and it uses the proof cache. A read
+is left unchecked only when its index is proved to be in range and not
+negative on every path that reaches it, since an unchecked read does not
+count from the end of the list. Every other check stays, and a `--debug`
+build keeps every check.
+
+Removing a check moves the verifier and the solver into what the program
+trusts: a wrong proof would turn a trap into an out-of-bounds read. So the
+flag is off by default for now. It becomes the default for release builds
+once differential testing of such builds against the interpreter covers it.

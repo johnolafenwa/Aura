@@ -10451,6 +10451,40 @@ pub fn lower_for_verification(program: &Program) -> MirModule {
     module
 }
 
+/// Lowers `program` as `lower` does, or as `lower_with_source_locations`
+/// does for a `debug` build, and leaves unchecked each element read and
+/// loan that `prove` shows in range. `prove` reads the module
+/// `lower_for_verification` gives and names the proved accesses as
+/// `verify::Report::proved_sites` does. Returns the module and how many
+/// accesses lost their check.
+pub fn lower_with_proved_checks<E>(
+    program: &Program,
+    debug: bool,
+    prove: impl FnOnce(
+        &MirModule,
+    )
+        -> std::result::Result<std::collections::BTreeSet<(String, usize, usize)>, E>,
+) -> std::result::Result<(MirModule, usize), E> {
+    let verified = lower_for_verification(program);
+    let proved = prove(&verified)?;
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SOURCE_LOCATIONS.with(|enabled| enabled.set(self.0));
+        }
+    }
+    let _restore = Restore(SOURCE_LOCATIONS.with(|enabled| enabled.replace(debug)));
+    let mut module = lower_unresolved(program);
+    specialize::specialize_generic_functions(&mut module);
+    resolve_runtime_ops_and_unions(program, &mut module);
+    checks::resolve_checks(&mut module);
+    type_args::record_call_type_args(&mut module);
+    methods::resolve_methods(&mut module);
+    let covered = checks::insert_proved_index_facts(&mut module, &verified, &proved);
+    ownership::insert_ownership(&mut module);
+    Ok((module, covered))
+}
+
 fn make_explicit(program: &Program, mut module: MirModule) -> MirModule {
     resolve_runtime_ops_and_unions(program, &mut module);
     checks::resolve_checks(&mut module);

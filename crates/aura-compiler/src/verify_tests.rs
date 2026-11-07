@@ -594,6 +594,7 @@ fn every_kind_and_status_has_a_report() {
         solver: "z3".to_string(),
         functions: 1,
         cached: 0,
+        proved_sites: BTreeSet::new(),
         obligations: statuses
             .into_iter()
             .zip(kinds)
@@ -1070,4 +1071,79 @@ fn undecided_answers_are_not_cached() {
         assert_eq!(open_checks(&report), ["2 overflow unknown"]);
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// How many element reads and loans of each function skip their check.
+fn unchecked_accesses(module: &crate::mir::MirModule) -> BTreeMap<String, usize> {
+    module
+        .functions
+        .iter()
+        .map(|function| {
+            let text = format!("{:?}", function.blocks);
+            let count = text.matches("Unchecked").count() + text.matches("checked: false").count();
+            (crate::mir::public_function_name(&function.name), count)
+        })
+        .collect()
+}
+
+#[test]
+fn builds_drop_only_the_bounds_checks_proved_in_range() {
+    if smt::SolverCommand::find(None).is_err() {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "CI must install an SMT solver"
+        );
+        return;
+    }
+    let source = r#"
+class Cell:
+    value: int64
+
+def middle(xs: list[int64]) -> int64:
+    requires len(xs) > 2
+    i = len(xs) // 2
+    return xs[i]
+
+def last(xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    i = -1
+    return xs[i]
+
+def pick(xs: list[int64], i: int64) -> int64:
+    return xs[i]
+
+def bump(cells: mut list[Cell], i: int64):
+    requires 0 <= i and i < len(cells)
+    view mut cell = cells[i]
+    cell.value += 1
+
+def main():
+    xs = [1, 2, 3]
+    print(middle(xs))
+    print(last(xs))
+    print(pick(xs, 0))
+    mut cells = [Cell(value=1)]
+    bump(cells, 0)
+    print(cells[0].value)
+"#;
+    let program = crate::check_source(source).expect("checks");
+    let plain = unchecked_accesses(&crate::mir::lower(&program));
+    for debug in [false, true] {
+        let (module, removed) = crate::mir::lower_with_proved_checks(&program, debug, |module| {
+            let options = Options {
+                prove_sites: true,
+                ..Options::default()
+            };
+            verify_module(&program, module, &options).map(|report| report.proved_sites)
+        })
+        .expect("verifies");
+        let proved = unchecked_accesses(&module);
+        // `middle` reads in range, and `bump` borrows in range; `last`
+        // counts from the end, and `pick` may read anywhere.
+        assert_eq!(proved["middle"], plain["middle"] + 1, "{proved:?}");
+        assert_eq!(proved["last"], plain["last"], "{proved:?}");
+        assert_eq!(proved["pick"], plain["pick"], "{proved:?}");
+        assert!(proved["bump"] > plain["bump"], "{proved:?}");
+        assert!(removed >= 2, "{removed}");
+    }
 }

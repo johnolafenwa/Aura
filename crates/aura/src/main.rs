@@ -201,18 +201,45 @@ fn main() {
         "build" => {
             let remaining = args.collect::<Vec<_>>();
             let (diagnostic_format, remaining) = parse_diagnostic_format(remaining);
+            let remove_proved_checks = remaining.iter().any(|arg| arg == "--remove-proved-checks");
+            let remaining: Vec<String> = remaining
+                .into_iter()
+                .filter(|arg| arg != "--remove-proved-checks")
+                .collect();
             let (output_path, debug, input_args) = parse_build_args(remaining);
             let input = read_input(&mut input_args.into_iter());
-            let result = match (input.from_stdin, debug) {
-                (true, false) => {
-                    lower_path_with_source_to_mir(Path::new(&input.path), &input.source)
-                }
-                (true, true) => lower_path_with_source_to_mir_with_source_locations(
+            // A debug build keeps every check.
+            let result = if remove_proved_checks && !debug {
+                let options = aura_compiler::verify::Options {
+                    cache_dir: verify_cache_root(),
+                    ..aura_compiler::verify::Options::default()
+                };
+                aura_compiler::lower_path_to_mir_with_proved_checks(
                     Path::new(&input.path),
-                    &input.source,
-                ),
-                (false, false) => lower_path_to_mir(Path::new(&input.path)),
-                (false, true) => lower_path_to_mir_with_source_locations(Path::new(&input.path)),
+                    input.from_stdin.then_some(input.source.as_str()),
+                    false,
+                    &options,
+                )
+                .map(|(mir, removed)| {
+                    if diagnostic_format == DiagnosticFormat::Human {
+                        eprintln!("aura: {removed} bounds checks proved and removed");
+                    }
+                    mir
+                })
+            } else {
+                match (input.from_stdin, debug) {
+                    (true, false) => {
+                        lower_path_with_source_to_mir(Path::new(&input.path), &input.source)
+                    }
+                    (true, true) => lower_path_with_source_to_mir_with_source_locations(
+                        Path::new(&input.path),
+                        &input.source,
+                    ),
+                    (false, false) => lower_path_to_mir(Path::new(&input.path)),
+                    (false, true) => {
+                        lower_path_to_mir_with_source_locations(Path::new(&input.path))
+                    }
+                }
             };
             match result {
                 Ok(mir) => {
@@ -4964,8 +4991,8 @@ fn usage_text() -> &'static str {
        or: aura <ast|ast-json|mir|analyze> <file.au>\n\
        or: aura <check|run|ast|ast-json|mir|analyze> --stdin <virtual-path>\n\
        or: aura run [--backend mir|direct|auto] <file.au> [-- <program-args>...]\n\
-       or: aura build -o <output> [--backend auto|direct] [--debug] [--format human|json] <file.au>\n\
-       or: aura build -o <output> [--backend auto|direct] [--debug] [--format human|json] --stdin <virtual-path>\n\
+       or: aura build -o <output> [--backend auto|direct] [--debug] [--remove-proved-checks] [--format human|json] <file.au>\n\
+       or: aura build -o <output> [--backend auto|direct] [--debug] [--remove-proved-checks] [--format human|json] --stdin <virtual-path>\n\
        or: aura complete --line <n> --character <n> [--trigger .] <file.au>\n\
        or: aura complete --line <n> --character <n> [--trigger .] --stdin <virtual-path>\n\
        or: aura <signature-help|references|prepare-rename|rename> --line <n> --character <n> [--new-name <name>] [--include-declaration] [--stdin] <path>\n\

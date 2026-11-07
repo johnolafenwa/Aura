@@ -16,7 +16,12 @@ in this file.
   `AU5103` when no solver runs, and `AU5104` for a step outside the
   modeled subset (floats, strings, and other collections for now).
   `--format json` prints one entry per check. See the new Verification
-  manual page.
+  manual page. Results are kept in a proof cache, so an unchanged function
+  is answered without the solver; `--no-cache` turns it off.
+- `aura build --remove-proved-checks` leaves out the list bounds checks of
+  element reads and borrows that `aura verify` proves can never fail. It is
+  off by default; debug builds keep every check.
+- The book gains a section on contracts and `aura verify` (11.4).
 - Generator functions: a module-level function declared `-> Generator[T]`
   (from `iter`) may `yield` values. Calling it runs nothing; each `next`
   runs the body to its next `yield` on a stack of its own, on both the

@@ -162,6 +162,10 @@ pub(super) struct Obligation {
     /// How many facts were known when the check was reached. A fact
     /// assumed later, such as a callee's `ensures`, holds only after it.
     pub(super) facts: usize,
+    /// For the stricter check an index proof for a build needs, the
+    /// element access it covers: its block and position. Such checks are
+    /// not reported.
+    pub(super) site: Option<(usize, usize)>,
 }
 
 /// The loops of a function's control-flow graph.
@@ -213,6 +217,11 @@ pub(super) struct Exec<'a> {
     /// Locals a closure of this function captures by reference. Any call
     /// may run the closure and change them.
     captured: BTreeSet<String>,
+    /// Whether to add the stricter check of each element access a build
+    /// can leave unchecked.
+    pub(super) prove_sites: bool,
+    /// The block and position of the instruction being executed.
+    position: (usize, usize),
 }
 
 const MAX_DEPTH: usize = 3;
@@ -246,6 +255,8 @@ impl<'a> Exec<'a> {
             labels,
             unsupported: None,
             captured: closure_captures(function),
+            prove_sites: false,
+            position: (0, 0),
         }
     }
 
@@ -303,6 +314,7 @@ impl<'a> Exec<'a> {
             pc: pc.to_string(),
             goal,
             facts: self.facts.len(),
+            site: None,
         });
     }
 
@@ -1045,7 +1057,8 @@ impl<'a> Exec<'a> {
 
     fn block(&mut self, index: usize, mut state: State) -> Vec<(usize, State)> {
         let block: &'a BasicBlock = &self.function.blocks[index];
-        for instruction in &block.instructions {
+        for (position, instruction) in block.instructions.iter().enumerate() {
+            self.position = (index, position);
             self.instruction(&mut state, instruction);
         }
         let target = |exec: &Self, label: &str| exec.labels[label];
@@ -1204,6 +1217,7 @@ impl<'a> Exec<'a> {
                     (Val::List { len, .. }, Val::Int(index, _)) => {
                         if *checked {
                             self.oblige_index(state, *span, len, index);
+                            self.oblige_site(state, *span, len, index);
                         }
                         let index = self.normalize_index(len, index);
                         Loan::Element {
@@ -1429,6 +1443,24 @@ impl<'a> Exec<'a> {
             &state.pc,
             Goal::Holds(goal),
         );
+    }
+
+    /// For a build, the check that the element access at the current
+    /// position may skip its bounds check: the index is in range and not
+    /// negative, since an unchecked access does not count from the end.
+    fn oblige_site(&mut self, state: &State, span: Span, len: &str, index: &str) {
+        if !self.prove_sites {
+            return;
+        }
+        self.obligations.push(Obligation {
+            kind: ObligationKind::IndexInRange,
+            span,
+            message: "list index is not negative and in range".to_string(),
+            pc: state.pc.clone(),
+            goal: Goal::Holds(format!("(and (<= 0 {index}) (< {index} {len}))")),
+            facts: self.facts.len(),
+            site: Some(self.position),
+        });
     }
 
     // ----- Rvalues ---------------------------------------------------------
@@ -2113,6 +2145,7 @@ impl<'a> Exec<'a> {
                         if matches!(list_op, ListOp::Index | ListOp::IndexScalar(_)) {
                             let span = span_of(self, 1);
                             self.oblige_index(state, span, &len, &index);
+                            self.oblige_site(state, span, &len, &index);
                         }
                         let index = self.normalize_index(&len, &index);
                         let list = Val::List { len, data, elem };

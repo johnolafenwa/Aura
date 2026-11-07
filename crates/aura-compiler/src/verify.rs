@@ -19,7 +19,7 @@ pub mod smt;
 #[path = "verify_spec.rs"]
 mod spec;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::{ContractClause, ContractKind, FunctionDecl};
 use crate::diag::{Diagnostic, Span};
@@ -109,6 +109,9 @@ pub struct Report {
     pub functions: usize,
     /// How many functions the proof cache answered.
     pub cached: usize,
+    /// With [`Options::prove_sites`], the element accesses proved to need
+    /// no bounds check, by MIR function name, block, and position.
+    pub proved_sites: BTreeSet<(String, usize, usize)>,
     pub obligations: Vec<ObligationReport>,
 }
 
@@ -186,6 +189,9 @@ pub struct Options {
     pub trace: bool,
     /// The proof cache directory; `None` solves every query.
     pub cache_dir: Option<std::path::PathBuf>,
+    /// Also prove which element accesses can skip their bounds check, for
+    /// a build that removes proved checks.
+    pub prove_sites: bool,
 }
 
 impl Default for Options {
@@ -196,6 +202,7 @@ impl Default for Options {
             function_filter: None,
             trace: std::env::var_os("AURA_VERIFY_TRACE").is_some(),
             cache_dir: None,
+            prove_sites: false,
         }
     }
 }
@@ -415,6 +422,7 @@ pub fn verify_module(
     };
     let mut merged: BTreeMap<((usize, usize), ObligationKind, String), ObligationReport> =
         BTreeMap::new();
+    let mut proved_sites = BTreeSet::new();
     // The solver starts at the first function the cache cannot answer.
     let mut solver: Option<smt::Solver> = None;
     let trace = options.trace;
@@ -430,6 +438,7 @@ pub fn verify_module(
         report.functions += 1;
         let public = crate::mir::public_function_name(&function.name);
         let mut exec = exec::Exec::new(&cx, function);
+        exec.prove_sites = options.prove_sites;
         let entry = exec.entry_state();
         exec.assume_entry_requires(&entry);
         exec.assume_entry_invariant(&entry);
@@ -477,7 +486,13 @@ pub fn verify_module(
                 statuses
             }
         };
+        // A site is proved only when every path that reaches it is.
+        let mut sites: BTreeMap<(usize, usize), bool> = BTreeMap::new();
         for (obligation, status) in exec.obligations.iter().zip(statuses) {
+            if let Some(site) = obligation.site {
+                *sites.entry(site).or_insert(true) &= status == Status::Proved;
+                continue;
+            }
             let key = (
                 (obligation.span.line, obligation.span.column),
                 obligation.kind,
@@ -503,8 +518,15 @@ pub fn verify_module(
                 }
             }
         }
+        proved_sites.extend(
+            sites
+                .into_iter()
+                .filter(|(_, proved)| *proved)
+                .map(|((block, position), _)| (function.name.clone(), block, position)),
+        );
     }
     report.obligations = merged.into_values().collect();
+    report.proved_sites = proved_sites;
     Ok(report)
 }
 
