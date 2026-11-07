@@ -270,6 +270,79 @@ def generator_start(n: int64, run: bool) -> int64:
     return total
 
 
+def sum_items(source: own Generator[int64]) -> int64:
+    mut total = 0
+    for x in source:
+        total += x
+    return total
+
+
+def generator_value(n: int64, run: bool) -> int64:
+    if run:
+        return sum_items(upto(n))
+    return 0
+
+
+def doubled(source: own Generator[int64]) -> Generator[int64]:
+    for x in source:
+        yield x * 2
+
+
+def generator_pipeline(n: int64, run: bool) -> int64:
+    if run:
+        return sum_items(doubled(upto(n)))
+    return 0
+
+
+def each_int(xs: own list[int64]) -> Generator[int64]:
+    for x in xs:
+        yield x
+
+
+def generator_list(n: int64, run: bool) -> int64:
+    mut xs: list[int64] = []
+    for i in range(n):
+        xs.append(i)
+    mut total = 0
+    if run:
+        for x in each_int(xs):
+            total += x
+    else:
+        total = xs.len()
+    return total
+
+
+def walk(n: int64) -> Generator[int64]:
+    mut at = Counter(name="walker", count=0)
+    while at.count < n:
+        yield at.count
+        at.count += 1
+
+
+def generator_class(n: int64, run: bool) -> int64:
+    mut total = 0
+    if run:
+        for x in walk(n):
+            total += x
+    return total
+
+
+def str_append(n: int64, run: bool) -> int64:
+    mut text = ""
+    if run:
+        for i in range(n):
+            text += "ab"
+    return text.len()
+
+
+def str_format(n: int64, run: bool) -> int64:
+    mut text = ""
+    if run:
+        for i in range(n):
+            text += f"{i},"
+    return text.len()
+
+
 def probe(operation: str, n: int64, run: bool) -> int64:
     if operation == "while_step":
         return while_step(n, run)
@@ -307,6 +380,18 @@ def probe(operation: str, n: int64, run: bool) -> int64:
         return generator_next(n, run)
     elif operation == "generator_start":
         return generator_start(n, run)
+    elif operation == "generator_value":
+        return generator_value(n, run)
+    elif operation == "generator_pipeline":
+        return generator_pipeline(n, run)
+    elif operation == "generator_list":
+        return generator_list(n, run)
+    elif operation == "generator_class":
+        return generator_class(n, run)
+    elif operation == "str_append":
+        return str_append(n, run)
+    elif operation == "str_format":
+        return str_format(n, run)
     return -1
 
 

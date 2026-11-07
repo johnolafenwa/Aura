@@ -333,6 +333,93 @@ fn generator_start(n: i64, run: bool) -> i64 {
     total
 }
 
+fn sum_items(source: impl Iterator<Item = i64>) -> i64 {
+    let mut total = 0i64;
+    for x in source {
+        total += x;
+    }
+    total
+}
+
+fn generator_value(n: i64, run: bool) -> i64 {
+    if run {
+        return sum_items(upto(black_box(n)));
+    }
+    0
+}
+
+fn doubled(source: impl Iterator<Item = i64>) -> impl Iterator<Item = i64> {
+    source.map(|x| x * 2)
+}
+
+fn generator_pipeline(n: i64, run: bool) -> i64 {
+    if run {
+        return sum_items(doubled(upto(black_box(n))));
+    }
+    0
+}
+
+fn generator_list(n: i64, run: bool) -> i64 {
+    let mut xs: Vec<i64> = Vec::new();
+    for i in 0..n {
+        xs.push(i);
+    }
+    let xs = black_box(xs);
+    if run {
+        let mut total = 0i64;
+        for x in xs.into_iter() {
+            total += x;
+        }
+        total
+    } else {
+        xs.len() as i64
+    }
+}
+
+fn walk(n: i64) -> impl Iterator<Item = i64> {
+    let mut at = Counter { name: "walker".to_string(), count: 0 };
+    std::iter::from_fn(move || {
+        if at.count < n {
+            at.count += 1;
+            Some(at.count - 1)
+        } else {
+            let _ = &at.name;
+            None
+        }
+    })
+}
+
+fn generator_class(n: i64, run: bool) -> i64 {
+    let mut total = 0i64;
+    if run {
+        for x in walk(black_box(n)) {
+            total += x;
+        }
+    }
+    total
+}
+
+fn str_append(n: i64, run: bool) -> i64 {
+    let mut text = String::new();
+    if run {
+        for _ in 0..black_box(n) {
+            text.push_str(black_box("ab"));
+        }
+    }
+    text.len() as i64
+}
+
+fn str_format(n: i64, run: bool) -> i64 {
+    use std::fmt::Write;
+    let mut text = String::new();
+    if run {
+        for i in 0..black_box(n) {
+            write!(text, "{i},").unwrap();
+        }
+    }
+    text.len() as i64
+}
+
 fn probe(operation: &str, n: i64, run: bool) -> i64 {
     match operation {
         "while_step" => while_step(n, run),
@@ -353,6 +440,12 @@ fn probe(operation: &str, n: i64, run: bool) -> i64 {
         "iterator_next" => iterator_next(n, run),
         "generator_next" => generator_next(n, run),
         "generator_start" => generator_start(n, run),
+        "generator_value" => generator_value(n, run),
+        "generator_pipeline" => generator_pipeline(n, run),
+        "generator_list" => generator_list(n, run),
+        "generator_class" => generator_class(n, run),
+        "str_append" => str_append(n, run),
+        "str_format" => str_format(n, run),
         _ => -1,
     }
 }

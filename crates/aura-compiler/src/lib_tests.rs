@@ -4271,10 +4271,27 @@ fn fast_iteration_forms_run_on_the_interpreter() {
             include_str!("../tests/fixtures/run-pass/fast_iteration_text.au"),
             include_str!("../tests/fixtures/run-pass/fast_iteration_text.stdout"),
         ),
+        (
+            include_str!("../tests/fixtures/run-pass/fast_iteration_values.au"),
+            include_str!("../tests/fixtures/run-pass/fast_iteration_values.stdout"),
+        ),
     ] {
         let output = run_source(source).expect("fast iteration runs");
         assert_eq!(output.stdout, expected);
     }
+}
+
+#[test]
+fn generator_values_lists_classes_and_pipelines_check_in_fast_form() {
+    crate::sema::FAST_FALLBACKS.with(|fallbacks| fallbacks.borrow_mut().clear());
+    let source = include_str!("../tests/fixtures/run-pass/fast_iteration_values.au");
+    let output = run_source(source).expect("fast iteration runs");
+    assert_eq!(
+        output.stdout,
+        include_str!("../tests/fixtures/run-pass/fast_iteration_values.stdout")
+    );
+    let fallbacks = crate::sema::FAST_FALLBACKS.with(|fallbacks| fallbacks.take());
+    assert!(fallbacks.is_empty(), "fast forms fell back: {fallbacks:?}");
 }
 
 #[test]

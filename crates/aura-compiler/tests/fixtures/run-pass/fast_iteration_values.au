@@ -1,0 +1,117 @@
+# Generators passed to functions that loop over them, generators that loop
+# over other generators, and generators with list and class locals all run
+# without a stack of their own; each prints what the coroutine form prints.
+from iter import Generator
+
+
+class Counter:
+    name: str
+    count: int64
+
+
+def upto(n: int64) -> Generator[int64]:
+    mut i = 0
+    while i < n:
+        yield i
+        i += 1
+
+
+def twice(n: int64) -> Generator[int64]:
+    for i in range(n):
+        yield i
+        yield i * 10
+
+
+def words(xs: own list[str]) -> Generator[str]:
+    for w in xs:
+        if w.len() > 2:
+            yield w.clone()
+        yield "-"
+
+
+def evens(xs: own list[int64]) -> Generator[int64]:
+    for x in xs:
+        if x % 2 == 0:
+            yield x
+
+
+def walk(n: int64) -> Generator[int64]:
+    mut at = Counter(name="w", count=0)
+    while at.count < n:
+        yield at.count
+        at.count += 2
+        yield at.count + 1000
+
+
+def doubled(source: own Generator[int64]) -> Generator[int64]:
+    for x in source:
+        yield x * 2
+
+
+def pairs(source: own Generator[int64]) -> Generator[int64]:
+    for x in source:
+        yield x
+        yield -x
+
+
+def sum_items(source: own Generator[int64]) -> int64:
+    mut total = 0
+    for x in source:
+        total += x
+    return total
+
+
+def first_over(source: own Generator[int64], limit: int64) -> int64:
+    for x in source:
+        if x > limit:
+            return x
+    return -1
+
+
+def count_twice(source: own Generator[int64]) -> int64:
+    mut seen = 0
+    for x in source:
+        seen += 1
+        if seen > 3:
+            break
+    return seen
+
+
+def join(source: own Generator[str]) -> str:
+    mut out = ""
+    for w in source:
+        out += w
+    return out
+
+
+def maybe(flag: bool, source: own Generator[int64]) -> int64:
+    if flag:
+        for x in source:
+            return x
+    return 7
+
+
+def main():
+    print(sum_items(upto(5)))
+    print(sum_items(twice(4)))
+    print(sum_items(doubled(upto(5))))
+    print(sum_items(pairs(doubled(twice(3)))))
+    print(sum_items(evens([1, 2, 3, 4, 5, 6])))
+    print(sum_items(walk(5)))
+    print(first_over(upto(100), 41))
+    print(first_over(doubled(upto(10)), 100))
+    print(count_twice(upto(10)))
+    print(count_twice(upto(2)))
+    print(join(words(["a", "bcd", "efgh", "ij"])))
+    print(maybe(true, upto(3)))
+    print(maybe(false, upto(3)))
+    g = upto(4)
+    print(sum_items(g))
+    mut total = 0
+    for x in walk(4):
+        total += x
+    print(total)
+    for w in words(["xyz", "q"]):
+        print(w)
+    for x in pairs(upto(2)):
+        print(x)

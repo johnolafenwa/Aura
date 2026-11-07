@@ -63,6 +63,8 @@ pub(crate) use decorators::{DECORATED_PREFIX, UNDECORATED_PREFIX};
 mod json_derive;
 pub(crate) use json_derive::GENERATED_LINE_OFFSET;
 mod program;
+#[cfg(test)]
+pub(crate) use program::FAST_FALLBACKS;
 pub(crate) use program::INITIALIZER_NAME;
 pub use program::{
     AliasInfo, ClassInfo, ConstantInfo, EnumInfo, EnumPayloadFieldInfo, EnumVariantInfo,
@@ -73,6 +75,9 @@ pub use program::{
 mod aliases;
 mod assoc_bounds;
 mod iterator_fast;
+mod iterator_fast_args;
+#[cfg(test)]
+mod iterator_fast_tests;
 pub(crate) use aliases::{expand_alias_callee, specialized_alias_callee};
 mod managers;
 pub(crate) use managers::{
