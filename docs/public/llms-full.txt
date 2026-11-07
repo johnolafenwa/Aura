@@ -2872,6 +2872,7 @@ aura check app.au
 | `aura run file.au -- args...` | Execute with program arguments available through `sys.args()`. |
 | `aura build -o path file.au` | Build a native binary. |
 | `aura build --debug -o path file.au` | Build an unoptimized native binary with debug information, for a debugger. |
+| `aura build --remove-proved-checks -o path file.au` | Build a native binary without the list bounds checks `aura verify` proves can never fail. See [Verification](/manual/verification#trust). |
 | `aura ast file.au` | Print the syntax tree. |
 | `aura ast-json file.au` | Print syntax tree JSON. |
 | `aura mir file.au` | Print lowered MIR. |
@@ -23116,21 +23117,58 @@ booleans, with each integer type's range as a check:
 - `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
   element reads and writes, and `copy`
 - `spec def` helpers, `old`, and `result` in contracts
+- quantifiers: `forall(x in xs, condition)`, `exists(...)`, and
+  `all([... for ...])` or `any(...)` with one `for` clause over a `range` or
+  a list of integers or `bool`, with `if` filters, in any contract, `assert`,
+  or loop `invariant`
 
 Anything else is a value the verifier knows nothing about: a `str`, a
 `dict`, a `set`, a float, the result of most library calls, and what a call
 through a function value returns. A check that depends on one of them can
 still be proved when the contract around it says enough.
 
-Quantifiers (`forall`, `exists`) in contracts, and `str`, `dict`, and `set`
-models, are planned. See the
+A loop that builds a list proves what it builds with a quantified
+invariant:
+
+```aura
+def squares(n: int64) -> list[int64]:
+    requires 0 <= n and n <= 1000
+    ensures len(result) == n
+    ensures forall(i in range(n), result[i] == i * i)
+    mut out: list[int64] = []
+    mut i = 0
+    while i < n:
+        invariant 0 <= i and i <= n
+        invariant len(out) == i
+        invariant forall(j in range(i), out[j] == j * j)
+        out.append(i * i)
+        i += 1
+    return out
+```
+
+A quantifier over several `for` clauses, over a tuple target, or over a list
+of other elements is reported as `AU5104`. `str`, `dict`, and `set` models
+are planned. See the
 [verification design](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/23-verification-design-checkpoint.md).
 
 ## Trust
 
 A check counts as proved only when the solver answers that no input breaks
-it. Every check stays in the program at run time: `aura verify` adds proof,
-and does not yet remove checks.
+it. `aura verify` itself removes nothing: every check stays in the program.
+
+`aura build --remove-proved-checks` builds a native binary without the list
+bounds checks of element reads and element borrows (`view x = xs[i]`) that
+the verifier proves can never fail, and prints how many it removed. It runs
+the verifier first, so it needs a solver, and it uses the proof cache. A read
+is left unchecked only when its index is proved to be in range and not
+negative on every path that reaches it, since an unchecked read does not
+count from the end of the list. Every other check stays, and a `--debug`
+build keeps every check.
+
+Removing a check moves the verifier and the solver into what the program
+trusts: a wrong proof would turn a trap into an out-of-bounds read. So the
+flag is off by default for now. It becomes the default for release builds
+once differential testing of such builds against the interpreter covers it.
 
 ## Source: docs/book/index.md
 
@@ -38416,9 +38454,10 @@ a native binary without the list bounds checks the verifier proves can never
 fail, and keeps every other check.
 
 The verifier doesn't model everything yet. Floats, strings, dictionaries,
-sets, and quantifiers such as `all(...)` in a contract are outside what it
-reads today, and a check that depends on them is reported as `AU5104` and
-stays a run-time check. The [verification manual page](/manual/verification)
+and sets are outside what it reads today, and a check that depends on them
+is reported as `AU5104` and stays a run-time check. Quantifiers are modeled:
+a contract such as `requires forall(p in prices, 0 <= p)` is proved at every
+call and assumed inside the function. The [verification manual page](/manual/verification)
 lists exactly what is modeled.
 
 ## Summary

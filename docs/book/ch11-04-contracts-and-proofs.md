@@ -206,9 +206,10 @@ a native binary without the list bounds checks the verifier proves can never
 fail, and keeps every other check.
 
 The verifier doesn't model everything yet. Floats, strings, dictionaries,
-sets, and quantifiers such as `all(...)` in a contract are outside what it
-reads today, and a check that depends on them is reported as `AU5104` and
-stays a run-time check. The [verification manual page](/manual/verification)
+and sets are outside what it reads today, and a check that depends on them
+is reported as `AU5104` and stays a run-time check. Quantifiers are modeled:
+a contract such as `requires forall(p in prices, 0 <= p)` is proved at every
+call and assumed inside the function. The [verification manual page](/manual/verification)
 lists exactly what is modeled.
 
 ## Summary

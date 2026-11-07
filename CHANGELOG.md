@@ -17,7 +17,9 @@ in this file.
   modeled subset (floats, strings, and other collections for now).
   `--format json` prints one entry per check. See the new Verification
   manual page. Results are kept in a proof cache, so an unchanged function
-  is answered without the solver; `--no-cache` turns it off.
+  is answered without the solver; `--no-cache` turns it off. Quantified
+  contracts (`forall`, `exists`, and `all`/`any` over one `for` clause) are
+  proved and assumed, so a loop invariant can describe a whole list.
 - `aura build --remove-proved-checks` leaves out the list bounds checks of
   element reads and borrows that `aura verify` proves can never fail. It is
   off by default; debug builds keep every check.

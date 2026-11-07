@@ -157,14 +157,38 @@ booleans, with each integer type's range as a check:
 - `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
   element reads and writes, and `copy`
 - `spec def` helpers, `old`, and `result` in contracts
+- quantifiers: `forall(x in xs, condition)`, `exists(...)`, and
+  `all([... for ...])` or `any(...)` with one `for` clause over a `range` or
+  a list of integers or `bool`, with `if` filters, in any contract, `assert`,
+  or loop `invariant`
 
 Anything else is a value the verifier knows nothing about: a `str`, a
 `dict`, a `set`, a float, the result of most library calls, and what a call
 through a function value returns. A check that depends on one of them can
 still be proved when the contract around it says enough.
 
-Quantifiers (`forall`, `exists`) in contracts, and `str`, `dict`, and `set`
-models, are planned. See the
+A loop that builds a list proves what it builds with a quantified
+invariant:
+
+```aura
+def squares(n: int64) -> list[int64]:
+    requires 0 <= n and n <= 1000
+    ensures len(result) == n
+    ensures forall(i in range(n), result[i] == i * i)
+    mut out: list[int64] = []
+    mut i = 0
+    while i < n:
+        invariant 0 <= i and i <= n
+        invariant len(out) == i
+        invariant forall(j in range(i), out[j] == j * j)
+        out.append(i * i)
+        i += 1
+    return out
+```
+
+A quantifier over several `for` clauses, over a tuple target, or over a list
+of other elements is reported as `AU5104`. `str`, `dict`, and `set` models
+are planned. See the
 [verification design](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/23-verification-design-checkpoint.md).
 
 ## Trust
