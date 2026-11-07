@@ -30,12 +30,12 @@
 //! statements.
 
 use super::{
-    BTreeSet, Diagnostic, Expr, ExprKind, FunctionChecker, Item, Module, ModuleContext,
+    BTreeMap, BTreeSet, Diagnostic, Expr, ExprKind, FunctionChecker, Item, Module, ModuleContext,
     ReceiverKind, Result, Stmt, Type,
 };
 use crate::ast::{
-    AssertStmt, AssignStmt, AssignTarget, BindingTarget, BreakStmt, ForStmt, MatchArm, MatchStmt,
-    Pattern, RestPattern, TuplePattern, VariantPattern, WhileStmt,
+    AssertStmt, AssignStmt, AssignTarget, BindingTarget, BreakStmt, ForStmt, IfBranch, IfStmt,
+    MatchArm, MatchStmt, Pattern, RestPattern, TuplePattern, VariantPattern, WhileStmt,
 };
 use std::cell::RefCell;
 
@@ -62,6 +62,19 @@ struct LoopState {
     lockstep: BTreeSet<LoopSite>,
     /// Loop and comprehension sources that implement `IntoIterator`.
     into_iter: BTreeSet<LoopSite>,
+    /// Discovered loops that can advance with `__aura_advance` (see
+    /// `iterator_fast.rs`).
+    fast: BTreeMap<LoopSite, FastLoop>,
+}
+
+/// How a discovered loop advances without a boxed `Step`.
+#[derive(Clone)]
+enum FastLoop {
+    /// The source's class has an `__aura_advance` method.
+    Advance,
+    /// The source calls a simple generator, whose frame builder (named
+    /// here) makes the iterator instead.
+    Frame(String),
 }
 
 thread_local! {
@@ -97,6 +110,7 @@ pub(super) fn check_with_iterator_loops(
                 discovered: BTreeSet::new(),
                 lockstep: BTreeSet::new(),
                 into_iter: BTreeSet::new(),
+                fast: BTreeMap::new(),
             })
         });
         struct Pop;
@@ -109,7 +123,7 @@ pub(super) fn check_with_iterator_loops(
         }
         let pop = Pop;
         let result = check(module.clone(), context.clone());
-        let (discovered, lockstep, into_iter) = LOOP_STATE.with(|state| {
+        let (discovered, lockstep, into_iter, fast) = LOOP_STATE.with(|state| {
             state
                 .borrow_mut()
                 .last_mut()
@@ -118,6 +132,7 @@ pub(super) fn check_with_iterator_loops(
                         std::mem::take(&mut state.discovered),
                         std::mem::take(&mut state.lockstep),
                         std::mem::take(&mut state.into_iter),
+                        std::mem::take(&mut state.fast),
                     )
                 })
                 .unwrap_or_default()
@@ -129,7 +144,7 @@ pub(super) fn check_with_iterator_loops(
             continue;
         }
         if (discovered.is_empty() && lockstep.is_empty())
-            || rewrite_module(&mut module, &discovered, &lockstep) == 0
+            || rewrite_module(&mut module, &discovered, &lockstep, &fast) == 0
         {
             return result;
         }
@@ -237,6 +252,7 @@ impl FunctionChecker<'_> {
     pub(super) fn discover_iterator_loop(
         &self,
         for_stmt: &ForStmt,
+        iterable_ty: &Type,
         item_ty: Type,
         locals: &mut std::collections::HashMap<String, super::LocalBinding>,
     ) -> Result<Type> {
@@ -267,22 +283,63 @@ impl FunctionChecker<'_> {
             Some(ReceiverKind::BorrowMut) | None => {}
         }
         discover(self.module_name, for_stmt.span);
+        if let Some(fast) = self.fast_loop(for_stmt, iterable_ty, locals) {
+            LOOP_STATE.with(|state| {
+                if let Some(state) = state.borrow_mut().last_mut() {
+                    if state.module == self.module_name {
+                        state.fast.insert(site(for_stmt.span), fast);
+                    }
+                }
+            });
+        }
         Ok(item_ty)
+    }
+
+    /// How the loop can advance without a boxed `Step`, if it can.
+    fn fast_loop(
+        &self,
+        for_stmt: &ForStmt,
+        iterable_ty: &Type,
+        locals: &std::collections::HashMap<String, super::LocalBinding>,
+    ) -> Option<FastLoop> {
+        if !matches!(for_stmt.target, BindingTarget::Name { .. }) {
+            return None;
+        }
+        if for_stmt.borrow_mode.is_none() {
+            if let ExprKind::Call { callee, .. } = &for_stmt.iterable.kind {
+                if let ExprKind::Name(function) = &callee.kind {
+                    let builder = format!("{}{function}", super::iterator_fast::FRAME_NEW_PREFIX);
+                    if !locals.contains_key(function) && self.functions.contains_key(&builder) {
+                        return Some(FastLoop::Frame(builder));
+                    }
+                }
+            }
+        }
+        let Type::Named(class, args) = iterable_ty else {
+            return None;
+        };
+        self.classes
+            .get(class)
+            .filter(|info| {
+                args.is_empty() && info.methods.contains_key(super::iterator_fast::ADVANCE)
+            })
+            .map(|_| FastLoop::Advance)
     }
 }
 
 /// Rewrites each recorded `IntoIterator` source into `source.into_iter()`.
 fn rewrite_into_iter_sources(module: &mut Module, into_iter: &BTreeSet<LoopSite>) -> usize {
     let none = BTreeSet::new();
-    rewrite_module_sources(module, &none, &none, into_iter)
+    rewrite_module_sources(module, &none, &none, into_iter, &BTreeMap::new())
 }
 
 fn rewrite_module(
     module: &mut Module,
     sites: &BTreeSet<LoopSite>,
     lockstep: &BTreeSet<LoopSite>,
+    fast: &BTreeMap<LoopSite, FastLoop>,
 ) -> usize {
-    rewrite_module_sources(module, sites, lockstep, &BTreeSet::new())
+    rewrite_module_sources(module, sites, lockstep, &BTreeSet::new(), fast)
 }
 
 fn rewrite_module_sources(
@@ -290,11 +347,13 @@ fn rewrite_module_sources(
     sites: &BTreeSet<LoopSite>,
     lockstep: &BTreeSet<LoopSite>,
     into_iter: &BTreeSet<LoopSite>,
+    fast: &BTreeMap<LoopSite, FastLoop>,
 ) -> usize {
     let mut rewriter = Rewriter {
         sites,
         lockstep,
         into_iter,
+        fast,
         count: 0,
     };
     for item in &mut module.items {
@@ -332,6 +391,7 @@ struct Rewriter<'a> {
     sites: &'a BTreeSet<LoopSite>,
     lockstep: &'a BTreeSet<LoopSite>,
     into_iter: &'a BTreeSet<LoopSite>,
+    fast: &'a BTreeMap<LoopSite, FastLoop>,
     count: usize,
 }
 
@@ -358,6 +418,8 @@ impl Rewriter<'_> {
             };
             let replacement = if lockstep {
                 lower_lockstep_iterator_loop(for_stmt)
+            } else if let Some(fast) = self.fast.get(&site(for_stmt.span)) {
+                lower_fast_loop(for_stmt, fast)
             } else {
                 lower_iterator_loop(for_stmt)
             };
@@ -544,6 +606,114 @@ fn target_pattern(target: BindingTarget) -> Pattern {
             span,
         }),
     }
+}
+
+/// A loop over a fast iterator:
+///
+/// ```text
+/// mut <iterator> = source        # or the frame builder's call
+/// while true:
+///     <step> = <iterator>.__aura_advance()
+///     if <step> is not None:
+///         target = <step>
+///         invariants; body
+///     else:
+///         break
+/// ```
+/// Column offset of the generated reads of a fast loop's step.
+const FAST_STEP_COLUMN: usize = 1_000_000;
+
+fn lower_fast_loop(for_stmt: ForStmt, fast: &FastLoop) -> Vec<Stmt> {
+    let span = for_stmt.span;
+    let source_span = for_stmt.iterable.span;
+    let mut stmts = Vec::new();
+    let mut iterable = for_stmt.iterable;
+    if let FastLoop::Frame(builder) = fast {
+        if let ExprKind::Call { callee, .. } = &mut iterable.kind {
+            callee.kind = ExprKind::Name(builder.clone());
+        }
+    }
+    let BindingTarget::Name {
+        name: target,
+        span: target_span,
+    } = for_stmt.target
+    else {
+        unreachable!("fast loops bind a name");
+    };
+    let receiver = if for_stmt.borrow_mode == Some(ReceiverKind::BorrowMut) {
+        iterable
+    } else {
+        let name = hidden_iterator_name(span);
+        stmts.push(Stmt::Assign(AssignStmt {
+            mutable: true,
+            target: AssignTarget::Name(name.clone()),
+            annotation: None,
+            op: None,
+            value: iterable,
+            span,
+        }));
+        Expr {
+            kind: ExprKind::Name(name),
+            span: source_span,
+        }
+    };
+    let step = format!("step {}:{}", span.line, span.column);
+    // The checker keys expression facts by span, so each read of the step
+    // gets a span of its own: the test sees `T | None`, the binding `T`.
+    let step_read = |at: crate::diag::Span| Expr {
+        kind: ExprKind::Name(step.clone()),
+        span: crate::diag::Span::new(at.line, at.column + FAST_STEP_COLUMN),
+    };
+    let tested = step_read(source_span);
+    let bound = step_read(target_span);
+    let mut body = Vec::new();
+    if target != "_" {
+        body.push(Stmt::Assign(AssignStmt {
+            mutable: false,
+            target: AssignTarget::Name(target),
+            annotation: None,
+            op: None,
+            value: bound,
+            span: target_span,
+        }));
+    }
+    body.extend(for_stmt.contracts.into_iter().map(invariant_check));
+    body.extend(for_stmt.body);
+    stmts.push(Stmt::While(WhileStmt {
+        condition: Expr {
+            kind: ExprKind::Bool(true),
+            span,
+        },
+        contracts: Vec::new(),
+        body: vec![
+            Stmt::Assign(AssignStmt {
+                mutable: false,
+                target: AssignTarget::Name(step),
+                annotation: None,
+                op: None,
+                value: method_call(receiver, super::iterator_fast::ADVANCE, source_span),
+                span,
+            }),
+            Stmt::If(IfStmt {
+                branches: vec![IfBranch {
+                    condition: Expr {
+                        kind: ExprKind::IsNone {
+                            value: Box::new(tested),
+                            negated: true,
+                            operator_span: span,
+                        },
+                        span,
+                    },
+                    body,
+                    span,
+                }],
+                else_body: Some(vec![Stmt::Break(BreakStmt { span })]),
+                span,
+            }),
+        ],
+        span,
+    }));
+    stmts
 }
 
 fn lower_iterator_loop(for_stmt: ForStmt) -> Vec<Stmt> {

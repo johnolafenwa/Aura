@@ -81,4 +81,21 @@ coroutine switching rather than the work inside the loop body.
 | `generator_next` | 9f | 100,000 | 5.0 | 8,099.3 | 1,619.5x |
 | `generator_start` | 9f | 10,000 | 11.0 | 24,551.1 | 2,231.9x |
 
-They are a baseline for later speed work on iterator loops and generators.
+That was the baseline. With the fast iteration forms (measured on
+7 November 2026, after #227), a loop over such an iterator calls an
+unboxed `__aura_advance` method that LLVM inlines, and a loop over a
+generator with one `yield` that calls nothing runs the generator's body in
+place, so neither builds a `Step` or switches stacks:
+
+| operation | step | count | Rust instr/op | Aura instr/op | Aura/Rust |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `iterator_next` | 9f | 100,000 | 7.0 | 15.9 | 2.3x |
+| `generator_next` | 9f | 100,000 | 5.0 | 6.0 | 1.2x |
+| `generator_start` | 9f | 10,000 | 11.0 | 0.4 | 0.0x |
+
+`generator_start` now costs nothing: the one-item generator runs in place
+and LLVM folds it into the loop around it, while Rust still builds its
+`from_fn` closure. A generator that does not qualify for running in place
+(more than one `yield`, or a call in its body) runs as a state machine,
+about 22 instructions per item on the same loop; one held in a variable,
+or with non-number locals, still runs on its own stack.

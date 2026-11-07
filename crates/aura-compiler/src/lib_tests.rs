@@ -4253,6 +4253,16 @@ fn associated_type_bounds_run_on_the_interpreter() {
 }
 
 #[test]
+fn fast_iteration_forms_run_on_the_interpreter() {
+    let output = run_source(include_str!("../tests/fixtures/run-pass/fast_iteration.au"))
+        .expect("fast iteration runs");
+    assert_eq!(
+        output.stdout,
+        include_str!("../tests/fixtures/run-pass/fast_iteration.stdout")
+    );
+}
+
+#[test]
 fn generators_run_lazily_and_close_on_the_interpreter() {
     let source = concat!(
         "from iter import Generator, Step\n",

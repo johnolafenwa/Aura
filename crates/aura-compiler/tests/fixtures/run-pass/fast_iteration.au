@@ -1,0 +1,102 @@
+# Loops over user iterators and simple generators take faster paths
+# (an unboxed advance method, a state-machine frame, or running the
+# generator's body in place); each prints what the plain loop would.
+from iter import Generator, Iterator, Step
+
+
+class Countdown:
+    left: int64
+
+
+impl Iterator[int64] for Countdown:
+    def next(mut self) -> Step[int64]:
+        if self.left == 0:
+            return Step.End
+        self.left -= 1
+        return Step.Item(self.left)
+
+
+def upto(n: int64) -> Generator[int64]:
+    mut i = 0
+    while i < n:
+        yield i
+        i += 1
+
+
+def capped(n: int64, cap: int64) -> Generator[int64]:
+    for k in range(n):
+        if k >= cap:
+            return
+        yield k
+
+
+def pairs(n: int64) -> Generator[int64]:
+    mut a = 0
+    while a < n:
+        mut b = 0
+        while b < n:
+            yield a * 10 + b
+            b += 1
+        a += 1
+
+
+def twice(n: int64) -> Generator[int64]:
+    yield n
+    if n > 2:
+        return
+    yield n * 2
+
+
+def flags(n: int64) -> Generator[bool]:
+    for k in range(n):
+        yield k % 3 == 0
+
+
+def main():
+    mut total = 0
+    for value in Countdown(left=4):
+        total += value
+    print(total)
+    mut held = Countdown(left=3)
+    print(held.next())
+    for value in mut held:
+        print(value)
+    for e in upto(10):
+        if e == 3:
+            break
+        print(e)
+    for e in capped(10, 4):
+        print(e)
+    for e in capped(10, 6):
+        if e % 2 == 0:
+            continue
+        if e == 5:
+            break
+        print(e)
+    for p in pairs(3):
+        if p == 12:
+            break
+        if p % 2 == 1:
+            continue
+        print(p)
+    mut sum = 0
+    for i in range(3):
+        for x in upto(i):
+            if x == 1:
+                break
+            sum += 100 + x
+    print(sum)
+    for t in twice(1):
+        print(t)
+    for t in twice(5):
+        if t > 100:
+            break
+        print(t)
+    mut hits = 0
+    for flag in flags(7):
+        if flag:
+            hits += 1
+    print(hits)
+    stored = upto(2)
+    for z in stored:
+        print(z)

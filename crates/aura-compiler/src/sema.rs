@@ -72,6 +72,7 @@ pub use program::{
 };
 mod aliases;
 mod assoc_bounds;
+mod iterator_fast;
 pub(crate) use aliases::{expand_alias_callee, specialized_alias_callee};
 mod managers;
 pub(crate) use managers::{
@@ -4879,7 +4880,7 @@ impl<'a> FunctionChecker<'a> {
                                 .iterator_item_type(&iterable_ty)
                                 .expect("the guard found an item type");
                             (
-                                self.discover_iterator_loop(for_stmt, item_ty, locals)?,
+                                self.discover_iterator_loop(for_stmt, &iterable_ty, item_ty, locals)?,
                                 ReceiverKind::Value,
                                 false,
                             )

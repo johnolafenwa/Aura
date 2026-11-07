@@ -11,15 +11,29 @@ pub struct Span {
     pub column: usize,
 }
 
+/// Code the compiler generates from written code (a fast iteration form)
+/// gives each copied expression a span of its own: the written column plus
+/// a multiple of this stride. Rendering shows the written column.
+pub const GENERATED_COLUMN_STRIDE: usize = 1 << 12;
+
 impl Span {
     pub fn new(line: usize, column: usize) -> Self {
         Self { line, column }
+    }
+
+    /// The position as written, for a span of generated code.
+    pub fn written(self) -> Self {
+        Self {
+            line: self.line,
+            column: self.column % GENERATED_COLUMN_STRIDE,
+        }
     }
 }
 
 impl fmt::Display for Span {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.line, self.column)
+        let written = self.written();
+        write!(f, "{}:{}", written.line, written.column)
     }
 }
 
@@ -475,6 +489,23 @@ pub fn visible_call_frames(frames: &[RuntimeCallFrame]) -> Vec<RuntimeCallFrame>
                 span: frame.span.clone(),
             });
             after_body = true;
+            continue;
+        }
+        // A simple generator's frame advances under the generator's name,
+        // and a fast iterator's advance method as its `next`.
+        if let Some(advance) = name.strip_suffix(".__aura_advance") {
+            let shown = match advance.strip_prefix("__aura_frame_") {
+                Some(generator) => generator.to_string(),
+                None => format!("Iterator for {advance}.next"),
+            };
+            visible.push(RuntimeCallFrame {
+                function: match module {
+                    Some(module) => format!("{module}::{shown}"),
+                    None => shown,
+                },
+                span: frame.span.clone(),
+            });
+            after_body = false;
             continue;
         }
         if after_body
@@ -935,7 +966,10 @@ impl Diagnostic {
         for secondary in &self.secondary_spans {
             rendered.push_str(&format!(
                 "\n  = related {}:{}:{}: {}",
-                path, secondary.span.line, secondary.span.column, secondary.label
+                path,
+                secondary.span.line,
+                secondary.span.written().column,
+                secondary.label
             ));
         }
         for note in &self.notes {
@@ -1099,6 +1133,7 @@ fn display_source_path(path: &str) -> String {
 }
 
 fn render_annotated(path: &str, source: &str, span: Span, code: &str, message: &str) -> String {
+    let span = span.written();
     let location = format!("{}:{}:{}", path, span.line, span.column);
     let Some(line_text) = source.lines().nth(span.line.saturating_sub(1)) else {
         return format!("error[{}]: {}\n --> {}", code, message, location);
