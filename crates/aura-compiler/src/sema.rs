@@ -3171,6 +3171,9 @@ impl<'a> FunctionChecker<'a> {
             *checker.recursion_measure.borrow_mut() = None;
             return checker.check_spec_function(function, &mut locals, &return_type);
         }
+        if function.lemma {
+            return checker.check_lemma(function, &mut locals, &return_type);
+        }
         checker.check_contracts(function, &locals, &return_type)?;
         let flow = checker.check_block(&function.body, &mut locals, &return_type, 0, true)?;
         if return_type != Type::Unit && flow != BlockFlow::AlwaysReturns {
@@ -4441,6 +4444,7 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 Stmt::Expr(expr_stmt) => {
+                    self.check_lemma_call_arguments(&expr_stmt.expr, locals)?;
                     let ty = self.type_of_expr(&expr_stmt.expr, locals)?;
                     if !expr_stmt.discarded {
                         reject_unused_result(&expr_stmt.expr, &ty)?;

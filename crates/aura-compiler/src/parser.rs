@@ -80,6 +80,7 @@ fn class_invariant_method(
         doc: None,
         contracts: invariants,
         spec: false,
+        lemma: false,
     }
 }
 
@@ -523,6 +524,7 @@ impl Parser {
                 || self.at_keyword_extern()
                 || self.at_keyword_def()
                 || self.at_spec_def_start()
+                || self.at_lemma_def_start()
                 || self.at_keyword_trait()
                 || self.at_keyword_impl()
             {
@@ -553,7 +555,7 @@ impl Parser {
             }
             TokenKind::KwPublic => {
                 matches!(self.peek_kind(1), Some(TokenKind::Identifier(_)))
-                    && !(matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "spec")
+                    && !(matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "spec" || name == "lemma")
                         && matches!(self.peek_kind(2), Some(TokenKind::KwDef)))
             }
             _ => false,
@@ -617,6 +619,11 @@ impl Parser {
                 }
             }
             Ok(Item::Function(function))
+        } else if self.at_lemma_def_start() {
+            self.bump();
+            let mut function = self.parse_function(public)?;
+            function.lemma = true;
+            Ok(Item::Function(function))
         } else if self.at_keyword_trait() {
             Ok(Item::Trait(self.parse_trait(public)?))
         } else if self.at_keyword_impl() {
@@ -632,6 +639,12 @@ impl Parser {
     /// `spec def`: `spec` is a keyword only before `def`.
     fn at_spec_def_start(&self) -> bool {
         matches!(self.current_kind(), TokenKind::Identifier(name) if name == "spec")
+            && matches!(self.peek_kind(1), Some(TokenKind::KwDef))
+    }
+
+    /// `lemma def`: `lemma` is a keyword only before `def`.
+    fn at_lemma_def_start(&self) -> bool {
+        matches!(self.current_kind(), TokenKind::Identifier(name) if name == "lemma")
             && matches!(self.peek_kind(1), Some(TokenKind::KwDef))
     }
 
@@ -917,11 +930,16 @@ impl Parser {
         let mut methods = Vec::new();
         let mut invariants = Vec::new();
         while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
-            if self.at_spec_def_start() {
+            if self.at_spec_def_start() || self.at_lemma_def_start() {
+                let keyword = if self.at_spec_def_start() {
+                    "spec"
+                } else {
+                    "lemma"
+                };
                 return Err(Diagnostic::coded_at(
                     "AU2048",
                     self.current_span(),
-                    "a `spec def` is a module-level function; `spec def` methods are not available yet",
+                    format!("a `{keyword} def` is a module-level function; `{keyword} def` methods are not available yet"),
                 ));
             }
             if let Some(kind) = self.at_contract_clause() {
@@ -1250,6 +1268,7 @@ impl Parser {
             doc,
             contracts,
             spec: false,
+            lemma: false,
         })
     }
 
@@ -1496,6 +1515,7 @@ impl Parser {
             doc,
             contracts,
             spec: false,
+            lemma: false,
         })
     }
 

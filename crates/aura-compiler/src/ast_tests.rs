@@ -28,6 +28,7 @@ fn dummy_function(name: &str) -> FunctionDecl {
         doc: None,
         contracts: Vec::new(),
         spec: false,
+        lemma: false,
     }
 }
 

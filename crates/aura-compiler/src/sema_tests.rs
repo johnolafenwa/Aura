@@ -7629,6 +7629,7 @@ fn function_decl(name: &str) -> FunctionDecl {
         doc: None,
         contracts: Vec::new(),
         spec: false,
+        lemma: false,
     }
 }
 
@@ -31936,6 +31937,67 @@ fn contract_clauses_check_as_pure_bool_conditions() {
     ] {
         let error = crate::check_source(source).expect_err(source);
         assert_eq!(error.code, code, "{source}: {}", error.message);
+        assert!(error.message.contains(message), "{source}: {}", error.message);
+    }
+}
+
+#[test]
+fn lemmas_state_facts_with_pure_bodies_and_pure_arguments() {
+    crate::check_source(concat!(
+        "spec def tri(n: int64) -> int64:\n",
+        "    return n * (n + 1) // 2\n",
+        "\n",
+        "lemma def tri_bounded(n: int64):\n",
+        "    requires 0 <= n and n <= 1000\n",
+        "    decreases n\n",
+        "    ensures 0 <= tri(n)\n",
+        "    k = n - 1\n",
+        "    if k >= 0:\n",
+        "        tri_bounded(k)\n",
+        "    else:\n",
+        "        pass\n",
+        "    for i in range(n):\n",
+        "        assert i < n, \"in range\"\n",
+        "    mut j = 0\n",
+        "    while j < 2:\n",
+        "        j += 1\n",
+        "        if j == 2:\n",
+        "            break\n",
+        "        continue\n",
+        "    return\n",
+        "\n",
+        "def main():\n",
+        "    tri_bounded(3)\n",
+    ))
+    .expect("a lemma checks");
+    for (source, message) in [
+        (
+            "lemma def f(n: int64) -> int64:\n    return n\n",
+            "a `lemma def` returns nothing",
+        ),
+        (
+            "lemma def f(xs: mut list[int64]):\n    assert len(xs) >= 0\n",
+            "a `lemma def` cannot take `mut` parameter `xs`",
+        ),
+        (
+            "lemma def f(n: int64):\n    print(n)\n",
+            "a `lemma def` body holds only",
+        ),
+        (
+            "lemma def f(xs: list[int64]):\n    assert xs.copy().pop() > 0\n",
+            "a `lemma def` body must not change program state",
+        ),
+        (
+            "lemma def f(n: int64):\n    requires n > 0\n\ndef main():\n    mut xs = [1]\n    f(xs.pop())\n",
+            "an argument of a lemma call must not change program state",
+        ),
+        (
+            "class C:\n    n: int64\n\n    lemma def f(self):\n        pass\n",
+            "a `lemma def` is a module-level function",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err(source);
+        assert_eq!(error.code, "AU2048", "{source}: {}", error.message);
         assert!(error.message.contains(message), "{source}: {}", error.message);
     }
 }

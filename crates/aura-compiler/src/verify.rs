@@ -443,6 +443,7 @@ pub fn verify_module(
     let mut merged: BTreeMap<((usize, usize), ObligationKind, String), ObligationReport> =
         BTreeMap::new();
     let mut proved_sites = BTreeSet::new();
+    let mut erased_open = false;
     // The solver starts at the first function the cache cannot answer.
     let mut solver: Option<smt::Solver> = None;
     let trace = options.trace;
@@ -509,6 +510,7 @@ pub fn verify_module(
         // A site is proved only when every path that reaches it is.
         let mut sites: BTreeMap<(usize, usize), bool> = BTreeMap::new();
         for (obligation, status) in exec.obligations.iter().zip(statuses) {
+            erased_open |= obligation.erased && status != Status::Proved;
             if let Some(site) = obligation.site {
                 *sites.entry(site).or_insert(true) &= status == Status::Proved;
                 continue;
@@ -547,7 +549,11 @@ pub fn verify_module(
         );
     }
     report.obligations = merged.into_values().collect();
-    report.proved_sites = proved_sites;
+    // A lemma that is not proved may have let the verifier assume what no
+    // run checks, so no access counts as proved.
+    if !erased_open {
+        report.proved_sites = proved_sites;
+    }
     Ok(report)
 }
 

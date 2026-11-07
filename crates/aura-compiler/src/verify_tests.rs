@@ -1345,3 +1345,63 @@ def main():
         &["4 ensures failed"],
     );
 }
+
+#[test]
+fn lemmas_are_proved_once_and_relied_on_at_each_call() {
+    let source = r#"
+spec def tri(n: int64) -> int64:
+    return n * (n + 1) // 2
+
+lemma def tri_bounded(n: int64):
+    requires 0 <= n and n <= 1000
+    decreases n
+    ensures 0 <= tri(n) and tri(n) <= 500500
+    if n > 0:
+        tri_bounded(n - 1)
+
+def sum_to(n: int64) -> int64:
+    requires 0 <= n and n <= 1000
+    ensures result == tri(n)
+    mut total = 0
+    mut i = 0
+    while i < n:
+        invariant 0 <= i and i <= n
+        invariant total == tri(i)
+        tri_bounded(i)
+        i += 1
+        total += i
+    return total
+
+def main():
+    print(sum_to(10))
+"#;
+    assert_proved(source);
+    // A call written as a statement is erased, so a run does not check its
+    // `requires`, and a lemma the verifier cannot prove leaves every
+    // access checked.
+    let erased = r#"
+lemma def big(n: int64):
+    requires n > 100
+    assert n > 50
+
+def main():
+    xs = [1, 2]
+    big(1)
+    print(xs[0])
+"#;
+    let output = crate::run_source(erased).expect("an erased lemma call does not run");
+    assert_eq!(output.stdout, "1\n");
+    let options = Options {
+        prove_sites: true,
+        ..Options::default()
+    };
+    let Some(report) = verify_with(erased, &options) else {
+        return;
+    };
+    assert_eq!(open_checks(&report), ["8 requires failed"]);
+    assert!(report.proved_sites.is_empty());
+    let proved = erased.replace("big(1)", "big(101)");
+    let report = verify_with(&proved, &options).expect("a solver ran above");
+    assert!(report.is_proved());
+    assert_eq!(report.proved_sites.len(), 1);
+}

@@ -15,7 +15,8 @@ use super::{
     Result, Type,
 };
 use crate::ast::{
-    Argument, ComprehensionOutput, ContractClause, ContractKind, FormatPart, OldValue,
+    Argument, AssignTarget, ComprehensionOutput, ContractClause, ContractKind, FormatPart,
+    OldValue, Stmt,
 };
 use aura_core::ops::ReceiverKind;
 
@@ -278,6 +279,125 @@ impl FunctionChecker<'_> {
             self.check_block(&function.body, locals, return_type, 0, true)
                 .map(|_| ())
         })
+    }
+
+    /// Checks a `lemma def`: a proof with no result and no `mut`
+    /// parameters, whose body only states facts. It may read `spec def`
+    /// helpers, since it never runs where a call is erased.
+    pub(super) fn check_lemma(
+        &self,
+        function: &FunctionDecl,
+        locals: &mut HashMap<String, LocalBinding>,
+        return_type: &Type,
+    ) -> Result<()> {
+        if *return_type != Type::Unit {
+            return Err(Diagnostic::coded_at(
+                CODE,
+                function.span,
+                "a `lemma def` returns nothing; it states its facts as `ensures` clauses",
+            ));
+        }
+        if let Some(param) = function.params.iter().find(|param| {
+            locals
+                .get(&param.name)
+                .is_some_and(|binding| binding.passing == ReceiverKind::BorrowMut)
+        }) {
+            return Err(Diagnostic::coded_at(
+                CODE,
+                param.span,
+                format!("a `lemma def` cannot take `mut` parameter `{}`", param.name),
+            ));
+        }
+        self.check_lemma_body(&function.body)?;
+        self.check_contracts(function, locals, return_type)?;
+        self.with_spec(|| {
+            self.check_block(&function.body, locals, return_type, 0, true)
+                .map(|_| ())
+        })
+    }
+
+    /// A lemma body holds only what states or proves a fact: `assert`,
+    /// `if`, loops, local assignments of pure values, and calls of other
+    /// lemmas, each pure.
+    fn check_lemma_body(&self, body: &[Stmt]) -> Result<()> {
+        let pure = |expr: &Expr| self.reject_impure(expr, "a `lemma def` body", &mut Vec::new());
+        for stmt in body {
+            match stmt {
+                Stmt::Pass(_) | Stmt::Break(_) | Stmt::Continue(_) => {}
+                Stmt::Return(ret) if ret.value.is_none() => {}
+                Stmt::Assert(assert) => {
+                    pure(&assert.condition)?;
+                    if let Some(message) = &assert.message {
+                        pure(message)?;
+                    }
+                }
+                Stmt::Assign(assign) if matches!(assign.target, AssignTarget::Name(_)) => {
+                    pure(&assign.value)?;
+                }
+                Stmt::If(if_stmt) => {
+                    for branch in &if_stmt.branches {
+                        pure(&branch.condition)?;
+                        self.check_lemma_body(&branch.body)?;
+                    }
+                    if let Some(body) = &if_stmt.else_body {
+                        self.check_lemma_body(body)?;
+                    }
+                }
+                Stmt::While(while_stmt) => {
+                    pure(&while_stmt.condition)?;
+                    self.check_lemma_body(&while_stmt.body)?;
+                }
+                Stmt::For(for_stmt) if for_stmt.borrow_mode.is_none() => {
+                    pure(&for_stmt.iterable)?;
+                    self.check_lemma_body(&for_stmt.body)?;
+                }
+                Stmt::Expr(expr_stmt) if self.lemma_call(&expr_stmt.expr).is_some() => {}
+                _ => {
+                    return Err(Diagnostic::coded_at(
+                        CODE,
+                        super::statement_span(stmt),
+                        "a `lemma def` body holds only `assert`, `if`, loops, assignments of local names, and lemma calls, each pure",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The arguments of `expr`, when it is a call of a `lemma def`.
+    fn lemma_call<'e>(&self, expr: &'e Expr) -> Option<&'e [Argument]> {
+        let ExprKind::Call { callee, args } = &expr.kind else {
+            return None;
+        };
+        let ExprKind::Name(name) = &callee.kind else {
+            return None;
+        };
+        self.functions
+            .get(name)
+            .is_some_and(|function| function.decl.lemma)
+            .then_some(args.as_slice())
+    }
+
+    /// A lemma call written as a statement is erased at run time, so its
+    /// arguments must be pure: nothing they do may be lost.
+    pub(super) fn check_lemma_call_arguments(
+        &self,
+        expr: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        let Some(args) = self.lemma_call(expr) else {
+            return Ok(());
+        };
+        // A local of the same name is called instead.
+        if matches!(&expr.kind, ExprKind::Call { callee, .. }
+            if matches!(&callee.kind, ExprKind::Name(name) if locals.contains_key(name)))
+        {
+            return Ok(());
+        }
+        for arg in args {
+            self.reject_impure(&arg.value, "an argument of a lemma call", &mut Vec::new())?;
+        }
+        Ok(())
     }
 
     /// Runs `check` with `spec def` references allowed.

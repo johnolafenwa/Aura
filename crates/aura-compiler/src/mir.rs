@@ -12409,6 +12409,25 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Whether `expr`, a statement, calls a `lemma def`, which only the
+    /// verifier reads: outside verification the call is erased. Its
+    /// arguments are pure, so nothing is lost.
+    fn erased_lemma_call(&self, expr: &Expr) -> bool {
+        if VERIFICATION.with(std::cell::Cell::get) {
+            return false;
+        }
+        let ExprKind::Call { callee, .. } = &expr.kind else {
+            return false;
+        };
+        let ExprKind::Name(name) = &callee.kind else {
+            return false;
+        };
+        !self.local_types.contains_key(&self.render_local_name(name))
+            && self
+                .resolve_function_info(name)
+                .is_some_and(|function| function.decl.lemma)
+    }
+
     fn resolve_function_info(&self, name: &str) -> Option<&crate::sema::FunctionInfo> {
         self.current_module_namespace()
             .and_then(|namespace| namespace.all_functions.get(name))
@@ -13804,6 +13823,7 @@ impl<'a> Lowerer<'a> {
                 true
             }
             Stmt::Pass(_) => true,
+            Stmt::Expr(expr_stmt) if self.erased_lemma_call(&expr_stmt.expr) => true,
             Stmt::Expr(expr_stmt) => {
                 let value_type = self.infer_expr_type(&expr_stmt.expr);
                 let value = self.lower_expr_for_owned_value(&expr_stmt.expr, value_type.as_ref());

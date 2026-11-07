@@ -29,6 +29,10 @@ in this file.
   inherits them (it may repeat them exactly or leave them out), they are
   checked in each implementation, and `aura verify` proves each
   implementation keeps them and relies on them at calls through the trait.
+- `lemma def` declares a proof: a function with no result whose `ensures`
+  state a fact. `aura verify` proves it once and relies on it at each call;
+  a call written as a statement is erased at run time. A recursive lemma
+  with `decreases` is a proof by induction.
 - `aura build --remove-proved-checks` leaves out the list bounds checks of
   element reads and borrows that `aura verify` proves can never fail. It is
   off by default; debug builds keep every check.

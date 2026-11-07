@@ -166,6 +166,10 @@ pub(super) struct Obligation {
     /// element access it covers: its block and position. Such checks are
     /// not reported.
     pub(super) site: Option<(usize, usize)>,
+    /// A check no run performs: one in a `lemma def`, or the `requires` of
+    /// an erased lemma call. Until it is proved, what follows from it is
+    /// not known to hold when the program runs.
+    pub(super) erased: bool,
 }
 
 /// The loops of a function's control-flow graph.
@@ -211,6 +215,8 @@ pub(super) struct Exec<'a> {
     span: Span,
     /// Check failure blocks whose paths the current iteration assumes away.
     pub(super) assumed_fails: BTreeSet<usize>,
+    /// Set while the `requires` of a `lemma def` call are proved.
+    erasing: bool,
     labels: BTreeMap<&'a str, usize>,
     /// Set when the function is outside what the executor can walk.
     pub(super) unsupported: Option<String>,
@@ -252,6 +258,7 @@ impl<'a> Exec<'a> {
             local_types,
             span: function.span,
             assumed_fails: BTreeSet::new(),
+            erasing: false,
             labels,
             unsupported: None,
             captured: closure_captures(function),
@@ -321,6 +328,11 @@ impl<'a> Exec<'a> {
             goal,
             facts: self.facts.len(),
             site: None,
+            erased: self.erasing
+                || self
+                    .cx
+                    .decl(&self.function.name)
+                    .is_some_and(|decl| decl.lemma),
         });
     }
 
@@ -1470,6 +1482,7 @@ impl<'a> Exec<'a> {
             goal: Goal::Holds(format!("(and (<= 0 {index}) (< {index} {len}))")),
             facts: self.facts.len(),
             site: Some(self.position),
+            erased: false,
         });
     }
 
@@ -2142,7 +2155,9 @@ impl<'a> Exec<'a> {
             pre.push((param.name.clone(), value));
         }
         let span = self.span;
+        self.erasing = self.cx.decl(name).is_some_and(|decl| decl.lemma);
         self.call_requires(state, name, &pre, span);
+        self.erasing = false;
         let result = match result_type {
             Some(ty) => self.fresh(ty, hint.unwrap_or("result")),
             None => match &callee.return_type {

@@ -493,7 +493,7 @@
         },
         {
           "name": "storage.modifier.spec.aura",
-          "match": "\\bspec(?=\\s+def\\b)"
+          "match": "\\b(spec|lemma)(?=\\s+def\\b)"
         },
         {
           "name": "keyword.control.aura",

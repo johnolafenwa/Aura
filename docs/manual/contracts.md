@@ -240,6 +240,53 @@ An implementation may repeat the trait's clauses exactly or leave them out,
 and its parameters keep the trait's names, which the clauses read. A trait
 method takes no `decreases`.
 
+## Lemmas
+
+A `lemma def` is a proof: a function with no result whose `ensures`
+clauses state a fact, and whose body shows why it holds. `aura verify`
+proves a lemma once, like any function, and then relies on its `ensures`
+wherever it is called. A call written as a statement is erased when the
+program runs, so a lemma costs nothing at run time, however much work its
+body does.
+
+```aura
+spec def tri(n: int64) -> int64:
+    return n * (n + 1) // 2
+
+lemma def tri_bounded(n: int64):
+    requires 0 <= n and n <= 1000
+    decreases n
+    ensures 0 <= tri(n) and tri(n) <= 500500
+    if n > 0:
+        tri_bounded(n - 1)
+
+def sum_to(n: int64) -> int64:
+    requires 0 <= n and n <= 1000
+    ensures result == tri(n)
+    mut total = 0
+    mut i = 0
+    while i < n:
+        invariant 0 <= i and i <= n
+        invariant total == tri(i)
+        tri_bounded(i)
+        i += 1
+        total += i
+    return total
+
+def main():
+    print(sum_to(10))  # 55
+```
+
+A recursive lemma with a `decreases` measure is a proof by induction: the
+call `tri_bounded(n - 1)` assumes the fact for the smaller case. A lemma
+body holds only `assert`, `if`, loops, assignments of local names, and
+calls of other lemmas, each pure, and it may read `spec def` helpers.
+Its parameters cannot be `mut`, and it returns nothing. The arguments of a
+lemma call written as a statement must be pure, since the call does not
+run. Because nothing checks an erased call when the program runs, a lemma
+or a lemma call that the verifier cannot prove keeps
+`aura build --remove-proved-checks` from removing any check.
+
 ## Class Invariants
 
 A class can state what is true of every one of its objects, with
@@ -301,7 +348,7 @@ followed by the method or construction that ran the check.
 ## Contextual Keywords
 
 `requires`, `ensures`, `invariant`, and `decreases` are keywords only at
-the start of a clause line, and `spec` only before `def`. Elsewhere they
+the start of a clause line, and `spec` and `lemma` only before `def`. Elsewhere they
 are ordinary names, so `requires = 1`, `invariant: int64`, and the call
 `requires(x)` keep their meaning. Write a space before a parenthesis that
 starts a condition: `requires (a or b) and c`. `result`, `old`, `forall`,
