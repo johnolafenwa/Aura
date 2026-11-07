@@ -1624,11 +1624,19 @@ impl<'a> NativeCodegen<'a> {
                 && !element_lend_temps.contains(place)
                 && !field_lend_temps.contains(place)
         };
+        let borrowed_params = function
+            .params
+            .iter()
+            .filter(|param| param.passing == crate::mir::MirReceiverKind::Borrow)
+            .map(|param| param.name.as_str())
+            .collect::<HashSet<_>>();
         elements::lent_payload_reads(
             function,
             &mut lent_element_reads,
             owns_its_word,
             // An inline union holds its member's box in its payload words.
+            // A parameter the function borrows holds its box for the whole
+            // call, and nothing in the function can change it.
             |place| {
                 let holds = owns_its_word(place)
                     || (matches!(variable_types.get(place), Some(DirectType::Union(_)))
@@ -1636,7 +1644,9 @@ impl<'a> NativeCodegen<'a> {
                         && !writeback_locals
                             .iter()
                             .any(|(writeback, _)| writeback == place));
-                holds && explicit_locals.tracked.contains(place)
+                (holds && explicit_locals.tracked.contains(place))
+                    || (borrowed_params.contains(place)
+                        && matches!(variable_types.get(place), Some(DirectType::Opaque(_))))
             },
             |instruction| {
                 crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
@@ -1668,6 +1678,7 @@ impl<'a> NativeCodegen<'a> {
             builder.def_var(variable, zero);
             lent_elements.insert(name, variable);
         }
+        let entry_copy_loans = element_loans::entry_copy_loans(function);
         let mut compiler = FunctionCompiler {
             builder,
             blocks,
@@ -1722,7 +1733,9 @@ impl<'a> NativeCodegen<'a> {
             native_loans: HashMap::new(),
             fused_entry_probes: element_loans::fused_entry_probes(function),
             fused_entry_slots: HashMap::new(),
-            entry_copy_loans: element_loans::entry_copy_loans(function),
+            entry_copy_loans: entry_copy_loans.clone(),
+            lent_entry_copies: element_loans::lent_entry_copy_loans(function, &entry_copy_loans),
+            lent_fused_copies: HashSet::new(),
             fused_entry_copies: HashMap::new(),
             retain_calls: HashMap::new(),
             retain_releases: HashMap::new(),
@@ -3090,6 +3103,12 @@ struct FunctionCompiler<'a> {
     /// The entry loans of the function a fused test may copy for, with
     /// whether each is read once, and the copies those tests made, by loan.
     entry_copy_loans: HashMap<String, bool>,
+    /// The loans of `entry_copy_loans` whose fused test may lend the found
+    /// value (see `element_loans::lent_entry_copy_loans`).
+    lent_entry_copies: HashSet<String>,
+    /// The fused entry copies that hold a lent lookup result: a value's
+    /// address with its low bit set, or a copy's box.
+    lent_fused_copies: HashSet<String>,
     fused_entry_copies: HashMap<String, Var>,
     /// Each retained handle with the retain that made it and the handle it
     /// retained. A consumer that copies the value into its slot turns the

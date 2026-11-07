@@ -31,11 +31,13 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 
-use aura_core::layout::{LayoutId, LayoutKind, LayoutTable};
+use aura_core::layout::{LayoutId, LayoutKind, LayoutTable, ScalarLayout};
 use aura_core::types::Type;
 
 use super::typed_layout::{self, FieldOps, TypedLayout};
-use super::{canonical_runtime_type_name, shared_runtime_type_tag, ElementBox, RuntimeTypeTag};
+use super::{
+    canonical_runtime_type_name, shared_runtime_type_tag, ElementBox, OpaqueValue, RuntimeTypeTag,
+};
 use crate::runtime_value::{RuntimeName, Value};
 
 /// The access code of the first enum layout a program registers. Class
@@ -264,9 +266,24 @@ pub fn register_enum_layout(descriptor: &str, access: u32) -> Result<&'static En
         access,
         &build,
     )?;
-    Ok(layout
+    let layout: &'static EnumLayout = layout
         .downcast_ref()
-        .expect("the enum layout registry holds enum layouts"))
+        .expect("the enum layout registry holds enum layouts");
+    if layout.enum_name.as_str() == "json.Value" {
+        JSON_VALUE_LAYOUT.store(std::ptr::from_ref(layout).cast_mut(), Ordering::Release);
+    }
+    Ok(layout)
+}
+
+/// The layout of `json.Value` once the program registered it, which a
+/// parse builds its values in.
+static JSON_VALUE_LAYOUT: AtomicPtr<EnumLayout> = AtomicPtr::new(std::ptr::null_mut());
+
+/// The layout of `json.Value`, when the program has registered one.
+pub fn json_value_layout() -> Option<&'static EnumLayout> {
+    // SAFETY: only registered layouts, which live for the rest of the
+    // process, are stored.
+    unsafe { JSON_VALUE_LAYOUT.load(Ordering::Acquire).as_ref() }
 }
 
 /// The cell generated code keeps for one enum layout: its access code and
@@ -394,12 +411,51 @@ impl TypedPayloads {
         if !fits {
             return Err(payloads);
         }
-        let mut typed = Self::new(layout, variant);
+        // Every place is written below, so the block needs no zeroing.
+        let mut typed = Self::uninit(layout, variant);
         for (index, value) in payloads.into_iter().enumerate() {
             // SAFETY: the place is dead, and the value fits it.
             unsafe { typed.write_dead(index, value) };
         }
         Ok(typed)
+    }
+
+    /// [`Self::from_values`] for a variant that takes one payload, with no
+    /// vector of payloads to build: a parse makes every `json.Value` this
+    /// way.
+    pub fn from_value(
+        layout: &'static EnumLayout,
+        variant_name: &str,
+        payload: Value,
+    ) -> Result<Self, Value> {
+        let Some(variant) = layout.variant_index(variant_name) else {
+            return Err(payload);
+        };
+        let plan = &layout.variants[variant];
+        let [place] = plan.payloads.as_slice() else {
+            return Err(payload);
+        };
+        if !layout.is_box(*place) && !(layout.ops.fits)(layout.table(), place.layout, &payload) {
+            return Err(payload);
+        }
+        let mut typed = Self::uninit(layout, variant);
+        // SAFETY: the place is dead, and the value fits it.
+        unsafe { typed.write_dead(0, payload) };
+        Ok(typed)
+    }
+
+    /// Variant `variant` with a block whose bytes are dead. The caller
+    /// writes every payload before the variant is read, copied, or dropped.
+    fn uninit(layout: &'static EnumLayout, variant: usize) -> Self {
+        let plan = &layout.variants[variant];
+        let data = plan
+            .block
+            .map(|block| super::allocate_layout_block(block, false));
+        Self {
+            layout,
+            variant: variant as u32,
+            data,
+        }
     }
 
     pub fn layout(&self) -> &'static EnumLayout {
@@ -536,6 +592,26 @@ impl TypedPayloads {
         }))
     }
 
+    /// The bits of payload `index` when the block holds it in place as an
+    /// `int64`, a `float64`, or a `bool`: the integer, the float's bits, or
+    /// 0 or 1. `None` for any other payload.
+    pub fn scalar_bits(&self, index: usize) -> Option<(ScalarLayout, i64)> {
+        let place = self.place(index)?;
+        let LayoutKind::Scalar(scalar) = self.layout.table().get(place.layout).kind else {
+            return None;
+        };
+        let address = self.address(place);
+        // SAFETY: the place holds a scalar of its layout, at its alignment.
+        let bits = unsafe {
+            match scalar {
+                ScalarLayout::Int64 | ScalarLayout::Float64 => address.cast::<i64>().read(),
+                ScalarLayout::Bool => i64::from(address.read() != 0),
+                _ => return None,
+            }
+        };
+        Some((scalar, bits))
+    }
+
     /// Every payload, in order.
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = Cow<'_, Value>> + '_ {
         (0..self.len()).map(|index| self.get(index).expect("index in range"))
@@ -624,6 +700,18 @@ impl Clone for TypedPayloads {
         let copy = Self::new(self.layout, self.variant());
         let table = self.layout.table();
         for place in self.places() {
+            if self.layout.is_box(*place) {
+                // The copy shares each payload box, with a reference of its
+                // own: a payload is never changed in place while another
+                // reference holds its box (see the module documentation).
+                // SAFETY: the slot holds a box pointer, null or owning its box.
+                let boxed = unsafe { self.address(*place).cast::<*mut OpaqueValue>().read() };
+                // SAFETY: a held box is live.
+                unsafe { super::retain_untracked_value(boxed) };
+                // SAFETY: the copy's slot is dead.
+                unsafe { copy.address(*place).cast::<*mut OpaqueValue>().write(boxed) };
+                continue;
+            }
             // SAFETY: each place of the block holds a value of its layout,
             // the copy's bytes are dead, and the two blocks are distinct.
             unsafe {

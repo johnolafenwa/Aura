@@ -706,9 +706,17 @@ impl FunctionCompiler<'_> {
                 _ => return Ok(None),
             }
         };
+        // A loan only `json.as_int`, `json.as_float`, or `json.as_bool`
+        // reads may hold the found value's address instead of a copy (see
+        // [`lent_entry_copy_loans`]).
+        let lend = field.is_none() && self.lent_entry_copies.contains(&loan);
         let (find, key) = if op == DictOp::ContainsKeyInt64 {
             (
-                RuntimeFn::MapGetInt64Payload,
+                if lend {
+                    RuntimeFn::MapGetInt64Lent
+                } else {
+                    RuntimeFn::MapGetInt64Payload
+                },
                 self.load_operand(key)?.values[0],
             )
         } else {
@@ -718,8 +726,18 @@ impl FunctionCompiler<'_> {
             };
             let key_ty = ensure_direct_type(&types[0], &self.classes, "dict key")?;
             let key = self.load_operand_as_opaque_direct(key, &key_ty)?;
-            (RuntimeFn::MapGetPayload, key.values[0])
+            (
+                if lend {
+                    RuntimeFn::MapGetLent
+                } else {
+                    RuntimeFn::MapGetPayload
+                },
+                key.values[0],
+            )
         };
+        if lend {
+            self.lent_fused_copies.insert(loan.clone());
+        }
         let copy = match field {
             None => {
                 let map_box = self.load_root(map)?.values[0];
@@ -773,6 +791,15 @@ impl FunctionCompiler<'_> {
             return Ok(None);
         };
         let copy = self.builder.use_var(variable);
+        let ty = direct_type_to_type(&self.local_type(place)?);
+        if self.lent_fused_copies.contains(place) {
+            // The scalar accessor that reads it reads a lent value where it
+            // lies, and the loan's end releases a copy.
+            return Ok(Some(ValueRef {
+                values: vec![copy],
+                ty: DirectType::Opaque(ty),
+            }));
+        }
         let read = if self.entry_copy_loans.get(place) == Some(&true) {
             let taken = self.builder.iconst(types::I64, 0);
             self.builder.def_var(variable, taken);
@@ -781,7 +808,6 @@ impl FunctionCompiler<'_> {
             // The loan's other reads share the copy, as reads of a local do.
             self.retain_opaque_handle(copy)
         };
-        let ty = direct_type_to_type(&self.local_type(place)?);
         Ok(Some(self.owned_opaque_result(vec![read], ty)))
     }
 
@@ -790,7 +816,10 @@ impl FunctionCompiler<'_> {
         let Some(&variable) = self.fused_entry_copies.get(loan) else {
             return;
         };
-        let copy = self.builder.use_var(variable);
+        let mut copy = self.builder.use_var(variable);
+        if self.lent_fused_copies.contains(loan) {
+            copy = self.owned_lent_word(copy);
+        }
         let release_block = self.builder.create_block();
         let done_block = self.builder.create_block();
         self.builder.brif(copy, release_block, &[], done_block, &[]);
@@ -1687,4 +1716,69 @@ pub(super) fn entry_copy_loans(function: &MirFunction) -> HashMap<String, bool> 
         }
     }
     loans
+}
+
+/// The entry loans of `entry_copies` (see [`entry_copy_loans`]) whose
+/// every read is the one argument of `json.as_int`, `json.as_float`, or
+/// `json.as_bool`. The accessor reads the value where it lies and keeps no
+/// reference to it, so the fused test may lend the found value instead of
+/// copying it: its address, or a copy when the dict is shared with
+/// another thread or the value is not a leaf (see
+/// `aura_direct_map_get_lent`). Nothing else names the dict while the loan
+/// lives, so the address stays valid until the loan ends.
+pub(super) fn lent_entry_copy_loans(
+    function: &MirFunction,
+    entry_copies: &HashMap<String, bool>,
+) -> HashSet<String> {
+    let mut accessor_reads = HashMap::<&str, usize>::new();
+    let mut other_reads = HashSet::<&str>::new();
+    for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+        match instruction {
+            Instruction::ReadLoan { loan, .. } => {
+                other_reads.insert(loan.as_str());
+            }
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Runtime { op, .. },
+                        args,
+                        ..
+                    },
+                ..
+            } => {
+                let accessor = matches!(
+                    op,
+                    RuntimeOp::Host(builtin)
+                        if matches!(builtin.name(), "json::as_int" | "json::as_float" | "json::as_bool")
+                ) && args.len() == 1;
+                for arg in args {
+                    if let Operand::Place(place) = &arg.value {
+                        if accessor {
+                            *accessor_reads.entry(place.as_str()).or_default() += 1;
+                        } else {
+                            other_reads.insert(place.as_str());
+                        }
+                    }
+                }
+            }
+            Instruction::Assign {
+                value: Rvalue::Call { args, .. },
+                ..
+            } => {
+                for arg in args {
+                    if let Operand::Place(place) = &arg.value {
+                        other_reads.insert(place.as_str());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    entry_copies
+        .keys()
+        .filter(|loan| {
+            accessor_reads.contains_key(loan.as_str()) && !other_reads.contains(loan.as_str())
+        })
+        .cloned()
+        .collect()
 }

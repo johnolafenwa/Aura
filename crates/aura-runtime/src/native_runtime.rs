@@ -169,7 +169,8 @@ pub use class_layouts::{
 pub use element_boxes::{ElementBox, ElementMut};
 use enum_layouts::{celled_enum_layout, registered_enum_layout};
 pub use enum_layouts::{
-    register_enum_layout, EnumLayout, EnumLayoutCell, TypedPayloads, FIRST_ENUM_ACCESS,
+    json_value_layout, register_enum_layout, EnumLayout, EnumLayoutCell, TypedPayloads,
+    FIRST_ENUM_ACCESS,
 };
 pub use frame_stack::{
     direct_frame_stack_layout, DirectFrameStack, DirectFrameStackLayout,
@@ -3595,7 +3596,10 @@ impl DirectHostArgBuffer {
 
     fn take_value(&self, name: &str, index: usize) -> std::result::Result<Value, Diagnostic> {
         let handle = self.handle(name, index, ReceiverKind::Value)?;
-        Ok(unsafe { value_mut(handle, |value| mem::replace(value, Value::Unit)) })
+        // The buffer owns one reference. A box another reference holds, or
+        // a frozen one, such as the shared box of a variant with no
+        // payloads, keeps its value and the builtin takes a copy.
+        Ok(unsafe { take_owned_contents(handle) })
     }
 }
 
@@ -3658,14 +3662,13 @@ fn direct_json_exact_payload<'a>(
     value: &'a Value,
     expected_variant: &str,
     call: &str,
-) -> std::result::Result<Option<&'a Value>, Diagnostic> {
+) -> std::result::Result<Option<Cow<'a, Value>>, Diagnostic> {
     let variant = direct_json_variant(value, call)?;
     if variant.variant_name != expected_variant {
         return Ok(None);
     }
-    // The runtime builds every `json.Value` with its payloads as values.
-    match variant.payloads.values() {
-        [payload] => Ok(Some(payload)),
+    match variant.payloads.get(0) {
+        Some(payload) if variant.payloads.len() == 1 => Ok(Some(payload)),
         _ => Err(Diagnostic::coded(
             "AU4001",
             format!("malformed runtime `json.Value.{expected_variant}` payload in `{call}`"),
@@ -3783,35 +3786,70 @@ fn direct_json_is_null(args: &DirectHostArgBuffer) -> std::result::Result<Value,
 fn direct_json_as_bool(args: &DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic> {
     let name = "json::as_bool";
     args.with_borrow(name, 0, |value| {
-        Ok(match direct_json_exact_payload(value, "Bool", name)? {
-            Some(Value::Bool(value)) => optional_named("bool", Some(Value::Bool(*value))),
-            Some(_) => {
-                return Err(Diagnostic::coded(
-                    "AU4001",
-                    "malformed runtime `json.Value.Bool` payload in `json::as_bool`",
-                ))
-            }
-            None => optional_named("bool", None),
-        })
+        Ok(
+            match direct_json_exact_payload(value, "Bool", name)?.as_deref() {
+                Some(Value::Bool(value)) => optional_named("bool", Some(Value::Bool(*value))),
+                Some(_) => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "malformed runtime `json.Value.Bool` payload in `json::as_bool`",
+                    ))
+                }
+                None => optional_named("bool", None),
+            },
+        )
     })
 }
 
 fn direct_json_as_int(args: &DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic> {
     let name = "json::as_int";
     args.with_borrow(name, 0, |value| {
-        Ok(match direct_json_exact_payload(value, "Int", name)? {
-            Some(Value::Int(value)) if json_int_metadata_is_exact(value) => {
-                optional_named("int64", Some(Value::Int(*value)))
-            }
-            Some(_) => {
-                return Err(Diagnostic::coded(
-                    "AU4001",
-                    "malformed runtime `json.Value.Int` payload in `json::as_int`",
-                ))
-            }
-            None => optional_named("int64", None),
-        })
+        Ok(
+            match direct_json_exact_payload(value, "Int", name)?.as_deref() {
+                Some(Value::Int(value)) if json_int_metadata_is_exact(value) => {
+                    optional_named("int64", Some(Value::Int(*value)))
+                }
+                Some(_) => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "malformed runtime `json.Value.Int` payload in `json::as_int`",
+                    ))
+                }
+                None => optional_named("int64", None),
+            },
+        )
     })
+}
+
+/// `aura_direct_json_as_scalar` for a `json.Value` kept in its layout,
+/// which holds a scalar payload in place: `Some(Some(bits))` when `value`
+/// is `variant`, `Some(None)` when it is another variant, and `None` when
+/// the value is not kept in the layout, which the general path reads.
+fn typed_json_scalar_bits(value: &Value, variant: &str, kind: i64) -> Option<Option<i64>> {
+    let Value::EnumVariant(EnumVariantValue {
+        payloads: VariantPayloads::Typed(typed),
+        ..
+    }) = value
+    else {
+        return None;
+    };
+    let layout = enum_layouts::json_value_layout()?;
+    if !std::ptr::eq(typed.layout(), layout) {
+        return None;
+    }
+    if typed.variant_name().as_str() != variant {
+        return Some(None);
+    }
+    let expected = match kind {
+        0 => aura_core::layout::ScalarLayout::Int64,
+        1 => aura_core::layout::ScalarLayout::Float64,
+        _ => aura_core::layout::ScalarLayout::Bool,
+    };
+    match typed.scalar_bits(0) {
+        Some((scalar, bits)) if scalar == expected => Some(Some(bits)),
+        // A payload of another shape takes the general path, which reports it.
+        _ => None,
+    }
 }
 
 /// `json.as_int`, `json.as_float`, or `json.as_bool` for a union that
@@ -3832,7 +3870,13 @@ pub extern "C-unwind" fn aura_direct_json_as_scalar(
         };
         let bits = unsafe {
             with_lent_value(value, |value| {
-                match direct_json_exact_payload(value, variant, name) {
+                if let Some(bits) = typed_json_scalar_bits(value, variant, kind) {
+                    return bits;
+                }
+                match direct_json_exact_payload(value, variant, name)
+                    .as_ref()
+                    .map(|payload| payload.as_deref())
+                {
                     Ok(None) => None,
                     Ok(Some(payload @ Value::Int(number)))
                         if kind == 0 && json_int_metadata_is_exact(number) =>
@@ -3845,7 +3889,7 @@ pub extern "C-unwind" fn aura_direct_json_as_scalar(
                         "AU4001",
                         format!("malformed runtime `json.Value.{variant}` payload in `{name}`"),
                     )),
-                    Err(diagnostic) => runtime_diagnostic_error(diagnostic),
+                    Err(diagnostic) => runtime_diagnostic_error(diagnostic.clone()),
                 }
             })
         };
@@ -3862,16 +3906,18 @@ pub extern "C-unwind" fn aura_direct_json_as_scalar(
 fn direct_json_as_float(args: &DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic> {
     let name = "json::as_float";
     args.with_borrow(name, 0, |value| {
-        Ok(match direct_json_exact_payload(value, "Float", name)? {
-            Some(Value::Float(value)) => optional_named("float64", Some(Value::Float(*value))),
-            Some(_) => {
-                return Err(Diagnostic::coded(
-                    "AU4001",
-                    "malformed runtime `json.Value.Float` payload in `json::as_float`",
-                ))
-            }
-            None => optional_named("float64", None),
-        })
+        Ok(
+            match direct_json_exact_payload(value, "Float", name)?.as_deref() {
+                Some(Value::Float(value)) => optional_named("float64", Some(Value::Float(*value))),
+                Some(_) => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "malformed runtime `json.Value.Float` payload in `json::as_float`",
+                    ))
+                }
+                None => optional_named("float64", None),
+            },
+        )
     })
 }
 
@@ -10190,10 +10236,9 @@ fn lent_map_payload(found: Option<&Value>, confined: bool) -> *mut OpaqueValue {
 /// only those.
 fn copies_infallibly(value: &Value) -> bool {
     match value {
-        Value::EnumVariant(variant) => variant
-            .payloads
-            .iter()
-            .all(|payload| is_clone_leaf(&payload)),
+        // A variant kept in its layout copies its scalars as bytes, so only
+        // its payload boxes are checked, without reading the scalars out.
+        Value::EnumVariant(variant) => variant.payloads.copy_flat(is_clone_leaf),
         leaf => is_clone_leaf(leaf),
     }
 }

@@ -1062,6 +1062,16 @@ impl VariantPayloads {
         }
     }
 
+    /// Payload `index` where it lies: a payload kept as a value or in a
+    /// box of its own. A scalar kept in a layout's block has no `Value` to
+    /// borrow and gives `None`.
+    pub fn borrowed(&self, index: usize) -> Option<&Value> {
+        match self.get(index)? {
+            Cow::Borrowed(payload) => Some(payload),
+            Cow::Owned(_) => None,
+        }
+    }
+
     pub fn iter(&self) -> VariantPayloadIter<'_> {
         VariantPayloadIter {
             payloads: self,
@@ -3342,6 +3352,17 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
         }) if payloads
             .iter()
             .all(|payload| is_clone_leaf(payload) || shares_collection_storage(payload)) =>
+        {
+            return Ok(value.clone());
+        }
+        // The same for a variant kept in its layout: each payload box it
+        // copies shares its collection's storage.
+        Value::EnumVariant(EnumVariantValue {
+            payloads: VariantPayloads::Typed(typed),
+            ..
+        }) if typed.boxed_payloads_all(|payload| {
+            is_clone_leaf(payload) || shares_collection_storage(payload)
+        }) =>
         {
             return Ok(value.clone());
         }
@@ -18356,10 +18377,17 @@ struct RuntimeJson(Value);
 
 impl RuntimeJson {
     fn variant(variant_name: &'static str, payload: Value) -> Self {
+        let payloads = match crate::native_runtime::json_value_layout() {
+            Some(layout) => match TypedPayloads::from_value(layout, variant_name, payload) {
+                Ok(typed) => VariantPayloads::Typed(typed),
+                Err(payload) => vec![payload].into(),
+            },
+            None => vec![payload].into(),
+        };
         Self(Value::EnumVariant(EnumVariantValue {
             enum_name: RuntimeName::from_static("json.Value"),
             variant_name: RuntimeName::from_static(variant_name),
-            payloads: vec![payload].into(),
+            payloads,
         }))
     }
 }
@@ -18592,7 +18620,7 @@ fn runtime_json_node(value: &Value) -> Option<RuntimeJsonNode<'_>> {
     let Value::EnumVariant(EnumVariantValue {
         enum_name,
         variant_name,
-        payloads: VariantPayloads::Values(payloads),
+        payloads,
     }) = value
     else {
         return None;
@@ -18600,7 +18628,28 @@ fn runtime_json_node(value: &Value) -> Option<RuntimeJsonNode<'_>> {
     if nominal_runtime_base_name(enum_name) != "json.Value" {
         return None;
     }
-    Some(match (variant_name.as_str(), payloads.as_slice()) {
+    let payloads: &[Value] = match payloads {
+        VariantPayloads::Values(payloads) => payloads,
+        // A variant in `json.Value`'s layout: a scalar is read out of the
+        // block, and any other payload borrowed from its box.
+        VariantPayloads::Typed(_) if payloads.len() == 1 => match payloads.get(0)? {
+            Cow::Borrowed(payload) => std::slice::from_ref(payload),
+            Cow::Owned(payload) => {
+                return Some(match (variant_name.as_str(), payload) {
+                    ("Bool", Value::Bool(value)) => RuntimeJsonNode::Bool(value),
+                    ("Int", Value::Int(value)) if json_int_metadata_is_exact(&value) => {
+                        RuntimeJsonNode::Int(i64::try_from(value.as_i128()?).ok()?)
+                    }
+                    ("Float", Value::Float(value)) if value.is_finite() => {
+                        RuntimeJsonNode::Float(value)
+                    }
+                    _ => return None,
+                })
+            }
+        },
+        VariantPayloads::Typed(_) => &[],
+    };
+    Some(match (variant_name.as_str(), payloads) {
         ("Null", []) => RuntimeJsonNode::Null,
         ("Bool", [Value::Bool(value)]) => RuntimeJsonNode::Bool(*value),
         ("Int", [Value::Int(value)]) if json_int_metadata_is_exact(value) => {
@@ -18836,92 +18885,122 @@ pub fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
                 )));
             }
 
-            completed = match (variant.variant_name.as_str(), variant.payloads.values()) {
-                ("Null", []) => Some(JsonValue::Null),
-                ("Bool", [Value::Bool(value)]) => Some(JsonValue::Bool(*value)),
-                ("Int", [Value::Int(value)]) if json_int_metadata_is_exact(value) => {
-                    let value = value
-                        .as_i128()
-                        .and_then(|value| i64::try_from(value).ok())
-                        .ok_or_else(|| malformed("Value.Int payload is outside `int64`"))?;
-                    Some(JsonValue::Int(value))
-                }
-                ("Int", [Value::Int(_)]) => {
-                    return Err(malformed(
-                        "Value.Int payload must be exactly `int64` at runtime",
-                    ))
-                }
-                ("Float", [Value::Float(value)]) => Some(JsonValue::Float(*value)),
-                ("String", [Value::String(value)]) => Some(JsonValue::String(clone_string(value)?)),
-                ("Array", [Value::Vec(values)]) if json_array_metadata_is_exact(values) => {
-                    let child_depth = json_runtime_child_depth(depth)?;
-                    let capacity =
-                        json_runtime_container_capacity(values.elements.len(), remaining, limit)?;
-                    let mut converted = Vec::new();
-                    json_runtime_conversion_try_reserve(&mut converted, capacity)?;
-                    if values.elements.is_empty() {
-                        Some(JsonValue::Array(converted))
-                    } else {
-                        frames
-                            .try_reserve(1)
-                            .map_err(json_runtime_allocation_error)?;
-                        // `json.Value` elements are variants, never scalars.
-                        let elements = &values.elements;
-                        frames.push(ConversionFrame::Array {
-                            values: elements,
-                            next_index: 1,
-                            converted,
-                            child_depth,
-                        });
-                        next = elements.value_at(0).map(|element| (element, child_depth));
-                        None
+            // A variant in `json.Value`'s layout keeps a scalar payload in
+            // its block, which has no `Value` to borrow, so it is read out
+            // first; its other payloads are borrowed from their boxes.
+            'node: {
+                let read_out;
+                let payloads: &[Value] = match &variant.payloads {
+                    VariantPayloads::Values(payloads) => payloads,
+                    VariantPayloads::Typed(_) => match variant.payloads.borrowed(0) {
+                        Some(payload) if variant.payloads.len() == 1 => {
+                            std::slice::from_ref(payload)
+                        }
+                        _ => {
+                            read_out = variant
+                                .payloads
+                                .iter()
+                                .map(Cow::into_owned)
+                                .collect::<Vec<_>>();
+                            completed =
+                                json_runtime_leaf(variant.variant_name.as_str(), &read_out)?;
+                            break 'node;
+                        }
+                    },
+                };
+                completed = match (variant.variant_name.as_str(), payloads) {
+                    ("Null", []) => Some(JsonValue::Null),
+                    ("Bool", [Value::Bool(value)]) => Some(JsonValue::Bool(*value)),
+                    ("Int", [Value::Int(value)]) if json_int_metadata_is_exact(value) => {
+                        let value = value
+                            .as_i128()
+                            .and_then(|value| i64::try_from(value).ok())
+                            .ok_or_else(|| malformed("Value.Int payload is outside `int64`"))?;
+                        Some(JsonValue::Int(value))
                     }
-                }
-                ("Array", [Value::Vec(_)]) => {
-                    return Err(malformed(
-                        "Value.Array payload must be exactly `list[json.Value]` at runtime",
-                    ))
-                }
-                ("Object", [Value::Map(entries)]) if json_object_metadata_is_exact(entries) => {
-                    let child_depth = json_runtime_child_depth(depth)?;
-                    let capacity =
-                        json_runtime_container_capacity(entries.entries.len(), remaining, limit)?;
-                    let mut converted = Vec::new();
-                    json_runtime_conversion_try_reserve(&mut converted, capacity)?;
-                    let mut remaining = entries.entries.iter();
-                    if let Some((key, value)) = remaining.next() {
-                        let Value::String(key) = key else {
-                            return Err(malformed(format!(
-                                "Value.Object key must be `str`, found `{}`",
-                                key.render()
-                            )));
-                        };
-                        frames
-                            .try_reserve(1)
-                            .map_err(json_runtime_allocation_error)?;
-                        frames.push(ConversionFrame::Object {
+                    ("Int", [Value::Int(_)]) => {
+                        return Err(malformed(
+                            "Value.Int payload must be exactly `int64` at runtime",
+                        ))
+                    }
+                    ("Float", [Value::Float(value)]) => Some(JsonValue::Float(*value)),
+                    ("String", [Value::String(value)]) => {
+                        Some(JsonValue::String(clone_string(value)?))
+                    }
+                    ("Array", [Value::Vec(values)]) if json_array_metadata_is_exact(values) => {
+                        let child_depth = json_runtime_child_depth(depth)?;
+                        let capacity = json_runtime_container_capacity(
+                            values.elements.len(),
                             remaining,
-                            converted,
-                            pending_key: key,
-                            child_depth,
-                        });
-                        next = Some((value, child_depth));
-                        None
-                    } else {
-                        Some(JsonValue::Object(converted))
+                            limit,
+                        )?;
+                        let mut converted = Vec::new();
+                        json_runtime_conversion_try_reserve(&mut converted, capacity)?;
+                        if values.elements.is_empty() {
+                            Some(JsonValue::Array(converted))
+                        } else {
+                            frames
+                                .try_reserve(1)
+                                .map_err(json_runtime_allocation_error)?;
+                            // `json.Value` elements are variants, never scalars.
+                            let elements = &values.elements;
+                            frames.push(ConversionFrame::Array {
+                                values: elements,
+                                next_index: 1,
+                                converted,
+                                child_depth,
+                            });
+                            next = elements.value_at(0).map(|element| (element, child_depth));
+                            None
+                        }
                     }
-                }
-                ("Object", [Value::Map(_)]) => {
-                    return Err(malformed(
+                    ("Array", [Value::Vec(_)]) => {
+                        return Err(malformed(
+                            "Value.Array payload must be exactly `list[json.Value]` at runtime",
+                        ))
+                    }
+                    ("Object", [Value::Map(entries)]) if json_object_metadata_is_exact(entries) => {
+                        let child_depth = json_runtime_child_depth(depth)?;
+                        let capacity = json_runtime_container_capacity(
+                            entries.entries.len(),
+                            remaining,
+                            limit,
+                        )?;
+                        let mut converted = Vec::new();
+                        json_runtime_conversion_try_reserve(&mut converted, capacity)?;
+                        let mut remaining = entries.entries.iter();
+                        if let Some((key, value)) = remaining.next() {
+                            let Value::String(key) = key else {
+                                return Err(malformed(format!(
+                                    "Value.Object key must be `str`, found `{}`",
+                                    key.render()
+                                )));
+                            };
+                            frames
+                                .try_reserve(1)
+                                .map_err(json_runtime_allocation_error)?;
+                            frames.push(ConversionFrame::Object {
+                                remaining,
+                                converted,
+                                pending_key: key,
+                                child_depth,
+                            });
+                            next = Some((value, child_depth));
+                            None
+                        } else {
+                            Some(JsonValue::Object(converted))
+                        }
+                    }
+                    ("Object", [Value::Map(_)]) => return Err(malformed(
                         "Value.Object payload must be exactly `dict[str, json.Value]` at runtime",
-                    ))
-                }
-                (variant_name, _) => {
-                    return Err(malformed(format!(
-                        "variant `{variant_name}` has an invalid payload shape"
-                    )))
-                }
-            };
+                    )),
+                    (variant_name, _) => {
+                        return Err(malformed(format!(
+                            "variant `{variant_name}` has an invalid payload shape"
+                        )))
+                    }
+                };
+            }
         } else {
             let frame = frames
                 .pop()
@@ -18991,6 +19070,30 @@ pub fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
         if next.is_none() && frames.is_empty() {
             return Ok(completed.expect("completed runtime JSON conversion has a value"));
         }
+    }
+}
+
+/// The `json.Value` of a variant with no payload or a scalar one, read out
+/// of the variant's layout.
+fn json_runtime_leaf(variant_name: &str, payloads: &[Value]) -> Result<Option<JsonValue>> {
+    let malformed = |message: &str| {
+        Diagnostic::coded(
+            "AU4001",
+            format!("malformed runtime `json.Value` for json.dumps: {message}"),
+        )
+    };
+    match (variant_name, payloads) {
+        ("Null", []) => Ok(Some(JsonValue::Null)),
+        ("Bool", [Value::Bool(value)]) => Ok(Some(JsonValue::Bool(*value))),
+        ("Int", [Value::Int(value)]) if json_int_metadata_is_exact(value) => value
+            .as_i128()
+            .and_then(|value| i64::try_from(value).ok())
+            .map(|value| Some(JsonValue::Int(value)))
+            .ok_or_else(|| malformed("Value.Int payload is outside `int64`")),
+        ("Float", [Value::Float(value)]) => Ok(Some(JsonValue::Float(*value))),
+        (variant_name, _) => Err(malformed(&format!(
+            "variant `{variant_name}` has an invalid payload shape"
+        ))),
     }
 }
 
@@ -19161,8 +19264,8 @@ fn host_json_exact_payload(
     if variant.variant_name != expected_variant {
         return Ok(None);
     }
-    match variant.payloads.values() {
-        [payload] => Ok(Some(payload.clone())),
+    match variant.payloads.get(0) {
+        Some(payload) if variant.payloads.len() == 1 => Ok(Some(payload.into_owned())),
         _ => Err(Diagnostic::coded(
             "AU4001",
             format!("malformed runtime `json.Value.{expected_variant}` payload in `{call}`"),
