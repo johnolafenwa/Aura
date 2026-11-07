@@ -1228,3 +1228,35 @@ def main():
         ],
     );
 }
+
+#[test]
+fn mut_parameters_change_only_what_their_contracts_say() {
+    assert_proved(
+        r#"
+def bump(xs: mut list[int64], k: int64):
+    requires 0 <= k and k < len(xs)
+    requires xs[k] < 100
+    ensures len(xs) == len(old(xs))
+    ensures xs[k] == old(xs[k]) + 1
+    ensures forall(i in range(len(xs)), i == k or xs[i] == old(xs)[i])
+    xs[k] += 1
+
+def push_one(xs: mut list[int64]):
+    requires len(xs) < 1000
+    ensures len(xs) == len(old(xs)) + 1
+    ensures forall(i in range(len(old(xs))), xs[i] == old(xs)[i])
+    xs.append(1)
+
+def main():
+    mut xs = [1, 2, 3]
+    n = 7
+    bump(xs, 1)
+    assert xs[1] == 3
+    assert n == 7
+    assert len(xs) == 3
+    push_one(xs)
+    assert len(xs) == 4
+    assert xs[0] == 1 and xs[1] == 3
+"#,
+    );
+}
