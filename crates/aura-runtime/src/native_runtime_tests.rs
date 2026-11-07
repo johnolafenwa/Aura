@@ -29617,3 +29617,32 @@ fn well_known_enum_names_share_one_text_from_any_buffer() {
         );
     }
 }
+
+#[test]
+fn map_insert_in_place_stores_what_set_in_place_stores_without_a_result() {
+    let map = super::aura_direct_map_empty();
+    super::aura_direct_map_insert_in_place(map, string_value("name"), int_value(1));
+    super::aura_direct_map_insert_in_place(map, string_value("count"), int_value(3));
+    // An equal key keeps its first place and takes the later value.
+    super::aura_direct_map_insert_in_place(map, string_value("name"), int_value(2));
+    assert_eq!(super::aura_direct_map_len(map), 2);
+    assert_eq!(
+        expect_vec_strings(super::aura_direct_map_keys(map)),
+        vec!["name".to_string(), "count".to_string()]
+    );
+    assert_eq!(
+        expect_vec_ints(super::aura_direct_map_values(map)),
+        vec![2, 3]
+    );
+    // The map took its types from its first entry, before any tag.
+    unsafe {
+        super::with_value(map, |value| {
+            let Value::Map(map) = value else {
+                panic!("expected a dict, found {value:?}");
+            };
+            assert_eq!(map.key_type, Type::named("str"));
+            assert_eq!(map.value_type, Type::named("int64"));
+        })
+    };
+    unsafe { release_value(map) };
+}

@@ -919,6 +919,20 @@ impl DictEntries {
     /// Stores `value` under `key`. An equal key keeps its slot and its
     /// original key, and the replaced value is returned.
     pub fn insert(&mut self, key: Value, value: Value) -> Option<Value> {
+        // A small dict scans and writes its one vector, made unshared once.
+        if let Storage::Small(entries) = &mut self.storage {
+            let entries = Arc::make_mut(entries);
+            if let Some(entry) = entries
+                .iter_mut()
+                .find(|(candidate, _)| key_equals(candidate, &key))
+            {
+                return Some(std::mem::replace(&mut entry.1, value));
+            }
+            if entries.len() < INDEX_THRESHOLD {
+                entries.push((key, value));
+                return None;
+            }
+        }
         match self.probe(|| hash_value(&key), |candidate| key_equals(candidate, &key)) {
             (Some(slot), _) => Some(std::mem::replace(self.value_at_mut(slot), value)),
             (None, hash) => {

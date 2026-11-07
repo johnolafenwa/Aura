@@ -10561,24 +10561,49 @@ pub extern "C-unwind" fn aura_direct_map_set_in_place(
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let key = unsafe { consume_owned_value(key) };
-        let value = unsafe { consume_owned_value(value) };
-        let previous = with_map_mut(map, |map| {
-            if is_unknown_runtime_type(&map.key_type) {
-                let inferred = inferred_collection_type(&key);
-                if !is_unknown_runtime_type(&inferred) {
-                    map.key_type = inferred.into();
-                }
-            }
-            if is_unknown_runtime_type(&map.value_type) {
-                let inferred = inferred_collection_type(&value);
-                if !is_unknown_runtime_type(&inferred) {
-                    map.value_type = inferred.into();
-                }
-            }
-            map.entries.insert(key, value)
-        });
+        let previous = unsafe { direct_map_insert(map, key, value) };
         boxed_value(previous.map(lookup_found).unwrap_or_else(lookup_missing))
+    })
+}
+
+/// `aura_direct_map_set_in_place` for a caller that drops the `Lookup` it
+/// returns, such as a dict literal or `d[k] = v`: the replaced value is
+/// dropped here, and no box is made for it.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_insert_in_place(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+) {
+    task_runtime_boundary(|| {
+        drop(unsafe { direct_map_insert(map, key, value) });
+    })
+}
+
+/// Stores the owned `key` and `value` boxes' values in `map`, and returns
+/// the value an equal key held. A map that does not know its key or value
+/// type yet takes it from the entry.
+unsafe fn direct_map_insert(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+) -> Option<Value> {
+    let key = unsafe { consume_owned_value(key) };
+    let value = unsafe { consume_owned_value(value) };
+    with_map_mut(map, |map| {
+        if is_unknown_runtime_type(&map.key_type) {
+            let inferred = inferred_collection_type(&key);
+            if !is_unknown_runtime_type(&inferred) {
+                map.key_type = inferred.into();
+            }
+        }
+        if is_unknown_runtime_type(&map.value_type) {
+            let inferred = inferred_collection_type(&value);
+            if !is_unknown_runtime_type(&inferred) {
+                map.value_type = inferred.into();
+            }
+        }
+        map.entries.insert(key, value)
     })
 }
 
