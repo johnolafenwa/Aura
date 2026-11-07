@@ -32124,6 +32124,12 @@ fn for_loops_iterate_user_iterators() {
     );
     crate::check_source(&source).expect("iterator loops check");
 
+    // Loop clauses, comprehensions, and the lockstep forms take iterators.
+    let source = format!(
+        "{ITERATOR_PRELUDE}def main():\n    for x in Count(n=2):\n        invariant x >= 0\n        print(x)\n    c = Count(n=2)\n    print([x for x in c])\n    print({{x: i for i, x in enumerate(Count(n=2))}})\n    print([x + y for x, y in zip(Count(n=2), Count(n=3))])\n    for i, x in enumerate(Count(n=2), start=1):\n        invariant i >= 1\n        print(i + x)\n    for pair in zip(Count(n=2), Count(n=2)):\n        print(pair)\n    k = Count(n=1)\n    for x in k.collect():\n        print(x)\n"
+    );
+    crate::check_source(&source).expect("iterator sources check");
+
     for (body, code, message) in [
         (
             "    c = Count(n=2)\n    for x in c:\n        print(x)\n    print(c.n)\n",
@@ -32141,14 +32147,19 @@ fn for_loops_iterate_user_iterators() {
             "requires a mutable iterator place",
         ),
         (
-            "    for x in Count(n=2):\n        invariant x >= 0\n        print(x)\n",
-            "AU2048",
-            "loop clauses on a `for` loop over an iterator",
+            "    for i, x in zip([1, 2], Count(n=2)):\n        print(x)\n",
+            "AU2002",
+            "`zip` cannot pair a collection with an iterator",
         ),
         (
-            "    print([x for x in Count(n=2)])\n",
+            "    for i, x in own enumerate(Count(n=2)):\n        print(x)\n",
+            "AU3002",
+            "without an ownership modifier",
+        ),
+        (
+            "    for i, x in enumerate(Count(n=2)):\n        invariant x\n        print(x)\n",
             "AU2002",
-            "a comprehension cannot iterate the iterator `Count` yet",
+            "an `invariant` condition must be `bool`",
         ),
         (
             "    for x in 3:\n        print(x)\n",
@@ -32280,7 +32291,7 @@ fn named_callable_slots_keep_every_contract_diagnostic() {
         "type Named = Callable[def(value: int64) -> int64]\ntype Bare = Callable[def(int64) -> int64]\n\ndef inc(value: int64) -> int64:\n    return value + 1\n\ndef main():\n    n = 3\n    g: def(value: int64) -> int64 = lambda value: value + n\n    f: def(int64) -> int64 = g\n    print(f(1))\n    a = Named(inc)\n    b: Bare = a\n    print(b(4))\n    h: def(int64) -> int64 = inc\n    print(h(2))\n",
     )
     .expect("unnamed slots admit any parameter name");
-    let cases: [(&str, &str); 12] = [
+    let cases: [(&str, &str); 13] = [
         (
             "def inc(value: int64) -> int64:\n    return value\n\ndef main():\n    c: Callable[def(int64) -> int64] = inc\n",
             "becomes `Callable[def(int64) -> int64]` only through an explicit `Callable(...)`",
@@ -32300,6 +32311,10 @@ fn named_callable_slots_keep_every_contract_diagnostic() {
         (
             "type Unary = def(value: int64) -> int64\ndef increment(value: int64 = 1) -> int64:\n    return value + 1\ndef main():\n    step: Unary = increment\n    print(step(4))\n",
             "use the explicit adapter `Unary(increment)`",
+        ),
+        (
+            "type Unary = def(value: int64) -> int64\ndef pick[T](value: int64 = 1) -> int64:\n    return value\ndef main():\n    step: Unary = pick[str]\n    print(step(4))\n",
+            "use the explicit adapter `Unary(pick[str])`",
         ),
         (
             "class Counter:\n    value: int64\n    def scaled(self, factor: int64 = 2) -> int64:\n        return self.value * factor\ndef main():\n    counter = Counter(value=2)\n    selected: def(factor: int64) -> int64 = counter.scaled\n    print(selected(3))\n",

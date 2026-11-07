@@ -1,0 +1,6 @@
+error[AU2002]: `zip` cannot pair a collection with an iterator
+ --> crates/aura-compiler/tests/fixtures/check-fail/iterator_zip_mixed.au:13:20
+   |
+13 |     for name, n in zip(names, naturals()):
+   |                    ^
+  = help: zip two iterators, or call `.collect()` on the iterator to zip two lists

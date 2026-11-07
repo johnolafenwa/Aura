@@ -34,8 +34,8 @@ use super::{
     ReceiverKind, Result, Stmt, Type,
 };
 use crate::ast::{
-    AssignStmt, AssignTarget, BindingTarget, BreakStmt, ForStmt, MatchArm, MatchStmt, Pattern,
-    RestPattern, TuplePattern, VariantPattern, WhileStmt,
+    AssertStmt, AssignStmt, AssignTarget, BindingTarget, BreakStmt, ForStmt, MatchArm, MatchStmt,
+    Pattern, RestPattern, TuplePattern, VariantPattern, WhileStmt,
 };
 use std::cell::RefCell;
 
@@ -43,6 +43,8 @@ use std::cell::RefCell;
 pub(crate) const ITER_MODULE: &str = "iter";
 pub(crate) const ITERATOR_TRAIT: &str = "Iterator";
 pub(crate) const ITERATOR_NEXT: &str = "next";
+/// The `Iterator[T]` default method that drains an iterator into a list.
+pub(crate) const ITERATOR_COLLECT: &str = "collect";
 
 /// A source position: line and column of the `for` statement.
 type LoopSite = (usize, usize);
@@ -53,6 +55,8 @@ struct LoopState {
     /// bodies of imported classes, which carry their own module's loops.
     module: String,
     discovered: BTreeSet<LoopSite>,
+    /// `for` loops over `enumerate(...)` or `zip(...)` of user iterators.
+    lockstep: BTreeSet<LoopSite>,
 }
 
 thread_local! {
@@ -86,6 +90,7 @@ pub(super) fn check_with_iterator_loops(
             state.borrow_mut().push(LoopState {
                 module: module_name.clone(),
                 discovered: BTreeSet::new(),
+                lockstep: BTreeSet::new(),
             })
         });
         struct Pop;
@@ -98,18 +103,31 @@ pub(super) fn check_with_iterator_loops(
         }
         let pop = Pop;
         let result = check(module.clone(), context.clone());
-        let discovered = LOOP_STATE.with(|state| {
+        let (discovered, lockstep) = LOOP_STATE.with(|state| {
             state
                 .borrow_mut()
                 .last_mut()
-                .map(|state| std::mem::take(&mut state.discovered))
+                .map(|state| {
+                    (
+                        std::mem::take(&mut state.discovered),
+                        std::mem::take(&mut state.lockstep),
+                    )
+                })
                 .unwrap_or_default()
         });
         drop(pop);
-        if discovered.is_empty() || rewrite_module(&mut module, &discovered) == 0 {
+        if (discovered.is_empty() && lockstep.is_empty())
+            || rewrite_module(&mut module, &discovered, &lockstep) == 0
+        {
             return result;
         }
     }
+}
+
+/// Records that the comprehension source at `span` iterates a user
+/// iterator, so the rewrite collects it first.
+pub(super) fn discover_comprehension_source(module: &str, span: crate::diag::Span) {
+    discover(module, span);
 }
 
 /// Records that the loop at `span` iterates a user iterator.
@@ -123,9 +141,29 @@ fn discover(module: &str, span: crate::diag::Span) {
     });
 }
 
+/// Records that the `for` loop at `span` iterates `enumerate(...)` or
+/// `zip(...)` of user iterators, which the rewrite spells lazily.
+pub(super) fn discover_lockstep_loop(module: &str, span: crate::diag::Span) {
+    LOOP_STATE.with(|state| {
+        if let Some(state) = state.borrow_mut().last_mut() {
+            if state.module == module {
+                state.lockstep.insert(site(span));
+            }
+        }
+    });
+}
+
 impl FunctionChecker<'_> {
     /// The item type `T` when `ty` implements the builtin `iter.Iterator[T]`.
     pub(super) fn iterator_item_type(&self, ty: &Type) -> Option<Type> {
+        // A type parameter bounded by `Iterator[T]` iterates its `T`.
+        if let Type::TypeParam(name) = ty {
+            return self.type_param_bounds.get(name)?.iter().find_map(|bound| {
+                let short = bound.trait_name.rsplit(['.', ':']).next();
+                (short == Some(ITERATOR_TRAIT) && bound.trait_args.len() == 1)
+                    .then(|| bound.trait_args[0].clone())
+            });
+        }
         if !matches!(ty, Type::Named(..)) {
             return None;
         }
@@ -174,20 +212,21 @@ impl FunctionChecker<'_> {
             }
             Some(ReceiverKind::BorrowMut) | None => {}
         }
-        if let Some(clause) = for_stmt.contracts.first() {
-            return Err(Diagnostic::coded_at(
-                "AU2048",
-                clause.span,
-                "loop clauses on a `for` loop over an iterator are not available yet",
-            ));
-        }
         discover(self.module_name, for_stmt.span);
         Ok(item_ty)
     }
 }
 
-fn rewrite_module(module: &mut Module, sites: &BTreeSet<LoopSite>) -> usize {
-    let mut rewriter = Rewriter { sites, count: 0 };
+fn rewrite_module(
+    module: &mut Module,
+    sites: &BTreeSet<LoopSite>,
+    lockstep: &BTreeSet<LoopSite>,
+) -> usize {
+    let mut rewriter = Rewriter {
+        sites,
+        lockstep,
+        count: 0,
+    };
     for item in &mut module.items {
         match item {
             Item::Function(function) => rewriter.block(&mut function.body),
@@ -213,11 +252,15 @@ fn rewrite_module(module: &mut Module, sites: &BTreeSet<LoopSite>) -> usize {
         }
     }
     rewriter.block(&mut module.top_level_stmts);
+    for constant in &mut module.constants {
+        rewriter.expr(&mut constant.value);
+    }
     rewriter.count
 }
 
 struct Rewriter<'a> {
     sites: &'a BTreeSet<LoopSite>,
+    lockstep: &'a BTreeSet<LoopSite>,
     count: usize,
 }
 
@@ -225,25 +268,130 @@ impl Rewriter<'_> {
     fn block(&mut self, body: &mut Vec<Stmt>) {
         let mut index = 0;
         while index < body.len() {
+            self.stmt_exprs(&mut body[index]);
             self.nested(&mut body[index]);
-            let rewrite = matches!(
-                &body[index],
-                Stmt::For(for_stmt) if self.sites.contains(&site(for_stmt.span))
-            );
-            if !rewrite {
+            let rewrite = match &body[index] {
+                Stmt::For(for_stmt) if self.lockstep.contains(&site(for_stmt.span)) => Some(true),
+                Stmt::For(for_stmt) if self.sites.contains(&site(for_stmt.span)) => Some(false),
+                _ => None,
+            };
+            let Some(lockstep) = rewrite else {
                 index += 1;
                 continue;
-            }
+            };
             let Stmt::For(for_stmt) = body.remove(index) else {
                 unreachable!("the statement was just matched as a `for` loop");
             };
-            let replacement = lower_iterator_loop(for_stmt);
+            let replacement = if lockstep {
+                lower_lockstep_iterator_loop(for_stmt)
+            } else {
+                lower_iterator_loop(for_stmt)
+            };
             let added = replacement.len();
             for (offset, stmt) in replacement.into_iter().enumerate() {
                 body.insert(index + offset, stmt);
             }
             index += added;
             self.count += 1;
+        }
+    }
+
+    /// Rewrites the comprehension sources in `expr` that iterate a user
+    /// iterator into `source.collect()`. A comprehension builds its whole
+    /// result at once, so collecting the source first keeps its meaning.
+    fn expr(&mut self, expr: &mut Expr) {
+        if let ExprKind::Comprehension { clauses, .. } = &mut expr.kind {
+            for clause in clauses {
+                self.source(&mut clause.iterable);
+            }
+        }
+        expr.for_each_child_mut(&mut |child| self.expr(child));
+    }
+
+    /// Rewrites one comprehension source, or each operand of an
+    /// `enumerate(...)` or `zip(...)` source, found at a recorded site.
+    fn source(&mut self, iterable: &mut Expr) {
+        if let ExprKind::Call { callee, args } = &mut iterable.kind {
+            if matches!(&callee.kind, ExprKind::Name(name) if name == "enumerate" || name == "zip")
+            {
+                for arg in args {
+                    self.source(&mut arg.value);
+                }
+                return;
+            }
+        }
+        if !self.sites.contains(&site(iterable.span)) {
+            return;
+        }
+        let span = iterable.span;
+        let source = std::mem::replace(
+            iterable,
+            Expr {
+                kind: ExprKind::Bool(false),
+                span,
+            },
+        );
+        *iterable = Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Member {
+                        object: Box::new(source),
+                        field: ITERATOR_COLLECT.to_string(),
+                    },
+                    span,
+                }),
+                args: Vec::new(),
+            },
+            span,
+        };
+        self.count += 1;
+    }
+
+    /// Visits the expressions a statement holds directly.
+    fn stmt_exprs(&mut self, stmt: &mut Stmt) {
+        match stmt {
+            Stmt::Assign(assign) => {
+                self.expr(&mut assign.value);
+                match &mut assign.target {
+                    AssignTarget::Name(_) => {}
+                    AssignTarget::Member { object, .. } => self.expr(object),
+                    AssignTarget::Index { object, index } => {
+                        self.expr(object);
+                        self.expr(index);
+                    }
+                }
+            }
+            Stmt::View(view) => self.expr(&mut view.source),
+            Stmt::Destructure(destructure) => self.expr(&mut destructure.value),
+            Stmt::Assert(assert) => {
+                self.expr(&mut assert.condition);
+                if let Some(message) = &mut assert.message {
+                    self.expr(message);
+                }
+            }
+            Stmt::Return(ret) => {
+                if let Some(value) = &mut ret.value {
+                    self.expr(value);
+                }
+            }
+            Stmt::If(if_stmt) => {
+                for branch in &mut if_stmt.branches {
+                    self.expr(&mut branch.condition);
+                }
+            }
+            Stmt::Match(match_stmt) => {
+                self.expr(&mut match_stmt.scrutinee);
+                for arm in &mut match_stmt.arms {
+                    if let Some(guard) = &mut arm.guard {
+                        self.expr(guard);
+                    }
+                }
+            }
+            Stmt::For(for_stmt) => self.expr(&mut for_stmt.iterable),
+            Stmt::With(with) => self.expr(&mut with.value),
+            Stmt::While(while_stmt) => self.expr(&mut while_stmt.condition),
+            Stmt::Expr(expr_stmt) => self.expr(&mut expr_stmt.expr),
+            Stmt::Pass(_) | Stmt::Break(_) | Stmt::Continue(_) => {}
         }
     }
 
@@ -338,7 +486,12 @@ fn lower_iterator_loop(for_stmt: ForStmt) -> Vec<Stmt> {
             span: target_span,
         }),
         guard: None,
-        body: for_stmt.body,
+        body: for_stmt
+            .contracts
+            .into_iter()
+            .map(invariant_check)
+            .chain(for_stmt.body)
+            .collect(),
         span,
     };
     let end_arm = MatchArm {
@@ -359,6 +512,254 @@ fn lower_iterator_loop(for_stmt: ForStmt) -> Vec<Stmt> {
             arms: vec![item_arm, end_arm],
             span,
         })],
+        span,
+    }));
+    stmts
+}
+
+/// The check a `for` loop's `invariant` clause becomes at the start of the
+/// rewritten loop's item arm, after the target is bound.
+fn invariant_check(clause: crate::ast::ContractClause) -> Stmt {
+    Stmt::Assert(AssertStmt {
+        condition: clause.condition.clone(),
+        message: None,
+        span: clause.condition.span,
+        clause: Some(Box::new(clause)),
+    })
+}
+
+/// `receiver.next()` at `span`.
+fn next_call(receiver: Expr, span: crate::diag::Span) -> Expr {
+    Expr {
+        kind: ExprKind::Call {
+            callee: Box::new(Expr {
+                kind: ExprKind::Member {
+                    object: Box::new(receiver),
+                    field: ITERATOR_NEXT.to_string(),
+                },
+                span,
+            }),
+            args: Vec::new(),
+        },
+        span,
+    }
+}
+
+fn name_expr(name: &str, span: crate::diag::Span) -> Expr {
+    Expr {
+        kind: ExprKind::Name(name.to_string()),
+        span,
+    }
+}
+
+/// `match <scrutinee>: case <pattern>: body`, with `case _: break` when the
+/// scrutinee is a `Step[T]`.
+fn match_one(
+    scrutinee: Expr,
+    pattern: Pattern,
+    body: Vec<Stmt>,
+    step: bool,
+    span: crate::diag::Span,
+) -> Stmt {
+    let pattern_span = pattern.span();
+    let pattern = if step {
+        Pattern::Variant(VariantPattern {
+            enum_name: None,
+            variant_name: "Item".to_string(),
+            subpatterns: vec![pattern],
+            span: pattern_span,
+        })
+    } else {
+        pattern
+    };
+    let mut arms = vec![MatchArm {
+        pattern,
+        guard: None,
+        body,
+        span,
+    }];
+    if step {
+        arms.push(MatchArm {
+            pattern: Pattern::Wildcard(span),
+            guard: None,
+            body: vec![Stmt::Break(BreakStmt { span })],
+            span,
+        });
+    }
+    Stmt::Match(MatchStmt {
+        scrutinee,
+        capability: ReceiverKind::Value,
+        arms,
+        span,
+    })
+}
+
+/// Lowers `for target in enumerate(it[, start]):` and
+/// `for target in zip(a, b):` over user iterators lazily:
+///
+/// ```text
+/// mut <index L:C>: int64 = start
+/// mut <iterator L:C 0> = a
+/// mut <iterator L:C 1> = b
+/// while true:
+///     match own <iterator L:C 0>.next():
+///         case Item(x):
+///             match own <iterator L:C 1>.next():
+///                 case Item(y):
+///                     match <index L:C>:
+///                         case i:
+///                             <index L:C> += 1
+///                             body
+///                 case _:
+///                     break
+///         case _:
+///             break
+/// ```
+///
+/// Each target element binds as a pattern, so it shadows an outer name the
+/// way a `for` target does. A target that is not a tuple of one element per
+/// position binds the whole tuple instead.
+fn lower_lockstep_iterator_loop(for_stmt: ForStmt) -> Vec<Stmt> {
+    let span = for_stmt.span;
+    let source_span = for_stmt.iterable.span;
+    let ExprKind::Call { callee, args } = for_stmt.iterable.kind else {
+        unreachable!("a lockstep loop iterates an `enumerate` or `zip` call");
+    };
+    let enumerate = matches!(&callee.kind, ExprKind::Name(name) if name == "enumerate");
+    let mut operands: Vec<Expr> = args.into_iter().map(|argument| argument.value).collect();
+    let start = (enumerate && operands.len() == 2).then(|| operands.pop().expect("two arguments"));
+    let site_name = format!("{}:{}", span.line, span.column);
+    let index_name = format!("index {site_name}");
+    let mut stmts = Vec::new();
+    if enumerate {
+        stmts.push(Stmt::Assign(AssignStmt {
+            mutable: true,
+            target: AssignTarget::Name(index_name.clone()),
+            annotation: Some(crate::ast::TypeRef {
+                kind: crate::ast::TypeRefKind::Named {
+                    name: "int64".to_string(),
+                    args: Vec::new(),
+                },
+                indirect: false,
+                span: source_span,
+            }),
+            op: None,
+            value: start.unwrap_or(Expr {
+                kind: ExprKind::Int(0),
+                span: source_span,
+            }),
+            span,
+        }));
+    }
+    let iterator_names: Vec<String> = (0..operands.len())
+        .map(|position| format!("iterator {site_name} {position}"))
+        .collect();
+    for (name, operand) in iterator_names.iter().zip(operands) {
+        stmts.push(Stmt::Assign(AssignStmt {
+            mutable: true,
+            target: AssignTarget::Name(name.clone()),
+            annotation: None,
+            op: None,
+            value: operand,
+            span,
+        }));
+    }
+
+    let positions = iterator_names.len() + usize::from(enumerate);
+    let target_span = for_stmt.target.span();
+    let (index_pattern, item_patterns, whole) = match for_stmt.target {
+        BindingTarget::Tuple { elements, .. }
+            if elements.len() == positions
+                && !elements
+                    .iter()
+                    .any(|element| matches!(element, BindingTarget::Rest { .. })) =>
+        {
+            let mut patterns = elements.into_iter().map(target_pattern);
+            let index = enumerate.then(|| patterns.next().expect("an index element"));
+            (index, patterns.collect::<Vec<_>>(), None)
+        }
+        target => {
+            let items: Vec<String> = (0..iterator_names.len())
+                .map(|position| format!("item {site_name} {position}"))
+                .collect();
+            let patterns = items
+                .iter()
+                .map(|name| {
+                    Pattern::Binding(crate::ast::BindingPattern {
+                        name: name.clone(),
+                        span: target_span,
+                    })
+                })
+                .collect();
+            (None, patterns, Some((target, items)))
+        }
+    };
+
+    let mut body: Vec<Stmt> = for_stmt
+        .contracts
+        .into_iter()
+        .map(invariant_check)
+        .chain(for_stmt.body)
+        .collect();
+    if let Some((target, items)) = whole {
+        let mut elements = Vec::new();
+        if enumerate {
+            elements.push(name_expr(&index_name, source_span));
+        }
+        elements.extend(items.iter().map(|name| name_expr(name, target_span)));
+        body = vec![match_one(
+            Expr {
+                kind: ExprKind::Tuple(elements),
+                span: source_span,
+            },
+            target_pattern(target),
+            body,
+            false,
+            span,
+        )];
+    } else if let Some(pattern) = index_pattern {
+        body = vec![match_one(
+            name_expr(&index_name, source_span),
+            pattern,
+            body,
+            false,
+            span,
+        )];
+    }
+    if enumerate {
+        // Advance the index before the body so `continue` keeps counting.
+        let increment = Stmt::Assign(AssignStmt {
+            mutable: false,
+            target: AssignTarget::Name(index_name.clone()),
+            annotation: None,
+            op: Some(crate::ast::BinaryOp::Add),
+            value: Expr {
+                kind: ExprKind::Int(1),
+                span: source_span,
+            },
+            span,
+        });
+        let Stmt::Match(index_match) = &mut body[0] else {
+            unreachable!("the body was just wrapped in a match");
+        };
+        index_match.arms[0].body.insert(0, increment);
+    }
+    for (name, pattern) in iterator_names.iter().zip(item_patterns).rev() {
+        body = vec![match_one(
+            next_call(name_expr(name, source_span), source_span),
+            pattern,
+            body,
+            true,
+            span,
+        )];
+    }
+    stmts.push(Stmt::While(WhileStmt {
+        condition: Expr {
+            kind: ExprKind::Bool(true),
+            span,
+        },
+        contracts: Vec::new(),
+        body,
         span,
     }));
     stmts

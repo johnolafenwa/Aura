@@ -232,6 +232,19 @@ New codes are assigned in the step that needs them and registered in
   last use on the native backend and the end of the owning call in the
   interpreter, so the documented guarantee is "no later than the owning
   function's return". Generator methods are not supported yet.
+- **9d, part 1 (2026-11-03).** Iterator sources everywhere a list source
+  works. A comprehension clause (or an `enumerate`/`zip` operand in one)
+  over an iterator is recorded during checking and rewritten to
+  `source.collect()`, a new `Iterator[T]` default method, since a
+  comprehension builds its result at once; its elements then read as
+  shared list elements. A `for` loop over `enumerate`/`zip` of iterators is
+  rewritten lazily into nested `match own it.next():` statements with a
+  hidden `int64` index, and the target elements bind as patterns. Zipping a
+  collection with an iterator reports `AU2002` rather than collecting
+  silently. `invariant` clauses on iterator loops become clause-tagged
+  asserts at the top of the item arm (`AssertStmt.clause`), so they report
+  `AU4009` as on other loops. Close on every loop exit was already
+  delivered by 9c drop-close.
 
 ## Ratification Record
 

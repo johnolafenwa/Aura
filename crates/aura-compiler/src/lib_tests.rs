@@ -4144,6 +4144,88 @@ fn generator_bodies_wait_on_the_interpreter() {
 }
 
 #[test]
+fn bounded_iterator_type_params_loop_and_match_on_the_interpreter() {
+    let source = concat!(
+        "from iter import Generator, Iterator, Step\n",
+        "\n",
+        "def total[I: Iterator[int64]](it: own I) -> int64:\n",
+        "    mut sum = 0\n",
+        "    for x in it:\n",
+        "        sum += x\n",
+        "    return sum\n",
+        "\n",
+        "def first[I: Iterator[int64]](it: own I) -> int64:\n",
+        "    mut src = it\n",
+        "    match own src.next():\n",
+        "        case Item(x):\n",
+        "            return x\n",
+        "        case _:\n",
+        "            return -1\n",
+        "\n",
+        "def count(n: int64) -> Generator[int64]:\n",
+        "    for i in range(n):\n",
+        "        yield i\n",
+        "\n",
+        "def main():\n",
+        "    print(total(count(4)))\n",
+        "    print(first(count(0)))\n",
+        "    print(first(count(3)))\n",
+    );
+    let output = run_source(source).expect("bounded iterator loops run");
+    assert_eq!(output.stdout, "6\n-1\n0\n");
+}
+
+#[test]
+fn iterator_loops_rewrite_inside_every_statement_form_on_the_interpreter() {
+    let source = concat!(
+        "from iter import Iterator, Step\n",
+        "\n",
+        "class Countdown:\n",
+        "    n: int64\n",
+        "\n",
+        "impl Iterator[int64] for Countdown:\n",
+        "    def next(mut self) -> Step[int64]:\n",
+        "        if self.n == 0:\n",
+        "            return Step.End\n",
+        "        self.n -= 1\n",
+        "        return Step.Item(self.n)\n",
+        "\n",
+        "trait Summer:\n",
+        "    def total(self) -> int64:\n",
+        "        mut s = 0\n",
+        "        for x in Countdown(n=3):\n",
+        "            s += x\n",
+        "        return s\n",
+        "\n",
+        "class Bag:\n",
+        "    v: int64\n",
+        "\n",
+        "impl Summer for Bag:\n",
+        "    pass\n",
+        "\n",
+        "def main():\n",
+        "    mut xs = [0, 0]\n",
+        "    xs[0] = 1\n",
+        "    view first = xs\n",
+        "    a, b = (1, 2)\n",
+        "    match a:\n",
+        "        case 1 if b == 2:\n",
+        "            print(\"guard\")\n",
+        "        case _:\n",
+        "            print(\"other\")\n",
+        "    if a == 0:\n",
+        "        print(\"then\")\n",
+        "    else:\n",
+        "        print(\"else\")\n",
+        "    for x in Countdown(n=2):\n",
+        "        print(x + first[0])\n",
+        "    print(Bag(v=1).total())\n",
+    );
+    let output = run_source(source).expect("iterator loops in trait defaults run");
+    assert_eq!(output.stdout, "guard\nelse\n2\n1\n3\n");
+}
+
+#[test]
 fn generators_run_lazily_and_close_on_the_interpreter() {
     let source = concat!(
         "from iter import Generator, Step\n",

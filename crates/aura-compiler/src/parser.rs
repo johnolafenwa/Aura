@@ -1799,6 +1799,7 @@ impl Parser {
             condition,
             message,
             span,
+            clause: None,
         }))
     }
 

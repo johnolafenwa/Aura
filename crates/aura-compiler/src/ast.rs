@@ -630,6 +630,11 @@ pub struct AssertStmt {
     pub condition: Expr,
     pub message: Option<Expr>,
     pub span: Span,
+    /// The loop `invariant` clause this check stands for, when a rewrite
+    /// moved the clause out of its loop header. The check then reports and
+    /// is checked as that clause.
+    #[serde(skip)]
+    pub clause: Option<Box<ContractClause>>,
 }
 
 #[derive(Clone, Debug, Serialize)]

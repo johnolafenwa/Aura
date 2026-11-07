@@ -8606,6 +8606,7 @@ fn lambda_scope_navigation_reaches_assignment_targets_and_assert_operands() {
                 condition: lambda.clone(),
                 message: Some(leaf()),
                 span,
+                clause: None,
             }),
         ),
         (
@@ -8614,6 +8615,7 @@ fn lambda_scope_navigation_reaches_assignment_targets_and_assert_operands() {
                 condition: expr(ExprKind::Bool(true)),
                 message: Some(lambda),
                 span,
+                clause: None,
             }),
         ),
     ];

@@ -14,6 +14,17 @@ public trait Iterator[T]:
     """A source of items that a `for` loop can consume one at a time."""
     def next(mut self) -> Step[T]
 
+    def collect(own self) -> list[T]:
+        """Consumes the iterator and returns its items in order."""
+        mut source = self
+        mut items: list[T] = []
+        while true:
+            match own source.next():
+                case Item(item):
+                    items.append(item)
+                case _:
+                    return items
+
 
 public type GeneratorBody = Callable[own def() -> None]
 
