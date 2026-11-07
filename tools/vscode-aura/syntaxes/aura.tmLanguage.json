@@ -488,7 +488,7 @@
           "match": "^\\s*(requires|ensures|invariant|decreases)(?=\\s+[^\\s=:,.)\\]])"
         },
         {
-          "name": "keyword.control.aura",
+          "name": "keyword.control.flow.yield.aura",
           "match": "^\\s*yield(?=\\s+[^\\s=:,.)\\]])"
         },
         {
