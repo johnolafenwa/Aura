@@ -4226,6 +4226,16 @@ fn iterator_loops_rewrite_inside_every_statement_form_on_the_interpreter() {
 }
 
 #[test]
+fn into_iterator_sources_and_associated_types_run_on_the_interpreter() {
+    let output = run_source(include_str!("../tests/fixtures/run-pass/into_iterator.au"))
+        .expect("into_iterator runs");
+    assert_eq!(
+        output.stdout,
+        include_str!("../tests/fixtures/run-pass/into_iterator.stdout")
+    );
+}
+
+#[test]
 fn generators_run_lazily_and_close_on_the_interpreter() {
     let source = concat!(
         "from iter import Generator, Step\n",

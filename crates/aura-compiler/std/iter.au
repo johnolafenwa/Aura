@@ -26,6 +26,14 @@ public trait Iterator[T]:
                     return items
 
 
+public trait IntoIterator[T]:
+    """A value that a `for` loop, a comprehension, `enumerate`, or `zip` can
+    consume by turning it into an iterator of `T` items."""
+    type Iter: Iterator[T]
+
+    def into_iter(own self) -> Self.Iter
+
+
 public type GeneratorBody = Callable[own def() -> None]
 
 

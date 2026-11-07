@@ -45,6 +45,9 @@ pub(crate) const ITERATOR_TRAIT: &str = "Iterator";
 pub(crate) const ITERATOR_NEXT: &str = "next";
 /// The `Iterator[T]` default method that drains an iterator into a list.
 pub(crate) const ITERATOR_COLLECT: &str = "collect";
+/// The builtin trait for values that turn into an iterator, and its method.
+pub(crate) const INTO_ITERATOR_TRAIT: &str = "IntoIterator";
+pub(crate) const INTO_ITERATOR_METHOD: &str = "into_iter";
 
 /// A source position: line and column of the `for` statement.
 type LoopSite = (usize, usize);
@@ -57,6 +60,8 @@ struct LoopState {
     discovered: BTreeSet<LoopSite>,
     /// `for` loops over `enumerate(...)` or `zip(...)` of user iterators.
     lockstep: BTreeSet<LoopSite>,
+    /// Loop and comprehension sources that implement `IntoIterator`.
+    into_iter: BTreeSet<LoopSite>,
 }
 
 thread_local! {
@@ -91,6 +96,7 @@ pub(super) fn check_with_iterator_loops(
                 module: module_name.clone(),
                 discovered: BTreeSet::new(),
                 lockstep: BTreeSet::new(),
+                into_iter: BTreeSet::new(),
             })
         });
         struct Pop;
@@ -103,7 +109,7 @@ pub(super) fn check_with_iterator_loops(
         }
         let pop = Pop;
         let result = check(module.clone(), context.clone());
-        let (discovered, lockstep) = LOOP_STATE.with(|state| {
+        let (discovered, lockstep, into_iter) = LOOP_STATE.with(|state| {
             state
                 .borrow_mut()
                 .last_mut()
@@ -111,11 +117,17 @@ pub(super) fn check_with_iterator_loops(
                     (
                         std::mem::take(&mut state.discovered),
                         std::mem::take(&mut state.lockstep),
+                        std::mem::take(&mut state.into_iter),
                     )
                 })
                 .unwrap_or_default()
         });
         drop(pop);
+        // `IntoIterator` sources become `into_iter()` calls first; the next
+        // check then finds ordinary iterator loops.
+        if !into_iter.is_empty() && rewrite_into_iter_sources(&mut module, &into_iter) > 0 {
+            continue;
+        }
         if (discovered.is_empty() && lockstep.is_empty())
             || rewrite_module(&mut module, &discovered, &lockstep) == 0
         {
@@ -178,6 +190,38 @@ impl FunctionChecker<'_> {
         })
     }
 
+    /// Whether `ty` implements the builtin `iter.IntoIterator[T]`, so a loop
+    /// over it iterates `ty.into_iter()`.
+    pub(super) fn implements_into_iterator(&self, ty: &Type) -> bool {
+        self.trait_impls_in_scope().any(|trait_impl| {
+            self.trait_info_for_impl(trait_impl).is_some_and(|info| {
+                info.module_name == ITER_MODULE && info.decl.name == INTO_ITERATOR_TRAIT
+            }) && self.trait_impl_substitutions(trait_impl, ty).is_some()
+        })
+    }
+
+    /// Records that the source at `span` is an `IntoIterator` value, so the
+    /// rewrite iterates `source.into_iter()`, and stops this check: the
+    /// rewritten module is checked again.
+    pub(super) fn discover_into_iterator_source(
+        &self,
+        span: crate::diag::Span,
+        ty: &Type,
+    ) -> Diagnostic {
+        LOOP_STATE.with(|state| {
+            if let Some(state) = state.borrow_mut().last_mut() {
+                if state.module == self.module_name {
+                    state.into_iter.insert(site(span));
+                }
+            }
+        });
+        Diagnostic::coded_at(
+            "AU2002",
+            span,
+            format!("`{ty}` is iterated through `into_iter()`"),
+        )
+    }
+
     /// Checks the header of a `for` loop over a user iterator and records it
     /// for rewriting. Returns the loop target's type.
     pub(super) fn discover_iterator_loop(
@@ -217,14 +261,30 @@ impl FunctionChecker<'_> {
     }
 }
 
+/// Rewrites each recorded `IntoIterator` source into `source.into_iter()`.
+fn rewrite_into_iter_sources(module: &mut Module, into_iter: &BTreeSet<LoopSite>) -> usize {
+    let none = BTreeSet::new();
+    rewrite_module_sources(module, &none, &none, into_iter)
+}
+
 fn rewrite_module(
     module: &mut Module,
     sites: &BTreeSet<LoopSite>,
     lockstep: &BTreeSet<LoopSite>,
 ) -> usize {
+    rewrite_module_sources(module, sites, lockstep, &BTreeSet::new())
+}
+
+fn rewrite_module_sources(
+    module: &mut Module,
+    sites: &BTreeSet<LoopSite>,
+    lockstep: &BTreeSet<LoopSite>,
+    into_iter: &BTreeSet<LoopSite>,
+) -> usize {
     let mut rewriter = Rewriter {
         sites,
         lockstep,
+        into_iter,
         count: 0,
     };
     for item in &mut module.items {
@@ -261,6 +321,7 @@ fn rewrite_module(
 struct Rewriter<'a> {
     sites: &'a BTreeSet<LoopSite>,
     lockstep: &'a BTreeSet<LoopSite>,
+    into_iter: &'a BTreeSet<LoopSite>,
     count: usize,
 }
 
@@ -270,6 +331,9 @@ impl Rewriter<'_> {
         while index < body.len() {
             self.stmt_exprs(&mut body[index]);
             self.nested(&mut body[index]);
+            if let Stmt::For(for_stmt) = &mut body[index] {
+                self.wrap_into_iter_source(&mut for_stmt.iterable);
+            }
             let rewrite = match &body[index] {
                 Stmt::For(for_stmt) if self.lockstep.contains(&site(for_stmt.span)) => Some(true),
                 Stmt::For(for_stmt) if self.sites.contains(&site(for_stmt.span)) => Some(false),
@@ -302,10 +366,39 @@ impl Rewriter<'_> {
     fn expr(&mut self, expr: &mut Expr) {
         if let ExprKind::Comprehension { clauses, .. } = &mut expr.kind {
             for clause in clauses {
+                self.wrap_into_iter_source(&mut clause.iterable);
                 self.source(&mut clause.iterable);
             }
         }
         expr.for_each_child_mut(&mut |child| self.expr(child));
+    }
+
+    /// Rewrites a loop or comprehension source, or each operand of an
+    /// `enumerate(...)` or `zip(...)` source, that was recorded as an
+    /// `IntoIterator` value into `source.into_iter()`.
+    fn wrap_into_iter_source(&mut self, iterable: &mut Expr) {
+        if let ExprKind::Call { callee, args } = &mut iterable.kind {
+            if matches!(&callee.kind, ExprKind::Name(name) if name == "enumerate" || name == "zip")
+            {
+                for arg in args {
+                    self.wrap_into_iter_source(&mut arg.value);
+                }
+                return;
+            }
+        }
+        if !self.into_iter.contains(&site(iterable.span)) {
+            return;
+        }
+        let span = iterable.span;
+        let source = std::mem::replace(
+            iterable,
+            Expr {
+                kind: ExprKind::Bool(false),
+                span,
+            },
+        );
+        *iterable = method_call(source, INTO_ITERATOR_METHOD, span);
+        self.count += 1;
     }
 
     /// Rewrites one comprehension source, or each operand of an
@@ -530,19 +623,7 @@ fn invariant_check(clause: crate::ast::ContractClause) -> Stmt {
 
 /// `receiver.next()` at `span`.
 fn next_call(receiver: Expr, span: crate::diag::Span) -> Expr {
-    Expr {
-        kind: ExprKind::Call {
-            callee: Box::new(Expr {
-                kind: ExprKind::Member {
-                    object: Box::new(receiver),
-                    field: ITERATOR_NEXT.to_string(),
-                },
-                span,
-            }),
-            args: Vec::new(),
-        },
-        span,
-    }
+    method_call(receiver, ITERATOR_NEXT, span)
 }
 
 fn name_expr(name: &str, span: crate::diag::Span) -> Expr {
@@ -763,4 +844,21 @@ fn lower_lockstep_iterator_loop(for_stmt: ForStmt) -> Vec<Stmt> {
         span,
     }));
     stmts
+}
+
+/// `receiver.method()`.
+fn method_call(receiver: Expr, method: &str, span: crate::diag::Span) -> Expr {
+    Expr {
+        kind: ExprKind::Call {
+            callee: Box::new(Expr {
+                kind: ExprKind::Member {
+                    object: Box::new(receiver),
+                    field: method.to_string(),
+                },
+                span,
+            }),
+            args: Vec::new(),
+        },
+        span,
+    }
 }

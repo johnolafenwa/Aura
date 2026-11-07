@@ -27573,6 +27573,17 @@ impl<'a> Lowerer<'a> {
     }
 
     fn type_implements_trait_bound(&self, ty: &Type, bound: &TraitBound) -> bool {
+        // A type parameter satisfies the bounds it was declared with, as in
+        // a default method of `impl[I: Iterator[T]] Trait for Wrap[I]`.
+        if let Type::TypeParam(name) = ty {
+            if self
+                .type_param_bounds
+                .get(name)
+                .is_some_and(|bounds| bounds.contains(bound))
+            {
+                return true;
+            }
+        }
         // A union satisfies a bound when every member does (ADR-0052 A8).
         if let Type::Union(union) = ty {
             return union

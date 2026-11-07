@@ -252,6 +252,21 @@ New codes are assigned in the step that needs them and registered in
   panic, and after a suspended generator is unwound or reset on drop. A
   stack whose coroutine has not finished is never pooled.
 
+- **9e (2026-11-07).** Associated types follow D1 for traits and
+  implementations: `type Name: Bound` in a trait is a trailing hidden trait
+  type parameter spelled `Self.Name`, and an implementation's
+  `type Name = T` line is appended to its trait arguments in declaration
+  order, so dispatch, specialization, and both backends treat it as an
+  ordinary trait argument. The parser resolves `Self.Name` inside an
+  `impl` block to the fixed type. Fixed types are checked against the
+  declared bounds before any body, and default trait bodies may rely on
+  those bounds. `iter.IntoIterator[T]` sources in `for` loops,
+  comprehension clauses, and `enumerate`/`zip` operands are rewritten to
+  `source.into_iter()` and checked again. Deferred: a bound naming a trait
+  with associated types (`S: IntoIterator[T]` exposing `S.Iter`) reports
+  `AU2002`; it needs hidden per-bound type parameters inferred at call
+  sites.
+
 ## Ratification Record
 
 Pending.
