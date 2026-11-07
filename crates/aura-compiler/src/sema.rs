@@ -71,6 +71,7 @@ pub use program::{
     TraitInfo, TraitMethodInfo,
 };
 mod aliases;
+mod assoc_bounds;
 pub(crate) use aliases::{expand_alias_callee, specialized_alias_callee};
 mod managers;
 pub(crate) use managers::{
@@ -1915,6 +1916,7 @@ impl<'a> FunctionChecker<'a> {
             }
         }
 
+        self.infer_bound_only_type_args(method_type_params, type_param_bounds, &mut substitutions);
         for type_param in method_type_params {
             if !substitutions.contains_key(type_param) {
                 return Err(Diagnostic::at(

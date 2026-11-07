@@ -4236,6 +4236,23 @@ fn into_iterator_sources_and_associated_types_run_on_the_interpreter() {
 }
 
 #[test]
+fn associated_type_bounds_run_on_the_interpreter() {
+    for (source, expected) in [
+        (
+            include_str!("../tests/fixtures/run-pass/into_iterator_bounds.au"),
+            include_str!("../tests/fixtures/run-pass/into_iterator_bounds.stdout"),
+        ),
+        (
+            include_str!("../tests/fixtures/run-pass/associated_type_bounds.au"),
+            include_str!("../tests/fixtures/run-pass/associated_type_bounds.stdout"),
+        ),
+    ] {
+        let output = run_source(source).expect("associated type bounds run");
+        assert_eq!(output.stdout, expected);
+    }
+}
+
+#[test]
 fn generators_run_lazily_and_close_on_the_interpreter() {
     let source = concat!(
         "from iter import Generator, Step\n",

@@ -486,8 +486,53 @@ These rules apply:
   arguments substituted (`AU2002`).
 - A generic implementation can fix an associated type in terms of its own
   type parameters, as in `type Iter = Generator[T]`.
-- A trait with associated types cannot be a bound yet: `S: Source[int64]`
-  reports `AU2002`. Bound the iterator type instead, as `I: Iterator[T]`.
+- A class, enum, or implementation cannot bound a type parameter by a
+  trait with associated types yet (`AU2002`). A function or method can.
+
+A function or method bound writes only the trait's own arguments, as in
+`S: Source[int64]`. Each associated type then becomes a hidden type
+parameter of the function, spelled `S.Iter`, which carries the trait's
+bounds for it. The function's signature and body can name it, and a call
+infers it from the implementation the argument's type has:
+
+```aura
+from iter import Generator, IntoIterator
+
+
+def total[S: IntoIterator[int64]](source: own S) -> int64:
+    mut sum = 0
+    for value in source:
+        sum += value
+    return sum
+
+
+def iterator_of[T, S: IntoIterator[T]](source: own S) -> S.Iter:
+    return source.into_iter()
+
+
+class Numbers:
+    values: list[int64]
+
+
+def walk(values: own list[int64]) -> Generator[int64]:
+    for value in values:
+        yield value
+
+
+impl IntoIterator[int64] for Numbers:
+    type Iter = Generator[int64]
+
+    def into_iter(own self) -> Self.Iter:
+        return walk(self.values)
+
+
+def main():
+    print(total(Numbers(values=[1, 2, 3])))
+    print(iterator_of(Numbers(values=[4, 5])).collect())
+```
+
+Here `T` in `iterator_of` appears only in the bound, and the call infers it
+the same way, from `impl IntoIterator[int64] for Numbers`.
 
 The builtin `iter.IntoIterator[T]` trait uses an associated type so that a
 `for` loop can consume any value that turns into an iterator. See
@@ -648,7 +693,7 @@ The checker enforces the selected `From.from` method's clone-safety obligations 
 - Trait and implementation methods cannot give ordinary parameters defaults.
 - Generic task targets are permitted when their callable type arguments can be resolved. Bare shared and `own` targets use task-owned captures. `mut` targets are rejected.
 - Equal-specificity overlapping implementations are an error at the use site.
-- A trait with associated types cannot be used as a bound.
+- Only a function or method can bound a type parameter by a trait with associated types.
 - Clone-safety obligations are inferred, not written. An explicit implementation cannot strengthen the contract inferred by its trait method.
 
 [Current Limits](/manual/current-limits) collects the observable syntax and implementation limits. [Static Semantics](/manual/static-semantics#generics-traits-and-implementations) has the cross-cutting type rules.

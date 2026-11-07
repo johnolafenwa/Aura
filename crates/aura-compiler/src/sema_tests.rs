@@ -32522,8 +32522,8 @@ fn associated_type_misuse_reports_clear_diagnostics() {
             "a `for` loop consumes an `IntoIterator` source",
         ),
         (
-            "from iter import IntoIterator\n\ndef total[S: IntoIterator[int64]](s: own S) -> int64:\n    return 0\n\ndef main():\n    print(1)\n",
-            "a bound cannot name `IntoIterator` yet",
+            "from iter import IntoIterator\n\nclass Holder[S: IntoIterator[int64]]:\n    source: S\n\ndef main():\n    print(1)\n",
+            "only a function or method bound can name `IntoIterator` yet",
         ),
         (
             "trait Source:\n    def open(self) -> int64\n    type Iter\n\ndef main():\n    print(1)\n",

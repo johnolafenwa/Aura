@@ -1,0 +1,77 @@
+from iter import Generator, IntoIterator
+
+
+class Playlist:
+    songs: list[str]
+
+
+def play(songs: own list[str]) -> Generator[str]:
+    for song in songs:
+        yield song.clone()
+
+
+impl IntoIterator[str] for Playlist:
+    type Iter = Generator[str]
+    def into_iter(own self) -> Self.Iter:
+        return play(self.songs)
+
+
+def count[T, S: IntoIterator[T]](source: own S) -> int64:
+    mut n = 0
+    for _ in source:
+        n += 1
+    return n
+
+
+def outer[S: IntoIterator[str]](source: own S) -> int64:
+    return count(source)
+
+
+def upper[S: IntoIterator[str]](source: own S) -> list[str]:
+    return [x + "!" for x in source]
+
+
+def pairs[S: IntoIterator[str]](source: own S):
+    for i, x in enumerate(source):
+        print(f"{i} {x}")
+
+
+def iterator_of[T, S: IntoIterator[T]](source: own S) -> S.Iter:
+    return source.into_iter()
+
+
+trait Greet:
+    def name(self) -> str
+
+    def hello(self) -> str:
+        return "hi " + self.name()
+
+
+class Wrap[T]:
+    v: T
+
+
+impl[T: Greet] Greet for Wrap[T]:
+    def name(self) -> str:
+        return self.v.name()
+
+    def hello(self) -> str:
+        return "wrap " + self.name()
+
+
+class Person:
+    n: str
+
+
+impl Greet for Person:
+    def name(self) -> str:
+        return self.n.clone()
+
+
+def main():
+    print(count(Playlist(songs=["a", "b", "c"])))
+    print(outer(Playlist(songs=["a"])))
+    print(upper(Playlist(songs=["p", "q"])))
+    pairs(Playlist(songs=["m", "n"]))
+    print(iterator_of(Playlist(songs=["x", "y"])).collect())
+    print(Wrap(v=Person(n="ada")).hello())
