@@ -26,4 +26,5 @@ We'll build a generic stack and a `largest` function that first refuses to
 compile, then use traits to describe priced items in a small shop and fix
 `largest` along the way. By the end you'll be able to write generic code,
 define and implement traits, give your own types operators and custom printing,
-and convert between types deliberately.
+convert between types deliberately, and make `for` loops work over your own
+types with iterators and generators.

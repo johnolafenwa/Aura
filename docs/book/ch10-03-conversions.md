@@ -360,24 +360,6 @@ Aura 0.12. The call has to be in a module-level function, not in a method, and
 a function that makes it can't be started directly as a task. The
 [Manual](/manual/generics-and-traits) lists them.
 
-## Summary
-
-Generics let you write a function, class, or enum once and use it with many
-types. Type parameters are checked once, for every possible type, so the
-ownership modes and operations in a generic body have to make sense for all of
-them: `own T` for values the body keeps, and a trait bound for any method or
-operator it calls. Traits name behavior, implementations promise it explicitly,
-and bounds put the requirement in the signature where callers can read it. A
-few traits connect to the language itself: `Display` controls printing, `Add`,
-`Ord`, and friends give your types operators, and `From` lets `try` convert
-errors.
-
-Conversions follow the same philosophy of saying what you mean. `as` converts
-numbers exactly or traps, `.to_float()` rounds on purpose, parsing text returns
-a `Result`, and `str()` and f-strings render anything. Nothing converts behind
-your back.
-
-With error handling and generics in hand, you're ready to make sure your code
-does what you think it does. [Chapter 11](/book/ch11-00-testing) introduces
-`aura test`, and we'll use it to find a real bug in some code that looks
-correct.
+Conversions are the last tool for making your own types fit in with the rest
+of the language. The next section covers the other one: making a `for` loop
+work over them.

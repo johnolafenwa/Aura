@@ -7362,7 +7362,7 @@ fn format_enum_variant_payload(payload: &crate::sema::EnumPayloadFieldInfo) -> S
 const KEYWORDS: &[&str] = &[
     "class", "enum", "trait", "def", "if", "elif", "else", "while", "for", "in", "match", "case",
     "with", "return", "assert", "try", "lambda", "public", "mut", "own", "indirect", "copy",
-    "break", "continue", "pass",
+    "break", "continue", "pass", "yield",
 ];
 
 struct CompletionMeta {

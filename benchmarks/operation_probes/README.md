@@ -66,3 +66,19 @@ the `str` and `dict` work of Phase 3.
 `int64` function that LLVM inlines, against the same arithmetic written
 in the loop, so Rust's cost is 0. Aura's is the frame record each call
 keeps: 37 instructions before step 4a, 12 after.
+
+`iterator_next`, `generator_next`, and `generator_start` (step 9f, added
+on 7 November 2026, measured at `f86a588`) cost one `next` of a
+user-defined `Iterator` class, one resumed `yield` of a generator, and
+creating, running to its first `yield`, and dropping a generator. Rust's
+side uses a plain `Iterator` impl and `std::iter::from_fn`, which LLVM
+inlines into the loop, so these ratios measure Aura's dispatch and
+coroutine switching rather than the work inside the loop body.
+
+| operation | step | count | Rust instr/op | Aura instr/op | Aura/Rust |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `iterator_next` | 9f | 100,000 | 7.0 | 2,161.1 | 308.7x |
+| `generator_next` | 9f | 100,000 | 5.0 | 8,099.3 | 1,619.5x |
+| `generator_start` | 9f | 10,000 | 11.0 | 24,551.1 | 2,231.9x |
+
+They are a baseline for later speed work on iterator loops and generators.

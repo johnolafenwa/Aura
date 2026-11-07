@@ -1,10 +1,12 @@
 # ADR-0054: Generators and the iterator protocol
 
-- Status: Accepted direction; detailed design pending
+- Status: Accepted; implemented in Batch 9 (steps 9b-9f)
 - Ratified direction: 2026-09-06, user approval of the priority roadmap
 - Date: 2026-08-02
 - Version target: Aura 0.4
-- Implementation: Not started
+- Implementation: Complete for Aura 0.13 except bounds on traits with
+  associated types; the detailed design and the per-step record are in
+  [the Batch 9 design checkpoint](../25-batch-9-design-checkpoint.md)
 - Roadmap decision: Batch S1, design-only checkpoint
 - Related: ADR-0006, ADR-0013, ADR-0016, ADR-0017, ADR-0019, ADR-0022,
   ADR-0032, ADR-0033, ADR-0038, ADR-0039, and ADR-0052
@@ -13,7 +15,8 @@
 
 The user approved lazy generators, a distinct item/end protocol, associated
 types, explicit idempotent close, early-exit cleanup, persistent failure state,
-and initially pinned frames. These features are not implemented. Remaining
+and initially pinned frames. Batch 9 implemented them; where the checkpoint
+settled a detail differently from this baseline, the checkpoint wins. Remaining
 details are listed at the end; other sections retain their design baseline.
 See the [approved roadmap](../14-priority-roadmap.md).
 

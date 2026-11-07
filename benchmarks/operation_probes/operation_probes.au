@@ -5,6 +5,7 @@
 # difference in executed instructions between the two, divided by `count`, is
 # what one operation costs. operation_probes.rs does the same work in Rust,
 # and both print the same line.
+from iter import Generator, Iterator, Step
 import sys
 
 
@@ -221,6 +222,54 @@ def call(n: int64, run: bool) -> int64:
     return total
 
 
+class Upto:
+    i: int64
+    n: int64
+
+
+impl Iterator[int64] for Upto:
+    def next(mut self) -> Step[int64]:
+        if self.i == self.n:
+            return Step.End
+        self.i += 1
+        return Step.Item(self.i - 1)
+
+
+def iterator_next(n: int64, run: bool) -> int64:
+    mut total = 0
+    if run:
+        for i in Upto(i=0, n=n):
+            total += i
+    return total
+
+
+def upto(n: int64) -> Generator[int64]:
+    mut i = 0
+    while i < n:
+        yield i
+        i += 1
+
+
+def generator_next(n: int64, run: bool) -> int64:
+    mut total = 0
+    if run:
+        for i in upto(n):
+            total += i
+    return total
+
+
+def generator_start(n: int64, run: bool) -> int64:
+    mut total = 0
+    if run:
+        for i in range(n):
+            for x in upto(1):
+                total += x + i
+    else:
+        for i in range(n):
+            total += i
+    return total
+
+
 def probe(operation: str, n: int64, run: bool) -> int64:
     if operation == "while_step":
         return while_step(n, run)
@@ -252,6 +301,12 @@ def probe(operation: str, n: int64, run: bool) -> int64:
         return enum_match(n, run)
     elif operation == "call":
         return call(n, run)
+    elif operation == "iterator_next":
+        return iterator_next(n, run)
+    elif operation == "generator_next":
+        return generator_next(n, run)
+    elif operation == "generator_start":
+        return generator_start(n, run)
     return -1
 
 
