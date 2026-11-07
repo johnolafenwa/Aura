@@ -42,6 +42,12 @@ def main():
             if q == 1:
                 break
             print(p * 10 + q)
+    mut n = 3
+    held = pairs(n)
+    n = 10
+    print("held")
+    for h in held:
+        print(h + n)
     else_count = 0
     print(else_count)
 

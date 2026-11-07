@@ -97,5 +97,6 @@ place, so neither builds a `Step` or switches stacks:
 and LLVM folds it into the loop around it, while Rust still builds its
 `from_fn` closure. A generator that does not qualify for running in place
 (more than one `yield`, or a call in its body) runs as a state machine,
-about 22 instructions per item on the same loop; one held in a variable,
-or with non-number locals, still runs on its own stack.
+about 22 instructions per item on the same loop. A generator passed
+around as a value, or with locals other than numbers, `bool`, and `str`,
+still runs on its own stack.

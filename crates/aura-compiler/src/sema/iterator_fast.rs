@@ -89,6 +89,7 @@ pub(super) fn expand(module: &Module, context: &ModuleContext) -> Option<(Module
     }
     let mut frames = Vec::new();
     let mut fusable = BTreeMap::new();
+    let mut framed = BTreeMap::new();
     for item in &module.items {
         let Item::Function(function) = item else {
             continue;
@@ -96,12 +97,26 @@ pub(super) fn expand(module: &Module, context: &ModuleContext) -> Option<(Module
         if let Some(frame) = generator_frame(function, &mut columns) {
             windows += 1;
             frames.extend(frame);
+            framed.insert(function.name.clone(), function.params.len());
             if let Some(found) = Fusable::of(function) {
                 fusable.insert(function.name.clone(), found);
             }
         }
     }
     let mut fused = 0;
+    if !framed.is_empty() {
+        for item in &mut module.items {
+            let bodies: Vec<&mut FunctionDecl> = match item {
+                Item::Function(function) => vec![function],
+                Item::Class(class) => class.methods.iter_mut().collect(),
+                Item::Impl(impl_decl) => impl_decl.methods.iter_mut().collect(),
+                _ => Vec::new(),
+            };
+            for function in bodies {
+                fused += hoist_held_generators(function, &framed);
+            }
+        }
+    }
     if !fusable.is_empty() {
         for item in &mut module.items {
             let bodies: Vec<&mut FunctionDecl> = match item {
@@ -207,6 +222,14 @@ const SCALARS: &[&str] = &[
     "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "float32", "float64",
     "bool",
 ];
+
+/// The name of a type a frame field may have: a number, `bool`, or `str`.
+fn field_type_name(ty: &TypeRef) -> Option<&str> {
+    match &ty.kind {
+        TypeRefKind::Named { name, args } if args.is_empty() && name == "str" => Some(name),
+        _ => scalar_name(ty),
+    }
+}
 
 fn scalar_name(ty: &TypeRef) -> Option<&str> {
     match &ty.kind {
@@ -402,6 +425,7 @@ impl FrameLayout {
             ExprKind::Int(_) => Some("int64".to_string()),
             ExprKind::Float(_) => Some("float64".to_string()),
             ExprKind::Bool(_) => Some("bool".to_string()),
+            ExprKind::String(_) | ExprKind::FString(_) => Some("str".to_string()),
             ExprKind::Name(name) => self.ty(name).map(str::to_string),
             ExprKind::Group(inner) => self.infer(inner),
             ExprKind::Cast { ty, .. } => scalar_name(ty).map(str::to_string),
@@ -513,7 +537,7 @@ fn collect_locals(
                     return layout.ty(target).is_some();
                 }
                 let ty = match &assign.annotation {
-                    Some(annotation) => scalar_name(annotation).map(str::to_string),
+                    Some(annotation) => field_type_name(annotation).map(str::to_string),
                     None => layout.infer(&assign.value),
                 };
                 ty.is_some_and(|ty| layout.declare(target, ty))
@@ -598,7 +622,7 @@ fn generator_frame(function: &FunctionDecl, columns: &mut usize) -> Option<Vec<I
         loops: 0,
     };
     for param in &function.params {
-        let ty = scalar_name(&param.ty)?;
+        let ty = field_type_name(&param.ty)?;
         (param.mode != ParamMode::BorrowMut && layout.declare(&param.name, ty.to_string()))
             .then_some(())?;
     }
@@ -765,6 +789,7 @@ fn zero(ty: &str, span: Span) -> Expr {
     let kind = match ty {
         "bool" => ExprKind::Bool(false),
         "float32" | "float64" => ExprKind::Float(0.0),
+        "str" => ExprKind::String(String::new()),
         _ => ExprKind::Int(0),
     };
     Expr { kind, span }
@@ -1306,7 +1331,7 @@ impl Fusable {
             loops: 0,
         };
         for param in &function.params {
-            layout.declare(&param.name, scalar_name(&param.ty)?.to_string());
+            layout.declare(&param.name, field_type_name(&param.ty)?.to_string());
         }
         // The frame pass already accepted this body.
         collect_locals(&function.body, &mut layout, &mut BTreeSet::new()).then_some(())?;
@@ -1326,6 +1351,7 @@ impl Fusable {
         if callee_names(&function.body)
             .iter()
             .any(|name| name != "range")
+            || !trap_free(&function.body)
         {
             return None;
         }
@@ -1901,4 +1927,162 @@ fn rename_body(body: &mut [Stmt], renamed: &BTreeMap<String, String>) {
             _ => {}
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Held generators
+
+/// Rewrites `g = gen(args)` followed, in the same block, by the only use of
+/// `g` as `for x in g:` into `for x in gen(...)`, with each argument kept in a
+/// hidden local at the assignment. The generator's body does not start
+/// before the loop asks for its first item, so this keeps the meaning, and
+/// the loop can then take a fast form. Returns how many it rewrote.
+fn hoist_held_generators(function: &mut FunctionDecl, framed: &BTreeMap<String, usize>) -> usize {
+    let bound = bound_names(function);
+    let Ok(text) = serde_json::to_string(&function.body) else {
+        return 0;
+    };
+    let uses = |name: &str| {
+        text.matches(&format!("{{\"Name\":{}}}", serde_json::Value::from(name)))
+            .count()
+    };
+    let mut count = 0;
+    hoist_block(&mut function.body, framed, &bound, &uses, &mut count);
+    count
+}
+
+fn hoist_block(
+    body: &mut Vec<Stmt>,
+    framed: &BTreeMap<String, usize>,
+    bound: &BTreeSet<String>,
+    uses: &dyn Fn(&str) -> usize,
+    count: &mut usize,
+) {
+    for stmt in body.iter_mut() {
+        match stmt {
+            Stmt::If(if_stmt) => {
+                for branch in &mut if_stmt.branches {
+                    hoist_block(&mut branch.body, framed, bound, uses, count);
+                }
+                if let Some(else_body) = &mut if_stmt.else_body {
+                    hoist_block(else_body, framed, bound, uses, count);
+                }
+            }
+            Stmt::While(while_stmt) => {
+                hoist_block(&mut while_stmt.body, framed, bound, uses, count)
+            }
+            Stmt::For(for_stmt) => hoist_block(&mut for_stmt.body, framed, bound, uses, count),
+            Stmt::Match(match_stmt) => {
+                for arm in &mut match_stmt.arms {
+                    hoist_block(&mut arm.body, framed, bound, uses, count);
+                }
+            }
+            Stmt::With(with) => hoist_block(&mut with.body, framed, bound, uses, count),
+            _ => {}
+        }
+    }
+    let mut index = 0;
+    while index < body.len() {
+        let Some((held, generator, args)) = held_generator(&body[index], framed, bound) else {
+            index += 1;
+            continue;
+        };
+        // The holder is assigned here and read once, by a later loop in this
+        // block.
+        let loop_index = (index + 1..body.len()).find(|&later| {
+            matches!(&body[later], Stmt::For(for_stmt)
+                if for_stmt.borrow_mode.is_none()
+                    && matches!(&for_stmt.iterable.kind, ExprKind::Name(name) if *name == held))
+        });
+        let Some(loop_index) = loop_index.filter(|_| uses(&held) == 2) else {
+            index += 1;
+            continue;
+        };
+        let span = stmt_span_of(&body[index]);
+        let mut hidden = Vec::with_capacity(args.len());
+        let mut assigns = Vec::with_capacity(args.len());
+        for (position, arg) in args.into_iter().enumerate() {
+            let name = format!("held {}:{} {position}", span.line, span.column);
+            assigns.push(assign(&name, arg, true, span));
+            hidden.push(name);
+        }
+        if let Stmt::For(for_stmt) = &mut body[loop_index] {
+            let source_span = for_stmt.iterable.span;
+            for_stmt.iterable = call(
+                name_expr(&generator, source_span),
+                hidden
+                    .iter()
+                    .map(|name| name_expr(name, source_span))
+                    .collect(),
+                source_span,
+            );
+        }
+        let added = assigns.len();
+        body.splice(index..=index, assigns);
+        index += added;
+        *count += 1;
+    }
+}
+
+/// `(holder, generator, arguments)` when `stmt` is `holder = generator(...)`
+/// for a framed generator called with one positional argument per
+/// parameter.
+fn held_generator(
+    stmt: &Stmt,
+    framed: &BTreeMap<String, usize>,
+    bound: &BTreeSet<String>,
+) -> Option<(String, String, Vec<Expr>)> {
+    let Stmt::Assign(assign) = stmt else {
+        return None;
+    };
+    let (AssignTarget::Name(held), None, None) = (&assign.target, &assign.annotation, &assign.op)
+    else {
+        return None;
+    };
+    let ExprKind::Call { callee, args } = &assign.value.kind else {
+        return None;
+    };
+    let ExprKind::Name(generator) = &callee.kind else {
+        return None;
+    };
+    (framed.get(generator) == Some(&args.len())
+        && !bound.contains(generator)
+        && args.iter().all(|arg| arg.name.is_none()))
+    .then(|| {
+        (
+            held.clone(),
+            generator.clone(),
+            args.iter().map(|arg| arg.value.clone()).collect(),
+        )
+    })
+}
+
+fn stmt_span_of(stmt: &Stmt) -> Span {
+    match stmt {
+        Stmt::Assign(assign) => assign.span,
+        _ => Span::new(0, 0),
+    }
+}
+
+/// Whether the body's expressions call no methods and index nothing, the
+/// other ways besides a call that a body runs code that can trap.
+fn trap_free(body: &[Stmt]) -> bool {
+    fn walk(expr: &Expr) -> bool {
+        let own = match &expr.kind {
+            ExprKind::Call { callee, .. } => matches!(callee.kind, ExprKind::Name(_)),
+            ExprKind::Index { .. } | ExprKind::Slice { .. } => false,
+            _ => true,
+        };
+        let mut children = true;
+        let mut probe = expr.clone();
+        probe.for_each_child_mut(&mut |child| children &= walk(child));
+        own && children
+    }
+    let mut free = true;
+    visit_stmts(body, &mut |stmt| {
+        for expr in stmt_exprs(stmt) {
+            free &= walk(expr);
+        }
+    });
+    free
 }

@@ -1,0 +1,30 @@
+# Fast generator forms with str parameters, locals and items.
+from iter import Generator
+
+def labels(prefix: own str, n: int64) -> Generator[str]:
+    mut acc = ""
+    for i in range(n):
+        acc = acc + "x"
+        yield f"{prefix}{i}:{acc}"
+
+def words(n: int64) -> Generator[str]:
+    mut w = "a"
+    for i in range(n):
+        yield f"{w}"
+        w = w + "b"
+        yield f"{w}!"
+
+def chars(s: own str) -> Generator[str]:
+    for i in range(2):
+        yield s[i:i + 1]
+
+def main():
+    for l in labels("p", 3):
+        print(l)
+    for w in words(2):
+        print(w)
+    for c in chars("hey"):
+        print(c)
+    mut held = labels("h", 2)
+    for l in held:
+        print(l)

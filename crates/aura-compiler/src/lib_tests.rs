@@ -4267,6 +4267,10 @@ fn fast_iteration_forms_run_on_the_interpreter() {
             include_str!("../tests/fixtures/run-pass/fast_iteration_scopes.au"),
             include_str!("../tests/fixtures/run-pass/fast_iteration_scopes.stdout"),
         ),
+        (
+            include_str!("../tests/fixtures/run-pass/fast_iteration_text.au"),
+            include_str!("../tests/fixtures/run-pass/fast_iteration_text.stdout"),
+        ),
     ] {
         let output = run_source(source).expect("fast iteration runs");
         assert_eq!(output.stdout, expected);

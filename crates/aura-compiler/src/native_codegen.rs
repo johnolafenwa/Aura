@@ -15437,6 +15437,18 @@ fn frameless_leaf(function: &MirFunction, classes: &HashMap<String, MirClass>) -
     if function.name == "main" || function.blocks.is_empty() {
         return false;
     }
+    // A call the runtime enters, such as one through a function value,
+    // hands a mutable parameter's write-through sink over in the frame the
+    // runtime pushes. Only a fast iterator's advance method, which only
+    // generated loops call directly, may skip that frame with one.
+    let mutable = function.receiver == Some(MirReceiverKind::BorrowMut)
+        || function
+            .params
+            .iter()
+            .any(|param| param.passing == MirReceiverKind::BorrowMut);
+    if mutable && !function.name.ends_with(FAST_ADVANCE_SUFFIX) {
+        return false;
+    }
     let locals_are_words = function
         .local_types
         .iter()

@@ -49,15 +49,15 @@ in this file.
   class with an explicit `impl Iterator[T]` (no type parameters, `T` a
   number, `bool`, `str`, or a class of the module, and `next` returning
   `Step.End` or `Step.Item(value)`) no longer builds a `Step` per item. A
-  `for` loop over a direct call of a module generator whose parameters and
-  locals are numbers or `bool` runs the generator as a state machine
+  `for` loop over a call of a module generator whose parameters and locals
+  are numbers, `bool`, or `str` runs the generator as a state machine
   instead of on its own stack, and when the generator has one `yield` and
-  calls nothing, runs its body in place. The operation probes now measure
-  2.3x Rust for `iterator_next` (from 309x) and 1.2x for `generator_next`
-  (from 1,620x). Output is unchanged; a trap inside a generator that runs
-  in place reports its line, but the call chain names the loop's function
-  rather than the generator. Small native functions that only compute on
-  numbers also skip their call-frame record.
+  calls nothing, runs its body in place. The call may also be held in a
+  variable that only the loop reads. The operation probes now measure 2.3x
+  Rust for `iterator_next` (from 309x) and 1.2x for `generator_next` (from
+  1,620x). Output, diagnostics, and trap call chains are unchanged. Small
+  native functions that only compute on numbers also skip their call-frame
+  record.
 - Fixed: `aura fmt` removed the space in `yield (a, b)`, which turned the
   statement into a call of a function named `yield`.
 

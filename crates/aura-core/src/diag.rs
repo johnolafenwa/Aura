@@ -521,6 +521,47 @@ pub fn visible_call_frames(frames: &[RuntimeCallFrame]) -> Vec<RuntimeCallFrame>
     visible
 }
 
+/// A loop can run a generator's body in place, so a trap there has no frame
+/// of the generator's own. Such code has generated spans; when the trap's
+/// line belongs to a module-level `def` other than the innermost frame's
+/// function, the chain shows that function first, as if it had a frame.
+pub fn name_inlined_generator(frames: &mut Vec<RuntimeCallFrame>, trap: Span, source: &str) {
+    if trap.column < GENERATED_COLUMN_STRIDE {
+        return;
+    }
+    let Some(innermost) = frames.first() else {
+        return;
+    };
+    let lines = source.lines().take(trap.line).collect::<Vec<_>>();
+    let Some((index, name)) = lines.iter().enumerate().rev().find_map(|(index, line)| {
+        let rest = line.strip_prefix("def ")?;
+        let end = rest.find(['(', '['])?;
+        Some((index, rest[..end].trim().to_string()))
+    }) else {
+        return;
+    };
+    let (module, shown) = match innermost.function.rsplit_once("::") {
+        Some((module, shown)) => (Some(module), shown),
+        None => (None, innermost.function.as_str()),
+    };
+    let declared = Span::new(index + 1, 1);
+    if shown == name || innermost.span.start.line == declared.line {
+        return;
+    }
+    let function = match module {
+        Some(module) => format!("{module}::{name}"),
+        None => name,
+    };
+    let path = innermost.span.path.clone();
+    frames.insert(
+        0,
+        RuntimeCallFrame {
+            function,
+            span: RuntimeSourceSpan::point(path, declared),
+        },
+    );
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeTaskFrame {
     pub task_function: String,
@@ -860,7 +901,7 @@ impl Diagnostic {
             code: self.code.clone(),
             severity: self.severity,
             message: self.message.clone(),
-            primary_span: self.span.map(|span| StructuredSpan {
+            primary_span: self.span.map(Span::written).map(|span| StructuredSpan {
                 path: path.clone(),
                 start: span,
                 end: Span::new(span.line, span.column.saturating_add(1)),
@@ -982,7 +1023,11 @@ impl Diagnostic {
             ));
         }
         if !self.call_frames.is_empty() {
-            let frames = visible_call_frames(&self.call_frames)
+            let mut frames = visible_call_frames(&self.call_frames);
+            if let Some(span) = self.span {
+                name_inlined_generator(&mut frames, span, source);
+            }
+            let frames = frames
                 .iter()
                 .map(|frame| format!("{} at {}", frame.function, frame.span.start))
                 .collect::<Vec<_>>()
