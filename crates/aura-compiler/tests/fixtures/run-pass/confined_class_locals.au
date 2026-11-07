@@ -1,0 +1,45 @@
+class Inner:
+    x: int
+    tag: str
+
+class Outer:
+    name: str
+    inner: Inner
+    items: list[int]
+
+def bump(inner: mut Inner) -> None:
+    inner.x += 1
+    inner.tag += "!"
+
+def show(inner: Inner) -> str:
+    return f"{inner.tag}{inner.x}"
+
+def take(inner: own Inner) -> int:
+    return inner.x
+
+def run() -> None:
+    mut o = Outer(name="a", inner=Inner(x=1, tag="t"), items=[1, 2])
+    bump(o.inner)
+    print(show(o.inner))
+    o.name += "b"
+    o.items.append(3)
+    print(f"{o.name} {o.inner.x} {o.inner.tag} {o.items.len()}")
+    o.inner = Inner(x=10, tag="u")
+    n = o.name
+    o.name = n + "c"
+    print(f"{o.name} {o.inner.x} {o.inner.tag}")
+    mut total = 0
+    for i in range(5):
+        mut p = Outer(name=f"{i}", inner=Inner(x=i, tag="v"), items=[])
+        bump(p.inner)
+        total += p.inner.x + p.name.len()
+    print(total)
+    mut q = Outer(name="q", inner=Inner(x=7, tag="w"), items=[])
+    view w = q.inner
+    print(show(w))
+    print(take(q.inner))
+    q.name = "r"
+    print(q.name)
+
+def main() -> None:
+    run()

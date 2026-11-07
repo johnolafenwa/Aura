@@ -15995,3 +15995,59 @@ fn debug_source_paths_keep_the_directory_the_program_was_given_by() {
     );
     std::fs::remove_dir_all(&directory).expect("remove the test directory");
 }
+
+#[test]
+fn confined_instances_are_class_locals_built_here_and_reached_only_by_field() {
+    let module = lower_source_to_mir(
+        r#"
+class Counter:
+    name: str
+    count: int
+
+def keep(counter: Counter) -> int:
+    return counter.count
+
+def make() -> Counter:
+    return Counter(name="m", count=0)
+
+def run(seed: Counter) -> int:
+    mut local = Counter(name="a", count=0)
+    local.count += 1
+    local.name += "b"
+    mut passed = Counter(name="b", count=0)
+    passed.count += keep(passed)
+    mut copied = make()
+    copied.count += 1
+    mut bound = Counter(name="c", count=0)
+    bound.count += 1
+    mut other = Counter(name="d", count=0)
+    other = bound
+    return local.count + passed.count + copied.count + other.count + seed.count
+
+def main() -> None:
+    print(run(Counter(name="s", count=1)))
+"#,
+    )
+    .expect("class locals should lower");
+    let classes = module
+        .classes
+        .iter()
+        .map(|class| (class.name.clone(), class.clone()))
+        .collect::<HashMap<_, _>>();
+    let run = module
+        .functions
+        .iter()
+        .find(|function| function.name == "run")
+        .expect("run lowers");
+    let confined = super::classes::confined_instances(run, &classes);
+    assert!(confined.contains("local"), "{confined:?}");
+    for name in ["seed", "passed", "copied", "bound", "other"] {
+        assert!(!confined.contains(name), "{name} in {confined:?}");
+    }
+    let keep = module
+        .functions
+        .iter()
+        .find(|function| function.name == "keep")
+        .expect("keep lowers");
+    assert!(super::classes::confined_instances(keep, &classes).is_empty());
+}
