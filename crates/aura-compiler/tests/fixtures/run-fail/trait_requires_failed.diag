@@ -1,0 +1,8 @@
+error[AU4009]: `requires` clause failed: `k > 0`
+ --> crates/aura-compiler/tests/fixtures/run-fail/trait_requires_failed.au:3:18
+  |
+3 |         requires k > 0
+  |                  ^
+  = note: left = 0
+  = note: right = 0
+  = note: Aura call chain (innermost first): Scale for Unit.by at 9:5 -> scale_all at 12:1 -> main at 18:1

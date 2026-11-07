@@ -1467,17 +1467,18 @@ impl Parser {
         let (receiver, params) = self.parse_params(true)?;
         self.expect_simple(TokenKind::RParen)?;
         let (return_type, view_return) = self.parse_return_annotation(span)?;
-        // A docstring-only body leaves the method signature-only.
-        let (doc, body) = if self.eat_simple(&TokenKind::Colon).is_some() {
+        // A body of only a docstring and clauses leaves the method
+        // signature-only.
+        let (doc, contracts, body) = if self.eat_simple(&TokenKind::Colon).is_some() {
             self.expect_newline()?;
             let previous_view_return = self.current_function_returns_view;
             self.current_function_returns_view = view_return.is_some();
-            let body = self.parse_block_with_docstring();
+            let body = self.parse_trait_method_body();
             self.current_function_returns_view = previous_view_return;
             body?
         } else {
             self.expect_newline()?;
-            (None, Vec::new())
+            (None, Vec::new(), Vec::new())
         };
         Ok(FunctionDecl {
             public: false,
@@ -1493,7 +1494,7 @@ impl Parser {
             property: None,
             decorators: Vec::new(),
             doc,
-            contracts: Vec::new(),
+            contracts,
             spec: false,
         })
     }
@@ -2494,27 +2495,6 @@ impl Parser {
         }))
     }
 
-    /// Parses an indented body whose first statement slot may hold a
-    /// docstring. The docstring is returned separately and produces no
-    /// statement.
-    fn parse_block_with_docstring(&mut self) -> Result<(Option<DocString>, Vec<Stmt>)> {
-        self.expect_simple(TokenKind::Indent)?;
-        self.skip_newlines();
-        let doc = self.take_docstring()?;
-
-        let mut body = Vec::new();
-        while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
-            if self.at_simple(&TokenKind::Newline) {
-                self.bump();
-                continue;
-            }
-            body.push(self.parse_stmt()?);
-        }
-
-        self.expect_simple(TokenKind::Dedent)?;
-        Ok((doc, body))
-    }
-
     /// Parses a function body: an optional docstring, then the `requires`
     /// and `ensures` clauses, then the statements.
     fn parse_function_body(
@@ -2534,6 +2514,26 @@ impl Parser {
         }
         self.expect_simple(TokenKind::Dedent)?;
         Ok((doc, contracts, body))
+    }
+
+    /// Parses a trait method body: a function body whose clauses are only
+    /// `requires` and `ensures`, which every implementation inherits.
+    fn parse_trait_method_body(
+        &mut self,
+    ) -> Result<(Option<DocString>, Vec<ContractClause>, Vec<Stmt>)> {
+        let body = self.parse_function_body()?;
+        if let Some(clause) = body
+            .1
+            .iter()
+            .find(|clause| clause.kind == ContractKind::Decreases)
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2048",
+                clause.span,
+                "a trait method states only `requires` and `ensures`, which every implementation inherits",
+            ));
+        }
+        Ok(body)
     }
 
     /// Parses the clauses at the top of a body, each on its own line.

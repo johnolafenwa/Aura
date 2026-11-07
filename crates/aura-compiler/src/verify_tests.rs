@@ -1304,3 +1304,44 @@ def main():
         ],
     );
 }
+
+#[test]
+fn trait_contracts_hold_for_every_implementation_and_generic_calls_rely_on_them() {
+    assert_open(
+        r#"
+trait Shape:
+    def area(self) -> int64:
+        ensures result >= 0
+    def scaled(self, k: int64) -> int64:
+        requires 1 <= k and k <= 10
+        ensures result >= 0
+        return min(self.area(), 1000) * k
+
+class Square:
+    side: int64
+
+class Sheet:
+    w: int64
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return min(max(self.side, 0), 1000) * 2
+
+impl Shape for Sheet:
+    def area(self) -> int64:
+        return self.w
+
+def first_area[T: Shape](items: list[T]) -> int64:
+    ensures result >= 0
+    for item in items:
+        return item.area()
+    return 0
+
+def main():
+    print(Square(side=3).scaled(2))
+    print(first_area([Square(side=1), Square(side=2)]))
+    print(first_area([Sheet(w=4)]))
+"#,
+        &["4 ensures failed"],
+    );
+}

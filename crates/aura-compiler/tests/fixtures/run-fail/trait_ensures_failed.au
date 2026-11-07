@@ -1,0 +1,15 @@
+trait Shape:
+    def area(self) -> int64:
+        ensures result >= 0
+
+class Sheet:
+    w: int64
+    h: int64
+
+impl Shape for Sheet:
+    def area(self) -> int64:
+        return self.w * self.h
+
+def main():
+    print(Sheet(w=2, h=3).area())
+    print(Sheet(w=2, h=-3).area())

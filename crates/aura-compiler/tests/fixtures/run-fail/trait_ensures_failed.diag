@@ -1,0 +1,8 @@
+error[AU4009]: `ensures` clause failed: `result >= 0`
+ --> crates/aura-compiler/tests/fixtures/run-fail/trait_ensures_failed.au:3:17
+  |
+3 |         ensures result >= 0
+  |                 ^
+  = note: left = -6
+  = note: right = 0
+  = note: Aura call chain (innermost first): Shape for Sheet.area at 10:5 -> main at 13:1

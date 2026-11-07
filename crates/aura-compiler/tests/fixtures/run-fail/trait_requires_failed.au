@@ -1,0 +1,20 @@
+trait Scale:
+    def by(self, k: int64) -> int64:
+        requires k > 0
+
+class Unit:
+    n: int64
+
+impl Scale for Unit:
+    def by(self, k: int64) -> int64:
+        return self.n * k
+
+def scale_all[T: Scale](items: list[T], k: int64) -> int64:
+    mut sum = 0
+    for item in items:
+        sum += item.by(k)
+    return sum
+
+def main():
+    print(scale_all([Unit(n=1)], 2))
+    print(scale_all([Unit(n=1)], 0))

@@ -31911,13 +31911,59 @@ fn contract_clauses_check_as_pure_bool_conditions() {
         (
             "trait Shape:\n    def area(self) -> int64\n\nclass Sq:\n    side: int64\n\nimpl Shape for Sq:\n    def area(self) -> int64:\n        ensures result >= 0\n        return self.side\n",
             "AU2048",
-            "cannot declare `ensures`: trait methods do not have contracts yet",
+            "the `Shape` implementation of `area` must repeat the trait method's clauses exactly or leave them out",
+        ),
+        (
+            "trait Shape:\n    def area(self) -> int64:\n        ensures result >= 0\n\nclass Sq:\n    side: int64\n\nimpl Shape for Sq:\n    def area(self) -> int64:\n        ensures result > 0\n        return self.side\n",
+            "AU2048",
+            "must repeat the trait method's clauses exactly or leave them out",
+        ),
+        (
+            "trait Scale:\n    def by(self, k: int64) -> int64:\n        requires k > 0\n\nclass Sq:\n    side: int64\n\nimpl Scale for Sq:\n    def by(self, j: int64) -> int64:\n        return j\n",
+            "AU2048",
+            "names this parameter `j`; the trait's clauses read it as `k`",
+        ),
+        (
+            "trait Scale:\n    def by(self, k: int64) -> int64:\n        requires k.pop() > 0\n",
+            "AU2048",
+            "a `requires` condition must not change program state",
+        ),
+        (
+            "trait Scale:\n    def by(self, k: int64) -> int64:\n        decreases k\n",
+            "AU2048",
+            "a trait method states only `requires` and `ensures`",
         ),
     ] {
         let error = crate::check_source(source).expect_err(source);
         assert_eq!(error.code, code, "{source}: {}", error.message);
         assert!(error.message.contains(message), "{source}: {}", error.message);
     }
+}
+
+#[test]
+fn trait_methods_state_contracts_their_implementations_inherit() {
+    crate::check_source(concat!(
+        "trait Shape:\n",
+        "    def area(self) -> int64:\n",
+        "        \"\"\"The area.\"\"\"\n",
+        "        ensures result >= 0\n",
+        "    def scaled(self, k: int64) -> int64:\n",
+        "        requires k >= 1\n",
+        "        ensures result >= 0\n",
+        "        return self.area() * k\n",
+        "\n",
+        "class Sq:\n",
+        "    side: int64\n",
+        "\n",
+        "impl Shape for Sq:\n",
+        "    def area(self) -> int64:\n",
+        "        ensures result >= 0\n",
+        "        return self.side * self.side\n",
+        "\n",
+        "def main():\n",
+        "    print(Sq(side=2).scaled(3))\n",
+    ))
+    .expect("an implementation may repeat the trait's clauses");
 }
 
 #[test]

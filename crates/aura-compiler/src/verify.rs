@@ -246,6 +246,26 @@ impl<'a> VerifyContext<'a> {
                 }
             }
         }
+        // A method of a trait implementation has the contract of its
+        // declaration, found by its span: the implementation's own method,
+        // or the trait's default.
+        let mut impl_methods = BTreeMap::new();
+        for trait_impl in &program.trait_impls {
+            for method in trait_impl.methods.values() {
+                impl_methods.insert(
+                    (method.decl.span.line, method.decl.span.column),
+                    &method.decl,
+                );
+            }
+        }
+        for function in &module.functions {
+            let name = spec::base_name(&function.name);
+            if !decls.contains_key(name) && name.contains(" for ") {
+                if let Some(decl) = impl_methods.get(&(function.span.line, function.span.column)) {
+                    decls.insert(name.to_string(), decl);
+                }
+            }
+        }
         Self {
             functions: module
                 .functions
@@ -502,6 +522,7 @@ pub fn verify_module(
                 Some(existing) => {
                     if status.rank() > existing.status.rank() {
                         existing.status = status;
+                        existing.function = public.clone();
                     }
                 }
                 None => {

@@ -2019,6 +2019,34 @@ impl<'a> Exec<'a> {
                     target,
                 )
             }
+            // A call through a trait picks its implementation at run time.
+            // Every implementation has the trait method's contract, so the
+            // call relies on that.
+            CallTarget::TraitMember {
+                object,
+                receiver_place,
+                dispatch: Some(MethodDispatch::Candidates { candidates, .. }),
+                ..
+            } if self.shared_contract(candidates).is_some() => {
+                let function = self.shared_contract(candidates).expect("checked above");
+                let receiver = self.operand(state, object, None);
+                let mut actuals = Vec::new();
+                for arg in args {
+                    actuals.push((
+                        arg.name.clone(),
+                        self.operand(state, &arg.value, None),
+                        arg.writeback_place.clone(),
+                    ));
+                }
+                self.user_call(
+                    state,
+                    &function,
+                    Some((receiver, receiver_place.clone())),
+                    actuals,
+                    target_type.as_ref(),
+                    target,
+                )
+            }
             CallTarget::Member { receiver_place, .. }
             | CallTarget::TraitMember { receiver_place, .. } => {
                 if let Some(place) = receiver_place {
@@ -2032,6 +2060,27 @@ impl<'a> Exec<'a> {
                 fresh_target(self)
             }
         }
+    }
+
+    /// The first of `candidates` when every one is a function with the same
+    /// contract, as the implementations of one trait method are.
+    fn shared_contract(&self, candidates: &[crate::mir::MethodCandidate]) -> Option<String> {
+        let first = candidates.first()?;
+        let contract = |name: &str| {
+            self.cx.function(name)?;
+            let decl = self.cx.decl(name)?;
+            Some(
+                decl.contracts
+                    .iter()
+                    .map(|clause| (clause.kind, clause.text.clone()))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let expected = contract(&first.function)?;
+        candidates
+            .iter()
+            .all(|candidate| contract(&candidate.function).as_ref() == Some(&expected))
+            .then(|| first.function.clone())
     }
 
     /// The value of the hidden function that computes a parameter's

@@ -206,6 +206,40 @@ so each argument the measure reads must be a pure expression. A function
 takes at most one `decreases`, a method takes none yet, and a call to
 another function is not checked, so mutual recursion is not covered.
 
+## Trait Methods
+
+A trait method can state `requires` and `ensures` clauses, and every
+implementation of it inherits them. A call through the trait, such as a
+call on a value whose type is a type parameter bounded by the trait, relies
+on the same contract whichever implementation runs.
+
+```aura
+trait Shape:
+    def area(self) -> int64:
+        ensures result >= 0
+
+class Square:
+    side: int64
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+
+def total[T: Shape](items: list[T]) -> int64:
+    mut sum = 0
+    for item in items:
+        sum += item.area()
+    return sum
+
+def main():
+    print(total([Square(side=1), Square(side=2)]))  # 5
+```
+
+The clauses are checked in each implementation as if it had written them.
+An implementation may repeat the trait's clauses exactly or leave them out,
+and its parameters keep the trait's names, which the clauses read. A trait
+method takes no `decreases`.
+
 ## Class Invariants
 
 A class can state what is true of every one of its objects, with
@@ -282,7 +316,8 @@ These forms report `AU2048`:
 - an `ensures` that reads an `own` parameter of a non-Copy type, which the
   body may have moved; `old(param)` reads it on entry instead
 - a parameter named `result` in a function with `ensures`
-- clauses on the methods of a trait implementation
+- clauses on a trait implementation's method that differ from the trait
+  method's
 - `spec def` methods
 
 ## Diagnostics

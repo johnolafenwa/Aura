@@ -36,7 +36,9 @@ function:
 
 A function is proved on its own. A call relies only on what its callee
 declares: the verifier proves the callee's `requires` at the call, and then
-assumes its `ensures`. Nothing else about the callee's body is used, so
+assumes its `ensures`. A call through a trait, on a value whose type is a
+type parameter, relies on the trait method's contract, which every
+implementation is proved to keep. Nothing else about the callee's body is used, so
 what a caller needs to know must be in the contract.
 
 ```aura

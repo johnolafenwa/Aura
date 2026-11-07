@@ -25,6 +25,10 @@ in this file.
   itself, where the measure of the arguments must be smaller; `aura verify`
   proves both, so a recursion with a measure is proved to end. The
   arguments the measure reads must be pure.
+- A trait method may state `requires` and `ensures`. Every implementation
+  inherits them (it may repeat them exactly or leave them out), they are
+  checked in each implementation, and `aura verify` proves each
+  implementation keeps them and relies on them at calls through the trait.
 - `aura build --remove-proved-checks` leaves out the list bounds checks of
   element reads and borrows that `aura verify` proves can never fail. It is
   off by default; debug builds keep every check.
