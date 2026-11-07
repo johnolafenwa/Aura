@@ -63,6 +63,33 @@ fn a_short_text_stays_inline_until_it_outgrows_the_value() {
 }
 
 #[test]
+fn an_append_within_capacity_needs_the_room_already_there() {
+    let mut inline = Text::from("ab");
+    assert!(inline.push_within_capacity("cd", true));
+    assert_eq!(inline, "abcd");
+    let filler = "x".repeat(super::INLINE_CAPACITY);
+    assert!(!inline.push_within_capacity(&filler, true));
+    assert_eq!(
+        (inline.as_str(), inline.capacity()),
+        ("abcd", super::INLINE_CAPACITY)
+    );
+
+    let mut heap = Text::new();
+    heap.try_reserve(40).expect("a small reservation succeeds");
+    let room = heap.capacity();
+    assert!(heap.push_within_capacity("é", false));
+    assert!(!heap.is_ascii());
+    let rest = "y".repeat(room - heap.len());
+    assert!(heap.push_within_capacity(&rest, true));
+    assert!(!heap.push_within_capacity("z", true));
+    assert_eq!((heap.len(), heap.capacity()), (room, room));
+    // Growing appends where the room ran out.
+    heap.try_push_with("z", true)
+        .expect("a small append succeeds");
+    assert!(heap.capacity() > room && heap.ends_with("yz"));
+}
+
+#[test]
 fn a_text_converts_compares_and_formats_as_its_bytes() {
     use std::collections::HashSet;
     let owned = String::from("path/name");

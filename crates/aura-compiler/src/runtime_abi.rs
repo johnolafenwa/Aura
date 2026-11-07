@@ -131,6 +131,8 @@ runtime_functions! {
     StringifyValue => ("aura_direct_stringify_value", [I64], Some(I64)),
     RegisterDisplay => ("aura_direct_register_display", [I64, I64, I64], None),
     FormatBegin => ("aura_direct_format_begin", [I64, I64], Some(I64)),
+    FormatAppendBegin => ("aura_direct_format_append_begin", [I64], Some(I64)),
+    FormatAppendStr => ("aura_direct_format_append_str", [I64, I64, I64], Some(I64)),
     FormatPushStr => ("aura_direct_format_push_str", [I64, I64, I64], None),
     FormatPushI64 => ("aura_direct_format_push_i64", [I64, I64], None),
     FormatBeginI64 => ("aura_direct_format_begin_i64", [I64, I64, I64, I64], Some(I64)),

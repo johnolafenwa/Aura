@@ -22459,6 +22459,59 @@ fn direct_format_builder_appends_the_same_text_as_stringify_and_format() {
 }
 
 #[test]
+fn direct_format_append_builds_in_the_only_box_and_copies_a_shared_one() {
+    // The only reference is the builder itself, so the text grows in place.
+    let text = string_value("ab");
+    let builder = super::aura_direct_format_append_begin(text);
+    assert_eq!(builder, text);
+    let builder = super::aura_direct_format_append_str(builder, "cd".as_ptr(), 2);
+    assert_eq!(builder, text);
+    // A part that is the builder reads the text before it changes.
+    super::aura_direct_format_push_value(builder, builder);
+    assert_eq!(expect_string(builder), "abcdabcd");
+
+    // A box another handle holds keeps its text, and the builder is a copy.
+    let shared = string_value("kept");
+    let other = unsafe { retain_value(shared) };
+    let builder = super::aura_direct_format_append_str(shared, "!".as_ptr(), 1);
+    assert_ne!(builder, shared);
+    assert_eq!(expect_string(builder), "kept!");
+    assert_eq!(expect_string(other), "kept");
+
+    // A module constant is never changed in place.
+    let constant = string_value("const");
+    unsafe { super::freeze_direct_value(constant) };
+    let builder = super::aura_direct_format_append_begin(constant);
+    assert_ne!(builder, constant);
+    super::aura_direct_format_push_str(builder, "?".as_ptr(), 1);
+    assert_eq!(expect_string(builder), "const?");
+    assert_eq!(
+        unsafe { value_ref(constant) },
+        Value::String("const".into())
+    );
+    unsafe { super::free_frozen_direct_value(constant) };
+
+    let diagnostic = capture_direct_boundary_diagnostic(|| {
+        super::aura_direct_format_append_begin(std::ptr::null_mut());
+    });
+    assert_eq!(
+        diagnostic.message,
+        "direct runtime received a null opaque value pointer"
+    );
+
+    let number = int_value(1);
+    let address = number as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_format_push_str(address as *mut OpaqueValue, "x".as_ptr(), 1);
+    });
+    assert_eq!(
+        diagnostic.message,
+        "f-string builder holds `integer` instead of `str`"
+    );
+    unsafe { release_value(number) };
+}
+
+#[test]
 fn literal_replace_reads_its_arguments_where_the_program_keeps_them() {
     let text = string_value("a<b><");
     let replaced =
