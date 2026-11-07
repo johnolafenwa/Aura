@@ -4035,7 +4035,10 @@ fn read_input(args: &mut impl Iterator<Item = String>) -> Input {
 /// proved.
 fn handle_verify_command(args: Vec<String>) {
     let (diagnostic_format, args) = parse_diagnostic_format(args);
-    let mut options = aura_compiler::verify::Options::default();
+    let mut options = aura_compiler::verify::Options {
+        cache_dir: verify_cache_root(),
+        ..aura_compiler::verify::Options::default()
+    };
     let mut rest = Vec::new();
     let mut index = 0;
     while index < args.len() {
@@ -4056,6 +4059,10 @@ fn handle_verify_command(args: Vec<String>) {
             "--function" => {
                 options.function_filter = Some(value());
                 index += 2;
+            }
+            "--no-cache" => {
+                options.cache_dir = None;
+                index += 1;
             }
             _ => {
                 rest.push(args[index].clone());
@@ -4082,8 +4089,12 @@ fn handle_verify_command(args: Vec<String>) {
             for diagnostic in &diagnostics {
                 eprintln!("{}", render_error(&input.path, &input.source, diagnostic));
             }
+            let cached = match report.cached {
+                0 => String::new(),
+                count => format!(", {count} from the proof cache"),
+            };
             write_stdout(&format!(
-                "verified {}: {} of {} checks proved in {} functions ({})\n",
+                "verified {}: {} of {} checks proved in {} functions{cached} ({})\n",
                 input.path,
                 report.proved(),
                 report.obligations.len(),
@@ -4125,6 +4136,7 @@ fn handle_verify_command(args: Vec<String>) {
                 "schema_version": 1,
                 "solver": report.solver,
                 "functions": report.functions,
+                "cached": report.cached,
                 "proved": report.proved(),
                 "obligations": obligations,
                 "diagnostics": diagnostics
@@ -4137,6 +4149,22 @@ fn handle_verify_command(args: Vec<String>) {
     }
     if !report.is_proved() {
         process::exit(1);
+    }
+}
+
+/// The proof cache of `aura verify`: `verify` under `AURA_CACHE_DIR` when
+/// it is set, else `~/.cache/aura/verify`.
+fn verify_cache_root() -> Option<PathBuf> {
+    match std::env::var_os("AURA_CACHE_DIR").filter(|dir| !dir.is_empty()) {
+        Some(dir) => Some(PathBuf::from(dir).join("verify")),
+        None => std::env::var_os("HOME")
+            .filter(|home| !home.is_empty())
+            .map(|home| {
+                PathBuf::from(home)
+                    .join(".cache")
+                    .join("aura")
+                    .join("verify")
+            }),
     }
 }
 
@@ -4946,7 +4974,7 @@ fn usage_text() -> &'static str {
        or: aura fmt [--check] [path ...]\n\
        or: aura doc [--out <dir>] [--json] [path ...]\n\
        or: aura test [-k <substring>] [--format json] [--timeout-ms <n>] [path ...]\n\
-       or: aura verify [--solver <path>] [--timeout <ms>] [--function <name>] [--format human|json] <file.au>\n\
+       or: aura verify [--solver <path>] [--timeout <ms>] [--function <name>] [--no-cache] [--format human|json] <file.au>\n\
        or: aura deps update [package]\n\
        or: aura upgrade\n\
        or: aura help\n\

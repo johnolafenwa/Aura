@@ -593,6 +593,7 @@ fn every_kind_and_status_has_a_report() {
     let report = Report {
         solver: "z3".to_string(),
         functions: 1,
+        cached: 0,
         obligations: statuses
             .into_iter()
             .zip(kinds)
@@ -1005,4 +1006,68 @@ def main():
     print(bag.count)
 "#,
     );
+}
+
+#[test]
+fn the_proof_cache_answers_unchanged_functions() {
+    let dir = std::env::temp_dir().join(format!("aura-verify-cache-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let options = Options {
+        cache_dir: Some(dir.clone()),
+        ..Options::default()
+    };
+    let source =
+        "def double(x: int64) -> int64:\n    return x * 2\n\ndef main():\n    print(double(2))\n";
+    let Some(first) = verify_with(source, &options) else {
+        return;
+    };
+    assert_eq!(first.cached, 0);
+    let second = verify_with(source, &options).expect("a solver");
+    assert_eq!(second.cached, 2);
+    assert_eq!(open_checks(&second), open_checks(&first));
+    assert!(matches!(
+        &second.obligations[0].status,
+        Status::Failed { counterexample } if !counterexample.is_empty()
+    ));
+    // An entry that does not parse, or does not match the function, is
+    // solved again and replaced.
+    let entries: Vec<_> = std::fs::read_dir(&dir)
+        .expect("cache")
+        .map(|entry| entry.expect("entry").path())
+        .collect();
+    assert_eq!(entries.len(), 2);
+    std::fs::write(&entries[0], "not json").expect("corrupt");
+    std::fs::write(&entries[1], "[]").expect("wrong length");
+    let third = verify_with(source, &options).expect("a solver");
+    assert_eq!(third.cached, 0);
+    assert_eq!(verify_with(source, &options).expect("a solver").cached, 2);
+    // A cache that cannot be written only loses its entries.
+    let blocked = dir.join("blocked");
+    std::fs::write(&blocked, "a file, not a directory").expect("blocker");
+    let options = Options {
+        cache_dir: Some(blocked),
+        ..Options::default()
+    };
+    assert_eq!(verify_with(source, &options).expect("a solver").cached, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn undecided_answers_are_not_cached() {
+    let dir = script_dir("cache-unknown");
+    let options = Options {
+        solver: Some(script(&dir, "z3", UNKNOWN_SOLVER, true)),
+        cache_dir: Some(dir.join("cache")),
+        ..Options::default()
+    };
+    let program =
+        crate::check_source("def double(x: int64) -> int64:\n    return x * 2\n").expect("checks");
+    let module = crate::mir::lower_for_verification(&program);
+    for _ in 0..2 {
+        let report = verify_module(&program, &module, &options).expect("runs");
+        assert_eq!(report.cached, 0);
+        assert_eq!(open_checks(&report), ["2 overflow unknown"]);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }

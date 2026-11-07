@@ -66,7 +66,7 @@ impl ObligationKind {
 }
 
 /// The outcome of one obligation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Status {
     Proved,
     /// The solver found inputs that break the check.
@@ -107,6 +107,8 @@ pub struct ObligationReport {
 pub struct Report {
     pub solver: String,
     pub functions: usize,
+    /// How many functions the proof cache answered.
+    pub cached: usize,
     pub obligations: Vec<ObligationReport>,
 }
 
@@ -182,6 +184,8 @@ pub struct Options {
     /// Print each query's SMT text to standard error. The default is
     /// whether `AURA_VERIFY_TRACE` is set.
     pub trace: bool,
+    /// The proof cache directory; `None` solves every query.
+    pub cache_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for Options {
@@ -191,6 +195,7 @@ impl Default for Options {
             timeout_ms: 10_000,
             function_filter: None,
             trace: std::env::var_os("AURA_VERIFY_TRACE").is_some(),
+            cache_dir: None,
         }
     }
 }
@@ -403,14 +408,15 @@ pub fn verify_module(
     let command = smt::SolverCommand::find(options.solver.as_deref())
         .map_err(|message| Diagnostic::coded("AU5103", message))?;
     let cx = VerifyContext::new(program, module);
+    let version = command.version();
     let mut report = Report {
-        solver: format!("{} ({})", command.program.display(), command.version()),
+        solver: format!("{} ({version})", command.program.display()),
         ..Report::default()
     };
     let mut merged: BTreeMap<((usize, usize), ObligationKind, String), ObligationReport> =
         BTreeMap::new();
-    let mut solver = smt::Solver::start(&command, options.timeout_ms)
-        .map_err(|message| Diagnostic::coded("AU5103", message))?;
+    // The solver starts at the first function the cache cannot answer.
+    let mut solver: Option<smt::Solver> = None;
     let trace = options.trace;
     for function in &module.functions {
         if !verified_function(program, &cx, function) {
@@ -446,8 +452,31 @@ pub fn verify_module(
             );
             continue;
         }
-        let statuses = solve(&mut solver, &exec, trace)
-            .map_err(|message| Diagnostic::coded("AU5103", message))?;
+        let cache = options
+            .cache_dir
+            .as_deref()
+            .map(|dir| dir.join(format!("{}.json", cache_key(&version, options, &exec))));
+        let statuses = match cache.as_deref().and_then(|path| read_cache(path, &exec)) {
+            Some(statuses) => {
+                report.cached += 1;
+                statuses
+            }
+            None => {
+                let solver = match &mut solver {
+                    Some(solver) => solver,
+                    None => solver.insert(
+                        smt::Solver::start(&command, options.timeout_ms)
+                            .map_err(|message| Diagnostic::coded("AU5103", message))?,
+                    ),
+                };
+                let statuses = solve(solver, &exec, trace)
+                    .map_err(|message| Diagnostic::coded("AU5103", message))?;
+                if let Some(path) = &cache {
+                    write_cache(path, &statuses);
+                }
+                statuses
+            }
+        };
         for (obligation, status) in exec.obligations.iter().zip(statuses) {
             let key = (
                 (obligation.span.line, obligation.span.column),
@@ -477,6 +506,72 @@ pub fn verify_module(
     }
     report.obligations = merged.into_values().collect();
     Ok(report)
+}
+
+/// The proof cache key of a function's queries: everything the solver
+/// sees, the solver's version, and the time limit.
+fn cache_key(version: &str, options: &Options, exec: &exec::Exec<'_>) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    let mut part = |text: &str| {
+        hasher.update(text.len().to_le_bytes());
+        hasher.update(text.as_bytes());
+    };
+    part("aura-verify-cache-1");
+    part(version);
+    part(&options.timeout_ms.to_string());
+    for decl in &exec.decls {
+        part(decl);
+    }
+    part("facts");
+    for fact in &exec.facts {
+        part(fact);
+    }
+    part("inputs");
+    for (name, term) in &exec.inputs {
+        part(name);
+        part(term);
+    }
+    for obligation in &exec.obligations {
+        part(&obligation.facts.to_string());
+        part(&obligation.pc);
+        match &obligation.goal {
+            exec::Goal::Holds(goal) => part(goal),
+            exec::Goal::Unsupported(reason) => {
+                part("unsupported");
+                part(reason);
+            }
+        }
+    }
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// The cached statuses at `path`, when there is one for every obligation.
+fn read_cache(path: &std::path::Path, exec: &exec::Exec<'_>) -> Option<Vec<Status>> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let statuses: Vec<Status> = serde_json::from_str(&text).ok()?;
+    (statuses.len() == exec.obligations.len()).then_some(statuses)
+}
+
+/// Records decided statuses. An answer the solver gave up on depends on the
+/// machine's speed, so it is solved again next time. Failing to write only
+/// loses the cache entry.
+fn write_cache(path: &std::path::Path, statuses: &[Status]) {
+    if statuses.contains(&Status::Unknown) {
+        return;
+    }
+    let text = serde_json::to_string(statuses).expect("statuses serialize");
+    let temp = path.with_extension(format!("tmp{}", std::process::id()));
+    let written = std::fs::create_dir_all(path.parent().expect("a cache file has a directory"))
+        .and_then(|()| std::fs::write(&temp, text))
+        .and_then(|()| std::fs::rename(&temp, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
 }
 
 /// Checks each obligation of `exec` against its declarations and facts.

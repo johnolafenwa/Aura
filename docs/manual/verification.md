@@ -131,7 +131,19 @@ where it is stated and uses it where it is needed.
 | `--solver <path>` | The solver to run. The default is `AURA_SMT_SOLVER` when it is set, else `z3`, else `cvc5`, found on `PATH`. |
 | `--timeout <ms>` | The time limit for each check. The default is 10000. |
 | `--function <name>` | Verify only the functions whose name contains `name`. |
+| `--no-cache` | Solve every check again, without the proof cache. |
 | `--format json` | Print the report as JSON: one entry for each check, with its kind, function, line, column, message, and status (`proved`, `failed`, `unknown`, or `unsupported`), then the diagnostics. |
+
+### Proof Cache
+
+`aura verify` keeps each function's results in a proof cache, under
+`verify` in `AURA_CACHE_DIR` when it is set, or else in
+`~/.cache/aura/verify`. A function whose checks, the facts they rely on,
+the solver version, and the time limit are all unchanged is answered from
+the cache without starting the solver, so verifying again after a small
+edit solves only what the edit touched. The summary line says how many
+functions the cache answered. A check the solver gave up on is never
+cached.
 
 ## What It Models
 
