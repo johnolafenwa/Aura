@@ -1036,7 +1036,12 @@ fn the_proof_cache_answers_unchanged_functions() {
         .collect();
     assert_eq!(entries.len(), 2);
     std::fs::write(&entries[0], "not json").expect("corrupt");
-    std::fs::write(&entries[1], "[]").expect("wrong length");
+    // One status more than the entry holds, whichever function it is.
+    let held: Vec<Status> =
+        serde_json::from_str(&std::fs::read_to_string(&entries[1]).expect("entry")).expect("json");
+    let longer = vec![Status::Proved; held.len() + 1];
+    std::fs::write(&entries[1], serde_json::to_string(&longer).expect("json"))
+        .expect("wrong length");
     let third = verify_with(source, &options).expect("a solver");
     assert_eq!(third.cached, 0);
     assert_eq!(verify_with(source, &options).expect("a solver").cached, 2);
