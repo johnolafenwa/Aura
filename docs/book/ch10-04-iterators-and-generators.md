@@ -290,10 +290,27 @@ The `type Iter = Generator[str]` line fixes the associated type, and inside the
 implementation `Self.Iter` means that type. The trait requires `Iter` to be an
 `Iterator[str]`, so the checker rejects an implementation whose `Iter` isn't
 one. A `for` loop over a `Playlist` calls `into_iter()` for you, and so do
-comprehensions, `enumerate`, and `zip`. Your own traits can declare associated
+comprehensions, `enumerate`, and `zip`.
+
+A generic function can accept anything a loop can consume by bounding its
+parameter with `IntoIterator`:
+
+```aura
+from iter import IntoIterator
+
+
+def longest[S: IntoIterator[str]](words: own S) -> str:
+    mut best = ""
+    for word in words:
+        if len(word) > len(best):
+            best = word.clone()
+    return best
+```
+
+`longest(playlist)` works for a `Playlist`, and for any other type with an
+`IntoIterator[str]` implementation. Your own traits can declare associated
 types the same way; the [Manual](/manual/generics-and-traits#associated-types)
-has the details, including the one thing Aura 0.12 can't do yet, which is use
-such a trait as a bound.
+has the details.
 
 ## Summary
 

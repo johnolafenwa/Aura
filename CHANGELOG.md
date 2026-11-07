@@ -7,6 +7,47 @@ in this file.
 
 ## Unreleased
 
+- Generator functions: a module-level function declared `-> Generator[T]`
+  (from `iter`) may `yield` values. Calling it runs nothing; each `next`
+  runs the body to its next `yield` on a stack of its own, on both the
+  interpreter and native builds. `Generator[T]` implements `Iterator[T]`, so
+  `for` loops take it, and `close()` stops it with its `with` exits run
+  once. A trap in the body is a trap of the caller's task, and the call
+  chain names the generator. A body may sleep, receive from a `Queue`, or do
+  file I/O; the wait suspends the calling task. Misuse reports `AU2049`.
+- Comprehensions, `invariant` clauses, `enumerate`, and `zip` take
+  iterator sources. `for` loops over `enumerate(it)` and `zip(a, b)` of two
+  iterators stay lazy, so an endless generator can be zipped with a finite
+  one; a comprehension collects its iterator source first. `Iterator[T]`
+  gains `collect(own self) -> list[T]`. `zip` of a collection with an
+  iterator reports `AU2002`.
+- Associated types: a trait can declare `type Name: Bound` lines, written
+  `Self.Name` in its methods, and each implementation fixes them with
+  `type Name = T`. The fixed type must satisfy the bounds (`AU2002`).
+- New `iter.IntoIterator[T]` trait with `type Iter: Iterator[T]` and
+  `into_iter(own self) -> Self.Iter`. `for` loops, comprehensions,
+  `enumerate`, and `zip` consume an `IntoIterator` value through
+  `into_iter()`.
+- Fixed: a default trait method failed in the compiler's lowering ("assigns
+  untyped local") when an implementation with a bounded type parameter,
+  such as `impl[I: Iterator[int64]] Trait for Wrap[I]`, inherited it.
+- Fixed: a `for` loop over a generic `I: Iterator[T]` parameter failed in
+  the compiler's lowering with a wrong-enum match error.
+- Fixed: `for x in value.method():` where `method` takes `own self` reported
+  a false "use of moved value" on the receiver.
+- A function or method can bound a type parameter by a trait with
+  associated types, as in `def total[S: IntoIterator[int64]](source: own S)`.
+  Each associated type becomes a hidden type parameter `S.Iter` that the
+  signature and body can name, and a call infers it, and any type parameter
+  only the bound names, from the argument's implementation. A `for` loop
+  over such a parameter calls `into_iter()`. Class, enum, and
+  implementation bounds still report `AU2002`.
+- Fixed: a method of a bounded generic implementation, such as
+  `impl[T: Greet] Greet for Wrap[T]`, could not call another method of the
+  same trait on `self` ("unsupported method call").
+- Fixed: `aura fmt` removed the space in `yield (a, b)`, which turned the
+  statement into a call of a function named `yield`.
+
 ## VS Code extension 0.12.0 — 2026-11-03
 
 - Highlights the contract clauses `requires`, `ensures`, `invariant`, and
@@ -108,35 +149,6 @@ The semantic interface stays 20, and the native cache format stays `v10`.
   implements `Iterator[T]`: the bare form consumes the iterator, and
   `for x in mut it:` borrows it so a later loop can continue where a
   `break` left off.
-- Generator functions: a module-level function declared `-> Generator[T]`
-  (from `iter`) may `yield` values. Calling it runs nothing; each `next`
-  runs the body to its next `yield` on a stack of its own, on both the
-  interpreter and native builds. `Generator[T]` implements `Iterator[T]`, so
-  `for` loops take it, and `close()` stops it with its `with` exits run
-  once. A trap in the body is a trap of the caller's task, and the call
-  chain names the generator. A body may sleep, receive from a `Queue`, or do
-  file I/O; the wait suspends the calling task. Misuse reports `AU2049`.
-- Comprehensions, `invariant` clauses, `enumerate`, and `zip` take
-  iterator sources. `for` loops over `enumerate(it)` and `zip(a, b)` of two
-  iterators stay lazy, so an endless generator can be zipped with a finite
-  one; a comprehension collects its iterator source first. `Iterator[T]`
-  gains `collect(own self) -> list[T]`. `zip` of a collection with an
-  iterator reports `AU2002`.
-- Associated types: a trait can declare `type Name: Bound` lines, written
-  `Self.Name` in its methods, and each implementation fixes them with
-  `type Name = T`. The fixed type must satisfy the bounds (`AU2002`). A
-  trait with associated types cannot be a bound yet.
-- New `iter.IntoIterator[T]` trait with `type Iter: Iterator[T]` and
-  `into_iter(own self) -> Self.Iter`. `for` loops, comprehensions,
-  `enumerate`, and `zip` consume an `IntoIterator` value through
-  `into_iter()`.
-- Fixed: a default trait method failed in the compiler's lowering ("assigns
-  untyped local") when an implementation with a bounded type parameter,
-  such as `impl[I: Iterator[int64]] Trait for Wrap[I]`, inherited it.
-- Fixed: a `for` loop over a generic `I: Iterator[T]` parameter failed in
-  the compiler's lowering with a wrong-enum match error.
-- Fixed: `for x in value.method():` where `method` takes `own self` reported
-  a false "use of moved value" on the receiver.
 - A unit variant of an imported generic enum, such as `opt.Opt.Nothing`,
   now takes its type arguments from the expected type, as an unqualified
   variant already did. It used to report a return type mismatch.
