@@ -936,7 +936,6 @@ def f2(xs: list[int64], names: list[str], name: str, p: P, t: (int64, int64)) ->
     requires xs.contains(3)
     requires str(p.x) == "1"
     requires twice(v=len(xs)) == 2
-    requires all([x > 0 for x in xs])
     return 0
 
 def main():
@@ -946,14 +945,13 @@ def main():
         &[
             "22 assert failed",
             "25 index in range failed",
+            "34 requires unsupported",
             "35 requires unsupported",
-            "36 requires unsupported",
-            "36 requires unsupported",
-            "36 requires unsupported",
-            "36 requires unsupported",
-            "36 requires unsupported",
-            "36 requires unsupported",
-            "36 requires unsupported",
+            "35 requires unsupported",
+            "35 requires unsupported",
+            "35 requires unsupported",
+            "35 requires unsupported",
+            "35 requires unsupported",
         ],
     );
 }
@@ -1146,4 +1144,87 @@ def main():
         assert!(proved["bump"] > plain["bump"], "{proved:?}");
         assert!(removed >= 2, "{removed}");
     }
+}
+
+#[test]
+fn quantified_contracts_are_proved_and_assumed() {
+    assert_proved(
+        r#"
+def cart_total(prices: list[int64]) -> int64:
+    requires len(prices) <= 10_000
+    requires all([0 <= p and p <= 1_000_000 for p in prices])
+    mut total = 0
+    for i in range(len(prices)):
+        invariant 0 <= total and total <= i * 1_000_000
+        total += prices[i]
+    return total
+
+def first_positive(xs: list[int64]) -> int64:
+    requires exists(x in xs, x > 0)
+    requires len(xs) <= 100
+    ensures result >= 0
+    for i in range(len(xs)):
+        if xs[i] > 0:
+            return i
+    return 0
+
+def squares(n: int64) -> list[int64]:
+    requires 0 <= n and n <= 1000
+    ensures len(result) == n
+    ensures forall(i in range(n), result[i] == i * i)
+    mut out: list[int64] = []
+    mut i = 0
+    while i < n:
+        invariant 0 <= i and i <= n
+        invariant len(out) == i
+        invariant forall(j in range(i), out[j] == j * j)
+        out.append(i * i)
+        i += 1
+    return out
+
+def main():
+    print(cart_total([1250, 499, 2000]))
+    print(first_positive([-1, 0, 3]))
+    print(squares(4))
+"#,
+    );
+}
+
+#[test]
+fn quantified_contracts_report_what_fails_and_what_is_not_modeled() {
+    assert_open(
+        r#"
+def evens(n: int64) -> list[int64]:
+    requires 0 <= n and n <= 100
+    ensures forall(i in range(n), result[i] % 2 == 0)
+    mut out: list[int64] = []
+    mut i = 0
+    while i < n:
+        invariant 0 <= i and i <= n and len(out) == i
+        invariant forall(j in range(i), out[j] % 2 == 0)
+        out.append(i)
+        i += 1
+    return out
+
+def window(xs: list[int64], lo: int64, hi: int64) -> int64:
+    requires all([x >= 0 for x in xs if x > 10])
+    requires all([xs[k] < 50 for k in range(lo, hi)])
+    requires any([x == y for x in xs for y in xs])
+    requires all([len(name) > 0 for name in ["a"]])
+    requires all([x > 0 for (x, y) in [(1, 2)]])
+    assert all([x < 1000 for x in xs])
+    return 0
+
+def main():
+    print(evens(1))
+    print(window([1, 20], 0, 2))
+"#,
+        &[
+            "9 loop invariant failed",
+            "20 assert failed",
+            "25 requires unsupported",
+            "25 requires unsupported",
+            "25 requires unsupported",
+        ],
+    );
 }

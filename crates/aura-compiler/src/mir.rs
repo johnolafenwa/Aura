@@ -10408,6 +10408,9 @@ pub fn lower(program: &Program) -> MirModule {
 
 thread_local! {
     static SOURCE_LOCATIONS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while lowering for the verifier, which reads each check's clause
+    /// as written and so needs the local behind each source name in scope.
+    static VERIFICATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Lowers `program` as `lower` does and puts a `SourceLocation` before each
@@ -10441,7 +10444,14 @@ pub fn lower_for_verification(program: &Program) -> MirModule {
             SOURCE_LOCATIONS.with(|enabled| enabled.set(self.0));
         }
     }
+    struct RestoreVerification(bool);
+    impl Drop for RestoreVerification {
+        fn drop(&mut self) {
+            VERIFICATION.with(|enabled| enabled.set(self.0));
+        }
+    }
     let _restore = Restore(SOURCE_LOCATIONS.with(|enabled| enabled.replace(true)));
+    let _verification = RestoreVerification(VERIFICATION.with(|enabled| enabled.replace(true)));
     let mut module = lower_unresolved(program);
     specialize::specialize_generic_functions(&mut module);
     resolve_runtime_ops_and_unions(program, &mut module);
@@ -13359,6 +13369,26 @@ impl<'a> Lowerer<'a> {
         self.end_binding_block();
     }
 
+    /// For the verifier, records in the current block the local behind
+    /// each source name in scope that lowering renamed.
+    fn name_scope_for_verifier(&mut self) {
+        if !VERIFICATION.with(std::cell::Cell::get) {
+            return;
+        }
+        let mut names: BTreeMap<String, String> = BTreeMap::new();
+        let rebound = self.binding_blocks.iter().map(|block| &block.rebound);
+        for scope in rebound.chain(self.scoped_names.iter()) {
+            for (name, local) in scope {
+                names.insert(name.clone(), local.clone());
+            }
+        }
+        for (name, local) in names {
+            if local != name {
+                self.emit(Instruction::SourceName { local, name });
+            }
+        }
+    }
+
     fn current_binding_block(&mut self) -> &mut BindingBlock {
         self.binding_blocks
             .last_mut()
@@ -14244,6 +14274,7 @@ impl<'a> Lowerer<'a> {
         });
 
         self.switch_to(failure_block);
+        self.name_scope_for_verifier();
         // Render retained operands only on failure, before evaluating the lazy
         // source message. The comparison itself has already consumed the raw
         // captures, so formatting cannot alter its result or evaluate either

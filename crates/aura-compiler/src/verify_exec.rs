@@ -210,7 +210,7 @@ pub(super) struct Exec<'a> {
     /// The source position of the statement being executed.
     span: Span,
     /// Check failure blocks whose paths the current iteration assumes away.
-    assumed_fails: BTreeSet<usize>,
+    pub(super) assumed_fails: BTreeSet<usize>,
     labels: BTreeMap<&'a str, usize>,
     /// Set when the function is outside what the executor can walk.
     pub(super) unsupported: Option<String>,
@@ -261,6 +261,12 @@ impl<'a> Exec<'a> {
     }
 
     // ----- SMT text --------------------------------------------------------
+
+    /// A fresh name for a variable a quantifier binds; it is not declared.
+    pub(super) fn bound_name(&mut self) -> String {
+        self.counter += 1;
+        format!("k!q{}", self.counter)
+    }
 
     pub(super) fn fresh_const(&mut self, sort: &str, hint: &str) -> String {
         self.counter += 1;
@@ -411,7 +417,7 @@ impl<'a> Exec<'a> {
     }
 
     /// The type of a place path such as `self.balance` or `pair.0`.
-    fn place_type(&self, path: &str) -> Option<Type> {
+    pub(super) fn place_type(&self, path: &str) -> Option<Type> {
         let mut segments = path.split('.');
         let mut ty = self.local_types.get(segments.next()?)?.clone();
         for segment in segments {
@@ -422,7 +428,7 @@ impl<'a> Exec<'a> {
 
     // ----- Places ----------------------------------------------------------
 
-    fn read_place(&mut self, state: &mut State, path: &str) -> Val {
+    pub(super) fn read_place(&mut self, state: &mut State, path: &str) -> Val {
         let mut segments = path.split('.');
         let root = segments.next().unwrap_or(path).to_string();
         let rest: Vec<&str> = segments.collect();
@@ -1070,6 +1076,10 @@ impl<'a> Exec<'a> {
                 then_label,
                 else_label,
             } => {
+                let (pass, fail) = (target(self, then_label), target(self, else_label));
+                if let Some(next) = self.clause_branch(&state, fail, pass) {
+                    return next;
+                }
                 let condition = match self.operand(&mut state, condition, None) {
                     Val::Bool(term) => term,
                     _ => self.fresh_const("Bool", "branch"),
@@ -2314,7 +2324,7 @@ fn runtime_op_is_pure(op: RuntimeOp) -> bool {
 
 /// What a failure block's check states, for the report: the clause as
 /// written, or the `assert` and its message.
-fn check_message(kind: AssertKind, message: Option<&Operand>) -> String {
+pub(super) fn check_message(kind: AssertKind, message: Option<&Operand>) -> String {
     let text = match message {
         Some(Operand::String(text)) => text.as_str(),
         _ => return "`assert` condition".to_string(),
