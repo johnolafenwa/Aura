@@ -16868,3 +16868,97 @@ def main():
         "8\n10\ng8\n20\ng3\n",
     );
 }
+
+/// Whether an SMT solver is on `PATH` for the `aura verify` tests. CI
+/// installs a pinned Z3, so a missing one there fails the test.
+fn smt_solver_available() -> bool {
+    let found = ["z3", "cvc5"].iter().any(|name| {
+        std::env::var_os("PATH")
+            .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(name).is_file()))
+    }) || std::env::var_os("AURA_SMT_SOLVER").is_some();
+    assert!(
+        found || std::env::var_os("CI").is_none(),
+        "CI must install an SMT solver for the `aura verify` tests"
+    );
+    found
+}
+
+#[test]
+fn verify_reports_proved_and_failed_checks_in_human_and_json_form() {
+    if !smt_solver_available() {
+        eprintln!("skipping: no SMT solver on PATH");
+        return;
+    }
+    let temp = TempDir::new("aura-verify-cli");
+    let proved = temp.path().join("proved.au");
+    fs::write(
+        &proved,
+        "def half(x: int64) -> int64:\n    requires x >= 0\n    ensures result <= x\n    return x // 2\n\ndef main():\n    print(half(10))\n",
+    )
+    .expect("write the proved program");
+    let output = Command::new(aura_bin())
+        .args(["verify"])
+        .arg(&proved)
+        .output()
+        .expect("run aura verify");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("4 of 4 checks proved in 2 functions"),
+        "{stdout}"
+    );
+
+    let failed = temp.path().join("failed.au");
+    fs::write(
+        &failed,
+        "def double(x: int64) -> int64:\n    return x * 2\n\ndef main():\n    print(double(2))\n",
+    )
+    .expect("write the failing program");
+    let output = Command::new(aura_bin())
+        .args(["verify"])
+        .arg(&failed)
+        .output()
+        .expect("run aura verify");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("error[AU5101]: cannot prove integer result in range"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("counterexample: x = "), "{stderr}");
+
+    let output = Command::new(aura_bin())
+        .args([
+            "verify",
+            "--format",
+            "json",
+            "--timeout",
+            "5000",
+            "--function",
+            "double",
+        ])
+        .arg(&failed)
+        .output()
+        .expect("run aura verify --format json");
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("a JSON report");
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["functions"], 1);
+    assert_eq!(report["proved"], 0);
+    assert_eq!(report["obligations"][0]["status"], "failed");
+    assert_eq!(report["obligations"][0]["kind"], "overflow");
+    assert_eq!(report["obligations"][0]["line"], 2);
+    assert_eq!(report["diagnostics"][0]["code"], "AU5101");
+
+    let output = Command::new(aura_bin())
+        .args(["verify", "--solver", "/nonexistent/z3"])
+        .arg(&proved)
+        .output()
+        .expect("run aura verify with a missing solver");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("AU5103"));
+}

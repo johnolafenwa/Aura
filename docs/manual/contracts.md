@@ -7,10 +7,9 @@ a loop runs or while an object exists. Aura checks every clause each time
 it applies, in `aura run` and in built programs alike, and stops the program
 with `AU4009` when one is false.
 
-Contracts are the first stage of Aura's verification plan. A later
-`aura verify` command will prove clauses before the program runs; until
-then they are runtime checks. See the
-[verification design](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/23-verification-design-checkpoint.md).
+`aura verify` proves clauses before the program runs, together with the
+arithmetic and list indexes around them; see
+[Verification](/manual/verification). The checks still run in every build.
 
 ## Function Contracts
 

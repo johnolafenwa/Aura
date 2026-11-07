@@ -376,6 +376,26 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         band: "lint",
         title: "unused local binding",
     },
+    DiagnosticCodeInfo {
+        code: "AU5101",
+        band: "verify",
+        title: "check not proved",
+    },
+    DiagnosticCodeInfo {
+        code: "AU5102",
+        band: "verify",
+        title: "solver could not decide",
+    },
+    DiagnosticCodeInfo {
+        code: "AU5103",
+        band: "verify",
+        title: "solver unavailable",
+    },
+    DiagnosticCodeInfo {
+        code: "AU5104",
+        band: "verify",
+        title: "check outside the verified subset",
+    },
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

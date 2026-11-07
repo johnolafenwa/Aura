@@ -74,6 +74,20 @@ Homebrew's static `libzstd.a`, so `aura` loads no Homebrew library.
 an `aura` loads, and fails on one outside the system set. The release
 workflow and the native binaries CI job run it.
 
+## Z3
+
+`aura verify` and its tests run an SMT solver. Install the version CI pins
+with:
+
+```sh
+scripts/install-z3.sh
+export PATH="$HOME/.cache/aura/z3/5.3.3.0/solver:$PATH"
+```
+
+The script installs the `z3-solver` wheel into a private virtual
+environment and links its `z3` into a directory of its own. Without a
+solver on `PATH`, the verifier tests skip locally; under CI they fail.
+
 ## GitHub Actions
 
 | Workflow | What it does |
