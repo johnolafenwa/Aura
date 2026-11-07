@@ -492,13 +492,30 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Why each module whose fast iteration forms did not check fell back
+    /// to the module as written, so tests can see that a form stays fast.
+    pub(crate) static FAST_FALLBACKS: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 fn check_with_context_unprefaced(module: Module, context: ModuleContext) -> Result<Program> {
     // Fast iteration forms are an optimization: when the module with them
     // added does not check, the module is checked as written, so its
     // diagnostics are the ones the author's code earns.
-    if let Some((fast_module, fast_context)) = super::iterator_fast::expand(&module, &context) {
-        if let Ok(program) = check_pipeline(fast_module, fast_context) {
-            return Ok(program);
+    for extended in [true, false] {
+        let Some((fast_module, fast_context)) =
+            super::iterator_fast::expand(&module, &context, extended)
+        else {
+            continue;
+        };
+        match check_pipeline(fast_module, fast_context) {
+            Ok(program) => return Ok(program),
+            Err(_error) => {
+                #[cfg(test)]
+                FAST_FALLBACKS.with(|fallbacks| fallbacks.borrow_mut().push(_error.message));
+            }
         }
     }
     check_pipeline(module, context)
