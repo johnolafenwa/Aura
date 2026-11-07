@@ -574,3 +574,90 @@ fn the_layout_table_registers_enum_cells() {
     assert_eq!((access, index), (FIRST_TEST_ACCESS + 50, 1));
     assert_eq!(block, typed_payloads(&typed_value).data());
 }
+
+/// A dict of typed variants under `str` keys, as generated code builds one.
+fn shadow_map(prefix: &str, access: u32) -> *mut crate::native_runtime::OpaqueValue {
+    use crate::native_runtime::{aura_direct_map_empty, aura_direct_map_insert_in_place};
+    let map = aura_direct_map_empty();
+    for (key, value) in [
+        (
+            "ring",
+            typed(prefix, access, "Named", vec![text("ring"), int32(3)]),
+        ),
+        (
+            "dot",
+            typed(prefix, access, "Circle", vec![Value::Float(1.5)]),
+        ),
+    ] {
+        aura_direct_map_insert_in_place(map, boxed_value(text(key)), boxed_value(value));
+    }
+    map
+}
+
+#[test]
+fn borrowing_entry_loans_read_the_dict_value_in_place() {
+    use crate::native_runtime::{
+        aura_direct_end_shadow, aura_direct_map_get_shadow, aura_direct_retain_value,
+        SHADOW_REFERENCE,
+    };
+    run_lightweight_root_task(|| {
+        with_direct_task_runtime_scope(|| {
+            let access = FIRST_TEST_ACCESS + 60;
+            let map = shadow_map("Shadow", access);
+            let key = boxed_value(text("ring"));
+            let read = |boxed| unsafe { value_ref(boxed) };
+            let expected = typed("Shadow", access, "Named", vec![text("ring"), int32(3)]);
+
+            // A confined dict lends its value: the box reads the entry's own
+            // block, and it looks shared to every check.
+            let shadow = aura_direct_map_get_shadow(map, key);
+            let header = unsafe { &*shadow };
+            assert_eq!(
+                header.ref_count.load(Ordering::Acquire),
+                SHADOW_REFERENCE + 1
+            );
+            let lent_block = typed_payloads(unsafe { &*header.value.get() }).data();
+            let stored = unsafe { value_ref(map) };
+            let Value::Map(stored) = &stored else {
+                panic!("a dict");
+            };
+            let entry = stored.entries.value_of(&text("ring")).expect("the entry");
+            assert_eq!(typed_payloads(entry).data(), lent_block);
+            assert_eq!(read(shadow), expected);
+            // Ending the loan leaves the dict's value as it was.
+            unsafe { aura_direct_end_shadow(shadow) };
+            assert_eq!(read(map), unsafe { value_ref(map) });
+            let again = aura_direct_map_get_shadow(map, key);
+            assert_eq!(read(again), expected);
+
+            // A borrower that kept the box gets a copy of its own at the end.
+            unsafe { aura_direct_retain_value(again) };
+            unsafe { aura_direct_end_shadow(again) };
+            let kept = unsafe { &*again };
+            assert_eq!(kept.ref_count.load(Ordering::Acquire), 1);
+            assert_ne!(
+                typed_payloads(unsafe { &*kept.value.get() }).data(),
+                lent_block
+            );
+            assert_eq!(read(again), expected);
+            unsafe { aura_direct_release_value(again) };
+
+            // A dict whose entries another dict shares hands out a copy.
+            let shared = boxed_value(unsafe { value_ref(map) });
+            let copy = aura_direct_map_get_shadow(map, key);
+            assert_eq!(unsafe { &*copy }.ref_count.load(Ordering::Acquire), 1);
+            assert_eq!(read(copy), expected);
+            unsafe { aura_direct_end_shadow(copy) };
+            // A missing key gives null, which ends as nothing.
+            let missing = boxed_value(text("none"));
+            let none = aura_direct_map_get_shadow(map, missing);
+            assert!(none.is_null());
+            unsafe { aura_direct_end_shadow(none) };
+            for boxed in [shared, missing, key, map] {
+                unsafe { aura_direct_release_value(boxed) };
+            }
+            Ok(Value::Unit)
+        })
+    })
+    .expect("the loans run");
+}

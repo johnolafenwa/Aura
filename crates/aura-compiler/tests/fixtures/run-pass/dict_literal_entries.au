@@ -1,0 +1,31 @@
+import json
+
+
+def pick(n: int64) -> str:
+    if n % 2 == 0:
+        return "even"
+    return "odd"
+
+
+def main():
+    # Every key spelled once, spelled twice, and mixed with computed keys.
+    once = {"a": 1, "b": 2, "c": 3}
+    twice = {"a": 1, "b": 2, "a": 3}
+    mixed = {pick(2): 1, "even": 2, "odd": 3, pick(3): 4}
+    ints = {1: "one", 2: "two", 1: "uno"}
+    empty: dict[str, int64] = {}
+    print(
+        f"{once} {twice} {mixed} {ints} {empty} {once.len()} {twice.len()} {mixed.len()}"
+    )
+    nested = {
+        "doc": json.Value.Object({"id": json.Value.Int(7), "id": json.Value.Int(8)})
+    }
+    match nested.lookup("doc"):
+        case Lookup.Found(doc):
+            print(json.dumps(doc))
+        case Lookup.Missing:
+            print("missing")
+    mut grown = {"x": 1}
+    grown["y"] = 2
+    grown["x"] = 3
+    print(f"{grown}")

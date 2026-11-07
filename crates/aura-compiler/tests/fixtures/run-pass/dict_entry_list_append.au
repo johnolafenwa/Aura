@@ -1,0 +1,25 @@
+class Index:
+    by_name: dict[str, list[int64]] = {}
+
+    def add(mut self, name: own str, id: int64):
+        match mut self.by_name.lookup(name):
+            case Lookup.Found(ids):
+                ids.append(id)
+            case Lookup.Missing:
+                self.by_name[name] = [id]
+
+
+def main():
+    mut index = Index()
+    names = ["ann", "bo", "cy"]
+    for i in range(30):
+        index.add(names[i % 3].clone(), i)
+    mut local: dict[str, list[int64]] = {}
+    for i in range(6):
+        key = names[i % 2].clone()
+        match mut local.lookup(key):
+            case Lookup.Found(ids):
+                ids.append(i * 10)
+            case Lookup.Missing:
+                local[key] = [i]
+    print(f"{index.by_name} {local}")

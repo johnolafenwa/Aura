@@ -1,0 +1,43 @@
+enum Shape:
+    Dot(int64)
+    Named(str)
+    Many(list[str])
+
+
+class Keep:
+    sizes: list[int64] = []
+
+    def keep(mut self, shape: Shape):
+        self.sizes.append(size(shape))
+
+
+def size(shape: Shape) -> int64:
+    match shape:
+        case Shape.Dot(n):
+            return n
+        case Shape.Named(text):
+            return text.len()
+        case Shape.Many(items):
+            return items.len()
+
+
+def main():
+    mut shapes: dict[str, Shape] = {}
+    shapes["a"] = Shape.Dot(3)
+    shapes["b"] = Shape.Named("ring")
+    shapes["c"] = Shape.Many(["x", "y"])
+    mut keep = Keep()
+    mut total = 0
+    for key in shapes.keys():
+        match shapes.lookup(key):
+            case Lookup.Found(shape):
+                total += size(shape)
+                keep.keep(shape)
+            case Lookup.Missing:
+                pass
+    shapes["b"] = Shape.Dot(1)
+    shapes.remove("c")
+    mut again = 0
+    for n in keep.sizes:
+        again += n
+    print(f"{total} {again} {shapes.len()}")

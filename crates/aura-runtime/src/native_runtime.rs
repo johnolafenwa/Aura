@@ -10324,7 +10324,7 @@ fn lent_map_lookup(
 /// reference sees a shared box, so nothing empties or changes it in place.
 /// It sits below [`FROZEN_REFERENCES`], so retains and releases count as
 /// usual.
-const SHADOW_REFERENCE: u32 = 1 << 29;
+pub(crate) const SHADOW_REFERENCE: u32 = 1 << 29;
 
 /// A lookup result for an entry loan whose every read borrows it: a box
 /// whose value is the found value itself, read where the dict keeps it, or
