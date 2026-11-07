@@ -249,6 +249,19 @@ fn key_is_str(mut key: &Value, text: &str) -> bool {
     matches!(key, Value::String(key) if short_bytes_eq(key.as_bytes(), text.as_bytes()))
 }
 
+/// `candidate == key`, with the common `str` and integer keys compared
+/// inline instead of through `Value`'s whole equality.
+#[inline(always)]
+fn key_equals(candidate: &Value, key: &Value) -> bool {
+    match (candidate, key) {
+        (Value::String(candidate), Value::String(key)) => {
+            short_bytes_eq(candidate.as_bytes(), key.as_bytes())
+        }
+        (Value::Int(candidate), Value::Int(key)) => candidate == key,
+        _ => candidate == key,
+    }
+}
+
 /// `a == b`, comparing up to sixteen bytes in two overlapping words
 /// instead of calling `memcmp`. Keys, enum names, and variant names are
 /// mostly short.
@@ -675,7 +688,7 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
 
     /// The slot of the entry whose key equals `key`, for [`Self::at_slot`].
     pub fn position(&self, key: &Value) -> Option<usize> {
-        self.probe(|| hash_value(key), |candidate| candidate == key)
+        self.probe(|| hash_value(key), |candidate| key_equals(candidate, key))
             .0
     }
 
@@ -775,7 +788,7 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
     /// and keeps the order of the rest. A large collection may keep a hole
     /// where the entry was, which makes [`Self::get`] scan.
     pub fn remove(&mut self, key: &Value) -> Option<T> {
-        let (slot, hash) = self.probe(|| hash_value(key), |candidate| candidate == key);
+        let (slot, hash) = self.probe(|| hash_value(key), |candidate| key_equals(candidate, key));
         Some(self.remove_slot(slot?, hash, false))
     }
 
@@ -784,7 +797,7 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
     /// It takes time proportional to the collection's size, unless the
     /// entry is the last one.
     pub fn shift_remove(&mut self, key: &Value) -> Option<T> {
-        let (slot, hash) = self.probe(|| hash_value(key), |candidate| candidate == key);
+        let (slot, hash) = self.probe(|| hash_value(key), |candidate| key_equals(candidate, key));
         Some(self.remove_slot(slot?, hash, true))
     }
 
@@ -906,7 +919,21 @@ impl DictEntries {
     /// Stores `value` under `key`. An equal key keeps its slot and its
     /// original key, and the replaced value is returned.
     pub fn insert(&mut self, key: Value, value: Value) -> Option<Value> {
-        match self.probe(|| hash_value(&key), |candidate| *candidate == key) {
+        // A small dict scans and writes its one vector, made unshared once.
+        if let Storage::Small(entries) = &mut self.storage {
+            let entries = Arc::make_mut(entries);
+            if let Some(entry) = entries
+                .iter_mut()
+                .find(|(candidate, _)| key_equals(candidate, &key))
+            {
+                return Some(std::mem::replace(&mut entry.1, value));
+            }
+            if entries.len() < INDEX_THRESHOLD {
+                entries.push((key, value));
+                return None;
+            }
+        }
+        match self.probe(|| hash_value(&key), |candidate| key_equals(candidate, &key)) {
             (Some(slot), _) => Some(std::mem::replace(self.value_at_mut(slot), value)),
             (None, hash) => {
                 self.push_new_hashed((key, value), hash);
@@ -919,7 +946,10 @@ impl DictEntries {
 impl SetElements {
     /// Adds `element` unless an equal one is present. Returns whether it was added.
     pub fn insert(&mut self, element: Value) -> bool {
-        match self.probe(|| hash_value(&element), |candidate| *candidate == element) {
+        match self.probe(
+            || hash_value(&element),
+            |candidate| key_equals(candidate, &element),
+        ) {
             (Some(_), _) => false,
             (None, hash) => {
                 self.push_new_hashed(element, hash);

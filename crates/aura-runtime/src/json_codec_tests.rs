@@ -765,6 +765,9 @@ fn the_single_pass_parser_builds_what_serde_builds_or_gives_up() {
         r#""esc \" \\ \/ \b \f \n \r \t \u00e9 \ud83d\ude00 end""#.to_string(),
         "\"caf\u{e9}\"".to_string(),
         r#"{"a": 1, "b": [true, null, {"c": "d"}], "a": 2}"#.to_string(),
+        r#"[{"a": [1, {"b": [2, 3], "c": {}}, []], "d": "e"}, [4, [5, {"f": 6, "f": 7}]], 8]"#
+            .to_string(),
+        r#"{"x": [1, 2, {"y": 3}, [4, 5]], "z": {"w": [6], "v": 7}, "u": 8}"#.to_string(),
         "{}".to_string(),
         "[]".to_string(),
         "[ 1 , 2 ]".to_string(),
@@ -787,7 +790,7 @@ fn the_single_pass_parser_builds_what_serde_builds_or_gives_up() {
     ];
     for source in &sources {
         let serde = parse_with_serde::<JsonValue>(source);
-        match FastJsonParser::<JsonValue>::parse(source) {
+        match FastJsonParser::<JsonValue>::parse(source, MAX_JSON_DEPTH) {
             Some(fast) => assert_eq!(
                 format!("{:?}", Ok::<_, JsonCodecError>(fast)),
                 format!("{serde:?}"),
@@ -799,6 +802,91 @@ fn the_single_pass_parser_builds_what_serde_builds_or_gives_up() {
             format!("{:?}", parse_into::<JsonValue>(source)),
             format!("{serde:?}"),
             "{source}"
+        );
+    }
+}
+
+#[test]
+fn nested_containers_keep_their_own_items_and_entries_in_order() {
+    let parsed = parse_ok(r#"[{"a": [1, {"b": [2]}], "c": 3}, [4, {"d": []}], 5]"#);
+    assert_eq!(
+        parsed,
+        JsonValue::Array(vec![
+            JsonValue::Object(vec![
+                (
+                    "a".to_string(),
+                    JsonValue::Array(vec![
+                        JsonValue::Int(1),
+                        JsonValue::Object(vec![(
+                            "b".to_string(),
+                            JsonValue::Array(vec![JsonValue::Int(2)])
+                        )]),
+                    ])
+                ),
+                ("c".to_string(), JsonValue::Int(3)),
+            ]),
+            JsonValue::Array(vec![
+                JsonValue::Int(4),
+                JsonValue::Object(vec![("d".to_string(), JsonValue::Array(Vec::new()))]),
+            ]),
+            JsonValue::Int(5),
+        ])
+    );
+}
+
+#[test]
+fn a_depth_bounded_parse_gives_up_only_on_sources_nested_past_its_limit() {
+    let deep = |levels: usize| format!("{}{}", "[".repeat(levels), "]".repeat(levels));
+    // Within the limit it parses as `parse_into` does, errors included.
+    for source in [
+        deep(3),
+        r#"{"a": [1, {"b": 2}]}"#.to_string(),
+        "[[1,]]".to_string(),
+        "{\"a\": [1e400]}".to_string(),
+        "\"[[[[[[\"".to_string(),
+        "[1, 2".to_string(),
+    ] {
+        let bounded = parse_into_within_depth::<JsonValue>(&source, 3)
+            .unwrap_or_else(|| panic!("{source} nests within 3 levels"));
+        assert_eq!(
+            format!("{bounded:?}"),
+            format!("{:?}", parse_into::<JsonValue>(&source)),
+            "{source}"
+        );
+    }
+    // Past the limit it builds nothing, whether or not the source is valid.
+    for source in [
+        deep(4),
+        "[[[[1]]]".to_string(),
+        "[1, [2, [3, [4]]], x]".to_string(),
+        "[1,] [[[[".to_string(),
+    ] {
+        assert!(
+            parse_into_within_depth::<JsonValue>(&source, 3).is_none(),
+            "{source} nests past 3 levels"
+        );
+    }
+}
+
+#[test]
+fn dumps_escapes_beside_multi_byte_text_and_quotes_plain_text_whole() {
+    for (value, expected) in [
+        ("", r#""""#),
+        ("plain text", r#""plain text""#),
+        ("caf\u{e9} \u{1f600}", "\"caf\u{e9} \u{1f600}\""),
+        ("\u{e9}\"\u{e9}", "\"\u{e9}\\\"\u{e9}\""),
+        (
+            "\u{1f600}\\\n\u{1}\u{e9}",
+            "\"\u{1f600}\\\\\\n\\u0001\u{e9}\"",
+        ),
+        ("end\"", r#""end\"""#),
+        ("\"start", r#""\"start""#),
+        ("a\u{7f}b", "\"a\u{7f}b\""),
+    ] {
+        assert_eq!(
+            dumps(&JsonValue::String(value.to_string()), None).unwrap(),
+            expected,
+            "wrong JSON text for {value:?}"
         );
     }
 }

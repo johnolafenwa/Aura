@@ -621,3 +621,51 @@ fn small_and_large_entries_answer_the_same_reads() {
         assert!(entries == copy.into_vec());
     }
 }
+
+#[test]
+fn small_and_large_dicts_match_str_and_integer_keys_by_value() {
+    let typed_seven = Value::Int(
+        IntegerValue::from_typed_signed(7, IntegerKind::Int32).expect("7 fits in int32"),
+    );
+    let long_key = "a key longer than sixteen bytes";
+    for size in [3, INDEX_THRESHOLD + 3] {
+        let mut entries = DictEntries::new();
+        for index in 0..size {
+            entries.insert(text(&format!("k{index}")), int(index as i64));
+        }
+        entries.insert(int(7), text("seven"));
+        entries.insert(text(long_key), text("long"));
+        entries.insert(text(""), text("empty"));
+
+        // An equal key keeps its first place and takes the later value.
+        assert_eq!(entries.insert(text("k1"), int(10)), Some(int(1)));
+        assert_eq!(
+            entries.insert(typed_seven.clone(), text("typed")),
+            Some(text("seven"))
+        );
+        assert_eq!(entries.len(), size + 3);
+        assert_eq!(entries.get(1), Some(&(text("k1"), int(10))));
+        assert_eq!(entries.value_of(&int(7)), Some(&text("typed")));
+        assert_eq!(entries.value_of(&text(long_key)), Some(&text("long")));
+        assert_eq!(entries.value_of(&text("")), Some(&text("empty")));
+        // Keys of one length that differ only inside, and keys of another
+        // kind, do not match.
+        assert_eq!(
+            entries.value_of(&text("a key longer than sixteen bytez")),
+            None
+        );
+        assert_eq!(entries.value_of(&text("k")), None);
+        assert_eq!(entries.value_of(&Value::Float(7.0)), None);
+        assert_eq!(
+            entries.remove(&text("k0")).map(|(_, value)| value),
+            Some(int(0))
+        );
+        assert_eq!(entries.value_of(&text("k0")), None);
+    }
+
+    let mut set = SetElements::new();
+    assert!(set.insert(text("a")));
+    assert!(!set.insert(text("a")));
+    assert!(set.insert(int(7)));
+    assert!(!set.insert(typed_seven));
+}

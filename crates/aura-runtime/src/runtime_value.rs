@@ -3908,9 +3908,82 @@ pub struct SetValue {
 
 #[derive(Clone, Debug)]
 pub struct MapValue {
-    pub key_type: Type,
-    pub value_type: Type,
+    pub key_type: SharedType,
+    pub value_type: SharedType,
     pub entries: DictEntries,
+}
+
+/// A [`Type`] that copies of a value share instead of copying: a `dict`'s
+/// key and value types. Copying one takes a count, not an allocation, and
+/// keeps [`MapValue`], and so every [`Value`], small. It reads, compares,
+/// and prints as the type it holds.
+#[derive(Clone)]
+pub struct SharedType(Arc<Type>);
+
+impl SharedType {
+    /// `Type::named(name)`, which for a common name, such as `str` or
+    /// `json.Value`, allocates nothing.
+    pub fn named(name: &str) -> Self {
+        Self::common(name).unwrap_or_else(|| Self(Arc::new(Type::named(name))))
+    }
+
+    /// The one shared copy of a type without arguments that most `dict`s
+    /// have.
+    fn common(name: &str) -> Option<Self> {
+        static COMMON: OnceLock<[(&'static str, SharedType); 5]> = OnceLock::new();
+        let common = COMMON.get_or_init(|| {
+            ["str", "json.Value", "int64", "Unknown", "float64"]
+                .map(|name| (name, SharedType(Arc::new(Type::named(name)))))
+        });
+        common
+            .iter()
+            .find(|(common, _)| *common == name)
+            .map(|(_, shared)| shared.clone())
+    }
+}
+
+impl From<Type> for SharedType {
+    fn from(ty: Type) -> Self {
+        match &ty {
+            Type::Named(name, args) if args.is_empty() => Self::common(name),
+            _ => None,
+        }
+        .unwrap_or_else(|| Self(Arc::new(ty)))
+    }
+}
+
+impl std::ops::Deref for SharedType {
+    type Target = Type;
+
+    fn deref(&self) -> &Type {
+        &self.0
+    }
+}
+
+impl AsRef<Type> for SharedType {
+    fn as_ref(&self) -> &Type {
+        &self.0
+    }
+}
+
+impl fmt::Debug for SharedType {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&*self.0, formatter)
+    }
+}
+
+impl PartialEq for SharedType {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0) || *self.0 == *other.0
+    }
+}
+
+impl Eq for SharedType {}
+
+impl PartialEq<Type> for SharedType {
+    fn eq(&self, other: &Type) -> bool {
+        *self.0 == *other
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -17833,8 +17906,8 @@ fn host_string_map_arg(
 
 fn host_string_map_value(entries: BTreeMap<String, String>) -> Value {
     Value::Map(MapValue {
-        key_type: Type::named("str"),
-        value_type: Type::named("str"),
+        key_type: SharedType::named("str"),
+        value_type: SharedType::named("str"),
         entries: entries
             .into_iter()
             .map(|(key, value)| (Value::String(key.into()), Value::String(value.into())))
@@ -18362,8 +18435,8 @@ pub fn json_value_to_runtime(value: JsonValue) -> Result<Value> {
                             "json.Value",
                             "Object",
                             json_runtime_single_payload(Value::Map(MapValue {
-                                key_type: json_runtime_type("str")?,
-                                value_type: json_runtime_type("json.Value")?,
+                                key_type: json_runtime_type("str")?.into(),
+                                value_type: json_runtime_type("json.Value")?.into(),
                                 entries: entries.into(),
                             }))?,
                         )?);
@@ -18468,8 +18541,8 @@ impl json_codec::JsonTree for RuntimeJson {
         Self::variant(
             "Object",
             Value::Map(MapValue {
-                key_type: Type::named("str"),
-                value_type: Type::named("json.Value"),
+                key_type: SharedType::named("str"),
+                value_type: SharedType::named("json.Value"),
                 entries: object,
             }),
         )
@@ -18548,16 +18621,37 @@ pub const JSON_INLINE_PARSE_MAX_DEPTH: usize = 8;
 /// service costs more than parsing a small document, and such a source
 /// cannot recurse deep enough to threaten a task stack.
 pub fn json_parse_inline(source: &str) -> Option<JsonInlineParse> {
-    if source.len() > JSON_INLINE_PARSE_MAX_BYTES
-        || !json_codec::nesting_at_most(source, JSON_INLINE_PARSE_MAX_DEPTH)
-    {
+    if source.len() > JSON_INLINE_PARSE_MAX_BYTES {
         return None;
     }
     let hooked = json_runtime_conversion_hooked();
-    let outcome = panic::catch_unwind(AssertUnwindSafe(|| json_parse_runtime(source, hooked)))
-        .map_err(|payload| JsonCodecServiceError::Panicked(task_panic_message(&*payload)))
-        .and_then(|parsed| parsed.map_err(JsonCodecServiceError::Codec));
+    // The parse checks the nesting as it goes, so a source that parses is
+    // not scanned for it first.
+    let outcome = match panic::catch_unwind(AssertUnwindSafe(|| {
+        json_parse_runtime_within_depth(source, hooked, JSON_INLINE_PARSE_MAX_DEPTH)
+    })) {
+        Ok(None) => return None,
+        Ok(Some(parsed)) => parsed.map_err(JsonCodecServiceError::Codec),
+        Err(payload) => Err(JsonCodecServiceError::Panicked(task_panic_message(
+            &*payload,
+        ))),
+    };
     Some(JsonInlineParse(outcome))
+}
+
+/// [`json_parse_runtime`] of a source that nests at most `limit` levels,
+/// or `None` when it nests deeper.
+fn json_parse_runtime_within_depth(
+    source: &str,
+    hooked: bool,
+    limit: usize,
+) -> Option<std::result::Result<ParsedJson, JsonCodecError>> {
+    if hooked {
+        return json_codec::parse_into_within_depth::<JsonValue>(source, limit)
+            .map(|parsed| parsed.map(ParsedJson::Tree));
+    }
+    json_codec::parse_into_within_depth::<RuntimeJson>(source, limit)
+        .map(|parsed| parsed.map(|value| ParsedJson::Runtime(value.0)))
 }
 
 /// A source [`json_parse_inline`] parsed on the calling task.

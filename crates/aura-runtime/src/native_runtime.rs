@@ -74,11 +74,12 @@ use crate::runtime_value::{
     InstanceValue, IntegerArithmeticMode, LightweightTaskFailureSignal, MapValue,
     ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessSupervisorValue,
     ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue, RuntimeName,
-    RuntimeSchedulerWakeReason, SendValueError, SetElements, SetValue, TaskCancelledSignal,
-    TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue,
-    TlsStreamValue, TupleValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
-    VariantPayloads, VecValue, WebSocketListenerValue, WebSocketValue,
-    DIRECT_GENERATOR_STACK_BYTES, DIRECT_RUNTIME_TYPE_FIELD, DIRECT_RUNTIME_TYPE_SEPARATOR,
+    RuntimeSchedulerWakeReason, SendValueError, SetElements, SetValue, SharedType,
+    TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
+    TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpSocketValue,
+    UnixListenerValue, UnixStreamValue, Value, VariantPayloads, VecValue, WebSocketListenerValue,
+    WebSocketValue, DIRECT_GENERATOR_STACK_BYTES, DIRECT_RUNTIME_TYPE_FIELD,
+    DIRECT_RUNTIME_TYPE_SEPARATOR,
 };
 use crate::text_methods;
 use aura_core::ops::{BinaryOp, ReceiverKind, UnaryOp};
@@ -2234,7 +2235,7 @@ fn embedded_runtime_type_name(value: &Value) -> Option<String> {
         ))),
         Value::Map(map) => Some(canonical_runtime_type_name(&Type::Named(
             "dict".to_string(),
-            vec![map.key_type.clone(), map.value_type.clone()],
+            vec![Type::clone(&map.key_type), Type::clone(&map.value_type)],
         ))),
         Value::Instance(instance) => {
             instance
@@ -2827,8 +2828,12 @@ fn retag_value(value: &mut Value, tag: &RuntimeTypeTag) {
         Value::Map(map) => {
             if let Type::Named(name, args) = parsed {
                 if name == "dict" && args.len() == 2 {
-                    assign_type(&mut map.key_type, &args[0]);
-                    assign_type(&mut map.value_type, &args[1]);
+                    if map.key_type != args[0] {
+                        map.key_type = args[0].clone().into();
+                    }
+                    if map.value_type != args[1] {
+                        map.value_type = args[1].clone().into();
+                    }
                 }
             }
         }
@@ -3281,7 +3286,8 @@ unsafe fn consume_value(ptr: *mut OpaqueValue) -> Value {
 
 /// Takes the value out of a box the caller owns one reference to. A box
 /// that another reference still holds keeps its value, and the caller gets
-/// a copy. Only a box with one reference is emptied.
+/// a copy. Only a box with one reference is emptied, and the caller then
+/// releases that reference, freeing the box.
 unsafe fn take_owned_contents(ptr: *mut OpaqueValue) -> Value {
     // SAFETY: the caller owns a reference, so the box is live. A count of
     // one cannot grow while the caller holds the only reference.
@@ -3289,10 +3295,16 @@ unsafe fn take_owned_contents(ptr: *mut OpaqueValue) -> Value {
         unsafe { ptr.as_ref() }.is_some_and(|value| value.ref_count.load(Ordering::Acquire) > 1);
     if shared {
         crate::runtime_value::representation_stats::note_clone();
-        unsafe { value_ref(ptr) }
-    } else {
-        unsafe { value_mut(ptr, |value| std::mem::replace(value, Value::Unit)) }
+        return unsafe { value_ref(ptr) };
     }
+    let Some(opaque) = (unsafe { ptr.as_ref() }) else {
+        runtime_error("direct runtime received a null opaque value pointer");
+    };
+    let _access = opaque.access(true);
+    // Every caller releases its only reference next, which frees the box,
+    // so the emptied box's list view need not follow the write.
+    // SAFETY: as in `value_mut`.
+    unsafe { std::mem::replace(&mut *opaque.value.get(), Value::Unit) }
 }
 
 unsafe fn consume_owned_value(ptr: *mut OpaqueValue) -> Value {
@@ -3995,6 +4007,11 @@ thread_local! {
 /// share one copy of each name instead of allocating their own.
 fn literal_runtime_name(ptr: *const u8, len: usize) -> RuntimeName {
     let bytes = unsafe { slice::from_raw_parts(ptr, len) };
+    // The names of the enums the runtime itself defines need no lookup,
+    // and copying or dropping a static name touches no count.
+    if let Some(name) = well_known_runtime_name(bytes) {
+        return RuntimeName::from_static(name);
+    }
     let address = ptr as usize;
     let slot = ((address >> 3) ^ (address >> 11) ^ len) % LITERAL_NAME_LOOKUP_SLOTS;
     let slots = [slot, slot ^ 1];
@@ -4027,6 +4044,27 @@ fn literal_runtime_name(ptr: *const u8, len: usize) -> RuntimeName {
         lookup[index] = Some((address, len, name.clone()));
     });
     name
+}
+
+/// `bytes` as a static name when it spells one of the enum or variant
+/// names of the enums every program uses: `Result`, `Option`, `Lookup`,
+/// and `json.Value`.
+#[inline]
+fn well_known_runtime_name(bytes: &[u8]) -> Option<&'static str> {
+    let names: &[&'static str] = match bytes.len() {
+        2 => &["Ok"],
+        3 => &["Int", "Err"],
+        4 => &["Null", "Bool", "Some", "None"],
+        5 => &["Found", "Float", "Array"],
+        6 => &["String", "Object", "Lookup", "Result", "Option"],
+        7 => &["Missing"],
+        10 => &["json.Value"],
+        _ => return None,
+    };
+    names
+        .iter()
+        .copied()
+        .find(|name| crate::collection_index::short_bytes_eq(name.as_bytes(), bytes))
 }
 
 /// The text of the UTF-8 bytes at `ptr`, which generated code passes for a
@@ -4573,8 +4611,8 @@ pub extern "C-unwind" fn aura_direct_ffi_call(
 
 fn headers_map_value(headers: Vec<(String, String)>) -> Value {
     Value::Map(MapValue {
-        key_type: Type::named("str"),
-        value_type: Type::named("str"),
+        key_type: SharedType::named("str"),
+        value_type: SharedType::named("str"),
         entries: headers
             .into_iter()
             .map(|(key, value)| (Value::String(key.into()), Value::String(value.into())))
@@ -5252,7 +5290,7 @@ fn inferred_collection_type(value: &Value) -> Type {
         Value::Set(set) => Type::Named("set".to_string(), vec![set.element_type.clone()]),
         Value::Map(map) => Type::Named(
             "dict".to_string(),
-            vec![map.key_type.clone(), map.value_type.clone()],
+            vec![Type::clone(&map.key_type), Type::clone(&map.value_type)],
         ),
         Value::Duration(_) => Type::named("Duration"),
         Value::Rng(_) => Type::named("random.Rng"),
@@ -10146,8 +10184,8 @@ pub extern "C-unwind" fn aura_direct_array_reduce(
 pub extern "C-unwind" fn aura_direct_map_empty() -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         boxed_value(Value::Map(MapValue {
-            key_type: Type::named("Unknown"),
-            value_type: Type::named("Unknown"),
+            key_type: SharedType::named("Unknown"),
+            value_type: SharedType::named("Unknown"),
             entries: DictEntries::new(),
         }))
     })
@@ -10568,24 +10606,49 @@ pub extern "C-unwind" fn aura_direct_map_set_in_place(
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let key = unsafe { consume_owned_value(key) };
-        let value = unsafe { consume_owned_value(value) };
-        let previous = with_map_mut(map, |map| {
-            if is_unknown_runtime_type(&map.key_type) {
-                let inferred = inferred_collection_type(&key);
-                if !is_unknown_runtime_type(&inferred) {
-                    map.key_type = inferred;
-                }
-            }
-            if is_unknown_runtime_type(&map.value_type) {
-                let inferred = inferred_collection_type(&value);
-                if !is_unknown_runtime_type(&inferred) {
-                    map.value_type = inferred;
-                }
-            }
-            map.entries.insert(key, value)
-        });
+        let previous = unsafe { direct_map_insert(map, key, value) };
         boxed_value(previous.map(lookup_found).unwrap_or_else(lookup_missing))
+    })
+}
+
+/// `aura_direct_map_set_in_place` for a caller that drops the `Lookup` it
+/// returns, such as a dict literal or `d[k] = v`: the replaced value is
+/// dropped here, and no box is made for it.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_insert_in_place(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+) {
+    task_runtime_boundary(|| {
+        drop(unsafe { direct_map_insert(map, key, value) });
+    })
+}
+
+/// Stores the owned `key` and `value` boxes' values in `map`, and returns
+/// the value an equal key held. A map that does not know its key or value
+/// type yet takes it from the entry.
+unsafe fn direct_map_insert(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+) -> Option<Value> {
+    let key = unsafe { consume_owned_value(key) };
+    let value = unsafe { consume_owned_value(value) };
+    with_map_mut(map, |map| {
+        if is_unknown_runtime_type(&map.key_type) {
+            let inferred = inferred_collection_type(&key);
+            if !is_unknown_runtime_type(&inferred) {
+                map.key_type = inferred.into();
+            }
+        }
+        if is_unknown_runtime_type(&map.value_type) {
+            let inferred = inferred_collection_type(&value);
+            if !is_unknown_runtime_type(&inferred) {
+                map.value_type = inferred.into();
+            }
+        }
+        map.entries.insert(key, value)
     })
 }
 
@@ -10639,8 +10702,8 @@ pub extern "C-unwind" fn aura_direct_map_with_capacity(entries: i64) -> *mut Opa
         // Reserving is only a hint; a failed one leaves the dict to grow.
         let _ = map.try_reserve(usize::try_from(entries).unwrap_or(0));
         boxed_value(Value::Map(MapValue {
-            key_type: Type::named("Unknown"),
-            value_type: Type::named("Unknown"),
+            key_type: SharedType::named("Unknown"),
+            value_type: SharedType::named("Unknown"),
             entries: map,
         }))
     })
@@ -10650,13 +10713,13 @@ fn infer_literal_entry_types(map: &mut MapValue, key: &Value, value: &Value) {
     if is_unknown_runtime_type(&map.key_type) {
         let inferred = inferred_collection_type(key);
         if !is_unknown_runtime_type(&inferred) {
-            map.key_type = inferred;
+            map.key_type = inferred.into();
         }
     }
     if is_unknown_runtime_type(&map.value_type) {
         let inferred = inferred_collection_type(value);
         if !is_unknown_runtime_type(&inferred) {
-            map.value_type = inferred;
+            map.value_type = inferred.into();
         }
     }
 }
@@ -10715,7 +10778,7 @@ pub extern "C-unwind" fn aura_direct_map_keys(map: *mut OpaqueValue) -> *mut Opa
         });
         let (key_type, elements) = direct_array_result(result, 0, 0);
         boxed_value(Value::Vec(VecValue {
-            element_type: key_type,
+            element_type: Type::clone(&key_type),
             elements: elements.into(),
             str_view: Default::default(),
         }))
@@ -10735,7 +10798,7 @@ pub extern "C-unwind" fn aura_direct_map_values(map: *mut OpaqueValue) -> *mut O
         });
         let (value_type, elements) = direct_array_result(result, 0, 0);
         boxed_value(Value::Vec(VecValue {
-            element_type: value_type,
+            element_type: Type::clone(&value_type),
             elements: elements.into(),
             str_view: Default::default(),
         }))
@@ -10746,12 +10809,15 @@ pub extern "C-unwind" fn aura_direct_map_values(map: *mut OpaqueValue) -> *mut O
 pub extern "C-unwind" fn aura_direct_map_items(map: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let result = with_map(map, |map| {
-            let element_type = Type::Tuple(vec![map.key_type.clone(), map.value_type.clone()]);
+            let element_type = Type::Tuple(vec![
+                Type::clone(&map.key_type),
+                Type::clone(&map.value_type),
+            ]);
             let mut elements =
                 try_array_buffer(map.entries.len(), "Array-containing Map items copy")?;
             for (key, value) in &map.entries {
                 elements.push(Value::Tuple(TupleValue {
-                    element_types: vec![map.key_type.clone(), map.value_type.clone()],
+                    element_types: vec![Type::clone(&map.key_type), Type::clone(&map.value_type)],
                     elements: vec![
                         try_clone_array_containing_value(key)?,
                         try_clone_array_containing_value(value)?,

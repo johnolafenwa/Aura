@@ -350,9 +350,6 @@ pub(super) fn lent_element_reads<'f>(
             }
         }
     }
-    if std::env::var_os("AURA_DEBUG_LENT").is_some() {
-        eprintln!("DBG {} lists={:?} rejected={:?}", function.name, lists, rejected);
-    }
     lists.retain(|temp, _| !rejected.contains(temp));
 
     // The temporaries one `Lend` fills and that are only read until their

@@ -1654,12 +1654,6 @@ impl<'a> NativeCodegen<'a> {
                 })
             },
         );
-        if std::env::var_os("AURA_DEBUG_LENT").is_some() {
-            eprintln!(
-                "DBG2 {} lists={:?} payloads={:?}",
-                function.name, lent_element_reads.lists, lent_element_reads.payloads
-            );
-        }
         let shaped_locals = shapes::shaped_locals(function, &self.program_shapes, |local| {
             lookup_slots.contains(local)
                 || lent_places.contains(local)

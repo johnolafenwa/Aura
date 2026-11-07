@@ -2212,8 +2212,8 @@ fn arg_default_value(default: ArgDefault) -> Result<Value> {
         ArgDefault::Int64(value) => Value::Int(IntegerValue::from_i64(value)),
         ArgDefault::Int32(value) => Value::Int(IntegerValue::from_i32(value)),
         ArgDefault::EmptyStrDict => Value::Map(MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::named("str"),
+            key_type: Type::named("str").into(),
+            value_type: Type::named("str").into(),
             entries: DictEntries::new(),
         }),
         ArgDefault::StdioNull => process_stdio_null(),
@@ -3086,7 +3086,7 @@ impl MirRuntime {
             )),
             Value::Map(map) => Some(Type::Named(
                 "dict".to_string(),
-                vec![map.key_type.clone(), map.value_type.clone()],
+                vec![Type::clone(&map.key_type), Type::clone(&map.value_type)],
             )),
             Value::Duration(_) => Some(Type::named("Duration")),
             Value::Rng(_) => Some(Type::named("random.Rng")),
@@ -4811,8 +4811,8 @@ impl MirRuntime {
                     values.insert(key, value);
                 }
                 Ok(RvalueOutcome::Value(Value::Map(MapValue {
-                    key_type: key_type.clone(),
-                    value_type: value_type.clone(),
+                    key_type: key_type.clone().into(),
+                    value_type: value_type.clone().into(),
                     entries: values,
                 })))
             }
@@ -5094,8 +5094,8 @@ impl MirRuntime {
             let values = evaluate_named_args(args, env)?;
             bind_builtin_args(&[], values)?;
             return Ok(Value::Map(MapValue {
-                key_type: Type::named("Unknown"),
-                value_type: Type::named("Unknown"),
+                key_type: Type::named("Unknown").into(),
+                value_type: Type::named("Unknown").into(),
                 entries: DictEntries::new(),
             }));
         }
@@ -5236,8 +5236,8 @@ impl MirRuntime {
                         Diagnostic::coded("AU4005", "dictionary capacity allocation failed")
                     })?;
                     Ok(Value::Map(MapValue {
-                        key_type: args[0].clone(),
-                        value_type: args[1].clone(),
+                        key_type: args[0].clone().into(),
+                        value_type: args[1].clone().into(),
                         entries,
                     }))
                 }
@@ -7753,7 +7753,7 @@ impl MirRuntime {
                     elements.push(try_clone_mir_value(key)?);
                 }
                 Ok(Value::Vec(VecValue {
-                    element_type: map.key_type.clone(),
+                    element_type: Type::clone(&map.key_type),
                     elements: elements.into(),
                     str_view: Default::default(),
                 }))
@@ -7768,7 +7768,7 @@ impl MirRuntime {
                     elements.push(try_clone_mir_value(value)?);
                 }
                 Ok(Value::Vec(VecValue {
-                    element_type: map.value_type.clone(),
+                    element_type: Type::clone(&map.value_type),
                     elements: elements.into(),
                     str_view: Default::default(),
                 }))
@@ -7784,12 +7784,18 @@ impl MirRuntime {
                     try_array_buffer(map.entries.len(), "Array-containing Map entry copy")?;
                 for (key, value) in &map.entries {
                     elements.push(Value::Tuple(TupleValue {
-                        element_types: vec![map.key_type.clone(), map.value_type.clone()],
+                        element_types: vec![
+                            Type::clone(&map.key_type),
+                            Type::clone(&map.value_type),
+                        ],
                         elements: vec![try_clone_mir_value(key)?, try_clone_mir_value(value)?],
                     }));
                 }
                 Ok(Value::Vec(VecValue {
-                    element_type: Type::Tuple(vec![map.key_type.clone(), map.value_type.clone()]),
+                    element_type: Type::Tuple(vec![
+                        Type::clone(&map.key_type),
+                        Type::clone(&map.value_type),
+                    ]),
                     elements: elements.into(),
                     str_view: Default::default(),
                 }))
@@ -11790,8 +11796,8 @@ fn expect_owned_headers_map(value: Value, label: &str) -> Result<Vec<(String, St
 
 fn headers_map_value(headers: Vec<(String, String)>) -> Value {
     Value::Map(MapValue {
-        key_type: Type::named("str"),
-        value_type: Type::named("str"),
+        key_type: Type::named("str").into(),
+        value_type: Type::named("str").into(),
         entries: headers
             .into_iter()
             .map(|(key, value)| (Value::String(key.into()), Value::String(value.into())))
