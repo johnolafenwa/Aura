@@ -7654,6 +7654,7 @@ fn trait_decl(name: &str, type_params: Vec<&str>) -> TraitDecl {
         methods: Vec::new(),
         span: Span::new(1, 1),
         doc: None,
+        assoc_types: Vec::new(),
     }
 }
 
@@ -7673,6 +7674,7 @@ fn trait_info(name: &str, type_params: Vec<&str>) -> TraitInfo {
         module_name: "<test>".to_string(),
         decl: trait_decl(name, type_params),
         supertraits: Vec::new(),
+        assoc_bounds: Vec::new(),
         methods: BTreeMap::new(),
     }
 }
@@ -8228,6 +8230,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                 module_name: program.module_name.clone(),
                 decl: trait_decl("Not", vec!["Out"]),
                 supertraits: Vec::new(),
+                assoc_bounds: Vec::new(),
                 methods: BTreeMap::from([(
                     "not".to_string(),
                     TraitMethodInfo {
@@ -8247,6 +8250,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                 module_name: program.module_name.clone(),
                 decl: trait_decl("Neg", vec!["Out"]),
                 supertraits: Vec::new(),
+                assoc_bounds: Vec::new(),
                 methods: BTreeMap::from([(
                     "neg".to_string(),
                     TraitMethodInfo {
@@ -8273,6 +8277,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                 methods: vec![not_decl.clone()],
                 span: Span::new(1, 1),
                 derived: false,
+                assoc_types: Vec::new(),
             },
             type_params: Vec::new(),
             type_param_bounds: BTreeMap::new(),
@@ -8300,6 +8305,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                 methods: vec![neg_decl.clone()],
                 span: Span::new(1, 1),
                 derived: false,
+                assoc_types: Vec::new(),
             },
             type_params: Vec::new(),
             type_param_bounds: BTreeMap::new(),
@@ -32494,4 +32500,50 @@ fn the_iter_module_cannot_declare_generator_functions() {
             .contains("cannot declare generator functions"),
         "{diagnostic:?}"
     );
+}
+
+#[test]
+fn associated_type_misuse_reports_clear_diagnostics() {
+    let cases = [
+        (
+            "from iter import Generator, IntoIterator\n\nclass Bag:\n    items: list[str]\n\ndef walk(items: own list[str]) -> Generator[str]:\n    for item in items:\n        yield item.clone()\n\nimpl IntoIterator[str] for Bag:\n    type Iter = int64\n    def into_iter(own self) -> Self.Iter:\n        return walk(self.items)\n\ndef main():\n    for word in Bag(items=[\"a\"]):\n        print(word)\n",
+            "must implement `Iterator[str]`, but `int64` does not",
+        ),
+        (
+            "from iter import Generator, IntoIterator\n\nclass Bag:\n    items: list[str]\n\ndef walk(items: own list[str]) -> Generator[str]:\n    for item in items:\n        yield item.clone()\n\nimpl IntoIterator[str] for Bag:\n    def into_iter(own self) -> Generator[str]:\n        return walk(self.items)\n\ndef main():\n    for word in Bag(items=[\"a\"]):\n        print(word)\n",
+            "must fix its associated type `Iter`",
+        ),
+        (
+            "from iter import Generator, IntoIterator\n\nclass Bag:\n    items: list[str]\n\ndef walk(items: own list[str]) -> Generator[str]:\n    for item in items:\n        yield item.clone()\n\nimpl IntoIterator[str] for Bag:\n    type Iter = Generator[str]\n    type Other = int64\n    def into_iter(own self) -> Generator[str]:\n        return walk(self.items)\n\ndef main():\n    for word in Bag(items=[\"a\"]):\n        print(word)\n",
+            "has no associated type `Other`",
+        ),
+        (
+            "from iter import Generator, IntoIterator\n\nclass Bag:\n    items: list[str]\n\ndef walk(items: own list[str]) -> Generator[str]:\n    for item in items:\n        yield item.clone()\n\nimpl IntoIterator[str] for Bag:\n    type Iter = Generator[str]\n    def into_iter(own self) -> Generator[str]:\n        return walk(self.items)\n\ndef main():\n    for word in mut Bag(items=[\"a\"]):\n        print(word)\n",
+            "a `for` loop consumes an `IntoIterator` source",
+        ),
+        (
+            "from iter import IntoIterator\n\ndef total[S: IntoIterator[int64]](s: own S) -> int64:\n    return 0\n\ndef main():\n    print(1)\n",
+            "a bound cannot name `IntoIterator` yet",
+        ),
+        (
+            "trait Source:\n    def open(self) -> int64\n    type Iter\n\ndef main():\n    print(1)\n",
+            "declares its associated types before its methods",
+        ),
+        (
+            "trait Source:\n    type Iter\n    type Iter\n\ndef main():\n    print(1)\n",
+            "associated type `Iter` is declared twice",
+        ),
+        (
+            "trait Source:\n    type Iter\n\nclass A:\n    n: int64\n\nimpl Source for A:\n    def f(self) -> int64:\n        return 1\n    type Iter = int64\n\ndef main():\n    print(1)\n",
+            "fixes its associated types before its methods",
+        ),
+        (
+            "trait Source:\n    type Iter\n\nclass A:\n    n: int64\n\nimpl Source for A:\n    type Iter = int64\n    type Iter = str\n\ndef main():\n    print(1)\n",
+            "associated type `Iter` is fixed twice",
+        ),
+    ];
+    for (source, expected) in cases {
+        let error = crate::check_source(source).expect_err(source);
+        assert!(error.message.contains(expected), "{source}\n{error:?}");
+    }
 }

@@ -122,6 +122,16 @@ The semantic interface stays 20, and the native cache format stays `v10`.
   one; a comprehension collects its iterator source first. `Iterator[T]`
   gains `collect(own self) -> list[T]`. `zip` of a collection with an
   iterator reports `AU2002`.
+- Associated types: a trait can declare `type Name: Bound` lines, written
+  `Self.Name` in its methods, and each implementation fixes them with
+  `type Name = T`. The fixed type must satisfy the bounds (`AU2002`). A
+  trait with associated types cannot be a bound yet.
+- New `iter.IntoIterator[T]` trait with `type Iter: Iterator[T]` and
+  `into_iter(own self) -> Self.Iter`. `for` loops, comprehensions,
+  `enumerate`, and `zip` consume an `IntoIterator` value through
+  `into_iter()`.
+- Fixed: a `for` loop over a generic `I: Iterator[T]` parameter failed in
+  the compiler's lowering with a wrong-enum match error.
 - Fixed: `for x in value.method():` where `method` takes `own self` reported
   a false "use of moved value" on the receiver.
 - A unit variant of an imported generic enum, such as `opt.Opt.Nothing`,

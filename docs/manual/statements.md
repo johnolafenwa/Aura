@@ -286,6 +286,7 @@ Maintained iterable forms include:
 | `for left, right in zip(first, second):` | Yields one pair per shared position and stops at the shorter sequence. |
 | `for value in iterator:` | Consumes an `iter.Iterator[T]` implementation and yields each owned item. |
 | `for value in mut iterator:` | Borrows a mutable `iter.Iterator[T]` place and yields each owned item, leaving the iterator usable afterwards. |
+| `for value in source:` | Consumes an `iter.IntoIterator[T]` implementation through `source.into_iter()` and yields each owned item. |
 
 `for value in mut set:` is not supported in Aura 0.3.
 
@@ -420,6 +421,47 @@ print({w.clone(): i for i, w in enumerate(words())})  # {ant: 0, bee: 1}
 ```
 
 An endless iterator in a comprehension never finishes collecting.
+
+### Values That Turn Into Iterators
+
+A type that is not an iterator itself can still be a loop source by
+implementing `IntoIterator[T]` from the `iter` module. Its associated type
+`Iter` names the iterator that `into_iter` returns:
+
+```aura
+from iter import Generator, IntoIterator
+
+
+class Bag:
+    items: list[str]
+
+
+def walk(items: own list[str]) -> Generator[str]:
+    for item in items:
+        yield item.clone()
+
+
+impl IntoIterator[str] for Bag:
+    type Iter = Generator[str]
+
+    def into_iter(own self) -> Self.Iter:
+        return walk(self.items)
+
+
+def main():
+    for word in Bag(items=["ant", "bee"]):
+        print(word)  # ant, then bee
+```
+
+- `for x in source:` over such a value means
+  `for x in source.into_iter():`, so the loop consumes the source. The
+  same holds for a comprehension clause and each operand of `enumerate` and
+  `zip`.
+- `for x in mut source:` and `for x in own source:` report `AU3004`.
+- A type that implements `Iterator[T]` is iterated as an iterator even if it
+  also implements `IntoIterator[T]`.
+- [Associated Types](/manual/generics-and-traits#associated-types) covers
+  `type` lines in traits and implementations.
 
 ### Generator Functions
 

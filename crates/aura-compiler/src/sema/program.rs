@@ -354,6 +354,9 @@ pub struct TraitInfo {
     pub decl: TraitDecl,
     pub supertraits: Vec<TraitBound>,
     pub methods: BTreeMap<String, TraitMethodInfo>,
+    /// The bounds of each associated type, by its hidden type parameter
+    /// (`Self.Name`), in the trait's own module.
+    pub assoc_bounds: Vec<(String, Vec<TraitBound>)>,
 }
 
 #[derive(Clone, Debug)]
@@ -812,6 +815,19 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             &trait_type_param_scope,
             Some(&self_placeholder),
         )?;
+        let mut assoc_bounds = Vec::new();
+        for assoc in &trait_decl.assoc_types {
+            let bounds = lower_supertraits(
+                &assoc.bounds,
+                &traits,
+                &type_names,
+                &type_arities,
+                &canonical_type_names,
+                &trait_type_param_scope,
+                Some(&self_placeholder),
+            )?;
+            assoc_bounds.push((crate::ast::assoc_type_param_name(&assoc.name), bounds));
+        }
         let mut methods = BTreeMap::new();
         for method in &trait_decl.methods {
             if method.name == INITIALIZER_NAME {
@@ -905,6 +921,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                 decl: trait_decl.clone(),
                 supertraits,
                 methods,
+                assoc_bounds,
             },
         );
     }
@@ -1490,6 +1507,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                 format!("unknown trait `{}`", impl_decl.trait_name),
             )
         })?;
+        let impl_decl = &impl_with_assoc_type_args(impl_decl, trait_info)?;
         let mut implicit_type_params = BTreeSet::new();
         collect_type_ref_type_params(
             &impl_decl.for_type,
@@ -2049,6 +2067,18 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             let mut impl_method_obligations = BTreeMap::<(usize, String), BTreeSet<String>>::new();
             let mut impl_method_array_equality_obligations =
                 BTreeMap::<(usize, String), BTreeSet<String>>::new();
+
+            // Associated types first: loops over `IntoIterator` sources in
+            // the bodies below rely on them.
+            for trait_impl in &program.trait_impls {
+                checker
+                    .with_module_name(&trait_impl.module_name)
+                    .with_type_params(
+                        type_param_scope(&trait_impl.type_params),
+                        trait_impl.type_param_bounds.clone(),
+                    )
+                    .check_trait_impl_assoc_types(trait_impl)?;
+            }
 
             for (trait_name, trait_info) in &program.traits {
                 let trait_type_param_scope = type_param_scope(&trait_info.decl.type_params);
@@ -2719,4 +2749,46 @@ fn reject_signature_span_positions(
         ));
     }
     Ok(())
+}
+
+/// The `impl` block with its associated types appended to its trait
+/// arguments, in the order the trait declares them, since each associated
+/// type is a trailing trait type parameter.
+fn impl_with_assoc_type_args(impl_decl: &ImplDecl, trait_info: &TraitInfo) -> Result<ImplDecl> {
+    let declared = &trait_info.decl.assoc_types;
+    for binding in &impl_decl.assoc_types {
+        if !declared.iter().any(|assoc| assoc.name == binding.name) {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                binding.span,
+                format!(
+                    "trait `{}` has no associated type `{}`",
+                    trait_info.decl.name, binding.name
+                ),
+            ));
+        }
+    }
+    let mut impl_decl = impl_decl.clone();
+    for assoc in declared {
+        let Some(binding) = impl_decl
+            .assoc_types
+            .iter()
+            .find(|binding| binding.name == assoc.name)
+        else {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                impl_decl.span,
+                format!(
+                    "this implementation of `{}` must fix its associated type `{}`",
+                    trait_info.decl.name, assoc.name
+                ),
+            )
+            .with_help(format!(
+                "add `type {} = ...` before the methods",
+                assoc.name
+            )));
+        };
+        impl_decl.trait_args.push(binding.target.clone());
+    }
+    Ok(impl_decl)
 }

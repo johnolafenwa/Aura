@@ -450,6 +450,49 @@ These rules apply:
 - A function that makes the call, directly or through another generic function, cannot be a task target. Start the task with a function that calls it.
 - `T.method` without a call is not a value.
 
+## Associated Types
+
+A trait can declare associated types before its methods. Each is a type
+that every implementation picks:
+
+```aura fragment
+trait Source[T]:
+    type Iter: Iterator[T]
+
+    def open(own self) -> Self.Iter
+```
+
+Inside the trait, `Self.Iter` names the associated type. The bounds after
+the colon are optional; a default method may use what they promise, so a
+default body can call `next()` on a `Self.Iter` value here.
+
+An implementation fixes each associated type with a `type` line before its
+methods. `Self.Iter` in its method signatures and bodies then means that
+type:
+
+```aura fragment
+impl Source[int64] for Start:
+    type Iter = Countdown
+
+    def open(own self) -> Self.Iter:
+        return Countdown(n=self.n)
+```
+
+These rules apply:
+
+- An implementation must fix every associated type its trait declares, and
+  only those (`AU2002`).
+- The fixed type must satisfy the declared bounds, with the trait's type
+  arguments substituted (`AU2002`).
+- A generic implementation can fix an associated type in terms of its own
+  type parameters, as in `type Iter = Generator[T]`.
+- A trait with associated types cannot be a bound yet: `S: Source[int64]`
+  reports `AU2002`. Bound the iterator type instead, as `I: Iterator[T]`.
+
+The builtin `iter.IntoIterator[T]` trait uses an associated type so that a
+`for` loop can consume any value that turns into an iterator. See
+[Statements](/manual/statements#iterator-iteration).
+
 ## Supertraits
 
 A trait can require one or more supertraits:
@@ -605,6 +648,7 @@ The checker enforces the selected `From.from` method's clone-safety obligations 
 - Trait and implementation methods cannot give ordinary parameters defaults.
 - Generic task targets are permitted when their callable type arguments can be resolved. Bare shared and `own` targets use task-owned captures. `mut` targets are rejected.
 - Equal-specificity overlapping implementations are an error at the use site.
+- A trait with associated types cannot be used as a bound.
 - Clone-safety obligations are inferred, not written. An explicit implementation cannot strengthen the contract inferred by its trait method.
 
 [Current Limits](/manual/current-limits) collects the observable syntax and implementation limits. [Static Semantics](/manual/static-semantics#generics-traits-and-implementations) has the cross-cutting type rules.

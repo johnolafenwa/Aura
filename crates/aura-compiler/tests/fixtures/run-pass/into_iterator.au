@@ -1,0 +1,91 @@
+from iter import Generator, IntoIterator, Iterator, Step
+
+# A class that a `for` loop consumes through `IntoIterator`.
+class Bag:
+    items: list[str]
+
+def walk(items: own list[str]) -> Generator[str]:
+    for item in items:
+        yield item.clone()
+
+impl IntoIterator[str] for Bag:
+    type Iter = Generator[str]
+
+    def into_iter(own self) -> Self.Iter:
+        return walk(self.items)
+
+# A generic implementation.
+class Pair[T]:
+    first: T
+    second: T
+
+def both[T](first: own T, second: own T) -> Generator[T]:
+    yield first
+    yield second
+
+impl[T] IntoIterator[T] for Pair[T]:
+    type Iter = Generator[T]
+
+    def into_iter(own self) -> Self.Iter:
+        return both(self.first, self.second)
+
+# A user trait whose default method relies on its associated type's bound.
+trait Source[T]:
+    type Iter: Iterator[T]
+
+    def open(own self) -> Self.Iter
+
+    def first_or(own self, fallback: own T) -> T:
+        mut it = self.open()
+        match own it.next():
+            case Item(x):
+                return x
+            case _:
+                return fallback
+
+class Countdown:
+    n: int64
+
+impl Iterator[int64] for Countdown:
+    def next(mut self) -> Step[int64]:
+        if self.n == 0:
+            return Step.End
+        self.n -= 1
+        return Step.Item(self.n)
+
+class Start:
+    n: int64
+
+impl Source[int64] for Start:
+    type Iter = Countdown
+
+    def open(own self) -> Self.Iter:
+        return Countdown(n=self.n)
+
+# An associated type without bounds.
+trait Counted:
+    type Count
+
+    def count(self) -> Self.Count
+
+impl Counted for Start:
+    type Count = int64
+
+    def count(self) -> int64:
+        return self.n
+
+def main():
+    for word in Bag(items=["ant", "bee"]):
+        print(word)
+    print([w + "!" for w in Bag(items=["x", "y"])])
+    for i, w in enumerate(Bag(items=["p", "q"])):
+        print(f"{i} {w}")
+    for a, b in zip(Bag(items=["1", "2"]), Bag(items=["3", "4"])):
+        print(a + b)
+    for n in Pair[int64](first=1, second=2):
+        print(n)
+    for s in Pair(first="a", second="b"):
+        print(s)
+    print(Start(n=3).first_or(-1))
+    print(Start(n=0).first_or(-1))
+    print(Start(n=7).count())

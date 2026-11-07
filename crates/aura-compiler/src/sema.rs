@@ -3432,6 +3432,11 @@ impl<'a> FunctionChecker<'a> {
         let mut iterator_operands = 0;
         for iterable in &form.iterables {
             let iterable_ty = self.type_of_expr(iterable, locals)?;
+            if self.iterator_item_type(&iterable_ty).is_none()
+                && self.implements_into_iterator(&iterable_ty)
+            {
+                return Err(self.discover_into_iterator_source(iterable.span, &iterable_ty));
+            }
             if let Some(item_ty) = self.iterator_item_type(&iterable_ty) {
                 iterator_operands += 1;
                 element_types.push(item_ty);
@@ -3555,6 +3560,11 @@ impl<'a> FunctionChecker<'a> {
             let mut any_non_copy = false;
             for iterable in &form.iterables {
                 let iterable_ty = self.type_of_expr(iterable, locals)?;
+                if self.iterator_item_type(&iterable_ty).is_none()
+                    && self.implements_into_iterator(&iterable_ty)
+                {
+                    return Err(self.discover_into_iterator_source(iterable.span, &iterable_ty));
+                }
                 // A user iterator operand is collected into a list first.
                 let element_ty = match lockstep_element_type(&iterable_ty) {
                     Some(element_ty) => element_ty,
@@ -3614,6 +3624,12 @@ impl<'a> FunctionChecker<'a> {
                             ReceiverKind::Borrow
                         };
                         (element_ty, passing, false)
+                    }
+                    _ if self.iterator_item_type(&iterable_ty).is_none()
+                        && self.implements_into_iterator(&iterable_ty) =>
+                    {
+                        return Err(self
+                            .discover_into_iterator_source(clause.iterable.span, &iterable_ty));
                     }
                     _ if self.iterator_item_type(&iterable_ty).is_some() => {
                         // The rewrite collects the source into a list first;
@@ -4840,6 +4856,21 @@ impl<'a> FunctionChecker<'a> {
                                 _ => ReceiverKind::Value,
                             };
                             (element_ty, passing, borrow_mode == Some(ReceiverKind::Value))
+                        }
+                        _ if self.iterator_item_type(&iterable_ty).is_none()
+                            && self.implements_into_iterator(&iterable_ty) =>
+                        {
+                            if for_stmt.borrow_mode.is_some() {
+                                return Err(Diagnostic::coded_at(
+                                    "AU3004",
+                                    for_stmt.span,
+                                    format!("a `for` loop consumes an `IntoIterator` source such as `{iterable_ty}`; write `for item in source:`"),
+                                ));
+                            }
+                            return Err(self.discover_into_iterator_source(
+                                for_stmt.iterable.span,
+                                &iterable_ty,
+                            ));
                         }
                         _ if self.iterator_item_type(&iterable_ty).is_some() => {
                             let item_ty = self
