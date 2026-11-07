@@ -28,6 +28,7 @@ pub use aura_runtime::runtime_value;
 pub mod sema;
 pub(crate) use aura_runtime::text_methods;
 pub mod union_layout;
+pub mod verify;
 pub(crate) use aura_runtime::union_runtime;
 
 use std::fs;
@@ -367,6 +368,28 @@ fn check_module_with_builtin_imports(module: ast::Module) -> Result<Program> {
 pub fn lower_path_with_source_to_mir(path: &Path, source: &str) -> Result<MirModule> {
     let program = check_path_with_source(path, source)?;
     Ok(lower_to_mir(&program))
+}
+
+/// Proves the checks of the program at `path` with an SMT solver
+/// (`aura verify`).
+pub fn verify_path(path: &Path, options: &verify::Options) -> Result<verify::Report> {
+    let program = check_path(path)?;
+    verify_program(&program, options)
+}
+
+/// `verify_path` for source text that stands in for the file at `path`.
+pub fn verify_path_with_source(
+    path: &Path,
+    source: &str,
+    options: &verify::Options,
+) -> Result<verify::Report> {
+    let program = check_path_with_source(path, source)?;
+    verify_program(&program, options)
+}
+
+fn verify_program(program: &Program, options: &verify::Options) -> Result<verify::Report> {
+    let module = mir::lower_for_verification(program);
+    verify::verify_module(program, &module, options)
 }
 
 pub fn check_path(path: &Path) -> Result<Program> {

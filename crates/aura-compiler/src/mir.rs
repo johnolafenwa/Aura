@@ -10430,6 +10430,27 @@ pub(crate) fn lower_unspecialized(program: &Program) -> MirModule {
     make_explicit(program, lower_unresolved(program))
 }
 
+/// Lowers `program` for `aura verify`: every generic call copied, every
+/// trap named, and every method call resolved, with a `SourceLocation`
+/// before each statement, but no ownership pass. Retains and releases
+/// carry no logical meaning, so the verifier reads the module before them.
+pub fn lower_for_verification(program: &Program) -> MirModule {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SOURCE_LOCATIONS.with(|enabled| enabled.set(self.0));
+        }
+    }
+    let _restore = Restore(SOURCE_LOCATIONS.with(|enabled| enabled.replace(true)));
+    let mut module = lower_unresolved(program);
+    specialize::specialize_generic_functions(&mut module);
+    resolve_runtime_ops_and_unions(program, &mut module);
+    checks::resolve_checks(&mut module);
+    type_args::record_call_type_args(&mut module);
+    methods::resolve_methods(&mut module);
+    module
+}
+
 fn make_explicit(program: &Program, mut module: MirModule) -> MirModule {
     resolve_runtime_ops_and_unions(program, &mut module);
     checks::resolve_checks(&mut module);

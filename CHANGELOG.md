@@ -7,6 +7,16 @@ in this file.
 
 ## Unreleased
 
+- `aura verify file.au` proves, with an external Z3 or cvc5, that a
+  program's checks cannot fail: integer overflow, zero divisors, list
+  indexes, `assert`, `requires`, `ensures`, loop `invariant` and
+  `decreases`, and class invariants. Each function is proved on its own
+  from its callees' contracts. A check that can fail is reported as
+  `AU5101` with a counterexample; `AU5102` when the solver gives up,
+  `AU5103` when no solver runs, and `AU5104` for a step outside the
+  modeled subset (floats, strings, and other collections for now).
+  `--format json` prints one entry per check. See the new Verification
+  manual page.
 - Generator functions: a module-level function declared `-> Generator[T]`
   (from `iter`) may `yield` values. Calling it runs nothing; each `next`
   runs the body to its next `yield` on a stack of its own, on both the
