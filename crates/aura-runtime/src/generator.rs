@@ -14,8 +14,8 @@
 //! context that ever suspends to the scheduler.
 
 use super::{
-    enter_task_stack_bounds, task_stack_bounds, Diagnostic, RuntimeSchedulerWakeReason,
-    TaskStackBounds, TaskYield, Value,
+    enter_task_stack_bounds, take_pooled_task_stack, task_stack_bounds, Diagnostic,
+    RuntimeSchedulerWakeReason, TaskStackBounds, TaskStackReturn, TaskYield, Value,
 };
 use corosensei::stack::DefaultStack;
 use corosensei::{Coroutine, CoroutineResult, Yielder};
@@ -73,6 +73,9 @@ struct GeneratorState {
     status: GeneratorStatus,
     body: Option<GeneratorBody>,
     coroutine: Option<GeneratorCoroutine>,
+    /// Where the coroutine's stack, taken from the task stack pool, goes
+    /// once the body is done.
+    stack_return: Option<TaskStackReturn>,
     bounds: Option<TaskStackBounds>,
     stack_bytes: usize,
     item: Option<Value>,
@@ -101,6 +104,17 @@ struct YielderCell(Cell<*const GeneratorYielder>);
 unsafe impl Send for YielderCell {}
 unsafe impl Sync for YielderCell {}
 
+impl GeneratorState {
+    /// Drops a coroutine whose body is done, returning its stack to the pool.
+    fn retire(&mut self, coroutine: GeneratorCoroutine) {
+        debug_assert!(coroutine.done() || !coroutine.started());
+        match self.stack_return.take() {
+            Some(stack_return) => stack_return.recycle(coroutine.into_stack()),
+            None => drop(coroutine),
+        }
+    }
+}
+
 impl Drop for GeneratorState {
     fn drop(&mut self) {
         if let Some(mut coroutine) = self.coroutine.take() {
@@ -113,6 +127,7 @@ impl Drop for GeneratorState {
                     unsafe { coroutine.force_reset() };
                 }
             }
+            self.retire(coroutine);
         }
     }
 }
@@ -215,6 +230,7 @@ impl GeneratorValue {
                 status: GeneratorStatus::Fresh,
                 body: Some(Box::new(body)),
                 coroutine: None,
+                stack_return: None,
                 bounds: None,
                 stack_bytes,
                 item: None,
@@ -297,14 +313,16 @@ impl GeneratorValue {
                         return Ok(false);
                     }
                     let body = state.body.take().expect("a fresh generator holds its body");
-                    let stack = match DefaultStack::new(state.stack_bytes) {
-                        Ok(stack) => stack,
+                    let (stack, stack_return) = match take_pooled_task_stack(state.stack_bytes) {
+                        Ok(pooled) => pooled.into_parts(),
                         Err(error) => {
                             return Err(generator_error(format!(
-                                "cannot allocate a generator stack: {error}"
+                                "cannot allocate a generator stack: {}",
+                                error.message
                             )))
                         }
                     };
+                    state.stack_return = Some(stack_return);
                     state.bounds = Some(task_stack_bounds(&stack));
                     let yielder_cell = state.yielder.clone();
                     Coroutine::with_stack(stack, move |yielder: &GeneratorYielder, _input| {
@@ -349,17 +367,20 @@ impl GeneratorValue {
                 Ok(CoroutineResult::Return(Ok(()))) => {
                     let mut state = lock(&self.inner);
                     state.status = GeneratorStatus::Done;
+                    state.retire(coroutine);
                     return Ok(false);
                 }
                 Ok(CoroutineResult::Return(Err(error))) => {
                     let mut state = lock(&self.inner);
                     state.status = GeneratorStatus::Failed;
+                    state.retire(coroutine);
                     state.failure = Some(error.clone());
                     return Err(error);
                 }
                 Err(payload) => {
                     let mut state = lock(&self.inner);
                     state.status = GeneratorStatus::Failed;
+                    state.retire(coroutine);
                     drop(state);
                     panic::resume_unwind(payload);
                 }

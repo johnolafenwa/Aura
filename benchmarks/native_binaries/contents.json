@@ -159,7 +159,7 @@
   "baselines": {
     "linux-x86_64": {
       "hello_world": 1038976,
-      "reference_agent": 2104040,
+      "reference_agent": 2318496,
       "json": 1661336,
       "tls": 3489272,
       "websocket": 3791576

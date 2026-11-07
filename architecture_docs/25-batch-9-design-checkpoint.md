@@ -246,6 +246,12 @@ New codes are assigned in the step that needs them and registered in
   `AU4009` as on other loops. Close on every loop exit was already
   delivered by 9c drop-close.
 
+- **9c, part 2 (2026-11-06).** Generator stacks come from the Batch 8
+  task stack pool (`take_pooled_task_stack`), and a body's stack goes back
+  to its home pool once the coroutine is done: on return, on a trap, on a
+  panic, and after a suspended generator is unwound or reset on drop. A
+  stack whose coroutine has not finished is never pooled.
+
 ## Ratification Record
 
 Pending.
