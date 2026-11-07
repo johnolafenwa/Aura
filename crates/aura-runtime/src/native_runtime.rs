@@ -6782,13 +6782,115 @@ pub extern "C-unwind" fn aura_direct_format_begin(ptr: *const u8, len: usize) ->
     task_runtime_boundary(|| boxed_value(Value::String(literal_str(ptr, len).into())))
 }
 
+/// Starts an f-string that appends to `text`, a `str` box the caller owns
+/// one reference to, for `text += ...`. The only reference to a confined
+/// box comes back as the builder itself, so the parts append in place and a
+/// loop of appends grows the text by doubling instead of copying it whole
+/// each time. A box another handle shares, or a frozen one, keeps its text,
+/// and the caller's reference goes for a copy.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_format_append_begin(
+    text: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| unsafe { format_append_builder(text) })
+}
+
+/// [`aura_direct_format_append_begin`] followed by the push of the literal
+/// part after it, in one call: `text += "..."`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_format_append_str(
+    text: *mut OpaqueValue,
+    ptr: *const u8,
+    len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller's contract.
+        let builder = unsafe { format_append_builder(text) };
+        let (part, ascii) = literal_part(unsafe { slice::from_raw_parts(ptr, len) });
+        push_format_text_with(builder, part, ascii);
+        builder
+    })
+}
+
+/// The text of a literal part, with whether it is ASCII, from one scan
+/// for an ASCII part.
+#[inline]
+fn literal_part(bytes: &[u8]) -> (&str, bool) {
+    if bytes.is_ascii() {
+        // SAFETY: ASCII is UTF-8.
+        (unsafe { str::from_utf8_unchecked(bytes) }, true)
+    } else {
+        (utf8_text(bytes), false)
+    }
+}
+
+/// The builder for appending to `text`, as
+/// [`aura_direct_format_append_begin`] describes.
+///
+/// # Safety
+///
+/// `text` is null or a live box the caller owns one reference to.
+#[inline]
+unsafe fn format_append_builder(text: *mut OpaqueValue) -> *mut OpaqueValue {
+    // SAFETY: the caller owns a reference, so the box is live, and a count
+    // of one cannot grow while it holds the only reference.
+    let header = unsafe { text.as_ref() }
+        .unwrap_or_else(|| runtime_error("direct runtime received a null opaque value pointer"));
+    if header.ref_count.load(Ordering::Acquire) == 1 && header.shared_lock().is_none() {
+        return text;
+    }
+    unsafe { copy_for_append(text) }
+}
+
+/// A new box with a copy of `text`'s value, for an append that must leave
+/// `text` as it is, and the caller's reference to `text` goes.
+///
+/// # Safety
+///
+/// `text` is a live box the caller owns one reference to.
+#[cold]
+unsafe fn copy_for_append(text: *mut OpaqueValue) -> *mut OpaqueValue {
+    let copy = boxed_value(unsafe { value_ref(text) });
+    unsafe { aura_direct_release_value(text) };
+    copy
+}
+
 fn push_format_text(builder: *mut OpaqueValue, text: &str) {
     push_format_text_with(builder, text, text.is_ascii());
 }
 
 /// Appends `text`, whose ASCII flag the caller already knows, to the
-/// f-string `builder`.
+/// f-string `builder`. A part that fits in the room a builder confined to
+/// this thread already has, as a builder generated code makes is, goes in
+/// place without taking an access.
+#[inline]
 fn push_format_text_with(builder: *mut OpaqueValue, text: &str, ascii: bool) {
+    // SAFETY: the builder is a live box. Only a `list` keeps elements apart
+    // from its value or a view of them, so a `str` needs neither, and no
+    // other access to a confined box is in progress while this one runs.
+    let confined = unsafe { builder.as_ref() }.and_then(|header| {
+        if header.shared_lock().is_some() {
+            return None;
+        }
+        match unsafe { &mut *header.value.get() } {
+            Value::String(output) => Some(output),
+            _ => None,
+        }
+    });
+    if let Some(output) = confined {
+        if output.len() + text.len() <= crate::runtime_value::MAX_STRING_BYTES
+            && output.push_within_capacity(text, ascii)
+        {
+            return;
+        }
+    }
+    grow_format_text_with(builder, text, ascii);
+}
+
+/// [`push_format_text_with`] for a part that needs the builder to grow, or
+/// trips the string limit, or a builder that is shared or not a `str`.
+#[cold]
+fn grow_format_text_with(builder: *mut OpaqueValue, text: &str, ascii: bool) {
     let appended = unsafe {
         value_mut(builder, |value| match value {
             Value::String(output) => append_text_checked_with(output, text, ascii),
@@ -6811,8 +6913,8 @@ pub extern "C-unwind" fn aura_direct_format_push_str(
 ) {
     task_runtime_boundary(|| {
         // SAFETY: the caller's contract.
-        let bytes = unsafe { slice::from_raw_parts(ptr, len) };
-        push_format_text_with(builder, utf8_text(bytes), bytes.is_ascii());
+        let (part, ascii) = literal_part(unsafe { slice::from_raw_parts(ptr, len) });
+        push_format_text_with(builder, part, ascii);
     })
 }
 
@@ -6888,7 +6990,13 @@ pub extern "C-unwind" fn aura_direct_format_push_value(
 ) {
     task_runtime_boundary(|| {
         // A `str` part is appended from where it lies, without rendering a
-        // copy first.
+        // copy first. A part that is the builder itself, as in
+        // `text += text`, is read before the builder changes.
+        if builder == value {
+            let text = render_direct_value(value);
+            push_format_text(builder, &text);
+            return;
+        }
         let appended = unsafe {
             with_value(value, |value| match value {
                 Value::String(text) => {
