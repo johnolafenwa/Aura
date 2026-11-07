@@ -20,6 +20,11 @@ in this file.
   is answered without the solver; `--no-cache` turns it off. Quantified
   contracts (`forall`, `exists`, and `all`/`any` over one `for` clause) are
   proved and assumed, so a loop invariant can describe a whole list.
+- A function may declare a `decreases` measure. It is checked on entry,
+  where it must be at least 0, and before each call the function makes to
+  itself, where the measure of the arguments must be smaller; `aura verify`
+  proves both, so a recursion with a measure is proved to end. The
+  arguments the measure reads must be pure.
 - `aura build --remove-proved-checks` leaves out the list bounds checks of
   element reads and borrows that `aura verify` proves can never fail. It is
   off by default; debug builds keep every check.

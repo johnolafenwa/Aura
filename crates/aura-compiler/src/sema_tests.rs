@@ -31978,6 +31978,52 @@ fn loop_clauses_check_as_pure_conditions_and_measures() {
 }
 
 #[test]
+fn function_measures_check_and_recursive_calls_pass_pure_arguments() {
+    crate::check_source(concat!(
+        "def walk(xs: list[int64], i: int64, label: str = \"x\") -> int64:\n",
+        "    requires 0 <= i and i <= len(xs)\n",
+        "    decreases len(xs) - i\n",
+        "    if i == len(xs):\n",
+        "        return 0\n",
+        "    print(label)\n",
+        "    return xs[i] + walk(xs, i + 1, label + \"y\")\n",
+        "\n",
+        "spec def twice(v: int64) -> int64:\n",
+        "    return v * 2\n",
+        "\n",
+        "def main():\n",
+        "    print(walk([1, 2], 0))\n",
+    ))
+    .expect("a function measure checks");
+    for (source, code, message) in [
+        (
+            "def f(n: int64) -> int64:\n    decreases n\n    decreases n + 1\n    return n\n",
+            "AU2048",
+            "a function takes at most one `decreases` clause",
+        ),
+        (
+            "def f(n: int64) -> int64:\n    decreases n > 0\n    return n\n",
+            "AU2002",
+            "a `decreases` measure must be `int64`, found `bool`",
+        ),
+        (
+            "class C:\n    n: int64\n\n    def f(self, k: int64) -> int64:\n        decreases k\n        return k\n",
+            "AU2048",
+            "a method cannot declare `decreases` yet",
+        ),
+        (
+            "def f(xs: list[int64], k: int64) -> int64:\n    decreases k\n    if k <= 0:\n        return 0\n    mut ys = [1]\n    return f(xs, k=ys.pop() - 1)\n",
+            "AU2048",
+            "an argument the `decreases` measure reads must not change program state",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err(source);
+        assert_eq!(error.code, code, "{source}: {}", error.message);
+        assert!(error.message.contains(message), "{source}: {}", error.message);
+    }
+}
+
+#[test]
 fn class_invariants_check_against_self_and_builtin_receivers_only() {
     crate::check_source(concat!(
         "class Bag:\n",

@@ -1550,6 +1550,18 @@ const DECREASES_CURRENT: &str = "decreases measure";
 const DECREASES_PREVIOUS: &str = "previous measure";
 const DECREASES_STARTED: &str = "measured before";
 
+/// A function's `decreases` measure, for the checks at its recursive
+/// calls.
+#[derive(Clone)]
+struct RecursionMeasure {
+    function: String,
+    clause: crate::ast::ContractClause,
+    /// Each parameter in order, with its default.
+    params: Vec<(String, Option<Expr>)>,
+    /// The local holding the measure's value on entry.
+    entry: String,
+}
+
 struct DecreasesState {
     clause: crate::ast::ContractClause,
     previous: String,
@@ -11675,6 +11687,8 @@ struct Lowerer<'a> {
     specialized_bound_roots: BTreeMap<String, String>,
     non_owning_roots: BTreeSet<String>,
     scoped_names: Vec<std::collections::HashMap<String, String>>,
+    /// The `decreases` measure of the function being lowered.
+    recursion_measure: Option<RecursionMeasure>,
     /// The source name of each compiler-made local that holds a source
     /// variable, kept for a debug build once the variable's scope ends.
     debug_names: BTreeMap<String, String>,
@@ -11900,6 +11914,7 @@ impl<'a> Lowerer<'a> {
             specialized_bound_roots: BTreeMap::new(),
             non_owning_roots: BTreeSet::new(),
             scoped_names: Vec::new(),
+            recursion_measure: None,
             debug_names: BTreeMap::new(),
             binding_blocks: vec![BindingBlock::default()],
             ended_bindings: BTreeSet::new(),
@@ -14010,6 +14025,7 @@ impl<'a> Lowerer<'a> {
     /// with `result` naming the returned value.
     fn lower_contracted_body(&mut self, function: &crate::ast::FunctionDecl) {
         self.lower_contract_checks(function, crate::ast::ContractKind::Requires);
+        self.lower_recursion_measure(function);
         // Only the hidden class invariant method has `invariant` clauses.
         self.lower_contract_checks(function, crate::ast::ContractKind::Invariant);
         let guarded = self.guarded_self_class(function);
@@ -14151,6 +14167,124 @@ impl<'a> Lowerer<'a> {
             crate::ast::ContractKind::Decreases => AssertKind::Decreases,
         };
         self.lower_check(&check, assert_kind);
+    }
+
+    /// On entry to a function with a `decreases` measure, checks that it is
+    /// not negative and records it, so each recursive call can check that
+    /// the measure of its arguments is smaller.
+    fn lower_recursion_measure(&mut self, function: &crate::ast::FunctionDecl) {
+        let Some(clause) = function
+            .contracts
+            .iter()
+            .find(|clause| clause.kind == crate::ast::ContractKind::Decreases)
+        else {
+            return;
+        };
+        let entry = self.new_typed_temp(Type::named("int64"));
+        let value = self.lower_expr(&clause.condition);
+        self.emit(Instruction::Assign {
+            target: entry.clone(),
+            value: Rvalue::Use(value),
+        });
+        let span = clause.condition.span;
+        let non_negative = Expr {
+            kind: ExprKind::Binary {
+                op: BinaryOp::GreaterEq,
+                left: Box::new(Expr {
+                    kind: ExprKind::Name(DECREASES_CURRENT.to_string()),
+                    span,
+                }),
+                right: Box::new(Expr {
+                    kind: ExprKind::Int(0),
+                    span,
+                }),
+            },
+            span,
+        };
+        self.scoped_names.push(std::collections::HashMap::from([(
+            DECREASES_CURRENT.to_string(),
+            entry.clone(),
+        )]));
+        self.lower_clause_check(
+            &non_negative,
+            format!("`decreases` clause failed: `{}` went below 0", clause.text),
+            clause.span,
+            crate::ast::ContractKind::Decreases,
+        );
+        self.scoped_names.pop();
+        self.recursion_measure = Some(RecursionMeasure {
+            function: function.name.clone(),
+            clause: clause.clone(),
+            params: function
+                .params
+                .iter()
+                .map(|param| (param.name.clone(), param.default.clone()))
+                .collect(),
+            entry,
+        });
+    }
+
+    /// Before a call of the function being lowered, when it has a
+    /// `decreases` measure, checks that the measure of the call's
+    /// arguments is smaller than on entry. Each argument is evaluated again
+    /// for it, which the checker allows because each is pure.
+    fn lower_recursive_call_measure(&mut self, callee: &Expr, args: &[Argument]) {
+        let (Some(measure), ExprKind::Name(name)) = (&self.recursion_measure, &callee.kind) else {
+            return;
+        };
+        if *name != measure.function || self.local_types.contains_key(&self.render_local_name(name))
+        {
+            return;
+        }
+        let measure = measure.clone();
+        let mut scope = std::collections::HashMap::from([(
+            DECREASES_PREVIOUS.to_string(),
+            measure.entry.clone(),
+        )]);
+        for (index, (param, default)) in measure.params.iter().enumerate() {
+            if !crate::sema::expr_references_name(&measure.clause.condition, param) {
+                continue;
+            }
+            let value = args
+                .iter()
+                .find(|arg| arg.name.as_deref() == Some(param.as_str()))
+                .or_else(|| args.get(index).filter(|arg| arg.name.is_none()))
+                .map(|arg| &arg.value)
+                .or(default.as_ref());
+            let Some(value) = value else {
+                return;
+            };
+            let place = self.new_temp_for_expr(value);
+            let operand = self.lower_expr(value);
+            self.emit(Instruction::Assign {
+                target: place.clone(),
+                value: Rvalue::Use(operand),
+            });
+            scope.insert(param.clone(), place);
+        }
+        let span = callee.span;
+        let smaller = Expr {
+            kind: ExprKind::Binary {
+                op: BinaryOp::Less,
+                left: Box::new(measure.clause.condition.clone()),
+                right: Box::new(Expr {
+                    kind: ExprKind::Name(DECREASES_PREVIOUS.to_string()),
+                    span,
+                }),
+            },
+            span,
+        };
+        self.scoped_names.push(scope);
+        self.lower_clause_check(
+            &smaller,
+            format!(
+                "`decreases` clause failed: `{}` did not get smaller at the recursive call",
+                measure.clause.text
+            ),
+            span,
+            crate::ast::ContractKind::Decreases,
+        );
+        self.scoped_names.pop();
     }
 
     /// Lowers the hidden state a `while` loop's `decreases` measure needs:
@@ -23403,6 +23537,7 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         expected: Option<&Type>,
     ) -> Operand {
+        self.lower_recursive_call_measure(callee, args);
         match &callee.kind {
             ExprKind::Name(name) if name == "len" && args.len() == 1 => {
                 if let Some(len) = self.lower_span_len(&args[0].value) {

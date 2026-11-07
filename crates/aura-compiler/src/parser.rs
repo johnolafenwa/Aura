@@ -43,7 +43,8 @@ fn misplaced_contract_error(span: Span, kind: ContractKind) -> Diagnostic {
         ContractKind::Requires | ContractKind::Ensures => {
             "a function body, after any docstring and"
         }
-        ContractKind::Invariant | ContractKind::Decreases => "a loop body,",
+        ContractKind::Invariant => "a loop body,",
+        ContractKind::Decreases => "a function or loop body, after any docstring and",
     };
     Diagnostic::coded_at(
         "AU2048",
@@ -205,17 +206,18 @@ fn wrong_place_contract_error(
             format!(
                 "a class body states only `invariant` clauses; `{}` belongs at the top of a {} body",
                 kind.keyword(),
-                if kind == ContractKind::Decreases { "`while` loop" } else { "method" }
+                if kind == ContractKind::Decreases { "function or `while` loop" } else { "method" }
             ),
         );
     }
-    let message = match kind {
-        ContractKind::Requires | ContractKind::Ensures => format!(
+    // A function and a loop both take `decreases`.
+    let message = if let ContractKind::Requires | ContractKind::Ensures = kind {
+        format!(
             "`{}` clauses belong at the top of a function body; a loop states `invariant` and `decreases`",
             kind.keyword()
-        ),
-        ContractKind::Invariant => "`invariant` clauses belong at the top of a loop body or in a class body; a function states `requires` and `ensures`".to_string(),
-        ContractKind::Decreases => "`decreases` clauses belong at the top of a `while` loop body; a function states `requires` and `ensures`".to_string(),
+        )
+    } else {
+        "`invariant` clauses belong at the top of a loop body or in a class body; a function states `requires`, `ensures`, and `decreases`".to_string()
     };
     Diagnostic::coded_at("AU2048", span, message)
 }
@@ -2547,7 +2549,7 @@ impl Parser {
                     context == ClauseContext::Function
                 }
                 ContractKind::Invariant => context != ClauseContext::Function,
-                ContractKind::Decreases => context == ClauseContext::Loop,
+                ContractKind::Decreases => context != ClauseContext::Class,
             };
             if !allowed {
                 return Err(wrong_place_contract_error(

@@ -31,7 +31,7 @@ function:
 | requires | each call of a function with `requires` | `AU4009` at the call |
 | ensures | each `return` of a function with `ensures` | `AU4009` on return |
 | loop invariant | each loop `invariant` | `AU4009` in the loop |
-| decreases | each `decreases` measure | `AU4009` in the loop |
+| decreases | each `decreases` measure of a loop or a recursive function | `AU4009` in the loop or at the recursive call |
 | class invariant | constructions and calls of public `mut self` methods | `AU4009` at the check |
 
 A function is proved on its own. A call relies only on what its callee
@@ -94,7 +94,19 @@ loop never assigns keeps its value, and a counter the loop only steps up
 covers indexes such as `for i in range(len(xs))` and `while i < len(xs)`.
 
 A `decreases` measure is proved to stay at least 0 and to get smaller in
-every iteration, which proves that the loop ends.
+every iteration, which proves that the loop ends. On a function, it is
+proved to be at least 0 on entry and smaller at every call the function
+makes to itself, which proves that the recursion ends:
+
+```aura
+def gcd(a: int64, b: int64) -> int64:
+    requires a >= 0 and b >= 0
+    decreases b
+    ensures result >= 0
+    if b == 0:
+        return a
+    return gcd(b, a % b)
+```
 
 ## Reports
 

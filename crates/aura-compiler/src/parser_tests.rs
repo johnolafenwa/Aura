@@ -5201,8 +5201,8 @@ fn loop_clauses_parse_at_the_top_of_loop_bodies() {
             "`requires` clauses belong at the top of a function body",
         ),
         (
-            "def f(k: int64):\n    decreases k\n",
-            "`decreases` clauses belong at the top of a `while` loop body",
+            "def f(k: int64):\n    pass\n    decreases k\n",
+            "`decreases` clauses must come first in a function or loop body",
         ),
         (
             "def f(k: int64):\n    while k > 0:\n        pass\n        invariant k > 0\n",
@@ -5271,7 +5271,7 @@ fn class_invariants_become_a_hidden_checking_method() {
         ),
         (
             "class C:\n    n: int64\n    decreases self.n\n",
-            "`decreases` belongs at the top of a `while` loop body",
+            "`decreases` belongs at the top of a function or `while` loop body",
         ),
         (
             "class C:\n    n: int64\n\n    def __invariant__(self):\n        pass\n",

@@ -181,6 +181,31 @@ def main():
   the previous time. A loop that keeps both rules must end. A `for` loop
   always ends, so it takes no `decreases`, and a loop takes at most one.
 
+### Recursive Functions
+
+A function that calls itself can state a `decreases` measure too. It is
+checked on entry, where it must be at least 0, and before every call the
+function makes to itself, where the measure of the call's arguments must
+be smaller than the measure on entry. A recursion that keeps both rules
+must end.
+
+```aura
+def gcd(a: int64, b: int64) -> int64:
+    requires a >= 0 and b >= 0
+    decreases b
+    if b == 0:
+        return a
+    return gcd(b, a % b)
+
+def main():
+    print(gcd(84, 36))  # 12
+```
+
+The measure is computed again from the call's arguments before the call,
+so each argument the measure reads must be a pure expression. A function
+takes at most one `decreases`, a method takes none yet, and a call to
+another function is not checked, so mutual recursion is not covered.
+
 ## Class Invariants
 
 A class can state what is true of every one of its objects, with
@@ -252,6 +277,7 @@ and `exists` are special only inside clauses and `spec def` bodies.
 
 These forms report `AU2048`:
 
+- `decreases` on a method
 - `ensures` on `__init__` or on a function with a view result
 - an `ensures` that reads an `own` parameter of a non-Copy type, which the
   body may have moved; `old(param)` reads it on entry instead

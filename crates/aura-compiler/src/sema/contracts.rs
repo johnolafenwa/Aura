@@ -14,7 +14,9 @@ use super::{
     BTreeMap, Diagnostic, Expr, ExprKind, FunctionChecker, FunctionDecl, HashMap, LocalBinding,
     Result, Type,
 };
-use crate::ast::{ComprehensionOutput, ContractClause, ContractKind, FormatPart, OldValue};
+use crate::ast::{
+    Argument, ComprehensionOutput, ContractClause, ContractKind, FormatPart, OldValue,
+};
 use aura_core::ops::ReceiverKind;
 
 const CODE: &str = "AU2048";
@@ -69,6 +71,7 @@ impl FunctionChecker<'_> {
         locals: &HashMap<String, LocalBinding>,
         return_type: &Type,
     ) -> Result<()> {
+        *self.recursion_measure.borrow_mut() = None;
         for clause in &function.contracts {
             if clause.kind == ContractKind::Ensures {
                 if function.view_return.is_some() {
@@ -111,6 +114,9 @@ impl FunctionChecker<'_> {
                     ));
                 }
             }
+            if clause.kind == ContractKind::Decreases {
+                self.check_function_measure(function, clause)?;
+            }
             let mut scope = locals.clone();
             if clause.kind == ContractKind::Ensures {
                 scope.insert(RESULT_NAME.to_string(), result_binding(return_type.clone()));
@@ -120,6 +126,74 @@ impl FunctionChecker<'_> {
                 }
             }
             self.check_clause_condition(clause, &mut scope)?;
+        }
+        Ok(())
+    }
+
+    /// Checks a function's `decreases` measure and records, for each
+    /// parameter in order, the name the measure reads it by.
+    fn check_function_measure(
+        &self,
+        function: &FunctionDecl,
+        clause: &ContractClause,
+    ) -> Result<()> {
+        if function.receiver.is_some() {
+            return Err(Diagnostic::coded_at(
+                CODE,
+                clause.span,
+                "a method cannot declare `decreases` yet; state the measure on a function",
+            ));
+        }
+        let mut measure = self.recursion_measure.borrow_mut();
+        if measure.is_some() {
+            return Err(Diagnostic::coded_at(
+                CODE,
+                clause.span,
+                "a function takes at most one `decreases` clause",
+            ));
+        }
+        let params = function
+            .params
+            .iter()
+            .map(|param| {
+                super::expr_references_name(&clause.condition, &param.name)
+                    .then(|| param.name.clone())
+            })
+            .collect();
+        *measure = Some((function.name.clone(), params));
+        Ok(())
+    }
+
+    /// A call to the function being checked, when it declares `decreases`,
+    /// passes a pure argument for each parameter the measure reads, so the
+    /// lowering can evaluate the measure on them before the call.
+    pub(super) fn check_recursive_call(
+        &self,
+        callee: &Expr,
+        args: &[Argument],
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        let measure = self.recursion_measure.borrow();
+        let Some((function, params)) = measure.as_ref() else {
+            return Ok(());
+        };
+        if !matches!(&callee.kind, ExprKind::Name(name) if name == function && !locals.contains_key(name))
+        {
+            return Ok(());
+        }
+        for (index, arg) in args.iter().enumerate() {
+            let measured = match &arg.name {
+                Some(name) => params.iter().flatten().any(|param| param == name),
+                None => params.get(index).is_some_and(Option::is_some),
+            };
+            if measured {
+                let mut receivers = Vec::new();
+                self.reject_impure(
+                    &arg.value,
+                    "an argument the `decreases` measure reads",
+                    &mut receivers,
+                )?;
+            }
         }
         Ok(())
     }

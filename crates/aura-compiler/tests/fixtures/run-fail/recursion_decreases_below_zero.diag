@@ -1,0 +1,8 @@
+error[AU4009]: `decreases` clause failed: `n` went below 0
+ --> crates/aura-compiler/tests/fixtures/run-fail/recursion_decreases_below_zero.au:2:15
+  |
+2 |     decreases n
+  |               ^
+  = note: left = -1
+  = note: right = 0
+  = note: Aura call chain (innermost first): halve at 1:1 -> halve at 1:1 -> halve at 1:1 -> main at 7:1

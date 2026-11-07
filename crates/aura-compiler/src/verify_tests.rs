@@ -1260,3 +1260,47 @@ def main():
 "#,
     );
 }
+
+#[test]
+fn recursive_functions_are_proved_to_end() {
+    assert_proved(
+        r#"
+def gcd(a: int64, b: int64) -> int64:
+    requires a >= 0 and b >= 0
+    decreases b
+    ensures result >= 0
+    if b == 0:
+        return a
+    return gcd(b, a % b)
+
+def count(n: int64, step: int64 = 1) -> int64:
+    requires 0 <= n and n <= 1000 and step == 1
+    decreases n
+    ensures 0 <= result and result <= n
+    if n == 0:
+        return 0
+    return 1 + count(n - step)
+
+def main():
+    print(gcd(84, 36))
+    print(count(10))
+"#,
+    );
+    assert_open(
+        r#"
+def spin(n: int64, step: int64) -> int64:
+    decreases n
+    if n <= 0:
+        return 0
+    return spin(n - step, step)
+
+def main():
+    print(spin(3, 1))
+"#,
+        &[
+            "3 decreases failed",
+            "6 decreases failed",
+            "6 overflow failed",
+        ],
+    );
+}

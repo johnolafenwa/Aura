@@ -1970,6 +1970,9 @@ impl<'a> Exec<'a> {
                     Err(_) => fresh_target(self),
                 }
             }
+            CallTarget::Name(name) if args.is_empty() && self.default_value(name).is_some() => {
+                self.default_value(name).expect("checked above")
+            }
             CallTarget::Name(name) => {
                 if self.cx.function(name).is_some() {
                     let mut actuals = Vec::new();
@@ -2029,6 +2032,24 @@ impl<'a> Exec<'a> {
                 fresh_target(self)
             }
         }
+    }
+
+    /// The value of the hidden function that computes a parameter's
+    /// default, `f::__default_<index>_<param>`, read from the default as
+    /// written when the contract model reads it.
+    fn default_value(&mut self, name: &str) -> Option<Val> {
+        let (function, rest) = name.split_once("::__default_")?;
+        let (_, param) = rest.split_once('_')?;
+        let decl = self.cx.decl(function)?;
+        let default = decl
+            .params
+            .iter()
+            .find(|p| p.name == param)?
+            .default
+            .as_ref()?;
+        let mut wd = Vec::new();
+        let value = self.spec(default, &Default::default(), &mut wd, 0).ok()?;
+        wd.is_empty().then_some(value)
     }
 
     /// A call of a user function: prove its `requires`, then assume its
