@@ -2944,6 +2944,21 @@ fn host_builtin_entry(name: &str) -> extern "C-unwind" fn(*mut i64, i64) -> *mut
         .unwrap_or_else(|| panic!("`{name}` has no native host builtin entry"))
 }
 
+/// Calls a JSON builtin that takes its one argument by value, moving the
+/// caller's only reference into the argument buffer as generated code does.
+fn direct_json_owned_host_builtin_call(name: &str, argument: *mut OpaqueValue) -> *mut OpaqueValue {
+    let clone_count = super::direct_value_clone_count();
+    let buffer = super::aura_direct_arg_buffer_new(1);
+    super::aura_direct_arg_buffer_store_owned(buffer, 0, argument as i64);
+    let result = host_builtin_entry(name)(buffer, 1);
+    assert_eq!(
+        super::direct_value_clone_count(),
+        clone_count,
+        "{name} must move its owned argument without cloning it"
+    );
+    result
+}
+
 fn direct_json_host_builtin_call(name: &str, arguments: &[*mut OpaqueValue]) -> *mut OpaqueValue {
     let clone_count = super::direct_value_clone_count();
     let result = direct_host_builtin_call(name, arguments);
@@ -3368,18 +3383,11 @@ fn direct_json_accessors_return_none_for_other_variants_and_owned_accessors_stil
 
     for name in ["json::into_string", "json::into_array", "json::into_object"] {
         let source = direct_json_value(JsonValue::Null);
-        let result = direct_json_host_builtin_call(name, &[source]);
+        // The builtin consumes its owned value even when it returns None,
+        // so the source box is freed with the argument buffer.
+        let result = direct_json_owned_host_builtin_call(name, source);
         expect_optional_absent(result);
-        unsafe {
-            super::with_value(source, |value| {
-                assert!(
-                    matches!(value, Value::Unit),
-                    "{name} must consume its owned value even when returning None"
-                );
-            });
-            release_value(source);
-            release_value(result);
-        }
+        unsafe { release_value(result) };
     }
 }
 
@@ -3499,7 +3507,7 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
             other => panic!("expected json.Value.String, found {other:?}"),
         })
     };
-    let extracted_string = direct_json_host_builtin_call("json::into_string", &[owned_string]);
+    let extracted_string = direct_json_owned_host_builtin_call("json::into_string", owned_string);
     unsafe {
         super::with_value(extracted_string, |value| match value {
             Value::Union(union) => match &union.payload {
@@ -3510,12 +3518,6 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
                 other => panic!("expected extracted str, found {other:?}"),
             },
             other => panic!("expected a present `str | None`, found {other:?}"),
-        });
-        super::with_value(owned_string, |value| {
-            assert!(
-                matches!(value, Value::Unit),
-                "owned str source was not moved"
-            )
         });
     }
 
@@ -3529,7 +3531,7 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
             other => panic!("expected json.Value.Array, found {other:?}"),
         })
     };
-    let extracted_array = direct_json_host_builtin_call("json::into_array", &[owned_array]);
+    let extracted_array = direct_json_owned_host_builtin_call("json::into_array", owned_array);
     unsafe {
         super::with_value(extracted_array, |value| match value {
             Value::Union(union) => match &union.payload {
@@ -3539,12 +3541,6 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
                 other => panic!("expected extracted Vec, found {other:?}"),
             },
             other => panic!("expected a present `list[json.Value] | None`, found {other:?}"),
-        });
-        super::with_value(owned_array, |value| {
-            assert!(
-                matches!(value, Value::Unit),
-                "owned Array source was not moved"
-            )
         });
     }
 
@@ -3561,7 +3557,7 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
             other => panic!("expected json.Value.Object, found {other:?}"),
         })
     };
-    let extracted_object = direct_json_host_builtin_call("json::into_object", &[owned_object]);
+    let extracted_object = direct_json_owned_host_builtin_call("json::into_object", owned_object);
     unsafe {
         super::with_value(extracted_object, |value| match value {
             Value::Union(union) => match &union.payload {
@@ -3569,12 +3565,6 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
                 other => panic!("expected extracted Map, found {other:?}"),
             },
             other => panic!("expected a present `dict[str, json.Value] | None`, found {other:?}"),
-        });
-        super::with_value(owned_object, |value| {
-            assert!(
-                matches!(value, Value::Unit),
-                "owned Object source was not moved"
-            )
         });
     }
 
@@ -3586,11 +3576,8 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
         dumped,
         null,
         is_null,
-        owned_string,
         extracted_string,
-        owned_array,
         extracted_array,
-        owned_object,
         extracted_object,
     ] {
         unsafe { release_value(pointer) };

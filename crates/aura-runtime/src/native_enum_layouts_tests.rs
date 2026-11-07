@@ -602,7 +602,7 @@ fn borrowing_entry_loans_read_the_dict_value_in_place() {
     };
     run_lightweight_root_task(|| {
         with_direct_task_runtime_scope(|| {
-            let access = FIRST_TEST_ACCESS + 60;
+            let access = FIRST_TEST_ACCESS + 65;
             let map = shadow_map("Shadow", access);
             let key = boxed_value(text("ring"));
             let read = |boxed| unsafe { value_ref(boxed) };
