@@ -10589,6 +10589,85 @@ pub extern "C-unwind" fn aura_direct_map_set_in_place(
     })
 }
 
+/// Puts one entry of a dict literal into the dict the literal builds,
+/// taking the key's and the value's boxes. Nothing reads the entry a later
+/// key of the same literal replaces, so no `Lookup` comes back.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_literal_entry(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+) {
+    task_runtime_boundary(|| {
+        let key = unsafe { consume_owned_value(key) };
+        let value = unsafe { consume_owned_value(value) };
+        insert_literal_entry(map, key, value);
+    })
+}
+
+/// [`aura_direct_map_literal_entry`] for a `str` key the source spells:
+/// the key comes as its bytes, with no box. A key no other key of the
+/// literal spells (`distinct` is 1) is appended without a search.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_literal_str_entry(
+    map: *mut OpaqueValue,
+    key_ptr: *const u8,
+    key_len: usize,
+    value: *mut OpaqueValue,
+    distinct: i64,
+) {
+    task_runtime_boundary(|| {
+        let key = Value::String(literal_str(key_ptr, key_len).into());
+        let value = unsafe { consume_owned_value(value) };
+        if distinct == 0 {
+            insert_literal_entry(map, key, value);
+            return;
+        }
+        with_map_mut(map, |map| {
+            infer_literal_entry_types(map, &key, &value);
+            map.entries.push_new((key, value));
+        });
+    })
+}
+
+/// An empty dict with room for the `entries` entries of the literal that
+/// builds it.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_with_capacity(entries: i64) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let mut map = DictEntries::new();
+        // Reserving is only a hint; a failed one leaves the dict to grow.
+        let _ = map.try_reserve(usize::try_from(entries).unwrap_or(0));
+        boxed_value(Value::Map(MapValue {
+            key_type: Type::named("Unknown"),
+            value_type: Type::named("Unknown"),
+            entries: map,
+        }))
+    })
+}
+
+fn infer_literal_entry_types(map: &mut MapValue, key: &Value, value: &Value) {
+    if is_unknown_runtime_type(&map.key_type) {
+        let inferred = inferred_collection_type(key);
+        if !is_unknown_runtime_type(&inferred) {
+            map.key_type = inferred;
+        }
+    }
+    if is_unknown_runtime_type(&map.value_type) {
+        let inferred = inferred_collection_type(value);
+        if !is_unknown_runtime_type(&inferred) {
+            map.value_type = inferred;
+        }
+    }
+}
+
+fn insert_literal_entry(map: *mut OpaqueValue, key: Value, value: Value) {
+    with_map_mut(map, |map| {
+        infer_literal_entry_types(map, &key, &value);
+        map.entries.insert(key, value);
+    });
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_map_remove_in_place(
     map: *mut OpaqueValue,
@@ -10909,6 +10988,7 @@ impl<'p> std::ops::Deref for DirectElementPathSteps<'p> {
     }
 }
 
+#[inline(always)]
 fn direct_element_path_steps(
     path: &str,
 ) -> std::result::Result<DirectElementPathSteps<'_>, String> {
@@ -10920,7 +11000,18 @@ fn direct_element_path_steps(
         len: 0,
         spilled: Vec::new(),
     };
-    for segment in path.split('.') {
+    // Split at each `.` by byte: a path is short, and a `char` search costs
+    // more than the walk it plans.
+    let bytes = path.as_bytes();
+    let mut start = 0;
+    while start <= bytes.len() {
+        let end = bytes[start..]
+            .iter()
+            .position(|&byte| byte == b'.')
+            .map_or(bytes.len(), |offset| start + offset);
+        // Both ends sit at an end of the path or next to an ASCII `.`.
+        let segment = &path[start..end];
+        start = end + 1;
         let step = match segment {
             "" => return Err(format!("invalid element path `{path}`")),
             "[i]" => DirectElementPathStep::Index,
@@ -11052,11 +11143,14 @@ fn direct_element_step<'a>(
                     value_type_name(value)
                 )));
             };
-            let key = unsafe { take_value(selectors.next()? as *mut OpaqueValue) };
-            map.entries
-                .value_of(&key)
+            // The key is read where its box holds it; only a missing key,
+            // which the error reports, is copied.
+            let key = selectors.next()? as *mut OpaqueValue;
+            unsafe { with_value(key, |key| map.entries.value_of(key)) }
                 .map(Cow::Borrowed)
-                .ok_or_else(|| DirectElementPathError::MissingKey(Box::new(key)))
+                .ok_or_else(|| {
+                    DirectElementPathError::MissingKey(Box::new(unsafe { take_value(key) }))
+                })
         }
         DirectElementPathStep::Projection(projection) => {
             direct_value_at_path(value, &[projection], selectors.path)
@@ -11102,15 +11196,18 @@ fn direct_element_walk_mut<R>(
                     value_type_name(value)
                 )));
             };
-            let key = unsafe { take_value(selectors.next()? as *mut OpaqueValue) };
-            match map.entries.position(&key) {
+            // As in `direct_element_step`, the key is read in its box.
+            let key = selectors.next()? as *mut OpaqueValue;
+            match unsafe { with_value(key, |key| map.entries.position(key)) } {
                 Some(position) => direct_element_walk_mut(
                     map.entries.value_at_mut(position),
                     rest,
                     selectors,
                     edit,
                 ),
-                None => Err(DirectElementPathError::MissingKey(Box::new(key))),
+                None => Err(DirectElementPathError::MissingKey(Box::new(unsafe {
+                    take_value(key)
+                }))),
             }
         }
         DirectElementPathStep::Projection(projection) => {

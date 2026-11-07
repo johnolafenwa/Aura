@@ -3341,6 +3341,17 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
         }
     }
     match value {
+        // A variant kept in its layout copies its block, and each payload
+        // box it copies shares its collection's storage.
+        Value::EnumVariant(EnumVariantValue {
+            payloads: VariantPayloads::Typed(typed),
+            ..
+        }) if typed.boxed_payloads_all(|payload| {
+            is_clone_leaf(payload) || shares_collection_storage(payload)
+        }) =>
+        {
+            return Ok(value.clone());
+        }
         Value::Tuple(tuple) if tuple.elements.iter().all(is_flat_clone) => return Ok(value.clone()),
         value if is_flat_clone(value) => return Ok(value.clone()),
         // A variant that carries only leaves and shared collections, such
@@ -3352,17 +3363,6 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
         }) if payloads
             .iter()
             .all(|payload| is_clone_leaf(payload) || shares_collection_storage(payload)) =>
-        {
-            return Ok(value.clone());
-        }
-        // The same for a variant kept in its layout: each payload box it
-        // copies shares its collection's storage.
-        Value::EnumVariant(EnumVariantValue {
-            payloads: VariantPayloads::Typed(typed),
-            ..
-        }) if typed.boxed_payloads_all(|payload| {
-            is_clone_leaf(payload) || shares_collection_storage(payload)
-        }) =>
         {
             return Ok(value.clone());
         }
@@ -9234,6 +9234,13 @@ impl PartialEq for MapValue {
 
 impl Clone for Value {
     fn clone(&self) -> Self {
+        // A variant kept in its layout copies its block, and its payload
+        // boxes copy their values.
+        if let Value::EnumVariant(variant) = self {
+            if matches!(variant.payloads, VariantPayloads::Typed(_)) {
+                return Value::EnumVariant(variant.clone());
+            }
+        }
         // A variant whose payloads are all leaves, such as `Lookup.Found(3)`
         // or `json.Value.Int(3)`, has no tree to walk.
         if let Value::EnumVariant(variant) = self {

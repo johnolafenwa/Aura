@@ -1654,6 +1654,12 @@ impl<'a> NativeCodegen<'a> {
                 })
             },
         );
+        if std::env::var_os("AURA_DEBUG_LENT").is_some() {
+            eprintln!(
+                "DBG2 {} lists={:?} payloads={:?}",
+                function.name, lent_element_reads.lists, lent_element_reads.payloads
+            );
+        }
         let shaped_locals = shapes::shaped_locals(function, &self.program_shapes, |local| {
             lookup_slots.contains(local)
                 || lent_places.contains(local)
@@ -5675,7 +5681,25 @@ impl<'a> FunctionCompiler<'a> {
         };
         let key_direct_ty = ensure_direct_type(&resolved_key_type, &self.classes, "dict key")?;
         let value_direct_ty = ensure_direct_type(&resolved_value_type, &self.classes, "Map value")?;
-        let init = self.builder.call(self.runtime[RuntimeFn::MapEmpty], &[]);
+        let str_keys = matches!(&resolved_key_type, Type::Named(name, args) if name == "str" && args.is_empty());
+        // When the literal spells every key, each `str` key it spells once
+        // goes in without a search.
+        let all_spelled = entries
+            .iter()
+            .all(|entry| matches!(entry.key, Operand::String(_)));
+        let mut spelled = HashMap::<&str, usize>::new();
+        for entry in entries {
+            if let Operand::String(text) = &entry.key {
+                *spelled.entry(text.as_str()).or_default() += 1;
+            }
+        }
+        let init = if entries.is_empty() {
+            self.builder.call(self.runtime[RuntimeFn::MapEmpty], &[])
+        } else {
+            let room = self.builder.iconst(types::I64, entries.len() as i64);
+            self.builder
+                .call(self.runtime[RuntimeFn::MapWithCapacity], &[room])
+        };
         let map = self.owned_opaque_result(
             init.results,
             Type::Named(
@@ -5684,15 +5708,29 @@ impl<'a> FunctionCompiler<'a> {
             ),
         );
         for entry in entries {
+            // A `str` key the source spells goes in as its bytes, with no box.
+            if let (Operand::String(text), true) = (&entry.key, str_keys) {
+                let (key_ptr, key_len) = self.string_constant(text.as_bytes())?;
+                let value = self.load_operand_as_opaque_direct(&entry.value, &value_direct_ty)?;
+                let value = self.transfer_owned_opaque_value(&value);
+                let distinct = self.builder.iconst(
+                    types::I64,
+                    i64::from(all_spelled && spelled.get(text.as_str()) == Some(&1)),
+                );
+                self.builder.call(
+                    self.runtime[RuntimeFn::MapLiteralStrEntry],
+                    &[map.values[0], key_ptr, key_len, value, distinct],
+                );
+                continue;
+            }
             let key = self.load_operand_as_opaque_direct(&entry.key, &key_direct_ty)?;
             let value = self.load_operand_as_opaque_direct(&entry.value, &value_direct_ty)?;
             let key = self.transfer_owned_opaque_value(&key);
             let value = self.transfer_owned_opaque_value(&value);
-            let result = self.builder.call(
-                self.runtime[RuntimeFn::MapSetInPlace],
+            self.builder.call(
+                self.runtime[RuntimeFn::MapLiteralEntry],
                 &[map.values[0], key, value],
             );
-            self.release_opaque_handle(result.results[0]);
         }
         Ok(map)
     }
@@ -9232,6 +9270,15 @@ impl<'a> FunctionCompiler<'a> {
                 self.runtime[RuntimeFn::VecCheckIndex],
                 &[list, index, line, column],
             );
+            return Ok(());
+        }
+        // The `contains_key` test the loan's block follows found the entry,
+        // and nothing changed the dict since.
+        if self
+            .fused_entry_probes
+            .values()
+            .any(|probe| probe.loan == loan)
+        {
             return Ok(());
         }
         let resolved = self.resolve_view_place(loan)?;

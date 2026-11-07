@@ -35,9 +35,7 @@ use aura_core::layout::{LayoutId, LayoutKind, LayoutTable, ScalarLayout};
 use aura_core::types::Type;
 
 use super::typed_layout::{self, FieldOps, TypedLayout};
-use super::{
-    canonical_runtime_type_name, shared_runtime_type_tag, ElementBox, OpaqueValue, RuntimeTypeTag,
-};
+use super::{canonical_runtime_type_name, shared_runtime_type_tag, ElementBox, RuntimeTypeTag};
 use crate::runtime_value::{RuntimeName, Value};
 
 /// The access code of the first enum layout a program registers. Class
@@ -700,18 +698,6 @@ impl Clone for TypedPayloads {
         let copy = Self::new(self.layout, self.variant());
         let table = self.layout.table();
         for place in self.places() {
-            if self.layout.is_box(*place) {
-                // The copy shares each payload box, with a reference of its
-                // own: a payload is never changed in place while another
-                // reference holds its box (see the module documentation).
-                // SAFETY: the slot holds a box pointer, null or owning its box.
-                let boxed = unsafe { self.address(*place).cast::<*mut OpaqueValue>().read() };
-                // SAFETY: a held box is live.
-                unsafe { super::retain_untracked_value(boxed) };
-                // SAFETY: the copy's slot is dead.
-                unsafe { copy.address(*place).cast::<*mut OpaqueValue>().write(boxed) };
-                continue;
-            }
             // SAFETY: each place of the block holds a value of its layout,
             // the copy's bytes are dead, and the two blocks are distinct.
             unsafe {
