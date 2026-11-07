@@ -10319,6 +10319,141 @@ fn lent_map_lookup(
     }
 }
 
+/// The count bit of a shadow box (see [`shadow_map_payload`]). While it is
+/// set the count never reaches zero, and every check for a box with one
+/// reference sees a shared box, so nothing empties or changes it in place.
+/// It sits below [`FROZEN_REFERENCES`], so retains and releases count as
+/// usual.
+const SHADOW_REFERENCE: u32 = 1 << 29;
+
+/// A lookup result for an entry loan whose every read borrows it: a box
+/// whose value is the found value itself, read where the dict keeps it, or
+/// what [`boxed_map_payload`] returns. Only a dict confined to this thread
+/// whose entries no other dict shares lends, so nothing else reaches the
+/// value, and nothing names the dict while the loan lives. Only a variant
+/// kept in its enum's layout lends: the box's value is then the variant's
+/// block address and payload boxes, which the dict's entry owns, and a
+/// reader that changes a payload's form in place changes the entry's.
+/// [`aura_direct_end_shadow`] ends the loan.
+fn shadow_map_payload(map: &MapValue, found: Option<&Value>, confined: bool) -> *mut OpaqueValue {
+    match found {
+        Some(
+            value @ Value::EnumVariant(EnumVariantValue {
+                payloads: VariantPayloads::Typed(_),
+                ..
+            }),
+        ) if confined && !map.entries.is_shared() => {
+            // SAFETY: the copy of the value's bytes is never dropped:
+            // `aura_direct_end_shadow` forgets it or replaces it.
+            let alias = unsafe { std::ptr::read(value) };
+            let boxed = untracked_boxed_value(alias, None);
+            // SAFETY: the box is new.
+            unsafe { &*boxed }
+                .ref_count
+                .store(SHADOW_REFERENCE + 1, Ordering::Release);
+            boxed
+        }
+        found => boxed_map_payload(found),
+    }
+}
+
+/// Looks a key up in the `dict` that `map` holds for a borrowing entry
+/// loan (see [`shadow_map_payload`]).
+fn shadow_map_lookup(
+    map: *mut OpaqueValue,
+    find: impl FnOnce(&MapValue) -> Option<&Value>,
+) -> *mut OpaqueValue {
+    unsafe {
+        with_lendable_value(map, false, |value, confined| match value {
+            Value::Map(map) => shadow_map_payload(map, find(map), confined),
+            other => runtime_error(format!(
+                "expected `dict`, found `{}`",
+                value_type_name(other)
+            )),
+        })
+    }
+}
+
+/// `aura_direct_map_get_payload` for an entry loan whose every read borrows
+/// the value (see [`shadow_map_payload`]).
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_get_shadow(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        shadow_map_lookup(map, |map| {
+            unsafe { with_value(key, |key| map.entries.value_of(key).map(std::ptr::from_ref)) }
+                .map(|found| unsafe { &*found })
+        })
+    })
+}
+
+/// [`aura_direct_map_get_shadow`] for an `int64` key.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_get_int64_shadow(
+    map: *mut OpaqueValue,
+    key: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| shadow_map_lookup(map, |map| map.entries.value_of_i64(key)))
+}
+
+/// Ends an entry loan [`aura_direct_map_get_shadow`] began. A shadow box
+/// nothing else holds is freed without dropping the value it reads, which
+/// the dict still owns. One that a borrower kept a reference to takes a
+/// copy of the value first, so the holder keeps what it saw. A box that
+/// holds a copy is released.
+///
+/// # Safety
+///
+/// `boxed` is null or the result of the loan's lookup, and nothing reads it
+/// through the loan again.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_end_shadow(boxed: *mut OpaqueValue) {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller passes null or a live box.
+        let Some(header) = (unsafe { boxed.as_ref() }) else {
+            return;
+        };
+        let count = header.ref_count.load(Ordering::Acquire);
+        if count & SHADOW_REFERENCE == 0 || count >= FROZEN_REFERENCES {
+            unsafe { aura_direct_release_value(boxed) };
+            return;
+        }
+        if count == SHADOW_REFERENCE + 1 {
+            // Only the loan holds the box, so nothing can take another
+            // reference. The value's bytes go back to the dict unread.
+            // SAFETY: no other reference exists.
+            unsafe { std::ptr::write(header.value.get(), Value::Unit) };
+            header.ref_count.store(1, Ordering::Release);
+            unsafe { release_untracked_value(boxed) };
+            return;
+        }
+        {
+            // A holder kept the box: give it a copy of its own, under the
+            // box's lock when another thread may read it.
+            let lock = header.shared_lock();
+            let _guard = lock.map(|lock| {
+                lock.write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+            });
+            // SAFETY: the guard, or confinement, keeps every reader out, and
+            // the copy of the bytes is forgotten, not dropped.
+            unsafe {
+                let alias = std::ptr::read(header.value.get());
+                let copy = alias.clone();
+                std::mem::forget(alias);
+                std::ptr::write(header.value.get(), copy);
+            }
+            header.refresh_list_view();
+        }
+        header
+            .ref_count
+            .fetch_sub(SHADOW_REFERENCE, Ordering::AcqRel);
+        unsafe { release_untracked_value(boxed) };
+    })
+}
+
 /// Looks a key up in the `dict` at `index` of `list`, lending the result.
 /// It reports a bad index or element as `with_vec_element` does.
 fn lent_vec_element_map_lookup(

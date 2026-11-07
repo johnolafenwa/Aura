@@ -1679,6 +1679,7 @@ impl<'a> NativeCodegen<'a> {
             lent_elements.insert(name, variable);
         }
         let entry_copy_loans = element_loans::entry_copy_loans(function);
+        let lent_entry_copies = element_loans::lent_entry_copy_loans(function, &entry_copy_loans);
         let mut compiler = FunctionCompiler {
             builder,
             blocks,
@@ -1734,8 +1735,19 @@ impl<'a> NativeCodegen<'a> {
             fused_entry_probes: element_loans::fused_entry_probes(function),
             fused_entry_slots: HashMap::new(),
             entry_copy_loans: entry_copy_loans.clone(),
-            lent_entry_copies: element_loans::lent_entry_copy_loans(function, &entry_copy_loans),
+            shadow_entry_copies: element_loans::shadow_entry_copy_loans(
+                function,
+                &entry_copy_loans,
+                &lent_entry_copies,
+                |instruction| {
+                    crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
+                        self.borrowing.get(name)
+                    })
+                },
+            ),
+            lent_entry_copies,
             lent_fused_copies: HashSet::new(),
+            shadow_fused_copies: HashSet::new(),
             fused_entry_copies: HashMap::new(),
             retain_calls: HashMap::new(),
             retain_releases: HashMap::new(),
@@ -3109,6 +3121,12 @@ struct FunctionCompiler<'a> {
     /// The fused entry copies that hold a lent lookup result: a value's
     /// address with its low bit set, or a copy's box.
     lent_fused_copies: HashSet<String>,
+    /// The loans of `shadow_entry_copies` whose fused test took a shadow
+    /// box, which their end hands back.
+    shadow_fused_copies: HashSet<String>,
+    /// The entry loans only borrowers read. See
+    /// `element_loans::shadow_entry_copy_loans`.
+    shadow_entry_copies: HashSet<String>,
     fused_entry_copies: HashMap<String, Var>,
     /// Each retained handle with the retain that made it and the handle it
     /// retained. A consumer that copies the value into its slot turns the

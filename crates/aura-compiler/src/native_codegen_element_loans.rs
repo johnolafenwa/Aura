@@ -710,10 +710,15 @@ impl FunctionCompiler<'_> {
         // reads may hold the found value's address instead of a copy (see
         // [`lent_entry_copy_loans`]).
         let lend = field.is_none() && self.lent_entry_copies.contains(&loan);
+        // A loan only borrowers read takes a box that reads the found
+        // value in place (see [`shadow_entry_copy_loans`]).
+        let shadow = !lend && self.shadow_entry_copies.contains(&loan);
         let (find, key) = if op == DictOp::ContainsKeyInt64 {
             (
                 if lend {
                     RuntimeFn::MapGetInt64Lent
+                } else if shadow {
+                    RuntimeFn::MapGetInt64Shadow
                 } else {
                     RuntimeFn::MapGetInt64Payload
                 },
@@ -729,6 +734,8 @@ impl FunctionCompiler<'_> {
             (
                 if lend {
                     RuntimeFn::MapGetLent
+                } else if shadow {
+                    RuntimeFn::MapGetShadow
                 } else {
                     RuntimeFn::MapGetPayload
                 },
@@ -737,6 +744,9 @@ impl FunctionCompiler<'_> {
         };
         if lend {
             self.lent_fused_copies.insert(loan.clone());
+        }
+        if shadow {
+            self.shadow_fused_copies.insert(loan.clone());
         }
         let copy = match field {
             None => {
@@ -760,9 +770,16 @@ impl FunctionCompiler<'_> {
                 self.builder.switch_to_block(slow_block);
                 self.builder.seal_block(slow_block);
                 let map_value = self.load_place(map)?;
+                // The field's value may be a copy this read frees, so the
+                // slow read copies the found value too.
+                let slow_find = match find {
+                    RuntimeFn::MapGetShadow => RuntimeFn::MapGetPayload,
+                    RuntimeFn::MapGetInt64Shadow => RuntimeFn::MapGetInt64Payload,
+                    find => find,
+                };
                 let copy = self
                     .builder
-                    .call(self.runtime[find], &[map_value.values[0], key])
+                    .call(self.runtime[slow_find], &[map_value.values[0], key])
                     .results[0];
                 self.builder.jump(join_block, &[copy]);
                 self.builder.switch_to_block(join_block);
@@ -792,9 +809,10 @@ impl FunctionCompiler<'_> {
         };
         let copy = self.builder.use_var(variable);
         let ty = direct_type_to_type(&self.local_type(place)?);
-        if self.lent_fused_copies.contains(place) {
+        if self.lent_fused_copies.contains(place) || self.shadow_fused_copies.contains(place) {
             // The scalar accessor that reads it reads a lent value where it
-            // lies, and the loan's end releases a copy.
+            // lies, and the loan's end releases a copy. A borrower reads a
+            // shadow box, which the loan's end takes back.
             return Ok(Some(ValueRef {
                 values: vec![copy],
                 ty: DirectType::Opaque(ty),
@@ -825,7 +843,12 @@ impl FunctionCompiler<'_> {
         self.builder.brif(copy, release_block, &[], done_block, &[]);
         self.builder.switch_to_block(release_block);
         self.builder.seal_block(release_block);
-        self.release_opaque_handle(copy);
+        if self.shadow_fused_copies.contains(loan) {
+            self.builder
+                .call(self.runtime[RuntimeFn::EndShadow], &[copy]);
+        } else {
+            self.release_opaque_handle(copy);
+        }
         self.builder.jump(done_block, &[]);
         self.builder.switch_to_block(done_block);
         self.builder.seal_block(done_block);
@@ -1716,6 +1739,57 @@ pub(super) fn entry_copy_loans(function: &MirFunction) -> HashMap<String, bool> 
         }
     }
     loans
+}
+
+/// The entry loans of `entry_copies` (see [`entry_copy_loans`]) whose
+/// every read is an argument the callee borrows, as `borrowed` lists them
+/// for an instruction, besides those [`lent_entry_copy_loans`] lends. The
+/// borrowers only read the value while the call lasts, so the fused test
+/// may hand them a box that reads the found value where the dict keeps it
+/// (see `aura_direct_map_get_shadow`), and the loan's end takes it back.
+pub(super) fn shadow_entry_copy_loans<'f>(
+    function: &'f MirFunction,
+    entry_copies: &HashMap<String, bool>,
+    lent: &HashSet<String>,
+    borrowed: impl Fn(&'f Instruction) -> Vec<&'f Operand>,
+) -> HashSet<String> {
+    let mut borrowed_reads = HashSet::<&str>::new();
+    let mut other_reads = HashSet::<&str>::new();
+    for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+        match instruction {
+            Instruction::ReadLoan { loan, .. } => {
+                other_reads.insert(loan.as_str());
+            }
+            Instruction::Assign {
+                value: Rvalue::Call { args, .. },
+                ..
+            } => {
+                let borrows = borrowed(instruction);
+                for arg in args {
+                    if let Operand::Place(place) = &arg.value {
+                        if borrows
+                            .iter()
+                            .any(|operand| std::ptr::eq(*operand, &arg.value))
+                        {
+                            borrowed_reads.insert(place.as_str());
+                        } else {
+                            other_reads.insert(place.as_str());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    entry_copies
+        .keys()
+        .filter(|loan| {
+            !lent.contains(loan.as_str())
+                && borrowed_reads.contains(loan.as_str())
+                && !other_reads.contains(loan.as_str())
+        })
+        .cloned()
+        .collect()
 }
 
 /// The entry loans of `entry_copies` (see [`entry_copy_loans`]) whose
