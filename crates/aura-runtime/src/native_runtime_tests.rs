@@ -1502,8 +1502,8 @@ fn direct_nested_array_collection_reads_and_clones_use_fallible_copy() {
         .contains("Array shape could not allocate"));
 
     let map = boxed_value(Value::Map(MapValue {
-        key_type: Type::named("str"),
-        value_type: Type::Named("Array".to_string(), vec![Type::named("int32")]),
+        key_type: Type::named("str").into(),
+        value_type: Type::Named("Array".to_string(), vec![Type::named("int32")]).into(),
         entries: vec![(Value::String("item".to_string().into()), array_value(11))].into(),
     }));
     let map_address = map as usize;
@@ -5622,8 +5622,8 @@ fn direct_runtime_type_tags_are_interned_and_retagging_is_idempotent() {
     }
 
     let map = boxed_value(Value::Map(MapValue {
-        key_type: Type::named("Unknown"),
-        value_type: Type::named("Unknown"),
+        key_type: Type::named("Unknown").into(),
+        value_type: Type::named("Unknown").into(),
         entries: Vec::new().into(),
     }));
     super::aura_direct_tag_value_type(map, b"dict[str, int32]".as_ptr(), 16);
@@ -5745,8 +5745,8 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     }
 
     let mixed_map = boxed_value(Value::Map(MapValue {
-        key_type: Type::named("Unknown"),
-        value_type: Type::named("Unknown"),
+        key_type: Type::named("Unknown").into(),
+        value_type: Type::named("Unknown").into(),
         entries: Vec::new().into(),
     }));
     super::aura_direct_tag_value_type(
@@ -11495,8 +11495,8 @@ fn direct_enum_owned_payload_buffer_moves_string_vec_and_map_allocations() {
         (
             "Object",
             Value::Map(MapValue {
-                key_type: Type::named("str"),
-                value_type: Type::named("json.Value"),
+                key_type: Type::named("str").into(),
+                value_type: Type::named("json.Value").into(),
                 entries: entries.into(),
             }),
             Allocation::Map(entries_ptr),
@@ -12291,8 +12291,8 @@ fn direct_json_rejects_inexact_int_array_object_and_indent_metadata() {
         enum_name: "json.Value".into(),
         variant_name: "Object".into(),
         payloads: (vec![Value::Map(MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::named("Unknown"),
+            key_type: Type::named("str").into(),
+            value_type: Type::named("Unknown").into(),
             entries: vec![].into(),
         })])
         .into(),
@@ -12995,8 +12995,8 @@ fn native_runtime_private_value_decoders_cover_success_paths() {
     assert_eq!(
         super::expect_headers_map(
             &Value::Map(MapValue {
-                key_type: aura_core::types::Type::named("Unknown"),
-                value_type: aura_core::types::Type::named("Unknown"),
+                key_type: aura_core::types::Type::named("Unknown").into(),
+                value_type: aura_core::types::Type::named("Unknown").into(),
                 entries: vec![(
                     Value::String("content-type".to_string().into()),
                     Value::String("text/plain".to_string().into()),
@@ -13137,8 +13137,8 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "headers-key-type" => {
                 super::expect_headers_map(
                     &Value::Map(MapValue {
-                        key_type: aura_core::types::Type::named("Unknown"),
-                        value_type: aura_core::types::Type::named("Unknown"),
+                        key_type: aura_core::types::Type::named("Unknown").into(),
+                        value_type: aura_core::types::Type::named("Unknown").into(),
                         entries: vec![(
                             Value::Int(IntegerValue::from_signed(1)),
                             Value::String("value".to_string().into()),
@@ -15833,8 +15833,8 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         value_type_name(Value::Map(MapValue {
-            key_type: aura_core::types::Type::named("str"),
-            value_type: aura_core::types::Type::named("int32"),
+            key_type: aura_core::types::Type::named("str").into(),
+            value_type: aura_core::types::Type::named("int32").into(),
             entries: Vec::new().into(),
         })),
         "dict"
@@ -15912,8 +15912,8 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         inferred_collection_type(&Value::Map(MapValue {
-            key_type: aura_core::types::Type::named("str"),
-            value_type: aura_core::types::Type::named("int32"),
+            key_type: aura_core::types::Type::named("str").into(),
+            value_type: aura_core::types::Type::named("int32").into(),
             entries: Vec::new().into(),
         })),
         aura_core::types::Type::Named(
@@ -25698,8 +25698,8 @@ fn direct_element_path_take_and_probe_lend_entries_without_cloning() {
         })
     }
     let table = boxed_value(Value::Map(MapValue {
-        key_type: Type::named("str"),
-        value_type: Type::Named("list".to_string(), vec![Type::named("int64")]),
+        key_type: Type::named("str").into(),
+        value_type: Type::Named("list".to_string(), vec![Type::named("int64")]).into(),
         entries: vec![(Value::String("a".to_string().into()), bucket(&[1, 2, 3]))].into(),
     })) as usize;
     let key = string_value("a") as usize;
@@ -26027,8 +26027,8 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
     // Dictionary entries (borrowed keys), nested lists inside entries, and
     // a nested element written in place through two selections.
     let table = boxed_value(Value::Map(MapValue {
-        key_type: Type::named("str"),
-        value_type: Type::Named("list".to_string(), vec![Type::named("int64")]),
+        key_type: Type::named("str").into(),
+        value_type: Type::Named("list".to_string(), vec![Type::named("int64")]).into(),
         entries: vec![(
             Value::String("a".to_string().into()),
             Value::Vec(VecValue {
@@ -26178,8 +26178,8 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
 #[test]
 fn adr0061_direct_entry_paths_borrow_keys_and_check_selector_counts() {
     let table = boxed_value(Value::Map(MapValue {
-        key_type: Type::named("str"),
-        value_type: Type::named("int64"),
+        key_type: Type::named("str").into(),
+        value_type: Type::named("int64").into(),
         entries: vec![(
             Value::String("ready".to_string().into()),
             Value::Int(IntegerValue::from_i64(1)),
@@ -27783,7 +27783,7 @@ fn opaque_values_keep_their_box_size() {
     // in-place appends. The shape tag that lets generated code skip a
     // repeated tag takes 8, and the value's 16-byte alignment pads 8.
     #[cfg(target_pointer_width = "64")]
-    assert_eq!(std::mem::size_of::<OpaqueValue>(), 208);
+    assert_eq!(std::mem::size_of::<OpaqueValue>(), 192);
 }
 
 #[test]
@@ -28721,8 +28721,8 @@ fn direct_retags_skip_values_that_already_have_the_shape() {
     assert!(!changes(&set, &named("set", vec![Type::named("str")])));
     assert!(changes(&set, &named("set", vec![int64()])));
     let map = Value::Map(MapValue {
-        key_type: Type::named("str"),
-        value_type: int64(),
+        key_type: Type::named("str").into(),
+        value_type: int64().into(),
         entries: DictEntries::new(),
     });
     assert!(!changes(

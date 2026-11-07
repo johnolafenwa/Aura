@@ -323,8 +323,8 @@ fn runtime_member_type_identifies_every_backend_independent_payload_kind() {
     );
     assert_eq!(
         runtime_member_type(&Value::Map(MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::named("bool"),
+            key_type: Type::named("str").into(),
+            value_type: Type::named("bool").into(),
             entries: Vec::new().into(),
         })),
         Some(Type::Named(
