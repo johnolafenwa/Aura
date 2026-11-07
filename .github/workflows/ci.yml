@@ -94,6 +94,10 @@ jobs:
       - name: Install LLVM
         run: bash scripts/install-llvm.sh
 
+      - name: Install Z3
+        # `aura verify` and its tests run against one pinned solver.
+        run: bash scripts/install-z3.sh
+
       - name: Install npm dependencies
         run: npm ci
 

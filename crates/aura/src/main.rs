@@ -51,6 +51,7 @@ fn main() {
         "fmt" => handle_fmt_command(args.collect()),
         "doc" => handle_doc_command(args.collect()),
         "test" => handle_test_command(args.collect()),
+        "verify" => handle_verify_command(args.collect()),
         "deps" => {
             let remaining = args.collect::<Vec<_>>();
             handle_deps_command(remaining);
@@ -4029,6 +4030,116 @@ fn read_input(args: &mut impl Iterator<Item = String>) -> Input {
     }
 }
 
+/// `aura verify`: proves the program's checks with an SMT solver and
+/// reports each check it could not prove. Exits 1 unless every check was
+/// proved.
+fn handle_verify_command(args: Vec<String>) {
+    let (diagnostic_format, args) = parse_diagnostic_format(args);
+    let mut options = aura_compiler::verify::Options::default();
+    let mut rest = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let value = || {
+            args.get(index + 1)
+                .cloned()
+                .unwrap_or_else(|| print_usage_and_exit(2))
+        };
+        match args[index].as_str() {
+            "--solver" => {
+                options.solver = Some(value());
+                index += 2;
+            }
+            "--timeout" => {
+                options.timeout_ms = value().parse().unwrap_or_else(|_| print_usage_and_exit(2));
+                index += 2;
+            }
+            "--function" => {
+                options.function_filter = Some(value());
+                index += 2;
+            }
+            _ => {
+                rest.push(args[index].clone());
+                index += 1;
+            }
+        }
+    }
+    let input = read_input(&mut rest.into_iter());
+    let result = if input.from_stdin {
+        aura_compiler::verify_path_with_source(Path::new(&input.path), &input.source, &options)
+    } else {
+        aura_compiler::verify_path(Path::new(&input.path), &options)
+    };
+    let report = match result {
+        Ok(report) => report,
+        Err(error) => {
+            emit_diagnostic(diagnostic_format, &input.path, &input.source, &error);
+            process::exit(1);
+        }
+    };
+    let diagnostics = report.diagnostics();
+    match diagnostic_format {
+        DiagnosticFormat::Human => {
+            for diagnostic in &diagnostics {
+                eprintln!("{}", render_error(&input.path, &input.source, diagnostic));
+            }
+            write_stdout(&format!(
+                "verified {}: {} of {} checks proved in {} functions ({})\n",
+                input.path,
+                report.proved(),
+                report.obligations.len(),
+                report.functions,
+                report.solver
+            ));
+        }
+        DiagnosticFormat::Json => {
+            let obligations = report
+                .obligations
+                .iter()
+                .map(|obligation| {
+                    let (status, detail) = match &obligation.status {
+                        aura_compiler::verify::Status::Proved => ("proved", JsonValue::Null),
+                        aura_compiler::verify::Status::Failed { counterexample } => (
+                            "failed",
+                            serde_json::json!(counterexample
+                                .iter()
+                                .map(|(name, value)| serde_json::json!({"name": name, "value": value}))
+                                .collect::<Vec<_>>()),
+                        ),
+                        aura_compiler::verify::Status::Unknown => ("unknown", JsonValue::Null),
+                        aura_compiler::verify::Status::Unsupported(reason) => {
+                            ("unsupported", JsonValue::String(reason.clone()))
+                        }
+                    };
+                    serde_json::json!({
+                        "kind": obligation.kind.name(),
+                        "function": obligation.function,
+                        "line": obligation.span.line,
+                        "column": obligation.span.column,
+                        "message": obligation.message,
+                        "status": status,
+                        "detail": detail,
+                    })
+                })
+                .collect::<Vec<_>>();
+            let output = serde_json::json!({
+                "schema_version": 1,
+                "solver": report.solver,
+                "functions": report.functions,
+                "proved": report.proved(),
+                "obligations": obligations,
+                "diagnostics": diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.structured(&input.path))
+                    .collect::<Vec<_>>(),
+            });
+            write_stdout(&format!("{output}\n"));
+        }
+    }
+    if !report.is_proved() {
+        process::exit(1);
+    }
+}
+
 fn parse_diagnostic_format(args: Vec<String>) -> (DiagnosticFormat, Vec<String>) {
     let mut format = DiagnosticFormat::Human;
     let mut remaining = Vec::new();
@@ -4835,6 +4946,7 @@ fn usage_text() -> &'static str {
        or: aura fmt [--check] [path ...]\n\
        or: aura doc [--out <dir>] [--json] [path ...]\n\
        or: aura test [-k <substring>] [--format json] [--timeout-ms <n>] [path ...]\n\
+       or: aura verify [--solver <path>] [--timeout <ms>] [--function <name>] [--format human|json] <file.au>\n\
        or: aura deps update [package]\n\
        or: aura upgrade\n\
        or: aura help\n\

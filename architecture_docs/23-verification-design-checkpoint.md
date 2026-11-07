@@ -263,6 +263,26 @@ usable only in clauses and other spec bodies). V1d gives contracts their
 own manual page, `docs/manual/contracts.md`. V1 is complete; `ghost`
 locals, `spec def` methods, and trait-method contracts move to V2 and V3.
 
+V2 progress: V2a adds `aura verify` (`crates/aura-compiler/src/verify.rs`).
+It lowers with `mir::lower_for_verification`, which stops before the
+ownership pass, and executes each function symbolically over its
+control-flow graph: paths merge through `ite`-defined constants, and each
+loop is cut at its header, where the loop's `invariant` and `decreases`
+checks are proved on entry and for the back edges and assumed for the
+havocked iteration. A counter that the loop only steps one way keeps its
+side of its entry value without an invariant. Obligations come from the
+named arithmetic traps, checked list reads, writes, and pops, every
+`AssertFail`, and the callee `requires` at each call, which the verifier
+reads from the callee's declaration (`verify_spec.rs`) and pairs with its
+`ensures` as an assumption after the call. A function's own failed
+`requires` paths are assumed away. Facts reach the solver in the order the
+walk assumes them, so a check sees only what holds before it. Integers,
+`bool`, lists of scalars, tuples, classes, enums, and unions are modeled;
+anything else is a fresh unconstrained value. Results are `AU5101` (not
+proved, with a counterexample), `AU5102` (solver undecided), `AU5103` (no
+solver), and `AU5104` (outside the modeled subset). CI installs the
+pinned Z3 of `scripts/install-z3.sh`. Checks are not removed yet.
+
 V1 needs each stage's full local gates, coverage floors, and interpreter and
 native parity, like every other batch. V1 also adds a fixture family of
 contract programs that V2 then proves.
