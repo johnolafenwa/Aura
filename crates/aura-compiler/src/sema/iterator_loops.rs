@@ -193,6 +193,16 @@ impl FunctionChecker<'_> {
     /// Whether `ty` implements the builtin `iter.IntoIterator[T]`, so a loop
     /// over it iterates `ty.into_iter()`.
     pub(super) fn implements_into_iterator(&self, ty: &Type) -> bool {
+        // A type parameter bounded by `IntoIterator[T]` (with its hidden
+        // associated `Iter` argument) iterates its `into_iter()`.
+        if let Type::TypeParam(name) = ty {
+            return self.type_param_bounds.get(name).is_some_and(|bounds| {
+                bounds.iter().any(|bound| {
+                    bound.trait_name.rsplit(['.', ':']).next() == Some(INTO_ITERATOR_TRAIT)
+                        && bound.trait_args.len() == 2
+                })
+            });
+        }
         self.trait_impls_in_scope().any(|trait_impl| {
             self.trait_info_for_impl(trait_impl).is_some_and(|info| {
                 info.module_name == ITER_MODULE && info.decl.name == INTO_ITERATOR_TRAIT

@@ -26813,6 +26813,11 @@ impl<'a> Lowerer<'a> {
                                             );
                                         }
                                     }
+                                    self.infer_bound_only_type_args(
+                                        &type_params,
+                                        &function.type_param_bounds,
+                                        &mut substitutions,
+                                    );
                                     substitute_type(&function.signature.return_type, &substitutions)
                                 }
                             })
@@ -27570,6 +27575,83 @@ impl<'a> Lowerer<'a> {
             }
         }
         Some(substitutions)
+    }
+
+    /// Fills in a callee's type parameters that only its bounds name, such
+    /// as the hidden `S.Iter` of `S: IntoIterator[T]` (step 9e-2), from the
+    /// implementation of the bound's trait for the type `S` resolved to.
+    fn infer_bound_only_type_args(
+        &self,
+        type_params: &BTreeSet<String>,
+        bounds: &BTreeMap<String, Vec<TraitBound>>,
+        substitutions: &mut std::collections::HashMap<String, Type>,
+    ) {
+        let bare = |name: &str| name.rsplit('.').next().unwrap_or(name).to_string();
+        for (param, param_bounds) in bounds {
+            let Some(actual) = substitutions.get(param).cloned() else {
+                continue;
+            };
+            for bound in param_bounds {
+                let open = bound.trait_args.iter().any(|arg| {
+                    matches!(arg, Type::TypeParam(name)
+                        if type_params.contains(name) && !substitutions.contains_key(name))
+                });
+                if !open {
+                    continue;
+                }
+                let mut candidates = Vec::new();
+                if let Type::TypeParam(name) = &actual {
+                    candidates.extend(
+                        self.type_param_bounds
+                            .get(name)
+                            .into_iter()
+                            .flatten()
+                            .filter(|current| bare(&current.trait_name) == bare(&bound.trait_name))
+                            .map(|current| current.trait_args.clone()),
+                    );
+                } else {
+                    for trait_impl in self.trait_impls_in_scope() {
+                        if bare(&trait_impl.trait_name) != bare(&bound.trait_name) {
+                            continue;
+                        }
+                        let Some(impl_substitutions) =
+                            self.trait_impl_substitutions(trait_impl, &actual)
+                        else {
+                            continue;
+                        };
+                        candidates.push(
+                            trait_impl
+                                .trait_args
+                                .iter()
+                                .map(|arg| substitute_type(arg, &impl_substitutions))
+                                .collect::<Vec<_>>(),
+                        );
+                    }
+                }
+                let matched = candidates
+                    .into_iter()
+                    .filter(|candidate| candidate.len() == bound.trait_args.len())
+                    .find_map(|candidate| {
+                        let mut trial = substitutions.clone();
+                        bound
+                            .trait_args
+                            .iter()
+                            .zip(&candidate)
+                            .all(|(pattern, implemented)| {
+                                crate::sema::type_pattern_matches(
+                                    pattern,
+                                    implemented,
+                                    type_params,
+                                    &mut trial,
+                                )
+                            })
+                            .then_some(trial)
+                    });
+                if let Some(trial) = matched {
+                    *substitutions = trial;
+                }
+            }
+        }
     }
 
     fn type_implements_trait_bound(&self, ty: &Type, bound: &TraitBound) -> bool {

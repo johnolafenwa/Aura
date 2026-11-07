@@ -1759,6 +1759,11 @@ impl<'a> FunctionChecker<'a> {
             })?;
         }
 
+        self.infer_bound_only_type_args(
+            &function.decl.type_params,
+            &function.type_param_bounds,
+            &mut substitutions,
+        );
         for type_param in &function.decl.type_params {
             let Some(resolved) = substitutions.get(type_param) else {
                 return Err(Diagnostic::at(
@@ -2604,6 +2609,11 @@ impl<'a> FunctionChecker<'a> {
             ));
         }
 
+        self.infer_bound_only_type_args(
+            callee_type_params,
+            callee_type_param_bounds,
+            &mut substitutions,
+        );
         for type_param in callee_type_params {
             if let Some(resolved) = substitutions.get(type_param) {
                 if super::types::type_contains_span(resolved) {
@@ -3475,6 +3485,11 @@ impl FunctionChecker<'_> {
                 )
             })?;
         }
+        self.infer_bound_only_type_args(
+            &target.decl.type_params,
+            target.type_param_bounds,
+            &mut substitutions,
+        );
         for type_param in &target.decl.type_params {
             let Some(resolved) = substitutions.get(type_param) else {
                 return Err(Diagnostic::at(

@@ -487,3 +487,11 @@ fn contract_clauses_keep_the_space_after_their_keyword() {
         "def f(a: bool, b: bool):\n    requires (a or b) and a\n    requires [1][0] == 1\n    requires -1 < 0\n    ensures a == a\n    requires(a)\n    print(a)\n",
     );
 }
+
+#[test]
+fn statement_yield_of_a_tuple_keeps_its_space() {
+    assert_formats(
+        "def pairs(n: int64) -> Generator[(int64, int64)]:\n    yield (n, n)\n    yield -n\n",
+        "def pairs(n: int64) -> Generator[(int64, int64)]:\n    yield (n, n)\n    yield -n\n",
+    );
+}

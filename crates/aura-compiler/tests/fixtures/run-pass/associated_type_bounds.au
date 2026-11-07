@@ -1,0 +1,118 @@
+import iter
+from iter import Generator, IntoIterator, Step
+
+
+trait Source[T]:
+    type Iter: iter.Iterator[T]
+
+    def open(own self) -> Self.Iter
+
+
+trait Plain:
+    def unrelated(self) -> int64
+
+
+class Pairs:
+    n: int64
+
+
+def pairs(n: int64) -> Generator[(int64, str)]:
+    for i in range(n):
+        yield (i, str(i))
+
+
+impl IntoIterator[(int64, str)] for Pairs:
+    type Iter = Generator[(int64, str)]
+
+    def into_iter(own self) -> Self.Iter:
+        return pairs(self.n)
+
+
+impl Source[(int64, str)] for Pairs:
+    type Iter = Generator[(int64, str)]
+
+    def open(own self) -> Self.Iter:
+        return pairs(self.n)
+
+
+def keys[S: iter.IntoIterator[(int64, str)]](source: own S) -> list[int64]:
+    mut out = list[int64]()
+    for k, _ in source:
+        out.append(k)
+    return out
+
+
+def explicit[S: IntoIterator[str, I], I: iter.Iterator[str]](source: own S) -> int64:
+    mut n = 0
+    for _ in source.into_iter():
+        n += 1
+    return n
+
+
+def opened[S: Source[(int64, str)]](source: own S) -> int64:
+    mut total = 0
+    mut it = source.open()
+    while true:
+        match it.next():
+            case Step.Item(pair):
+                total += pair[0]
+            case _:
+                break
+    return total
+
+
+class Words:
+    items: list[str]
+
+    def count_of[S: IntoIterator[str]](self, source: own S) -> int64:
+        mut n = len(self.items)
+        for _ in source:
+            n += 1
+        return n
+
+
+def walk(items: own list[str]) -> Generator[str]:
+    for item in items:
+        yield item.clone()
+
+
+impl IntoIterator[str] for Words:
+    type Iter = Generator[str]
+
+    def into_iter(own self) -> Self.Iter:
+        return walk(self.items)
+
+
+trait Table[K]:
+    type Rows: iter.Iterator[(K, int64)]
+
+    def rows(own self) -> Self.Rows
+
+
+def numbered(items: own list[str]) -> Generator[(str, int64)]:
+    mut n = 0
+    for item in items:
+        n += 1
+        yield (item.clone(), n)
+
+
+impl Table[str] for Words:
+    type Rows = Generator[(str, int64)]
+
+    def rows(own self) -> Self.Rows:
+        return numbered(self.items)
+
+
+def last_row[S: Table[str]](source: own S) -> int64:
+    mut last = 0
+    for row in source.rows():
+        last = row[1]
+    return last
+
+
+def main():
+    print(keys(Pairs(n=3)))
+    print(explicit(Words(items=["a", "b"])))
+    print(opened(Pairs(n=4)))
+    print(Words(items=["x"]).count_of(Words(items=["y", "z"])))
+    print(last_row(Words(items=["p", "q", "r"])))
