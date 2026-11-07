@@ -18513,16 +18513,37 @@ pub const JSON_INLINE_PARSE_MAX_DEPTH: usize = 8;
 /// service costs more than parsing a small document, and such a source
 /// cannot recurse deep enough to threaten a task stack.
 pub fn json_parse_inline(source: &str) -> Option<JsonInlineParse> {
-    if source.len() > JSON_INLINE_PARSE_MAX_BYTES
-        || !json_codec::nesting_at_most(source, JSON_INLINE_PARSE_MAX_DEPTH)
-    {
+    if source.len() > JSON_INLINE_PARSE_MAX_BYTES {
         return None;
     }
     let hooked = json_runtime_conversion_hooked();
-    let outcome = panic::catch_unwind(AssertUnwindSafe(|| json_parse_runtime(source, hooked)))
-        .map_err(|payload| JsonCodecServiceError::Panicked(task_panic_message(&*payload)))
-        .and_then(|parsed| parsed.map_err(JsonCodecServiceError::Codec));
+    // The parse checks the nesting as it goes, so a source that parses is
+    // not scanned for it first.
+    let outcome = match panic::catch_unwind(AssertUnwindSafe(|| {
+        json_parse_runtime_within_depth(source, hooked, JSON_INLINE_PARSE_MAX_DEPTH)
+    })) {
+        Ok(None) => return None,
+        Ok(Some(parsed)) => parsed.map_err(JsonCodecServiceError::Codec),
+        Err(payload) => Err(JsonCodecServiceError::Panicked(task_panic_message(
+            &*payload,
+        ))),
+    };
     Some(JsonInlineParse(outcome))
+}
+
+/// [`json_parse_runtime`] of a source that nests at most `limit` levels,
+/// or `None` when it nests deeper.
+fn json_parse_runtime_within_depth(
+    source: &str,
+    hooked: bool,
+    limit: usize,
+) -> Option<std::result::Result<ParsedJson, JsonCodecError>> {
+    if hooked {
+        return json_codec::parse_into_within_depth::<JsonValue>(source, limit)
+            .map(|parsed| parsed.map(ParsedJson::Tree));
+    }
+    json_codec::parse_into_within_depth::<RuntimeJson>(source, limit)
+        .map(|parsed| parsed.map(|value| ParsedJson::Runtime(value.0)))
 }
 
 /// A source [`json_parse_inline`] parsed on the calling task.

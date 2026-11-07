@@ -24,8 +24,9 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 /// The size step of the lists: every small block is rounded up to it.
 const STEP: usize = 16;
-/// The largest block the lists keep.
-const MAX_SIZE: usize = 1024;
+/// The largest block the lists keep: room for the entries of a `dict`
+/// small enough to scan, which a JSON object mostly is.
+const MAX_SIZE: usize = 2048;
 const CLASSES: usize = MAX_SIZE / STEP;
 /// The most blocks one thread keeps of each size.
 const CAPACITY: u32 = 1024;

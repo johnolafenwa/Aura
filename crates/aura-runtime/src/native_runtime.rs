@@ -3280,7 +3280,8 @@ unsafe fn consume_value(ptr: *mut OpaqueValue) -> Value {
 
 /// Takes the value out of a box the caller owns one reference to. A box
 /// that another reference still holds keeps its value, and the caller gets
-/// a copy. Only a box with one reference is emptied.
+/// a copy. Only a box with one reference is emptied, and the caller then
+/// releases that reference, freeing the box.
 unsafe fn take_owned_contents(ptr: *mut OpaqueValue) -> Value {
     // SAFETY: the caller owns a reference, so the box is live. A count of
     // one cannot grow while the caller holds the only reference.
@@ -3288,10 +3289,16 @@ unsafe fn take_owned_contents(ptr: *mut OpaqueValue) -> Value {
         unsafe { ptr.as_ref() }.is_some_and(|value| value.ref_count.load(Ordering::Acquire) > 1);
     if shared {
         crate::runtime_value::representation_stats::note_clone();
-        unsafe { value_ref(ptr) }
-    } else {
-        unsafe { value_mut(ptr, |value| std::mem::replace(value, Value::Unit)) }
+        return unsafe { value_ref(ptr) };
     }
+    let Some(opaque) = (unsafe { ptr.as_ref() }) else {
+        runtime_error("direct runtime received a null opaque value pointer");
+    };
+    let _access = opaque.access(true);
+    // Every caller releases its only reference next, which frees the box,
+    // so the emptied box's list view need not follow the write.
+    // SAFETY: as in `value_mut`.
+    unsafe { std::mem::replace(&mut *opaque.value.get(), Value::Unit) }
 }
 
 unsafe fn consume_owned_value(ptr: *mut OpaqueValue) -> Value {
@@ -3949,6 +3956,11 @@ thread_local! {
 /// share one copy of each name instead of allocating their own.
 fn literal_runtime_name(ptr: *const u8, len: usize) -> RuntimeName {
     let bytes = unsafe { slice::from_raw_parts(ptr, len) };
+    // The names of the enums the runtime itself defines need no lookup,
+    // and copying or dropping a static name touches no count.
+    if let Some(name) = well_known_runtime_name(bytes) {
+        return RuntimeName::from_static(name);
+    }
     let address = ptr as usize;
     let slot = ((address >> 3) ^ (address >> 11) ^ len) % LITERAL_NAME_LOOKUP_SLOTS;
     let slots = [slot, slot ^ 1];
@@ -3981,6 +3993,27 @@ fn literal_runtime_name(ptr: *const u8, len: usize) -> RuntimeName {
         lookup[index] = Some((address, len, name.clone()));
     });
     name
+}
+
+/// `bytes` as a static name when it spells one of the enum or variant
+/// names of the enums every program uses: `Result`, `Option`, `Lookup`,
+/// and `json.Value`.
+#[inline]
+fn well_known_runtime_name(bytes: &[u8]) -> Option<&'static str> {
+    let names: &[&'static str] = match bytes.len() {
+        2 => &["Ok"],
+        3 => &["Int", "Err"],
+        4 => &["Null", "Bool", "Some", "None"],
+        5 => &["Found", "Float", "Array"],
+        6 => &["String", "Object", "Lookup", "Result", "Option"],
+        7 => &["Missing"],
+        10 => &["json.Value"],
+        _ => return None,
+    };
+    names
+        .iter()
+        .copied()
+        .find(|name| crate::collection_index::short_bytes_eq(name.as_bytes(), bytes))
 }
 
 /// The text of the UTF-8 bytes at `ptr`, which generated code passes for a

@@ -29576,3 +29576,44 @@ fn function_signatures_decode_once_per_descriptor_and_the_cache_stays_bounded() 
             <= FUNCTION_SIGNATURE_CACHE_LIMIT
     );
 }
+
+#[test]
+fn well_known_enum_names_share_one_text_from_any_buffer() {
+    for name in [
+        "json.Value",
+        "Null",
+        "Bool",
+        "Int",
+        "Float",
+        "String",
+        "Array",
+        "Object",
+        "Lookup",
+        "Found",
+        "Missing",
+        "Result",
+        "Ok",
+        "Err",
+        "Option",
+        "Some",
+        "None",
+    ] {
+        let first = name.as_bytes().to_vec();
+        let second = name.as_bytes().to_vec();
+        let from_first = super::literal_runtime_name(first.as_ptr(), first.len());
+        let from_second = super::literal_runtime_name(second.as_ptr(), second.len());
+        assert_eq!(from_first.as_str(), name);
+        assert!(
+            std::ptr::eq(from_first.as_ptr(), from_second.as_ptr()),
+            "{name} should not be copied"
+        );
+    }
+    // Names that only look like them are their own.
+    for name in ["Lookups", "Ok!", "json.value", "Nul", ""] {
+        let bytes = name.as_bytes().to_vec();
+        assert_eq!(
+            super::literal_runtime_name(bytes.as_ptr(), bytes.len()).as_str(),
+            name
+        );
+    }
+}
