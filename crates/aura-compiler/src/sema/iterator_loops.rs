@@ -125,10 +125,7 @@ pub(super) fn check_with_iterator_loops(
         drop(pop);
         // `IntoIterator` sources become `into_iter()` calls first; the next
         // check then finds ordinary iterator loops.
-        if !into_iter.is_empty() {
-            if rewrite_into_iter_sources(&mut module, &into_iter) == 0 {
-                return result;
-            }
+        if !into_iter.is_empty() && rewrite_into_iter_sources(&mut module, &into_iter) > 0 {
             continue;
         }
         if (discovered.is_empty() && lockstep.is_empty())
@@ -196,9 +193,6 @@ impl FunctionChecker<'_> {
     /// Whether `ty` implements the builtin `iter.IntoIterator[T]`, so a loop
     /// over it iterates `ty.into_iter()`.
     pub(super) fn implements_into_iterator(&self, ty: &Type) -> bool {
-        if !matches!(ty, Type::Named(..)) {
-            return false;
-        }
         self.trait_impls_in_scope().any(|trait_impl| {
             self.trait_info_for_impl(trait_impl).is_some_and(|info| {
                 info.module_name == ITER_MODULE && info.decl.name == INTO_ITERATOR_TRAIT

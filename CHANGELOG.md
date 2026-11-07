@@ -130,6 +130,9 @@ The semantic interface stays 20, and the native cache format stays `v10`.
   `into_iter(own self) -> Self.Iter`. `for` loops, comprehensions,
   `enumerate`, and `zip` consume an `IntoIterator` value through
   `into_iter()`.
+- Fixed: a default trait method failed in the compiler's lowering ("assigns
+  untyped local") when an implementation with a bounded type parameter,
+  such as `impl[I: Iterator[int64]] Trait for Wrap[I]`, inherited it.
 - Fixed: a `for` loop over a generic `I: Iterator[T]` parameter failed in
   the compiler's lowering with a wrong-enum match error.
 - Fixed: `for x in value.method():` where `method` takes `own self` reported

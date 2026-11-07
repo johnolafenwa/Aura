@@ -62,14 +62,26 @@ impl Source[int64] for Start:
     def open(own self) -> Self.Iter:
         return Countdown(n=self.n)
 
-# An associated type without bounds.
+# An associated type fixed to the implementation's own type parameter.
+class Wrap[I]:
+    inner: I
+
+impl[I: Iterator[int64]] Source[int64] for Wrap[I]:
+    type Iter = I
+
+    def open(own self) -> Self.Iter:
+        return self.inner
+
+# An associated type with two bounds, and one without bounds.
 trait Counted:
-    type Count
+    type Count: Ord[int64], Add[int64, int64]
+    type Label
 
     def count(self) -> Self.Count
 
 impl Counted for Start:
     type Count = int64
+    type Label = str
 
     def count(self) -> int64:
         return self.n
@@ -89,3 +101,5 @@ def main():
     print(Start(n=3).first_or(-1))
     print(Start(n=0).first_or(-1))
     print(Start(n=7).count())
+    print(Wrap(inner=Countdown(n=5)).first_or(-1))
+    print([a + b for a, b in zip(Bag(items=["m", "n"]), Bag(items=["o", "p"]))])

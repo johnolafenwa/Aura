@@ -2848,13 +2848,11 @@ impl Parser {
                 if let Some(binding) = self
                     .impl_assoc_types
                     .iter()
-                    .find(|binding| binding.name == assoc)
+                    .find(|binding| binding.name == assoc && args.is_empty())
                 {
-                    if args.is_empty() {
-                        let mut target = binding.target.clone();
-                        target.span = ty.span;
-                        return Ok(target);
-                    }
+                    let mut target = binding.target.clone();
+                    target.span = ty.span;
+                    return Ok(target);
                 }
             }
         }
