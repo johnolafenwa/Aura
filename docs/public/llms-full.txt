@@ -2872,7 +2872,7 @@ aura check app.au
 | `aura run file.au -- args...` | Execute with program arguments available through `sys.args()`. |
 | `aura build -o path file.au` | Build a native binary. |
 | `aura build --debug -o path file.au` | Build an unoptimized native binary with debug information, for a debugger. |
-| `aura build --remove-proved-checks -o path file.au` | Build a native binary without the list bounds checks `aura verify` proves can never fail. See [Verification](/manual/verification#trust). |
+| `aura build --remove-proved-checks -o path file.au` | Build a native binary without the bounds, overflow, divisor, and `assert` checks `aura verify` proves can never fail. See [Verification](/manual/verification#trust). |
 | `aura ast file.au` | Print the syntax tree. |
 | `aura ast-json file.au` | Print syntax tree JSON. |
 | `aura mir file.au` | Print lowered MIR. |
@@ -6429,6 +6429,45 @@ assigns its name without `ghost`, reports `AU2048`. As with an erased
 lemma call, a ghost `assert` that the verifier cannot prove keeps
 `aura build --remove-proved-checks` from removing any check.
 
+## Callable Contracts
+
+A type alias for a callable type can end with `:` and an indented block of
+`requires` and `ensures` clauses over the callable's named parameters and
+`result`. A parameter of that type has the contract: a call through it must
+meet the `requires`, and its result has the `ensures`.
+
+```aura
+type Step = def(n: int64) -> int64:
+    requires 0 <= n and n < 100
+    ensures result > n
+
+def inc(n: int64) -> int64:
+    requires n < 1000
+    ensures result == n + 1
+    return n + 1
+
+def apply_twice(f: Step, x: int64) -> int64:
+    requires 0 <= x and x < 50
+    ensures result > x
+    y = f(x)
+    if y < 100:
+        return f(y)
+    return y
+
+def main():
+    print(apply_twice(inc, 3))
+```
+
+Passing `inc` as a `Step` asks `aura verify` to prove that `inc` fits:
+every call `Step` allows meets `inc`'s `requires`, and `inc`'s `ensures`
+gives `Step`'s. A callable contract is for the verifier. The program checks
+it nowhere; each function still checks its own `requires` when it runs. A
+function value that is not a named function, such as a lambda, is reported
+as `AU5104` where it becomes a `Step`.
+
+The callable type names each parameter and takes none as `mut`, and the
+alias has no type parameters.
+
 ## Class Invariants
 
 A class can state what is true of every one of its objects, with
@@ -6509,6 +6548,8 @@ These forms report `AU2048`:
   body may have moved; `old(param)` reads it on entry instead
 - a parameter named `result` in a function with `ensures`
 - `lemma def` methods
+- a contract on a generic type alias, on a callable type with an unnamed
+  or `mut` parameter, or on an alias of a type that is not callable
 
 ## Diagnostics
 
@@ -11147,7 +11188,12 @@ The rules for these declarations:
 - **Return type.** Every extern function spells an explicit `-> Type`. Use
   `-> None` for a C function that returns no value.
 - **No body.** An extern function has no Aura body, type parameters, receiver,
-  defaults, or trailing colon.
+  or defaults. Its only block is an optional trusted contract.
+- **Trusted contract.** An indented block of `requires` and `ensures` clauses
+  states what the C function needs and promises. `aura verify` proves each
+  `requires` at every call and assumes each `ensures` after it, without
+  proof. The program checks neither when it runs, because the contract is
+  trusted. See [Verification](/manual/verification#trust).
 - **Opaque handles.** An opaque declaration is written
   `extern "C" opaque class Name`. It has no fields, methods, body, or type
   parameters.
@@ -13367,14 +13413,19 @@ item
     | impl-declaration ;
 
 type-alias-declaration
-    = "type", identifier, [ bounded-type-parameters ], "=", type, NEWLINE ;
+    = "type", identifier, [ bounded-type-parameters ], "=", type,
+      ( NEWLINE | ":", NEWLINE, INDENT, contract-clause, { contract-clause }, DEDENT ) ;
 
 extern-function-declaration
     = "extern", STRING, "def", identifier,
-      "(", [ parameter-list ], ")", "->", type, NEWLINE ;
+      "(", [ parameter-list ], ")", "->", type,
+      ( NEWLINE | ":", NEWLINE, INDENT, contract-clause, { contract-clause }, DEDENT ) ;
 
 extern-opaque-declaration
     = "extern", STRING, "opaque", "class", identifier, NEWLINE ;
+
+contract-clause
+    = ( "requires" | "ensures" ), expression, NEWLINE ;
 ```
 
 Item declarations are module-level. They are not statements and cannot appear
@@ -13388,7 +13439,9 @@ own type parameters. Anywhere else, `type` is an ordinary identifier. Static
 checking rejects alias expansion cycles with `AU2012`.
 
 Parsing requires the extern ABI string to be exactly `"C"`. Extern
-declarations are bodyless and non-generic.
+declarations are bodyless and non-generic. An extern function's optional
+indented block holds only `requires` and `ensures` clauses, its trusted
+contract.
 [FFI v0](/manual/ffi) restricts their parameter modes and types.
 
 ## Type References And Type Parameters
@@ -23224,9 +23277,10 @@ function:
 
 | Check | Example | Runtime failure it rules out |
 | --- | --- | --- |
-| overflow | `a + b`, `-x`, `abs(x)`, `x as int32` | `AU4002` integer overflow |
-| division by zero | `a // b`, `a % b` | `AU4004` zero divisor |
+| overflow | `a + b`, `-x`, `abs(x)`, `x as int32`, `f as int64`, `n as float64` | `AU4002` integer overflow or an inexact or out-of-range conversion |
+| division by zero | `a // b`, `a % b`, `x / y` of floats | `AU4004` zero divisor |
 | index in range | `xs[i]`, `xs[i] = v`, `xs.pop()` | `AU4003` index out of range |
+| key present | `d[k]`, `s.remove(x)` | `AU4003` missing key, `AU4008` missing element |
 | assert | `assert total >= 0` | `AU4001` assertion failed |
 | requires | each call of a function with `requires` | `AU4009` at the call |
 | ensures | each `return` of a function with `ensures` | `AU4009` on return |
@@ -23339,7 +23393,7 @@ verified scale.au: 0 of 1 checks proved in 2 functions (/usr/bin/z3 (Z3 version 
 | `AU5101` | The check can fail. The counterexample gives parameter values that make it fail, as far as the solver reports them. |
 | `AU5102` | The solver gave up before deciding. Raise `--timeout`, or add a `requires`, `invariant`, or `assert` that narrows the case. |
 | `AU5103` | No solver could be started. |
-| `AU5104` | The check depends on something the verifier does not model yet, such as floating-point arithmetic. It is not proved, and it stays a runtime check. |
+| `AU5104` | The check depends on something the verifier does not model yet, such as floating-point `**`. It is not proved, and it stays a runtime check. |
 
 A check that fails to prove is not always a bug: the verifier may lack a
 fact that holds. Add it as a `requires` on the function, an `invariant` on
@@ -23367,6 +23421,12 @@ edit solves only what the edit touched. The summary line says how many
 functions the cache answered. A check the solver gave up on is never
 cached.
 
+In VS Code, the Aura extension runs `aura verify` each time an Aura file
+opens or is saved. Each check it cannot prove shows as a diagnostic at the
+check, with the counterexample, and each line whose checks are all proved
+ends with a `✓ proved` hint. The results show until the file is edited
+again. Set `aura.verifyOnSave` to `false` to turn this off.
+
 ## What It Models
 
 The verifier reasons about values exactly, as mathematical integers and
@@ -23374,21 +23434,51 @@ booleans, with each integer type's range as a check:
 
 - integers of every width, `bool`, and `None`
 - lists, with their lengths, and their elements when those are integers,
-  `bool`, or tuples and classes of modeled values; the length of any other
-  list
+  `bool`, `str`, or tuples and classes of modeled values; the length of any
+  other list
+- `float32` and `float64` as IEEE-754 values, rounding each `+`, `-`, `*`,
+  `/`, and `sqrt` to nearest, ties to even, with NaN, infinities, and signed
+  zeros; comparisons, `abs`, `to_float`, and casts between floats and
+  integers
+- `str`, as a sequence of characters: literals, `+`, `==`, `<` and the other
+  comparisons, `len`, `in`, `contains`, `starts_with`, and `ends_with`
+- `dict` and `set` with integer or `str` keys: which keys they hold, their
+  length, and a `dict`'s values when those are integers, `bool`, or `str`;
+  literals, `d[k]`, `d[k] = v`, `in`, `len`, `is_empty`, `clear`, `keys`,
+  `values`, and `items` of a `dict`, and `add`, `remove`, `discard`, and
+  `clear` of a `set`, with `==` of whole collections
 - tuples, classes, enums, and unions such as `int64 | None`, field by field
 - `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
   element reads and writes, and `copy`
 - `spec def` helpers, `old`, and `result` in contracts, and `ghost` locals
+- parameters of a callable alias with a contract
+  ([Callable Contracts](/manual/contracts#callable-contracts)): calls
+  through them prove its `requires` and assume its `ensures`, and a named
+  function passed as one is proved to fit it
+- `extern "C"` functions with a trusted contract: an indented block of
+  `requires` and `ensures` after the signature. Each call proves the
+  `requires`, and the result and `mut` arguments have the `ensures`
+- task starts: `group.start(work, n)` proves `work`'s `requires` on the
+  arguments the child receives, and the value of `Ready` from
+  `task.result()`, `poll()`, or `result_or(...)` has `work`'s `ensures`.
+  Each task's function is verified like any other
+- calls through a function value that names one function, such as
+  `g = inc` then `g(5)`: the call proves `inc`'s `requires` and assumes its
+  `ensures`
 - quantifiers: `forall(x in xs, condition)`, `exists(...)`, and
   `all([... for ...])` or `any(...)`, with any number of `for` clauses, each
-  over a `range`, a modeled list, or `enumerate` or `zip` of modeled lists,
+  over a `range`, a modeled list, a `set`, the `keys()` of a `dict`, or
+  `enumerate` or `zip` of modeled lists,
   with tuple targets and `if` filters, nested, in any contract, `assert`, or
   loop `invariant`
 
-Anything else is a value the verifier knows nothing about: a `str`, a
-`dict`, a `set`, a float, the result of most library calls, and what a call
-through a function value returns. A check that depends on one of them can
+Anything else is a value the verifier knows nothing about: a `dict` or
+`set` of other keys, the result of float `//`, `%`, and `**`, the result of most library calls, such as
+`str.split` or `dict.get`, and what a call returns through a function value the verifier cannot
+follow, such as one passed as an argument, stored in a collection, or
+chosen on different paths. Such a value's `requires` is reported as
+`AU5104` where it leaves the function, and stays checked when it is
+called. A check that depends on one of them can
 still be proved when the contract around it says enough.
 
 A loop that builds a list proves what it builds with a quantified
@@ -23414,8 +23504,25 @@ A `for` loop over a `range(...)` call can say the same with less: its
 invariants also hold when the range runs out, with the target at the end,
 so `len(out) == i` gives `len(out) == n` after `for i in range(n)`.
 
-A quantifier over a `str`, a `dict`, a `set`, or a list of other elements is
-reported as `AU5104`. `str`, `dict`, and `set` models are planned. See the
+A dictionary read proves its key is there from what the code and contracts
+say about it:
+
+```aura
+def price(prices: dict[str, int64], item: str) -> int64:
+    requires item in prices
+    requires all([prices[k] >= 0 for k in prices.keys()])
+    ensures result >= 0
+    return prices[item]
+```
+
+A float contract is about IEEE-754 values, so `x == x` fails for NaN, and a
+contract that needs `x / y` to be a number says so, as `requires y > 0.0`
+does about the divisor. Proofs about float division and square roots can
+take the solver longer than proofs about integers; one it cannot finish in
+time is reported as `AU5102`.
+
+A quantifier over a `str`, or over a list of other elements, is reported as
+`AU5104`. See the
 [verification design](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/23-verification-design-checkpoint.md).
 
 ## Trust
@@ -23423,19 +23530,41 @@ reported as `AU5104`. `str`, `dict`, and `set` models are planned. See the
 A check counts as proved only when the solver answers that no input breaks
 it. `aura verify` itself removes nothing: every check stays in the program.
 
-`aura build --remove-proved-checks` builds a native binary without the list
-bounds checks of element reads and element borrows (`view x = xs[i]`) that
-the verifier proves can never fail, and prints how many it removed. It runs
-the verifier first, so it needs a solver, and it uses the proof cache. A read
-is left unchecked only when its index is proved to be in range and not
-negative on every path that reaches it, since an unchecked read does not
-count from the end of the list. Every other check stays, and a `--debug`
-build keeps every check.
+`aura build --remove-proved-checks` builds a native binary without the
+checks that the verifier proves can never fail, and prints how many of each
+kind it removed:
+
+- the list bounds checks of element reads and element borrows
+  (`view x = xs[i]`), when the index is proved to be in range and not
+  negative, since an unchecked read does not count from the end of the list
+- the overflow and zero-divisor checks of integer `+`, `-`, `*`, `//`, `%`,
+  `/`, and negation; the native backend also tells LLVM that such a result
+  does not wrap, which lets it optimize the arithmetic around it
+- `assert`s, and the `ensures`, loop `invariant`, and `decreases` checks
+
+A check goes only when it is proved on every path that reaches it. A
+function's `requires` stays checked on entry, since a caller the verifier
+does not see may break it. The flag runs the verifier first, so it needs a
+solver, and it uses the proof cache. A `--debug` build keeps every check.
 
 Removing a check moves the verifier and the solver into what the program
-trusts: a wrong proof would turn a trap into an out-of-bounds read. So the
+trusts: a wrong proof would turn a trap into an out-of-bounds read, a
+wrapped integer, or a broken contract. So the
 flag is off by default for now. It becomes the default for release builds
 once differential testing of such builds against the interpreter covers it.
+
+A trusted contract on an `extern "C"` function is the other thing a proof
+relies on without checking. The verifier cannot read C, so it takes the
+`ensures` as given:
+
+```aura fragment
+extern "C" def clamp_index(i: int64, n: int64) -> int64:
+    requires n > 0
+    ensures 0 <= result and result < n
+```
+
+A wrong `ensures` there makes proofs that rely on it wrong too. Keep such a
+contract to what the C function's own documentation promises.
 
 ## Source: docs/book/index.md
 
@@ -38698,12 +38827,15 @@ A proof doesn't remove anything by default. Every contract and every bounds
 check stays in the program, which is why a `requires` that the verifier
 couldn't prove still stops a bad call with a clear diagnostic. When you want
 the proofs to pay for themselves, `aura build --remove-proved-checks` builds
-a native binary without the list bounds checks the verifier proves can never
-fail, and keeps every other check.
+a native binary without the bounds, overflow, divisor, and `assert` checks
+the verifier proves can never fail, and keeps every other check.
 
-The verifier doesn't model everything yet. Floats, strings, dictionaries,
-and sets are outside what it reads today, and a check that depends on them
-is reported as `AU5104` and stays a run-time check. Quantifiers are modeled:
+The verifier reads strings, dictionaries, and sets too, so it proves that
+a `prices[item]` read finds its key when a `requires item in prices` says
+so. Floats are IEEE-754 values, so a contract over them means what the
+hardware computes, NaN included. It doesn't model everything yet: most
+library calls are outside what it reads today, and a check that depends on them is reported
+as `AU5104` and stays a run-time check. Quantifiers are modeled:
 a contract such as `requires forall(p in prices, 0 <= p)` is proved at every
 call and assumed inside the function. The [verification manual page](/manual/verification)
 lists exactly what is modeled.

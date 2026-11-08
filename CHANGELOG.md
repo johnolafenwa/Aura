@@ -7,6 +7,44 @@ in this file.
 
 ## Unreleased
 
+- A type alias of a callable type may end with `:` and a block of
+  `requires` and `ensures` clauses. A parameter of that type has the
+  contract: `aura verify` proves the `requires` at each call through it and
+  assumes the `ensures`, and proves that a named function passed as one
+  fits the contract. Calls through adapted callables (`Alias(function)`)
+  are followed too.
+- An `extern "C"` function may end its signature with `:` and an indented
+  block of `requires` and `ensures` clauses: a trusted contract. `aura
+  verify` proves the `requires` at each call and assumes the `ensures`
+  after it; the program checks neither.
+- `aura verify` proves the `requires` of a task's target where the task
+  starts, and gives the task's result the target's `ensures` when
+  `result`, `poll`, or `result_or` reads it.
+- `aura verify` follows function values that name one function: a call
+  through `g = inc` proves `inc`'s `requires` and assumes its `ensures`. A
+  function value with a `requires` that is passed on, stored, or chosen on
+  different paths is still reported where the verifier stops following it.
+- `aura verify` models `float32` and `float64` as IEEE-754 values, with
+  rounding, NaN, infinities, and signed zeros. It proves float division by
+  zero cannot happen, that `as` casts between floats and integers are exact
+  or in range, and float contracts and assertions. A solver answer stopped
+  at the time limit is reported as undecided instead of an error.
+- `aura verify` models `str`, `dict`, and `set`. Strings are sequences of
+  characters with `+`, comparisons, `len`, `in`, `contains`, `starts_with`,
+  and `ends_with`; dictionaries and sets with integer or `str` keys track
+  which keys they hold, their length, and a dictionary's values. A new
+  `key present` check proves each `d[k]` read and `set.remove` finds what
+  it looks for, and quantifiers range over a `set` or a dictionary's
+  `keys()`. Lists of `str` are modeled element by element.
+- The VS Code extension shows proof results inline: on open and save it
+  runs `aura verify`, shows each check it cannot prove as a diagnostic
+  with the counterexample, and ends each line whose checks are all proved
+  with a `✓ proved` hint. The `aura.verifyOnSave` setting turns it off.
+- `aura build --remove-proved-checks` also removes the integer overflow and
+  zero-divisor checks, and the `assert`, `ensures`, loop `invariant`, and
+  `decreases` checks, that `aura verify` proves can never fail, and tells
+  LLVM that proved integer arithmetic does not wrap. It reports how many
+  checks of each kind it removed. A function's `requires` stays checked.
 - `ghost name = value` declares a local only the verifier reads. The program
   never computes it, and an `assert` or loop clause that reads one is
   proved by `aura verify` and not checked when the program runs. Ghost

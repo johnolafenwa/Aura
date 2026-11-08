@@ -158,6 +158,11 @@
           "scope": "machine",
           "markdownDescription": "Full path to the `aura` executable the language server runs. Leave empty to use `aura` on `PATH`, then `~/.local/bin`, `~/.cargo/bin`, `/opt/homebrew/bin`, and `/usr/local/bin`."
         },
+        "aura.verifyOnSave": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Run `aura verify` when an Aura file opens or is saved, and show each check it cannot prove as a diagnostic and each line whose checks it proves with a `✓` hint. Needs an SMT solver (`z3` or `cvc5`) on `PATH`; without one nothing is shown."
+        },
         "aura.lldbDapPath": {
           "type": "string",
           "default": "",

@@ -11,7 +11,10 @@
 
 use std::collections::BTreeMap;
 
-use super::exec::{conjoin, not, Exec, Goal, IntTy, State, Val};
+use super::exec::{
+    conjoin, key_sort, not, scalar_val, smt_string, structural_eq, Exec, FloatTy, Goal, IntTy,
+    State, Val,
+};
 use super::ObligationKind;
 use crate::ast::{
     BinaryOp, BindingTarget, CompareOp, ComprehensionOutput, ContractClause, ContractKind, Expr,
@@ -244,6 +247,97 @@ impl Exec<'_> {
         self.assume_record_invariants(state, &returned);
     }
 
+    /// A named function passed as a callable alias with a contract meets
+    /// it: on any arguments the alias's `requires` allows, the function's
+    /// `requires` holds, and its `ensures` gives the alias's.
+    pub(super) fn prove_callable_refinement(&mut self, state: &State, function: &str, alias: &str) {
+        let span = self.span;
+        let pc = state.pc.clone();
+        let (Some(decl), Some(info)) = (self.cx.decl(function), self.cx.alias_contract(alias))
+        else {
+            return;
+        };
+        let display = public_name(function);
+        let goals = (|| -> Result<(String, String), String> {
+            if decl.params.len() != info.decl.params.len() {
+                return Err(format!("`{display}` takes a different number of arguments"));
+            }
+            let mut alias_env = Env::new();
+            let mut function_env = Env::new();
+            for ((alias_param, ty), param) in info
+                .decl
+                .params
+                .iter()
+                .zip(&info.signature.params)
+                .zip(&decl.params)
+            {
+                let value = self.fresh(ty, &alias_param.name);
+                alias_env.insert(alias_param.name.clone(), value.clone());
+                function_env.insert(param.name.clone(), value);
+            }
+            let result = self.fresh(&info.signature.return_type, "result");
+            let terms = |clauses: &[ContractClause],
+                         kind: ContractKind,
+                         env: &Env,
+                         exec: &mut Self|
+             -> Result<String, String> {
+                let mut parts = Vec::new();
+                for clause in clauses.iter().filter(|clause| clause.kind == kind) {
+                    if !clause.olds.is_empty() {
+                        return Err("`old` in a callable contract is not modeled yet".into());
+                    }
+                    let mut env = env.clone();
+                    env.insert("result".to_string(), result.clone());
+                    let mut wd = Vec::new();
+                    let Val::Bool(term) = exec.spec(&clause.condition, &env, &mut wd, 0)? else {
+                        return Err("a clause is not a modeled `bool`".into());
+                    };
+                    parts.extend(wd);
+                    parts.push(term);
+                }
+                Ok(conjoin(&parts))
+            };
+            let alias_requires = terms(
+                &info.decl.contracts,
+                ContractKind::Requires,
+                &alias_env,
+                self,
+            )?;
+            let function_requires =
+                terms(&decl.contracts, ContractKind::Requires, &function_env, self)?;
+            let function_ensures =
+                terms(&decl.contracts, ContractKind::Ensures, &function_env, self)?;
+            let alias_ensures = terms(
+                &info.decl.contracts,
+                ContractKind::Ensures,
+                &alias_env,
+                self,
+            )?;
+            Ok((
+                format!("(=> {alias_requires} {function_requires})"),
+                format!("(=> (and {alias_requires} {function_ensures}) {alias_ensures})"),
+            ))
+        })();
+        let (accepts, keeps) = match goals {
+            Ok((accepts, keeps)) => (Goal::Holds(accepts), Goal::Holds(keeps)),
+            Err(reason) => (Goal::Unsupported(reason.clone()), Goal::Unsupported(reason)),
+        };
+        self.oblige(
+            ObligationKind::Requires,
+            span,
+            format!("`{display}` accepts every call the contract of `{alias}` allows"),
+            &pc,
+            accepts,
+        );
+        self.oblige(
+            ObligationKind::Ensures,
+            span,
+            format!("`{display}` keeps the `ensures` of `{alias}`"),
+            &pc,
+            keeps,
+        );
+    }
+
     /// When an implementation of a trait method states its own `requires`,
     /// a call through the trait proves only the trait's: each of the
     /// implementation's must follow from them.
@@ -394,6 +488,10 @@ impl Exec<'_> {
         match &expr.kind {
             ExprKind::Int(value) => Ok(Val::Int(value.to_string(), IntTy::INT64)),
             ExprKind::Bool(value) => Ok(Val::Bool(value.to_string())),
+            ExprKind::Float(value) => Ok(Val::Float(FloatTy::literal(*value), FloatTy::F64)),
+            ExprKind::String(text) => smt_string(text)
+                .map(Val::Str)
+                .ok_or("this string literal is not modeled yet".to_string()),
             ExprKind::Name(name) => env
                 .get(name)
                 .cloned()
@@ -403,6 +501,9 @@ impl Exec<'_> {
                 let value = self.spec(inner, env, wd, depth)?;
                 match (op, value) {
                     (UnaryOp::Not, Val::Bool(term)) => Ok(Val::Bool(not(&term))),
+                    (UnaryOp::Neg, Val::Float(term, float)) => {
+                        Ok(Val::Float(format!("(fp.neg {term})"), float))
+                    }
                     (UnaryOp::Neg, Val::Int(term, ty)) => {
                         let result = format!("(- {term})");
                         wd.push(ty.contains(&result));
@@ -427,13 +528,31 @@ impl Exec<'_> {
                         CompareOp::Greater => BinaryOp::Greater,
                         CompareOp::GreaterEq => BinaryOp::GreaterEq,
                         CompareOp::In | CompareOp::NotIn => {
-                            return Err("membership is not modeled in contracts yet".into())
+                            let held = self.membership(&previous, &next)?;
+                            parts.push(if link.op == CompareOp::In {
+                                held
+                            } else {
+                                not(&held)
+                            });
+                            previous = next;
+                            continue;
                         }
                     };
                     parts.push(compare(op, &previous, &next)?);
                     previous = next;
                 }
                 Ok(Val::Bool(conjoin(&parts)))
+            }
+            ExprKind::Membership {
+                value,
+                container,
+                negated,
+                ..
+            } => {
+                let item = self.spec(value, env, wd, depth)?;
+                let collection = self.spec(container, env, wd, depth)?;
+                let held = self.membership(&item, &collection)?;
+                Ok(Val::Bool(if *negated { not(&held) } else { held }))
             }
             ExprKind::Conditional {
                 then_expr,
@@ -455,6 +574,20 @@ impl Exec<'_> {
                     }
                     (Val::Bool(a), Val::Bool(b)) => {
                         Ok(Val::Bool(format!("(ite {condition} {a} {b})")))
+                    }
+                    (Val::Str(a), Val::Str(b)) => {
+                        Ok(Val::Str(format!("(ite {condition} {a} {b})")))
+                    }
+                    (Val::Float(a, aty), Val::Float(b, bty)) => {
+                        let float = wider_of(aty, bty);
+                        Ok(Val::Float(
+                            format!(
+                                "(ite {condition} {} {})",
+                                float.convert(&a, aty),
+                                float.convert(&b, bty)
+                            ),
+                            float,
+                        ))
                     }
                     _ => Err("a conditional of this type is not modeled yet".into()),
                 }
@@ -488,6 +621,29 @@ impl Exec<'_> {
                             value => Ok(value),
                         }
                     }
+                    Val::Map {
+                        keys,
+                        values,
+                        value,
+                        ..
+                    } => {
+                        let key = match self.spec(index, env, wd, depth)? {
+                            Val::Int(term, _) | Val::Str(term) => term,
+                            _ => return Err("a dict key is not a modeled value".into()),
+                        };
+                        wd.push(format!("(select {keys} {key})"));
+                        let Some(values) = values else {
+                            return Err("values of this type are not modeled yet".into());
+                        };
+                        let read = scalar_val(format!("(select {values} {key})"), &value);
+                        // Under a quantifier the key names a bound
+                        // variable, which no declared constant may use.
+                        Ok(if key.contains("!q") {
+                            read
+                        } else {
+                            self.name_scalars(read, "value")
+                        })
+                    }
                     Val::Tuple(items) => match &index.kind {
                         ExprKind::Int(position) => items
                             .get(*position as usize)
@@ -510,6 +666,28 @@ impl Exec<'_> {
                 if let ExprKind::Member { object, field } = &callee.kind {
                     // A `spec def` method of the receiver's class.
                     let receiver = self.spec(object, env, wd, depth)?;
+                    if let (Val::List { .. }, "contains", [arg]) =
+                        (&receiver, field.as_str(), args.as_slice())
+                    {
+                        let item = self.spec(&arg.value, env, wd, depth)?;
+                        return self.membership(&item, &receiver).map(Val::Bool);
+                    }
+                    if let Val::Str(text) = &receiver {
+                        let [arg] = args.as_slice() else {
+                            return Err(format!("`str.{field}` is not modeled in contracts yet"));
+                        };
+                        let Val::Str(other) = self.spec(&arg.value, env, wd, depth)? else {
+                            return Err(format!("`str.{field}` is not modeled in contracts yet"));
+                        };
+                        return match field.as_str() {
+                            "starts_with" => {
+                                Ok(Val::Bool(format!("(str.prefixof {other} {text})")))
+                            }
+                            "ends_with" => Ok(Val::Bool(format!("(str.suffixof {other} {text})"))),
+                            "contains" => Ok(Val::Bool(format!("(str.contains {text} {other})"))),
+                            _ => Err(format!("`str.{field}` is not modeled in contracts yet")),
+                        };
+                    }
                     let Val::Record(class, _) = &receiver else {
                         return Err(format!(
                             "`.{field}(...)` on this value is not modeled in contracts yet"
@@ -543,7 +721,16 @@ impl Exec<'_> {
                     values.push(self.spec(&arg.value, env, wd, depth)?);
                 }
                 match (name.as_str(), values.as_slice()) {
-                    ("len", [Val::List { len, .. }]) => Ok(Val::Int(len.clone(), IntTy::INT64)),
+                    (
+                        "len",
+                        [Val::List { len, .. } | Val::Map { len, .. } | Val::Set { len, .. }],
+                    ) => Ok(Val::Int(len.clone(), IntTy::INT64)),
+                    ("len", [Val::Str(text)]) => {
+                        Ok(Val::Int(format!("(str.len {text})"), IntTy::INT64))
+                    }
+                    ("abs", [Val::Float(term, float)]) => {
+                        Ok(Val::Float(format!("(fp.abs {term})"), *float))
+                    }
                     ("abs", [Val::Int(term, ty)]) => {
                         let result = format!("(ite (< {term} 0) (- {term}) {term})");
                         wd.push(ty.contains(&result));
@@ -562,6 +749,39 @@ impl Exec<'_> {
                 }
             }
             _ => Err("this expression is not modeled in contracts yet".into()),
+        }
+    }
+
+    /// Whether `item` is in `collection`: a key of a `dict`, an element of
+    /// a `set` or a list, or a part of a `str`.
+    fn membership(&mut self, item: &Val, collection: &Val) -> Result<String, String> {
+        match (item, collection) {
+            (Val::Int(key, _) | Val::Str(key), Val::Map { keys, key: ty, .. })
+                if key_sort(ty).is_some() =>
+            {
+                Ok(format!("(select {keys} {key})"))
+            }
+            (Val::Int(key, _) | Val::Str(key), Val::Set { members, .. }) => {
+                Ok(format!("(select {members} {key})"))
+            }
+            (Val::Str(part), Val::Str(text)) => Ok(format!("(str.contains {text} {part})")),
+            (
+                _,
+                Val::List {
+                    len,
+                    data: Some(data),
+                    elem,
+                },
+            ) => {
+                let k = self.bound_name();
+                let element = self.store_select(data, elem, &k);
+                let equal = structural_eq(item, &element)
+                    .ok_or("membership of this value is not modeled yet".to_string())?;
+                Ok(format!(
+                    "(exists (({k} Int)) (and (<= 0 {k}) (< {k} {len}) {equal}))"
+                ))
+            }
+            _ => Err("membership in this collection is not modeled in contracts yet".into()),
         }
     }
 
@@ -643,6 +863,31 @@ impl Exec<'_> {
             | BinaryOp::LessEq
             | BinaryOp::Greater
             | BinaryOp::GreaterEq => compare(op, &lhs, &rhs).map(Val::Bool),
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
+                if matches!((&lhs, &rhs), (Val::Float(..), Val::Float(..))) =>
+            {
+                let (Val::Float(a, aty), Val::Float(b, bty)) = (&lhs, &rhs) else {
+                    unreachable!("matched above")
+                };
+                let float = wider_of(*aty, *bty);
+                let (a, b) = (float.convert(a, *aty), float.convert(b, *bty));
+                let symbol = match op {
+                    BinaryOp::Add => "fp.add",
+                    BinaryOp::Sub => "fp.sub",
+                    BinaryOp::Mul => "fp.mul",
+                    _ => {
+                        wd.push(format!("(not (fp.isZero {b}))"));
+                        "fp.div"
+                    }
+                };
+                Ok(Val::Float(format!("({symbol} RNE {a} {b})"), float))
+            }
+            BinaryOp::Add if matches!((&lhs, &rhs), (Val::Str(_), Val::Str(_))) => {
+                let (Val::Str(a), Val::Str(b)) = (&lhs, &rhs) else {
+                    unreachable!("matched above")
+                };
+                Ok(Val::Str(format!("(str.++ {a} {b})")))
+            }
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::FloorDiv | BinaryOp::Mod => {
                 let (Val::Int(a, aty), Val::Int(b, bty)) = (&lhs, &rhs) else {
                     return Err("arithmetic on these operands is not modeled yet".into());
@@ -697,10 +942,10 @@ impl Exec<'_> {
         for clause in clauses {
             let k = self.bound_name();
             let mut iterable_wd = Vec::new();
-            let (range, value) =
+            let (range, value, sort) =
                 self.quantified_values(&clause.iterable, &k, &inner, &mut iterable_wd, depth)?;
             push_quantified_wd(wd, &ks, &hypotheses, &iterable_wd);
-            ks.push(k);
+            ks.push(format!("({k} {sort})"));
             // An element of a list of integers lies in its type's range.
             hypotheses.push(range);
             int_ranges(&value, &mut hypotheses);
@@ -740,8 +985,14 @@ impl Exec<'_> {
         env: &Env,
         wd: &mut Vec<String>,
         depth: usize,
-    ) -> Result<(String, Val), String> {
+    ) -> Result<(String, Val, &'static str), String> {
         if let ExprKind::Call { callee, args } = &iterable.kind {
+            if let ExprKind::Member { object, field } = &callee.kind {
+                // `for k in d.keys()` ranges over the keys, as `for k in d`.
+                if field == "keys" && args.is_empty() {
+                    return self.quantified_list(object, k, env, wd, depth);
+                }
+            }
             let ExprKind::Name(callee) = &callee.kind else {
                 return self.quantified_list(iterable, k, env, wd, depth);
             };
@@ -764,17 +1015,22 @@ impl Exec<'_> {
                 return Ok((
                     format!("(and (<= {low} {k}) (< {k} {high}))"),
                     Val::Int(k.to_string(), IntTy::INT64),
+                    "Int",
                 ));
             }
             if callee == "zip" && args.len() >= 2 && args.iter().all(|arg| arg.name.is_none()) {
                 let mut ranges = Vec::new();
                 let mut values = Vec::new();
                 for arg in args {
-                    let (range, value) = self.quantified_list(&arg.value, k, env, wd, depth)?;
+                    let (range, value, sort) =
+                        self.quantified_list(&arg.value, k, env, wd, depth)?;
+                    if sort != "Int" {
+                        return Err("`zip` over a `dict` or a `set` is not modeled yet".into());
+                    }
                     ranges.push(range);
                     values.push(value);
                 }
-                return Ok((conjoin(&ranges), Val::Tuple(values)));
+                return Ok((conjoin(&ranges), Val::Tuple(values), "Int"));
             }
             if callee == "enumerate" && (1..=2).contains(&args.len()) && args[0].name.is_none() {
                 let start = match args.get(1) {
@@ -787,7 +1043,11 @@ impl Exec<'_> {
                     Some(_) => return Err("this `enumerate` call is not modeled yet".into()),
                     None => "0".to_string(),
                 };
-                let (range, value) = self.quantified_list(&args[0].value, k, env, wd, depth)?;
+                let (range, value, sort) =
+                    self.quantified_list(&args[0].value, k, env, wd, depth)?;
+                if sort != "Int" {
+                    return Err("`enumerate` over a `dict` or a `set` is not modeled yet".into());
+                }
                 let position = if start == "0" {
                     k.to_string()
                 } else {
@@ -796,6 +1056,7 @@ impl Exec<'_> {
                 return Ok((
                     range,
                     Val::Tuple(vec![Val::Int(position, IntTy::INT64), value]),
+                    "Int",
                 ));
             }
         }
@@ -809,7 +1070,7 @@ impl Exec<'_> {
         env: &Env,
         wd: &mut Vec<String>,
         depth: usize,
-    ) -> Result<(String, Val), String> {
+    ) -> Result<(String, Val, &'static str), String> {
         match self.spec(iterable, env, wd, depth)? {
             Val::List {
                 len,
@@ -817,7 +1078,22 @@ impl Exec<'_> {
                 elem,
             } => {
                 let value = self.store_select(&data, &elem, k);
-                Ok((format!("(and (<= 0 {k}) (< {k} {len}))"), value))
+                Ok((format!("(and (<= 0 {k}) (< {k} {len}))"), value, "Int"))
+            }
+            // A `for` over a `dict` takes its keys, and over a `set` its
+            // elements: the bound variable ranges over what it holds.
+            Val::Map { keys, key: ty, .. }
+            | Val::Set {
+                members: keys,
+                elem: ty,
+                ..
+            } => {
+                let sort = key_sort(&ty).expect("a modeled collection has a modeled key");
+                Ok((
+                    format!("(select {keys} {k})"),
+                    scalar_val(k.to_string(), &ty),
+                    sort,
+                ))
             }
             _ => Err("quantifiers over this collection are not modeled yet".into()),
         }
@@ -848,10 +1124,7 @@ fn bind_target(target: &BindingTarget, value: Val, env: &mut Env) -> Result<(), 
 
 /// The SMT binder list of the bound variables `ks`.
 fn binders(ks: &[String]) -> String {
-    ks.iter()
-        .map(|k| format!("({k} Int)"))
-        .collect::<Vec<_>>()
-        .join(" ")
+    ks.join(" ")
 }
 
 /// Records that `terms` hold at every position `ks` where `hypotheses` do.
@@ -899,6 +1172,27 @@ fn compare(op: BinaryOp, lhs: &Val, rhs: &Val) -> Result<String, String> {
     let term = match (lhs, rhs) {
         (Val::Int(a, _), Val::Int(b, _)) => format!("({symbol} {a} {b})"),
         (Val::Bool(a), Val::Bool(b)) if symbol == "=" => format!("(= {a} {b})"),
+        (Val::Float(a, aty), Val::Float(b, bty)) => {
+            let float = wider_of(*aty, *bty);
+            let (a, b) = (float.convert(a, *aty), float.convert(b, *bty));
+            let symbol = match op {
+                BinaryOp::Less => "fp.lt",
+                BinaryOp::LessEq => "fp.leq",
+                BinaryOp::Greater => "fp.gt",
+                BinaryOp::GreaterEq => "fp.geq",
+                _ => "fp.eq",
+            };
+            format!("({symbol} {a} {b})")
+        }
+        (Val::Str(a), Val::Str(b)) => match op {
+            BinaryOp::Less => format!("(str.< {a} {b})"),
+            BinaryOp::LessEq => format!("(str.<= {a} {b})"),
+            BinaryOp::Greater => format!("(str.< {b} {a})"),
+            BinaryOp::GreaterEq => format!("(str.<= {b} {a})"),
+            _ => format!("(= {a} {b})"),
+        },
+        (Val::Map { .. } | Val::Set { .. }, _) if symbol == "=" => structural_eq(lhs, rhs)
+            .ok_or("comparing these values is not modeled in contracts yet".to_string())?,
         _ => return Err("comparing these values is not modeled in contracts yet".into()),
     };
     Ok(if op == BinaryOp::NotEq {
@@ -906,6 +1200,16 @@ fn compare(op: BinaryOp, lhs: &Val, rhs: &Val) -> Result<String, String> {
     } else {
         term
     })
+}
+
+/// The type two float operands meet at: a `float64` literal beside a
+/// `float32` rounds to it.
+fn wider_of(a: FloatTy, b: FloatTy) -> FloatTy {
+    if a == FloatTy::F32 || b == FloatTy::F32 {
+        FloatTy::F32
+    } else {
+        FloatTy::F64
+    }
 }
 
 /// A MIR function name without the type arguments of a specialized copy.
@@ -963,6 +1267,9 @@ impl<'a> Exec<'a> {
             let goal = conjoin(&wd);
             let pc = state.pc.clone();
             self.oblige(obligation, *span, text, &pc, Goal::Holds(goal));
+            if self.prove_sites {
+                self.copy_as_site((fail, super::exec::CHECK_FAILURE_SITE));
+            }
         }
         let pc = state.pc.clone();
         self.assume(&pc, term);

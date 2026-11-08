@@ -6,7 +6,7 @@ use super::units::{Partition, Placement};
 use super::{host_target_machine, target_machine, LlvmModule};
 use crate::native_backend::{
     types, AliasClass, CallConv, DataDescription, DefineError, FuncHandle, FunctionBackend, IntCC,
-    Linkage, MemFlags, ModuleBackend, ScalarType, Signature, TrapCode, Var,
+    Linkage, MemFlags, ModuleBackend, NoWrapOp, ScalarType, Signature, TrapCode, Var,
 };
 
 fn signature(call_conv: CallConv, params: &[ScalarType], returns: &[ScalarType]) -> Signature {
@@ -1144,4 +1144,38 @@ fn unoptimized_unit_objects_keep_every_function() {
             .count(),
         1
     );
+}
+
+#[test]
+fn proved_integer_operations_tell_llvm_they_do_not_wrap() {
+    let mut module = module();
+    let binary = signature(CallConv::C, &[types::I64, types::I64], &[types::I64]);
+    define(
+        &mut module,
+        "no_wrap",
+        Linkage::Export,
+        &binary,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            let (a, b) = (
+                builder.block_params(entry)[0],
+                builder.block_params(entry)[1],
+            );
+            let mut value = a;
+            for op in [NoWrapOp::Add, NoWrapOp::Sub, NoWrapOp::Mul] {
+                for signed in [true, false] {
+                    value = builder.no_wrap(op, signed, value, b);
+                }
+            }
+            builder.return_(&[value]);
+        },
+    );
+    let ir = ir(&module);
+    for op in ["add", "sub", "mul"] {
+        for flag in ["nsw", "nuw"] {
+            assert!(ir.contains(&format!("{op} {flag} i64")), "{ir}");
+        }
+    }
 }

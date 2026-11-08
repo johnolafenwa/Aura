@@ -388,15 +388,16 @@ pub fn verify_path_with_source(
 }
 
 /// Lowers `path` for a native build as [`lower_path_to_mir`] does, or with
-/// source locations for a `debug` build, and leaves unchecked each element
-/// read and loan `aura verify` proves in range. Returns the module and how
-/// many accesses lost their bounds check.
+/// source locations for a `debug` build, and removes each check `aura
+/// verify` proves cannot fail: element bounds, integer overflow and
+/// divisors, and `assert`s and clause checks. Returns the module and how
+/// many checks of each kind it removed.
 pub fn lower_path_to_mir_with_proved_checks(
     path: &Path,
     source: Option<&str>,
     debug: bool,
     options: &verify::Options,
-) -> Result<(MirModule, usize)> {
+) -> Result<(MirModule, mir::ProvedChecks)> {
     let program = match source {
         Some(source) => check_path_with_source(path, source)?,
         None => check_path(path)?,

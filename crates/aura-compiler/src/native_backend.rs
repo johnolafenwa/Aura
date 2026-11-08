@@ -448,6 +448,10 @@ pub(crate) trait FunctionBackend {
     fn iadd_imm(&mut self, value: Val, imm: i64) -> Val;
     fn isub(&mut self, left: Val, right: Val) -> Val;
     fn imul(&mut self, left: Val, right: Val) -> Val;
+    /// `left op right` for `+`, `-`, or `*` on integers that a proof shows
+    /// does not wrap, as a `signed` or unsigned value: the optimizer may
+    /// rely on it.
+    fn no_wrap(&mut self, op: NoWrapOp, signed: bool, left: Val, right: Val) -> Val;
     fn imul_imm(&mut self, value: Val, imm: i64) -> Val;
     fn ineg(&mut self, value: Val) -> Val;
     fn sdiv(&mut self, left: Val, right: Val) -> Val;
@@ -503,4 +507,12 @@ pub(crate) trait FunctionBackend {
     /// type `ty`. The truncated value must fit the type.
     fn fcvt_to_sint(&mut self, ty: ScalarType, value: Val) -> Val;
     fn fcvt_to_uint(&mut self, ty: ScalarType, value: Val) -> Val;
+}
+
+/// An integer operation [`FunctionBackend::no_wrap`] builds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NoWrapOp {
+    Add,
+    Sub,
+    Mul,
 }

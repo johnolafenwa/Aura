@@ -204,7 +204,7 @@ fn ffi_keywords_and_reserved_syntax_have_stable_frontend_diagnostics() {
         ),
         (
             "extern \"C\" def getpid() -> int32:\n    return 1\n",
-            "`extern` function declarations have no Aura body; remove `:` and the indented block",
+            "an `extern` function has no Aura body; its indented block holds only `requires` and `ensures` clauses",
         ),
         (
             "extern \"C\" def flush()\n",

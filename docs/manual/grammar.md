@@ -294,14 +294,19 @@ item
     | impl-declaration ;
 
 type-alias-declaration
-    = "type", identifier, [ bounded-type-parameters ], "=", type, NEWLINE ;
+    = "type", identifier, [ bounded-type-parameters ], "=", type,
+      ( NEWLINE | ":", NEWLINE, INDENT, contract-clause, { contract-clause }, DEDENT ) ;
 
 extern-function-declaration
     = "extern", STRING, "def", identifier,
-      "(", [ parameter-list ], ")", "->", type, NEWLINE ;
+      "(", [ parameter-list ], ")", "->", type,
+      ( NEWLINE | ":", NEWLINE, INDENT, contract-clause, { contract-clause }, DEDENT ) ;
 
 extern-opaque-declaration
     = "extern", STRING, "opaque", "class", identifier, NEWLINE ;
+
+contract-clause
+    = ( "requires" | "ensures" ), expression, NEWLINE ;
 ```
 
 Item declarations are module-level. They are not statements and cannot appear
@@ -315,7 +320,9 @@ own type parameters. Anywhere else, `type` is an ordinary identifier. Static
 checking rejects alias expansion cycles with `AU2012`.
 
 Parsing requires the extern ABI string to be exactly `"C"`. Extern
-declarations are bodyless and non-generic.
+declarations are bodyless and non-generic. An extern function's optional
+indented block holds only `requires` and `ensures` clauses, its trusted
+contract.
 [FFI v0](/manual/ffi) restricts their parameter modes and types.
 
 ## Type References And Type Parameters

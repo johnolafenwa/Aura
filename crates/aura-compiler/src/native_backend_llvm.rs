@@ -48,7 +48,7 @@ use super::{
     AliasClass, Blk, Call, CallConv, DataAddress, DataDescription, DataHandle, DataRef,
     DebugEncoding, DebugRecord, DebugVariable, DefineError, FloatCC, FuncHandle, FuncRef,
     FunctionBackend, FunctionBody, FunctionSource, Inst, IntCC, Linkage, MemFlags, ModuleBackend,
-    ScalarType, SigRef, Signature, Slot, TrapCode, Val, Var,
+    NoWrapOp, ScalarType, SigRef, Signature, Slot, TrapCode, Val, Var,
 };
 
 /// The pass pipeline every object runs. Step 9c measured `O1`, `O2`, and
@@ -561,6 +561,14 @@ enum BinaryOp {
     Iadd,
     Isub,
     Imul,
+    /// `+`, `-`, and `*` that do not wrap as signed (`Nsw`) or unsigned
+    /// (`Nuw`) values.
+    IaddNsw,
+    IaddNuw,
+    IsubNsw,
+    IsubNuw,
+    ImulNsw,
+    ImulNuw,
     Sdiv,
     Udiv,
     Srem,
@@ -1123,6 +1131,18 @@ impl FunctionBackend for LlvmFunction<'_> {
 
     fn imul_imm(&mut self, value: Val, imm: i64) -> Val {
         self.binary_imm(BinaryOp::Imul, value, imm)
+    }
+
+    fn no_wrap(&mut self, op: NoWrapOp, signed: bool, left: Val, right: Val) -> Val {
+        let op = match (op, signed) {
+            (NoWrapOp::Add, true) => BinaryOp::IaddNsw,
+            (NoWrapOp::Add, false) => BinaryOp::IaddNuw,
+            (NoWrapOp::Sub, true) => BinaryOp::IsubNsw,
+            (NoWrapOp::Sub, false) => BinaryOp::IsubNuw,
+            (NoWrapOp::Mul, true) => BinaryOp::ImulNsw,
+            (NoWrapOp::Mul, false) => BinaryOp::ImulNuw,
+        };
+        self.binary(op, left, right)
     }
 
     fn ineg(&mut self, value: Val) -> Val {
@@ -2738,6 +2758,12 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
             BinaryOp::Iadd => self.builder.build_int_add(left, right, ""),
             BinaryOp::Isub => self.builder.build_int_sub(left, right, ""),
             BinaryOp::Imul => self.builder.build_int_mul(left, right, ""),
+            BinaryOp::IaddNsw => self.builder.build_int_nsw_add(left, right, ""),
+            BinaryOp::IaddNuw => self.builder.build_int_nuw_add(left, right, ""),
+            BinaryOp::IsubNsw => self.builder.build_int_nsw_sub(left, right, ""),
+            BinaryOp::IsubNuw => self.builder.build_int_nuw_sub(left, right, ""),
+            BinaryOp::ImulNsw => self.builder.build_int_nsw_mul(left, right, ""),
+            BinaryOp::ImulNuw => self.builder.build_int_nuw_mul(left, right, ""),
             BinaryOp::Band => self.builder.build_and(left, right, ""),
             BinaryOp::Bor => self.builder.build_or(left, right, ""),
             BinaryOp::Bxor => self.builder.build_xor(left, right, ""),

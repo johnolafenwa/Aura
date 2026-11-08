@@ -194,6 +194,11 @@ impl Solver {
     pub fn check(&mut self) -> Result<SatResult, String> {
         let answer = self.exchange("(check-sat)")?;
         let answer = answer.trim();
+        // A query stopped at the time limit answers `unknown`, after an
+        // error that says so.
+        if answer.contains("canceled") && answer.ends_with("unknown") {
+            return Ok(SatResult::Unknown);
+        }
         if answer.contains("(error") {
             return Err(format!("the SMT solver refused a query: {answer}"));
         }
@@ -276,9 +281,14 @@ fn parse_sexpr_list(text: &str) -> Option<Vec<String>> {
     Some(items)
 }
 
-/// Renders a solver integer value such as `(- 5)` as `-5`.
+/// Renders a solver integer value such as `(- 5)` as `-5`, and a
+/// floating-point value such as `(fp #b0 #b01111111111 #x0000000000000)`
+/// as the float it stands for.
 pub fn render_int(value: &str) -> String {
     let value = value.trim();
+    if let Some(float) = render_float(value) {
+        return float;
+    }
     if let Some(inner) = value
         .strip_prefix("(-")
         .and_then(|rest| rest.strip_suffix(')'))
@@ -287,4 +297,46 @@ pub fn render_int(value: &str) -> String {
     } else {
         value.to_string()
     }
+}
+
+/// A solver `FloatingPoint` value as a float, when it is one.
+fn render_float(value: &str) -> Option<String> {
+    if let Some(special) = value.strip_prefix("(_ ") {
+        let name = special.split_whitespace().next()?;
+        return Some(
+            match name {
+                "+zero" => "0.0",
+                "-zero" => "-0.0",
+                "+oo" => "inf",
+                "-oo" => "-inf",
+                "NaN" => "nan",
+                _ => return None,
+            }
+            .to_string(),
+        );
+    }
+    let fields = parse_sexpr_list(value)?;
+    let [head, sign, exponent, significand] = fields.as_slice() else {
+        return None;
+    };
+    if head != "fp" {
+        return None;
+    }
+    let bits = |field: &str| -> Option<(u64, u32)> {
+        if let Some(binary) = field.strip_prefix("#b") {
+            Some((u64::from_str_radix(binary, 2).ok()?, binary.len() as u32))
+        } else {
+            let hex = field.strip_prefix("#x")?;
+            Some((u64::from_str_radix(hex, 16).ok()?, hex.len() as u32 * 4))
+        }
+    };
+    let (sign, _) = bits(sign)?;
+    let (exponent, exponent_width) = bits(exponent)?;
+    let (significand, significand_width) = bits(significand)?;
+    let rendered = match (exponent_width, significand_width) {
+        (11, 52) => f64::from_bits(sign << 63 | exponent << 52 | significand).to_string(),
+        (8, 23) => f32::from_bits((sign << 31 | exponent << 23 | significand) as u32).to_string(),
+        _ => return None,
+    };
+    Some(rendered)
 }

@@ -415,6 +415,45 @@ assigns its name without `ghost`, reports `AU2048`. As with an erased
 lemma call, a ghost `assert` that the verifier cannot prove keeps
 `aura build --remove-proved-checks` from removing any check.
 
+## Callable Contracts
+
+A type alias for a callable type can end with `:` and an indented block of
+`requires` and `ensures` clauses over the callable's named parameters and
+`result`. A parameter of that type has the contract: a call through it must
+meet the `requires`, and its result has the `ensures`.
+
+```aura
+type Step = def(n: int64) -> int64:
+    requires 0 <= n and n < 100
+    ensures result > n
+
+def inc(n: int64) -> int64:
+    requires n < 1000
+    ensures result == n + 1
+    return n + 1
+
+def apply_twice(f: Step, x: int64) -> int64:
+    requires 0 <= x and x < 50
+    ensures result > x
+    y = f(x)
+    if y < 100:
+        return f(y)
+    return y
+
+def main():
+    print(apply_twice(inc, 3))
+```
+
+Passing `inc` as a `Step` asks `aura verify` to prove that `inc` fits:
+every call `Step` allows meets `inc`'s `requires`, and `inc`'s `ensures`
+gives `Step`'s. A callable contract is for the verifier. The program checks
+it nowhere; each function still checks its own `requires` when it runs. A
+function value that is not a named function, such as a lambda, is reported
+as `AU5104` where it becomes a `Step`.
+
+The callable type names each parameter and takes none as `mut`, and the
+alias has no type parameters.
+
 ## Class Invariants
 
 A class can state what is true of every one of its objects, with
@@ -496,6 +535,8 @@ These forms report `AU2048`:
   body may have moved; `old(param)` reads it on entry instead
 - a parameter named `result` in a function with `ensures`
 - `lemma def` methods
+- a contract on a generic type alias, on a callable type with an unnamed
+  or `mut` parameter, or on an alias of a type that is not callable
 
 ## Diagnostics
 

@@ -3102,6 +3102,19 @@ impl<'a> FunctionChecker<'a> {
     }
 
     fn check_function(&self, function_info: &FunctionInfo) -> Result<()> {
+        self.check_function_with(function_info, false)
+    }
+
+    /// Checks only the contract of a bodyless declaration.
+    fn check_function_contracts(&self, function_info: &FunctionInfo) -> Result<()> {
+        self.check_function_with(function_info, true)
+    }
+
+    fn check_function_with(
+        &self,
+        function_info: &FunctionInfo,
+        contracts_only: bool,
+    ) -> Result<()> {
         let function = &function_info.decl;
         self.validate_view_return_contract(function)?;
         let type_param_scope = type_param_scope(&function.type_params);
@@ -3180,6 +3193,9 @@ impl<'a> FunctionChecker<'a> {
             return checker.check_lemma(function, &mut locals, &return_type);
         }
         checker.check_contracts(function, &locals, &return_type)?;
+        if contracts_only {
+            return Ok(());
+        }
         let flow = checker.check_block(&function.body, &mut locals, &return_type, 0, true)?;
         if return_type != Type::Unit && flow != BlockFlow::AlwaysReturns {
             return Err(Diagnostic::at(

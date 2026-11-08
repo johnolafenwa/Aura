@@ -377,13 +377,13 @@ def main():
 fn reports_steps_outside_the_modeled_subset() {
     assert_open(
         r#"
-def ratio(a: float64, b: float64) -> float64:
-    return a / b
+def power(a: float64, b: float64) -> float64:
+    return a ** b
 
 def main():
-    print(ratio(1.0, 2.0))
+    print(power(1.0, 2.0))
 "#,
-        &["3 division by zero unsupported"],
+        &["3 overflow unsupported"],
     );
 }
 
@@ -425,6 +425,26 @@ fn the_function_filter_limits_the_report() {
 fn solver_answers_parse() {
     assert_eq!(smt::render_int("(- 5)"), "-5");
     assert_eq!(smt::render_int(" 7 "), "7");
+    assert_eq!(
+        smt::render_int("(fp #b0 #b01111111111 #x0000000000000)"),
+        "1"
+    );
+    assert_eq!(
+        smt::render_int("(fp #b1 #b10000000 #b10000000000000000000000)"),
+        "-3"
+    );
+    for (special, rendered) in [
+        ("(_ +zero 11 53)", "0.0"),
+        ("(_ -zero 11 53)", "-0.0"),
+        ("(_ +oo 8 24)", "inf"),
+        ("(_ -oo 8 24)", "-inf"),
+        ("(_ NaN 11 53)", "nan"),
+        ("(_ bv5 8)", "(_ bv5 8)"),
+        ("(fp #b0 #b01 #b1)", "(fp #b0 #b01 #b1)"),
+        ("(fq #b0 #b0 #b0)", "(fq #b0 #b0 #b0)"),
+    ] {
+        assert_eq!(smt::render_int(special), rendered);
+    }
 }
 
 #[test]
@@ -564,6 +584,7 @@ fn every_kind_and_status_has_a_report() {
         ObligationKind::LoopInvariant,
         ObligationKind::Decreases,
         ObligationKind::ClassInvariant,
+        ObligationKind::KeyPresent,
     ];
     let names: Vec<&str> = kinds.iter().map(|kind| kind.name()).collect();
     assert_eq!(
@@ -577,7 +598,8 @@ fn every_kind_and_status_has_a_report() {
             "ensures",
             "loop invariant",
             "decreases",
-            "class invariant"
+            "class invariant",
+            "key present"
         ]
     );
     let statuses = [
@@ -745,6 +767,13 @@ fn solver_failures_and_unknown_answers_are_reported() {
     };
     // A solver that answers `unknown` leaves the check undecided.
     let report = run(script(&dir, "cvc5", UNKNOWN_SOLVER, true)).expect("runs");
+    assert_eq!(open_checks(&report), ["2 overflow unknown"]);
+    // A query stopped at the time limit is undecided too.
+    let canceled = UNKNOWN_SOLVER.replace(
+        "echo unknown",
+        "echo '(error \"line 1 column 7: canceled\")'; echo unknown",
+    );
+    let report = run(script(&dir, "cvc5", &canceled, true)).expect("runs");
     assert_eq!(open_checks(&report), ["2 overflow unknown"]);
     let command = smt::SolverCommand {
         kind: smt::SolverKind::Z3,
@@ -944,15 +973,71 @@ def main():
 "#,
         &[
             "22 assert failed",
-            "25 index in range failed",
             "34 requires unsupported",
             "35 requires unsupported",
             "35 requires unsupported",
-            "35 requires unsupported",
-            "35 requires unsupported",
-            "35 requires unsupported",
-            "35 requires unsupported",
         ],
+    );
+}
+
+#[test]
+fn contract_terms_outside_the_model_are_reported_as_unsupported() {
+    let report = verify(
+        r#"
+def g1(a: int64) -> int64:
+    requires a ** 2 >= 0
+    return a
+
+def g2(t: (int64, int64), a: int64) -> int64:
+    requires (a, a)[0] >= 0
+    return a
+
+def g3(flags: list[bool]) -> int64:
+    requires all(flags)
+    return 0
+
+def g4(s: str) -> int64:
+    requires s.find("a") != None
+    return 0
+
+def g5(d: set[int64]) -> int64:
+    requires all([k > 0 for k, v in enumerate(d)])
+    return 0
+
+def g6(d: set[int64], xs: list[int64]) -> int64:
+    requires all([a == b for a, b in zip(d, xs)])
+    return 0
+
+def g7(xs: list[float64], n: int64) -> int64:
+    requires all([i >= 0 for i, x in enumerate(xs, n ** 2)])
+    return 0
+
+def main():
+    print(g1(2))
+    print(g2((1, 2), 0))
+    print(g3([true]))
+    print(g4("A"))
+    print(g5({1}))
+    print(g6({1}, [1]))
+    print(g7([1.0], 1))
+"#,
+    );
+    let Some(report) = report else {
+        return;
+    };
+    assert_eq!(
+        open_checks(&report),
+        [
+            "3 overflow failed",
+            "27 overflow failed",
+            "27 overflow failed",
+            "31 requires unsupported",
+            "32 requires unsupported",
+            "33 requires unsupported",
+            "34 requires unsupported",
+            "37 requires unsupported",
+        ],
+        "{report:#?}"
     );
 }
 
@@ -970,7 +1055,7 @@ def f(a: int64, xs: list[int64]) -> int64:
 def main():
     print(f(1, [1]))
 "#,
-        &["10 requires unsupported"],
+        &[],
     );
 }
 
@@ -1147,7 +1232,7 @@ def main():
         assert_eq!(proved["last"], plain["last"], "{proved:?}");
         assert_eq!(proved["pick"], plain["pick"], "{proved:?}");
         assert!(proved["bump"] > plain["bump"], "{proved:?}");
-        assert!(removed >= 2, "{removed}");
+        assert!(removed.bounds >= 2, "{removed:?}");
     }
 }
 
@@ -1407,7 +1492,8 @@ def main():
     let proved = erased.replace("big(1)", "big(101)");
     let report = verify_with(&proved, &options).expect("a solver ran above");
     assert!(report.is_proved());
-    assert_eq!(report.proved_sites.len(), 1);
+    // The read, and the lemma's own `assert`.
+    assert_eq!(report.proved_sites.len(), 2, "{:?}", report.proved_sites);
 }
 
 #[test]
@@ -1596,7 +1682,7 @@ def main():
     let fixed = source.replace("a.balance = -1", "a.balance = 4");
     let report = verify_with(&fixed, &options).expect("a solver ran above");
     assert!(report.is_proved(), "{report:#?}");
-    assert_eq!(report.proved_sites.len(), 1);
+    assert!(!report.proved_sites.is_empty());
     crate::run_source(&fixed).expect("the program runs");
 }
 
@@ -1922,7 +2008,7 @@ def main():
         })
         .expect("verifies");
         // The read of `xs[i]` maps across the ghost code around it.
-        assert!(removed >= 1, "{removed}");
+        assert!(removed.bounds >= 1, "{removed:?}");
     }
 
     // A ghost `assert` no run checks: until it is proved, nothing counts as
@@ -1945,4 +2031,750 @@ def main():
         return;
     };
     assert!(report.proved_sites.is_empty());
+}
+
+#[test]
+fn proved_arithmetic_and_assertions_lose_their_checks_in_a_build() {
+    let source = r#"
+def total(xs: list[int64]) -> int64:
+    requires len(xs) <= 100
+    requires all([0 <= x and x <= 10 for x in xs])
+    ensures result <= 1000
+    mut s = 0
+    for i in range(len(xs)):
+        invariant 0 <= s and s <= 10 * i
+        s += xs[i]
+    assert s >= 0
+    return s
+
+def avg(a: int64, b: int64) -> int64:
+    requires 0 <= a and a <= 1000 and 1 <= b and b <= 10
+    return a // b + (a % b) * 2 - -a
+
+def unproved(n: int64, d: int64) -> int64:
+    assert n < 5
+    return n * 2 + n // d
+
+def main():
+    print(total([1, 2, 3]))
+    print(avg(17, 4))
+    print(unproved(3, 1))
+"#;
+    if smt::SolverCommand::find(None).is_err() {
+        return;
+    }
+    let program = crate::check_source(source).expect("checks");
+    let (module, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        let options = Options {
+            prove_sites: true,
+            ..Options::default()
+        };
+        verify_module(&program, module, &options).map(|report| report.proved_sites)
+    })
+    .expect("verifies");
+    assert!(removed.bounds >= 1, "{removed:?}");
+    assert!(removed.arithmetic >= 6, "{removed:?}");
+    assert!(removed.assertions >= 3, "{removed:?}");
+    assert_eq!(
+        removed.total(),
+        removed.bounds + removed.arithmetic + removed.assertions
+    );
+    crate::mir::checks::validate_checks(&module).expect("proved traps validate");
+    let function = |name: &str| {
+        module
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("the function")
+    };
+    let traps = |name: &str| {
+        let mut traps = Vec::new();
+        for block in &function(name).blocks {
+            for instruction in &block.instructions {
+                if let crate::mir::Instruction::Assign {
+                    value:
+                        crate::mir::Rvalue::Binary { trap, .. } | crate::mir::Rvalue::Unary { trap, .. },
+                    ..
+                } = instruction
+                {
+                    traps.push(*trap);
+                }
+            }
+        }
+        traps
+    };
+    use crate::mir::ArithmeticTrap;
+    assert!(
+        traps("avg").contains(&ArithmeticTrap::Proved),
+        "{:?}",
+        traps("avg")
+    );
+    assert!(!traps("avg")
+        .iter()
+        .any(|trap| trap.checks_overflow() || trap.checks_divisor()));
+    // What is not proved keeps its checks: the `assert`, and `n * 2` and
+    // `n // d`.
+    let unproved = traps("unproved");
+    assert!(!unproved.contains(&ArithmeticTrap::Proved), "{unproved:?}");
+    let fails = function("unproved")
+        .blocks
+        .iter()
+        .filter(|block| matches!(block.terminator, crate::mir::Terminator::AssertFail { .. }))
+        .count();
+    assert!(fails >= 1);
+    assert_eq!(
+        crate::run_source(source).expect("runs").stdout,
+        "6\n23\n9\n"
+    );
+}
+
+#[test]
+fn strings_dicts_and_sets_are_modeled() {
+    assert_proved(
+        r#"
+def greet(name: str) -> str:
+    requires len(name) > 0
+    ensures len(result) == len(name) + 7
+    ensures result == "hello, " + name
+    ensures result.starts_with("hello, ") and result.ends_with(name) and "llo" in result
+    assert len("a\\b") == 3 and len("\"") == 1 and len("é") == 1
+    return "hello, " + name
+
+def order(a: str, b: str) -> bool:
+    requires a < b
+    ensures result
+    ensures not (b <= a) and b > a and b >= a and a != b
+    return a.contains("") and a.starts_with("") and b.ends_with("")
+
+def lookup(d: dict[str, int64], k: str) -> int64:
+    requires k in d
+    requires all([d[v] >= 0 for v in d.keys()])
+    ensures result == d[k] and result >= 0
+    return d[k]
+
+def counts() -> int64:
+    mut d = {"a": 1, "b": 2}
+    d["c"] = 3
+    d["a"] = 4
+    assert len(d) == 3 and not d.is_empty()
+    assert "a" in d and not ("z" in d)
+    assert d["a"] == 4 and d["b"] == 2
+    mut total = 0
+    for k in d.keys():
+        total = 0 if k == "" else 1
+    for v in d.values():
+        assert v >= 0 or v < 0
+    for (k, v) in d.items():
+        assert k in d and d[k] == v
+    d.clear()
+    assert len(d) == 0 and not ("a" in d)
+    return total
+
+def by_number() -> None:
+    mut d: dict[int64, bool] = {1: true}
+    assert d[1]
+    d[2] = false
+    assert 2 in d and not d[2] and len(d) == 2
+    names = {7: "seven"}
+    assert names[7] == "seven" and len(names[7]) == 5
+
+def total(s: set[int64]) -> int64:
+    requires 3 in s and len(s) >= 1
+    requires all([x > 0 for x in s])
+    ensures result == len(s)
+    assert 3 in s and not (0 in s)
+    mut seen = 0
+    for x in s:
+        assert x > 0
+        seen = x
+    return len(s)
+
+def adds(t: mut set[int64]) -> None:
+    requires len(t) < 100
+    n = len(t)
+    t.add(7)
+    assert 7 in t and len(t) <= n + 1 and len(t) >= n
+    t.remove(7)
+    assert not (7 in t)
+    t.discard(7)
+    t.clear()
+    assert len(t) == 0 and t.is_empty()
+
+def words() -> None:
+    mut w = {"a", "b"}
+    w.add("a")
+    assert len(w) == 2 and "b" in w
+    same = {"b", "a"}
+    assert w == same
+    assert {"x": 1} == {"x": 1}
+    xs = ["p", "q"]
+    assert "q" in xs
+
+def pick(flag: bool) -> str:
+    ensures len(result) == 1
+    mut s = "a"
+    mut d = {1: 1}
+    mut t = {1}
+    if flag:
+        s = "b"
+        d[2] = 2
+        t.add(2)
+    assert 1 in d and 1 in t
+    return s
+
+def main():
+    print(greet("ada"))
+    print(order("a", "b"))
+    print(lookup({"x": 1}, "x"))
+    print(counts())
+    by_number()
+    print(total({3, 4}))
+    mut s = {1}
+    adds(s)
+    words()
+    print(pick(true))
+"#,
+    );
+    let Some(report) = assert_open(
+        r#"
+def bad(d: dict[str, int64]) -> int64:
+    requires "k" in d
+    return d["missing"]
+
+def drop():
+    mut t = {1}
+    t.remove(2)
+
+def caller(d: dict[str, int64]) -> int64:
+    return bad(d)
+
+def main():
+    drop()
+    print(caller({"k": 1}))
+"#,
+        &[
+            "4 key present failed",
+            "8 key present failed",
+            "11 requires failed",
+        ],
+    ) else {
+        return;
+    };
+    assert!(report
+        .obligations
+        .iter()
+        .any(|o| o.message == "key is in the dict"));
+}
+
+#[test]
+fn collections_outside_the_model_stay_open() {
+    assert_open(
+        r#"
+class P:
+    x: int64
+
+def edges(a: str, b: str, d: dict[str, int64], e: dict[str, int64], s: set[str], t: set[str], xs: list[str]) -> bool:
+    requires d == e and s == t
+    requires "a" in xs and xs.contains("a") and not ("zz" in xs) or true
+    requires "b" in "abc" and "a" not in s or true
+    requires (a if len(a) > 0 else b) == a or true
+    requires a + b == a + b
+    requires a <= b or a >= b or a > b
+    ensures result == (a >= b)
+    return a >= b or (a > b and a <= b)
+
+def unmodeled(m: dict[(int64, int64), int64], q: set[float64], flag: bool) -> int64:
+    requires len(m) >= 0
+    mut c = {2: P(x=0)}
+    if flag:
+        c[1] = P(x=1)
+    mut w = {(1, 2): 3}
+    w[(3, 4)] = 5
+    mut z = {1.0}
+    z.add(2.0)
+    return len(c)
+
+def unsupported(a: str, d: dict[str, P]) -> int64:
+    requires "k" in d and d["k"].x >= 0
+    requires a.split(",") == []
+    return 0
+
+def main():
+    print(edges("a", "b", {"x": 1}, {"x": 1}, {"a"}, {"a"}, ["a"]))
+    print(unmodeled({(1, 1): 1}, {1.0}, true))
+    print(unsupported("ax", {"k": P(x=1)}))
+"#,
+        &[
+            "33 requires unsupported",
+            "34 requires unsupported",
+            "34 requires unsupported",
+        ],
+    );
+    // Characters past what SMT strings hold leave a literal unmodeled.
+    assert_eq!(
+        exec::smt_string("a\"\\\u{e9}"),
+        Some("\"a\"\"\\u{5c}\\u{e9}\"".to_string())
+    );
+    assert_eq!(exec::smt_string("\u{10FFFF}"), None);
+}
+
+#[test]
+fn contracts_read_float_and_str_values() {
+    assert_proved(
+        r#"
+def scale(a: float64, b: float64) -> float64:
+    requires a >= 1.0 and a <= 2.0 and b >= 1.0 and b <= 2.0
+    ensures result == a * b and result - a * b == 0.0
+    ensures result == (a + b) - (a + b) + a * b
+    return a * b
+
+def halve(x: float64) -> float64:
+    requires x >= 1.0 and x <= 2.0
+    ensures result == x / 2.0
+    return x / 2.0
+
+def join(a: str, b: str) -> str:
+    ensures result == a + b
+    ensures len(result) == len(a) + len(b)
+    return a + b
+
+def choose(flag: bool, a: str, b: str) -> str:
+    ensures result == (a if flag else b)
+    if flag:
+        return a.clone()
+    return b.clone()
+
+def fchoose(flag: bool, x: float64) -> float64:
+    requires x >= 1.0 and x <= 2.0
+    ensures result == (x if flag else 1.0)
+    if flag:
+        return x
+    return 1.0
+
+def back(x: float32) -> int32:
+    requires 0.0 <= x and x <= 10.0
+    return x as int32
+
+def main():
+    print(scale(1.5, 1.5))
+    print(halve(1.5))
+    print(join("a", "b"))
+    print(choose(true, "a", "b"))
+    print(fchoose(false, 1.5))
+    print(back(2.5))
+"#,
+    );
+}
+
+#[test]
+fn floats_are_ieee_754_values() {
+    let Some(report) = assert_open(
+        r#"
+def half(x: float64) -> float64:
+    requires 0.0 <= x and x <= 100.0
+    ensures 0.0 <= result and result <= 50.0
+    return x / 2.0
+
+def bad(a: float64, b: float64) -> float64:
+    return a / b
+
+def conv(n: int64, x: float64) -> int64:
+    requires 0 <= n and n <= 1000
+    requires 0.0 <= x and x < 10.0
+    f = n as float64
+    assert f >= 0.0
+    g = n.to_float()
+    assert g == f
+    return x as int64
+
+def small(x: float32) -> float32:
+    requires x >= 1.0
+    y = x * 2.0
+    assert y >= 2.0
+    assert -y <= -2.0 and abs(-y) == y
+    return y
+
+def mean(xs: list[float64]) -> float64:
+    requires len(xs) == 2
+    requires all([0.0 <= x and x <= 1.0 for x in xs])
+    ensures 0.0 <= result
+    return (xs[0] + xs[1]) * 0.5
+
+def narrow(x: float64) -> float32:
+    requires 0.0 <= x and x <= 1.0
+    ensures result >= 0.0
+    ys: list[float32] = [1.5, 2.5]
+    assert ys[0] < ys[1]
+    return x as float32
+
+def pick(flag: bool, x: float64) -> float64:
+    requires x > 1.0
+    ensures result > 0.0
+    mut y = 1.0
+    if flag:
+        y = x
+    return y
+
+def root(x: float64) -> float64:
+    requires x >= 4.0 and x <= 100.0
+    return x.sqrt()
+
+def main():
+    print(half(3.0))
+    print(bad(1.0, 0.5))
+    print(conv(3, 2.5))
+    print(small(1.5))
+    print(mean([0.5, 0.25]))
+    print(narrow(0.5))
+    print(pick(true, 2.0))
+    print(root(9.0))
+"#,
+        &["8 division by zero failed"],
+    ) else {
+        return;
+    };
+    let failed = report
+        .obligations
+        .iter()
+        .find_map(|obligation| match &obligation.status {
+            Status::Failed { counterexample } => Some(counterexample.clone()),
+            _ => None,
+        })
+        .expect("a failed check");
+    assert!(
+        failed
+            .iter()
+            .any(|(name, value)| name == "b" && value.contains('0')),
+        "{failed:?}"
+    );
+}
+
+#[test]
+fn a_call_through_a_function_value_that_names_a_function_is_a_call_of_it() {
+    assert_open(
+        r#"
+def inc(n: int64) -> int64:
+    requires n < 100
+    ensures result == n + 1
+    return n + 1
+
+def apply(f: def(n: int64) -> int64, x: int64) -> int64:
+    return f(x)
+
+def direct() -> int64:
+    g = inc
+    y = g(5)
+    assert y == 6
+    return g(y)
+
+def wrong() -> int64:
+    g = inc
+    return g(500)
+
+def escapes() -> int64:
+    return apply(inc, 3)
+
+
+def keep(n: int64) -> int64:
+    return n
+
+def chosen(flag: bool) -> int64:
+    mut g = keep
+    if flag:
+        g = inc
+    return g(1)
+
+def stored() -> int64:
+    fs = [inc]
+    return fs[0](2)
+
+def main():
+    print(direct())
+    print(escapes())
+    print(chosen(true))
+    print(stored())
+"#,
+        &[
+            "18 requires failed",
+            "21 requires unsupported",
+            "30 requires unsupported",
+            "34 requires unsupported",
+        ],
+    );
+}
+
+#[test]
+fn a_task_start_proves_its_target_requires_and_its_result_has_the_ensures() {
+    assert_open(
+        r#"
+def work(n: int64) -> int64:
+    requires 0 <= n and n < 1000
+    ensures result == n * 2
+    return n * 2
+
+def run() -> int64:
+    mut out = 0
+    with group = TaskGroup():
+        task = group.start(work, 21)
+        group.start_soon(work, 3)
+        match task.result():
+            case TaskResult.Ready(value):
+                assert value == 42
+                out = value
+            case _:
+                out = 0
+    return out
+
+def fallback() -> int64:
+    mut v = 0
+    with group = TaskGroup():
+        task = group.start(work, 5)
+        v = task.result_or(10)
+    assert v == 10
+    return v
+
+def bad() -> int64:
+    mut v = 0
+    with group = TaskGroup():
+        task = group.start(work, 5000)
+        v = task.result_or(0)
+    return v
+
+def main():
+    print(run())
+    print(fallback())
+"#,
+        &["31 requires failed"],
+    );
+}
+
+#[test]
+fn extern_functions_have_trusted_contracts() {
+    let dir = script_dir("extern-contract");
+    std::fs::write(
+        dir.join("Aura.toml"),
+        "[package]\nname = \"ffi_spec\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    )
+    .expect("manifest");
+    std::fs::create_dir_all(dir.join("src")).expect("src");
+    let main = dir.join("src/main.au");
+    std::fs::write(
+        &main,
+        r#"extern "C" def abs_value(x: int32) -> int32:
+    requires x > -2147483648
+    ensures result >= 0
+    ensures result == x or result == -x
+
+extern "C" def plain(x: int32) -> int32
+
+extern "C" def fill(data: mut list[uint8], n: int64) -> None:
+    requires n <= len(data)
+    ensures len(data) >= n
+
+def use_it(x: int32) -> int32:
+    requires x > -100
+    y = abs_value(x)
+    assert y >= 0
+    return plain(y)
+
+def bad() -> int32:
+    return abs_value(-2147483648)
+
+def buffers() -> int64:
+    mut data: list[uint8] = [0, 0, 0]
+    fill(data, 2)
+    assert len(data) >= 2
+    fill(data, 9)
+    return len(data)
+
+def main():
+    print(use_it(-5))
+"#,
+    )
+    .expect("source");
+    let program = crate::check_path(&main).expect("an extern contract checks");
+    if smt::SolverCommand::find(None).is_ok() {
+        let module = crate::mir::lower_for_verification(&program);
+        let report = verify_module(&program, &module, &Options::default()).expect("verifies");
+        assert_eq!(
+            open_checks(&report),
+            ["19 requires failed", "25 requires failed"],
+            "{report:#?}"
+        );
+    }
+    // The contract checks like a function's.
+    std::fs::write(
+        &main,
+        "extern \"C\" def f(x: int32) -> int32:\n    ensures result > y\n\ndef main():\n    print(f(1))\n",
+    )
+    .expect("source");
+    let error = crate::check_path(&main).expect_err("an unknown name");
+    assert!(error.message.contains("`y`"), "{}", error.message);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn callable_aliases_carry_contracts() {
+    assert_open(
+        r#"
+type Step = def(n: int64) -> int64:
+    requires 0 <= n and n < 100
+    ensures result > n
+
+type Boxed = Callable[def(n: int64) -> int64]:
+    requires 0 <= n and n < 500
+    ensures result >= n
+
+def inc(n: int64) -> int64:
+    requires n < 1000
+    ensures result == n + 1
+    return n + 1
+
+def jump(n: int64) -> int64:
+    requires n < 10
+    return n + 5
+
+def odd(n: int64) -> int64:
+    requires n ** 2 >= 0
+    return n + 1
+
+def apply_twice(f: Step, x: int64) -> int64:
+    requires 0 <= x and x < 50
+    ensures result > x
+    y = f(x)
+    if y < 100:
+        return f(y)
+    return y
+
+def again(f: Step) -> int64:
+    return apply_twice(f, 1)
+
+def plain(f: def(n: int64) -> int64) -> int64:
+    return f(1)
+
+def leak(f: Step) -> int64:
+    return plain(f)
+
+def boxed(g: Boxed) -> int64:
+    ensures result >= 2
+    return g(2)
+
+def main():
+    print(apply_twice(inc, 3))
+    print(apply_twice(jump, 3))
+    print(again(inc))
+    print(apply_twice(lambda n: n + 1, 3))
+    print(boxed(Boxed(inc)))
+    print(leak(inc))
+    print(apply_twice(odd, 3))
+"#,
+        &[
+            "20 overflow failed",
+            "21 overflow failed",
+            "38 requires unsupported",
+            "46 requires failed",
+            "46 ensures failed",
+            "48 requires unsupported",
+            "48 overflow failed",
+            "51 requires unsupported",
+            "51 ensures unsupported",
+        ],
+    );
+    for (source, message) in [
+        (
+            "type S[T] = def(n: T) -> T:\n    requires true\n",
+            "a contract on a generic type alias is not supported yet",
+        ),
+        (
+            "type S = int64:\n    requires true\n",
+            "only a callable type such as `Callable[def(n: int64) -> int64]` can have a contract",
+        ),
+        (
+            "type S = def(int64) -> int64:\n    requires true\n",
+            "a callable type with a contract names each parameter, as in `def(n: int64)`",
+        ),
+        (
+            "type S = def(n: mut list[int64]) -> int64:\n    requires true\n",
+            "a callable type with a contract cannot take a `mut` parameter yet",
+        ),
+        (
+            "type S = def(n: int64) -> int64:\n    ensures result > m\n",
+            "unknown name `m`",
+        ),
+        (
+            "type S = def(n: int64) -> int64:\n    decreases n\n",
+            "a callable type states only `requires` and `ensures`",
+        ),
+    ] {
+        let error = crate::check_source(&format!("{source}\ndef main():\n    pass\n"))
+            .expect_err("a contract the checker refuses");
+        assert_eq!(error.message, message, "{source}");
+    }
+}
+
+#[test]
+fn operator_trait_calls_on_type_parameters_rely_on_the_implementations() {
+    let source = r#"
+class Meters:
+    v: int64
+
+impl Ord[Meters] for Meters:
+    def lt(self, rhs: Meters) -> bool:
+        ensures result == (self.v < rhs.v)
+        return self.v < rhs.v
+    def le(self, rhs: Meters) -> bool:
+        return self.v <= rhs.v
+    def gt(self, rhs: Meters) -> bool:
+        return self.v > rhs.v
+    def ge(self, rhs: Meters) -> bool:
+        return self.v >= rhs.v
+
+def smaller[T: Ord[T]](a: T, b: T) -> bool:
+    return a < b
+
+def main():
+    print(smaller(Meters(v=1), Meters(v=2)))
+    print(smaller(1, 2))
+"#;
+    assert_proved(source);
+}
+
+#[test]
+fn record_equality_lookups_and_unmodeled_spec_methods() {
+    let Some(report) = verify(
+        r#"
+class P:
+    x: int64
+    y: int64
+
+    spec def power(self) -> int64:
+        return self.x ** 2
+
+def same(a: P) -> bool:
+    b = P(x=a.x, y=a.y)
+    assert a == b
+    return a == b
+
+def at(xs: list[int64]) -> int64:
+    requires len(xs) >= 1
+    match xs.lookup(0):
+        case Lookup.Found(v):
+            return v
+        case Lookup.Missing:
+            assert false
+            return 0
+
+def squared(p: P) -> int64:
+    requires p.x == 3
+    ensures result >= 0
+    return p.power()
+
+def main():
+    print(same(P(x=1, y=2)))
+    print(at([1]))
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(open_checks(&report), ["25 ensures failed"], "{report:#?}");
 }

@@ -30998,6 +30998,7 @@ fn ffi_signature_validation_reserves_function_typed_parameters_and_returns() {
             params,
             return_type,
             span,
+            contracts: Vec::new(),
         };
     let opaque_handles = BTreeMap::new();
     let type_names = TypeDefinitions::default();

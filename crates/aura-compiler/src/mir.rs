@@ -1026,9 +1026,22 @@ pub enum ArithmeticTrap {
     /// that cannot fail inline, as long as every failing case reaches the
     /// helper.
     Runtime,
+    /// `aura verify` proved that the operation cannot fail, in place of an
+    /// `Overflow`, `DivisionByZero`, or `DivisionByZeroOrOverflow` check:
+    /// no check, and a backend may tell its optimizer that the result does
+    /// not wrap. Only `aura build --remove-proved-checks` names it.
+    Proved,
 }
 
 impl ArithmeticTrap {
+    /// Whether a proof may stand for this check: one MIR computes inline.
+    pub fn provable(self) -> bool {
+        matches!(
+            self,
+            Self::Overflow | Self::DivisionByZero | Self::DivisionByZeroOrOverflow
+        )
+    }
+
     /// Whether a backend that computes the value checks the divisor.
     pub fn checks_divisor(self) -> bool {
         matches!(
@@ -10497,7 +10510,7 @@ pub fn lower_with_proved_checks<E>(
         &MirModule,
     )
         -> std::result::Result<std::collections::BTreeSet<(String, usize, usize)>, E>,
-) -> std::result::Result<(MirModule, usize), E> {
+) -> std::result::Result<(MirModule, checks::ProvedChecks), E> {
     let verified = lower_for_verification(program);
     let proved = prove(&verified)?;
     struct Restore(bool);
@@ -10513,9 +10526,9 @@ pub fn lower_with_proved_checks<E>(
     checks::resolve_checks(&mut module);
     type_args::record_call_type_args(&mut module);
     methods::resolve_methods(&mut module);
-    let covered = checks::insert_proved_index_facts(&mut module, &verified, &proved);
+    let removed = checks::remove_proved_checks(&mut module, &verified, &proved);
     ownership::insert_ownership(&mut module);
-    Ok((module, covered))
+    Ok((module, removed))
 }
 
 fn make_explicit(program: &Program, mut module: MirModule) -> MirModule {
@@ -29329,6 +29342,7 @@ mod lending;
 
 #[path = "mir_checks.rs"]
 pub(crate) mod checks;
+pub use checks::ProvedChecks;
 
 #[path = "mir_type_args.rs"]
 pub(crate) mod type_args;
