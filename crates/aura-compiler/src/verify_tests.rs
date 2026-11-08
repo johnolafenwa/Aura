@@ -981,6 +981,67 @@ def main():
 }
 
 #[test]
+fn contract_terms_outside_the_model_are_reported_as_unsupported() {
+    let report = verify(
+        r#"
+def g1(a: int64) -> int64:
+    requires a ** 2 >= 0
+    return a
+
+def g2(t: (int64, int64), a: int64) -> int64:
+    requires (a, a)[0] >= 0
+    return a
+
+def g3(flags: list[bool]) -> int64:
+    requires all(flags)
+    return 0
+
+def g4(s: str) -> int64:
+    requires s.find("a") != None
+    return 0
+
+def g5(d: set[int64]) -> int64:
+    requires all([k > 0 for k, v in enumerate(d)])
+    return 0
+
+def g6(d: set[int64], xs: list[int64]) -> int64:
+    requires all([a == b for a, b in zip(d, xs)])
+    return 0
+
+def g7(xs: list[float64], n: int64) -> int64:
+    requires all([i >= 0 for i, x in enumerate(xs, n ** 2)])
+    return 0
+
+def main():
+    print(g1(2))
+    print(g2((1, 2), 0))
+    print(g3([true]))
+    print(g4("A"))
+    print(g5({1}))
+    print(g6({1}, [1]))
+    print(g7([1.0], 1))
+"#,
+    );
+    let Some(report) = report else {
+        return;
+    };
+    assert_eq!(
+        open_checks(&report),
+        [
+            "3 overflow failed",
+            "27 overflow failed",
+            "27 overflow failed",
+            "31 requires unsupported",
+            "32 requires unsupported",
+            "33 requires unsupported",
+            "34 requires unsupported",
+            "37 requires unsupported",
+        ],
+        "{report:#?}"
+    );
+}
+
+#[test]
 fn comparison_chains_are_modeled() {
     assert_open(
         r#"
@@ -2640,4 +2701,31 @@ def main():
             .expect_err("a contract the checker refuses");
         assert_eq!(error.message, message, "{source}");
     }
+}
+
+#[test]
+fn operator_trait_calls_on_type_parameters_rely_on_the_implementations() {
+    let source = r#"
+class Meters:
+    v: int64
+
+impl Ord[Meters] for Meters:
+    def lt(self, rhs: Meters) -> bool:
+        ensures result == (self.v < rhs.v)
+        return self.v < rhs.v
+    def le(self, rhs: Meters) -> bool:
+        return self.v <= rhs.v
+    def gt(self, rhs: Meters) -> bool:
+        return self.v > rhs.v
+    def ge(self, rhs: Meters) -> bool:
+        return self.v >= rhs.v
+
+def smaller[T: Ord[T]](a: T, b: T) -> bool:
+    return a < b
+
+def main():
+    print(smaller(Meters(v=1), Meters(v=2)))
+    print(smaller(1, 2))
+"#;
+    assert_proved(source);
 }
