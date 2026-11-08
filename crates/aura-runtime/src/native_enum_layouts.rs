@@ -199,7 +199,7 @@ impl EnumLayout {
         let tag = shared_runtime_type_tag(runtime_type.as_bytes());
         let enum_name = match (&root.ty, &tag.tagged_enum_name) {
             (Type::Named(_, args), Some(tagged)) if !args.is_empty() => tagged.clone(),
-            _ => RuntimeName::from(base.as_str()),
+            _ => layout_name(base.as_str()),
         };
         let variants: Vec<VariantPlan> = variants
             .iter()
@@ -225,7 +225,7 @@ impl EnumLayout {
                 });
                 let bytes_only = payloads.iter().all(|place| !table.needs_drop(place.layout));
                 VariantPlan {
-                    name: RuntimeName::from(variant.name.as_str()),
+                    name: layout_name(variant.name.as_str()),
                     payloads,
                     block,
                     bytes_only,
@@ -289,6 +289,14 @@ pub fn register_enum_layout(descriptor: &str, access: u32) -> Result<&'static En
         JSON_VALUE_LAYOUT.store(std::ptr::from_ref(layout).cast_mut(), Ordering::Release);
     }
     Ok(layout)
+}
+
+/// A name a layout keeps for as long as the program runs, as a static
+/// name: every variant built in the layout copies it, and copying or
+/// dropping a static name touches no count. A layout is built once per
+/// program, so the leaked text is bounded by the program's enums.
+fn layout_name(name: &str) -> RuntimeName {
+    RuntimeName::from_static(Box::leak(name.to_owned().into_boxed_str()))
 }
 
 /// The layout of `json.Value` once the program registered it, which a
