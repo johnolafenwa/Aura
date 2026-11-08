@@ -710,3 +710,20 @@ fn slot_loans_walk_a_dicts_entries_without_keys() {
     })
     .expect("the loans run");
 }
+
+#[test]
+fn a_list_element_box_of_a_typed_variant_has_its_layouts_shape() {
+    use crate::native_runtime::ElementBox;
+    let access = FIRST_TEST_ACCESS + 67;
+    let value = typed("ElementShape", access, "Circle", vec![Value::Float(2.0)]);
+    let shape = typed_payloads(&value).layout().shape_tag();
+    let element = ElementBox::new(value);
+    let header = unsafe { &*element.as_ptr() };
+    assert_eq!(header.shape_tag.load(Ordering::Relaxed), shape);
+    // Any other value starts with no shape.
+    let plain = ElementBox::new(Value::Float(2.0));
+    assert!(unsafe { &*plain.as_ptr() }
+        .shape_tag
+        .load(Ordering::Relaxed)
+        .is_null());
+}

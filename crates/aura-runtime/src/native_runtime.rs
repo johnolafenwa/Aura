@@ -2037,7 +2037,12 @@ fn element_boxed_value(value: Value) -> *mut OpaqueValue {
     {
         element.owner_thread = LIST_ELEMENT_THREAD;
     }
-    allocate_box(element)
+    let boxed = allocate_box(element);
+    // A variant kept in its layout has the layout's type from the start,
+    // so generated code that reads the element as that type tags nothing.
+    // SAFETY: the box is new and nothing else reads it yet.
+    unsafe { record_typed_variant_shape(boxed) };
+    boxed
 }
 
 // These helpers validate the explicit refcount stored in `OpaqueValue`, but they cannot detect

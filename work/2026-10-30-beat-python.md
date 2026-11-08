@@ -129,3 +129,22 @@ Callgrind instruction counts (docdb 10000 rows, json_roundtrip 10):
 - What remains: json_roundtrip walk over `keys()` (str copies, releases,
   type tags), parse 254M, dumps 153M, tree drop 141M; docdb `field_str`
   (its loan copy outlives the loan), parse, dumps, insert.
+- `d[k]` passed to a borrowing parameter now takes a shadow box too, and
+  `json.dumps` / `json.parse` read and build `json.Value` variants by
+  their index in the layout (docdb 801M, json_roundtrip 708M).
+- Keys loops: `for key in d.keys(): match d.lookup(key)` over a dict that
+  nothing changes no longer copies the keys or each key and does not
+  hash. Native code keeps the slot of the entry it is on
+  (`aura_direct_map_next_slot`) and the fused test lends that slot's
+  value (`aura_direct_map_shadow_at`). The analysis is
+  `native_codegen_key_loops.rs`. A micro walk of 8000 keys per round went
+  from about 1800 to 700 instructions per key. json_roundtrip 10 rounds:
+  708M -> 546M; wall about 620 ms against Python's 420.
+- Found while profiling: a typed variant box's layout tag is registered
+  under the plain name (`json.Value`) and generated code tags with the
+  descriptor (`aura-type-v2:n10:json.Value0;`), so the two never compare
+  equal and each fresh element box is tagged once more (about 130
+  instructions each). Parse is about 1150 instructions per value and
+  dropping the tree about 1000.
+- The native binary size baselines were re-recorded: the json subject
+  grew about 11% on Linux with this work (1661336 -> 1838368 bytes).
