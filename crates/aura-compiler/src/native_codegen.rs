@@ -1733,6 +1733,8 @@ impl<'a> NativeCodegen<'a> {
             last_runtime_type_tag: None,
             shaped_locals,
             shaped_boxes: HashSet::new(),
+            confined_instances: classes::confined_instances(function, &self.classes),
+            skip_class_check: false,
             fresh_str_copies: HashSet::new(),
             program_shapes: &self.program_shapes,
             view_places: HashMap::new(),
@@ -3003,6 +3005,11 @@ struct FunctionCompiler<'a> {
     /// whose layout owns a handle holds a boxed Copy value, which the
     /// backend drops itself: see `release_boxed_copy_roots`.
     tracked_roots: HashSet<String>,
+    /// Class locals whose fields need no layout check (see
+    /// `classes::confined_instances`).
+    confined_instances: HashSet<String>,
+    /// Set for the next `emit_class_check` of a confined instance.
+    skip_class_check: bool,
     /// The `mut` arguments and receivers the MIR moves into their call,
     /// which take their root's value: see `ownership::moved_writebacks`.
     moved_operands: HashSet<*const Operand>,

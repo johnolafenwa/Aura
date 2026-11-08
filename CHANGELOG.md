@@ -104,6 +104,11 @@ in this file.
   costs the same). Output, diagnostics, and trap call chains are unchanged,
   except that a trap in a generator run in place inside another generator
   run in place names only the innermost one.
+- Faster field access on class locals a function builds itself. A local
+  assigned only from a constructor call and otherwise used only through its
+  fields (`counter.count += 1`, `counter.name += "x"`) no longer checks the
+  instance's layout on each field read or write. `generator_class` drops to
+  2.0x Rust (from 5.6x).
 - Fixed: `aura fmt` removed the space in `yield (a, b)`, which turned the
   statement into a call of a function named `yield`.
 

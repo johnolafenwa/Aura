@@ -134,3 +134,14 @@ generators' frames, so all four run as a state machine or in place:
 read or write of a field of an instance with a `str` field checks the
 instance's layout first, which `class_field_read` and `field_write` also
 measure.
+
+A class local that the function builds with a constructor and otherwise
+reaches only through its fields keeps its layout, so its field reads and
+writes now skip that check:
+
+| operation | step | count | Rust instr/op | Aura instr/op | Aura/Rust |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `generator_class` | 9g | 100,000 | 5.0 | 10.1 | 2.0x |
+
+`class_field_read` (14.7x) and `field_write` (4.0x) reach instances held in
+a list, which other code can share, so they still check.
