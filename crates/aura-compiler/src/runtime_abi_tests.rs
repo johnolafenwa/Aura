@@ -198,7 +198,10 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
     // found value calls the `_payload` form of the op's helper, and one
     // whose found value is only read calls the `_lent` form. A `contains_key`
     // test that an entry loan follows probes the entry for both, and an
-    // `int64` dict value is stored from its word.
+    // `int64` dict value is stored from its word. An entry loan only
+    // borrowers read lends the value in a shadow box, a keys loop walks the
+    // entries by slot, and a dict literal is sized once and filled entry by
+    // entry.
     let uncovered = RuntimeFn::ALL
         .iter()
         .copied()
@@ -248,8 +251,13 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::MapProbeSlot,
             RuntimeFn::MapProbeSlotInt64,
             RuntimeFn::MapGetInt64Lent,
+            RuntimeFn::MapGetShadow,
             RuntimeFn::MapNextSlot,
             RuntimeFn::MapShadowAt,
+            RuntimeFn::MapGetInt64Shadow,
+            RuntimeFn::MapLiteralEntry,
+            RuntimeFn::MapLiteralStrEntry,
+            RuntimeFn::MapWithCapacity,
             RuntimeFn::MapSetIndexInt64,
         ]
     );

@@ -92,10 +92,12 @@ pub(super) fn entry_key_loops(
             continue;
         };
         if let Some((RuntimeOp::Dict(DictOp::Keys), dict, _)) = runtime_call(value) {
-            if !target.contains('.') && target != dict && followable(dict) {
-                if loops.insert(target, (dict, None)).is_some() {
-                    rejected.insert(target);
-                }
+            if !target.contains('.')
+                && target != dict
+                && followable(dict)
+                && loops.insert(target, (dict, None)).is_some()
+            {
+                rejected.insert(target);
             }
         }
     }

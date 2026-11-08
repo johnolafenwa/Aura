@@ -694,7 +694,7 @@ fn sip_hasher_matches_the_reference_vectors() {
 fn keyed_hasher_hashes_split_writes_and_words_as_one_stream() {
     use super::KeyedHasher;
     use std::hash::Hasher;
-    let bytes: Vec<u8> = (0..41).map(|byte| byte * 7).collect();
+    let bytes: Vec<u8> = (0..41u8).map(|byte| byte.wrapping_mul(7)).collect();
     let mut whole = KeyedHasher::with_keys(3, 9);
     whole.write(&bytes);
     for split in [0, 1, 7, 8, 9, 16, 23, 40, 41] {
