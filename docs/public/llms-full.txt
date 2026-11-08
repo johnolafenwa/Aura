@@ -23398,6 +23398,10 @@ booleans, with each integer type's range as a check:
 - `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
   element reads and writes, and `copy`
 - `spec def` helpers, `old`, and `result` in contracts, and `ghost` locals
+- task starts: `group.start(work, n)` proves `work`'s `requires` on the
+  arguments the child receives, and the value of `Ready` from
+  `task.result()`, `poll()`, or `result_or(...)` has `work`'s `ensures`.
+  Each task's function is verified like any other
 - calls through a function value that names one function, such as
   `g = inc` then `g(5)`: the call proves `inc`'s `requires` and assumes its
   `ensures`

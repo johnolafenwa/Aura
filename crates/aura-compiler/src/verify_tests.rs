@@ -2393,3 +2393,48 @@ def main():
         ],
     );
 }
+
+#[test]
+fn a_task_start_proves_its_target_requires_and_its_result_has_the_ensures() {
+    assert_open(
+        r#"
+def work(n: int64) -> int64:
+    requires 0 <= n and n < 1000
+    ensures result == n * 2
+    return n * 2
+
+def run() -> int64:
+    mut out = 0
+    with group = TaskGroup():
+        task = group.start(work, 21)
+        group.start_soon(work, 3)
+        match task.result():
+            case TaskResult.Ready(value):
+                assert value == 42
+                out = value
+            case _:
+                out = 0
+    return out
+
+def fallback() -> int64:
+    mut v = 0
+    with group = TaskGroup():
+        task = group.start(work, 5)
+        v = task.result_or(10)
+    assert v == 10
+    return v
+
+def bad() -> int64:
+    mut v = 0
+    with group = TaskGroup():
+        task = group.start(work, 5000)
+        v = task.result_or(0)
+    return v
+
+def main():
+    print(run())
+    print(fallback())
+"#,
+        &["31 requires failed"],
+    );
+}

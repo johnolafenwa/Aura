@@ -27,7 +27,9 @@ use crate::mir::{
     ArithmeticTrap, AssertKind, BasicBlock, CallTarget, Instruction, MethodDispatch, MirArg,
     MirFunction, MirReceiverKind, Operand, Rvalue, Terminator,
 };
-use crate::runtime_ops::{DictOp, FunctionOp, ListOp, RuntimeOp, ScalarOp, SetOp, StrOp, ValueOp};
+use crate::runtime_ops::{
+    DictOp, FunctionOp, ListOp, RuntimeOp, ScalarOp, SetOp, StrOp, TaskOp, ValueOp,
+};
 use crate::sema::Type;
 
 /// The inclusive range of an integer type.
@@ -292,6 +294,9 @@ pub(super) enum Val {
     /// A function value that names one function: a call through it is a
     /// call of that function.
     Func(String),
+    /// A `Task[T]` handle, with the value its task returns when it
+    /// finishes normally.
+    Task(Box<Val>),
     /// A `dict`: its length, which keys it holds as an `(Array K Bool)`,
     /// and its values as an `(Array K S)` when the encoding models them.
     Map {
@@ -1574,7 +1579,7 @@ impl<'a> Exec<'a> {
                 Val::Union(tag, self.merge_children(pcs, values, hint))
             }
             // Equal units and opaque values returned above.
-            Val::Unit | Val::Opaque | Val::Func(_) => Val::Opaque,
+            Val::Unit | Val::Opaque | Val::Func(_) | Val::Task(_) => Val::Opaque,
         }
     }
 
@@ -2614,9 +2619,35 @@ impl<'a> Exec<'a> {
                     _ => fresh_target(self),
                 }
             }
-            Rvalue::StartTask { args, .. } => {
-                self.havoc_writebacks(state, args);
-                fresh_target(self)
+            Rvalue::StartTask { function, args, .. } => {
+                // A child runs its target on arguments moved or copied into
+                // it, so the start proves the target's `requires` on them,
+                // and its result has the target's `ensures`.
+                let started = match self.followed_operand(state, function, None) {
+                    Val::Func(name) if self.cx.function(&name).is_some() => Some(name),
+                    _ => None,
+                };
+                let Some(name) = started else {
+                    self.havoc_writebacks(state, args);
+                    return fresh_target(self);
+                };
+                let mut actuals = Vec::new();
+                for arg in args {
+                    actuals.push((
+                        arg.name.clone(),
+                        self.operand(state, &arg.value, None),
+                        None,
+                    ));
+                }
+                let result_type = match &target_type {
+                    Some(Type::Named(task, items)) if task == "Task" && items.len() == 1 => {
+                        Some(items[0].clone())
+                    }
+                    _ => None,
+                };
+                let result =
+                    self.user_call(state, &name, None, actuals, result_type.as_ref(), target);
+                Val::Task(Box::new(result))
             }
             _ => fresh_target(self),
         }
@@ -3658,6 +3689,39 @@ impl<'a> Exec<'a> {
                         Some(Val::Int(result, target_int.unwrap_or(*ty)))
                     }
                     _ => None,
+                }
+            }
+            RuntimeOp::Task(task_op) => {
+                let Some(Val::Task(value)) = receiver else {
+                    return None;
+                };
+                let result_type = target.and_then(|target| self.place_type(target))?;
+                match task_op {
+                    TaskOp::Result | TaskOp::ResultTimeout | TaskOp::Poll | TaskOp::PollTimeout => {
+                        // A `Ready` outcome carries the task's value.
+                        let Val::Enum(name, tag, mut payloads) =
+                            self.fresh(&result_type, target.unwrap_or("outcome"))
+                        else {
+                            return None;
+                        };
+                        let Type::Named(_, type_args) = &result_type else {
+                            return None;
+                        };
+                        let ready = self
+                            .cx
+                            .enum_variants(&name, type_args)?
+                            .iter()
+                            .position(|(variant, _)| variant == "Ready")?;
+                        payloads[ready] = vec![*value];
+                        Some(Val::Enum(name, tag, payloads))
+                    }
+                    TaskOp::ResultOr | TaskOp::ResultOrTimeout => {
+                        let default =
+                            fit(arg(self, state, 0, IntTy::of(&result_type)), &result_type);
+                        let ready = self.fresh_const("Bool", "ready");
+                        let pcs = [ready.clone(), not(&ready)];
+                        Some(self.merge_vals(&pcs, &[&value, &default], "outcome"))
+                    }
                 }
             }
             RuntimeOp::Scalar(ScalarOp::ToFloat) => match receiver {

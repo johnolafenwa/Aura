@@ -7,6 +7,9 @@ in this file.
 
 ## Unreleased
 
+- `aura verify` proves the `requires` of a task's target where the task
+  starts, and gives the task's result the target's `ensures` when
+  `result`, `poll`, or `result_or` reads it.
 - `aura verify` follows function values that name one function: a call
   through `g = inc` proves `inc`'s `requires` and assumes its `ensures`. A
   function value with a `requires` that is passed on, stored, or chosen on
