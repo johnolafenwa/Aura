@@ -36,7 +36,9 @@ const CHUNK: usize = 64 * 1024;
 pub struct AuraAllocator;
 
 /// A free block, linked through its first word. The first block of a batch
-/// on a shared list also links the next batch through its second word.
+/// on a shared list also links the next batch through its second word, and
+/// the second block of a batch holds the batch's length there, so a thread
+/// that takes the batch need not walk its cold blocks to count them.
 struct FreeBlock {
     next: *mut FreeBlock,
     next_batch: *mut FreeBlock,
@@ -119,17 +121,39 @@ unsafe fn batch_tail(head: *mut FreeBlock) -> *mut FreeBlock {
     tail
 }
 
-/// Puts the batch `head`..`tail` on the shared list of `class`.
+/// The length of the batch that starts at `head`.
 ///
 /// # Safety
 ///
-/// The blocks of the batch are free blocks of the class that no one else
-/// holds, linked from `head` to `tail`.
-unsafe fn share_batch(class: usize, head: *mut FreeBlock, tail: *mut FreeBlock) {
+/// `head` starts a batch that `share_batch` put on a shared list.
+unsafe fn batch_len(head: *mut FreeBlock) -> u32 {
+    // SAFETY: the caller's contract; a batch of two or more blocks keeps
+    // its length in the second word of its second block.
+    unsafe {
+        let second = (*head).next;
+        if second.is_null() {
+            1
+        } else {
+            (*second).next_batch as usize as u32
+        }
+    }
+}
+
+/// Puts the batch `head`..`tail` of `len` blocks on the shared list of
+/// `class`.
+///
+/// # Safety
+///
+/// The blocks of the batch are `len` free blocks of the class that no one
+/// else holds, linked from `head` to `tail`.
+unsafe fn share_batch(class: usize, head: *mut FreeBlock, tail: *mut FreeBlock, len: u32) {
     SHARED[class].with(|shared| {
         // SAFETY: the caller hands the batch over.
         unsafe {
             (*tail).next = ptr::null_mut();
+            if len > 1 {
+                (*(*head).next).next_batch = len as usize as *mut FreeBlock;
+            }
             (*head).next_batch = shared.load(Ordering::Relaxed);
         }
         shared.store(head, Ordering::Relaxed);
@@ -174,17 +198,10 @@ impl ThreadBlocks {
         let batch = take_shared_batch(class);
         if !batch.is_null() {
             // SAFETY: the batch is ours now, and ends with a null link.
-            let rest = unsafe { (*batch).next };
-            let mut len = 0;
-            let mut block = rest;
-            while !block.is_null() {
-                len += 1;
-                // SAFETY: as above.
-                block = unsafe { (*block).next };
-            }
+            let (rest, len) = unsafe { ((*batch).next, batch_len(batch)) };
             let list = &self.lists[class];
             list.head.set(rest);
-            list.len.set(len);
+            list.len.set(len - 1);
             return batch.cast();
         }
         let size = class_size(class);
@@ -232,7 +249,7 @@ impl ThreadBlocks {
         list.head.set(unsafe { (*tail).next });
         list.len.set(CAPACITY - CAPACITY / 2);
         // SAFETY: the batch left the thread's list.
-        unsafe { share_batch(class, head, tail) };
+        unsafe { share_batch(class, head, tail, CAPACITY / 2) };
     }
 
     /// Cuts the uncut part of the thread's chunk into blocks of the largest
@@ -245,7 +262,7 @@ impl ThreadBlocks {
             let block = cut.cast::<FreeBlock>();
             // SAFETY: the block lies in the uncut part, which no one holds.
             unsafe {
-                share_batch(class, block, block);
+                share_batch(class, block, block, 1);
                 cut = cut.add(class_size(class));
             }
         }
@@ -257,11 +274,11 @@ impl Drop for ThreadBlocks {
     fn drop(&mut self) {
         for (class, list) in self.lists.iter().enumerate() {
             let head = list.head.replace(ptr::null_mut());
-            list.len.set(0);
+            let len = list.len.replace(0);
             if !head.is_null() {
-                // SAFETY: the blocks left the thread's list, which ends with
-                // a null link.
-                unsafe { share_batch(class, head, batch_tail(head)) };
+                // SAFETY: the `len` blocks left the thread's list, which ends
+                // with a null link.
+                unsafe { share_batch(class, head, batch_tail(head), len) };
             }
         }
         self.share_rest_of_chunk();
@@ -303,7 +320,7 @@ fn unlisted_block(class: usize) -> *mut u8 {
     unsafe {
         let rest = (*batch).next;
         if !rest.is_null() {
-            share_batch(class, rest, batch_tail(rest));
+            share_batch(class, rest, batch_tail(rest), batch_len(batch) - 1);
         }
     }
     batch.cast()
@@ -348,7 +365,7 @@ unsafe impl GlobalAlloc for AuraAllocator {
         {
             let free = block.cast::<FreeBlock>();
             // SAFETY: the caller hands the block over.
-            unsafe { share_batch(class, free, free) };
+            unsafe { share_batch(class, free, free, 1) };
         }
     }
 

@@ -984,3 +984,51 @@ fn int_keyed_entry_loans_and_literal_cells_lend_without_copies() {
     })
     .expect("the loans run");
 }
+
+#[test]
+fn a_variant_of_one_scalar_keeps_its_block_in_itself() {
+    let access = FIRST_TEST_ACCESS + 70;
+    let value = typed("Inline", access, "Circle", vec![Value::Float(2.5)]);
+    let payloads = typed_payloads(&value);
+    assert!(payloads.is_inline());
+    // A variant with a box among its payloads keeps a heap block.
+    let named = typed("Inline", access, "Named", vec![text("a"), int32(1)]);
+    assert!(!typed_payloads(&named).is_inline());
+    assert_eq!(
+        payloads.scalar_bits(0).map(|(_, bits)| bits),
+        Some(2.5_f64.to_bits() as i64)
+    );
+
+    // A box that takes the variant points its view at the block where the
+    // variant now lies, inside the box.
+    let boxed = boxed_value(value.clone());
+    let header = unsafe { &*boxed };
+    let held = unsafe { &*header.value.get() };
+    assert_eq!(header.list_elements.get(), typed_payloads(held).data());
+    assert_ne!(header.list_elements.get(), payloads.data());
+    // A write through the box keeps the view on the block.
+    unsafe { value_mut(boxed, |held| *held = value.clone()) };
+    let held = unsafe { &*header.value.get() };
+    assert_eq!(header.list_elements.get(), typed_payloads(held).data());
+    assert_eq!(unsafe { value_ref(boxed) }, value);
+    unsafe { aura_direct_release_value(boxed) };
+
+    // Copies and moves keep the payload, and taking it leaves zero.
+    let copy = value.clone();
+    assert_eq!(copy, value);
+    let Value::EnumVariant(mut variant) = copy else {
+        panic!("a variant");
+    };
+    let VariantPayloads::Typed(typed_copy) = &mut variant.payloads else {
+        panic!("typed payloads");
+    };
+    assert_eq!(typed_copy.take(0), Some(Value::Float(2.5)));
+    assert_eq!(typed_copy.scalar_bits(0).map(|(_, bits)| bits), Some(0));
+    let VariantPayloads::Typed(typed_copy) = std::mem::replace(
+        &mut variant.payloads,
+        VariantPayloads::from(Vec::<Value>::new()),
+    ) else {
+        panic!("typed payloads");
+    };
+    assert_eq!(typed_copy.into_vec(), vec![Value::Float(0.0)]);
+}

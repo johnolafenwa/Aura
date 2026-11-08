@@ -173,3 +173,31 @@ Callgrind instruction counts (docdb 10000 rows, json_roundtrip 10):
   (`aura_direct_element_path_load` clones the whole JSON document), a
   mutation of the copy, and a store of it back, so docdb's update loop
   costs about 25k instructions an update.
+
+## Lean values, steps 1 and 2 (2026-11-08)
+
+The design is in the lean-values checkpoint John approved on 2026-11-08
+(steps 1 to 6, one PR each).
+
+- Step 1: the enum and variant names a typed layout keeps are static
+  `RuntimeName`s, so copying one touches no count. Locked operations on
+  docdb fell from 2.36M to 1.64M per 10k docs; wall time did not move.
+- Step 2: a variant whose payloads are scalars of 8 bytes or less keeps
+  them in its `TypedPayloads` handle instead of a heap block, and a box
+  that holds one points its view at the handle (`follow_inline_block`).
+  That removes an allocation and a free per JSON number or bool, and cut
+  docdb's memory by about 5%.
+- Found by sampling json_roundtrip in real time (an `ITIMER_PROF`
+  sampler, which counts what callgrind does not: cache misses and
+  faults): 14.5% of samples sat on one load in the allocator's
+  `refill`, which walked every block of a shared batch to count it. The
+  blocks are cold, so each step was a cache miss. A batch now keeps its
+  length in its second block.
+
+Wall time on the cloud box, median of 5 (json_roundtrip 30 rounds, docdb
+50k docs):
+
+| Program | Steps 1-2 | + batch length | Python |
+| --- | --- | --- | --- |
+| json_roundtrip | 367 ms | 306 ms | 224 ms |
+| docdb | 831 ms, 194 MB | 768 ms, 194 MB | 488 ms, 115 MB |
