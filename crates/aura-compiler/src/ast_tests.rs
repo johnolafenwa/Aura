@@ -28,6 +28,7 @@ fn dummy_function(name: &str) -> FunctionDecl {
         doc: None,
         contracts: Vec::new(),
         spec: false,
+        lemma: false,
     }
 }
 
@@ -85,6 +86,7 @@ fn item_name_matches_decl_name() {
         methods: vec![dummy_function("show")],
         span: Span::new(1, 1),
         doc: None,
+        assoc_types: Vec::new(),
     });
     let impl_item = Item::Impl(ImplDecl {
         type_params: vec![],
@@ -95,6 +97,7 @@ fn item_name_matches_decl_name() {
         methods: vec![dummy_function("show")],
         span: Span::new(1, 1),
         derived: false,
+        assoc_types: Vec::new(),
     });
 
     assert_eq!(class_item.name(), "Point");

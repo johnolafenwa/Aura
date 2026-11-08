@@ -4115,3 +4115,243 @@ fn eprint_writes_to_stderr_and_leaves_stdout_alone() {
     .expect("eprint should run");
     assert_eq!(output.stdout, "out\n");
 }
+
+#[test]
+fn a_consumer_trap_closes_its_paused_generator_first_on_the_interpreter() {
+    let error = run_source(include_str!(
+        "../tests/fixtures/run-fail/generator_caller_trap.au"
+    ))
+    .expect_err("the consumer traps");
+    assert_eq!(error.message, "assertion failed");
+    assert_eq!(
+        error.partial_stdout.as_deref(),
+        Some(include_str!(
+            "../tests/fixtures/run-fail/generator_caller_trap.stdout"
+        ))
+    );
+}
+
+#[test]
+fn generator_bodies_wait_on_the_interpreter() {
+    let output = run_source(include_str!(
+        "../tests/fixtures/run-pass/generator_waits.au"
+    ))
+    .expect("generator waits run");
+    assert_eq!(
+        output.stdout,
+        include_str!("../tests/fixtures/run-pass/generator_waits.stdout")
+    );
+}
+
+#[test]
+fn bounded_iterator_type_params_loop_and_match_on_the_interpreter() {
+    let source = concat!(
+        "from iter import Generator, Iterator, Step\n",
+        "\n",
+        "def total[I: Iterator[int64]](it: own I) -> int64:\n",
+        "    mut sum = 0\n",
+        "    for x in it:\n",
+        "        sum += x\n",
+        "    return sum\n",
+        "\n",
+        "def first[I: Iterator[int64]](it: own I) -> int64:\n",
+        "    mut src = it\n",
+        "    match own src.next():\n",
+        "        case Item(x):\n",
+        "            return x\n",
+        "        case _:\n",
+        "            return -1\n",
+        "\n",
+        "def count(n: int64) -> Generator[int64]:\n",
+        "    for i in range(n):\n",
+        "        yield i\n",
+        "\n",
+        "def main():\n",
+        "    print(total(count(4)))\n",
+        "    print(first(count(0)))\n",
+        "    print(first(count(3)))\n",
+    );
+    let output = run_source(source).expect("bounded iterator loops run");
+    assert_eq!(output.stdout, "6\n-1\n0\n");
+}
+
+#[test]
+fn iterator_loops_rewrite_inside_every_statement_form_on_the_interpreter() {
+    let source = concat!(
+        "from iter import Iterator, Step\n",
+        "\n",
+        "class Countdown:\n",
+        "    n: int64\n",
+        "\n",
+        "impl Iterator[int64] for Countdown:\n",
+        "    def next(mut self) -> Step[int64]:\n",
+        "        if self.n == 0:\n",
+        "            return Step.End\n",
+        "        self.n -= 1\n",
+        "        return Step.Item(self.n)\n",
+        "\n",
+        "trait Summer:\n",
+        "    def total(self) -> int64:\n",
+        "        mut s = 0\n",
+        "        for x in Countdown(n=3):\n",
+        "            s += x\n",
+        "        return s\n",
+        "\n",
+        "class Bag:\n",
+        "    v: int64\n",
+        "\n",
+        "impl Summer for Bag:\n",
+        "    pass\n",
+        "\n",
+        "def main():\n",
+        "    mut xs = [0, 0]\n",
+        "    xs[0] = 1\n",
+        "    view first = xs\n",
+        "    a, b = (1, 2)\n",
+        "    match a:\n",
+        "        case 1 if b == 2:\n",
+        "            print(\"guard\")\n",
+        "        case _:\n",
+        "            print(\"other\")\n",
+        "    if a == 0:\n",
+        "        print(\"then\")\n",
+        "    else:\n",
+        "        print(\"else\")\n",
+        "    for x in Countdown(n=2):\n",
+        "        print(x + first[0])\n",
+        "    print(Bag(v=1).total())\n",
+    );
+    let output = run_source(source).expect("iterator loops in trait defaults run");
+    assert_eq!(output.stdout, "guard\nelse\n2\n1\n3\n");
+}
+
+#[test]
+fn into_iterator_sources_and_associated_types_run_on_the_interpreter() {
+    let output = run_source(include_str!("../tests/fixtures/run-pass/into_iterator.au"))
+        .expect("into_iterator runs");
+    assert_eq!(
+        output.stdout,
+        include_str!("../tests/fixtures/run-pass/into_iterator.stdout")
+    );
+}
+
+#[test]
+fn associated_type_bounds_run_on_the_interpreter() {
+    for (source, expected) in [
+        (
+            include_str!("../tests/fixtures/run-pass/into_iterator_bounds.au"),
+            include_str!("../tests/fixtures/run-pass/into_iterator_bounds.stdout"),
+        ),
+        (
+            include_str!("../tests/fixtures/run-pass/associated_type_bounds.au"),
+            include_str!("../tests/fixtures/run-pass/associated_type_bounds.stdout"),
+        ),
+    ] {
+        let output = run_source(source).expect("associated type bounds run");
+        assert_eq!(output.stdout, expected);
+    }
+}
+
+#[test]
+fn fast_iteration_forms_run_on_the_interpreter() {
+    for (source, expected) in [
+        (
+            include_str!("../tests/fixtures/run-pass/fast_iteration.au"),
+            include_str!("../tests/fixtures/run-pass/fast_iteration.stdout"),
+        ),
+        (
+            include_str!("../tests/fixtures/run-pass/fast_iteration_edges.au"),
+            include_str!("../tests/fixtures/run-pass/fast_iteration_edges.stdout"),
+        ),
+        (
+            include_str!("../tests/fixtures/run-pass/fast_iteration_scopes.au"),
+            include_str!("../tests/fixtures/run-pass/fast_iteration_scopes.stdout"),
+        ),
+        (
+            include_str!("../tests/fixtures/run-pass/fast_iteration_text.au"),
+            include_str!("../tests/fixtures/run-pass/fast_iteration_text.stdout"),
+        ),
+        (
+            include_str!("../tests/fixtures/run-pass/fast_iteration_values.au"),
+            include_str!("../tests/fixtures/run-pass/fast_iteration_values.stdout"),
+        ),
+    ] {
+        let output = run_source(source).expect("fast iteration runs");
+        assert_eq!(output.stdout, expected);
+    }
+}
+
+#[test]
+fn generator_values_lists_classes_and_pipelines_check_in_fast_form() {
+    crate::sema::FAST_FALLBACKS.with(|fallbacks| fallbacks.borrow_mut().clear());
+    let source = include_str!("../tests/fixtures/run-pass/fast_iteration_values.au");
+    let output = run_source(source).expect("fast iteration runs");
+    assert_eq!(
+        output.stdout,
+        include_str!("../tests/fixtures/run-pass/fast_iteration_values.stdout")
+    );
+    let fallbacks = crate::sema::FAST_FALLBACKS.with(|fallbacks| fallbacks.take());
+    assert!(fallbacks.is_empty(), "fast forms fell back: {fallbacks:?}");
+}
+
+#[test]
+fn generators_run_lazily_and_close_on_the_interpreter() {
+    let source = concat!(
+        "from iter import Generator, Step\n",
+        "\n",
+        "class Tracer:\n",
+        "    def __enter__(mut self) -> None:\n",
+        "        print(\"enter\")\n",
+        "\n",
+        "    def __exit__(mut self) -> None:\n",
+        "        print(\"exit\")\n",
+        "\n",
+        "def count(n: int64) -> Generator[int64]:\n",
+        "    print(\"start\")\n",
+        "    with Tracer() as t:\n",
+        "        for i in range(n):\n",
+        "            yield i\n",
+        "\n",
+        "def main():\n",
+        "    mut g = count(3)\n",
+        "    print(\"made\")\n",
+        "    match g.next():\n",
+        "        case Step.Item(v):\n",
+        "            print(v)\n",
+        "        case _:\n",
+        "            pass\n",
+        "    g.close()\n",
+        "    g.close()\n",
+        "    match g.next():\n",
+        "        case Step.Item(v):\n",
+        "            print(v)\n",
+        "        case _:\n",
+        "            print(\"end\")\n",
+        "    for x in count(2):\n",
+        "        print(x)\n",
+    );
+    let output = run_source(source).expect("generators run");
+    assert_eq!(
+        output.stdout,
+        "made\nstart\nenter\n0\nexit\nend\nstart\nenter\n0\n1\nexit\n"
+    );
+
+    let trap = run_source(concat!(
+        "from iter import Generator\n",
+        "\n",
+        "def bad() -> Generator[int64]:\n",
+        "    yield 1\n",
+        "    assert false, \"broke\"\n",
+        "\n",
+        "def main():\n",
+        "    for x in bad():\n",
+        "        print(x)\n",
+    ))
+    .expect_err("the body traps");
+    assert!(trap.message.contains("broke"), "{trap:?}");
+    let chain = aura_core::diag::visible_call_frames(&trap.call_frames)
+        .into_iter()
+        .map(|frame| frame.function)
+        .collect::<Vec<_>>();
+    assert_eq!(chain, ["bad", "main"], "{trap:?}");
+}

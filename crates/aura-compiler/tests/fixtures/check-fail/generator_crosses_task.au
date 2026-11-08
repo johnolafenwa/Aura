@@ -1,0 +1,8 @@
+from iter import Generator
+def f() -> Generator[int64]:
+    yield 1
+def use(g: own Generator[int64]) -> int64:
+    return 0
+def main():
+    with TaskGroup() as group:
+        group.start(use, f())

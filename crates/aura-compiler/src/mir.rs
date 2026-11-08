@@ -1550,6 +1550,18 @@ const DECREASES_CURRENT: &str = "decreases measure";
 const DECREASES_PREVIOUS: &str = "previous measure";
 const DECREASES_STARTED: &str = "measured before";
 
+/// A function's `decreases` measure, for the checks at its recursive
+/// calls.
+#[derive(Clone)]
+struct RecursionMeasure {
+    function: String,
+    clause: crate::ast::ContractClause,
+    /// Each parameter in order, with its default.
+    params: Vec<(String, Option<Expr>)>,
+    /// The local holding the measure's value on entry.
+    entry: String,
+}
+
 struct DecreasesState {
     clause: crate::ast::ContractClause,
     previous: String,
@@ -6260,7 +6272,7 @@ fn validated_transfer_failure(
                 return None;
             }
             if crate::sema::is_builtin_io_resource_type(name, args)
-                || (name == "random.Rng" && args.is_empty())
+                || ((name == "random.Rng" || name == "iter.GeneratorHandle") && args.is_empty())
             {
                 return Some(format!("`{ty}` is a host resource"));
             }
@@ -10408,6 +10420,9 @@ pub fn lower(program: &Program) -> MirModule {
 
 thread_local! {
     static SOURCE_LOCATIONS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while lowering for the verifier, which reads each check's clause
+    /// as written and so needs the local behind each source name in scope.
+    static VERIFICATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Lowers `program` as `lower` does and puts a `SourceLocation` before each
@@ -10428,6 +10443,68 @@ pub fn lower_with_source_locations(program: &Program) -> MirModule {
 #[cfg(test)]
 pub(crate) fn lower_unspecialized(program: &Program) -> MirModule {
     make_explicit(program, lower_unresolved(program))
+}
+
+/// Lowers `program` for `aura verify`: every generic call copied, every
+/// trap named, and every method call resolved, with a `SourceLocation`
+/// before each statement, but no ownership pass. Retains and releases
+/// carry no logical meaning, so the verifier reads the module before them.
+pub fn lower_for_verification(program: &Program) -> MirModule {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SOURCE_LOCATIONS.with(|enabled| enabled.set(self.0));
+        }
+    }
+    struct RestoreVerification(bool);
+    impl Drop for RestoreVerification {
+        fn drop(&mut self) {
+            VERIFICATION.with(|enabled| enabled.set(self.0));
+        }
+    }
+    let _restore = Restore(SOURCE_LOCATIONS.with(|enabled| enabled.replace(true)));
+    let _verification = RestoreVerification(VERIFICATION.with(|enabled| enabled.replace(true)));
+    let mut module = lower_unresolved(program);
+    specialize::specialize_generic_functions(&mut module);
+    resolve_runtime_ops_and_unions(program, &mut module);
+    checks::resolve_checks(&mut module);
+    type_args::record_call_type_args(&mut module);
+    methods::resolve_methods(&mut module);
+    module
+}
+
+/// Lowers `program` as `lower` does, or as `lower_with_source_locations`
+/// does for a `debug` build, and leaves unchecked each element read and
+/// loan that `prove` shows in range. `prove` reads the module
+/// `lower_for_verification` gives and names the proved accesses as
+/// `verify::Report::proved_sites` does. Returns the module and how many
+/// accesses lost their check.
+pub fn lower_with_proved_checks<E>(
+    program: &Program,
+    debug: bool,
+    prove: impl FnOnce(
+        &MirModule,
+    )
+        -> std::result::Result<std::collections::BTreeSet<(String, usize, usize)>, E>,
+) -> std::result::Result<(MirModule, usize), E> {
+    let verified = lower_for_verification(program);
+    let proved = prove(&verified)?;
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SOURCE_LOCATIONS.with(|enabled| enabled.set(self.0));
+        }
+    }
+    let _restore = Restore(SOURCE_LOCATIONS.with(|enabled| enabled.replace(debug)));
+    let mut module = lower_unresolved(program);
+    specialize::specialize_generic_functions(&mut module);
+    resolve_runtime_ops_and_unions(program, &mut module);
+    checks::resolve_checks(&mut module);
+    type_args::record_call_type_args(&mut module);
+    methods::resolve_methods(&mut module);
+    let covered = checks::insert_proved_index_facts(&mut module, &verified, &proved);
+    ownership::insert_ownership(&mut module);
+    Ok((module, covered))
 }
 
 fn make_explicit(program: &Program, mut module: MirModule) -> MirModule {
@@ -11610,6 +11687,8 @@ struct Lowerer<'a> {
     specialized_bound_roots: BTreeMap<String, String>,
     non_owning_roots: BTreeSet<String>,
     scoped_names: Vec<std::collections::HashMap<String, String>>,
+    /// The `decreases` measure of the function being lowered.
+    recursion_measure: Option<RecursionMeasure>,
     /// The source name of each compiler-made local that holds a source
     /// variable, kept for a debug build once the variable's scope ends.
     debug_names: BTreeMap<String, String>,
@@ -11835,6 +11914,7 @@ impl<'a> Lowerer<'a> {
             specialized_bound_roots: BTreeMap::new(),
             non_owning_roots: BTreeSet::new(),
             scoped_names: Vec::new(),
+            recursion_measure: None,
             debug_names: BTreeMap::new(),
             binding_blocks: vec![BindingBlock::default()],
             ended_bindings: BTreeSet::new(),
@@ -12327,6 +12407,25 @@ impl<'a> Lowerer<'a> {
         } else {
             self.program.module_registry.get(self.module_name)
         }
+    }
+
+    /// Whether `expr`, a statement, calls a `lemma def`, which only the
+    /// verifier reads: outside verification the call is erased. Its
+    /// arguments are pure, so nothing is lost.
+    fn erased_lemma_call(&self, expr: &Expr) -> bool {
+        if VERIFICATION.with(std::cell::Cell::get) {
+            return false;
+        }
+        let ExprKind::Call { callee, .. } = &expr.kind else {
+            return false;
+        };
+        let ExprKind::Name(name) = &callee.kind else {
+            return false;
+        };
+        !self.local_types.contains_key(&self.render_local_name(name))
+            && self
+                .resolve_function_info(name)
+                .is_some_and(|function| function.decl.lemma)
     }
 
     fn resolve_function_info(&self, name: &str) -> Option<&crate::sema::FunctionInfo> {
@@ -13304,6 +13403,26 @@ impl<'a> Lowerer<'a> {
         self.end_binding_block();
     }
 
+    /// For the verifier, records in the current block the local behind
+    /// each source name in scope that lowering renamed.
+    fn name_scope_for_verifier(&mut self) {
+        if !VERIFICATION.with(std::cell::Cell::get) {
+            return;
+        }
+        let mut names: BTreeMap<String, String> = BTreeMap::new();
+        let rebound = self.binding_blocks.iter().map(|block| &block.rebound);
+        for scope in rebound.chain(self.scoped_names.iter()) {
+            for (name, local) in scope {
+                names.insert(name.clone(), local.clone());
+            }
+        }
+        for (name, local) in names {
+            if local != name {
+                self.emit(Instruction::SourceName { local, name });
+            }
+        }
+    }
+
     fn current_binding_block(&mut self) -> &mut BindingBlock {
         self.binding_blocks
             .last_mut()
@@ -13704,6 +13823,7 @@ impl<'a> Lowerer<'a> {
                 true
             }
             Stmt::Pass(_) => true,
+            Stmt::Expr(expr_stmt) if self.erased_lemma_call(&expr_stmt.expr) => true,
             Stmt::Expr(expr_stmt) => {
                 let value_type = self.infer_expr_type(&expr_stmt.expr);
                 let value = self.lower_expr_for_owned_value(&expr_stmt.expr, value_type.as_ref());
@@ -13711,7 +13831,12 @@ impl<'a> Lowerer<'a> {
                 true
             }
             Stmt::Assert(assert_stmt) => {
-                self.lower_assert(assert_stmt);
+                match &assert_stmt.clause {
+                    Some(clause) => {
+                        self.lower_clause_checks(std::slice::from_ref(clause.as_ref()), clause.kind)
+                    }
+                    None => self.lower_assert(assert_stmt),
+                }
                 true
             }
             Stmt::Return(return_stmt) => {
@@ -13920,6 +14045,7 @@ impl<'a> Lowerer<'a> {
     /// with `result` naming the returned value.
     fn lower_contracted_body(&mut self, function: &crate::ast::FunctionDecl) {
         self.lower_contract_checks(function, crate::ast::ContractKind::Requires);
+        self.lower_recursion_measure(function);
         // Only the hidden class invariant method has `invariant` clauses.
         self.lower_contract_checks(function, crate::ast::ContractKind::Invariant);
         let guarded = self.guarded_self_class(function);
@@ -14052,6 +14178,7 @@ impl<'a> Lowerer<'a> {
                 span,
             }),
             span: condition.span,
+            clause: None,
         };
         let assert_kind = match kind {
             crate::ast::ContractKind::Requires => AssertKind::Requires,
@@ -14060,6 +14187,124 @@ impl<'a> Lowerer<'a> {
             crate::ast::ContractKind::Decreases => AssertKind::Decreases,
         };
         self.lower_check(&check, assert_kind);
+    }
+
+    /// On entry to a function with a `decreases` measure, checks that it is
+    /// not negative and records it, so each recursive call can check that
+    /// the measure of its arguments is smaller.
+    fn lower_recursion_measure(&mut self, function: &crate::ast::FunctionDecl) {
+        let Some(clause) = function
+            .contracts
+            .iter()
+            .find(|clause| clause.kind == crate::ast::ContractKind::Decreases)
+        else {
+            return;
+        };
+        let entry = self.new_typed_temp(Type::named("int64"));
+        let value = self.lower_expr(&clause.condition);
+        self.emit(Instruction::Assign {
+            target: entry.clone(),
+            value: Rvalue::Use(value),
+        });
+        let span = clause.condition.span;
+        let non_negative = Expr {
+            kind: ExprKind::Binary {
+                op: BinaryOp::GreaterEq,
+                left: Box::new(Expr {
+                    kind: ExprKind::Name(DECREASES_CURRENT.to_string()),
+                    span,
+                }),
+                right: Box::new(Expr {
+                    kind: ExprKind::Int(0),
+                    span,
+                }),
+            },
+            span,
+        };
+        self.scoped_names.push(std::collections::HashMap::from([(
+            DECREASES_CURRENT.to_string(),
+            entry.clone(),
+        )]));
+        self.lower_clause_check(
+            &non_negative,
+            format!("`decreases` clause failed: `{}` went below 0", clause.text),
+            clause.span,
+            crate::ast::ContractKind::Decreases,
+        );
+        self.scoped_names.pop();
+        self.recursion_measure = Some(RecursionMeasure {
+            function: function.name.clone(),
+            clause: clause.clone(),
+            params: function
+                .params
+                .iter()
+                .map(|param| (param.name.clone(), param.default.clone()))
+                .collect(),
+            entry,
+        });
+    }
+
+    /// Before a call of the function being lowered, when it has a
+    /// `decreases` measure, checks that the measure of the call's
+    /// arguments is smaller than on entry. Each argument is evaluated again
+    /// for it, which the checker allows because each is pure.
+    fn lower_recursive_call_measure(&mut self, callee: &Expr, args: &[Argument]) {
+        let (Some(measure), ExprKind::Name(name)) = (&self.recursion_measure, &callee.kind) else {
+            return;
+        };
+        if *name != measure.function || self.local_types.contains_key(&self.render_local_name(name))
+        {
+            return;
+        }
+        let measure = measure.clone();
+        let mut scope = std::collections::HashMap::from([(
+            DECREASES_PREVIOUS.to_string(),
+            measure.entry.clone(),
+        )]);
+        for (index, (param, default)) in measure.params.iter().enumerate() {
+            if !crate::sema::expr_references_name(&measure.clause.condition, param) {
+                continue;
+            }
+            let value = args
+                .iter()
+                .find(|arg| arg.name.as_deref() == Some(param.as_str()))
+                .or_else(|| args.get(index).filter(|arg| arg.name.is_none()))
+                .map(|arg| &arg.value)
+                .or(default.as_ref());
+            let Some(value) = value else {
+                return;
+            };
+            let place = self.new_temp_for_expr(value);
+            let operand = self.lower_expr(value);
+            self.emit(Instruction::Assign {
+                target: place.clone(),
+                value: Rvalue::Use(operand),
+            });
+            scope.insert(param.clone(), place);
+        }
+        let span = callee.span;
+        let smaller = Expr {
+            kind: ExprKind::Binary {
+                op: BinaryOp::Less,
+                left: Box::new(measure.clause.condition.clone()),
+                right: Box::new(Expr {
+                    kind: ExprKind::Name(DECREASES_PREVIOUS.to_string()),
+                    span,
+                }),
+            },
+            span,
+        };
+        self.scoped_names.push(scope);
+        self.lower_clause_check(
+            &smaller,
+            format!(
+                "`decreases` clause failed: `{}` did not get smaller at the recursive call",
+                measure.clause.text
+            ),
+            span,
+            crate::ast::ContractKind::Decreases,
+        );
+        self.scoped_names.pop();
     }
 
     /// Lowers the hidden state a `while` loop's `decreases` measure needs:
@@ -14183,6 +14428,7 @@ impl<'a> Lowerer<'a> {
         });
 
         self.switch_to(failure_block);
+        self.name_scope_for_verifier();
         // Render retained operands only on failure, before evaluating the lazy
         // source message. The comparison itself has already consumed the raw
         // captures, so formatting cannot alter its result or evaluate either
@@ -14748,6 +14994,19 @@ impl<'a> Lowerer<'a> {
                     self.emit_list_member_call(&target, "extend", vec![Operand::MovePlace(other)]);
                     return;
                 }
+            }
+            let appended = match (&assign.target, &narrowed_target, op) {
+                (AssignTarget::Name(name), None, BinaryOp::Add) => {
+                    self.lower_str_append_parts(name, &target, target_ty.as_ref(), &assign.value)
+                }
+                _ => None,
+            };
+            if let Some(parts) = appended {
+                self.emit(Instruction::Assign {
+                    target,
+                    value: Rvalue::FormatString { parts },
+                });
+                return;
             }
             let left = match &assign.target {
                 AssignTarget::Name(name) => Expr {
@@ -19939,80 +20198,10 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::FString(parts) => {
                 let temp = self.new_typed_temp(Type::named("str"));
-                let mut lowered_parts = Vec::with_capacity(parts.len());
-                for part in parts {
-                    let lowered = match part {
-                        crate::ast::FormatPart::Literal(text) => {
-                            MirFormatPart::Literal(text.clone())
-                        }
-                        crate::ast::FormatPart::Expr(expr) => {
-                            let value_type = self.infer_expr_type(expr);
-                            let value = self.lower_expr_at_sequence_point(expr, None);
-                            if value_type
-                                .as_ref()
-                                .is_some_and(|ty| self.renders_without_effects(ty))
-                            {
-                                // The sequence point copied the scalar, and
-                                // rendering it runs no user code, so the
-                                // string renders it in place.
-                                lowered_parts.push(MirFormatPart::Value(value));
-                                continue;
-                            }
-                            let rendered = self.new_typed_temp(Type::named("str"));
-                            self.emit(Instruction::Assign {
-                                target: rendered.clone(),
-                                value: Rvalue::FormatString {
-                                    parts: vec![MirFormatPart::Value(value)],
-                                },
-                            });
-                            MirFormatPart::Value(Operand::Place(rendered))
-                        }
-                        crate::ast::FormatPart::Formatted { expr, spec, .. } => {
-                            let value_type = self
-                                .infer_expr_type(expr)
-                                .unwrap_or_else(|| Type::named("Unknown"));
-                            let value = self.lower_expr_at_sequence_point(expr, None);
-                            if self.has_custom_display(&value_type) {
-                                // A custom Display value renders once, then
-                                // the string subset formats the rendered text.
-                                let rendered = self.new_typed_temp(Type::named("str"));
-                                self.emit(Instruction::Assign {
-                                    target: rendered.clone(),
-                                    value: Rvalue::FormatString {
-                                        parts: vec![MirFormatPart::Value(value)],
-                                    },
-                                });
-                                // Precision truncates the rendered text, so a
-                                // bare precision takes the explicit string code.
-                                let spec = match crate::runtime_value::parse_format_spec(spec) {
-                                    Ok(parsed)
-                                        if parsed.precision.is_some() && parsed.ty.is_none() =>
-                                    {
-                                        format!("{spec}s")
-                                    }
-                                    _ => spec.clone(),
-                                };
-                                MirFormatPart::Formatted {
-                                    value: Operand::Place(rendered),
-                                    spec,
-                                    value_type: Type::named("str"),
-                                }
-                            } else {
-                                MirFormatPart::Formatted {
-                                    value,
-                                    spec: spec.clone(),
-                                    value_type,
-                                }
-                            }
-                        }
-                    };
-                    lowered_parts.push(lowered);
-                }
+                let parts = self.lower_format_parts(parts);
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
-                    value: Rvalue::FormatString {
-                        parts: lowered_parts,
-                    },
+                    value: Rvalue::FormatString { parts },
                 });
                 Operand::Place(temp)
             }
@@ -20510,6 +20699,109 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Calls the list method `field` on the list in `place` for its effect.
+    /// `text += value` on a `str` local, as the f-string `f"{text}..."`
+    /// whose first part is `text` and whose other parts are the parts of an
+    /// f-string `value`, its literal text, or `value` itself. Native code
+    /// appends the rest to the local's own text in place when nothing else
+    /// holds it. `None` for any other `+=`, and for a `value` that reads
+    /// `name`, which would see the text it changes.
+    fn lower_str_append_parts(
+        &mut self,
+        name: &str,
+        target: &str,
+        target_ty: Option<&Type>,
+        value: &Expr,
+    ) -> Option<Vec<MirFormatPart>> {
+        let is_str = |ty: Option<&Type>| ty == Some(&Type::named("str"));
+        if !is_str(target_ty)
+            || !is_str(self.infer_expr_type(value).as_ref())
+            || crate::sema::expr_references_name(value, name)
+        {
+            return None;
+        }
+        let mut parts = vec![MirFormatPart::Value(Operand::Place(target.to_string()))];
+        match &value.kind {
+            ExprKind::FString(value_parts) => parts.extend(self.lower_format_parts(value_parts)),
+            ExprKind::String(text) => parts.push(MirFormatPart::Literal(text.clone())),
+            _ => {
+                let value = self.lower_expr(value);
+                parts.push(MirFormatPart::Value(value));
+            }
+        }
+        Some(parts)
+    }
+
+    /// The parts of an f-string, each interpolated value lowered in order
+    /// to the operand the string renders.
+    fn lower_format_parts(&mut self, parts: &[crate::ast::FormatPart]) -> Vec<MirFormatPart> {
+        let mut lowered_parts = Vec::with_capacity(parts.len());
+        for part in parts {
+            let lowered = match part {
+                crate::ast::FormatPart::Literal(text) => MirFormatPart::Literal(text.clone()),
+                crate::ast::FormatPart::Expr(expr) => {
+                    let value_type = self.infer_expr_type(expr);
+                    let value = self.lower_expr_at_sequence_point(expr, None);
+                    if value_type
+                        .as_ref()
+                        .is_some_and(|ty| self.renders_without_effects(ty))
+                    {
+                        // The sequence point copied the scalar, and
+                        // rendering it runs no user code, so the
+                        // string renders it in place.
+                        lowered_parts.push(MirFormatPart::Value(value));
+                        continue;
+                    }
+                    let rendered = self.new_typed_temp(Type::named("str"));
+                    self.emit(Instruction::Assign {
+                        target: rendered.clone(),
+                        value: Rvalue::FormatString {
+                            parts: vec![MirFormatPart::Value(value)],
+                        },
+                    });
+                    MirFormatPart::Value(Operand::Place(rendered))
+                }
+                crate::ast::FormatPart::Formatted { expr, spec, .. } => {
+                    let value_type = self
+                        .infer_expr_type(expr)
+                        .unwrap_or_else(|| Type::named("Unknown"));
+                    let value = self.lower_expr_at_sequence_point(expr, None);
+                    if self.has_custom_display(&value_type) {
+                        // A custom Display value renders once, then
+                        // the string subset formats the rendered text.
+                        let rendered = self.new_typed_temp(Type::named("str"));
+                        self.emit(Instruction::Assign {
+                            target: rendered.clone(),
+                            value: Rvalue::FormatString {
+                                parts: vec![MirFormatPart::Value(value)],
+                            },
+                        });
+                        // Precision truncates the rendered text, so a
+                        // bare precision takes the explicit string code.
+                        let spec = match crate::runtime_value::parse_format_spec(spec) {
+                            Ok(parsed) if parsed.precision.is_some() && parsed.ty.is_none() => {
+                                format!("{spec}s")
+                            }
+                            _ => spec.clone(),
+                        };
+                        MirFormatPart::Formatted {
+                            value: Operand::Place(rendered),
+                            spec,
+                            value_type: Type::named("str"),
+                        }
+                    } else {
+                        MirFormatPart::Formatted {
+                            value,
+                            spec: spec.clone(),
+                            value_type,
+                        }
+                    }
+                }
+            };
+            lowered_parts.push(lowered);
+        }
+        lowered_parts
+    }
+
     fn emit_list_member_call(&mut self, place: &str, field: &str, args: Vec<Operand>) {
         let ignored = self.new_typed_temp(Type::Unit);
         self.emit(Instruction::Assign {
@@ -23311,6 +23603,7 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         expected: Option<&Type>,
     ) -> Operand {
+        self.lower_recursive_call_measure(callee, args);
         match &callee.kind {
             ExprKind::Name(name) if name == "len" && args.len() == 1 => {
                 if let Some(len) = self.lower_span_len(&args[0].value) {
@@ -26807,6 +27100,11 @@ impl<'a> Lowerer<'a> {
                                             );
                                         }
                                     }
+                                    self.infer_bound_only_type_args(
+                                        &type_params,
+                                        &function.type_param_bounds,
+                                        &mut substitutions,
+                                    );
                                     substitute_type(&function.signature.return_type, &substitutions)
                                 }
                             })
@@ -27145,11 +27443,18 @@ impl<'a> Lowerer<'a> {
                                 )
                             });
                         }
-                        self.trait_method_for_receiver(&receiver_type, field).map(
-                            |(method, substitutions)| {
+                        if let Some((method, substitutions)) =
+                            self.trait_method_for_receiver(&receiver_type, field)
+                        {
+                            return Some(substitute_type(
+                                &method.signature.return_type,
+                                &substitutions,
+                            ));
+                        }
+                        self.bounded_trait_method_for_receiver(&receiver_type, field)
+                            .map(|(_, _, method, substitutions)| {
                                 substitute_type(&method.signature.return_type, &substitutions)
-                            },
-                        )
+                            })
                     }
                     _ => None,
                 }
@@ -27559,7 +27864,95 @@ impl<'a> Lowerer<'a> {
         Some(substitutions)
     }
 
+    /// Fills in a callee's type parameters that only its bounds name, such
+    /// as the hidden `S.Iter` of `S: IntoIterator[T]` (step 9e-2), from the
+    /// implementation of the bound's trait for the type `S` resolved to.
+    fn infer_bound_only_type_args(
+        &self,
+        type_params: &BTreeSet<String>,
+        bounds: &BTreeMap<String, Vec<TraitBound>>,
+        substitutions: &mut std::collections::HashMap<String, Type>,
+    ) {
+        let bare = |name: &str| name.rsplit('.').next().unwrap_or(name).to_string();
+        for (param, param_bounds) in bounds {
+            let Some(actual) = substitutions.get(param).cloned() else {
+                continue;
+            };
+            for bound in param_bounds {
+                let open = bound.trait_args.iter().any(|arg| {
+                    matches!(arg, Type::TypeParam(name)
+                        if type_params.contains(name) && !substitutions.contains_key(name))
+                });
+                if !open {
+                    continue;
+                }
+                let mut candidates = Vec::new();
+                if let Type::TypeParam(name) = &actual {
+                    candidates.extend(
+                        self.type_param_bounds
+                            .get(name)
+                            .into_iter()
+                            .flatten()
+                            .filter(|current| bare(&current.trait_name) == bare(&bound.trait_name))
+                            .map(|current| current.trait_args.clone()),
+                    );
+                } else {
+                    for trait_impl in self.trait_impls_in_scope() {
+                        if bare(&trait_impl.trait_name) != bare(&bound.trait_name) {
+                            continue;
+                        }
+                        let Some(impl_substitutions) =
+                            self.trait_impl_substitutions(trait_impl, &actual)
+                        else {
+                            continue;
+                        };
+                        candidates.push(
+                            trait_impl
+                                .trait_args
+                                .iter()
+                                .map(|arg| substitute_type(arg, &impl_substitutions))
+                                .collect::<Vec<_>>(),
+                        );
+                    }
+                }
+                let matched = candidates
+                    .into_iter()
+                    .filter(|candidate| candidate.len() == bound.trait_args.len())
+                    .find_map(|candidate| {
+                        let mut trial = substitutions.clone();
+                        bound
+                            .trait_args
+                            .iter()
+                            .zip(&candidate)
+                            .all(|(pattern, implemented)| {
+                                crate::sema::type_pattern_matches(
+                                    pattern,
+                                    implemented,
+                                    type_params,
+                                    &mut trial,
+                                )
+                            })
+                            .then_some(trial)
+                    });
+                if let Some(trial) = matched {
+                    *substitutions = trial;
+                }
+            }
+        }
+    }
+
     fn type_implements_trait_bound(&self, ty: &Type, bound: &TraitBound) -> bool {
+        // A type parameter satisfies the bounds it was declared with, as in
+        // a default method of `impl[I: Iterator[T]] Trait for Wrap[I]`.
+        if let Type::TypeParam(name) = ty {
+            if self
+                .type_param_bounds
+                .get(name)
+                .is_some_and(|bounds| bounds.contains(bound))
+            {
+                return true;
+            }
+        }
         // A union satisfies a bound when every member does (ADR-0052 A8).
         if let Type::Union(union) = ty {
             return union
@@ -28693,6 +29086,9 @@ pub(crate) mod layout;
 
 #[path = "mir_methods.rs"]
 pub(crate) mod methods;
+
+#[path = "mir_recursion.rs"]
+pub(crate) mod recursion;
 
 pub(crate) use ownership_check::validate_ownership;
 

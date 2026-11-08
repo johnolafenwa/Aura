@@ -51,6 +51,7 @@ fn main() {
         "fmt" => handle_fmt_command(args.collect()),
         "doc" => handle_doc_command(args.collect()),
         "test" => handle_test_command(args.collect()),
+        "verify" => handle_verify_command(args.collect()),
         "deps" => {
             let remaining = args.collect::<Vec<_>>();
             handle_deps_command(remaining);
@@ -200,18 +201,45 @@ fn main() {
         "build" => {
             let remaining = args.collect::<Vec<_>>();
             let (diagnostic_format, remaining) = parse_diagnostic_format(remaining);
+            let remove_proved_checks = remaining.iter().any(|arg| arg == "--remove-proved-checks");
+            let remaining: Vec<String> = remaining
+                .into_iter()
+                .filter(|arg| arg != "--remove-proved-checks")
+                .collect();
             let (output_path, debug, input_args) = parse_build_args(remaining);
             let input = read_input(&mut input_args.into_iter());
-            let result = match (input.from_stdin, debug) {
-                (true, false) => {
-                    lower_path_with_source_to_mir(Path::new(&input.path), &input.source)
-                }
-                (true, true) => lower_path_with_source_to_mir_with_source_locations(
+            // A debug build keeps every check.
+            let result = if remove_proved_checks && !debug {
+                let options = aura_compiler::verify::Options {
+                    cache_dir: verify_cache_root(),
+                    ..aura_compiler::verify::Options::default()
+                };
+                aura_compiler::lower_path_to_mir_with_proved_checks(
                     Path::new(&input.path),
-                    &input.source,
-                ),
-                (false, false) => lower_path_to_mir(Path::new(&input.path)),
-                (false, true) => lower_path_to_mir_with_source_locations(Path::new(&input.path)),
+                    input.from_stdin.then_some(input.source.as_str()),
+                    false,
+                    &options,
+                )
+                .map(|(mir, removed)| {
+                    if diagnostic_format == DiagnosticFormat::Human {
+                        eprintln!("aura: {removed} bounds checks proved and removed");
+                    }
+                    mir
+                })
+            } else {
+                match (input.from_stdin, debug) {
+                    (true, false) => {
+                        lower_path_with_source_to_mir(Path::new(&input.path), &input.source)
+                    }
+                    (true, true) => lower_path_with_source_to_mir_with_source_locations(
+                        Path::new(&input.path),
+                        &input.source,
+                    ),
+                    (false, false) => lower_path_to_mir(Path::new(&input.path)),
+                    (false, true) => {
+                        lower_path_to_mir_with_source_locations(Path::new(&input.path))
+                    }
+                }
             };
             match result {
                 Ok(mir) => {
@@ -4029,6 +4057,144 @@ fn read_input(args: &mut impl Iterator<Item = String>) -> Input {
     }
 }
 
+/// `aura verify`: proves the program's checks with an SMT solver and
+/// reports each check it could not prove. Exits 1 unless every check was
+/// proved.
+fn handle_verify_command(args: Vec<String>) {
+    let (diagnostic_format, args) = parse_diagnostic_format(args);
+    let mut options = aura_compiler::verify::Options {
+        cache_dir: verify_cache_root(),
+        ..aura_compiler::verify::Options::default()
+    };
+    let mut rest = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let value = || {
+            args.get(index + 1)
+                .cloned()
+                .unwrap_or_else(|| print_usage_and_exit(2))
+        };
+        match args[index].as_str() {
+            "--solver" => {
+                options.solver = Some(value());
+                index += 2;
+            }
+            "--timeout" => {
+                options.timeout_ms = value().parse().unwrap_or_else(|_| print_usage_and_exit(2));
+                index += 2;
+            }
+            "--function" => {
+                options.function_filter = Some(value());
+                index += 2;
+            }
+            "--no-cache" => {
+                options.cache_dir = None;
+                index += 1;
+            }
+            _ => {
+                rest.push(args[index].clone());
+                index += 1;
+            }
+        }
+    }
+    let input = read_input(&mut rest.into_iter());
+    let result = if input.from_stdin {
+        aura_compiler::verify_path_with_source(Path::new(&input.path), &input.source, &options)
+    } else {
+        aura_compiler::verify_path(Path::new(&input.path), &options)
+    };
+    let report = match result {
+        Ok(report) => report,
+        Err(error) => {
+            emit_diagnostic(diagnostic_format, &input.path, &input.source, &error);
+            process::exit(1);
+        }
+    };
+    let diagnostics = report.diagnostics();
+    match diagnostic_format {
+        DiagnosticFormat::Human => {
+            for diagnostic in &diagnostics {
+                eprintln!("{}", render_error(&input.path, &input.source, diagnostic));
+            }
+            let cached = match report.cached {
+                0 => String::new(),
+                count => format!(", {count} from the proof cache"),
+            };
+            write_stdout(&format!(
+                "verified {}: {} of {} checks proved in {} functions{cached} ({})\n",
+                input.path,
+                report.proved(),
+                report.obligations.len(),
+                report.functions,
+                report.solver
+            ));
+        }
+        DiagnosticFormat::Json => {
+            let obligations = report
+                .obligations
+                .iter()
+                .map(|obligation| {
+                    let (status, detail) = match &obligation.status {
+                        aura_compiler::verify::Status::Proved => ("proved", JsonValue::Null),
+                        aura_compiler::verify::Status::Failed { counterexample } => (
+                            "failed",
+                            serde_json::json!(counterexample
+                                .iter()
+                                .map(|(name, value)| serde_json::json!({"name": name, "value": value}))
+                                .collect::<Vec<_>>()),
+                        ),
+                        aura_compiler::verify::Status::Unknown => ("unknown", JsonValue::Null),
+                        aura_compiler::verify::Status::Unsupported(reason) => {
+                            ("unsupported", JsonValue::String(reason.clone()))
+                        }
+                    };
+                    serde_json::json!({
+                        "kind": obligation.kind.name(),
+                        "function": obligation.function,
+                        "line": obligation.span.line,
+                        "column": obligation.span.column,
+                        "message": obligation.message,
+                        "status": status,
+                        "detail": detail,
+                    })
+                })
+                .collect::<Vec<_>>();
+            let output = serde_json::json!({
+                "schema_version": 1,
+                "solver": report.solver,
+                "functions": report.functions,
+                "cached": report.cached,
+                "proved": report.proved(),
+                "obligations": obligations,
+                "diagnostics": diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.structured(&input.path))
+                    .collect::<Vec<_>>(),
+            });
+            write_stdout(&format!("{output}\n"));
+        }
+    }
+    if !report.is_proved() {
+        process::exit(1);
+    }
+}
+
+/// The proof cache of `aura verify`: `verify` under `AURA_CACHE_DIR` when
+/// it is set, else `~/.cache/aura/verify`.
+fn verify_cache_root() -> Option<PathBuf> {
+    match std::env::var_os("AURA_CACHE_DIR").filter(|dir| !dir.is_empty()) {
+        Some(dir) => Some(PathBuf::from(dir).join("verify")),
+        None => std::env::var_os("HOME")
+            .filter(|home| !home.is_empty())
+            .map(|home| {
+                PathBuf::from(home)
+                    .join(".cache")
+                    .join("aura")
+                    .join("verify")
+            }),
+    }
+}
+
 fn parse_diagnostic_format(args: Vec<String>) -> (DiagnosticFormat, Vec<String>) {
     let mut format = DiagnosticFormat::Human;
     let mut remaining = Vec::new();
@@ -4825,8 +4991,8 @@ fn usage_text() -> &'static str {
        or: aura <ast|ast-json|mir|analyze> <file.au>\n\
        or: aura <check|run|ast|ast-json|mir|analyze> --stdin <virtual-path>\n\
        or: aura run [--backend mir|direct|auto] <file.au> [-- <program-args>...]\n\
-       or: aura build -o <output> [--backend auto|direct] [--debug] [--format human|json] <file.au>\n\
-       or: aura build -o <output> [--backend auto|direct] [--debug] [--format human|json] --stdin <virtual-path>\n\
+       or: aura build -o <output> [--backend auto|direct] [--debug] [--remove-proved-checks] [--format human|json] <file.au>\n\
+       or: aura build -o <output> [--backend auto|direct] [--debug] [--remove-proved-checks] [--format human|json] --stdin <virtual-path>\n\
        or: aura complete --line <n> --character <n> [--trigger .] <file.au>\n\
        or: aura complete --line <n> --character <n> [--trigger .] --stdin <virtual-path>\n\
        or: aura <signature-help|references|prepare-rename|rename> --line <n> --character <n> [--new-name <name>] [--include-declaration] [--stdin] <path>\n\
@@ -4835,6 +5001,7 @@ fn usage_text() -> &'static str {
        or: aura fmt [--check] [path ...]\n\
        or: aura doc [--out <dir>] [--json] [path ...]\n\
        or: aura test [-k <substring>] [--format json] [--timeout-ms <n>] [path ...]\n\
+       or: aura verify [--solver <path>] [--timeout <ms>] [--function <name>] [--no-cache] [--format human|json] <file.au>\n\
        or: aura deps update [package]\n\
        or: aura upgrade\n\
        or: aura help\n\

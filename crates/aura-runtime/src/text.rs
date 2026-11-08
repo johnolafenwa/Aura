@@ -165,41 +165,54 @@ impl Text {
         Ok(())
     }
 
-    /// Appends `other`, whose flag the caller knows.
-    fn push_with(&mut self, other: &str, other_ascii: bool) {
-        if let Repr::Inline { ascii, len, bytes } = &mut self.0 {
-            let start = usize::from(*len);
-            let end = start + other.len();
-            if end <= INLINE_CAPACITY {
+    /// Appends `other`, whose flag the caller knows, when it fits in the
+    /// storage the text already has, and returns whether it did. A text
+    /// without the room is left as it is.
+    #[inline]
+    pub fn push_within_capacity(&mut self, other: &str, other_ascii: bool) -> bool {
+        match &mut self.0 {
+            Repr::Inline { ascii, len, bytes } => {
+                let start = usize::from(*len);
+                let end = start + other.len();
+                if end > INLINE_CAPACITY {
+                    return false;
+                }
                 bytes[start..end].copy_from_slice(other.as_bytes());
                 *len = end as u8;
                 *ascii &= other_ascii;
-                return;
+            }
+            Repr::Heap { ascii, text } => {
+                if text.capacity() - text.len() < other.len() {
+                    return false;
+                }
+                text.push_str(other);
+                *ascii &= other_ascii;
             }
         }
-        self.reserve(other.len());
-        if let Repr::Heap { ascii, text } = &mut self.0 {
-            text.push_str(other);
-            *ascii &= other_ascii;
+        true
+    }
+
+    /// Appends `other`, whose flag the caller knows.
+    fn push_with(&mut self, other: &str, other_ascii: bool) {
+        if !self.push_within_capacity(other, other_ascii) {
+            self.reserve(other.len());
+            self.push_within_capacity(other, other_ascii);
         }
     }
 
     /// Appends `other`, whose flag the caller already knows, growing the
-    /// storage once, or the error for storage that could not grow.
+    /// storage once, or the error for storage that could not grow. A
+    /// `String` grows by doubling, so a loop of appends copies each byte a
+    /// bounded number of times.
     pub fn try_push_with(
         &mut self,
         other: &str,
         other_ascii: bool,
     ) -> Result<(), std::collections::TryReserveError> {
-        if let Repr::Inline { ascii, len, .. } = &self.0 {
-            if usize::from(*len) + other.len() > INLINE_CAPACITY {
-                let ascii = *ascii;
-                self.spill(ascii, other.len())?;
-            }
-        } else if let Repr::Heap { text, .. } = &mut self.0 {
-            text.try_reserve(other.len())?;
+        if !self.push_within_capacity(other, other_ascii) {
+            self.try_reserve(other.len())?;
+            self.push_within_capacity(other, other_ascii);
         }
-        self.push_with(other, other_ascii);
         Ok(())
     }
 

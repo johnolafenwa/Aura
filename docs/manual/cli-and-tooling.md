@@ -27,6 +27,7 @@ aura check app.au
 | `aura run file.au -- args...` | Execute with program arguments available through `sys.args()`. |
 | `aura build -o path file.au` | Build a native binary. |
 | `aura build --debug -o path file.au` | Build an unoptimized native binary with debug information, for a debugger. |
+| `aura build --remove-proved-checks -o path file.au` | Build a native binary without the list bounds checks `aura verify` proves can never fail. See [Verification](/manual/verification#trust). |
 | `aura ast file.au` | Print the syntax tree. |
 | `aura ast-json file.au` | Print syntax tree JSON. |
 | `aura mir file.au` | Print lowered MIR. |
@@ -38,10 +39,11 @@ aura check app.au
 | `aura fmt --stdin [--check]` | Format standard input to standard output. |
 | `aura doc [--out DIR] [--json] [paths...]` | Check each source and write one API page per module, in Markdown or JSON. See [Docstrings And API Docs](/manual/docstrings#generated-api-docs). |
 | `aura test [-k substring] [--format json] [--timeout-ms N] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case. Defaults to `tests/` and a 30-second per-case timeout. |
+| `aura verify [--solver PATH] [--timeout MS] [--function NAME] [--no-cache] [--format json] file.au` | Prove with an SMT solver that the program's contracts, arithmetic, and list indexes cannot fail. See [Verification](/manual/verification). |
 | `aura upgrade` | Download and run the verified installer to replace the compiler and bundled runtime with the latest published release. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
-| `aura version` / `aura --version` | Print the build channel and 12-hex-digit source commit. Release archives print `aura 0.11.0-preview (0123456789ab)`. Source builds print `aura 0.11.0-dev (0123456789ab)`. |
+| `aura version` / `aura --version` | Print the build channel and 12-hex-digit source commit. Release archives print `aura 0.12.0-preview (0123456789ab)`. Source builds print `aura 0.12.0-dev (0123456789ab)`. |
 
 MIR is Aura's mid-level intermediate representation. The editor query
 commands `signature-help`, `references`, `prepare-rename`, and `rename` are
@@ -185,7 +187,7 @@ build.
 
 ## Native Executable Profile
 
-Workspace release builds of Aura 0.11.0 use `opt-level=3`, fat LTO, one codegen
+Workspace release builds of Aura 0.12.0 use `opt-level=3`, fat LTO, one codegen
 unit, `debug=false`, and `strip="symbols"`. Panic unwinding stays enabled for
 the runtime's `extern "C-unwind"` boundaries. This profile reduces shipped
 compiler metadata. It does not strip the runtime archive's linkable symbols or
@@ -934,7 +936,7 @@ repository-gate tests cover them. `analyze`, `complete`, and diagnostic schema
 version `1` are maintained tooling contracts. Internal AST and MIR layouts are
 deliberately unstable.
 
-Aura 0.11 has no package registry, no publishing and installation workflow, no
+Aura 0.12 has no package registry, no publishing and installation workflow, no
 Windows support, no configurable formatter, and no annotation-based test
 discovery. Its maintained execution engines are the MIR runtime and the direct
 native backend.

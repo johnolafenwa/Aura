@@ -1,15 +1,15 @@
 use crate::ast::{
-    Argument, AssertStmt, AssignStmt, AssignTarget, BinaryOp, BindingPattern, BindingTarget,
-    BreakStmt, ClassDecl, ClassPattern, ClassPatternField, CompareLink, CompareOp,
-    ComprehensionClause, ComprehensionOutput, ConstantDecl, ContinueStmt, ContractClause,
-    ContractKind, Decorator, DestructureStmt, DocString, EnumDecl, EnumPayloadFieldDecl,
-    EnumVariantDecl, Expr, ExprKind, ExprStmt, ExternFunctionDecl, ExternOpaqueClassDecl,
-    FieldDecl, ForStmt, FormatPart, FunctionDecl, FunctionTypeParam, IfBranch, IfStmt, ImplDecl,
-    ImportDecl, ImportKind, ImportName, Item, LambdaCapture, LambdaParam, LiteralPattern,
-    LiteralPatternKind, MapEntryExpr, MatchArm, MatchExprArm, MatchStmt, Module, Param, ParamMode,
-    Pattern, ReceiverKind, RestPattern, ReturnStmt, SequencePattern, Stmt, TraitDecl, TuplePattern,
-    TypeAliasDecl, TypeRef, TypeRefKind, UnaryOp, VariantPattern, ViewKind, ViewReturn, ViewStmt,
-    WhileStmt, WithStmt,
+    Argument, AssertStmt, AssignStmt, AssignTarget, AssocTypeBinding, AssocTypeDecl, BinaryOp,
+    BindingPattern, BindingTarget, BreakStmt, ClassDecl, ClassPattern, ClassPatternField,
+    CompareLink, CompareOp, ComprehensionClause, ComprehensionOutput, ConstantDecl, ContinueStmt,
+    ContractClause, ContractKind, Decorator, DestructureStmt, DocString, EnumDecl,
+    EnumPayloadFieldDecl, EnumVariantDecl, Expr, ExprKind, ExprStmt, ExternFunctionDecl,
+    ExternOpaqueClassDecl, FieldDecl, ForStmt, FormatPart, FunctionDecl, FunctionTypeParam,
+    IfBranch, IfStmt, ImplDecl, ImportDecl, ImportKind, ImportName, Item, LambdaCapture,
+    LambdaParam, LiteralPattern, LiteralPatternKind, MapEntryExpr, MatchArm, MatchExprArm,
+    MatchStmt, Module, Param, ParamMode, Pattern, ReceiverKind, RestPattern, ReturnStmt,
+    SequencePattern, Stmt, TraitDecl, TuplePattern, TypeAliasDecl, TypeRef, TypeRefKind, UnaryOp,
+    VariantPattern, ViewKind, ViewReturn, ViewStmt, WhileStmt, WithStmt,
 };
 use crate::call::STEPPED_SLICE_BUILTIN;
 use crate::diag::{Diagnostic, Result, Span};
@@ -43,7 +43,8 @@ fn misplaced_contract_error(span: Span, kind: ContractKind) -> Diagnostic {
         ContractKind::Requires | ContractKind::Ensures => {
             "a function body, after any docstring and"
         }
-        ContractKind::Invariant | ContractKind::Decreases => "a loop body,",
+        ContractKind::Invariant => "a loop body,",
+        ContractKind::Decreases => "a function or loop body, after any docstring and",
     };
     Diagnostic::coded_at(
         "AU2048",
@@ -79,6 +80,7 @@ fn class_invariant_method(
         doc: None,
         contracts: invariants,
         spec: false,
+        lemma: false,
     }
 }
 
@@ -205,17 +207,18 @@ fn wrong_place_contract_error(
             format!(
                 "a class body states only `invariant` clauses; `{}` belongs at the top of a {} body",
                 kind.keyword(),
-                if kind == ContractKind::Decreases { "`while` loop" } else { "method" }
+                if kind == ContractKind::Decreases { "function or `while` loop" } else { "method" }
             ),
         );
     }
-    let message = match kind {
-        ContractKind::Requires | ContractKind::Ensures => format!(
+    // A function and a loop both take `decreases`.
+    let message = if let ContractKind::Requires | ContractKind::Ensures = kind {
+        format!(
             "`{}` clauses belong at the top of a function body; a loop states `invariant` and `decreases`",
             kind.keyword()
-        ),
-        ContractKind::Invariant => "`invariant` clauses belong at the top of a loop body or in a class body; a function states `requires` and `ensures`".to_string(),
-        ContractKind::Decreases => "`decreases` clauses belong at the top of a `while` loop body; a function states `requires` and `ensures`".to_string(),
+        )
+    } else {
+        "`invariant` clauses belong at the top of a loop body or in a class body; a function states `requires`, `ensures`, and `decreases`".to_string()
     };
     Diagnostic::coded_at("AU2048", span, message)
 }
@@ -434,6 +437,9 @@ struct Parser {
     index: usize,
     recursion_depth: usize,
     current_function_returns_view: bool,
+    /// The `type Name = T` lines of the `impl` block being parsed, so a
+    /// `Self.Name` type in its methods names `T`.
+    impl_assoc_types: Vec<AssocTypeBinding>,
     /// The source, line by line, for contract clause text. Empty for
     /// generated source.
     source_lines: Vec<String>,
@@ -450,6 +456,7 @@ impl Parser {
             index: 0,
             recursion_depth,
             current_function_returns_view: false,
+            impl_assoc_types: Vec::new(),
             source_lines: Vec::new(),
         }
     }
@@ -517,6 +524,7 @@ impl Parser {
                 || self.at_keyword_extern()
                 || self.at_keyword_def()
                 || self.at_spec_def_start()
+                || self.at_lemma_def_start()
                 || self.at_keyword_trait()
                 || self.at_keyword_impl()
             {
@@ -547,7 +555,7 @@ impl Parser {
             }
             TokenKind::KwPublic => {
                 matches!(self.peek_kind(1), Some(TokenKind::Identifier(_)))
-                    && !(matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "spec")
+                    && !(matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "spec" || name == "lemma")
                         && matches!(self.peek_kind(2), Some(TokenKind::KwDef)))
             }
             _ => false,
@@ -611,6 +619,11 @@ impl Parser {
                 }
             }
             Ok(Item::Function(function))
+        } else if self.at_lemma_def_start() {
+            self.bump();
+            let mut function = self.parse_function(public)?;
+            function.lemma = true;
+            Ok(Item::Function(function))
         } else if self.at_keyword_trait() {
             Ok(Item::Trait(self.parse_trait(public)?))
         } else if self.at_keyword_impl() {
@@ -626,6 +639,12 @@ impl Parser {
     /// `spec def`: `spec` is a keyword only before `def`.
     fn at_spec_def_start(&self) -> bool {
         matches!(self.current_kind(), TokenKind::Identifier(name) if name == "spec")
+            && matches!(self.peek_kind(1), Some(TokenKind::KwDef))
+    }
+
+    /// `lemma def`: `lemma` is a keyword only before `def`.
+    fn at_lemma_def_start(&self) -> bool {
+        matches!(self.current_kind(), TokenKind::Identifier(name) if name == "lemma")
             && matches!(self.peek_kind(1), Some(TokenKind::KwDef))
     }
 
@@ -911,11 +930,16 @@ impl Parser {
         let mut methods = Vec::new();
         let mut invariants = Vec::new();
         while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
-            if self.at_spec_def_start() {
+            if self.at_spec_def_start() || self.at_lemma_def_start() {
+                let keyword = if self.at_spec_def_start() {
+                    "spec"
+                } else {
+                    "lemma"
+                };
                 return Err(Diagnostic::coded_at(
                     "AU2048",
                     self.current_span(),
-                    "a `spec def` is a module-level function; `spec def` methods are not available yet",
+                    format!("a `{keyword} def` is a module-level function; `{keyword} def` methods are not available yet"),
                 ));
             }
             if let Some(kind) = self.at_contract_clause() {
@@ -1244,6 +1268,7 @@ impl Parser {
             doc,
             contracts,
             spec: false,
+            lemma: false,
         })
     }
 
@@ -1268,6 +1293,8 @@ impl Parser {
         self.skip_newlines();
         let doc = self.take_docstring()?;
         let mut methods = Vec::new();
+        let mut assoc_types: Vec<AssocTypeDecl> = Vec::new();
+        let mut type_params = type_params;
         while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
             if self.at_simple(&TokenKind::Newline) {
                 self.bump();
@@ -1275,6 +1302,39 @@ impl Parser {
             }
             if self.at_simple(&TokenKind::KwPass) {
                 self.parse_pass_stmt()?;
+                continue;
+            }
+            if self.at_assoc_type_start() {
+                let assoc_span = self.bump().span;
+                let assoc_name = self.expect_identifier()?;
+                if !methods.is_empty() {
+                    return Err(parse_error(
+                        assoc_span,
+                        "a trait declares its associated types before its methods",
+                    ));
+                }
+                if assoc_types.iter().any(|assoc| assoc.name == assoc_name) {
+                    return Err(parse_error(
+                        assoc_span,
+                        format!("associated type `{assoc_name}` is declared twice"),
+                    ));
+                }
+                let mut bounds = Vec::new();
+                if self.eat_simple(&TokenKind::Colon).is_some() {
+                    loop {
+                        bounds.push(self.parse_type()?);
+                        if self.eat_simple(&TokenKind::Comma).is_none() {
+                            break;
+                        }
+                    }
+                }
+                self.expect_statement_terminator()?;
+                type_params.push(crate::ast::assoc_type_param_name(&assoc_name));
+                assoc_types.push(AssocTypeDecl {
+                    name: assoc_name,
+                    bounds,
+                    span: assoc_span,
+                });
                 continue;
             }
             self.reject_misplaced_docstring(
@@ -1302,6 +1362,7 @@ impl Parser {
             methods,
             span,
             doc,
+            assoc_types,
         })
     }
 
@@ -1337,12 +1398,32 @@ impl Parser {
                 methods: Vec::new(),
                 span,
                 derived: true,
+                assoc_types: Vec::new(),
             });
         }
         self.expect_newline()?;
         self.expect_simple(TokenKind::Indent)?;
 
         let mut methods = Vec::new();
+        let previous_assoc_types = std::mem::take(&mut self.impl_assoc_types);
+        let body = self.parse_impl_body(&mut methods);
+        let assoc_types = std::mem::replace(&mut self.impl_assoc_types, previous_assoc_types);
+        body?;
+        Ok(ImplDecl {
+            type_params,
+            type_param_bounds,
+            trait_name,
+            trait_args,
+            for_type,
+            methods,
+            span,
+            derived: false,
+            assoc_types,
+        })
+    }
+
+    /// The `type` lines and methods of an `impl` block, through its dedent.
+    fn parse_impl_body(&mut self, methods: &mut Vec<FunctionDecl>) -> Result<()> {
         while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
             if self.at_simple(&TokenKind::Newline) {
                 self.bump();
@@ -1350,6 +1431,31 @@ impl Parser {
             }
             if self.at_simple(&TokenKind::KwPass) {
                 self.parse_pass_stmt()?;
+                continue;
+            }
+            if self.at_assoc_type_start() {
+                let assoc_span = self.bump().span;
+                let name = self.expect_identifier()?;
+                if !methods.is_empty() {
+                    return Err(parse_error(
+                        assoc_span,
+                        "an implementation fixes its associated types before its methods",
+                    ));
+                }
+                if self.impl_assoc_types.iter().any(|assoc| assoc.name == name) {
+                    return Err(parse_error(
+                        assoc_span,
+                        format!("associated type `{name}` is fixed twice"),
+                    ));
+                }
+                self.expect_simple(TokenKind::Equal)?;
+                let target = self.parse_type()?;
+                self.expect_statement_terminator()?;
+                self.impl_assoc_types.push(AssocTypeBinding {
+                    name,
+                    target,
+                    span: assoc_span,
+                });
                 continue;
             }
             self.reject_misplaced_docstring(
@@ -1362,18 +1468,14 @@ impl Parser {
             }
             methods.push(self.parse_function_with_receiver(true, false)?);
         }
-
         self.expect_simple(TokenKind::Dedent)?;
-        Ok(ImplDecl {
-            type_params,
-            type_param_bounds,
-            trait_name,
-            trait_args,
-            for_type,
-            methods,
-            span,
-            derived: false,
-        })
+        Ok(())
+    }
+
+    /// `type Name` at the start of a line in a trait or `impl` body.
+    fn at_assoc_type_start(&self) -> bool {
+        matches!(self.peek_kind(0), Some(TokenKind::Identifier(name)) if name == "type")
+            && matches!(self.peek_kind(1), Some(TokenKind::Identifier(_)))
     }
 
     fn parse_trait_method(&mut self) -> Result<FunctionDecl> {
@@ -1384,17 +1486,18 @@ impl Parser {
         let (receiver, params) = self.parse_params(true)?;
         self.expect_simple(TokenKind::RParen)?;
         let (return_type, view_return) = self.parse_return_annotation(span)?;
-        // A docstring-only body leaves the method signature-only.
-        let (doc, body) = if self.eat_simple(&TokenKind::Colon).is_some() {
+        // A body of only a docstring and clauses leaves the method
+        // signature-only.
+        let (doc, contracts, body) = if self.eat_simple(&TokenKind::Colon).is_some() {
             self.expect_newline()?;
             let previous_view_return = self.current_function_returns_view;
             self.current_function_returns_view = view_return.is_some();
-            let body = self.parse_block_with_docstring();
+            let body = self.parse_trait_method_body();
             self.current_function_returns_view = previous_view_return;
             body?
         } else {
             self.expect_newline()?;
-            (None, Vec::new())
+            (None, Vec::new(), Vec::new())
         };
         Ok(FunctionDecl {
             public: false,
@@ -1410,8 +1513,9 @@ impl Parser {
             property: None,
             decorators: Vec::new(),
             doc,
-            contracts: Vec::new(),
+            contracts,
             spec: false,
+            lemma: false,
         })
     }
 
@@ -1697,6 +1801,8 @@ impl Parser {
             ))
         } else if self.at_simple(&TokenKind::KwReturn) {
             self.parse_return_stmt()
+        } else if self.at_yield_stmt() {
+            self.parse_yield_stmt()
         } else if self.at_simple(&TokenKind::KwAssert) {
             self.parse_assert_stmt()
         } else if self.at_simple(&TokenKind::KwPass) {
@@ -1797,6 +1903,7 @@ impl Parser {
             condition,
             message,
             span,
+            clause: None,
         }))
     }
 
@@ -2408,27 +2515,6 @@ impl Parser {
         }))
     }
 
-    /// Parses an indented body whose first statement slot may hold a
-    /// docstring. The docstring is returned separately and produces no
-    /// statement.
-    fn parse_block_with_docstring(&mut self) -> Result<(Option<DocString>, Vec<Stmt>)> {
-        self.expect_simple(TokenKind::Indent)?;
-        self.skip_newlines();
-        let doc = self.take_docstring()?;
-
-        let mut body = Vec::new();
-        while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
-            if self.at_simple(&TokenKind::Newline) {
-                self.bump();
-                continue;
-            }
-            body.push(self.parse_stmt()?);
-        }
-
-        self.expect_simple(TokenKind::Dedent)?;
-        Ok((doc, body))
-    }
-
     /// Parses a function body: an optional docstring, then the `requires`
     /// and `ensures` clauses, then the statements.
     fn parse_function_body(
@@ -2450,6 +2536,26 @@ impl Parser {
         Ok((doc, contracts, body))
     }
 
+    /// Parses a trait method body: a function body whose clauses are only
+    /// `requires` and `ensures`, which every implementation inherits.
+    fn parse_trait_method_body(
+        &mut self,
+    ) -> Result<(Option<DocString>, Vec<ContractClause>, Vec<Stmt>)> {
+        let body = self.parse_function_body()?;
+        if let Some(clause) = body
+            .1
+            .iter()
+            .find(|clause| clause.kind == ContractKind::Decreases)
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2048",
+                clause.span,
+                "a trait method states only `requires` and `ensures`, which every implementation inherits",
+            ));
+        }
+        Ok(body)
+    }
+
     /// Parses the clauses at the top of a body, each on its own line.
     fn parse_contract_clauses(&mut self, context: ClauseContext) -> Result<Vec<ContractClause>> {
         let mut clauses = Vec::new();
@@ -2463,7 +2569,7 @@ impl Parser {
                     context == ClauseContext::Function
                 }
                 ContractKind::Invariant => context != ClauseContext::Function,
-                ContractKind::Decreases => context == ClauseContext::Loop,
+                ContractKind::Decreases => context != ClauseContext::Class,
             };
             if !allowed {
                 return Err(wrong_place_contract_error(
@@ -2533,8 +2639,21 @@ impl Parser {
             return None;
         };
         let kind = ContractKind::from_keyword(word)?;
+        self.at_contextual_statement_keyword(word).then_some(kind)
+    }
+
+    /// Whether the current token is `yield` starting a yield statement:
+    /// followed on the same rules as a contract keyword by an expression.
+    fn at_yield_stmt(&self) -> bool {
+        matches!(self.current_kind(), TokenKind::Identifier(word) if word == crate::ast::YIELD_KEYWORD)
+            && self.at_contextual_statement_keyword(crate::ast::YIELD_KEYWORD)
+    }
+
+    fn at_contextual_statement_keyword(&self, word: &str) -> bool {
         let keyword = &self.tokens[self.index];
-        let next = self.tokens.get(self.index + 1)?;
+        let Some(next) = self.tokens.get(self.index + 1) else {
+            return false;
+        };
         let starts_expression = match &next.kind {
             TokenKind::Identifier(_)
             | TokenKind::IntLiteral(_)
@@ -2558,9 +2677,36 @@ impl Parser {
         };
         // `requires [x]` and `requires -x` read as clauses only with a space.
         let spaced = next.span.column > keyword.span.column + word.len();
-        let starts_expression = starts_expression
-            && (spaced || !matches!(next.kind, TokenKind::LBracket | TokenKind::Minus));
-        starts_expression.then_some(kind)
+        starts_expression
+            && (spaced || !matches!(next.kind, TokenKind::LBracket | TokenKind::Minus))
+    }
+
+    /// `yield expr`, kept as a call of the hidden name `yield ` until the
+    /// generator pass rewrites it (see `sema::generators`).
+    fn parse_yield_stmt(&mut self) -> Result<Stmt> {
+        let span = self.current_span();
+        self.bump();
+        let value = self.parse_expr()?;
+        self.expect_statement_terminator()?;
+        let value_span = value.span;
+        Ok(Stmt::Expr(ExprStmt {
+            expr: Expr {
+                kind: ExprKind::Call {
+                    callee: Box::new(Expr {
+                        kind: ExprKind::Name(crate::ast::YIELD_MARKER.to_string()),
+                        span,
+                    }),
+                    args: vec![crate::ast::Argument {
+                        name: None,
+                        value,
+                        span: value_span,
+                    }],
+                },
+                span,
+            },
+            span,
+            discarded: false,
+        }))
     }
 
     /// True when the current token is a plain triple-quoted string that is a
@@ -2717,6 +2863,25 @@ impl Parser {
     }
 
     fn parse_type_atom_inner(&mut self) -> Result<TypeRef> {
+        let ty = self.parse_type_atom_core()?;
+        // Inside an `impl` block, `Self.Name` is the type the block fixed.
+        if let TypeRefKind::Named { name, args } = &ty.kind {
+            if let Some(assoc) = name.strip_prefix("Self.") {
+                if let Some(binding) = self
+                    .impl_assoc_types
+                    .iter()
+                    .find(|binding| binding.name == assoc && args.is_empty())
+                {
+                    let mut target = binding.target.clone();
+                    target.span = ty.span;
+                    return Ok(target);
+                }
+            }
+        }
+        Ok(ty)
+    }
+
+    fn parse_type_atom_core(&mut self) -> Result<TypeRef> {
         let span = self.current_span();
         let capability = match self.current_kind() {
             TokenKind::KwMut => Some("mut"),

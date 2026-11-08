@@ -1502,8 +1502,8 @@ fn direct_nested_array_collection_reads_and_clones_use_fallible_copy() {
         .contains("Array shape could not allocate"));
 
     let map = boxed_value(Value::Map(MapValue {
-        key_type: Type::named("str"),
-        value_type: Type::Named("Array".to_string(), vec![Type::named("int32")]),
+        key_type: Type::named("str").into(),
+        value_type: Type::Named("Array".to_string(), vec![Type::named("int32")]).into(),
         entries: vec![(Value::String("item".to_string().into()), array_value(11))].into(),
     }));
     let map_address = map as usize;
@@ -2944,6 +2944,21 @@ fn host_builtin_entry(name: &str) -> extern "C-unwind" fn(*mut i64, i64) -> *mut
         .unwrap_or_else(|| panic!("`{name}` has no native host builtin entry"))
 }
 
+/// Calls a JSON builtin that takes its one argument by value, moving the
+/// caller's only reference into the argument buffer as generated code does.
+fn direct_json_owned_host_builtin_call(name: &str, argument: *mut OpaqueValue) -> *mut OpaqueValue {
+    let clone_count = super::direct_value_clone_count();
+    let buffer = super::aura_direct_arg_buffer_new(1);
+    super::aura_direct_arg_buffer_store_owned(buffer, 0, argument as i64);
+    let result = host_builtin_entry(name)(buffer, 1);
+    assert_eq!(
+        super::direct_value_clone_count(),
+        clone_count,
+        "{name} must move its owned argument without cloning it"
+    );
+    result
+}
+
 fn direct_json_host_builtin_call(name: &str, arguments: &[*mut OpaqueValue]) -> *mut OpaqueValue {
     let clone_count = super::direct_value_clone_count();
     let result = direct_host_builtin_call(name, arguments);
@@ -3046,7 +3061,9 @@ fn direct_host_builtin_ffi_covers_success_and_diagnostic_boundaries() {
             crate::runtime_value::host_builtins::host_builtin_function(name).is_some()
                 || crate::runtime_value::evaluate_bytes_host_builtin_ref(name, &Value::Unit)
                     .is_some()
-                || crate::text_methods::is_bytes_search_builtin(name),
+                || crate::text_methods::is_bytes_search_builtin(name)
+                // The interpreter runs generator bodies itself.
+                || name.starts_with("iter::__aura_generator_"),
             "`{name}` must also reach the MIR interpreter"
         );
     }
@@ -3366,18 +3383,11 @@ fn direct_json_accessors_return_none_for_other_variants_and_owned_accessors_stil
 
     for name in ["json::into_string", "json::into_array", "json::into_object"] {
         let source = direct_json_value(JsonValue::Null);
-        let result = direct_json_host_builtin_call(name, &[source]);
+        // The builtin consumes its owned value even when it returns None,
+        // so the source box is freed with the argument buffer.
+        let result = direct_json_owned_host_builtin_call(name, source);
         expect_optional_absent(result);
-        unsafe {
-            super::with_value(source, |value| {
-                assert!(
-                    matches!(value, Value::Unit),
-                    "{name} must consume its owned value even when returning None"
-                );
-            });
-            release_value(source);
-            release_value(result);
-        }
+        unsafe { release_value(result) };
     }
 }
 
@@ -3497,7 +3507,7 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
             other => panic!("expected json.Value.String, found {other:?}"),
         })
     };
-    let extracted_string = direct_json_host_builtin_call("json::into_string", &[owned_string]);
+    let extracted_string = direct_json_owned_host_builtin_call("json::into_string", owned_string);
     unsafe {
         super::with_value(extracted_string, |value| match value {
             Value::Union(union) => match &union.payload {
@@ -3508,12 +3518,6 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
                 other => panic!("expected extracted str, found {other:?}"),
             },
             other => panic!("expected a present `str | None`, found {other:?}"),
-        });
-        super::with_value(owned_string, |value| {
-            assert!(
-                matches!(value, Value::Unit),
-                "owned str source was not moved"
-            )
         });
     }
 
@@ -3527,7 +3531,7 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
             other => panic!("expected json.Value.Array, found {other:?}"),
         })
     };
-    let extracted_array = direct_json_host_builtin_call("json::into_array", &[owned_array]);
+    let extracted_array = direct_json_owned_host_builtin_call("json::into_array", owned_array);
     unsafe {
         super::with_value(extracted_array, |value| match value {
             Value::Union(union) => match &union.payload {
@@ -3537,12 +3541,6 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
                 other => panic!("expected extracted Vec, found {other:?}"),
             },
             other => panic!("expected a present `list[json.Value] | None`, found {other:?}"),
-        });
-        super::with_value(owned_array, |value| {
-            assert!(
-                matches!(value, Value::Unit),
-                "owned Array source was not moved"
-            )
         });
     }
 
@@ -3559,7 +3557,7 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
             other => panic!("expected json.Value.Object, found {other:?}"),
         })
     };
-    let extracted_object = direct_json_host_builtin_call("json::into_object", &[owned_object]);
+    let extracted_object = direct_json_owned_host_builtin_call("json::into_object", owned_object);
     unsafe {
         super::with_value(extracted_object, |value| match value {
             Value::Union(union) => match &union.payload {
@@ -3567,12 +3565,6 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
                 other => panic!("expected extracted Map, found {other:?}"),
             },
             other => panic!("expected a present `dict[str, json.Value] | None`, found {other:?}"),
-        });
-        super::with_value(owned_object, |value| {
-            assert!(
-                matches!(value, Value::Unit),
-                "owned Object source was not moved"
-            )
         });
     }
 
@@ -3584,11 +3576,8 @@ fn direct_json_host_builtins_borrow_without_cloning_and_move_owned_payloads() {
         dumped,
         null,
         is_null,
-        owned_string,
         extracted_string,
-        owned_array,
         extracted_array,
-        owned_object,
         extracted_object,
     ] {
         unsafe { release_value(pointer) };
@@ -5620,8 +5609,8 @@ fn direct_runtime_type_tags_are_interned_and_retagging_is_idempotent() {
     }
 
     let map = boxed_value(Value::Map(MapValue {
-        key_type: Type::named("Unknown"),
-        value_type: Type::named("Unknown"),
+        key_type: Type::named("Unknown").into(),
+        value_type: Type::named("Unknown").into(),
         entries: Vec::new().into(),
     }));
     super::aura_direct_tag_value_type(map, b"dict[str, int32]".as_ptr(), 16);
@@ -5743,8 +5732,8 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     }
 
     let mixed_map = boxed_value(Value::Map(MapValue {
-        key_type: Type::named("Unknown"),
-        value_type: Type::named("Unknown"),
+        key_type: Type::named("Unknown").into(),
+        value_type: Type::named("Unknown").into(),
         entries: Vec::new().into(),
     }));
     super::aura_direct_tag_value_type(
@@ -11493,8 +11482,8 @@ fn direct_enum_owned_payload_buffer_moves_string_vec_and_map_allocations() {
         (
             "Object",
             Value::Map(MapValue {
-                key_type: Type::named("str"),
-                value_type: Type::named("json.Value"),
+                key_type: Type::named("str").into(),
+                value_type: Type::named("json.Value").into(),
                 entries: entries.into(),
             }),
             Allocation::Map(entries_ptr),
@@ -12289,8 +12278,8 @@ fn direct_json_rejects_inexact_int_array_object_and_indent_metadata() {
         enum_name: "json.Value".into(),
         variant_name: "Object".into(),
         payloads: (vec![Value::Map(MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::named("Unknown"),
+            key_type: Type::named("str").into(),
+            value_type: Type::named("Unknown").into(),
             entries: vec![].into(),
         })])
         .into(),
@@ -12993,8 +12982,8 @@ fn native_runtime_private_value_decoders_cover_success_paths() {
     assert_eq!(
         super::expect_headers_map(
             &Value::Map(MapValue {
-                key_type: aura_core::types::Type::named("Unknown"),
-                value_type: aura_core::types::Type::named("Unknown"),
+                key_type: aura_core::types::Type::named("Unknown").into(),
+                value_type: aura_core::types::Type::named("Unknown").into(),
                 entries: vec![(
                     Value::String("content-type".to_string().into()),
                     Value::String("text/plain".to_string().into()),
@@ -13135,8 +13124,8 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "headers-key-type" => {
                 super::expect_headers_map(
                     &Value::Map(MapValue {
-                        key_type: aura_core::types::Type::named("Unknown"),
-                        value_type: aura_core::types::Type::named("Unknown"),
+                        key_type: aura_core::types::Type::named("Unknown").into(),
+                        value_type: aura_core::types::Type::named("Unknown").into(),
                         entries: vec![(
                             Value::Int(IntegerValue::from_signed(1)),
                             Value::String("value".to_string().into()),
@@ -15831,8 +15820,8 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         value_type_name(Value::Map(MapValue {
-            key_type: aura_core::types::Type::named("str"),
-            value_type: aura_core::types::Type::named("int32"),
+            key_type: aura_core::types::Type::named("str").into(),
+            value_type: aura_core::types::Type::named("int32").into(),
             entries: Vec::new().into(),
         })),
         "dict"
@@ -15910,8 +15899,8 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         inferred_collection_type(&Value::Map(MapValue {
-            key_type: aura_core::types::Type::named("str"),
-            value_type: aura_core::types::Type::named("int32"),
+            key_type: aura_core::types::Type::named("str").into(),
+            value_type: aura_core::types::Type::named("int32").into(),
             entries: Vec::new().into(),
         })),
         aura_core::types::Type::Named(
@@ -22457,6 +22446,59 @@ fn direct_format_builder_appends_the_same_text_as_stringify_and_format() {
 }
 
 #[test]
+fn direct_format_append_builds_in_the_only_box_and_copies_a_shared_one() {
+    // The only reference is the builder itself, so the text grows in place.
+    let text = string_value("ab");
+    let builder = super::aura_direct_format_append_begin(text);
+    assert_eq!(builder, text);
+    let builder = super::aura_direct_format_append_str(builder, "cd".as_ptr(), 2);
+    assert_eq!(builder, text);
+    // A part that is the builder reads the text before it changes.
+    super::aura_direct_format_push_value(builder, builder);
+    assert_eq!(expect_string(builder), "abcdabcd");
+
+    // A box another handle holds keeps its text, and the builder is a copy.
+    let shared = string_value("kept");
+    let other = unsafe { retain_value(shared) };
+    let builder = super::aura_direct_format_append_str(shared, "!".as_ptr(), 1);
+    assert_ne!(builder, shared);
+    assert_eq!(expect_string(builder), "kept!");
+    assert_eq!(expect_string(other), "kept");
+
+    // A module constant is never changed in place.
+    let constant = string_value("const");
+    unsafe { super::freeze_direct_value(constant) };
+    let builder = super::aura_direct_format_append_begin(constant);
+    assert_ne!(builder, constant);
+    super::aura_direct_format_push_str(builder, "?".as_ptr(), 1);
+    assert_eq!(expect_string(builder), "const?");
+    assert_eq!(
+        unsafe { value_ref(constant) },
+        Value::String("const".into())
+    );
+    unsafe { super::free_frozen_direct_value(constant) };
+
+    let diagnostic = capture_direct_boundary_diagnostic(|| {
+        super::aura_direct_format_append_begin(std::ptr::null_mut());
+    });
+    assert_eq!(
+        diagnostic.message,
+        "direct runtime received a null opaque value pointer"
+    );
+
+    let number = int_value(1);
+    let address = number as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_format_push_str(address as *mut OpaqueValue, "x".as_ptr(), 1);
+    });
+    assert_eq!(
+        diagnostic.message,
+        "f-string builder holds `integer` instead of `str`"
+    );
+    unsafe { release_value(number) };
+}
+
+#[test]
 fn literal_replace_reads_its_arguments_where_the_program_keeps_them() {
     let text = string_value("a<b><");
     let replaced =
@@ -25696,8 +25738,8 @@ fn direct_element_path_take_and_probe_lend_entries_without_cloning() {
         })
     }
     let table = boxed_value(Value::Map(MapValue {
-        key_type: Type::named("str"),
-        value_type: Type::Named("list".to_string(), vec![Type::named("int64")]),
+        key_type: Type::named("str").into(),
+        value_type: Type::Named("list".to_string(), vec![Type::named("int64")]).into(),
         entries: vec![(Value::String("a".to_string().into()), bucket(&[1, 2, 3]))].into(),
     })) as usize;
     let key = string_value("a") as usize;
@@ -25738,6 +25780,51 @@ fn direct_element_path_take_and_probe_lend_entries_without_cloning() {
         element_path_load(table, "[k]", &[key as i64]).render(),
         "[1, 2, 3, 4]"
     );
+
+    // A push appends a scalar's bits to the list in place, and a list of
+    // no known element type takes the value path and learns it.
+    let push = |bits: i64, kind: super::DirectScalarKind| {
+        super::aura_direct_element_path_push_scalar(
+            table as *mut OpaqueValue,
+            "[k]".as_ptr(),
+            3,
+            [key as i64].as_ptr(),
+            1,
+            bits,
+            kind as i64,
+            3,
+            9,
+        );
+    };
+    push(5, super::DirectScalarKind::Int64);
+    assert_eq!(
+        element_path_load(table, "[k]", &[key as i64]).render(),
+        "[1, 2, 3, 4, 5]"
+    );
+    let untyped = super::aura_direct_vec_empty();
+    element_path_store(table, "[k]", &[key as i64], unsafe { take_value(untyped) });
+    push(2.5f64.to_bits() as i64, super::DirectScalarKind::Float64);
+    assert_eq!(
+        element_path_load(table, "[k]", &[key as i64]).render(),
+        "[2.5]"
+    );
+    // A value that is not a list traps.
+    element_path_store(table, "[k]", &[key as i64], Value::Unit);
+    let not_list = element_trap_message(move || {
+        super::aura_direct_element_path_push_scalar(
+            table as *mut OpaqueValue,
+            "[k]".as_ptr(),
+            3,
+            [key as i64].as_ptr(),
+            1,
+            1,
+            super::DirectScalarKind::Int64 as i64,
+            3,
+            9,
+        );
+    });
+    assert!(not_list.contains("expected `list`"), "{not_list}");
+    element_path_store(table, "[k]", &[key as i64], bucket(&[1, 2, 3, 4]));
 
     // A missing key traps at the index expression for both helpers.
     let missing = string_value("missing") as usize;
@@ -26025,8 +26112,8 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
     // Dictionary entries (borrowed keys), nested lists inside entries, and
     // a nested element written in place through two selections.
     let table = boxed_value(Value::Map(MapValue {
-        key_type: Type::named("str"),
-        value_type: Type::Named("list".to_string(), vec![Type::named("int64")]),
+        key_type: Type::named("str").into(),
+        value_type: Type::Named("list".to_string(), vec![Type::named("int64")]).into(),
         entries: vec![(
             Value::String("a".to_string().into()),
             Value::Vec(VecValue {
@@ -26176,8 +26263,8 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
 #[test]
 fn adr0061_direct_entry_paths_borrow_keys_and_check_selector_counts() {
     let table = boxed_value(Value::Map(MapValue {
-        key_type: Type::named("str"),
-        value_type: Type::named("int64"),
+        key_type: Type::named("str").into(),
+        value_type: Type::named("int64").into(),
         entries: vec![(
             Value::String("ready".to_string().into()),
             Value::Int(IntegerValue::from_i64(1)),
@@ -27781,7 +27868,7 @@ fn opaque_values_keep_their_box_size() {
     // in-place appends. The shape tag that lets generated code skip a
     // repeated tag takes 8, and the value's 16-byte alignment pads 8.
     #[cfg(target_pointer_width = "64")]
-    assert_eq!(std::mem::size_of::<OpaqueValue>(), 208);
+    assert_eq!(std::mem::size_of::<OpaqueValue>(), 192);
 }
 
 #[test]
@@ -28719,8 +28806,8 @@ fn direct_retags_skip_values_that_already_have_the_shape() {
     assert!(!changes(&set, &named("set", vec![Type::named("str")])));
     assert!(changes(&set, &named("set", vec![int64()])));
     let map = Value::Map(MapValue {
-        key_type: Type::named("str"),
-        value_type: int64(),
+        key_type: Type::named("str").into(),
+        value_type: int64().into(),
         entries: DictEntries::new(),
     });
     assert!(!changes(
@@ -29482,4 +29569,165 @@ fn one_byte_replace_count_and_split_match_the_substring_search() {
             .collect();
         assert_eq!(parts, text.split(from).collect::<Vec<_>>(), "{text}");
     }
+}
+
+#[test]
+fn direct_generator_helpers_drive_a_runtime_generator() {
+    use crate::runtime_value::{GeneratorHooks, GeneratorValue, DIRECT_GENERATOR_STACK_BYTES};
+    let item = |value: i64| Value::Int(IntegerValue::from_signed(i128::from(value)));
+    let generator = GeneratorValue::new(
+        move || {
+            // Closing makes the paused `yield` report false.
+            let more = super::direct_generator_yield(vec![item(7)], None)?;
+            assert_eq!(more, Value::Bool(false));
+            Ok(())
+        },
+        DIRECT_GENERATOR_STACK_BYTES,
+        true,
+        Some(Box::new(super::DirectGeneratorFrames::default())),
+    );
+    let handle = boxed_value(Value::Generator(generator));
+    let args = super::DirectHostArgBuffer {
+        handles: vec![handle as i64],
+    };
+    let call = |name| super::direct_generator_handle(name, &args);
+    assert_eq!(
+        call("iter::__aura_generator_resume").expect("resume"),
+        Value::Bool(true)
+    );
+    assert_eq!(call("iter::__aura_generator_take").expect("take"), item(7));
+    assert_eq!(
+        call("iter::__aura_generator_close").expect("close"),
+        Value::Unit
+    );
+    assert_eq!(
+        call("iter::__aura_generator_resume").expect("ended"),
+        Value::Bool(false)
+    );
+
+    let not_a_generator = boxed_value(Value::Bool(true));
+    let args = super::DirectHostArgBuffer {
+        handles: vec![not_a_generator as i64],
+    };
+    let error = super::direct_generator_handle("iter::__aura_generator_resume", &args)
+        .expect_err("a bool is not a generator");
+    assert!(error.message.contains("expected a generator"), "{error:?}");
+
+    let error = super::direct_generator_start(vec![Value::Bool(true)], None)
+        .expect_err("a bool is not a body");
+    assert!(error.message.contains("one closure argument"), "{error:?}");
+    let error = super::direct_generator_yield(Vec::new(), None).expect_err("yield needs an item");
+    assert!(error.message.contains("one item argument"), "{error:?}");
+
+    // Outside a direct task the frame hooks have no stack to move.
+    let mut frames = super::DirectGeneratorFrames::default();
+    frames.before_resume();
+    frames.after_suspend();
+}
+
+#[test]
+fn function_signatures_decode_once_per_descriptor_and_the_cache_stays_bounded() {
+    use super::{
+        decoded_function_signature, FUNCTION_SIGNATURE_CACHE, FUNCTION_SIGNATURE_CACHE_LIMIT,
+    };
+    use aura_core::types::Type;
+
+    let signature = Type::Function {
+        params: Vec::new(),
+        return_type: Box::new(Type::Unit),
+    };
+    let descriptor = aura_core::type_descriptor::encode(&signature);
+    FUNCTION_SIGNATURE_CACHE.with(|cache| cache.borrow_mut().clear());
+    let first = decoded_function_signature(descriptor.as_ptr(), descriptor.len());
+    let second = decoded_function_signature(descriptor.as_ptr(), descriptor.len());
+    assert_eq!(first, signature);
+    assert_eq!(second, signature);
+    assert_eq!(
+        FUNCTION_SIGNATURE_CACHE.with(|cache| cache.borrow().len()),
+        1
+    );
+
+    let descriptors = (0..FUNCTION_SIGNATURE_CACHE_LIMIT + 4)
+        .map(|_| descriptor.clone())
+        .collect::<Vec<_>>();
+    for descriptor in &descriptors {
+        assert_eq!(
+            decoded_function_signature(descriptor.as_ptr(), descriptor.len()),
+            signature
+        );
+    }
+    assert!(
+        FUNCTION_SIGNATURE_CACHE.with(|cache| cache.borrow().len())
+            <= FUNCTION_SIGNATURE_CACHE_LIMIT
+    );
+}
+
+#[test]
+fn well_known_enum_names_share_one_text_from_any_buffer() {
+    for name in [
+        "json.Value",
+        "Null",
+        "Bool",
+        "Int",
+        "Float",
+        "String",
+        "Array",
+        "Object",
+        "Lookup",
+        "Found",
+        "Missing",
+        "Result",
+        "Ok",
+        "Err",
+        "Option",
+        "Some",
+        "None",
+    ] {
+        let first = name.as_bytes().to_vec();
+        let second = name.as_bytes().to_vec();
+        let from_first = super::literal_runtime_name(first.as_ptr(), first.len());
+        let from_second = super::literal_runtime_name(second.as_ptr(), second.len());
+        assert_eq!(from_first.as_str(), name);
+        assert!(
+            std::ptr::eq(from_first.as_ptr(), from_second.as_ptr()),
+            "{name} should not be copied"
+        );
+    }
+    // Names that only look like them are their own.
+    for name in ["Lookups", "Ok!", "json.value", "Nul", ""] {
+        let bytes = name.as_bytes().to_vec();
+        assert_eq!(
+            super::literal_runtime_name(bytes.as_ptr(), bytes.len()).as_str(),
+            name
+        );
+    }
+}
+
+#[test]
+fn map_insert_in_place_stores_what_set_in_place_stores_without_a_result() {
+    let map = super::aura_direct_map_empty();
+    super::aura_direct_map_insert_in_place(map, string_value("name"), int_value(1));
+    super::aura_direct_map_insert_in_place(map, string_value("count"), int_value(3));
+    // An equal key keeps its first place and takes the later value.
+    super::aura_direct_map_insert_in_place(map, string_value("name"), int_value(2));
+    assert_eq!(super::aura_direct_map_len(map), 2);
+    assert_eq!(
+        expect_vec_strings(super::aura_direct_map_keys(map)),
+        vec!["name".to_string(), "count".to_string()]
+    );
+    assert_eq!(
+        expect_vec_ints(super::aura_direct_map_values(map)),
+        vec![2, 3]
+    );
+    // The map took its types from its first entry, before any tag.
+    unsafe {
+        super::with_value(map, |value| {
+            let Value::Map(map) = value else {
+                panic!("expected a dict, found {value:?}");
+            };
+            assert_eq!(map.key_type, Type::named("str"));
+            assert_eq!(map.value_type, Type::named("int64"));
+        })
+    };
+    unsafe { release_value(map) };
 }

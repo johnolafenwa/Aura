@@ -66,3 +66,82 @@ the `str` and `dict` work of Phase 3.
 `int64` function that LLVM inlines, against the same arithmetic written
 in the loop, so Rust's cost is 0. Aura's is the frame record each call
 keeps: 37 instructions before step 4a, 12 after.
+
+`iterator_next`, `generator_next`, and `generator_start` (step 9f, added
+on 7 November 2026, measured at `f86a588`) cost one `next` of a
+user-defined `Iterator` class, one resumed `yield` of a generator, and
+creating, running to its first `yield`, and dropping a generator. Rust's
+side uses a plain `Iterator` impl and `std::iter::from_fn`, which LLVM
+inlines into the loop, so these ratios measure Aura's dispatch and
+coroutine switching rather than the work inside the loop body.
+
+| operation | step | count | Rust instr/op | Aura instr/op | Aura/Rust |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `iterator_next` | 9f | 100,000 | 7.0 | 2,161.1 | 308.7x |
+| `generator_next` | 9f | 100,000 | 5.0 | 8,099.3 | 1,619.5x |
+| `generator_start` | 9f | 10,000 | 11.0 | 24,551.1 | 2,231.9x |
+
+That was the baseline. With the fast iteration forms (measured on
+7 November 2026, after #227), a loop over such an iterator calls an
+unboxed `__aura_advance` method that LLVM inlines, and a loop over a
+generator with one `yield` that calls nothing runs the generator's body in
+place, so neither builds a `Step` or switches stacks:
+
+| operation | step | count | Rust instr/op | Aura instr/op | Aura/Rust |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `iterator_next` | 9f | 100,000 | 7.0 | 15.9 | 2.3x |
+| `generator_next` | 9f | 100,000 | 5.0 | 6.0 | 1.2x |
+| `generator_start` | 9f | 10,000 | 11.0 | 0.4 | 0.0x |
+
+`generator_start` now costs nothing: the one-item generator runs in place
+and LLVM folds it into the loop around it, while Rust still builds its
+`from_fn` closure. A generator that does not qualify for running in place
+(more than one `yield`, or a call in its body) runs as a state machine,
+about 22 instructions per item on the same loop. A generator passed
+around as a value, or with locals other than numbers, `bool`, and `str`,
+still ran on its own stack.
+
+`generator_value`, `generator_pipeline`, `generator_list`, and
+`generator_class` (step 9g, added on 7 November 2026) measure those cases:
+a generator passed to a function that sums it, a generator that doubles the
+items of another generator it was passed, a generator over a `list[int64]`
+it owns, and a generator whose loop counter is a field of a class instance.
+`str_append` and `str_format` measure a string-building loop. At `453a42b`,
+before step 9g:
+
+| operation | step | count | Rust instr/op | Aura instr/op | Aura/Rust |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `generator_value` | 9g | 100,000 | 5.0 | 8,087.3 | 1,617.1x |
+| `generator_pipeline` | 9g | 100,000 | 8.0 | 16,170.6 | 2,021.0x |
+| `generator_list` | 9g | 100,000 | 5.0 | 8,094.4 | 1,618.7x |
+| `generator_class` | 9g | 100,000 | 5.0 | 8,115.3 | 1,622.7x |
+| `str_append` | 9g | 100,000 | 38.4 | 101,245.1 | 2,639.8x |
+| `str_format` | 9g | 100,000 | 308.9 | 291,220.8 | 942.7x |
+
+A call that passes a generator call to a function that only loops over it
+now calls a copy of the function that loops over the generator call
+itself, and generator frames hold collections, classes, and other
+generators' frames, so all four run as a state machine or in place:
+
+| operation | step | count | Rust instr/op | Aura instr/op | Aura/Rust |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `generator_value` | 9g | 100,000 | 5.0 | 6.0 | 1.2x |
+| `generator_pipeline` | 9g | 100,000 | 8.0 | 10.0 | 1.2x |
+| `generator_list` | 9g | 100,000 | 5.0 | 7.0 | 1.4x |
+| `generator_class` | 9g | 100,000 | 5.0 | 28.1 | 5.6x |
+
+`generator_class` costs what the same loop costs without a generator: each
+read or write of a field of an instance with a `str` field checks the
+instance's layout first, which `class_field_read` and `field_write` also
+measure.
+
+A class local that the function builds with a constructor and otherwise
+reaches only through its fields keeps its layout, so its field reads and
+writes now skip that check:
+
+| operation | step | count | Rust instr/op | Aura instr/op | Aura/Rust |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `generator_class` | 9g | 100,000 | 5.0 | 10.1 | 2.0x |
+
+`class_field_read` (14.7x) and `field_write` (4.0x) reach instances held in
+a list, which other code can share, so they still check.

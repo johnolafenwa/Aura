@@ -171,8 +171,8 @@ pub(super) fn rng_clone_safety_in_context_inner(
         .or_else(|| copy_class_info_from_modules(name, imported_modules, module_registry))
     {
         if class_info.is_builtin
-            && class_info.module_name == "random"
-            && class_info.decl.name == "Rng"
+            && ((class_info.module_name == "random" && class_info.decl.name == "Rng")
+                || (class_info.module_name == "iter" && class_info.decl.name == "GeneratorHandle"))
             && args.is_empty()
         {
             return RngCloneSafety::ContainsRng;
@@ -213,7 +213,7 @@ pub(super) fn rng_clone_safety_in_context_inner(
             });
         visiting.remove(&key);
         safety
-    } else if name == "random.Rng" && args.is_empty() {
+    } else if (name == "random.Rng" || name == "iter.GeneratorHandle") && args.is_empty() {
         // A canonical builtin type can reach clone-safety checking without
         // its namespace in reduced checker contexts. Resolved user classes
         // with the same nominal spelling took the class branch above.
@@ -875,6 +875,7 @@ pub(super) fn preserves_qualified_builtin_type_name(type_name: &str) -> bool {
             | "net.TlsStream"
             | "io.Error"
             | "random.Rng"
+            | "iter.GeneratorHandle"
     )
 }
 
@@ -1334,6 +1335,15 @@ impl<'a> FunctionChecker<'a> {
                     );
                 }
                 result
+            }
+            Type::Named(name, args) if name == "iter.GeneratorHandle" && args.is_empty() => {
+                TransferSummary {
+                    failure: Some(
+                        "a generator runs on the task that created it and is not Transfer"
+                            .to_string(),
+                    ),
+                    requirements: Vec::new(),
+                }
             }
             Type::Named(name, args) if name == "random.Rng" && args.is_empty() => TransferSummary {
                 failure: Some(

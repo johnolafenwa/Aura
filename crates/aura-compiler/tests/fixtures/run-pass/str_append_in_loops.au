@@ -1,0 +1,127 @@
+GREETING = "hello"
+
+
+def label(i: int64) -> str:
+    return f"<{i}>"
+
+
+def literal_appends(n: int64) -> str:
+    mut text = ""
+    for i in range(n):
+        text += "ab"
+    return text
+
+
+def format_appends(n: int64) -> str:
+    mut text = "start:"
+    for i in range(n):
+        text += f"{i},"
+    return text
+
+
+def variable_appends(n: int64) -> str:
+    piece = "xy"
+    mut text = ""
+    for i in range(n):
+        text += piece
+    return text
+
+
+def call_appends(n: int64) -> str:
+    mut text = ""
+    for i in range(n):
+        text += label(i)
+    return text
+
+
+def self_appends(n: int64) -> str:
+    mut text = "a"
+    for i in range(n):
+        text += text
+    return text
+
+
+def self_format_appends(n: int64) -> str:
+    mut text = "a"
+    for i in range(n):
+        text += f"[{text}]"
+    return text
+
+
+def shared_appends() -> str:
+    mut text = "base"
+    kept = text.clone()
+    text += "-more"
+    mut copies: list[str] = []
+    for i in range(3):
+        copies.append(text.clone())
+        text += f"{i}"
+    print(kept)
+    for copy in copies:
+        print(copy)
+    return text
+
+
+def unicode_appends(n: int64) -> str:
+    mut text = "é"
+    for i in range(n):
+        text += "ü"
+        text += f"{i}ß"
+    return text
+
+
+def long_appends() -> int64:
+    mut text = ""
+    for i in range(2000):
+        text += f"{i:04},"
+    if text.len() != 10000:
+        return -1
+    if text[0:10] != "0000,0001,":
+        return -2
+    if text[9990:10000] != "1998,1999,":
+        return -3
+    return text.len()
+
+
+def constant_appends() -> str:
+    mut text = GREETING.clone()
+    for i in range(2):
+        text += ", world"
+    return text
+
+
+def add_suffixes(text: mut str, n: int64):
+    for i in range(n):
+        text += f"!{i}"
+
+
+class Log:
+    lines: str
+
+
+def parameter_appends() -> str:
+    mut text = "p"
+    add_suffixes(text, 3)
+    text += "."
+    mut log = Log(lines="")
+    for i in range(3):
+        log.lines += f"{i};"
+    return f"{text} {log.lines}"
+
+
+def main():
+    print(literal_appends(5))
+    print(literal_appends(0).len())
+    print(literal_appends(40).len())
+    print(format_appends(12))
+    print(variable_appends(4))
+    print(call_appends(4))
+    print(self_appends(4))
+    print(self_format_appends(3))
+    print(shared_appends())
+    print(unicode_appends(3))
+    print(unicode_appends(3).len())
+    print(long_appends())
+    print(constant_appends())
+    print(GREETING)
+    print(parameter_appends())

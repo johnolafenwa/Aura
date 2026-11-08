@@ -28,6 +28,7 @@ pub use aura_runtime::runtime_value;
 pub mod sema;
 pub(crate) use aura_runtime::text_methods;
 pub mod union_layout;
+pub mod verify;
 pub(crate) use aura_runtime::union_runtime;
 
 use std::fs;
@@ -367,6 +368,51 @@ fn check_module_with_builtin_imports(module: ast::Module) -> Result<Program> {
 pub fn lower_path_with_source_to_mir(path: &Path, source: &str) -> Result<MirModule> {
     let program = check_path_with_source(path, source)?;
     Ok(lower_to_mir(&program))
+}
+
+/// Proves the checks of the program at `path` with an SMT solver
+/// (`aura verify`).
+pub fn verify_path(path: &Path, options: &verify::Options) -> Result<verify::Report> {
+    let program = check_path(path)?;
+    verify_program(&program, options)
+}
+
+/// `verify_path` for source text that stands in for the file at `path`.
+pub fn verify_path_with_source(
+    path: &Path,
+    source: &str,
+    options: &verify::Options,
+) -> Result<verify::Report> {
+    let program = check_path_with_source(path, source)?;
+    verify_program(&program, options)
+}
+
+/// Lowers `path` for a native build as [`lower_path_to_mir`] does, or with
+/// source locations for a `debug` build, and leaves unchecked each element
+/// read and loan `aura verify` proves in range. Returns the module and how
+/// many accesses lost their bounds check.
+pub fn lower_path_to_mir_with_proved_checks(
+    path: &Path,
+    source: Option<&str>,
+    debug: bool,
+    options: &verify::Options,
+) -> Result<(MirModule, usize)> {
+    let program = match source {
+        Some(source) => check_path_with_source(path, source)?,
+        None => check_path(path)?,
+    };
+    let options = verify::Options {
+        prove_sites: true,
+        ..options.clone()
+    };
+    mir::lower_with_proved_checks(&program, debug, |module| {
+        verify::verify_module(&program, module, &options).map(|report| report.proved_sites)
+    })
+}
+
+fn verify_program(program: &Program, options: &verify::Options) -> Result<verify::Report> {
+    let module = mir::lower_for_verification(program);
+    verify::verify_module(program, &module, options)
 }
 
 pub fn check_path(path: &Path) -> Result<Program> {

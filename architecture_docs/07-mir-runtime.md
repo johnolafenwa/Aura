@@ -203,8 +203,9 @@ Important details:
 - `wait_any(...)` and `wait_all(...)` reuse the shared runtime scheduler deadline helpers
 - `Queue.get(timeout=...)` and I/O methods use deadline-aware helpers
 - compiler-inserted loop-backedge safepoints eventually yield from a hot loop
-  to runnable work on the local worker, but one long iteration or straight-line
-  CPU region can still starve siblings pinned there
+  to runnable work on the local worker, and the entries of functions on a call
+  cycle (`mir::recursion`) do the same for deep recursion, but one long
+  iteration or straight-line CPU region can still starve siblings pinned there
 - descriptor registrations persist in the reactor, deadlines live in a timer
   heap, and Queue, task-completion, and worker-pool events notify the
   responsible worker directly

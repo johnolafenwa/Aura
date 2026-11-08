@@ -267,6 +267,159 @@ fn call(n: i64, run: bool) -> i64 {
     total
 }
 
+struct Upto {
+    i: i64,
+    n: i64,
+}
+
+impl Iterator for Upto {
+    type Item = i64;
+
+    fn next(&mut self) -> Option<i64> {
+        if self.i == self.n {
+            return None;
+        }
+        self.i += 1;
+        Some(self.i - 1)
+    }
+}
+
+fn iterator_next(n: i64, run: bool) -> i64 {
+    let mut total = 0i64;
+    if run {
+        for i in (Upto { i: 0, n: black_box(n) }) {
+            total += i;
+        }
+    }
+    total
+}
+
+// Rust has no stable generators; a closure iterator is the usual stand-in.
+fn upto(n: i64) -> impl Iterator<Item = i64> {
+    let mut i = 0;
+    std::iter::from_fn(move || {
+        if i < n {
+            i += 1;
+            Some(i - 1)
+        } else {
+            None
+        }
+    })
+}
+
+fn generator_next(n: i64, run: bool) -> i64 {
+    let mut total = 0i64;
+    if run {
+        for i in upto(black_box(n)) {
+            total += i;
+        }
+    }
+    total
+}
+
+fn generator_start(n: i64, run: bool) -> i64 {
+    let mut total = 0i64;
+    if run {
+        for i in 0..n {
+            for x in upto(black_box(1)) {
+                total += x + i;
+            }
+        }
+    } else {
+        for i in 0..n {
+            total += black_box(i);
+        }
+    }
+    total
+}
+
+fn sum_items(source: impl Iterator<Item = i64>) -> i64 {
+    let mut total = 0i64;
+    for x in source {
+        total += x;
+    }
+    total
+}
+
+fn generator_value(n: i64, run: bool) -> i64 {
+    if run {
+        return sum_items(upto(black_box(n)));
+    }
+    0
+}
+
+fn doubled(source: impl Iterator<Item = i64>) -> impl Iterator<Item = i64> {
+    source.map(|x| x * 2)
+}
+
+fn generator_pipeline(n: i64, run: bool) -> i64 {
+    if run {
+        return sum_items(doubled(upto(black_box(n))));
+    }
+    0
+}
+
+fn generator_list(n: i64, run: bool) -> i64 {
+    let mut xs: Vec<i64> = Vec::new();
+    for i in 0..n {
+        xs.push(i);
+    }
+    let xs = black_box(xs);
+    if run {
+        let mut total = 0i64;
+        for x in xs.into_iter() {
+            total += x;
+        }
+        total
+    } else {
+        xs.len() as i64
+    }
+}
+
+fn walk(n: i64) -> impl Iterator<Item = i64> {
+    let mut at = Counter { name: "walker".to_string(), count: 0 };
+    std::iter::from_fn(move || {
+        if at.count < n {
+            at.count += 1;
+            Some(at.count - 1)
+        } else {
+            let _ = &at.name;
+            None
+        }
+    })
+}
+
+fn generator_class(n: i64, run: bool) -> i64 {
+    let mut total = 0i64;
+    if run {
+        for x in walk(black_box(n)) {
+            total += x;
+        }
+    }
+    total
+}
+
+fn str_append(n: i64, run: bool) -> i64 {
+    let mut text = String::new();
+    if run {
+        for _ in 0..black_box(n) {
+            text.push_str(black_box("ab"));
+        }
+    }
+    text.len() as i64
+}
+
+fn str_format(n: i64, run: bool) -> i64 {
+    use std::fmt::Write;
+    let mut text = String::new();
+    if run {
+        for i in 0..black_box(n) {
+            write!(text, "{i},").unwrap();
+        }
+    }
+    text.len() as i64
+}
+
 fn probe(operation: &str, n: i64, run: bool) -> i64 {
     match operation {
         "while_step" => while_step(n, run),
@@ -284,6 +437,15 @@ fn probe(operation: &str, n: i64, run: bool) -> i64 {
         "field_write" => field_write(n, run),
         "enum_match" => enum_match(n, run),
         "call" => call(n, run),
+        "iterator_next" => iterator_next(n, run),
+        "generator_next" => generator_next(n, run),
+        "generator_start" => generator_start(n, run),
+        "generator_value" => generator_value(n, run),
+        "generator_pipeline" => generator_pipeline(n, run),
+        "generator_list" => generator_list(n, run),
+        "generator_class" => generator_class(n, run),
+        "str_append" => str_append(n, run),
+        "str_format" => str_format(n, run),
         _ => -1,
     }
 }

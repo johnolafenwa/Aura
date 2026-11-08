@@ -1,8 +1,9 @@
 use std::collections::BTreeSet;
 
 use super::{
-    AssertionOperand, Diagnostic, DiagnosticSeverity, RuntimeCallFrame, RuntimeSourceSpan,
-    RuntimeTaskFrame, Span, DIAGNOSTIC_CODE_REGISTRY,
+    generator_copy_original, name_inlined_generator, visible_call_frames, AssertionOperand,
+    Diagnostic, DiagnosticSeverity, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span,
+    DIAGNOSTIC_CODE_REGISTRY, GENERATED_COLUMN_STRIDE, GENERATOR_BODY_PREFIX,
 };
 
 #[test]
@@ -191,7 +192,7 @@ fn diagnostic_code_registry_is_unique_banded_and_append_only_shaped() {
         assert!(entry.code[2..].chars().all(|ch| ch.is_ascii_digit()));
         assert!(matches!(
             entry.band,
-            "lexical" | "parse" | "names/types" | "ownership" | "runtime" | "lint"
+            "lexical" | "parse" | "names/types" | "ownership" | "runtime" | "lint" | "verify"
         ));
         assert!(!entry.title.is_empty());
     }
@@ -440,4 +441,84 @@ fn structured_json_matches_serde_json_byte_for_byte() {
             serde_json::to_string(&structured).expect("structured diagnostics serialize")
         );
     }
+}
+
+#[test]
+fn inlined_generator_traps_name_the_generator() {
+    let source =
+        "def gen(n: int64) -> Generator[int64]:\n    yield n + 1\n\ndef main():\n    pass\n";
+    let main = RuntimeCallFrame {
+        function: "app::main".to_string(),
+        span: RuntimeSourceSpan::point(None, Span::new(4, 1)),
+    };
+    let generated = Span::new(2, 11 + GENERATED_COLUMN_STRIDE * 3);
+    let mut frames = vec![main.clone()];
+    name_inlined_generator(&mut frames, generated, source);
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0].function, "app::gen");
+    assert_eq!(frames[0].span.start, Span::new(1, 1));
+    assert_eq!(generated.written(), Span::new(2, 11));
+    assert_eq!(generated.to_string(), "2:11");
+
+    // Written spans, frames of the same function, and traps above any `def`
+    // keep the chain as it is.
+    for (span, source) in [(Span::new(2, 11), source), (generated, "x = 1\ny = 2\n")] {
+        let mut frames = vec![main.clone()];
+        name_inlined_generator(&mut frames, span, source);
+        assert_eq!(frames, vec![main.clone()]);
+    }
+    let mut same = vec![RuntimeCallFrame {
+        function: "gen".to_string(),
+        span: RuntimeSourceSpan::point(None, Span::new(1, 1)),
+    }];
+    name_inlined_generator(&mut same, generated, source);
+    assert_eq!(same.len(), 1);
+    let mut none = Vec::new();
+    name_inlined_generator(&mut none, generated, source);
+    assert!(none.is_empty());
+    let advance = RuntimeCallFrame {
+        function: "__aura_frame_gen.__aura_advance".to_string(),
+        span: RuntimeSourceSpan::point(None, Span::new(1, 1)),
+    };
+    let next = RuntimeCallFrame {
+        function: "app::Counter.__aura_advance".to_string(),
+        span: RuntimeSourceSpan::point(None, Span::new(9, 5)),
+    };
+    let shown = visible_call_frames(&[advance, next, main]);
+    assert_eq!(shown[0].function, "gen");
+    assert_eq!(shown[1].function, "app::Iterator for Counter.next");
+}
+
+#[test]
+fn generator_copies_show_under_the_original_function() {
+    assert_eq!(
+        generator_copy_original("__aura_with_total__0_upto"),
+        Some("total")
+    );
+    assert_eq!(
+        generator_copy_original("__aura_with_sum__1___aura_with_doubled__0_upto"),
+        Some("sum")
+    );
+    assert_eq!(
+        generator_copy_original("__aura_with_a__b__2_g"),
+        Some("a__b")
+    );
+    assert_eq!(generator_copy_original("__aura_with_total"), None);
+    assert_eq!(generator_copy_original("__aura_with_total__x_upto"), None);
+    assert_eq!(generator_copy_original("total"), None);
+    let point = |function: &str| RuntimeCallFrame {
+        function: function.to_string(),
+        span: RuntimeSourceSpan::point(None, Span::new(1, 1)),
+    };
+    let shown = visible_call_frames(&[
+        point("__aura_frame___aura_with_doubled__0_upto.__aura_advance"),
+        point("app::__aura_with_total__0_upto"),
+        point(&format!("{GENERATOR_BODY_PREFIX}__aura_with_pairs__0_upto")),
+        point("main"),
+    ]);
+    let names = shown
+        .iter()
+        .map(|frame| frame.function.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["doubled", "app::total", "pairs", "main"]);
 }

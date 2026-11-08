@@ -208,6 +208,64 @@ New codes are assigned in the step that needs them and registered in
   itself. `own` reports `AU3004`. Comprehensions, `enumerate`/`zip`, and
   loop clauses over iterator sources are deferred to 9d, where the loop
   owns closing the iterator.
+- **9c, part 1 (2026-11-03).** Generator functions on both backends.
+  Before checking, `sema/generators.rs` splits each module-level function
+  that contains `yield` into a private body function
+  (`__aura_generator_body_<name>`, result `None`, each `yield e` rewritten
+  to `if not iter.__aura_generator_yield[T](e): return`) and the function
+  itself, which packs its arguments into an owned closure and returns
+  `iter.__aura_generator[T](...)`. So no MIR instruction is new: the yield
+  is a host builtin call, and lending, retain/release, and `with` cleanup
+  are unchanged. The runtime (`aura-runtime/src/generator.rs`) runs the
+  body closure on a corosensei coroutine of its own (G1), on the caller's
+  thread and task. `close` resumes the body with `yield` returning false.
+  The interpreter runs the body in a forked `MirRuntime` that shares the
+  program; the native body's frame-stack entries move out while it is
+  suspended (`GeneratorHooks`). Scheduler waits (9c-3) trampoline through
+  `yield_current_lightweight_task`: a body's wait suspends the generator,
+  and `resume` performs it on the task stack and hands the wake reason
+  back. A trap's task exit takes the same path. Cancellation needs nothing
+  more, since a cancelled wait wakes exactly as in task code. A
+  diagnostic shows the body frame under the generator's name and drops the
+  packing closure and `Generator.next` frames. Deviation: a dropped
+  suspended generator closes when its last owner releases it, which is the
+  last use on the native backend and the end of the owning call in the
+  interpreter, so the documented guarantee is "no later than the owning
+  function's return". Generator methods are not supported yet.
+- **9d, part 1 (2026-11-03).** Iterator sources everywhere a list source
+  works. A comprehension clause (or an `enumerate`/`zip` operand in one)
+  over an iterator is recorded during checking and rewritten to
+  `source.collect()`, a new `Iterator[T]` default method, since a
+  comprehension builds its result at once; its elements then read as
+  shared list elements. A `for` loop over `enumerate`/`zip` of iterators is
+  rewritten lazily into nested `match own it.next():` statements with a
+  hidden `int64` index, and the target elements bind as patterns. Zipping a
+  collection with an iterator reports `AU2002` rather than collecting
+  silently. `invariant` clauses on iterator loops become clause-tagged
+  asserts at the top of the item arm (`AssertStmt.clause`), so they report
+  `AU4009` as on other loops. Close on every loop exit was already
+  delivered by 9c drop-close.
+
+- **9c, part 2 (2026-11-06).** Generator stacks come from the Batch 8
+  task stack pool (`take_pooled_task_stack`), and a body's stack goes back
+  to its home pool once the coroutine is done: on return, on a trap, on a
+  panic, and after a suspended generator is unwound or reset on drop. A
+  stack whose coroutine has not finished is never pooled.
+
+- **9e (2026-11-07).** Associated types follow D1 for traits and
+  implementations: `type Name: Bound` in a trait is a trailing hidden trait
+  type parameter spelled `Self.Name`, and an implementation's
+  `type Name = T` line is appended to its trait arguments in declaration
+  order, so dispatch, specialization, and both backends treat it as an
+  ordinary trait argument. The parser resolves `Self.Name` inside an
+  `impl` block to the fixed type. Fixed types are checked against the
+  declared bounds before any body, and default trait bodies may rely on
+  those bounds. `iter.IntoIterator[T]` sources in `for` loops,
+  comprehension clauses, and `enumerate`/`zip` operands are rewritten to
+  `source.into_iter()` and checked again. Deferred: a bound naming a trait
+  with associated types (`S: IntoIterator[T]` exposing `S.Iter`) reports
+  `AU2002`; it needs hidden per-bound type parameters inferred at call
+  sites.
 
 ## Ratification Record
 

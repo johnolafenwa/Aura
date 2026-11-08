@@ -499,6 +499,18 @@ Editor warnings come from editor analysis only. `aura check`, `aura run`, and
 `AU5001` is reported only when the file checks. A `with` binding is exempt,
 since it holds its resource open for the block.
 
+### Verifier Diagnostics
+
+`aura verify` reports these for each check it could not prove. Other
+commands never report them. See [Verification](/manual/verification).
+
+| Code | Meaning | Common causes | How to fix |
+| --- | --- | --- | --- |
+| `AU5101` | check not proved | Inputs exist that make an overflow, a zero divisor, an out-of-range index, a failed `assert`, or a false contract clause happen. The note gives a counterexample. | Fix the code, or state the missing fact as a `requires`, `invariant`, or callee `ensures`. |
+| `AU5102` | solver could not decide | The solver ran out of time or gave up, often on nonlinear arithmetic. | Raise `--timeout`, or add an `assert` or `invariant` that narrows the case. |
+| `AU5103` | solver unavailable | No Z3 or cvc5 on `PATH`, `AURA_SMT_SOLVER` or `--solver` names a missing program, or the solver stopped. | Install Z3 or cvc5, or point `--solver` at it. |
+| `AU5104` | check outside the verified subset | The check depends on a step the verifier does not model yet, such as floating-point arithmetic, a power with a large or unknown exponent, or a contract expression it cannot read. | Keep it as a runtime check, or restate the contract with modeled operations. |
+
 ## Diagnostic Structure
 
 Every diagnostic contains all of these fields:

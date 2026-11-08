@@ -201,8 +201,8 @@ fn adr0061_element_place_walkers_report_missing_slots_without_changing_values() 
             vec![Type::named("str"), Type::named("int64")],
         ),
         Value::Map(MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::named("int64"),
+            key_type: Type::named("str").into(),
+            value_type: Type::named("int64").into(),
             entries: vec![(
                 Value::String("a".to_string().into()),
                 Value::Int(IntegerValue::from_i64(4)),
@@ -4013,8 +4013,8 @@ fn mir_length_map_len_borrows_receiver_without_snapshot_clone() {
             vec![Type::named("str"), Type::named("str")],
         ),
         Value::Map(MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::named("str"),
+            key_type: Type::named("str").into(),
+            value_type: Type::named("str").into(),
             entries: vec![
                 (
                     Value::String("first-map-key".repeat(64).into()),
@@ -4646,8 +4646,8 @@ fn mir_json_into_accessors_move_payload_allocations_and_consume_places() {
         json_value(
             "Object",
             vec![Value::Map(MapValue {
-                key_type: Type::named("str"),
-                value_type: Type::named("json.Value"),
+                key_type: Type::named("str").into(),
+                value_type: Type::named("json.Value").into(),
                 entries: entries.into(),
             })],
         ),
@@ -4712,8 +4712,8 @@ fn mir_json_variant_construction_moves_owned_payload_allocations() {
                 vec![Type::named("str"), Type::named("json.Value")],
             ),
             Value::Map(MapValue {
-                key_type: Type::named("str"),
-                value_type: Type::named("json.Value"),
+                key_type: Type::named("str").into(),
+                value_type: Type::named("json.Value").into(),
                 entries: entries.into(),
             }),
         ),
@@ -5333,8 +5333,8 @@ fn mir_json_adapters_reject_inexact_runtime_metadata() {
             "object_value",
             "Object",
             Value::Map(MapValue {
-                key_type: Type::named("str"),
-                value_type: Type::named("bool"),
+                key_type: Type::named("str").into(),
+                value_type: Type::named("bool").into(),
                 entries: Vec::new().into(),
             }),
         ),
@@ -5886,8 +5886,8 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
         let value = format!("{method}-value-").repeat(64);
         let value_ptr = value.as_ptr();
         let map = MapValue {
-            key_type: string_type.clone(),
-            value_type: string_type.clone(),
+            key_type: string_type.clone().into(),
+            value_type: string_type.clone().into(),
             entries: Vec::new().into(),
         };
         env.define_typed("map", map_type.clone(), Value::Map(map.clone()));
@@ -5923,8 +5923,8 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
     let extended_value = "extended-map-value".repeat(64);
     let extended_value_ptr = extended_value.as_ptr();
     let map = MapValue {
-        key_type: string_type.clone(),
-        value_type: string_type.clone(),
+        key_type: string_type.clone().into(),
+        value_type: string_type.clone().into(),
         entries: Vec::new().into(),
     };
     env.define_typed("map", map_type.clone(), Value::Map(map.clone()));
@@ -5932,8 +5932,8 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
         "other",
         map_type,
         Value::Map(MapValue {
-            key_type: string_type.clone(),
-            value_type: string_type.clone(),
+            key_type: string_type.clone().into(),
+            value_type: string_type.clone().into(),
             entries: vec![(
                 Value::String(extended_key.into()),
                 Value::String(extended_value.into()),
@@ -6041,8 +6041,8 @@ fn mir_owned_process_and_http_decoders_transfer_string_allocations() {
     let header_value_ptr = header_value.as_ptr();
     let headers = super::expect_owned_headers_map(
         Value::Map(MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::named("str"),
+            key_type: Type::named("str").into(),
+            value_type: Type::named("str").into(),
             entries: vec![(
                 Value::String(header_name.into()),
                 Value::String(header_value.into()),
@@ -6428,8 +6428,8 @@ fn string_vec_value(items: &[&str]) -> Value {
 
 fn string_map_value(items: &[(&str, &str)]) -> Value {
     Value::Map(crate::runtime_value::MapValue {
-        key_type: Type::named("str"),
-        value_type: Type::named("str"),
+        key_type: Type::named("str").into(),
+        value_type: Type::named("str").into(),
         entries: items
             .iter()
             .map(|(key, value)| {
@@ -6923,8 +6923,8 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
     assert_eq!(
         super::expect_headers_map(
             &Value::Map(MapValue {
-                key_type: Type::named("str"),
-                value_type: Type::named("str"),
+                key_type: Type::named("str").into(),
+                value_type: Type::named("str").into(),
                 entries: vec![(
                     Value::String("Accept".to_string().into()),
                     Value::String("*/*".to_string().into())
@@ -6942,8 +6942,8 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
     );
     let malformed_headers_error = super::expect_headers_map(
         &Value::Map(MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::named("str"),
+            key_type: Type::named("str").into(),
+            value_type: Type::named("str").into(),
             entries: vec![(Value::Bool(true), Value::String("bad".to_string().into()))].into(),
         }),
         "headers",
@@ -8746,8 +8746,8 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
                     vec![Type::named("str"), Type::named("str")],
                 ),
                 Value::Map(crate::runtime_value::MapValue {
-                    key_type: Type::named("str"),
-                    value_type: Type::named("str"),
+                    key_type: Type::named("str").into(),
+                    value_type: Type::named("str").into(),
                     entries: vec![(
                         Value::String("Content-Type".to_string().into()),
                         Value::String("text/plain".to_string().into()),
@@ -12198,7 +12198,7 @@ fn mir_runtime_process_builtins_cover_spawn_timeout_and_cancelled_edges() {
 #[test]
 fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers() {
     let mut runtime = test_runtime();
-    runtime.functions.insert(
+    std::sync::Arc::make_mut(&mut runtime.functions).insert(
         "widget_render".to_string(),
         MirFunction {
             name: "widget_render".to_string(),
@@ -12217,7 +12217,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
             }],
         },
     );
-    runtime.functions.insert(
+    std::sync::Arc::make_mut(&mut runtime.functions).insert(
         "status_label".to_string(),
         MirFunction {
             name: "status_label".to_string(),
@@ -12236,7 +12236,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
             }],
         },
     );
-    runtime.classes.insert(
+    std::sync::Arc::make_mut(&mut runtime.classes).insert(
         "Widget".to_string(),
         MirClass {
             name: "Widget".to_string(),
@@ -12250,7 +12250,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
             copy: false,
         },
     );
-    runtime.trait_impls.push(MirTraitImpl {
+    std::sync::Arc::make_mut(&mut runtime.trait_impls).push(MirTraitImpl {
         trait_name: "Label".to_string(),
         trait_args: Vec::new(),
         for_type: Type::named("Status"),
@@ -12294,8 +12294,8 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
             vec![Type::named("str"), Type::named("int32")],
         ),
         Value::Map(crate::runtime_value::MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::named("int32"),
+            key_type: Type::named("str").into(),
+            value_type: Type::named("int32").into(),
             entries: vec![(
                 Value::String("count".to_string().into()),
                 Value::Int(IntegerValue::from_signed(1)),
@@ -12754,7 +12754,7 @@ fn mir_runtime_builtin_error_surface_covers_additional_builtin_branches() {
 #[test]
 fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
     let mut runtime = test_runtime();
-    runtime.classes.insert(
+    std::sync::Arc::make_mut(&mut runtime.classes).insert(
         "Empty".to_string(),
         MirClass {
             name: "Empty".to_string(),
@@ -12764,7 +12764,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
             copy: false,
         },
     );
-    runtime.classes.insert(
+    std::sync::Arc::make_mut(&mut runtime.classes).insert(
         "Broken".to_string(),
         MirClass {
             name: "Broken".to_string(),
@@ -12778,7 +12778,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
             copy: false,
         },
     );
-    runtime.trait_impls.push(MirTraitImpl {
+    std::sync::Arc::make_mut(&mut runtime.trait_impls).push(MirTraitImpl {
         trait_name: "Render".to_string(),
         trait_args: Vec::new(),
         for_type: Type::named("Status"),
@@ -13034,7 +13034,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
 #[test]
 fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
     let mut runtime = test_runtime();
-    runtime.functions.insert(
+    std::sync::Arc::make_mut(&mut runtime.functions).insert(
         "counter_replace".to_string(),
         MirFunction {
             name: "counter_replace".to_string(),
@@ -13068,7 +13068,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
             }],
         },
     );
-    runtime.functions.insert(
+    std::sync::Arc::make_mut(&mut runtime.functions).insert(
         "counter_borrow_only".to_string(),
         MirFunction {
             name: "counter_borrow_only".to_string(),
@@ -13087,7 +13087,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
             }],
         },
     );
-    runtime.functions.insert(
+    std::sync::Arc::make_mut(&mut runtime.functions).insert(
         "status_mark".to_string(),
         MirFunction {
             name: "status_mark".to_string(),
@@ -13115,7 +13115,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
             }],
         },
     );
-    runtime.functions.insert(
+    std::sync::Arc::make_mut(&mut runtime.functions).insert(
         "status_borrow_only".to_string(),
         MirFunction {
             name: "status_borrow_only".to_string(),
@@ -13134,7 +13134,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
             }],
         },
     );
-    runtime.classes.insert(
+    std::sync::Arc::make_mut(&mut runtime.classes).insert(
         "Counter".to_string(),
         MirClass {
             name: "Counter".to_string(),
@@ -13158,7 +13158,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
             copy: false,
         },
     );
-    runtime.trait_impls.push(MirTraitImpl {
+    std::sync::Arc::make_mut(&mut runtime.trait_impls).push(MirTraitImpl {
         trait_name: "Mark".to_string(),
         trait_args: Vec::new(),
         for_type: Type::named("Status"),
@@ -13870,8 +13870,8 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
     );
     assert_eq!(
         MirRuntime::infer_value_type(&Value::Map(crate::runtime_value::MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::named("int32"),
+            key_type: Type::named("str").into(),
+            value_type: Type::named("int32").into(),
             entries: vec![(
                 Value::String("count".to_string().into()),
                 Value::Int(IntegerValue::from_signed(1)),
@@ -14353,8 +14353,8 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             vec![Type::named("str"), Type::named("int32")],
         ),
         Value::Map(crate::runtime_value::MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::named("int32"),
+            key_type: Type::named("str").into(),
+            value_type: Type::named("int32").into(),
             entries: vec![(
                 Value::String("count".to_string().into()),
                 Value::Int(IntegerValue::from_signed(1)),
@@ -14369,8 +14369,8 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             vec![Type::named("str"), Type::named("int32")],
         ),
         Value::Map(crate::runtime_value::MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::named("int32"),
+            key_type: Type::named("str").into(),
+            value_type: Type::named("int32").into(),
             entries: vec![(
                 Value::String("next".to_string().into()),
                 Value::Int(IntegerValue::from_signed(9)),
@@ -15347,8 +15347,8 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
             vec![Type::named("str"), Type::named("int32")],
         ),
         Value::Map(crate::runtime_value::MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::named("int32"),
+            key_type: Type::named("str").into(),
+            value_type: Type::named("int32").into(),
             entries: vec![(
                 Value::String("count".to_string().into()),
                 Value::Int(IntegerValue::from_signed(9)),
@@ -16178,8 +16178,8 @@ fn mir_runtime_index_helpers_cover_error_paths() {
     assert_eq!(internal_set_oob.span, Some(crate::diag::Span::new(4, 6)));
 
     let map_value = || crate::runtime_value::MapValue {
-        key_type: Type::named("str"),
-        value_type: Type::named("int32"),
+        key_type: Type::named("str").into(),
+        value_type: Type::named("int32").into(),
         entries: vec![(
             Value::String("count".to_string().into()),
             Value::Int(IntegerValue::from_signed(1)),
@@ -16243,8 +16243,8 @@ fn mir_runtime_index_helpers_cover_error_paths() {
     let map_missing_place = runtime
         .evaluate_map_method(
             crate::runtime_value::MapValue {
-                key_type: Type::named("str"),
-                value_type: Type::named("int32"),
+                key_type: Type::named("str").into(),
+                value_type: Type::named("int32").into(),
                 entries: vec![].into(),
             },
             "clear",
@@ -20764,7 +20764,11 @@ def main():
         optional_error_task = group.start(optional_fail)
         print(optional_error_task.poll(timeout=1s))
 
-        pending_task = group.start(wait_for_release)
+    # The failures above cancel `group`, so the pending child gets a group
+    # of its own; otherwise a worker that runs it before `poll()` would see
+    # the cancellation and return the default.
+    with pending_group = TaskGroup():
+        pending_task = pending_group.start(wait_for_release)
         print(pending_task.poll())
         _ = release.put(7)
     print("cleanup-complete")
@@ -21394,8 +21398,8 @@ fn owned_collection_methods_require_their_source_places() {
         str_view: Default::default(),
     };
     let map = || MapValue {
-        key_type: Type::named("str"),
-        value_type: Type::named("int64"),
+        key_type: Type::named("str").into(),
+        value_type: Type::named("int64").into(),
         entries: Vec::new().into(),
     };
     let set = || SetValue {
@@ -22467,8 +22471,8 @@ fn http_exchange_and_response_methods_report_invalid_utf8_and_closed_exchanges()
                     vec![Type::named("str"), Type::named("str")],
                 ),
                 Value::Map(MapValue {
-                    key_type: Type::named("str"),
-                    value_type: Type::named("str"),
+                    key_type: Type::named("str").into(),
+                    value_type: Type::named("str").into(),
                     entries: Vec::new().into(),
                 }),
             );
@@ -23112,8 +23116,8 @@ fn network_listen_and_request_builtins_report_bind_and_connect_failures() {
     let headers = EvaluatedMirArg {
         name: Some("headers".to_string()),
         value: Value::Map(MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::named("str"),
+            key_type: Type::named("str").into(),
+            value_type: Type::named("str").into(),
             entries: Vec::new().into(),
         }),
         ty: Some(Type::Named(
@@ -23721,4 +23725,66 @@ fn mir_slice_step_internal_abi_rejects_malformed_operands_and_objects() {
             .starts_with("unsupported MIR member call `__slice_step` on `"));
         assert_eq!(error.span, Some(Span::new(3, 4)));
     }
+}
+
+#[test]
+fn mir_recursive_entries_are_call_safepoints_only_when_tasks_can_run() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def fib(n: int64) -> int64:
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+def worker(n: int64) -> int64:
+    return fib(n)
+
+def main() -> int32:
+    with TaskGroup() as group:
+        task = group.start(worker, 8)
+        match task.result():
+            case TaskResult.Ready(result):
+                return result as int32
+            case _:
+                return 1
+"#,
+    )
+    .expect("concurrent recursive source should lower");
+    let fib = module
+        .functions
+        .iter()
+        .find(|function| function.name == "fib")
+        .cloned()
+        .expect("fib should lower");
+    let mut runtime = MirRuntime::new(
+        module,
+        Arc::new(Mutex::new(String::new())),
+        CancellationContext::default(),
+    );
+    assert!(runtime.safepoints_enabled);
+    assert!(runtime.recursive_functions.is_none());
+    // A task's own first call is not a safepoint.
+    runtime.call_depth = 1;
+    runtime.call_safepoint(&fib);
+    assert!(runtime.recursive_functions.is_none());
+    // Outside a task the yield returns at once.
+    runtime.call_depth = 2;
+    runtime.call_safepoint(&fib);
+    let recursive = runtime
+        .recursive_functions
+        .clone()
+        .expect("the first call finds the recursive functions");
+    assert!(recursive.contains("fib"));
+    assert!(!recursive.contains("worker"));
+    runtime.call_safepoint(&fib);
+    assert!(Arc::ptr_eq(
+        &recursive,
+        runtime.recursive_functions.as_ref().unwrap()
+    ));
+
+    let mut sequential = test_runtime();
+    assert!(!sequential.safepoints_enabled);
+    sequential.call_depth = 2;
+    sequential.call_safepoint(&fib);
+    assert!(sequential.recursive_functions.is_none());
 }

@@ -706,9 +706,37 @@ impl FunctionCompiler<'_> {
                 _ => return Ok(None),
             }
         };
-        let (find, key) = if op == DictOp::ContainsKeyInt64 {
+        // A loan only `json.as_int`, `json.as_float`, or `json.as_bool`
+        // reads may hold the found value's address instead of a copy (see
+        // [`lent_entry_copy_loans`]).
+        let lend = field.is_none() && self.lent_entry_copies.contains(&loan);
+        // A loan only borrowers read takes a box that reads the found
+        // value in place (see [`shadow_entry_copy_loans`]).
+        let shadow = !lend && self.shadow_entry_copies.contains(&loan);
+        // A loop that walks the dict's entries tests the entry it is at.
+        let walked_slot = match key {
+            Operand::Place(place) => self
+                .key_loop_keys
+                .get(place.as_str())
+                .map(|list| self.key_loops[list].1),
+            _ => None,
+        };
+        let (find, key) = if let Some(slot) = walked_slot {
+            if !shadow || field.is_some() || op != DictOp::ContainsKey {
+                return Err(format!(
+                    "direct backend cannot walk the entries of `{map}` for loan `{loan}`"
+                ));
+            }
+            (RuntimeFn::MapShadowAt, self.builder.use_var(slot))
+        } else if op == DictOp::ContainsKeyInt64 {
             (
-                RuntimeFn::MapGetInt64Payload,
+                if lend {
+                    RuntimeFn::MapGetInt64Lent
+                } else if shadow {
+                    RuntimeFn::MapGetInt64Shadow
+                } else {
+                    RuntimeFn::MapGetInt64Payload
+                },
                 self.load_operand(key)?.values[0],
             )
         } else {
@@ -718,8 +746,23 @@ impl FunctionCompiler<'_> {
             };
             let key_ty = ensure_direct_type(&types[0], &self.classes, "dict key")?;
             let key = self.load_operand_as_opaque_direct(key, &key_ty)?;
-            (RuntimeFn::MapGetPayload, key.values[0])
+            (
+                if lend {
+                    RuntimeFn::MapGetLent
+                } else if shadow {
+                    RuntimeFn::MapGetShadow
+                } else {
+                    RuntimeFn::MapGetPayload
+                },
+                key.values[0],
+            )
         };
+        if lend {
+            self.lent_fused_copies.insert(loan.clone());
+        }
+        if shadow {
+            self.shadow_fused_copies.insert(loan.clone());
+        }
         let copy = match field {
             None => {
                 let map_box = self.load_root(map)?.values[0];
@@ -741,11 +784,22 @@ impl FunctionCompiler<'_> {
                 self.builder.jump(join_block, &[copy]);
                 self.builder.switch_to_block(slow_block);
                 self.builder.seal_block(slow_block);
+                let baseline = self.layout_scratch.clone();
                 let map_value = self.load_place(map)?;
+                // The field's value may be a copy this read frees, so the
+                // slow read copies the found value too.
+                let slow_find = match find {
+                    RuntimeFn::MapGetShadow => RuntimeFn::MapGetPayload,
+                    RuntimeFn::MapGetInt64Shadow => RuntimeFn::MapGetInt64Payload,
+                    find => find,
+                };
                 let copy = self
                     .builder
-                    .call(self.runtime[find], &[map_value.values[0], key])
+                    .call(self.runtime[slow_find], &[map_value.values[0], key])
                     .results[0];
+                // A field's value this read loaded is released here, in the
+                // block that loaded it.
+                self.release_temporary_owned_since(&baseline);
                 self.builder.jump(join_block, &[copy]);
                 self.builder.switch_to_block(join_block);
                 self.builder.seal_block(join_block);
@@ -762,6 +816,51 @@ impl FunctionCompiler<'_> {
         }))
     }
 
+    /// Begins `d[k]`, a checked entry loan with no `contains_key` test
+    /// before it, whose every read borrows the value, as the fused test
+    /// does: a shadow box reads the value where the dict keeps it, and a
+    /// missing key takes the runtime probe, which reports it. Returns false
+    /// when the loan takes the usual path.
+    pub(super) fn begin_shadow_entry_loan(
+        &mut self,
+        loan: &str,
+        source: &str,
+        selector: &Operand,
+    ) -> std::result::Result<bool, String> {
+        if !self.shadow_entry_copies.contains(loan) || self.fused_entry_copies.contains_key(loan) {
+            return Ok(false);
+        }
+        let map_ty = direct_type_to_type(&self.type_of_place(source)?);
+        let Type::Named(_, types) = &map_ty else {
+            return Ok(false);
+        };
+        let op = match types.first() {
+            Some(Type::Named(name, args)) if name == "int64" && args.is_empty() => {
+                DictOp::ContainsKeyInt64
+            }
+            _ => DictOp::ContainsKey,
+        };
+        let Some(found) = self.compile_fused_entry_copy(loan.to_string(), op, source, selector)?
+        else {
+            return Ok(false);
+        };
+        let missing_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder
+            .brif(found.values[0], join_block, &[], missing_block, &[]);
+        self.builder.switch_to_block(missing_block);
+        self.builder.seal_block(missing_block);
+        let baseline = self.layout_scratch.clone();
+        self.emit_element_path_probe(loan, false)?;
+        self.release_temporary_owned_since(&baseline);
+        self.builder.jump(join_block, &[]);
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        // Reads go through the copy, as for a fused test's loan.
+        self.view_places.remove(loan);
+        Ok(true)
+    }
+
     /// A read of a loan [`compile_fused_entry_copy`] copied for: the copy
     /// itself when it is the loan's one read, which owns it from then on,
     /// or a new reference to it.
@@ -773,6 +872,16 @@ impl FunctionCompiler<'_> {
             return Ok(None);
         };
         let copy = self.builder.use_var(variable);
+        let ty = direct_type_to_type(&self.local_type(place)?);
+        if self.lent_fused_copies.contains(place) || self.shadow_fused_copies.contains(place) {
+            // The scalar accessor that reads it reads a lent value where it
+            // lies, and the loan's end releases a copy. A borrower reads a
+            // shadow box, which the loan's end takes back.
+            return Ok(Some(ValueRef {
+                values: vec![copy],
+                ty: DirectType::Opaque(ty),
+            }));
+        }
         let read = if self.entry_copy_loans.get(place) == Some(&true) {
             let taken = self.builder.iconst(types::I64, 0);
             self.builder.def_var(variable, taken);
@@ -781,7 +890,6 @@ impl FunctionCompiler<'_> {
             // The loan's other reads share the copy, as reads of a local do.
             self.retain_opaque_handle(copy)
         };
-        let ty = direct_type_to_type(&self.local_type(place)?);
         Ok(Some(self.owned_opaque_result(vec![read], ty)))
     }
 
@@ -790,13 +898,21 @@ impl FunctionCompiler<'_> {
         let Some(&variable) = self.fused_entry_copies.get(loan) else {
             return;
         };
-        let copy = self.builder.use_var(variable);
+        let mut copy = self.builder.use_var(variable);
+        if self.lent_fused_copies.contains(loan) {
+            copy = self.owned_lent_word(copy);
+        }
         let release_block = self.builder.create_block();
         let done_block = self.builder.create_block();
         self.builder.brif(copy, release_block, &[], done_block, &[]);
         self.builder.switch_to_block(release_block);
         self.builder.seal_block(release_block);
-        self.release_opaque_handle(copy);
+        if self.shadow_fused_copies.contains(loan) {
+            self.builder
+                .call(self.runtime[RuntimeFn::EndShadow], &[copy]);
+        } else {
+            self.release_opaque_handle(copy);
+        }
         self.builder.jump(done_block, &[]);
         self.builder.switch_to_block(done_block);
         self.builder.seal_block(done_block);
@@ -1687,4 +1803,120 @@ pub(super) fn entry_copy_loans(function: &MirFunction) -> HashMap<String, bool> 
         }
     }
     loans
+}
+
+/// The entry loans of `entry_copies` (see [`entry_copy_loans`]) whose
+/// every read is an argument the callee borrows, as `borrowed` lists them
+/// for an instruction, besides those [`lent_entry_copy_loans`] lends. The
+/// borrowers only read the value while the call lasts, so the fused test
+/// may hand them a box that reads the found value where the dict keeps it
+/// (see `aura_direct_map_get_shadow`), and the loan's end takes it back.
+pub(super) fn shadow_entry_copy_loans<'f>(
+    function: &'f MirFunction,
+    entry_copies: &HashMap<String, bool>,
+    lent: &HashSet<String>,
+    borrowed: impl Fn(&'f Instruction) -> Vec<&'f Operand>,
+) -> HashSet<String> {
+    let mut borrowed_reads = HashSet::<&str>::new();
+    let mut other_reads = HashSet::<&str>::new();
+    for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+        match instruction {
+            Instruction::ReadLoan { loan, .. } => {
+                other_reads.insert(loan.as_str());
+            }
+            Instruction::Assign {
+                value: Rvalue::Call { args, .. },
+                ..
+            } => {
+                let borrows = borrowed(instruction);
+                for arg in args {
+                    if let Operand::Place(place) = &arg.value {
+                        if borrows
+                            .iter()
+                            .any(|operand| std::ptr::eq(*operand, &arg.value))
+                        {
+                            borrowed_reads.insert(place.as_str());
+                        } else {
+                            other_reads.insert(place.as_str());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    entry_copies
+        .keys()
+        .filter(|loan| {
+            !lent.contains(loan.as_str())
+                && borrowed_reads.contains(loan.as_str())
+                && !other_reads.contains(loan.as_str())
+        })
+        .cloned()
+        .collect()
+}
+
+/// The entry loans of `entry_copies` (see [`entry_copy_loans`]) whose
+/// every read is the one argument of `json.as_int`, `json.as_float`, or
+/// `json.as_bool`. The accessor reads the value where it lies and keeps no
+/// reference to it, so the fused test may lend the found value instead of
+/// copying it: its address, or a copy when the dict is shared with
+/// another thread or the value is not a leaf (see
+/// `aura_direct_map_get_lent`). Nothing else names the dict while the loan
+/// lives, so the address stays valid until the loan ends.
+pub(super) fn lent_entry_copy_loans(
+    function: &MirFunction,
+    entry_copies: &HashMap<String, bool>,
+) -> HashSet<String> {
+    let mut accessor_reads = HashMap::<&str, usize>::new();
+    let mut other_reads = HashSet::<&str>::new();
+    for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+        match instruction {
+            Instruction::ReadLoan { loan, .. } => {
+                other_reads.insert(loan.as_str());
+            }
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Runtime { op, .. },
+                        args,
+                        ..
+                    },
+                ..
+            } => {
+                let accessor = matches!(
+                    op,
+                    RuntimeOp::Host(builtin)
+                        if matches!(builtin.name(), "json::as_int" | "json::as_float" | "json::as_bool")
+                ) && args.len() == 1;
+                for arg in args {
+                    if let Operand::Place(place) = &arg.value {
+                        if accessor {
+                            *accessor_reads.entry(place.as_str()).or_default() += 1;
+                        } else {
+                            other_reads.insert(place.as_str());
+                        }
+                    }
+                }
+            }
+            Instruction::Assign {
+                value: Rvalue::Call { args, .. },
+                ..
+            } => {
+                for arg in args {
+                    if let Operand::Place(place) = &arg.value {
+                        other_reads.insert(place.as_str());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    entry_copies
+        .keys()
+        .filter(|loan| {
+            accessor_reads.contains_key(loan.as_str()) && !other_reads.contains(loan.as_str())
+        })
+        .cloned()
+        .collect()
 }

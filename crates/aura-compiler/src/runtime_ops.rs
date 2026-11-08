@@ -2485,6 +2485,11 @@ impl HostBuiltin {
         if FunctionOp::from_name(name).is_some() {
             return None;
         }
+        // A generic host builtin's call names its type arguments.
+        let name = match name.find('[') {
+            Some(index) if name.ends_with(']') => &name[..index],
+            _ => name,
+        };
         HOST_BUILTIN_SYMBOLS
             .iter()
             .position(|(entry, _)| *entry == name)

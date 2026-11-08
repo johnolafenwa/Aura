@@ -7629,6 +7629,7 @@ fn function_decl(name: &str) -> FunctionDecl {
         doc: None,
         contracts: Vec::new(),
         spec: false,
+        lemma: false,
     }
 }
 
@@ -7654,6 +7655,7 @@ fn trait_decl(name: &str, type_params: Vec<&str>) -> TraitDecl {
         methods: Vec::new(),
         span: Span::new(1, 1),
         doc: None,
+        assoc_types: Vec::new(),
     }
 }
 
@@ -7673,6 +7675,7 @@ fn trait_info(name: &str, type_params: Vec<&str>) -> TraitInfo {
         module_name: "<test>".to_string(),
         decl: trait_decl(name, type_params),
         supertraits: Vec::new(),
+        assoc_bounds: Vec::new(),
         methods: BTreeMap::new(),
     }
 }
@@ -8228,6 +8231,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                 module_name: program.module_name.clone(),
                 decl: trait_decl("Not", vec!["Out"]),
                 supertraits: Vec::new(),
+                assoc_bounds: Vec::new(),
                 methods: BTreeMap::from([(
                     "not".to_string(),
                     TraitMethodInfo {
@@ -8247,6 +8251,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                 module_name: program.module_name.clone(),
                 decl: trait_decl("Neg", vec!["Out"]),
                 supertraits: Vec::new(),
+                assoc_bounds: Vec::new(),
                 methods: BTreeMap::from([(
                     "neg".to_string(),
                     TraitMethodInfo {
@@ -8273,6 +8278,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                 methods: vec![not_decl.clone()],
                 span: Span::new(1, 1),
                 derived: false,
+                assoc_types: Vec::new(),
             },
             type_params: Vec::new(),
             type_param_bounds: BTreeMap::new(),
@@ -8300,6 +8306,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                 methods: vec![neg_decl.clone()],
                 span: Span::new(1, 1),
                 derived: false,
+                assoc_types: Vec::new(),
             },
             type_params: Vec::new(),
             type_param_bounds: BTreeMap::new(),
@@ -31905,13 +31912,120 @@ fn contract_clauses_check_as_pure_bool_conditions() {
         (
             "trait Shape:\n    def area(self) -> int64\n\nclass Sq:\n    side: int64\n\nimpl Shape for Sq:\n    def area(self) -> int64:\n        ensures result >= 0\n        return self.side\n",
             "AU2048",
-            "cannot declare `ensures`: trait methods do not have contracts yet",
+            "the `Shape` implementation of `area` must repeat the trait method's clauses exactly or leave them out",
+        ),
+        (
+            "trait Shape:\n    def area(self) -> int64:\n        ensures result >= 0\n\nclass Sq:\n    side: int64\n\nimpl Shape for Sq:\n    def area(self) -> int64:\n        ensures result > 0\n        return self.side\n",
+            "AU2048",
+            "must repeat the trait method's clauses exactly or leave them out",
+        ),
+        (
+            "trait Scale:\n    def by(self, k: int64) -> int64:\n        requires k > 0\n\nclass Sq:\n    side: int64\n\nimpl Scale for Sq:\n    def by(self, j: int64) -> int64:\n        return j\n",
+            "AU2048",
+            "names this parameter `j`; the trait's clauses read it as `k`",
+        ),
+        (
+            "trait Scale:\n    def by(self, k: int64) -> int64:\n        requires k.pop() > 0\n",
+            "AU2048",
+            "a `requires` condition must not change program state",
+        ),
+        (
+            "trait Scale:\n    def by(self, k: int64) -> int64:\n        decreases k\n",
+            "AU2048",
+            "a trait method states only `requires` and `ensures`",
         ),
     ] {
         let error = crate::check_source(source).expect_err(source);
         assert_eq!(error.code, code, "{source}: {}", error.message);
         assert!(error.message.contains(message), "{source}: {}", error.message);
     }
+}
+
+#[test]
+fn lemmas_state_facts_with_pure_bodies_and_pure_arguments() {
+    crate::check_source(concat!(
+        "spec def tri(n: int64) -> int64:\n",
+        "    return n * (n + 1) // 2\n",
+        "\n",
+        "lemma def tri_bounded(n: int64):\n",
+        "    requires 0 <= n and n <= 1000\n",
+        "    decreases n\n",
+        "    ensures 0 <= tri(n)\n",
+        "    k = n - 1\n",
+        "    if k >= 0:\n",
+        "        tri_bounded(k)\n",
+        "    else:\n",
+        "        pass\n",
+        "    for i in range(n):\n",
+        "        assert i < n, \"in range\"\n",
+        "    mut j = 0\n",
+        "    while j < 2:\n",
+        "        j += 1\n",
+        "        if j == 2:\n",
+        "            break\n",
+        "        continue\n",
+        "    return\n",
+        "\n",
+        "def main():\n",
+        "    tri_bounded(3)\n",
+    ))
+    .expect("a lemma checks");
+    for (source, message) in [
+        (
+            "lemma def f(n: int64) -> int64:\n    return n\n",
+            "a `lemma def` returns nothing",
+        ),
+        (
+            "lemma def f(xs: mut list[int64]):\n    assert len(xs) >= 0\n",
+            "a `lemma def` cannot take `mut` parameter `xs`",
+        ),
+        (
+            "lemma def f(n: int64):\n    print(n)\n",
+            "a `lemma def` body holds only",
+        ),
+        (
+            "lemma def f(xs: list[int64]):\n    assert xs.copy().pop() > 0\n",
+            "a `lemma def` body must not change program state",
+        ),
+        (
+            "lemma def f(n: int64):\n    requires n > 0\n\ndef main():\n    mut xs = [1]\n    f(xs.pop())\n",
+            "an argument of a lemma call must not change program state",
+        ),
+        (
+            "class C:\n    n: int64\n\n    lemma def f(self):\n        pass\n",
+            "a `lemma def` is a module-level function",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err(source);
+        assert_eq!(error.code, "AU2048", "{source}: {}", error.message);
+        assert!(error.message.contains(message), "{source}: {}", error.message);
+    }
+}
+
+#[test]
+fn trait_methods_state_contracts_their_implementations_inherit() {
+    crate::check_source(concat!(
+        "trait Shape:\n",
+        "    def area(self) -> int64:\n",
+        "        \"\"\"The area.\"\"\"\n",
+        "        ensures result >= 0\n",
+        "    def scaled(self, k: int64) -> int64:\n",
+        "        requires k >= 1\n",
+        "        ensures result >= 0\n",
+        "        return self.area() * k\n",
+        "\n",
+        "class Sq:\n",
+        "    side: int64\n",
+        "\n",
+        "impl Shape for Sq:\n",
+        "    def area(self) -> int64:\n",
+        "        ensures result >= 0\n",
+        "        return self.side * self.side\n",
+        "\n",
+        "def main():\n",
+        "    print(Sq(side=2).scaled(3))\n",
+    ))
+    .expect("an implementation may repeat the trait's clauses");
 }
 
 #[test]
@@ -31963,6 +32077,52 @@ fn loop_clauses_check_as_pure_conditions_and_measures() {
             "def main():\n    for x in [1]:\n        invariant [y for y in [x]].pop() > 0\n",
             "AU2048",
             "an `invariant` condition must not change program state",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err(source);
+        assert_eq!(error.code, code, "{source}: {}", error.message);
+        assert!(error.message.contains(message), "{source}: {}", error.message);
+    }
+}
+
+#[test]
+fn function_measures_check_and_recursive_calls_pass_pure_arguments() {
+    crate::check_source(concat!(
+        "def walk(xs: list[int64], i: int64, label: str = \"x\") -> int64:\n",
+        "    requires 0 <= i and i <= len(xs)\n",
+        "    decreases len(xs) - i\n",
+        "    if i == len(xs):\n",
+        "        return 0\n",
+        "    print(label)\n",
+        "    return xs[i] + walk(xs, i + 1, label + \"y\")\n",
+        "\n",
+        "spec def twice(v: int64) -> int64:\n",
+        "    return v * 2\n",
+        "\n",
+        "def main():\n",
+        "    print(walk([1, 2], 0))\n",
+    ))
+    .expect("a function measure checks");
+    for (source, code, message) in [
+        (
+            "def f(n: int64) -> int64:\n    decreases n\n    decreases n + 1\n    return n\n",
+            "AU2048",
+            "a function takes at most one `decreases` clause",
+        ),
+        (
+            "def f(n: int64) -> int64:\n    decreases n > 0\n    return n\n",
+            "AU2002",
+            "a `decreases` measure must be `int64`, found `bool`",
+        ),
+        (
+            "class C:\n    n: int64\n\n    def f(self, k: int64) -> int64:\n        decreases k\n        return k\n",
+            "AU2048",
+            "a method cannot declare `decreases` yet",
+        ),
+        (
+            "def f(xs: list[int64], k: int64) -> int64:\n    decreases k\n    if k <= 0:\n        return 0\n    mut ys = [1]\n    return f(xs, k=ys.pop() - 1)\n",
+            "AU2048",
+            "an argument the `decreases` measure reads must not change program state",
         ),
     ] {
         let error = crate::check_source(source).expect_err(source);
@@ -32124,6 +32284,12 @@ fn for_loops_iterate_user_iterators() {
     );
     crate::check_source(&source).expect("iterator loops check");
 
+    // Loop clauses, comprehensions, and the lockstep forms take iterators.
+    let source = format!(
+        "{ITERATOR_PRELUDE}def main():\n    for x in Count(n=2):\n        invariant x >= 0\n        print(x)\n    c = Count(n=2)\n    print([x for x in c])\n    print({{x: i for i, x in enumerate(Count(n=2))}})\n    print([x + y for x, y in zip(Count(n=2), Count(n=3))])\n    for i, x in enumerate(Count(n=2), start=1):\n        invariant i >= 1\n        print(i + x)\n    for pair in zip(Count(n=2), Count(n=2)):\n        print(pair)\n    k = Count(n=1)\n    for x in k.collect():\n        print(x)\n"
+    );
+    crate::check_source(&source).expect("iterator sources check");
+
     for (body, code, message) in [
         (
             "    c = Count(n=2)\n    for x in c:\n        print(x)\n    print(c.n)\n",
@@ -32141,14 +32307,19 @@ fn for_loops_iterate_user_iterators() {
             "requires a mutable iterator place",
         ),
         (
-            "    for x in Count(n=2):\n        invariant x >= 0\n        print(x)\n",
-            "AU2048",
-            "loop clauses on a `for` loop over an iterator",
+            "    for i, x in zip([1, 2], Count(n=2)):\n        print(x)\n",
+            "AU2002",
+            "`zip` cannot pair a collection with an iterator",
         ),
         (
-            "    print([x for x in Count(n=2)])\n",
+            "    for i, x in own enumerate(Count(n=2)):\n        print(x)\n",
+            "AU3002",
+            "without an ownership modifier",
+        ),
+        (
+            "    for i, x in enumerate(Count(n=2)):\n        invariant x\n        print(x)\n",
             "AU2002",
-            "a comprehension cannot iterate the iterator `Count` yet",
+            "an `invariant` condition must be `bool`",
         ),
         (
             "    for x in 3:\n        print(x)\n",
@@ -32163,6 +32334,34 @@ fn for_loops_iterate_user_iterators() {
             diagnostic.message.contains(message),
             "{source}\n{diagnostic:?}"
         );
+    }
+}
+
+#[test]
+fn generator_functions_check_and_reject_misuse() {
+    let header = "from iter import Generator\n\n";
+    crate::check_source(&format!(
+        "{header}def count(n: int64, label: own str) -> Generator[int64]:\n    print(label)\n    for i in range(n):\n        if i > 5:\n            return\n        yield i\n\ndef main():\n    for x in count(3, \"go\"):\n        print(x)\n"
+    ))
+    .expect("generator functions check");
+    // `yield` alone stays an ordinary name outside generator functions.
+    crate::check_source("def f():\n    yield = 3\n    print(yield)\n").expect("yield is a name");
+
+    for (source, code, message) in [
+        ("def f() -> int64:\n    yield 1\n    return 0\n", "AU2049", "its result type must be `Generator[T]`"),
+        (&format!("{header}def f() -> Generator[int64]:\n    yield 1\n    return 2\n"), "AU2049", "cannot return a value"),
+        (&format!("{header}def f(xs: mut list[int64]) -> Generator[int64]:\n    yield 1\n"), "AU2049", "cannot be `mut`"),
+        (&format!("{header}def f() -> Generator[int64]:\n    yield \"no\"\n"), "AU2002", "the generator yields `int64`, found `str`"),
+        (&format!("{header}def f() -> Generator[int64]:\n    yield\n"), "AU2049", "`yield` needs a value"),
+        (&format!("{header}def f() -> Generator[int64]:\n    ensures true\n    yield 1\n"), "AU2049", "cannot have `ensures` clauses"),
+        (&format!("{header}def f(xs: list[int64]) -> Generator[int64]:\n    yield 1\n"), "AU3002", "generator parameter `xs` must be `own`"),
+        ("class C:\n    def m(self) -> int64:\n        yield 1\n        return 1\n", "AU2049", "not in a method"),
+        ("yield 3\n", "AU2049", "not in top-level statements"),
+        (&format!("{header}def f() -> Generator[int64]:\n    yield 1\n\ndef use(g: own Generator[int64]) -> int64:\n    return 0\n\ndef main():\n    with TaskGroup() as group:\n        group.start(use, f())\n"), "AU3008", "is not Transfer"),
+    ] {
+        let diagnostic = crate::check_source(source).expect_err("the generator is rejected");
+        assert_eq!(diagnostic.code, code, "{source}\n{diagnostic:?}");
+        assert!(diagnostic.message.contains(message), "{source}\n{diagnostic:?}");
     }
 }
 
@@ -32252,7 +32451,7 @@ fn named_callable_slots_keep_every_contract_diagnostic() {
         "type Named = Callable[def(value: int64) -> int64]\ntype Bare = Callable[def(int64) -> int64]\n\ndef inc(value: int64) -> int64:\n    return value + 1\n\ndef main():\n    n = 3\n    g: def(value: int64) -> int64 = lambda value: value + n\n    f: def(int64) -> int64 = g\n    print(f(1))\n    a = Named(inc)\n    b: Bare = a\n    print(b(4))\n    h: def(int64) -> int64 = inc\n    print(h(2))\n",
     )
     .expect("unnamed slots admit any parameter name");
-    let cases: [(&str, &str); 12] = [
+    let cases: [(&str, &str); 13] = [
         (
             "def inc(value: int64) -> int64:\n    return value\n\ndef main():\n    c: Callable[def(int64) -> int64] = inc\n",
             "becomes `Callable[def(int64) -> int64]` only through an explicit `Callable(...)`",
@@ -32272,6 +32471,10 @@ fn named_callable_slots_keep_every_contract_diagnostic() {
         (
             "type Unary = def(value: int64) -> int64\ndef increment(value: int64 = 1) -> int64:\n    return value + 1\ndef main():\n    step: Unary = increment\n    print(step(4))\n",
             "use the explicit adapter `Unary(increment)`",
+        ),
+        (
+            "type Unary = def(value: int64) -> int64\ndef pick[T](value: int64 = 1) -> int64:\n    return value\ndef main():\n    step: Unary = pick[str]\n    print(step(4))\n",
+            "use the explicit adapter `Unary(pick[str])`",
         ),
         (
             "class Counter:\n    value: int64\n    def scaled(self, factor: int64 = 2) -> int64:\n        return self.value * factor\ndef main():\n    counter = Counter(value=2)\n    selected: def(factor: int64) -> int64 = counter.scaled\n    print(selected(3))\n",
@@ -32448,4 +32651,90 @@ fn non_exhaustive_enum_match_help_spells_out_missing_cases() {
         nested.help,
         vec!["add a `case` for each missing pattern, or a final `case _:`".to_string()]
     );
+}
+
+fn generator_error_mapping_keeps_unrelated_diagnostics() {
+    let params = generators::GeneratorParams::default();
+    let unplaced = Diagnostic::new("`__aura_generator_yield` failed");
+    assert_eq!(
+        params.map_error(unplaced).message,
+        "`__aura_generator_yield` failed"
+    );
+    let span = Span { line: 1, column: 1 };
+    let other_yield = Diagnostic::at(span, "function `__aura_generator_yield` takes 1 argument");
+    assert_eq!(
+        params.map_error(other_yield).message,
+        "`yield` takes 1 argument"
+    );
+    let borrowed = Diagnostic::coded_at("AU3002", span, "`x` is borrowed");
+    assert_eq!(params.map_error(borrowed).message, "`x` is borrowed");
+}
+
+#[test]
+fn the_iter_module_cannot_declare_generator_functions() {
+    let module = crate::parse_source("def count() -> Generator[int64]:\n    yield 1\n")
+        .expect("the generator parses");
+    let diagnostic = check_with_context(
+        module,
+        ModuleContext {
+            module_name: "iter".to_string(),
+            imported_bindings: BTreeMap::new(),
+            module_registry: BTreeMap::new(),
+            is_entry_module: false,
+        },
+    )
+    .expect_err("iter cannot hold generators");
+    assert_eq!(diagnostic.code, "AU2049", "{diagnostic:?}");
+    assert!(
+        diagnostic
+            .message
+            .contains("cannot declare generator functions"),
+        "{diagnostic:?}"
+    );
+}
+
+#[test]
+fn associated_type_misuse_reports_clear_diagnostics() {
+    let cases = [
+        (
+            "from iter import Generator, IntoIterator\n\nclass Bag:\n    items: list[str]\n\ndef walk(items: own list[str]) -> Generator[str]:\n    for item in items:\n        yield item.clone()\n\nimpl IntoIterator[str] for Bag:\n    type Iter = int64\n    def into_iter(own self) -> Self.Iter:\n        return walk(self.items)\n\ndef main():\n    for word in Bag(items=[\"a\"]):\n        print(word)\n",
+            "must implement `Iterator[str]`, but `int64` does not",
+        ),
+        (
+            "from iter import Generator, IntoIterator\n\nclass Bag:\n    items: list[str]\n\ndef walk(items: own list[str]) -> Generator[str]:\n    for item in items:\n        yield item.clone()\n\nimpl IntoIterator[str] for Bag:\n    def into_iter(own self) -> Generator[str]:\n        return walk(self.items)\n\ndef main():\n    for word in Bag(items=[\"a\"]):\n        print(word)\n",
+            "must fix its associated type `Iter`",
+        ),
+        (
+            "from iter import Generator, IntoIterator\n\nclass Bag:\n    items: list[str]\n\ndef walk(items: own list[str]) -> Generator[str]:\n    for item in items:\n        yield item.clone()\n\nimpl IntoIterator[str] for Bag:\n    type Iter = Generator[str]\n    type Other = int64\n    def into_iter(own self) -> Generator[str]:\n        return walk(self.items)\n\ndef main():\n    for word in Bag(items=[\"a\"]):\n        print(word)\n",
+            "has no associated type `Other`",
+        ),
+        (
+            "from iter import Generator, IntoIterator\n\nclass Bag:\n    items: list[str]\n\ndef walk(items: own list[str]) -> Generator[str]:\n    for item in items:\n        yield item.clone()\n\nimpl IntoIterator[str] for Bag:\n    type Iter = Generator[str]\n    def into_iter(own self) -> Generator[str]:\n        return walk(self.items)\n\ndef main():\n    for word in mut Bag(items=[\"a\"]):\n        print(word)\n",
+            "a `for` loop consumes an `IntoIterator` source",
+        ),
+        (
+            "from iter import IntoIterator\n\nclass Holder[S: IntoIterator[int64]]:\n    source: S\n\ndef main():\n    print(1)\n",
+            "only a function or method bound can name `IntoIterator` yet",
+        ),
+        (
+            "trait Source:\n    def open(self) -> int64\n    type Iter\n\ndef main():\n    print(1)\n",
+            "declares its associated types before its methods",
+        ),
+        (
+            "trait Source:\n    type Iter\n    type Iter\n\ndef main():\n    print(1)\n",
+            "associated type `Iter` is declared twice",
+        ),
+        (
+            "trait Source:\n    type Iter\n\nclass A:\n    n: int64\n\nimpl Source for A:\n    def f(self) -> int64:\n        return 1\n    type Iter = int64\n\ndef main():\n    print(1)\n",
+            "fixes its associated types before its methods",
+        ),
+        (
+            "trait Source:\n    type Iter\n\nclass A:\n    n: int64\n\nimpl Source for A:\n    type Iter = int64\n    type Iter = str\n\ndef main():\n    print(1)\n",
+            "associated type `Iter` is fixed twice",
+        ),
+    ];
+    for (source, expected) in cases {
+        let error = crate::check_source(source).expect_err(source);
+        assert!(error.message.contains(expected), "{source}\n{error:?}");
+    }
 }

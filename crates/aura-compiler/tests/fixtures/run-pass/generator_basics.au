@@ -1,0 +1,102 @@
+# Generator functions (Batch 9 step 9c): laziness, owned inputs, generics,
+# nesting, early `return`, and the `next`/`close` protocol.
+from iter import Generator, Step
+
+def countdown(n: int64) -> Generator[int64]:
+    mut i = n
+    while i > 0:
+        yield i
+        i -= 1
+
+def words(prefix: own str, n: int64) -> Generator[str]:
+    print("words: start")
+    for i in range(n):
+        yield f"{prefix}{i}"
+    print("words: done")
+
+def each[T](xs: own list[T]) -> Generator[T]:
+    for x in own xs:
+        yield x
+
+def evens_below(limit: int64) -> Generator[int64]:
+    mut i = 0
+    while true:
+        if i >= limit:
+            return
+        if i % 2 == 0:
+            yield i
+        i += 1
+
+def pairs() -> Generator[int64]:
+    for a in evens_below(6):
+        for b in evens_below(a):
+            yield a * 10 + b
+
+def show(step: Step[int64]):
+    match step:
+        case Step.Item(value):
+            print(f"item {value}")
+        case _:
+            print("end")
+
+def worker(n: int64) -> int64:
+    mut total = 0
+    for x in countdown(n):
+        total += x
+    return total
+
+def main():
+    for x in countdown(3):
+        print(x)
+
+    # Calling a generator function runs none of its body.
+    g = words("w", 2)
+    print("created")
+    for w in g:
+        print(w)
+
+    for s in each(["a", "b"]):
+        print(s)
+    for flag in each([true, false]):
+        print(flag)
+
+    mut total = 0
+    for p in pairs():
+        total += p
+    print(total)
+
+    mut it = countdown(2)
+    show(it.next())
+    show(it.next())
+    show(it.next())
+    show(it.next())
+
+    mut early = evens_below(100)
+    show(early.next())
+    early.close()
+    show(early.next())
+    early.close()
+
+    mut never = countdown(5)
+    never.close()
+    show(never.next())
+
+    with TaskGroup() as group:
+        a = group.start(worker, 10)
+        b = group.start(worker, 100)
+        match a.result():
+            case TaskResult.Ready(value):
+                print(value)
+            case _:
+                pass
+        match b.result():
+            case TaskResult.Ready(value):
+                print(value)
+            case _:
+                pass
+
+    mut many = 0
+    for i in range(200):
+        for x in countdown(3):
+            many += x
+    print(many)

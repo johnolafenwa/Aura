@@ -305,7 +305,18 @@ pub struct FunctionDecl {
     /// `spec def` bodies may call.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub spec: bool,
+    /// `lemma def`: a proof the verifier checks once and then relies on at
+    /// each call. A call written as a statement is erased at run time.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub lemma: bool,
 }
+
+/// The contextual keyword of a yield statement.
+pub const YIELD_KEYWORD: &str = "yield";
+
+/// The callee name a parsed `yield value` statement carries until the
+/// generator pass rewrites it. The trailing space keeps source from naming it.
+pub const YIELD_MARKER: &str = "yield ";
 
 /// The hidden method that checks a class's `invariant` clauses. The parser
 /// adds it to every class that declares one; it borrows `self` and checks
@@ -544,6 +555,31 @@ pub struct TraitDecl {
     pub span: Span,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<DocString>,
+    /// `type Name: Bound` lines. Each is also a trailing entry of
+    /// `type_params`, spelled `Self.Name`, which every implementation fixes.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub assoc_types: Vec<AssocTypeDecl>,
+}
+
+/// An associated type a trait declares: `type Name: Bound, ...`.
+#[derive(Clone, Debug, Serialize)]
+pub struct AssocTypeDecl {
+    pub name: String,
+    pub bounds: Vec<TypeRef>,
+    pub span: Span,
+}
+
+/// An implementation's choice for an associated type: `type Name = T`.
+#[derive(Clone, Debug, Serialize)]
+pub struct AssocTypeBinding {
+    pub name: String,
+    pub target: TypeRef,
+    pub span: Span,
+}
+
+/// The hidden trait type parameter that stands for an associated type.
+pub fn assoc_type_param_name(name: &str) -> String {
+    format!("Self.{name}")
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -559,6 +595,9 @@ pub struct ImplDecl {
     /// compiler derives the methods.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub derived: bool,
+    /// `type Name = T` lines fixing the trait's associated types.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub assoc_types: Vec<AssocTypeBinding>,
 }
 
 /// Source-level ownership spelling for an ordinary parameter.
@@ -623,6 +662,11 @@ pub struct AssertStmt {
     pub condition: Expr,
     pub message: Option<Expr>,
     pub span: Span,
+    /// The loop `invariant` clause this check stands for, when a rewrite
+    /// moved the clause out of its loop header. The check then reports and
+    /// is checked as that clause.
+    #[serde(skip)]
+    pub clause: Option<Box<ContractClause>>,
 }
 
 #[derive(Clone, Debug, Serialize)]

@@ -1,0 +1,19 @@
+# A trap in a function that a generator call was passed to names the
+# function as written, not the copy that takes the generator's arguments.
+from iter import Generator
+
+def upto(n: int64) -> Generator[int64]:
+    mut i = 0
+    while i < n:
+        yield i
+        i += 1
+
+def boom(source: own Generator[int64]) -> int64:
+    mut total = 9223372036854775806
+    for x in source:
+        print(x)
+        total += x
+    return total
+
+def main():
+    print(boom(upto(5)))

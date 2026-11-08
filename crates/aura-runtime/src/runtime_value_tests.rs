@@ -1174,8 +1174,8 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
             ],
         }),
         Value::Map(MapValue {
-            key_type: Type::named("str"),
-            value_type: array_type.clone(),
+            key_type: Type::named("str").into(),
+            value_type: array_type.clone().into(),
             entries: vec![
                 (
                     Value::String("second".to_string().into()),
@@ -1279,8 +1279,8 @@ fn array_containing_language_copies_preserve_empty_containers() {
             elements: Vec::new().into(),
         }),
         Value::Map(MapValue {
-            key_type: Type::named("str"),
-            value_type: array_type.clone(),
+            key_type: Type::named("str").into(),
+            value_type: array_type.clone().into(),
             entries: Vec::new().into(),
         }),
         Value::Instance(InstanceValue {
@@ -1431,8 +1431,8 @@ fn adr0038_partial_capture_copies_release_every_projected_value_after_failure() 
                     str_view: Default::default(),
                 }),
                 Value::Map(MapValue {
-                    key_type: Type::named("str"),
-                    value_type: Type::named("Queue"),
+                    key_type: Type::named("str").into(),
+                    value_type: Type::named("Queue").into(),
                     entries: vec![(
                         Value::String("queue".to_string().into()),
                         channel_value(channel),
@@ -1541,8 +1541,8 @@ fn adr0038_partial_capture_copies_release_every_projected_value_after_failure() 
     };
     assert_failure_releases_partial_copies(
         Value::Map(MapValue {
-            key_type: Type::Tuple(vec![Type::named("int32")]),
-            value_type: Type::named("Queue"),
+            key_type: Type::Tuple(vec![Type::named("int32")]).into(),
+            value_type: Type::named("Queue").into(),
             entries: vec![
                 (integer_key(1), channel_value(&map_key_channel)),
                 (integer_key(2), channel_value(&map_key_channel)),
@@ -1563,8 +1563,8 @@ fn adr0038_partial_capture_copies_release_every_projected_value_after_failure() 
     };
     assert_failure_releases_partial_copies(
         Value::Map(MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::Tuple(vec![Type::named("Queue")]),
+            key_type: Type::named("str").into(),
+            value_type: Type::Tuple(vec![Type::named("Queue")]).into(),
             entries: vec![
                 (Value::String("first".to_string().into()), queue_tuple()),
                 (Value::String("second".to_string().into()), queue_tuple()),
@@ -6699,8 +6699,8 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
     );
     assert_source_type(
         Value::Map(MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::named("int32"),
+            key_type: Type::named("str").into(),
+            value_type: Type::named("int32").into(),
             entries: vec![].into(),
         }),
         "dict",
@@ -7818,8 +7818,8 @@ fn dynamic_json_runtime_conversion_rejects_noncanonical_payload_metadata() {
             json_variant(
                 "Object",
                 Value::Map(MapValue {
-                    key_type: Type::named("int64"),
-                    value_type: Type::named("json.Value"),
+                    key_type: Type::named("int64").into(),
+                    value_type: Type::named("json.Value").into(),
                     entries: Vec::new().into(),
                 }),
             ),
@@ -7830,8 +7830,8 @@ fn dynamic_json_runtime_conversion_rejects_noncanonical_payload_metadata() {
             json_variant(
                 "Object",
                 Value::Map(MapValue {
-                    key_type: Type::named("str"),
-                    value_type: Type::named("str"),
+                    key_type: Type::named("str").into(),
+                    value_type: Type::named("str").into(),
                     entries: Vec::new().into(),
                 }),
             ),
@@ -7913,8 +7913,8 @@ fn dynamic_json_accessors_reject_noncanonical_payload_metadata() {
             json_variant(
                 "Object",
                 Value::Map(MapValue {
-                    key_type: Type::named("int64"),
-                    value_type: Type::named("json.Value"),
+                    key_type: Type::named("int64").into(),
+                    value_type: Type::named("json.Value").into(),
                     entries: Vec::new().into(),
                 }),
             ),
@@ -7924,8 +7924,8 @@ fn dynamic_json_accessors_reject_noncanonical_payload_metadata() {
             json_variant(
                 "Object",
                 Value::Map(MapValue {
-                    key_type: Type::named("str"),
-                    value_type: Type::named("str"),
+                    key_type: Type::named("str").into(),
+                    value_type: Type::named("str").into(),
                     entries: Vec::new().into(),
                 }),
             ),
@@ -8036,8 +8036,8 @@ fn dynamic_json_host_boundary_rejects_malformed_runtime_shapes() {
         "json.Value",
         "Object",
         vec![Value::Map(MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::named("json.Value"),
+            key_type: Type::named("str").into(),
+            value_type: Type::named("json.Value").into(),
             entries: vec![(
                 Value::Int(IntegerValue::from_i64(1)),
                 runtime_json(crate::json_codec::JsonValue::Null),
@@ -8079,8 +8079,8 @@ fn dynamic_json_host_boundary_rejects_malformed_runtime_shapes() {
         "json.Value",
         "Object",
         vec![Value::Map(MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::named("json.Value"),
+            key_type: Type::named("str").into(),
+            value_type: Type::named("json.Value").into(),
             entries: vec![
                 (
                     Value::String("valid".into()),
@@ -8887,8 +8887,8 @@ fn host_control_plane_builtins_cover_success_and_error_boundaries() {
     }
     fn string_map(entries: &[(&str, &str)]) -> Value {
         Value::Map(MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::named("str"),
+            key_type: Type::named("str").into(),
+            value_type: Type::named("str").into(),
             entries: entries
                 .iter()
                 .map(|(key, value)| {
@@ -11893,8 +11893,8 @@ fn value_equality_and_render_cover_collection_shapes() {
     );
 
     let map_a = Value::Map(MapValue {
-        key_type: Type::named("str"),
-        value_type: Type::named("int32"),
+        key_type: Type::named("str").into(),
+        value_type: Type::named("int32").into(),
         entries: vec![
             (
                 Value::String("a".to_string().into()),
@@ -11908,8 +11908,8 @@ fn value_equality_and_render_cover_collection_shapes() {
         .into(),
     });
     let map_b = Value::Map(MapValue {
-        key_type: Type::named("str"),
-        value_type: Type::named("int32"),
+        key_type: Type::named("str").into(),
+        value_type: Type::named("int32").into(),
         entries: vec![
             (
                 Value::String("b".to_string().into()),
@@ -11926,8 +11926,8 @@ fn value_equality_and_render_cover_collection_shapes() {
     assert_ne!(
         map_a,
         Value::Map(MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::named("int32"),
+            key_type: Type::named("str").into(),
+            value_type: Type::named("int32").into(),
             entries: vec![(
                 Value::String("a".to_string().into()),
                 Value::Int(IntegerValue::from_signed(1)),
@@ -11938,8 +11938,8 @@ fn value_equality_and_render_cover_collection_shapes() {
     assert_ne!(
         map_a,
         Value::Map(MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::named("int32"),
+            key_type: Type::named("str").into(),
+            value_type: Type::named("int32").into(),
             entries: vec![
                 (
                     Value::String("a".to_string().into()),
@@ -12020,8 +12020,8 @@ fn nested_queue_producer_registration_walks_tuples_collections_instances_and_var
             elements: vec![Value::Channel(queue_in_set.clone())].into(),
         }),
         Value::Map(MapValue {
-            key_type: Type::named("Queue"),
-            value_type: Type::named("Queue"),
+            key_type: Type::named("Queue").into(),
+            value_type: Type::named("Queue").into(),
             entries: vec![(
                 Value::Channel(queue_in_map_key.clone()),
                 Value::Channel(queue_in_map_value.clone()),
@@ -19021,8 +19021,8 @@ fn malformed_json_runtime_trees_fall_back_to_structural_clones() {
         coverage_json(
             "Object",
             vec![Value::Map(MapValue {
-                key_type: Type::named("str"),
-                value_type: Type::named("json.Value"),
+                key_type: Type::named("str").into(),
+                value_type: Type::named("json.Value").into(),
                 entries: entries.into(),
             })],
         )
@@ -19062,8 +19062,8 @@ fn host_builtins_cover_retry_cancellation_probes_and_malformed_string_maps() {
     );
     assert!(super::evaluate_host_builtin("json::is_valid", vec![Value::Unit]).is_err());
     let mixed = Value::Map(MapValue {
-        key_type: Type::named("str"),
-        value_type: Type::named("int64"),
+        key_type: Type::named("str").into(),
+        value_type: Type::named("int64").into(),
         entries: vec![(
             Value::String("a".to_string().into()),
             Value::Int(IntegerValue::from_literal(1)),
@@ -19447,8 +19447,8 @@ fn format_width_padding_stays_within_the_string_allocation_limit() {
 #[test]
 fn array_free_dicts_and_sets_clone_by_sharing() {
     let map = Value::Map(MapValue {
-        key_type: Type::named("str"),
-        value_type: Type::named("json.Value"),
+        key_type: Type::named("str").into(),
+        value_type: Type::named("json.Value").into(),
         entries: vec![(
             Value::String("age".to_string().into()),
             Value::String("40".to_string().into()),
@@ -19478,8 +19478,8 @@ fn array_free_dicts_and_sets_clone_by_sharing() {
         Type::named("Point"),
     ] {
         let map = Value::Map(MapValue {
-            key_type: Type::named("str"),
-            value_type: unknown,
+            key_type: Type::named("str").into(),
+            value_type: unknown.into(),
             entries: vec![(Value::String("k".to_string().into()), Value::Unit)].into(),
         });
         let copy = super::try_clone_array_containing_value(&map).expect("clone");
@@ -19896,8 +19896,8 @@ fn runtime_json_dumps_write_what_the_tree_writes_and_defer_every_failure_to_it()
             "json.Value",
             "Object",
             vec![Value::Map(MapValue {
-                key_type: Type::named("str"),
-                value_type: Type::named("json.Value"),
+                key_type: Type::named("str").into(),
+                value_type: Type::named("json.Value").into(),
                 entries: vec![(Value::String("k".into()), deep_object)].into(),
             })],
         )
@@ -19907,8 +19907,8 @@ fn runtime_json_dumps_write_what_the_tree_writes_and_defer_every_failure_to_it()
         "json.Value",
         "Object",
         vec![Value::Map(MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::named("json.Value"),
+            key_type: Type::named("str").into(),
+            value_type: Type::named("json.Value").into(),
             entries: vec![(
                 Value::Int(IntegerValue::from_i64(1)),
                 runtime_json(JsonValue::Null),
@@ -20137,5 +20137,195 @@ fn closing_a_file_the_disk_cannot_take_yet_leaves_the_worker_to_other_tasks() {
     assert!(
         reader.join().expect("reader thread"),
         "the close wrote the buffer"
+    );
+}
+
+#[test]
+fn a_finished_task_stack_is_reused_by_the_next_task_of_the_same_capacity() {
+    let mut scheduler = super::LightweightTaskScheduler::new();
+    let before = super::task_stack_pool_len();
+    let first = scheduler
+        .spawn_task(None, || Ok(Value::Bool(true)))
+        .expect("the first task should be admitted");
+    scheduler.resume_task(1, super::RuntimeSchedulerWakeReason::Ready);
+    assert!(first.completed_result().is_some());
+    assert_eq!(super::task_stack_pool_len(), before + 1);
+
+    // A different capacity never receives the pooled stack.
+    let other = scheduler
+        .spawn_task_with_stack(None, Some(512 * 1024), || Ok(Value::Unit))
+        .expect("a task with an explicit stack should be admitted");
+    assert_eq!(super::task_stack_pool_len(), before + 1);
+    scheduler.resume_task(2, super::RuntimeSchedulerWakeReason::Ready);
+    assert!(other.completed_result().is_some());
+    assert_eq!(super::task_stack_pool_len(), before + 2);
+
+    let second = scheduler
+        .spawn_task(None, || Ok(Value::Bool(false)))
+        .expect("the second task should be admitted");
+    assert_eq!(super::task_stack_pool_len(), before + 1);
+    scheduler.resume_task(3, super::RuntimeSchedulerWakeReason::Ready);
+    match second.completed_result() {
+        Some(TaskExecutionResult::Ready(Ok(Value::Bool(false)))) => {}
+        other => panic!("unexpected reused-stack result: {other:?}"),
+    }
+}
+
+#[test]
+fn the_task_stack_pool_keeps_a_bounded_number_of_stacks_and_bytes() {
+    let mut pool = super::TaskStackPool::default();
+    let size = 256 * 1024;
+    for _ in 0..super::TASK_STACK_POOL_MAX_STACKS + 4 {
+        let stack = super::allocate_lightweight_task_stack(size).expect("stack");
+        let _ = pool.give(super::PooledTaskStack {
+            stack,
+            size,
+            home: None,
+        });
+    }
+    assert_eq!(pool.stacks.len(), super::TASK_STACK_POOL_MAX_STACKS);
+    assert_eq!(pool.bytes, super::TASK_STACK_POOL_MAX_STACKS * size);
+
+    // An idle worker trims back to the idle bound one batch at a time.
+    let mut batches = 0;
+    while pool.above_idle_bound() {
+        let surplus = pool.trim_for_idle();
+        assert!(!surplus.is_empty());
+        assert!(surplus.len() <= super::TASK_STACK_POOL_TRIM_BATCH);
+        batches += 1;
+    }
+    assert_eq!(pool.stacks.len(), super::TASK_STACK_POOL_IDLE_STACKS);
+    assert_eq!(pool.bytes, super::TASK_STACK_POOL_IDLE_STACKS * size);
+    assert_eq!(
+        batches,
+        (super::TASK_STACK_POOL_MAX_STACKS - super::TASK_STACK_POOL_IDLE_STACKS)
+            .div_ceil(super::TASK_STACK_POOL_TRIM_BATCH)
+    );
+    assert!(pool.trim_for_idle().is_empty());
+
+    let mut large = super::TaskStackPool::default();
+    let large_size = 512 * 1024 * 1024;
+    for _ in 0..3 {
+        let stack = super::allocate_lightweight_task_stack(large_size).expect("stack");
+        let _ = large.give(super::PooledTaskStack {
+            stack,
+            size: large_size,
+            home: None,
+        });
+    }
+    assert_eq!(large.stacks.len(), 2);
+    assert!(large.bytes <= super::TASK_STACK_POOL_MAX_BYTES);
+    assert!(large.take(size).is_none());
+    assert!(large.take(large_size).is_some());
+    assert_eq!(large.bytes, large_size);
+    // The idle bound is in bytes too: one large stack is above it.
+    assert!(large.above_idle_bound());
+    assert_eq!(large.trim_for_idle().len(), 1);
+    assert_eq!(large.bytes, 0);
+}
+
+fn prepared_test_task() -> super::PreparedLightweightTask {
+    let (_task, request) =
+        super::prepare_lightweight_task(None, None, true, Box::new(|| Ok(Value::Unit)), None)
+            .expect("a test task should be prepared");
+    request
+}
+
+#[test]
+fn worker_coordinator_places_steals_and_ages_children_that_have_not_run() {
+    use std::time::Duration;
+    let workers = super::LightweightWorkerCoordinator::new(3);
+    for inbox in &workers.inboxes {
+        inbox.started.store(true, Ordering::SeqCst);
+    }
+    assert!(workers.all_workers_busy());
+
+    // The first child takes the newest slot; the second moves it to the
+    // stealable queue.
+    workers.place_newest(0, prepared_test_task());
+    assert!(workers.has_waiting_children(1));
+    assert!(!workers.has_waiting_children(0));
+    workers.place_newest(0, prepared_test_task());
+    assert_eq!(workers.inboxes[0].queued.load(Ordering::SeqCst), 1);
+    assert_eq!(workers.pending_requests.load(Ordering::SeqCst), 2);
+    assert!(!workers.has_stealable_work(0));
+
+    // Young children are not stolen; once they have waited, the queued
+    // one goes first.
+    assert!(workers
+        .take_newest(0, Some(Duration::from_secs(60)))
+        .is_none());
+    std::thread::sleep(super::QUEUED_CHILD_STEAL_AGE * 2);
+    assert!(workers.has_stealable_work(1));
+    let stolen = workers.steal(1);
+    assert_eq!(stolen.len(), 1);
+    assert!(workers
+        .take_newest(0, Some(Duration::from_secs(60)))
+        .is_none());
+    std::thread::sleep(super::NEWEST_CHILD_STEAL_AGE * 2);
+    assert!(workers.newest_is_stealable(&workers.inboxes[0]));
+    let stolen_newest = workers.steal(2);
+    assert_eq!(stolen_newest.len(), 1);
+    assert_eq!(workers.pending_requests.load(Ordering::SeqCst), 0);
+
+    // A worker that has not started is never a victim.
+    workers.inboxes[0].started.store(false, Ordering::SeqCst);
+    workers.push_request(0, prepared_test_task());
+    assert!(!workers.has_stealable_work(1));
+    assert!(workers.steal(1).is_empty());
+    workers.inboxes[0].started.store(true, Ordering::SeqCst);
+
+    // The starvation path takes only a child that has waited long enough.
+    assert!(workers
+        .take_request_older_than(0, Duration::from_secs(60))
+        .is_none());
+    assert!(workers.take_request_older_than(0, Duration::ZERO).is_some());
+    assert!(workers.take_request_older_than(0, Duration::ZERO).is_none());
+
+    // Parking is counted once and cleared by whoever wakes the worker.
+    workers.park(2);
+    workers.park(2);
+    assert!(!workers.all_workers_busy());
+    assert_eq!(workers.parked_workers.load(Ordering::SeqCst), 1);
+    workers.wake_parked_worker(0);
+    assert_eq!(workers.parked_workers.load(Ordering::SeqCst), 0);
+    assert!(!workers.unpark(2));
+
+    for request in stolen.into_iter().chain(stolen_newest) {
+        assert!(super::cancel_unadmitted_lightweight_task(request).is_none());
+    }
+}
+
+#[test]
+fn a_dict_shares_its_types_and_keeps_values_small() {
+    use crate::runtime_value::{DictEntries, SharedType};
+    let map = MapValue {
+        key_type: SharedType::named("str"),
+        value_type: Type::named("json.Value").into(),
+        entries: DictEntries::new(),
+    };
+    let copy = map.clone();
+    // The copy shares the types, which compare and print as plain types.
+    assert!(std::ptr::eq(&*map.key_type, &*copy.key_type));
+    assert!(std::ptr::eq(&*map.value_type, &*copy.value_type));
+    assert_eq!(map.key_type, Type::named("str"));
+    assert_eq!(copy.value_type, Type::named("json.Value"));
+    assert_eq!(
+        format!("{:?}", map.key_type),
+        format!("{:?}", Type::named("str"))
+    );
+    let list = SharedType::from(Type::Named("list".to_string(), vec![Type::named("int64")]));
+    assert_eq!(
+        *list,
+        Type::Named("list".to_string(), vec![Type::named("int64")])
+    );
+    assert_ne!(list, SharedType::named("str"));
+    assert_eq!(SharedType::named("Point"), Type::named("Point"));
+    // A dict no longer makes every value as large as its two types.
+    assert!(std::mem::size_of::<MapValue>() <= 32);
+    assert!(
+        std::mem::size_of::<Value>() <= 96,
+        "a Value takes {} bytes",
+        std::mem::size_of::<Value>()
     );
 }

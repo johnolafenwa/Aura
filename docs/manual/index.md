@@ -5,7 +5,7 @@ runtime. It covers the complete syntax, name and type rules, ownership,
 execution, module APIs, diagnostics, limits, and tool contracts, in enough
 detail to reconstruct the language accurately.
 
-This Manual documents **Aura 0.11.0 (technical preview)**. The release stamp
+This Manual documents **Aura 0.12.0 (technical preview)**. The release stamp
 below records the implementation baseline commit the Manual was rendered from.
 
 <ReleaseStamp />
@@ -54,6 +54,8 @@ scope, terminology, authority, and conformance language.
 - [Contracts](/manual/contracts): `requires`, `ensures`, loop and class
   invariants, `decreases`, `old`, `forall`, `exists`, `spec def`, and
   `AU4009` failures.
+- [Verification](/manual/verification): `aura verify`, which proves with an
+  SMT solver that contracts, arithmetic, and list indexes cannot fail.
 - [Functions](/manual/functions): signatures, the bare, `own`, and `mut`
   parameter modes, default and named arguments, `main`, owned returns, and
   call binding.

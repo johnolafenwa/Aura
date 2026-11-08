@@ -22,7 +22,15 @@ use crate::diag::RuntimeCallFrame;
 pub(super) const DIRECT_MAX_CALL_DEPTH: usize = 256;
 
 /// The entries a stack holds before it moves them to the heap.
-pub(super) const DIRECT_FRAME_STACK_INLINE_ENTRIES: usize = 64;
+pub(super) const DIRECT_FRAME_STACK_INLINE_ENTRIES: usize = 16;
+
+/// The entries of recursive functions a task runs between two scheduler
+/// yields. Generated code counts [`DirectFrameStack`]'s `call_fuel` down
+/// at each entry of a function on a call cycle, and at zero stores this
+/// again and calls `aura_direct_yield_now`. Naive `fib` makes about 4,000
+/// calls in 10 microseconds, so a task in deep recursion yields every few
+/// tens of microseconds.
+pub const DIRECT_CALL_SAFEPOINT_INTERVAL: u64 = 4_096;
 
 /// The low bit of an entry that holds a boxed frame record instead of a
 /// descriptor. Both are 8-byte aligned, so the bit is free.
@@ -59,6 +67,9 @@ pub struct DirectFrameStack {
     flags: u64,
     /// The first entry: `inline`, or a heap block once the stack grows.
     entries: *mut usize,
+    /// The recursive-function entries left before the task yields (see
+    /// [`DIRECT_CALL_SAFEPOINT_INTERVAL`]). Only generated code reads it.
+    call_fuel: u64,
     capacity: usize,
     runtime_flags: u64,
     owned_frames: usize,
@@ -84,6 +95,7 @@ impl DirectFrameStack {
             pop_floor: 0,
             flags: 0,
             entries: ptr::null_mut(),
+            call_fuel: DIRECT_CALL_SAFEPOINT_INTERVAL,
             capacity: DIRECT_FRAME_STACK_INLINE_ENTRIES,
             runtime_flags: 0,
             owned_frames: 0,
@@ -133,6 +145,46 @@ impl DirectFrameStack {
         // SAFETY: the first `len` entries of the current block are
         // initialized.
         unsafe { std::slice::from_raw_parts(self.block(), self.len) }
+    }
+
+    /// The number of entries in use, including those below the floor.
+    pub(super) fn entry_count(&self) -> usize {
+        self.len
+    }
+
+    /// Removes the entries at and above `base`, outermost first, so a
+    /// suspended generator body can carry them until it resumes.
+    pub(super) fn take_entries_from(&mut self, base: usize) -> Vec<usize> {
+        let base = base.max(self.floor);
+        if self.len <= base {
+            return Vec::new();
+        }
+        let words = self.words()[base..].to_vec();
+        self.len = base;
+        let owned = words
+            .iter()
+            .filter(|word| *word & DIRECT_OWNED_FRAME_TAG != 0)
+            .count();
+        if owned > 0 {
+            self.owned_frames -= owned;
+            self.update_flags();
+        }
+        words
+    }
+
+    /// Pushes entries [`DirectFrameStack::take_entries_from`] removed.
+    pub(super) fn restore_entries(&mut self, words: Vec<usize>) {
+        let mut owned = 0;
+        for word in words {
+            if word & DIRECT_OWNED_FRAME_TAG != 0 {
+                owned += 1;
+            }
+            self.push_word(word);
+        }
+        if owned > 0 {
+            self.owned_frames += owned;
+            self.update_flags();
+        }
     }
 
     /// Pushes a descriptor's address.
@@ -378,6 +430,8 @@ pub struct DirectFrameStackLayout {
     pub floor_offset: i32,
     /// The offset of the address of the first entry.
     pub entries_offset: i32,
+    /// The offset of the scheduling fuel recursive entries count down.
+    pub call_fuel_offset: i32,
 }
 
 impl DirectFrameStackLayout {
@@ -391,6 +445,7 @@ impl DirectFrameStackLayout {
             i64::from(self.limit_offset),
             i64::from(self.floor_offset),
             i64::from(self.entries_offset),
+            i64::from(self.call_fuel_offset),
             Self::ENTRY_BYTES,
         ];
         fields.iter().fold(0x46_72_61_6d_i64, |hash, field| {
@@ -406,6 +461,7 @@ pub fn direct_frame_stack_layout() -> DirectFrameStackLayout {
         limit_offset: std::mem::offset_of!(DirectFrameStack, limit) as i32,
         floor_offset: std::mem::offset_of!(DirectFrameStack, pop_floor) as i32,
         entries_offset: std::mem::offset_of!(DirectFrameStack, entries) as i32,
+        call_fuel_offset: std::mem::offset_of!(DirectFrameStack, call_fuel) as i32,
     }
 }
 

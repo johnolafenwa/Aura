@@ -208,6 +208,9 @@ pub(super) fn validate_alias_contracts(
                 for ty in &decl.trait_args {
                     scoped.ty(ty, false)?;
                 }
+                for binding in &decl.assoc_types {
+                    scoped.ty(&binding.target, false)?;
+                }
                 for method in &decl.methods {
                     let params =
                         merged_type_param_scope(&scoped.checker.type_params, &method.type_params);

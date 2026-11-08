@@ -1,0 +1,145 @@
+# Iterators and generators near the edges of the fast iteration forms.
+import iter
+from iter import Generator, Iterator, Step
+
+
+enum Shade:
+    Light
+    Dark
+
+
+class Box[T]:
+    item: T
+
+
+impl Iterator[int64] for Box[int64]:
+    def next(mut self) -> Step[int64]:
+        return Step.End
+
+
+class Words:
+    left: int64
+
+
+impl iter.Iterator[str] for Words:
+    def next(mut self) -> iter.Step[str]:
+        match mut self.left:
+            case 0:
+                return iter.Step.End
+            case _:
+                self.left -= 1
+                for k in range(1):
+                    pass
+                while false:
+                    pass
+                return iter.Step.Item(f"w{self.left}")
+
+
+class Odd:
+    n: int64
+
+
+impl Iterator[int64] for Odd:
+    def next(mut self) -> Step[int64]:
+        if self.n > 2:
+            return Step.End
+        self.n += 1
+        step = Step.Item(self.n)
+        return step
+
+
+def floats(n: int64) -> Generator[float64]:
+    mut x = 0.5
+    mut on: bool = true
+    for k in range(1, n):
+        x = x * 2.0
+        if not on:
+            pass
+        elif k > 100:
+            break
+        else:
+            on = x > 0.0 and k >= 1
+        yield x
+
+
+def ticks(n: int64, step: int64 = 1) -> Generator[int64]:
+    mut i = -n
+    while i < n:
+        i += step
+        if i == 2:
+            continue
+        yield i % 7
+
+
+def chain(n: int64) -> Generator[int64]:
+    yield n
+    mut t = n
+    while t > 0:
+        t -= 1
+        if t == 1:
+            return
+        yield t
+
+
+def mixed(n: int64) -> Generator[int64]:
+    flag = true
+    g = (n)
+    w = n as int64
+    neg = not flag
+    inv = ~g
+    sum = 1 + g
+    rest = g - 1
+    both = g * w
+    chained = 0 < g < 10
+    for k in range(g):
+        if neg or not chained:
+            pass
+        else:
+            yield k + inv + sum + rest + both
+
+
+def gated(n: int64) -> Generator[int64]:
+    for k in range(n):
+        if k == 5:
+            return
+    mut j = 0
+    while j < 2:
+        yield j
+        j += 1
+
+
+def main():
+    for v in Box[int64](item=1):
+        print(v)
+    for w in Words(left=2):
+        print(w)
+    for o in Odd(n=0):
+        print(o)
+    for f in floats(4):
+        print(f)
+    for t in ticks(3):
+        match t:
+            case 4:
+                break
+            case _:
+                print(t)
+    for t in ticks(2, step=2):
+        print(t)
+    for c in chain(4):
+        print(c)
+    ticks = 5
+    print(ticks)
+    for m in mixed(2):
+        print(m)
+    for m in gated(3):
+        print(m)
+    for m in gated(9):
+        print(m)
+    for m in gated(3):
+        if m == 1:
+            break
+        print(m)
+    for m in gated(3):
+        if m == 0:
+            continue
+        print(m)

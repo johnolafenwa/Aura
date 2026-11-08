@@ -1,0 +1,14 @@
+from iter import Generator
+
+
+def naturals() -> Generator[int64]:
+    mut n = 0
+    while true:
+        yield n
+        n += 1
+
+
+def main():
+    names = ["a", "b"]
+    for name, n in zip(names, naturals()):
+        print(f"{name} {n}")

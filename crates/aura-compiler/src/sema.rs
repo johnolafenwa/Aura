@@ -18,6 +18,7 @@ use callables::{
 pub(crate) use loans::{synthetic_returned_view_decl, SYNTHETIC_CALLABLE_DECL};
 pub(crate) use types::closure_call_kind_for;
 mod display;
+mod generators;
 pub(crate) use display::{is_prelude_display, DISPLAY_METHOD, DISPLAY_TRAIT};
 mod iterator_loops;
 mod prelude;
@@ -62,6 +63,8 @@ pub(crate) use decorators::{DECORATED_PREFIX, UNDECORATED_PREFIX};
 mod json_derive;
 pub(crate) use json_derive::GENERATED_LINE_OFFSET;
 mod program;
+#[cfg(test)]
+pub(crate) use program::FAST_FALLBACKS;
 pub(crate) use program::INITIALIZER_NAME;
 pub use program::{
     AliasInfo, ClassInfo, ConstantInfo, EnumInfo, EnumPayloadFieldInfo, EnumVariantInfo,
@@ -70,6 +73,11 @@ pub use program::{
     TraitInfo, TraitMethodInfo,
 };
 mod aliases;
+mod assoc_bounds;
+mod iterator_fast;
+mod iterator_fast_args;
+#[cfg(test)]
+mod iterator_fast_tests;
 pub(crate) use aliases::{expand_alias_callee, specialized_alias_callee};
 mod managers;
 pub(crate) use managers::{
@@ -1057,6 +1065,10 @@ struct ResolvedBinaryOperatorAccess {
     rhs_passing: ReceiverKind,
 }
 
+/// A function with a `decreases` measure, and for each of its parameters
+/// in order, the name the measure reads it by, if it reads it.
+type RecursionMeasure = (String, Vec<Option<String>>);
+
 #[derive(Clone)]
 struct FunctionChecker<'a> {
     root_module_name: &'a str,
@@ -1088,6 +1100,10 @@ struct FunctionChecker<'a> {
     /// Set while a contract condition or a `spec def` body is typed: only
     /// there may a `spec def` be named.
     in_spec: Rc<std::cell::Cell<bool>>,
+    /// The function whose body is checked, when it declares `decreases`,
+    /// with the parameters its measure reads: a call to it must pass those
+    /// pure arguments, which the lowering reads again to check the measure.
+    recursion_measure: Rc<RefCell<Option<RecursionMeasure>>>,
     /// Owned lambda captures the current lambda body mutates in place (C2).
     mutated_captures: Rc<RefCell<BTreeSet<String>>>,
     /// The index expression currently typed as a place read: the object of
@@ -1914,6 +1930,7 @@ impl<'a> FunctionChecker<'a> {
             }
         }
 
+        self.infer_bound_only_type_args(method_type_params, type_param_bounds, &mut substitutions);
         for type_param in method_type_params {
             if !substitutions.contains_key(type_param) {
                 return Err(Diagnostic::at(
@@ -2154,6 +2171,7 @@ impl<'a> FunctionChecker<'a> {
             mutable_iteration_places: Rc::new(RefCell::new(Vec::new())),
             suppress_narrowing: Rc::new(std::cell::Cell::new(false)),
             in_spec: Rc::new(std::cell::Cell::new(false)),
+            recursion_measure: Rc::new(RefCell::new(None)),
             mutated_captures: Rc::new(RefCell::new(BTreeSet::new())),
             index_place_read: Rc::new(std::cell::Cell::new(None)),
             index_owned_read: Rc::new(std::cell::Cell::new(None)),
@@ -2215,6 +2233,7 @@ impl<'a> FunctionChecker<'a> {
             type_param_calls: self.type_param_calls.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
             in_spec: self.in_spec.clone(),
+            recursion_measure: self.recursion_measure.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
@@ -2261,6 +2280,7 @@ impl<'a> FunctionChecker<'a> {
             type_param_calls: self.type_param_calls.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
             in_spec: self.in_spec.clone(),
+            recursion_measure: self.recursion_measure.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
@@ -2303,6 +2323,7 @@ impl<'a> FunctionChecker<'a> {
             type_param_calls: self.type_param_calls.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
             in_spec: self.in_spec.clone(),
+            recursion_measure: self.recursion_measure.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
@@ -2345,6 +2366,7 @@ impl<'a> FunctionChecker<'a> {
             type_param_calls: self.type_param_calls.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
             in_spec: self.in_spec.clone(),
+            recursion_measure: self.recursion_measure.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
@@ -3151,7 +3173,11 @@ impl<'a> FunctionChecker<'a> {
         }
 
         if function.spec {
+            *checker.recursion_measure.borrow_mut() = None;
             return checker.check_spec_function(function, &mut locals, &return_type);
+        }
+        if function.lemma {
+            return checker.check_lemma(function, &mut locals, &return_type);
         }
         checker.check_contracts(function, &locals, &return_type)?;
         let flow = checker.check_block(&function.body, &mut locals, &return_type, 0, true)?;
@@ -3428,8 +3454,19 @@ impl<'a> FunctionChecker<'a> {
             element_types.push(Type::named("int64"));
         }
         let mut any_non_copy = false;
+        let mut iterator_operands = 0;
         for iterable in &form.iterables {
             let iterable_ty = self.type_of_expr(iterable, locals)?;
+            if self.iterator_item_type(&iterable_ty).is_none()
+                && self.implements_into_iterator(&iterable_ty)
+            {
+                return Err(self.discover_into_iterator_source(iterable.span, &iterable_ty));
+            }
+            if let Some(item_ty) = self.iterator_item_type(&iterable_ty) {
+                iterator_operands += 1;
+                element_types.push(item_ty);
+                continue;
+            }
             let Some(element_ty) = lockstep_element_type(&iterable_ty) else {
                 return Err(Diagnostic::coded_at(
                     "AU2002",
@@ -3449,6 +3486,39 @@ impl<'a> FunctionChecker<'a> {
 
         self.check_loop_form_start(&form, locals)?;
         let binding_ty = Type::Tuple(element_types);
+        if iterator_operands > 0 {
+            if iterator_operands != form.iterables.len() {
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    form.span,
+                    "`zip` cannot pair a collection with an iterator",
+                )
+                .with_help(
+                    "zip two iterators, or call `.collect()` on the iterator to zip two lists",
+                ));
+            }
+            // The loop consumes each iterator and owns every item it
+            // yields; the rewrite spells it with the iterators' `next`.
+            let mut body_locals = locals.clone();
+            self.bind_target(
+                &for_stmt.target,
+                &binding_ty,
+                ReceiverKind::Value,
+                false,
+                &mut body_locals,
+                "loop",
+            )?;
+            self.check_loop_clauses(&for_stmt.contracts, ALL_LOOP_CLAUSES, &body_locals, true)?;
+            self.check_block(
+                &for_stmt.body,
+                &mut body_locals,
+                return_type,
+                loop_depth + 1,
+                allow_return,
+            )?;
+            iterator_loops::discover_lockstep_loop(self.module_name, for_stmt.span);
+            return Ok(());
+        }
         let binding_passing = if any_non_copy {
             ReceiverKind::Borrow
         } else {
@@ -3515,18 +3585,36 @@ impl<'a> FunctionChecker<'a> {
             let mut any_non_copy = false;
             for iterable in &form.iterables {
                 let iterable_ty = self.type_of_expr(iterable, locals)?;
-                let Some(element_ty) = lockstep_element_type(&iterable_ty) else {
-                    return Err(Diagnostic::coded_at(
-                            "AU2002",
-                            iterable.span,
-                            format!(
-                                "`{}` requires a `list[T]` or `set[T]` iterable, found `{}`",
-                                form.name, iterable_ty
-                            ),
-                        )
-                        .with_help(
-                            "these comprehension forms read collections by position; use a plain clause for a `Range` or `Queue[T]`",
-                        ));
+                if self.iterator_item_type(&iterable_ty).is_none()
+                    && self.implements_into_iterator(&iterable_ty)
+                {
+                    return Err(self.discover_into_iterator_source(iterable.span, &iterable_ty));
+                }
+                // A user iterator operand is collected into a list first.
+                let element_ty = match lockstep_element_type(&iterable_ty) {
+                    Some(element_ty) => element_ty,
+                    None => match self.iterator_item_type(&iterable_ty) {
+                        Some(item_ty) => {
+                            iterator_loops::discover_comprehension_source(
+                                self.module_name,
+                                iterable.span,
+                            );
+                            item_ty
+                        }
+                        None => {
+                            return Err(Diagnostic::coded_at(
+                                "AU2002",
+                                iterable.span,
+                                format!(
+                                    "`{}` requires a `list[T]` or `set[T]` iterable, found `{}`",
+                                    form.name, iterable_ty
+                                ),
+                            )
+                            .with_help(
+                                "these comprehension forms read collections by position; use a plain clause for a `Range` or `Queue[T]`",
+                            ));
+                        }
+                    },
                 };
                 any_non_copy = any_non_copy || !self.is_copy_type(&element_ty);
                 element_types.push(element_ty);
@@ -3562,14 +3650,28 @@ impl<'a> FunctionChecker<'a> {
                         };
                         (element_ty, passing, false)
                     }
+                    _ if self.iterator_item_type(&iterable_ty).is_none()
+                        && self.implements_into_iterator(&iterable_ty) =>
+                    {
+                        return Err(self
+                            .discover_into_iterator_source(clause.iterable.span, &iterable_ty));
+                    }
                     _ if self.iterator_item_type(&iterable_ty).is_some() => {
-                        return Err(Diagnostic::coded_at(
-                            "AU2002",
+                        // The rewrite collects the source into a list first;
+                        // until then the clause binds owned items.
+                        iterator_loops::discover_comprehension_source(
+                            self.module_name,
                             clause.iterable.span,
-                            format!(
-                                "a comprehension cannot iterate the iterator `{iterable_ty}` yet; collect its items with a `for` loop"
-                            ),
-                        ));
+                        );
+                        let item_ty = self
+                            .iterator_item_type(&iterable_ty)
+                            .expect("the guard found an item type");
+                        let passing = if self.is_copy_type(&item_ty) {
+                            ReceiverKind::Value
+                        } else {
+                            ReceiverKind::Borrow
+                        };
+                        (item_ty, passing, false)
                     }
                     _ => {
                         return Err(Diagnostic::coded_at(
@@ -4303,6 +4405,14 @@ impl<'a> FunctionChecker<'a> {
                 Stmt::Destructure(destructure) => self.check_destructure(destructure, locals)?,
                 Stmt::Pass(_) => {}
                 Stmt::Assert(assert_stmt) => {
+                    if let Some(clause) = &assert_stmt.clause {
+                        self.check_loop_clauses(
+                            std::slice::from_ref(clause.as_ref()),
+                            &[ContractKind::Invariant],
+                            locals,
+                            true,
+                        )?;
+                    }
                     let condition_ty = self.type_of_expr(&assert_stmt.condition, locals)?;
                     self.reject_mutable_returned_view_value(&assert_stmt.condition, locals, false)?;
                     if condition_ty != Type::named("bool") {
@@ -4339,6 +4449,7 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 Stmt::Expr(expr_stmt) => {
+                    self.check_lemma_call_arguments(&expr_stmt.expr, locals)?;
                     let ty = self.type_of_expr(&expr_stmt.expr, locals)?;
                     if !expr_stmt.discarded {
                         reject_unused_result(&expr_stmt.expr, &ty)?;
@@ -4772,12 +4883,27 @@ impl<'a> FunctionChecker<'a> {
                             };
                             (element_ty, passing, borrow_mode == Some(ReceiverKind::Value))
                         }
+                        _ if self.iterator_item_type(&iterable_ty).is_none()
+                            && self.implements_into_iterator(&iterable_ty) =>
+                        {
+                            if for_stmt.borrow_mode.is_some() {
+                                return Err(Diagnostic::coded_at(
+                                    "AU3004",
+                                    for_stmt.span,
+                                    format!("a `for` loop consumes an `IntoIterator` source such as `{iterable_ty}`; write `for item in source:`"),
+                                ));
+                            }
+                            return Err(self.discover_into_iterator_source(
+                                for_stmt.iterable.span,
+                                &iterable_ty,
+                            ));
+                        }
                         _ if self.iterator_item_type(&iterable_ty).is_some() => {
                             let item_ty = self
                                 .iterator_item_type(&iterable_ty)
                                 .expect("the guard found an item type");
                             (
-                                self.discover_iterator_loop(for_stmt, item_ty, locals)?,
+                                self.discover_iterator_loop(for_stmt, &iterable_ty, item_ty, locals)?,
                                 ReceiverKind::Value,
                                 false,
                             )
@@ -7082,6 +7208,16 @@ impl<'a> FunctionChecker<'a> {
                         .chain(self.type_names.imported_aliases.values())
                         .find(|alias| alias.target.identical_contract(&adapter_type))
                         .map(|alias| alias.decl.name.as_str());
+                    fn type_args_spelling(types: Result<Vec<Type>>) -> String {
+                        match types {
+                            Ok(types) => {
+                                let names: Vec<String> =
+                                    types.iter().map(ToString::to_string).collect();
+                                names.join(", ")
+                            }
+                            Err(_) => "...".to_owned(),
+                        }
+                    }
                     fn spelling(checker: &FunctionChecker<'_>, expr: &Expr) -> String {
                         match &expr.kind {
                             ExprKind::Name(name) => name.clone(),
@@ -7092,26 +7228,7 @@ impl<'a> FunctionChecker<'a> {
                             ExprKind::Index { object, index } => format!(
                                 "{}[{}]",
                                 spelling(checker, object),
-                                checker
-                                    .explicit_type_args_from_index(index)
-                                    .map(|types| types
-                                        .iter()
-                                        .map(ToString::to_string)
-                                        .collect::<Vec<_>>()
-                                        .join(", "))
-                                    .unwrap_or_else(|_| "...".to_owned())
-                            ),
-                            ExprKind::Specialize { expr, type_args } => format!(
-                                "{}[{}]",
-                                spelling(checker, expr),
-                                checker
-                                    .lower_explicit_type_args(type_args)
-                                    .map(|types| types
-                                        .iter()
-                                        .map(ToString::to_string)
-                                        .collect::<Vec<_>>()
-                                        .join(", "))
-                                    .unwrap_or_else(|_| "...".to_owned())
+                                type_args_spelling(checker.explicit_type_args_from_index(index))
                             ),
                             _ => "value".to_owned(),
                         }
@@ -10140,6 +10257,7 @@ impl<'a> FunctionChecker<'a> {
         // Recover the same direct-call specialization only when the indexed
         // object is known to be a returned-view callable; ordinary runtime
         // indexing remains untouched.
+        self.check_recursive_call(callee, args, locals)?;
         let grouped = grouped_expr(callee);
         let mut grouped_specialization_base = None;
         let mut grouped_specialization_args = None;

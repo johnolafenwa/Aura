@@ -574,3 +574,413 @@ fn the_layout_table_registers_enum_cells() {
     assert_eq!((access, index), (FIRST_TEST_ACCESS + 50, 1));
     assert_eq!(block, typed_payloads(&typed_value).data());
 }
+
+/// A dict of typed variants under `str` keys, as generated code builds one.
+fn shadow_map(prefix: &str, access: u32) -> *mut crate::native_runtime::OpaqueValue {
+    use crate::native_runtime::{aura_direct_map_empty, aura_direct_map_insert_in_place};
+    let map = aura_direct_map_empty();
+    for (key, value) in [
+        (
+            "ring",
+            typed(prefix, access, "Named", vec![text("ring"), int32(3)]),
+        ),
+        (
+            "dot",
+            typed(prefix, access, "Circle", vec![Value::Float(1.5)]),
+        ),
+    ] {
+        aura_direct_map_insert_in_place(map, boxed_value(text(key)), boxed_value(value));
+    }
+    map
+}
+
+#[test]
+fn borrowing_entry_loans_read_the_dict_value_in_place() {
+    use crate::native_runtime::{
+        aura_direct_end_shadow, aura_direct_map_get_shadow, aura_direct_retain_value,
+        SHADOW_REFERENCE,
+    };
+    run_lightweight_root_task(|| {
+        with_direct_task_runtime_scope(|| {
+            let access = FIRST_TEST_ACCESS + 65;
+            let map = shadow_map("Shadow", access);
+            let key = boxed_value(text("ring"));
+            let read = |boxed| unsafe { value_ref(boxed) };
+            let expected = typed("Shadow", access, "Named", vec![text("ring"), int32(3)]);
+
+            // A confined dict lends its value: the box reads the entry's own
+            // block, and it looks shared to every check.
+            let shadow = aura_direct_map_get_shadow(map, key);
+            let header = unsafe { &*shadow };
+            assert_eq!(
+                header.ref_count.load(Ordering::Acquire),
+                SHADOW_REFERENCE + 1
+            );
+            let lent_block = typed_payloads(unsafe { &*header.value.get() }).data();
+            let stored = unsafe { value_ref(map) };
+            let Value::Map(stored) = &stored else {
+                panic!("a dict");
+            };
+            let entry = stored.entries.value_of(&text("ring")).expect("the entry");
+            assert_eq!(typed_payloads(entry).data(), lent_block);
+            assert_eq!(read(shadow), expected);
+            // Ending the loan leaves the dict's value as it was.
+            unsafe { aura_direct_end_shadow(shadow) };
+            assert_eq!(read(map), unsafe { value_ref(map) });
+            let again = aura_direct_map_get_shadow(map, key);
+            assert_eq!(read(again), expected);
+
+            // A borrower that kept the box gets a copy of its own at the end.
+            unsafe { aura_direct_retain_value(again) };
+            unsafe { aura_direct_end_shadow(again) };
+            let kept = unsafe { &*again };
+            assert_eq!(kept.ref_count.load(Ordering::Acquire), 1);
+            assert_ne!(
+                typed_payloads(unsafe { &*kept.value.get() }).data(),
+                lent_block
+            );
+            assert_eq!(read(again), expected);
+            unsafe { aura_direct_release_value(again) };
+
+            // A dict whose entries another dict shares hands out a copy.
+            let shared = boxed_value(unsafe { value_ref(map) });
+            let copy = aura_direct_map_get_shadow(map, key);
+            assert_eq!(unsafe { &*copy }.ref_count.load(Ordering::Acquire), 1);
+            assert_eq!(read(copy), expected);
+            unsafe { aura_direct_end_shadow(copy) };
+            // A missing key gives null, which ends as nothing.
+            let missing = boxed_value(text("none"));
+            let none = aura_direct_map_get_shadow(map, missing);
+            assert!(none.is_null());
+            unsafe { aura_direct_end_shadow(none) };
+            for boxed in [shared, missing, key, map] {
+                unsafe { aura_direct_release_value(boxed) };
+            }
+            Ok(Value::Unit)
+        })
+    })
+    .expect("the loans run");
+}
+
+#[test]
+fn slot_loans_walk_a_dicts_entries_without_keys() {
+    use crate::native_runtime::{
+        aura_direct_end_shadow, aura_direct_map_next_slot, aura_direct_map_shadow_at,
+        SHADOW_REFERENCE,
+    };
+    run_lightweight_root_task(|| {
+        with_direct_task_runtime_scope(|| {
+            let access = FIRST_TEST_ACCESS + 66;
+            let map = shadow_map("SlotShadow", access);
+            // The copy of the dict that gives the values goes before the
+            // walk, so the dict's entries are its own again.
+            let expected = match unsafe { value_ref(map) } {
+                Value::Map(stored) => stored
+                    .entries
+                    .iter()
+                    .map(|(_, value)| value.clone())
+                    .collect::<Vec<_>>(),
+                _ => panic!("a dict"),
+            };
+            let mut seen = Vec::new();
+            let mut slot = 0;
+            loop {
+                let next = aura_direct_map_next_slot(map, slot);
+                if next < 0 {
+                    break;
+                }
+                let shadow = aura_direct_map_shadow_at(map, next);
+                let header = unsafe { &*shadow };
+                assert_eq!(
+                    header.ref_count.load(Ordering::Acquire),
+                    SHADOW_REFERENCE + 1
+                );
+                seen.push(unsafe { value_ref(shadow) });
+                unsafe { aura_direct_end_shadow(shadow) };
+                slot = next + 1;
+            }
+            assert_eq!(seen, expected);
+            assert_eq!(aura_direct_map_next_slot(map, -1), -1);
+            // No entry in the slot, or a slot that is no slot, lends nothing.
+            assert!(aura_direct_map_shadow_at(map, slot).is_null());
+            assert!(aura_direct_map_shadow_at(map, -1).is_null());
+            unsafe { aura_direct_release_value(map) };
+            Ok(Value::Unit)
+        })
+    })
+    .expect("the loans run");
+}
+
+#[test]
+fn a_list_element_box_of_a_typed_variant_has_its_layouts_shape() {
+    use crate::native_runtime::ElementBox;
+    let access = FIRST_TEST_ACCESS + 67;
+    let value = typed("ElementShape", access, "Circle", vec![Value::Float(2.0)]);
+    let shape = typed_payloads(&value).layout().shape_tag();
+    let element = ElementBox::new(value);
+    let header = unsafe { &*element.as_ptr() };
+    assert_eq!(header.shape_tag.load(Ordering::Relaxed), shape);
+    // Any other value starts with no shape.
+    let plain = ElementBox::new(Value::Float(2.0));
+    assert!(unsafe { &*plain.as_ptr() }
+        .shape_tag
+        .load(Ordering::Relaxed)
+        .is_null());
+}
+
+/// The `json.Value` layout generated code registers, which this thread's
+/// parses then build their values in.
+fn json_layout(access: u32) -> &'static EnumLayout {
+    let json = Type::named("json.Value");
+    let text_type = Type::named("str");
+    let env = LayoutEnv {
+        classes: Default::default(),
+        enums: [(
+            "json.Value".to_string(),
+            EnumDefinition {
+                type_params: Vec::new(),
+                variants: vec![
+                    ("Null".to_string(), Vec::new()),
+                    ("Bool".to_string(), vec![Type::named("bool")]),
+                    ("Int".to_string(), vec![Type::named("int64")]),
+                    ("Float".to_string(), vec![Type::named("float64")]),
+                    ("String".to_string(), vec![text_type.clone()]),
+                    (
+                        "Array".to_string(),
+                        vec![Type::Named("list".to_string(), vec![json.clone()])],
+                    ),
+                    (
+                        "Object".to_string(),
+                        vec![Type::Named(
+                            "dict".to_string(),
+                            vec![text_type, json.clone()],
+                        )],
+                    ),
+                ],
+            },
+        )]
+        .into(),
+    };
+    let inline = |ty: &Type| matches!(ty, Type::Named(name, _) if matches!(name.as_str(), "int64" | "float64" | "bool"));
+    let mut builder = LayoutBuilder::new(&env);
+    let root = builder
+        .boxed_enum_layout(&json, inline)
+        .expect("a layout")
+        .expect("an enum");
+    let descriptor = Box::leak(encode_layouts(builder.table(), root).into_boxed_str());
+    let layout = register_enum_layout(descriptor, access).expect("json.Value is laid out");
+    assert!(std::ptr::eq(
+        crate::native_runtime::json_value_layout().expect("registered"),
+        layout
+    ));
+    layout
+}
+
+fn json_typed(layout: &'static EnumLayout, name: &str, payloads: Vec<Value>) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: layout.enum_name().clone(),
+        variant_name: RuntimeName::from(name),
+        payloads: VariantPayloads::Typed(
+            TypedPayloads::from_values(layout, name, payloads).expect("the payloads fit"),
+        ),
+    })
+}
+
+fn parsed_json(source: &str) -> Value {
+    let parsed = crate::runtime_value::json_parse_to_runtime(source).expect("the parse runs");
+    let Value::EnumVariant(result) = parsed else {
+        panic!("a Result");
+    };
+    assert_eq!(result.variant_name.as_str(), "Ok", "{source}");
+    result.payloads.get(0).expect("the value").into_owned()
+}
+
+#[test]
+fn json_parses_build_typed_variants_that_dump_and_read_in_place() {
+    use crate::native_runtime::aura_direct_json_as_scalar;
+    use crate::runtime_value::json_dumps_runtime;
+    let layout = json_layout(FIRST_TEST_ACCESS + 68);
+    // A parse keeps every variant in the layout, scalars in place.
+    let source = r#"{"a":null,"b":true,"c":-3,"d":2.5,"e":"x","f":[1,[2,false]],"g":{"h":"y"}}"#;
+    let value = parsed_json(source);
+    assert!(std::ptr::eq(typed_payloads(&value).layout(), layout));
+    assert_eq!(json_dumps_runtime(&value, None).expect("dumps"), source);
+    let indented = json_dumps_runtime(&value, Some(1)).expect("dumps");
+    assert!(indented.starts_with("{\n \"a\": null,\n"), "{indented}");
+    for scalar in ["7", "-1.25", "true", "null", "\"s\"", "[]", "{}"] {
+        let value = parsed_json(scalar);
+        assert_eq!(json_dumps_runtime(&value, None).expect("dumps"), scalar);
+    }
+
+    // A float the text cannot spell takes the general path, which reports it.
+    let nan = json_typed(layout, "Float", vec![Value::Float(f64::NAN)]);
+    assert!(json_dumps_runtime(&nan, None).is_err());
+    let nested = json_typed(
+        layout,
+        "Array",
+        vec![Value::Vec(crate::runtime_value::VecValue {
+            element_type: Type::named("json.Value"),
+            elements: vec![
+                json_typed(layout, "Bool", vec![Value::Bool(false)]),
+                json_typed(layout, "Int", vec![int64(4)]),
+                json_typed(layout, "Null", Vec::new()),
+                nan.clone(),
+            ]
+            .into(),
+            str_view: Default::default(),
+        })],
+    );
+    assert!(json_dumps_runtime(&nested, None).is_err());
+
+    // `json.as_int` and its kin read a scalar in place.
+    let read = |value: &Value, kind: i64| {
+        let boxed = boxed_value(value.clone());
+        let mut bits = 0_i64;
+        let found = aura_direct_json_as_scalar(boxed, kind, &mut bits);
+        unsafe { aura_direct_release_value(boxed) };
+        (found, bits)
+    };
+    let int = json_typed(layout, "Int", vec![int64(-9)]);
+    let float = json_typed(layout, "Float", vec![Value::Float(0.5)]);
+    let truth = json_typed(layout, "Bool", vec![Value::Bool(true)]);
+    assert_eq!(read(&int, 0), (1, -9));
+    assert_eq!(read(&float, 1), (1, 0.5_f64.to_bits() as i64));
+    assert_eq!(read(&truth, 2), (1, 1));
+    assert_eq!(read(&int, 1).0, 0);
+    assert_eq!(read(&truth, 0).0, 0);
+    // A value kept as payloads, or of another enum, takes the general path.
+    let loose = Value::EnumVariant(EnumVariantValue {
+        enum_name: RuntimeName::from("json.Value"),
+        variant_name: RuntimeName::from("Int"),
+        payloads: vec![int64(5)].into(),
+    });
+    assert_eq!(read(&loose, 0), (1, 5));
+
+    // Typed payloads made one at a time, by name or by index.
+    let by_name = TypedPayloads::from_value(layout, "Int", int64(2)).expect("fits");
+    assert_eq!(by_name.scalar_bits(0).map(|(_, bits)| bits), Some(2));
+    let index = layout.variant_index("Float").expect("Float");
+    let by_index = TypedPayloads::from_value_at(layout, index, Value::Float(1.0)).expect("fits");
+    assert_eq!(
+        by_index.scalar_bits(0).map(|(_, bits)| bits),
+        Some(1.0_f64.to_bits() as i64)
+    );
+    let string = TypedPayloads::from_value(layout, "String", text("t")).expect("fits");
+    assert_eq!(string.scalar_bits(0), None);
+    assert!(TypedPayloads::from_value(layout, "Nope", int64(1)).is_err());
+    assert!(TypedPayloads::from_value(layout, "Null", int64(1)).is_err());
+    assert!(TypedPayloads::from_value(layout, "Int", text("no")).is_err());
+    assert!(TypedPayloads::from_value_at(layout, 99, int64(1)).is_err());
+    assert!(TypedPayloads::from_value_at(layout, 0, int64(1)).is_err());
+    assert!(TypedPayloads::from_value_at(layout, index, text("no")).is_err());
+}
+
+#[test]
+fn dict_literals_take_their_entry_types_from_the_first_entry() {
+    use crate::native_runtime::{
+        aura_direct_map_literal_entry, aura_direct_map_literal_str_entry,
+        aura_direct_map_with_capacity,
+    };
+    let layout = json_layout(FIRST_TEST_ACCESS + 68);
+    let types = |map| match unsafe { value_ref(map) } {
+        Value::Map(map) => (
+            Type::clone(&map.key_type).to_string(),
+            Type::clone(&map.value_type).to_string(),
+            map.entries.len(),
+        ),
+        _ => panic!("a dict"),
+    };
+    let object = aura_direct_map_with_capacity(3);
+    for (key, distinct, value) in [
+        ("a", 1, json_typed(layout, "Int", vec![int64(1)])),
+        ("b", 1, json_typed(layout, "Null", Vec::new())),
+        ("a", 0, json_typed(layout, "Bool", vec![Value::Bool(true)])),
+    ] {
+        aura_direct_map_literal_str_entry(
+            object,
+            key.as_ptr(),
+            key.len(),
+            boxed_value(value),
+            distinct,
+        );
+    }
+    assert_eq!(
+        types(object),
+        ("str".to_string(), "json.Value".to_string(), 2)
+    );
+    let names = aura_direct_map_with_capacity(-1);
+    aura_direct_map_literal_str_entry(names, "k".as_ptr(), 1, boxed_value(text("v")), 0);
+    assert_eq!(types(names), ("str".to_string(), "str".to_string(), 1));
+    let numbers = aura_direct_map_with_capacity(2);
+    for (key, value) in [(1, 10), (1, 11)] {
+        aura_direct_map_literal_entry(numbers, boxed_value(int64(key)), boxed_value(int64(value)));
+    }
+    assert_eq!(
+        types(numbers),
+        ("int64".to_string(), "int64".to_string(), 1)
+    );
+    for map in [object, names, numbers] {
+        unsafe { aura_direct_release_value(map) };
+    }
+    // A dict's shared entry type reads as the type it names.
+    let shared = crate::runtime_value::SharedType::named("str");
+    assert_eq!(AsRef::<Type>::as_ref(&shared), &Type::named("str"));
+}
+
+#[test]
+fn an_entry_loan_of_a_value_that_is_no_dict_traps() {
+    use crate::native_runtime::aura_direct_map_get_int64_shadow;
+    let message = runtime_failure(|| {
+        let number = boxed_value(int64(1));
+        aura_direct_map_get_int64_shadow(number, 1);
+    });
+    assert!(message.contains("expected `dict`"), "{message}");
+}
+
+#[test]
+fn int_keyed_entry_loans_and_literal_cells_lend_without_copies() {
+    use crate::native_runtime::{
+        aura_direct_end_shadow, aura_direct_map_get_int64_shadow, aura_direct_map_insert_in_place,
+        aura_direct_string_literal_cell, SHADOW_REFERENCE,
+    };
+    run_lightweight_root_task(|| {
+        with_direct_task_runtime_scope(|| {
+            let access = FIRST_TEST_ACCESS + 69;
+            let map = crate::native_runtime::aura_direct_map_empty();
+            let stored = typed("IntShadow", access, "Circle", vec![Value::Float(3.5)]);
+            aura_direct_map_insert_in_place(
+                map,
+                boxed_value(int64(7)),
+                boxed_value(stored.clone()),
+            );
+            let shadow = aura_direct_map_get_int64_shadow(map, 7);
+            assert_eq!(
+                unsafe { &*shadow }.ref_count.load(Ordering::Acquire),
+                SHADOW_REFERENCE + 1
+            );
+            assert_eq!(unsafe { value_ref(shadow) }, stored);
+            unsafe { aura_direct_end_shadow(shadow) };
+            assert!(aura_direct_map_get_int64_shadow(map, 8).is_null());
+            unsafe { aura_direct_release_value(map) };
+
+            // A literal's cell makes its frozen box once.
+            let cell: &'static std::sync::atomic::AtomicUsize = Box::leak(Box::default());
+            let literal = "cell";
+            let first =
+                unsafe { aura_direct_string_literal_cell(cell, literal.as_ptr(), literal.len()) };
+            let second =
+                unsafe { aura_direct_string_literal_cell(cell, literal.as_ptr(), literal.len()) };
+            assert_eq!(first, second);
+            assert_eq!(unsafe { value_ref(first) }, text("cell"));
+            // No cell gives a box of its own.
+            let plain = unsafe {
+                aura_direct_string_literal_cell(std::ptr::null(), literal.as_ptr(), literal.len())
+            };
+            assert_ne!(plain, first);
+            assert_eq!(unsafe { value_ref(plain) }, text("cell"));
+            unsafe { aura_direct_release_value(plain) };
+            Ok(Value::Unit)
+        })
+    })
+    .expect("the loans run");
+}

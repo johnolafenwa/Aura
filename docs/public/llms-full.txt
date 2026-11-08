@@ -36,7 +36,7 @@ reads. The compiler enforces both.
 
 ## Install
 
-Install the Aura 0.11 technical preview on Linux x64, macOS x64, or macOS arm64:
+Install the Aura 0.12 technical preview on Linux x64, macOS x64, or macOS arm64:
 
 ```bash
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
@@ -59,7 +59,7 @@ pinned tools.
 
 ## What Aura Is For
 
-Aura 0.11 targets applications for agents, ML infrastructure, and the control
+Aura 0.12 targets applications for agents, ML infrastructure, and the control
 planes around models. Before a program runs, the compiler checks types,
 access, mutation, ownership transfer, resource cleanup, and task boundaries.
 
@@ -207,7 +207,7 @@ Aura aims to become a general-purpose systems language that can build every
 type of software. The intended scope spans applications, services, databases,
 language runtimes, embedded software, operating systems, and device drivers.
 
-Aura 0.11 lays the foundation: static typing, deterministic ownership, native
+Aura 0.12 lays the foundation: static typing, deterministic ownership, native
 compilation, structured concurrency, typed failure, packages, and integrated
 tooling. Later releases will add freestanding compilation, low-level memory
 access, hardware interfaces, portable layout controls, cross-compilation, and
@@ -232,7 +232,7 @@ limits.
 
 # Why Aura
 
-Aura 0.11.0 is a technical preview of a compiled, statically typed language for
+Aura 0.12.0 is a technical preview of a compiled, statically typed language for
 reliable software. It combines Python-inspired syntax, deterministic
 ownership, structured concurrency, typed failure, and native executables.
 
@@ -292,7 +292,7 @@ Aura aims to become a general-purpose systems language that can build every
 type of software. The intended scope spans applications, services, databases,
 language runtimes, embedded software, operating systems, and device drivers.
 
-Aura 0.11 lays the foundation: static typing, deterministic ownership, native
+Aura 0.12 lays the foundation: static typing, deterministic ownership, native
 compilation, structured concurrency, typed failure, packages, and integrated
 tooling. Later releases will add freestanding compilation, low-level memory
 access, hardware interfaces, portable layout controls, cross-compilation, and
@@ -324,7 +324,7 @@ compiler-tracked ownership. Its roadmap centers on
 Its ownership documentation gives each value one owner and defines
 [default immutable, `mut`, and `var` argument conventions](https://mojolang.org/docs/manual/values/ownership/).
 
-Aura 0.11 centers on the application control plane around models and agents.
+Aura 0.12 centers on the application control plane around models and agents.
 That covers scoped child tasks, transferable messages, typed I/O and process
 failures, timeouts, retries, and supervision. GPU programming, heterogeneous
 hardware, and interoperability with Python libraries are future areas for
@@ -378,7 +378,7 @@ The [Performance](/manual/performance) chapter records current measurements,
 known gaps, the evidence to reproduce them, and the optimization direction for
 later releases.
 
-Aura 0.11 is an executable technical preview. It includes the language, the
+Aura 0.12 is an executable technical preview. It includes the language, the
 native compiler, the ownership model, the structured task runtime, numeric
 arrays, control-plane modules, package tooling, the Manual, and the editor
 extension. The [Current Limits](/manual/current-limits) chapter lists the
@@ -388,7 +388,7 @@ exact boundaries of that surface.
 
 # Downloads
 
-Aura 0.11.0 is a technical preview. The compiler, command-line tools, editor
+Aura 0.12.0 is a technical preview. The compiler, command-line tools, editor
 extension, reference manual, and source all ship from the
 [Aura GitHub repository](https://github.com/johnolafenwa/Aura).
 
@@ -413,7 +413,7 @@ For step-by-step instructions, pick a platform guide:
 - [Windows 11 through Ubuntu on WSL 2](/install/windows-wsl)
 
 To install by hand, download the archive for your platform from the
-[v0.11.0-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.11.0-preview).
+[v0.12.0-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.12.0-preview).
 Each release includes Linux x64, macOS x64, and macOS arm64 archives and a
 `SHA256SUMS` manifest.
 
@@ -432,7 +432,7 @@ Install **Aura Programming Language** from either public extension registry:
 - [Open VSX](https://open-vsx.org/extension/JohnOlafenwa/vscode-aura-lang)
 
 Both registries carry the same package, with the plain extension version
-`0.11.0`. The extension needs the `aura` executable on `PATH`. Its semantic
+`0.12.0`. The extension needs the `aura` executable on `PATH`. Its semantic
 editor features run through the `aura lsp` server that the compiler provides.
 
 To install from a terminal:
@@ -442,7 +442,7 @@ code --install-extension JohnOlafenwa.vscode-aura-lang
 ```
 
 To install by hand, download
-[`aura-language.vsix`](https://github.com/johnolafenwa/Aura/releases/download/v0.11.0-preview/aura-language.vsix)
+[`aura-language.vsix`](https://github.com/johnolafenwa/Aura/releases/download/v0.12.0-preview/aura-language.vsix)
 from the GitHub Release. Then run **Extensions: Install from VSIX...** in
 VS Code.
 
@@ -461,7 +461,7 @@ the complete source is in the
 
 # Install Aura
 
-Aura 0.11 ships as a self-contained command-line tool with its own private
+Aura 0.12 ships as a self-contained command-line tool with its own private
 native runtime. Pick the guide for the operating system where `aura` will run:
 
 | Platform | Release archive | Guide |
@@ -488,7 +488,7 @@ curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 aura --version
 ```
 
-The output begins with `aura 0.11.0-preview`. The rest of the line is the
+The output begins with `aura 0.12.0-preview`. The rest of the line is the
 source commit the binary was built from.
 
 ## What Gets Installed
@@ -543,7 +543,7 @@ write a program, run it, and build a native executable.
 
 # Install Aura On Linux
 
-The Aura 0.11 preview supports x86-64 Ubuntu 24.04 and compatible Linux
+The Aura 0.12 preview supports x86-64 Ubuntu 24.04 and compatible Linux
 distributions that use glibc. The release has no Linux ARM64 or musl
 archives.
 
@@ -598,7 +598,7 @@ command -v aura
 aura --version
 ```
 
-The version begins with `aura 0.11.0-preview`.
+The version begins with `aura 0.12.0-preview`.
 
 ## 6. Run A Program
 
@@ -709,7 +709,7 @@ The installer uses `curl`, `tar`, and `shasum`, which macOS already includes:
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
-The script downloads the matching `v0.11.0-preview` archive. It checks the
+The script downloads the matching `v0.12.0-preview` archive. It checks the
 archive against the release's `SHA256SUMS` file before it copies anything
 into the installation prefix.
 
@@ -737,7 +737,7 @@ aura --version
 The command path ends in `.local/bin/aura`. The version begins with:
 
 ```text
-aura 0.11.0-preview
+aura 0.12.0-preview
 ```
 
 ## 5. Run A Program
@@ -861,7 +861,7 @@ codium --install-extension JohnOlafenwa.vscode-aura-lang
 A VSIX file is a packaged VS Code extension.
 
 1. Download `aura-language.vsix` from the
-   [v0.11.0-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.11.0-preview).
+   [v0.12.0-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.12.0-preview).
 2. Open the Command Palette and choose **Extensions: Install from VSIX...**.
 
 To install from a terminal instead:
@@ -1113,7 +1113,7 @@ runtime. It covers the complete syntax, name and type rules, ownership,
 execution, module APIs, diagnostics, limits, and tool contracts, in enough
 detail to reconstruct the language accurately.
 
-This Manual documents **Aura 0.11.0 (technical preview)**. The release stamp
+This Manual documents **Aura 0.12.0 (technical preview)**. The release stamp
 below records the implementation baseline commit the Manual was rendered from.
 
 The stamp uses the first commit source that applies:
@@ -1160,6 +1160,8 @@ scope, terminology, authority, and conformance language.
 - [Contracts](/manual/contracts): `requires`, `ensures`, loop and class
   invariants, `decreases`, `old`, `forall`, `exists`, `spec def`, and
   `AU4009` failures.
+- [Verification](/manual/verification): `aura verify`, which proves with an
+  SMT solver that contracts, arithmetic, and list indexes cannot fail.
 - [Functions](/manual/functions): signatures, the bare, `own`, and `mut`
   parameter modes, default and named arguments, `main`, owned returns, and
   call binding.
@@ -1990,9 +1992,9 @@ Assertion failure ends the current Aura execution path. It is not a catchable ex
 
 ## Status
 
-Both assertion forms are accepted, with the sequencing, cleanup, top-level, and no-strip behavior on this page. Aura 0.11 includes the bounded two-operand diagnostic.
+Both assertion forms are accepted, with the sequencing, cleanup, top-level, and no-strip behavior on this page. Aura 0.12 includes the bounded two-operand diagnostic.
 
-Aura 0.11 has no exception statements, no `raise`, and no catchable assertion failures.
+Aura 0.12 has no exception statements, no `raise`, and no catchable assertion failures.
 
 Design record: `architecture_docs/decisions/0024-assertion-evaluation-and-diagnostic-policy.md` for the assertion forms and their behavior, and `architecture_docs/decisions/0045-testing-framework-and-assertion-introspection.md` for operand introspection.
 
@@ -2032,7 +2034,7 @@ list or str is a fresh owned value.
 `str.from_bytes` is an associated method, so you call it on the type:
 `str.from_bytes(payload)`. It is not a `str(...)` constructor.
 
-The parameter name `encoding` is reserved. Aura 0.11 accepts no encoding
+The parameter name `encoding` is reserved. Aura 0.12 accepts no encoding
 argument on either conversion.
 
 ## Example
@@ -2186,7 +2188,7 @@ those uses.
 
 This surface adds no grammar. `list[uint8]`, `import bytes`, associated calls,
 method calls, module calls, named arguments, and `Result` patterns use the
-ordinary forms defined elsewhere in this Manual. Aura 0.11 has no byte-string
+ordinary forms defined elsewhere in this Manual. Aura 0.12 has no byte-string
 literal.
 
 ## Typing Rules
@@ -2210,7 +2212,7 @@ for the call, so you can reuse an input after `to_bytes`, `from_bytes`, an
 encoder, a decoder, or a hash. These signatures neither require nor imply
 `own`.
 
-An `encoding` argument, positional or named, is not part of the 0.11
+An `encoding` argument, positional or named, is not part of the 0.12
 signature. Ordinary argument checking rejects it.
 
 A source module you write whose last path component is `bytes` does not get
@@ -2300,7 +2302,7 @@ Whether an allocation within the ceiling succeeds depends on the host. SHA-256
 output is always 32 bytes. Codec output, errors, and offsets do not depend on
 the host.
 
-Aura 0.11 does not provide:
+Aura 0.12 does not provide:
 
 - other text encodings
 - URL-safe or unpadded base64
@@ -2314,7 +2316,7 @@ The reserved `encoding` parameter is not implemented.
 
 ## Status
 
-`list[uint8]` is the Aura 0.11 bytes type, and the conversion, codec, error,
+`list[uint8]` is the Aura 0.12 bytes type, and the conversion, codec, error,
 and hash behavior on this page is implemented. The bytes module derives no
 codecs for classes and enums. For JSON codecs and schemas, see
 [Typed Codecs](/manual/json#typed-codecs).
@@ -2807,7 +2809,7 @@ MIR execution and direct native generation both implement nominal classes, gener
 
 ## Limits And Implementation-Defined Behavior
 
-- Aura 0.11 has no class inheritance, overloads, property setters, or general destructor hook. A class has at most one initializer.
+- Aura 0.12 has no class inheritance, overloads, property setters, or general destructor hook. A class has at most one initializer.
 - An initializer cannot move a field out of `self` or return a `Result`.
 - A class field default cannot call a user-defined function in the current compiler. Compute the value before construction and pass it as an explicit field argument.
 - `indirect` is only a recursive field-layout marker. Its storage representation is not an observable language contract.
@@ -2870,6 +2872,7 @@ aura check app.au
 | `aura run file.au -- args...` | Execute with program arguments available through `sys.args()`. |
 | `aura build -o path file.au` | Build a native binary. |
 | `aura build --debug -o path file.au` | Build an unoptimized native binary with debug information, for a debugger. |
+| `aura build --remove-proved-checks -o path file.au` | Build a native binary without the list bounds checks `aura verify` proves can never fail. See [Verification](/manual/verification#trust). |
 | `aura ast file.au` | Print the syntax tree. |
 | `aura ast-json file.au` | Print syntax tree JSON. |
 | `aura mir file.au` | Print lowered MIR. |
@@ -2881,10 +2884,11 @@ aura check app.au
 | `aura fmt --stdin [--check]` | Format standard input to standard output. |
 | `aura doc [--out DIR] [--json] [paths...]` | Check each source and write one API page per module, in Markdown or JSON. See [Docstrings And API Docs](/manual/docstrings#generated-api-docs). |
 | `aura test [-k substring] [--format json] [--timeout-ms N] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case. Defaults to `tests/` and a 30-second per-case timeout. |
+| `aura verify [--solver PATH] [--timeout MS] [--function NAME] [--no-cache] [--format json] file.au` | Prove with an SMT solver that the program's contracts, arithmetic, and list indexes cannot fail. See [Verification](/manual/verification). |
 | `aura upgrade` | Download and run the verified installer to replace the compiler and bundled runtime with the latest published release. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
-| `aura version` / `aura --version` | Print the build channel and 12-hex-digit source commit. Release archives print `aura 0.11.0-preview (0123456789ab)`. Source builds print `aura 0.11.0-dev (0123456789ab)`. |
+| `aura version` / `aura --version` | Print the build channel and 12-hex-digit source commit. Release archives print `aura 0.12.0-preview (0123456789ab)`. Source builds print `aura 0.12.0-dev (0123456789ab)`. |
 
 MIR is Aura's mid-level intermediate representation. The editor query
 commands `signature-help`, `references`, `prepare-rename`, and `rename` are
@@ -3028,7 +3032,7 @@ build.
 
 ## Native Executable Profile
 
-Workspace release builds of Aura 0.11.0 use `opt-level=3`, fat LTO, one codegen
+Workspace release builds of Aura 0.12.0 use `opt-level=3`, fat LTO, one codegen
 unit, `debug=false`, and `strip="symbols"`. Panic unwinding stays enabled for
 the runtime's `extern "C-unwind"` boundaries. This profile reduces shipped
 compiler metadata. It does not strip the runtime archive's linkable symbols or
@@ -3776,7 +3780,7 @@ repository-gate tests cover them. `analyze`, `complete`, and diagnostic schema
 version `1` are maintained tooling contracts. Internal AST and MIR layouts are
 deliberately unstable.
 
-Aura 0.11 has no package registry, no publishing and installation workflow, no
+Aura 0.12 has no package registry, no publishing and installation workflow, no
 Windows support, no configurable formatter, and no annotation-based test
 discovery. Its maintained execution engines are the MIR runtime and the direct
 native backend.
@@ -4932,7 +4936,7 @@ resources and the runtime's size caps.
 
 ## Status
 
-The collection contract on this page is the Aura 0.11 surface.
+The collection contract on this page is the Aura 0.12 surface.
 
 Design record: [ADR-0044: Canonical collection surface](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0044-canonical-collection-surface.md).
 
@@ -4961,18 +4965,22 @@ execution through the same worker-thread architecture.
 The runtime rejects an empty, zero, signed, whitespace-padded, nonnumeric, or
 overflowing value with `AU4006` before execution starts.
 
-Each child gets a stable worker assignment when it is spawned. Its coroutine
-stack never migrates, and the runtime performs no work stealing. MIR execution
+Each child starts on its parent's worker. An idle worker may steal a child
+that has not started yet; once a task first runs, its coroutine stack never
+migrates. MIR execution
 and direct native execution share this contract. MIR is the compiler's
 mid-level intermediate representation, which `aura run` executes.
 
-Aura 0.11 task scheduling is cooperative across pinned workers:
+Aura 0.12 task scheduling is cooperative across pinned workers:
 
 - The compiler inserts a scheduling check on every loop backedge. This
   includes the ordinary end of the loop body and `continue`. A tight loop
   therefore lets ready timers, Queue operations, and socket work on the same
   worker proceed.
 - `break` and `return` leave the loop without taking that check.
+- The entry of every function on a call cycle, such as a function that calls
+  itself, takes the same check, so deep recursion with no loop also lets
+  same-worker work proceed.
 - A single long loop body or long straight-line CPU work can still delay
   sibling tasks pinned to the same worker.
 - The inserted check does not inspect cancellation. A task that must stop on
@@ -5489,8 +5497,8 @@ its source binding.
 
 Tasks run on cooperative pinned workers, as described in
 [Workers And Scheduling](#workers-and-scheduling). Starting a child stores its
-captures in task-owned storage and gives it a stable worker assignment for its
-whole lifetime.
+captures in task-owned storage. The child keeps the worker that first runs it
+for its whole lifetime.
 
 **Group exit** observes or joins children, as described in
 [Scope Exit](#scope-exit). It propagates an unread child failure. Host elapsed
@@ -5641,7 +5649,7 @@ Both MIR execution and direct native generation support:
 - Queue operations and iteration
 - typed heterogeneous `select`
 - wait helpers, sleep, and cancellation
-- compiler-inserted loop safepoints
+- compiler-inserted loop and call safepoints
 - user-trait dispatch on `Queue[T]`, `Task[T]`, and `TaskGroup` for method
   names that do not collide with builtin members
 
@@ -5649,10 +5657,11 @@ Builtin handle member names keep builtin dispatch on both backends. Default
 and explicit guarded stack requests use the same scheduler allocation path on
 both backends.
 
-The loop safepoints differ in frequency. MIR checks each backedge and yields
-every 8 backedges. Native code uses 4,096 units of function-local fuel between
-yields when sibling tasks are possible. It skips the check when the program
-proves that no sibling task can exist.
+The safepoints differ in frequency. MIR checks each backedge and yields
+every 8 backedges, and yields at every recursive entry below a task's first call. Native code uses
+4,096 units of function-local loop fuel and 4,096 units of per-task call fuel
+between yields when sibling tasks are possible. It skips both checks when the
+program proves that no sibling task can exist.
 
 The scheduler and runtime surface and the complete diagnostics are pinned by
 parity tests. Both backends therefore share the persistent reactor, the timer
@@ -5716,7 +5725,7 @@ These features are implemented:
 - sleep and cooperative cancellation
 - task-result observation and multi-task waits
 - computed Duration arithmetic
-- compiler-inserted loop-backedge safepoints
+- compiler-inserted loop-backedge and recursive-call safepoints
 - persistent reactor registrations, heap-managed deadlines, and direct Queue,
   task-completion, and blocking-pool wakeups
 - guarded 768 KiB coroutine stacks and the stack-override methods
@@ -5750,7 +5759,7 @@ One bounded, nonblocking service step at a time owns the protocol state. The
 state is returned before the coroutine observes cancellation or resumes
 reactor waiting. The process-global pool starts lazily, is shared by all
 lightweight schedulers, and lives until process exit. It intentionally has no
-0.11 runtime shutdown or join API. The non-Unix WebSocket fallback keeps its
+0.12 runtime shutdown or join API. The non-Unix WebSocket fallback keeps its
 compatibility path.
 
 Plain socket and reactor operations stay on the scheduler side. Resolver,
@@ -5819,7 +5828,7 @@ A **conforming Aura implementation**:
 - preserves the observable evaluation and cleanup behavior defined by the Manual
 - produces the specified typed outcomes or runtime failures
 - provides the maintained public API surface
-- does not expose proposal-only constructs as accepted 0.11 language features
+- does not expose proposal-only constructs as accepted 0.12 language features
 
 Exact diagnostic prose is normative only where a fixture or this Manual explicitly requires it. Otherwise, a conforming implementation needs a clear diagnostic with an accurate source location and the same stable `AU####` code. The message wording may differ, as long as the code keeps its documented meaning.
 
@@ -5856,6 +5865,7 @@ Each row names a reference area and the tests, fixtures, and maintained examples
 | persistent descriptor registrations, heap-ordered deadlines, direct Queue/task-completion/blocking-pool wakeups, wait-epoch race containment, one-winner cleanup, and event-or-deadline idle blocking without a periodic tick | `runtime_reactor` unit tests including `timers_fire_at_the_earliest_deadline_and_preserve_equal_deadline_order`, `one_persistent_fd_registration_aggregates_waiters_and_narrows_interest`, and `waker_coalescing_does_not_lose_inbox_entries_and_ready_is_deduplicated`; runtime-value direct-wakeup and cleanup tests; `scheduler_model` lost-wake/stale-epoch/one-winner state-space tests; `scheduler_mixed_wakeups_complete_in_mir_and_direct_backends`; `scripts/stress-scheduler.sh`; the contractual `scripts/bench-scalable-runtime.py` after-reactor run; and the MIR/direct parity matrix |
 | `yield_now` cooperative scheduling, zero-argument typing, explicit ready-set requeue, unit result, and backend parity | focused call-surface, semantic, MIR-runtime, native-codegen, analysis, language-server, and extension tests; the `yield_now` check/run fixtures; `examples/concurrency/yield_now.au`; and the forced MIR/direct parity matrix |
 | compiler-inserted scheduling checks on every ordinary and `continue` loop backedge; exit-path bypass; no implicit cancellation check; amortized function-local MIR/native fuel; sequential-program elision; and timer/Queue/socket progress on both backends | focused MIR lowering, MIR-runtime, native-codegen, and validation tests; `loop_backedge_safepoints_prevent_timer_and_queue_starvation`; the loopback-socket safepoint regression; the `sleeper_vs_hot_loop.au` scalable-runtime workload; the contractual starvation benchmark; and the forced MIR/direct parity matrix |
+| compiler-inserted scheduling checks at the entry of every function on a call cycle, found conservatively; per-task native call fuel in the frame stack; no implicit cancellation check; sequential-program elision; and timer/Queue progress beside deep recursion on both backends | `mir::recursion` and native-codegen call-safepoint tests; `recursive_call_safepoints_prevent_timer_and_queue_starvation`; the `sleeper_vs_recursion.au` probe |
 | Guarded 768 KiB default task stacks, exact `int64` 256 KiB..64 MiB collision-free overrides with 256 KiB reserved for measured shallow tasks, page rounding without clamping, and off-coroutine TLS/WebSocket protocol steps with HTTP/1.1 parsing on the calling task | focused call-surface, semantic, MIR, native-codegen, scheduler-allocation, protocol-service, recursion, language-server, and both-backend CLI tests; maintained loopback HTTP, TLS, and WebSocket round trips; the scalable-runtime same-process baseline/parked-task measurements; and the MIR/direct parity matrix |
 | unique mutable scheduler ownership; owned nested-start admission with synchronous preparation failure and safe immediate waits; internal FIFO admission without a public scheduling-order promise; teardown cancellation and observer wakeup; MIR/Rust unwind; and exact-once direct child/root stack-reset containment | `nested_spawns_are_fifo_and_an_immediate_child_wait_is_safe`, `nested_stack_allocation_failure_is_synchronous_and_does_not_enqueue_a_task`, `lightweight_scheduler_teardown_cancels_abandoned_tasks_and_runs_cleanup_once`, `pure_rust_abandoned_task_unwinds_owned_values_once_at_teardown`, `direct_cleanup_can_spawn_a_child_before_the_parent_is_retired`, and `generated_root_cleanup_runs_once_on_forced_exit_and_not_on_normal_return` in `runtime_value_tests`; the direct-root, unstarted-task, started-task, and normal-completion ownership tests in `native_runtime_tests`; the event-multiset oracle in `scheduler_nested_spawns.au`; `nested_scheduler_spawns_preserve_outcomes_cleanup_and_backend_parity`; and the raw-scheduler-alias rejection in `scripts/check-hygiene.sh` |
 | Structural Transfer, owned Copy snapshots, explicit/concrete generic task targets, Queue constructor/send payload enforcement, conditional Task Copy, static single-consumer observation, `AU3008` boundary diagnostics, `AU3009` duplication diagnostics, and atomic one-winner runtime defense | `task_boundaries_accept_structurally_transferable_values_and_results`, `task_boundary_diagnostics_explain_the_exact_nested_non_transfer_reason`, `task_transfer_checks_use_the_concrete_generic_specialization`, `queue_transport_requires_transfer_payloads_but_handle_only_methods_do_not`, `owned_builtin_snapshots_are_transfer_but_live_authority_is_not`, `task_target_explicit_specialization_and_contextual_defaults_are_concrete`, `task_capture_materializes_copy_snapshots_but_not_noncopy_shared_views`, `task_result_observation_rights_follow_repeatability`, and `clone_producing_operations_cannot_duplicate_task_observation_rights`; runtime-value, MIR-runtime, and native-runtime claim tests; the `task_transfer_*`, `queue_transfer_*`, and `task_result_*` check fixtures; `task_transfer_runtime_matrix.au`; its MIR/direct CLI parity test; compiler-service/LSP evidence; and the forced backend parity matrix |
@@ -5916,7 +5926,7 @@ Regression tests supplement fixtures when a case needs multiple files, temporary
 
 ## Backend Equivalence
 
-Aura 0.11 has two maintained semantic runtime representations:
+Aura 0.12 has two maintained semantic runtime representations:
 
 - `aura run` lowers checked source to MIR and executes it in the MIR runtime.
 - `aura build` lowers checked source to native code through the direct backend and links the native runtime.
@@ -6018,10 +6028,9 @@ a loop runs or while an object exists. Aura checks every clause each time
 it applies, in `aura run` and in built programs alike, and stops the program
 with `AU4009` when one is false.
 
-Contracts are the first stage of Aura's verification plan. A later
-`aura verify` command will prove clauses before the program runs; until
-then they are runtime checks. See the
-[verification design](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/23-verification-design-checkpoint.md).
+`aura verify` proves clauses before the program runs, together with the
+arithmetic and list indexes around them; see
+[Verification](/manual/verification). The checks still run in every build.
 
 ## Function Contracts
 
@@ -6187,6 +6196,112 @@ def main():
   the previous time. A loop that keeps both rules must end. A `for` loop
   always ends, so it takes no `decreases`, and a loop takes at most one.
 
+### Recursive Functions
+
+A function that calls itself can state a `decreases` measure too. It is
+checked on entry, where it must be at least 0, and before every call the
+function makes to itself, where the measure of the call's arguments must
+be smaller than the measure on entry. A recursion that keeps both rules
+must end.
+
+```aura
+def gcd(a: int64, b: int64) -> int64:
+    requires a >= 0 and b >= 0
+    decreases b
+    if b == 0:
+        return a
+    return gcd(b, a % b)
+
+def main():
+    print(gcd(84, 36))  # 12
+```
+
+The measure is computed again from the call's arguments before the call,
+so each argument the measure reads must be a pure expression. A function
+takes at most one `decreases`, a method takes none yet, and a call to
+another function is not checked, so mutual recursion is not covered.
+
+## Trait Methods
+
+A trait method can state `requires` and `ensures` clauses, and every
+implementation of it inherits them. A call through the trait, such as a
+call on a value whose type is a type parameter bounded by the trait, relies
+on the same contract whichever implementation runs.
+
+```aura
+trait Shape:
+    def area(self) -> int64:
+        ensures result >= 0
+
+class Square:
+    side: int64
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+
+def total[T: Shape](items: list[T]) -> int64:
+    mut sum = 0
+    for item in items:
+        sum += item.area()
+    return sum
+
+def main():
+    print(total([Square(side=1), Square(side=2)]))  # 5
+```
+
+The clauses are checked in each implementation as if it had written them.
+An implementation may repeat the trait's clauses exactly or leave them out,
+and its parameters keep the trait's names, which the clauses read. A trait
+method takes no `decreases`.
+
+## Lemmas
+
+A `lemma def` is a proof: a function with no result whose `ensures`
+clauses state a fact, and whose body shows why it holds. `aura verify`
+proves a lemma once, like any function, and then relies on its `ensures`
+wherever it is called. A call written as a statement is erased when the
+program runs, so a lemma costs nothing at run time, however much work its
+body does.
+
+```aura
+spec def tri(n: int64) -> int64:
+    return n * (n + 1) // 2
+
+lemma def tri_bounded(n: int64):
+    requires 0 <= n and n <= 1000
+    decreases n
+    ensures 0 <= tri(n) and tri(n) <= 500500
+    if n > 0:
+        tri_bounded(n - 1)
+
+def sum_to(n: int64) -> int64:
+    requires 0 <= n and n <= 1000
+    ensures result == tri(n)
+    mut total = 0
+    mut i = 0
+    while i < n:
+        invariant 0 <= i and i <= n
+        invariant total == tri(i)
+        tri_bounded(i)
+        i += 1
+        total += i
+    return total
+
+def main():
+    print(sum_to(10))  # 55
+```
+
+A recursive lemma with a `decreases` measure is a proof by induction: the
+call `tri_bounded(n - 1)` assumes the fact for the smaller case. A lemma
+body holds only `assert`, `if`, loops, assignments of local names, and
+calls of other lemmas, each pure, and it may read `spec def` helpers.
+Its parameters cannot be `mut`, and it returns nothing. The arguments of a
+lemma call written as a statement must be pure, since the call does not
+run. Because nothing checks an erased call when the program runs, a lemma
+or a lemma call that the verifier cannot prove keeps
+`aura build --remove-proved-checks` from removing any check.
+
 ## Class Invariants
 
 A class can state what is true of every one of its objects, with
@@ -6247,7 +6362,7 @@ followed by the method or construction that ran the check.
 ## Contextual Keywords
 
 `requires`, `ensures`, `invariant`, and `decreases` are keywords only at
-the start of a clause line, and `spec` only before `def`. Elsewhere they
+the start of a clause line, and `spec` and `lemma` only before `def`. Elsewhere they
 are ordinary names, so `requires = 1`, `invariant: int64`, and the call
 `requires(x)` keep their meaning. Write a space before a parenthesis that
 starts a condition: `requires (a or b) and c`. `result`, `old`, `forall`,
@@ -6257,11 +6372,13 @@ and `exists` are special only inside clauses and `spec def` bodies.
 
 These forms report `AU2048`:
 
+- `decreases` on a method
 - `ensures` on `__init__` or on a function with a view result
 - an `ensures` that reads an `own` parameter of a non-Copy type, which the
   body may have moved; `old(param)` reads it on entry instead
 - a parameter named `result` in a function with `ensures`
-- clauses on the methods of a trait implementation
+- clauses on a trait implementation's method that differ from the trait
+  method's
 - `spec def` methods
 
 ## Diagnostics
@@ -6276,7 +6393,7 @@ These forms report `AU2048`:
 
 # Control-Plane Modules
 
-This page covers Aura 0.11's small, typed host and control-plane modules:
+This page covers Aura 0.12's small, typed host and control-plane modules:
 `sys`, `path`, `json`, `toml`, `log`, `trace`, `metrics`, and `control`, plus
 a summary of the HTTP client. They are meant for service launchers, workers,
 evaluation harnesses, and agent infrastructure. They behave the same through
@@ -6377,7 +6494,7 @@ process share.
 - Incrementing past either `int64` bound is a runtime diagnostic and leaves
   the checked operation incomplete.
 
-The counters suit worker and test instrumentation. Aura 0.11 has no metrics
+The counters suit worker and test instrumentation. Aura 0.12 has no metrics
 exporter, export protocol, or scoped trace span API.
 
 ## Network Boundary
@@ -6387,7 +6504,7 @@ URLs. Validation uses the platform-independent Web PKI root set.
 
 - Request and response bodies support content length, connection-close
   framing, and chunked transfer encoding.
-- The 0.11 parser keeps a 16 MiB limit on an incoming wire message.
+- The 0.12 parser keeps a 16 MiB limit on an incoming wire message.
 - It accepts at most 64 headers and rejects conflicting framing headers.
 - Its `dict[str, str]` header boundary cannot represent repeated equal header
   names losslessly.
@@ -6804,9 +6921,9 @@ The foreign function interface (FFI) is at version 0.
 ### Scheduling
 
 - Aura task code runs on pinned cooperative scheduler workers. The default count is the available parallelism reported by the host. The `AURA_WORKERS=<positive integer>` override selects an explicit count.
-- A child is assigned to a worker when it is spawned and keeps that worker for its lifetime. Coroutine stacks never migrate, and the runtime does not steal work between workers.
+- A task keeps the worker that first runs it for its lifetime. Idle workers steal only children that have not started; a started task's coroutine stack never migrates, so a worker that took several long tasks cannot hand one off later.
 - A positive `AURA_WORKERS` value may exceed the host's available-core count. Empty, zero, signed, whitespace-padded, nonnumeric, and overflowing values are rejected before execution with `AU4006` and ``invalid AURA_WORKERS value `<raw>`: expected a positive integer``.
-- Scheduling is cooperative, not preemptive. The compiler checks every loop backedge and eventually yields from a tight loop, but only to runnable work assigned to that task's worker.
+- Scheduling is cooperative, not preemptive. The compiler checks every loop backedge and the entry of every function on a call cycle, and eventually yields from a tight loop or deep recursion, but only to runnable work assigned to that task's worker.
 - One long loop body or long straight-line computation can still delay siblings pinned to the same worker. The automatic checks do not inspect cancellation.
 - Queue and Task handles are the maintained cross-worker communication surface. All other task captures and results must be owned `Transfer` values, which keeps a share-nothing boundary.
 - A task's cancellation and diagnostic context stay isolated from work running on other workers.
@@ -6849,7 +6966,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - Deep HTTP, TLS, and maintained Unix WebSocket library frames run on a separate protocol-step pool with two 2 MiB-stack workers and a 64-job queue.
 - Each submitted protocol job is a bounded, nonblocking step. It returns owned protocol state before cancellation or reactor waiting resumes.
 - The non-Unix WebSocket fallback does not use the protocol-step pool.
-- The protocol-step pool is process-global, lazily initialized, shared by all lightweight schedulers, and lives for the whole process. It has no 0.11 runtime shutdown or join API.
+- The protocol-step pool is process-global, lazily initialized, shared by all lightweight schedulers, and lives for the whole process. It has no 0.12 runtime shutdown or join API.
 - File reads, resolver work, and listener binding run on the generic blocking-I/O pool. TLS asset bytes are read there, and then PEM parsing and rustls construction run on protocol workers.
 - The process-wide blocking-I/O pool defaults from host parallelism, with fallback `4` and a derived `2..=8` clamp. `AURA_BLOCKING_WORKERS=<positive integer>` requests that exact count without clamping.
 - `AURA_BLOCKING_QUEUE_CAPACITY=<positive integer>` bounds pending accepted jobs only. Running jobs and admission waiters do not consume it. Without it, the queue is unbounded.
@@ -6862,7 +6979,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 
 ### Size Limits
 
-- Filesystem one-shot reads and `fs.File` whole-file reads are capped at 256 MiB of remaining content. Aura 0.11 has no chunked file-read API.
+- Filesystem one-shot reads and `fs.File` whole-file reads are capped at 256 MiB of remaining content. Aura 0.12 has no chunked file-read API.
 - Process-pipe and captured-output reads are capped at 64 MiB. So are TCP, Unix, and TLS whole and bounded reads.
 - TLS certificate, private-key, and CA-file loading uses the same independent 64 MiB ceiling.
 - A bounded byte count of zero is invalid.
@@ -6878,7 +6995,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - TLS handshakes have a 10-second hard cap, even when the caller supplies no shorter timeout.
 - TLS APIs require PEM certificate and key assets.
 - High-level HTTP clients support HTTP/1.1 over `http://` and validated `https://`, including content-length, chunked, and close-delimited responses. Redirects, pooling, HTTP/2, proxy configuration, decompression, and high-level custom CA arguments are not implemented.
-- The high-level dictionary header model cannot preserve repeated equal field names losslessly. When the wire message repeats a header name, conversion may expose duplicate equal dictionary keys. Repeated headers are not a lossless 0.11 contract.
+- The high-level dictionary header model cannot preserve repeated equal field names losslessly. When the wire message repeats a header name, conversion may expose duplicate equal dictionary keys. Repeated headers are not a lossless 0.12 contract.
 - Unix domain sockets require a Unix host.
 - `WebSocketListener` has no explicit `close()` method. WebSocket cancellation and error propagation are not fully aligned with TCP and UDP.
 
@@ -6895,7 +7012,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - Dynamic `json.parse` uses a separate process-global service with two 2 MiB-stack workers and a total in-flight capacity of two.
 - The service reserves capacity before the fallible source copy. Lightweight tasks that find it saturated park through the scheduler. Once admitted, a synchronous parse defers cancellation until the codec completes.
 - Runtime materialization, JSON-aware clone and render, and dumping use iterative traversals.
-- The parse service lives for the whole process and has no 0.11 sizing or shutdown API.
+- The parse service lives for the whole process and has no 0.12 sizing or shutdown API.
 - The bounded `json.is_valid` and `json.parse_string_map` helpers keep their bounded caller-side paths and do not use that service.
 - JSON flat-dictionary and TOML helpers are restricted to typed `dict[str, str]`.
 - JSON has no arbitrary-precision number, streaming codec, or schema validation. A derived `json.Codec` for a generic class or enum is not implemented.
@@ -7465,6 +7582,18 @@ Editor warnings come from editor analysis only. `aura check`, `aura run`, and
 
 `AU5001` is reported only when the file checks. A `with` binding is exempt,
 since it holds its resource open for the block.
+
+### Verifier Diagnostics
+
+`aura verify` reports these for each check it could not prove. Other
+commands never report them. See [Verification](/manual/verification).
+
+| Code | Meaning | Common causes | How to fix |
+| --- | --- | --- | --- |
+| `AU5101` | check not proved | Inputs exist that make an overflow, a zero divisor, an out-of-range index, a failed `assert`, or a false contract clause happen. The note gives a counterexample. | Fix the code, or state the missing fact as a `requires`, `invariant`, or callee `ensures`. |
+| `AU5102` | solver could not decide | The solver ran out of time or gave up, often on nonlinear arithmetic. | Raise `--timeout`, or add an `assert` or `invariant` that narrows the case. |
+| `AU5103` | solver unavailable | No Z3 or cvc5 on `PATH`, `AURA_SMT_SOLVER` or `--solver` names a missing program, or the solver stopped. | Install Z3 or cvc5, or point `--solver` at it. |
+| `AU5104` | check outside the verified subset | The check depends on a step the verifier does not model yet, such as floating-point arithmetic, a power with a large or unknown exponent, or a contract expression it cannot read. | Keep it as a runtime check, or restate the contract with modeled operations. |
 
 ## Diagnostic Structure
 
@@ -8384,7 +8513,7 @@ Bare builtin constructor names such as `Found(...)`, `Missing`, `Ok(...)`, and `
 
 A user enum is copyable when every payload type of every variant is statically copyable. Otherwise the enum is a move type. The classification is structural across all variants. It does not depend on the variant held at runtime.
 
-`Lookup[T]`, `Poll[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` follow the same payload-copy rule. `TaskResult[T]`, `SelectOutcome[Q, T]`, `WaitAny[T]`, and `WaitAll[T]` are move outcome types in Aura 0.11, even with copy payloads. An unconstrained generic payload is not assumed copyable. See [Types](/manual/types#copy-and-move-categories).
+`Lookup[T]`, `Poll[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` follow the same payload-copy rule. `TaskResult[T]`, `SelectOutcome[Q, T]`, `WaitAny[T]`, and `WaitAll[T]` are move outcome types in Aura 0.12, even with copy payloads. An unconstrained generic payload is not assumed copyable. See [Types](/manual/types#copy-and-move-categories).
 
 ## Statement Matches
 
@@ -8438,7 +8567,7 @@ Expression arms may also use the inline form `case Pattern: expression`. Stateme
 
 ## Pattern Forms
 
-At the top level of a match arm, Aura 0.11 supports:
+At the top level of a match arm, Aura 0.12 supports:
 
 - an enum variant pattern for an enum scrutinee
 - a recursively nested tuple pattern for a tuple scrutinee, with at most one rest element
@@ -8853,7 +8982,7 @@ This chapter defines the runtime behavior that `aura run` and built programs sha
 
 ## Maintained Execution Paths
 
-Aura 0.11 has one checked source language and two runtime representations:
+Aura 0.12 has one checked source language and two runtime representations:
 
 - `aura run` lowers the entry package to MIR, Aura's mid-level intermediate representation, and executes it in the MIR runtime.
 - A native direct build lowers MIR-compatible program structure to native code linked with the direct runtime.
@@ -8871,7 +9000,7 @@ After checking succeeds, an entry module runs in one of two modes:
 1. If it has executable top-level statements, those statements execute in their stored source order. The file cannot also declare a local `main`.
 2. Otherwise, a local `main()` is called when present. It returns `None` or `int32`.
 
-An imported function named `main` is not an entrypoint. In Aura 0.11, importing a module does not execute its top-level statements as a side effect.
+An imported function named `main` is not an entrypoint. In Aura 0.12, importing a module does not execute its top-level statements as a side effect.
 
 For `aura run`, a returned `int32` is passed to the host process as the requested exit status. `None` means success. A built native program follows the same entry result contract.
 
@@ -9265,9 +9394,13 @@ Scheduler abandonment marks the remaining task cancelled and releases scheduler-
 
 ### Workers
 
-Aura lightweight tasks run on cooperative scheduler workers, and each task is pinned to one worker. By default, the runtime uses the available parallelism the host reports. The `AURA_WORKERS=<positive integer>` environment override selects an explicit count.
+Aura lightweight tasks run on cooperative scheduler workers, and each task is pinned to one worker once it first runs. By default, the runtime uses the available parallelism the host reports. The `AURA_WORKERS=<positive integer>` environment override selects an explicit count.
 
-Each child receives a stable worker assignment when it is spawned. Its coroutine stack never migrates, and the runtime does not steal tasks between workers.
+A child starts out on its parent's worker. The newest child waits in that worker's private slot, so a parent that starts a child and waits for it at once keeps both on one core. An older child waits in the worker's stealable queue. A worker with nothing to run takes half of another worker's queued children before it spins and blocks, and a worker that queues a child while another is blocked wakes one. A newest child that its worker has not picked up within 20 microseconds, as when its parent blocks the thread in a foreign call, can also be taken.
+
+A task binds to the worker that first runs it. From then on its coroutine stack and frames never migrate, so only tasks that have not started move between workers. While every worker is busy, a worker runs one of its own queued children that has waited 100 milliseconds alongside its other tasks, at most once per 100 milliseconds, so children of a program whose workers all run endless tasks still start.
+
+A finished task's guarded stack returns to the pool of the worker that handed it out, for later children of the same stack size. Reuse keeps the guard page and the requested capacity. While the worker has work, its pool keeps up to 1,024 stacks and 1 GiB of reserved address space, so a burst of task exits, such as a cancelled group, does not unmap each stack; when the worker goes idle it trims the pool back to 32 stacks and 32 MiB, a few at a time.
 
 A worker with no ready task spins for up to 50 microseconds, watching for a notification from another worker, before it blocks in its poller. It skips the spin while one of its tasks waits on a descriptor. A notification wakes a blocked poller with a system call; a worker that is still running drains its notifications before it blocks, so notifying it needs no system call.
 
@@ -9277,22 +9410,24 @@ Queue waits, task waits, sleep, nonblocking sockets, and scheduler-integrated I/
 
 Scheduling order among multiple ready tasks is not specified. Neither is completion order among independent tasks, or program-output order. Coordinate through queues, task results, cancellation, and other documented synchronization, not timing assumptions.
 
-Aura exposes no worker identity or affinity API. Task execution is multicore. Preemption and work stealing are unavailable, and speedup depends on the workload.
+Aura exposes no worker identity or affinity API. Task execution is multicore. Idle workers steal children that have not started; a started task never moves, and there is no preemption, so speedup depends on the workload.
 
 Queue and Task handles are the maintained cross-worker communication surface. Every other capture and result is owned `Transfer` data, which keeps the boundary share-nothing. Cancellation and diagnostic context are installed per task and stay isolated across workers.
 
-### Loop Safepoints
+### Loop And Call Safepoints
 
 The compiler inserts a cooperative scheduling check on every semantic loop backedge. Reaching the ordinary tail of a `while` or `for` body passes the backedge, and so does `continue`. `break`, `return`, and other exits that leave the loop do not. These checks let a tight loop eventually return to the scheduler, so ready timers, Queue operations, and socket work are not starved indefinitely.
 
-A loop safepoint is not preemption, and it does not inspect cancellation. A single long iteration can still delay every sibling pinned to the same worker until the body reaches its backedge. Long straight-line CPU work with no loop or scheduler operation can do the same.
+Recursion has no backedge, so the entry of every function that lies on a call cycle is a safepoint too. A function lies on a call cycle when it calls itself, directly or through other functions. The compiler finds the cycles conservatively: a call through a function value, a dynamic method, or a builtin that may call back into Aura code is assumed to reach every function that escapes as a value, a method, or a `Display` implementation. Deep recursion with no loop, such as a naive `fib`, therefore returns to the scheduler like a loop does. Entries of functions that are not on a cycle carry no check.
+
+A safepoint is not preemption, and it does not inspect cancellation. A single long iteration or a long call that is not recursive can still delay every sibling pinned to the same worker until it reaches a backedge or a recursive entry. Long straight-line CPU work with no loop, recursion, or scheduler operation can do the same.
 
 - Use `cancelled()` when the task must observe cancellation.
 - Use `yield_now()` when the program needs an explicit scheduling point between chosen chunks.
 
 Neither automatic nor explicit yielding specifies which ready local task runs next.
 
-MIR execution amortizes the cooperative yield with 8 units of function-local loop fuel. Direct native code uses 4,096 units and replenishes the fuel after yielding. A program proven to have no possible sibling Aura task elides the runtime check entirely. These backend strategies may produce different valid interleavings. Scheduling order is not observable language order.
+MIR execution amortizes the cooperative yield with 8 units of function-local loop fuel, and yields at every recursive entry below a task's first call, since an interpreted call costs far more than a yield. Direct native code uses 4,096 units of function-local loop fuel, kept in a register, and 4,096 units of per-task call fuel, kept in the task's frame stack. Each replenishes its fuel after yielding. A program proven to have no possible sibling Aura task elides both checks entirely. These backend strategies may produce different valid interleavings. Scheduling order is not observable language order.
 
 ### `yield_now()`
 
@@ -9340,7 +9475,7 @@ Worker traps and checked Duration overflow propagate as runtime diagnostics. Can
 
 Starting a task first copies or moves every argument into task-owned capture storage. The child then applies the target's declared parameter capability to that capture. A bare parameter borrows it, and an `own` parameter consumes it. Mutable targets are rejected statically.
 
-Task captures, results, and Queue payloads must also pass the structural `Transfer` check before the child is admitted to its spawn-time pinned worker.
+Task captures, results, and Queue payloads must also pass the structural `Transfer` check before the child is admitted to the worker that first runs it.
 
 Starting a child from a running task does not mutate the live scheduler through an alias. The runtime first prepares the child's guarded stack and task state. Then it transfers that prepared request to the scheduler for admission. If preparation fails, the start fails synchronously before a handle is returned, and no child is admitted.
 
@@ -9370,7 +9505,7 @@ The runtime has three process-global service pools besides the scheduler workers
 
 A job owns its protocol state for one bounded, nonblocking library step. The coroutine waits for the state to return before it observes cancellation or waits for descriptor readiness again. So a protocol state is never abandoned with two owners, and no resource mutex stays held across the worker wait. Reactor readiness, absolute deadlines, and cancellation stay scheduler-side concerns.
 
-The protocol-step pool is lazily initialized and shared by every lightweight scheduler. Its workers intentionally live until process exit. Aura 0.11 has no protocol-pool shutdown or join surface. The non-Unix WebSocket fallback keeps its compatibility path.
+The protocol-step pool is lazily initialized and shared by every lightweight scheduler. Its workers intentionally live until process exit. Aura 0.12 has no protocol-pool shutdown or join surface. The non-Unix WebSocket fallback keeps its compatibility path.
 
 **Generic blocking-I/O pool.** Resolver, listener-bind, and file reads use this pool. A TCP connect to a literal socket address such as `127.0.0.1:8080` skips it: the connect starts nonblocking and the task waits on the reactor. TLS asset bytes are read here before PEM parsing and rustls construction run on protocol workers. PEM is the text encoding used for certificates and keys.
 
@@ -9387,7 +9522,7 @@ A task reserves capacity before it makes the fallible owned copy of its parse so
 
 The dependency-owned recursive parser runs on the service stack. Runtime materialization, JSON-aware cloning and rendering, and dump conversion and emission use iterative traversals. The direct backend waits for admission without value-table access. It then holds read access only long enough to copy the source, and releases it before submission and completion waiting.
 
-The bounded `json.is_valid` and `json.parse_string_map` operations stay caller-side and do not use this service. Codec workers are process-lifetime. Aura 0.11 has no shutdown or configuration surface for them.
+The bounded `json.is_valid` and `json.parse_string_map` operations stay caller-side and do not use this service. Codec workers are process-lifetime. Aura 0.12 has no shutdown or configuration surface for them.
 
 ## Task Groups And Failure Observation
 
@@ -9399,7 +9534,7 @@ The bounded `json.is_valid` and `json.parse_string_map` operations stay caller-s
 - A task failure observed through its `Task` result does not also abort the group as unread.
 - An unread child failure aborts the group scope. It wakes Queue iteration and waits that depend on that group.
 
-Cancellation is cooperative. Pure CPU code observes cancellation through `cancelled()`. `yield_now()` is a scheduling point but does not inspect cancellation, and neither do compiler-inserted loop safepoints. Scheduler-aware blocking operations receive cancellation context directly.
+Cancellation is cooperative. Pure CPU code observes cancellation through `cancelled()`. `yield_now()` is a scheduling point but does not inspect cancellation, and neither do compiler-inserted loop and call safepoints. Scheduler-aware blocking operations receive cancellation context directly.
 
 Queue reachability is based on live tasks known to hold `Queue` handles. It does not use an elapsed-time threshold.
 
@@ -9456,7 +9591,7 @@ Pure expression evaluation, ordinary control flow, and collection operations are
 - operating-system secure random output
 - the exact wording of host operating-system errors
 
-An explicitly seeded `random.Rng` is deterministic. Its xoshiro256** sequence, integer and float mapping, and shuffle order are fixed for Aura 0.3.x, 0.4.x, 0.5.x, 0.6.x, 0.7.x, 0.8.x, 0.9.x, 0.10.x, and 0.11.x. [Randomness Module](/manual/randomness) specifies them. Secure random calls are external effects and never draw from that stream.
+An explicitly seeded `random.Rng` is deterministic. Its xoshiro256** sequence, integer and float mapping, and shuffle order are fixed for Aura 0.3.x, 0.4.x, 0.5.x, 0.6.x, 0.7.x, 0.8.x, 0.9.x, 0.10.x, 0.11.x, and 0.12.x. [Randomness Module](/manual/randomness) specifies them. Secure random calls are external effects and never draw from that stream.
 
 Aura converts host effects into typed values and ordering primitives where practical. It does not pretend the host environment is deterministic.
 
@@ -10631,7 +10766,7 @@ one value per line.
 
 ## Forms Not Implemented
 
-Aura 0.11 expressions do not include:
+Aura 0.12 expressions do not include:
 
 - generator expressions
 - assignment expressions
@@ -11098,7 +11233,7 @@ terminate the process, and no backend can make it safe.
 
 ## Status
 
-Implemented in Aura 0.11:
+Implemented in Aura 0.12:
 
 - FFI v0 package opt-in and the root dependency report
 - bodyless `extern "C"` functions and opaque handles
@@ -11145,7 +11280,7 @@ Every filesystem API returns `Result[..., io.Error]`, except `fs.exists(...)`, w
 | `fs.create` | `create(path: str) -> Result[fs.File, io.Error]` | Creates or truncates a file for writing. |
 | `fs.append` | `append(path: str) -> Result[fs.File, io.Error]` | Opens a file for appending. Creates it if needed. |
 
-The 256 MiB read cap is part of the API contract. It also applies to `fs.File.read_all()` and `fs.File.read_bytes()`. Aura 0.11 has no chunked file-read API. To process a larger file, use a host-side helper or split the data before Aura reads it.
+The 256 MiB read cap is part of the API contract. It also applies to `fs.File.read_all()` and `fs.File.read_bytes()`. Aura 0.12 has no chunked file-read API. To process a larger file, use a host-side helper or split the data before Aura reads it.
 
 `fs.read_dir` has a known defect. It reports a failure to open the directory. After the directory is open, it silently skips any entry whose metadata or read operation fails. If you need a complete, audited directory listing, check the result with a host helper until the defect is fixed.
 
@@ -11319,7 +11454,7 @@ Host filesystem results can differ by operating system and environment. Those di
 
 Each one-shot read, and each whole-file read on `fs.File`, is capped at 256 MiB of remaining content.
 
-Aura 0.11 has none of these:
+Aura 0.12 has none of these:
 
 - chunked file reading
 - recursive directory operations
@@ -11337,9 +11472,9 @@ After a directory is open, an entry that fails during enumeration is skipped. On
 
 ## Status
 
-Aura 0.11 implements the one-shot functions, the `fs.File` methods, typed errors, deterministic cleanup, the strict split between text and bytes, and the limits on this page. The fixed 256 MiB whole-read limit is an accepted design decision.
+Aura 0.12 implements the one-shot functions, the `fs.File` methods, typed errors, deterministic cleanup, the strict split between text and bytes, and the limits on this page. The fixed 256 MiB whole-read limit is an accepted design decision.
 
-The skipped-entry behavior in `fs.read_dir` is a known defect. Do not rely on it. Aura 0.11 has no chunked or asynchronous file access, transactional operations, richer metadata, or cross-platform path abstraction API.
+The skipped-entry behavior in `fs.read_dir` is a known defect. Do not rely on it. Aura 0.12 has no chunked or asynchronous file access, transactional operations, richer metadata, or cross-platform path abstraction API.
 
 Design record: [ADR-0018: Fixed resource read limits](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0018-fixed-resource-read-limits.md).
 
@@ -12345,7 +12480,7 @@ The qualified name and a `from shapes import Make` name the same trait. A module
 
 An implementation with no body, such as `impl json.Codec for Point`, asks the compiler to derive the methods. Only `json.Codec` can be derived, and the checker rejects any other bodyless implementation with `AU2046`. See [Derived Codecs](/manual/json#derived-codecs).
 
-Aura 0.11 imposes no separate orphan rule. An implementation must still refer to known, visible types and traits. It takes part only where it is present in the loaded module or package context.
+Aura 0.12 imposes no separate orphan rule. An implementation must still refer to known, visible types and traits. It takes part only where it is present in the loaded module or package context.
 
 ### Trait Methods On Unions
 
@@ -12386,7 +12521,7 @@ The checker rejects the following before any body runs:
 - signature mismatches
 - default ordinary arguments added by an implementation method
 
-An explicit implementation MUST NOT strengthen its trait method's clone-safety contract. Its body can rely on obligations that the trait method already inferred. It cannot add a requirement that bound-based callers cannot see. Aura 0.11 has no explicit clone-safety annotation, so generic clone-producing behavior belongs in a trait default body. An implementation that adds such a requirement is rejected with `AU3007`.
+An explicit implementation MUST NOT strengthen its trait method's clone-safety contract. Its body can rely on obligations that the trait method already inferred. It cannot add a requirement that bound-based callers cannot see. Aura 0.12 has no explicit clone-safety annotation, so generic clone-producing behavior belongs in a trait default body. An implementation that adds such a requirement is rejected with `AU3007`.
 
 An `impl` targeting any builtin type MUST NOT explicitly define or inherit a trait method whose name is a builtin member of that target. This covers:
 
@@ -12448,6 +12583,88 @@ These rules apply:
 - The associated method cannot declare its own type parameters.
 - A function that makes the call, directly or through another generic function, cannot be a task target. Start the task with a function that calls it.
 - `T.method` without a call is not a value.
+
+## Associated Types
+
+A trait can declare associated types before its methods. Each is a type
+that every implementation picks:
+
+```aura fragment
+trait Source[T]:
+    type Iter: Iterator[T]
+
+    def open(own self) -> Self.Iter
+```
+
+Inside the trait, `Self.Iter` names the associated type. The bounds after
+the colon are optional; a default method may use what they promise, so a
+default body can call `next()` on a `Self.Iter` value here.
+
+An implementation fixes each associated type with a `type` line before its
+methods. `Self.Iter` in its method signatures and bodies then means that
+type:
+
+```aura fragment
+impl Source[int64] for Start:
+    type Iter = Countdown
+
+    def open(own self) -> Self.Iter:
+        return Countdown(n=self.n)
+```
+
+These rules apply:
+
+- An implementation must fix every associated type its trait declares, and
+  only those (`AU2002`).
+- The fixed type must satisfy the declared bounds, with the trait's type
+  arguments substituted (`AU2002`).
+- A generic implementation can fix an associated type in terms of its own
+  type parameters, as in `type Iter = Generator[T]`.
+- A class, enum, or implementation cannot bound a type parameter by a
+  trait with associated types yet (`AU2002`). A function or method can.
+
+A function or method bound writes only the trait's own arguments, as in
+`S: Source[int64]`. Each associated type then becomes a hidden type
+parameter of the function, spelled `S.Iter`, which carries the trait's
+bounds for it. The function's signature and body can name it, and a call
+infers it from the implementation the argument's type has:
+
+```aura
+from iter import Generator, IntoIterator
+
+def total[S: IntoIterator[int64]](source: own S) -> int64:
+    mut sum = 0
+    for value in source:
+        sum += value
+    return sum
+
+def iterator_of[T, S: IntoIterator[T]](source: own S) -> S.Iter:
+    return source.into_iter()
+
+class Numbers:
+    values: list[int64]
+
+def walk(values: own list[int64]) -> Generator[int64]:
+    for value in values:
+        yield value
+
+impl IntoIterator[int64] for Numbers:
+    type Iter = Generator[int64]
+
+    def into_iter(own self) -> Self.Iter:
+        return walk(self.values)
+
+def main():
+    print(total(Numbers(values=[1, 2, 3])))
+    print(iterator_of(Numbers(values=[4, 5])).collect())
+```
+
+Here `T` in `iterator_of` appears only in the bound, and the call infers it
+the same way, from `impl IntoIterator[int64] for Numbers`.
+
+The builtin `iter.IntoIterator[T]` trait uses an associated type so that a
+`for` loop can consume any value that turns into an iterator. See
+[Statements](/manual/statements#iterator-iteration).
 
 ## Supertraits
 
@@ -12604,6 +12821,7 @@ The checker enforces the selected `From.from` method's clone-safety obligations 
 - Trait and implementation methods cannot give ordinary parameters defaults.
 - Generic task targets are permitted when their callable type arguments can be resolved. Bare shared and `own` targets use task-owned captures. `mut` targets are rejected.
 - Equal-specificity overlapping implementations are an error at the use site.
+- Only a function or method can bound a type parameter by a trait with associated types.
 - Clone-safety obligations are inferred, not written. An explicit implementation cannot strengthen the contract inferred by its trait method.
 
 [Current Limits](/manual/current-limits) collects the observable syntax and implementation limits. [Static Semantics](/manual/static-semantics#generics-traits-and-implementations) has the cross-cutting type rules.
@@ -12686,7 +12904,7 @@ The checker gives lowering, analysis, and the language server one resolved speci
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.11 has none of the following:
+Aura 0.12 has none of the following:
 
 - trait objects or dynamic dispatch
 - associated types or constants
@@ -12873,7 +13091,7 @@ as follows:
 
 - Two opening braces insert one literal opening brace.
 - Two closing braces insert one literal closing brace.
-- In Aura 0.11, a lone closing brace outside an interpolation is also literal.
+- In Aura 0.12, a lone closing brace outside an interpolation is also literal.
 
 Interpolations may contain nested braces and ordinary single- or
 double-quoted strings. Braces inside those strings do not change the
@@ -13950,7 +14168,7 @@ instead of risking host stack exhaustion:
 These are observable implementation limits of Aura 0.3. Inputs that exceed
 them must be rejected cleanly.
 
-## Syntax Not In Aura 0.11
+## Syntax Not In Aura 0.12
 
 The grammar intentionally excludes:
 
@@ -14112,7 +14330,7 @@ The host process supplies the actual standard streams. A backend may buffer them
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.11 offers line-oriented text input only. It has no standard-input byte API, terminal mode API, stream replacement API, asynchronous console API, or built-in formatted-output language.
+Aura 0.12 offers line-oriented text input only. It has no standard-input byte API, terminal mode API, stream replacement API, asynchronous console API, or built-in formatted-output language.
 
 `io.read_line` has no Aura line-length cap of its own. It allocates for the incoming line, up to host memory limits.
 
@@ -14127,9 +14345,9 @@ For stable control flow, match the specific variants that carry no message where
 
 ## Status
 
-Aura 0.11 implements the standard-stream functions, `print` behavior, the `io.Error` enum, the strict UTF-8 policy, the EOF distinction, and shortest round-trip float rendering. None of the I/O semantics on this page is provisional.
+Aura 0.12 implements the standard-stream functions, `print` behavior, the `io.Error` enum, the strict UTF-8 policy, the EOF distinction, and shortest round-trip float rendering. None of the I/O semantics on this page is provisional.
 
-Aura 0.11 has no binary standard input, async stream handles, terminal control, configurable formatting, or user-defined error derivation.
+Aura 0.12 has no binary standard input, async stream handles, terminal control, configurable formatting, or user-defined error derivation.
 
 ## Source: docs/manual/json.md
 
@@ -14701,7 +14919,7 @@ The fixed limits are:
 The codec service for `json.parse` admits two operations across the process.
 Its two 2 MiB-stack workers start lazily and live until the process exits.
 Sources of at most 16 KiB and 8 levels of nesting do not use it.
-Aura 0.11 has no API to shut down, join, size, or configure the service. The
+Aura 0.12 has no API to shut down, join, size, or configure the service. The
 service capacity does not apply to `json.is_valid`, `json.parse_string_map`,
 or `json.stringify_map`.
 
@@ -14717,14 +14935,14 @@ language does not claim that every host out-of-memory condition can be caught.
 ## Status
 
 The value and error model, parse and dump, accessors, ordering, formatting,
-and resource limits are implemented Aura 0.11 behavior.
+and resource limits are implemented Aura 0.12 behavior.
 
 The `json.Codec` trait, `json.DecodeError`, derived codecs for classes and
 enums, and the generic `encode`, `decode`, `decode_text`, and `schema` functions are
 implemented on both backends.
 
 `is_valid`, `stringify_map`, and `parse_string_map` are bounded
-flat-dictionary operations. Aura 0.11 has no streaming JSON codec.
+flat-dictionary operations. Aura 0.12 has no streaming JSON codec.
 
 Design record: [ADR-0021: JSON value model and codec policy](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0021-json-value-model-and-codec-policy.md).
 
@@ -14732,7 +14950,7 @@ Design record: [ADR-0021: JSON value model and codec policy](https://github.com/
 
 # Language Specification
 
-This Manual is the normative specification of the implemented Aura 0.11
+This Manual is the normative specification of the implemented Aura 0.12
 development language. It defines what a conforming implementation must
 provide:
 
@@ -14786,7 +15004,7 @@ the contract only when the surrounding paragraph says so.
 
 ## Specification Version
 
-This reference describes Aura 0.11 as implemented by the repository that
+This reference describes Aura 0.12 as implemented by the repository that
 contains it. Aura is an advanced technical preview, so source and API
 contracts may change before a tagged stable release.
 
@@ -14799,7 +15017,7 @@ Any behavior change MUST update these in the same pass:
 - the work record
 
 The repository commit identifies the precise revision of the specification.
-The rendered Manual is stamped with source version 0.11.0 (technical preview)
+The rendered Manual is stamped with source version 0.12.0 (technical preview)
 and its implementation baseline commit. Release builds supply that commit
 without writing a self-referential hash into this source page. The
 [Manual overview](/manual/) gives the exact precedence and the local fallback.
@@ -14862,7 +15080,7 @@ enum instead.
 | **Copy type** | A type whose values are duplicated, not consumed, by assignment and by-value use. |
 | **Move type** | A type whose by-value use transfers ownership. The source place is then unavailable until it is reinitialized. |
 | **Clone-producing operation** | An operation that creates a second owned structural value and keeps the original. Examples are explicit collection copies, cloned collection reads, and task-result observations. |
-| **Clone-safety obligation** | An inferred callable requirement: a substituted type must not duplicate non-cloneable state through a clone-producing operation. Aura 0.11 protects `random.Rng` state and live file, process, and network resources under this contract. |
+| **Clone-safety obligation** | An inferred callable requirement: a substituted type must not duplicate non-cloneable state through a clone-producing operation. Aura 0.12 protects `random.Rng` state and live file, process, and network resources under this contract. |
 | **Borrow** | Temporary access to an existing place without transferring ownership. A shared borrow permits reading. A mutable borrow permits exclusive mutation. |
 | **Owned position** | A source position that consumes a non-copy value. These include an explicit `own` parameter or collection loop, a class field or enum payload constructor, assignment, return, and maintained storing APIs. |
 | **Default parameter mode** | The unmodified `value: T` spelling. Its source contract is shared access for every type. An implementation may pass copy bits directly without changing that contract. The shared mode stays the same after generic specialization. |
@@ -15029,7 +15247,7 @@ physical line.
 print("ready") # A trailing comment.
 ```
 
-Aura 0.11 has no block comments.
+Aura 0.12 has no block comments.
 
 ## Spaces, Tabs, And Indentation
 
@@ -15124,7 +15342,7 @@ interpolation cannot cross a physical newline.
 
 ## Punctuation And Operators
 
-Aura 0.11 recognizes these punctuation and operator tokens:
+Aura 0.12 recognizes these punctuation and operator tokens:
 
 ```text
 ( ) [ ] { } : , . ?
@@ -15329,7 +15547,7 @@ To write a literal brace:
 
 - Two consecutive opening braces produce one literal opening brace.
 - Two consecutive closing braces produce one literal closing brace.
-- Aura 0.11 also treats a lone closing brace outside an interpolation as
+- Aura 0.12 also treats a lone closing brace outside an interpolation as
   literal text.
 
 ```aura fragment
@@ -15671,7 +15889,7 @@ follows the general runtime diagnostic rules.
 
 ## Status
 
-Everything on this page is implemented in Aura 0.11 on both the MIR and direct
+Everything on this page is implemented in Aura 0.12 on both the MIR and direct
 backends: the constants and functions, their exact bits and signatures, the
 exceptional-value classifications, initialization and evaluation order, and
 diagnostics.
@@ -15817,7 +16035,7 @@ A function body starts with bindings for its ordinary parameters. A method body 
 
 Parameter names, `self`, local bindings, loop bindings, `with` bindings, and pattern bindings all live in the function's value namespace. A use is valid only after the binding is introduced on the current control-flow path.
 
-Aura 0.11 does not support local function, class, enum, or trait declarations. An item lives at module level or as a member of an enclosing declaration that permits it.
+Aura 0.12 does not support local function, class, enum, or trait declarations. An item lives at module level or as a member of an enclosing declaration that permits it.
 
 ## Local Bindings
 
@@ -16213,7 +16431,7 @@ The listener rejects malformed HTTP requests. A malformed request does not leave
 
 An incoming parsed HTTP message is limited to 16 MiB of wire data and 64 headers. The listener reports an oversized or invalid request as an HTTP error where the protocol allows it.
 
-Headers are exposed as `dict[str, str]`. That type cannot faithfully hold repeated fields, such as several `set-Cookie` lines. The current conversion can also produce duplicate equal keys internally, despite the normal `dict` rule that keys are unique. If an application needs lossless or canonical handling of repeated headers, it must not use this 0.11 high-level HTTP API.
+Headers are exposed as `dict[str, str]`. That type cannot faithfully hold repeated fields, such as several `set-Cookie` lines. The current conversion can also produce duplicate equal keys internally, despite the normal `dict` rule that keys are unique. If an application needs lossless or canonical handling of repeated headers, it must not use this 0.12 high-level HTTP API.
 
 ## HTTP Client
 
@@ -16238,7 +16456,7 @@ Use the byte request and response APIs for binary payloads or an unknown encodin
 
 Client URLs can use `http://` or `https://`. HTTPS validates the server certificate. Responses can use content-length, chunked transfer encoding, or connection-close framing. The same limits of 16 MiB per incoming message and 64 headers apply.
 
-The high-level HTTP helpers in 0.11 do not follow redirects, pool connections, speak HTTP/2, use proxies, decompress bodies, or take a custom-CA argument.
+The high-level HTTP helpers in 0.12 do not follow redirects, pool connections, speak HTTP/2, use proxies, decompress bodies, or take a custom-CA argument.
 
 ## WebSocket
 
@@ -16433,7 +16651,7 @@ These are absent: redirects, connection pooling, HTTP/2, proxies, decompression,
 
 ## Status
 
-Aura 0.11 implements the constructors, protocols, resources, typed errors, timeouts, cancellation behavior, scheduler integration, cleanup rules, and caps on this page.
+Aura 0.12 implements the constructors, protocols, resources, typed errors, timeouts, cancellation behavior, scheduler integration, cleanup rules, and caps on this page.
 
 Nonblocking descriptors stay registered with the runtime's persistent reactor, the event loop that watches for socket readiness, across scheduler turns. Timeout deadlines share the reactor's timer heap. An idle scheduler blocks until a descriptor is ready, another runtime event arrives, or the next deadline passes. It uses no periodic tick.
 
@@ -16695,7 +16913,7 @@ diagnostics. The bundled VS Code extension uses that compiler-owned surface.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.11 Arrays are CPU-only, contiguous, row-major, and have rank one or
+Aura 0.12 Arrays are CPU-only, contiguous, row-major, and have rank one or
 more. They do not have:
 
 - array-shape broadcasting or mixed promotion
@@ -17612,7 +17830,7 @@ Each dependency entry chooses exactly one source:
 
 Registry forms are not implemented. These include string-valued version
 dependencies such as `util = "1.2.0"` and detailed `version =` dependencies.
-Aura 0.11 has no registry resolution, publish, or install flow.
+Aura 0.12 has no registry resolution, publish, or install flow.
 
 The dependency key is not a free alias. It must exactly match the resolved
 dependency's `[package].name`, so the manifest name and the import root are
@@ -17641,7 +17859,7 @@ rules:
 - every package has a readable `src/` directory and a valid package manifest
 
 Two different paths cannot claim the same package name. The graph limits are
-observable Aura 0.11 limits. Raising them requires matching reference and
+observable Aura 0.12 limits. Raising them requires matching reference and
 conformance changes.
 
 ## Workspaces
@@ -17959,7 +18177,7 @@ No package semantics on this page are provisional.
 
 Registry resolution, publishing, installation, alternative source roots,
 workspace globs, wildcard or relative imports, implicit re-exports, and
-import-time initialization are outside the Aura 0.11 language contract.
+import-time initialization are outside the Aura 0.12 language contract.
 
 ## Source: docs/manual/performance.md
 
@@ -18155,7 +18373,7 @@ diagnostic-grade.
 | `dict_build_get`: 20,000 `str` keys, 200,000 `get` calls | 18.47 s | 0.31 s | 0.032 s |
 | `set_insert_contains`: 20,000 inserts, 200,000 `in` tests | 24.69 s | 0.038 s | 0.008 s |
 | `int_list_sum`: `for` over 100,000 `int64` values, 20 times | 1.96 s | 0.048 s | 0.048 s |
-| `string_list_scan`: 10,000 `str` compared, 100 times | 1.60 s | 0.11 s | 0.018 s |
+| `string_list_scan`: 10,000 `str` compared, 100 times | 1.60 s | 0.110 s | 0.018 s |
 | `record_field_reads`: `doc.get("age")` on 5,000 dicts, 20 times | 0.80 s | 0.15 s | 0.007 s |
 
 Before is `5f68c34`. After is the Batch 7a runtime changes. The programs live
@@ -18464,6 +18682,20 @@ seconds here instead of 20.9 and `regex_match` 7.4x instead of 8.6x.
 ran 26% faster, `json_roundtrip` 21%, and `template_render` 18%. Aura
 is still slower than Python on `csv_aggregate`, `docdb`, `file_io`,
 `json_roundtrip`, and `template_render`.
+
+Aura 0.12.0 is a language release with no performance work. Measured
+against the published 0.11.0 archive on 3 November 2026, both compilers
+execute the same instructions on every program, within 0.1% (`task_pool`
+1.6% fewer), 88.3 billion in all at the bench size. Wall times, in the
+same two passes on a busier container, are within run-to-run spread:
+
+| Measure | Aura 0.11.0 | Aura 0.12.0 |
+| --- | ---: | ---: |
+| All 30 programs, wall time | 19.7 s | 19.9 s |
+| Median Aura / Rust, wall time | 3.7x | 3.8x |
+| Median Aura / Python 3.13, wall time | 0.45x | 0.46x |
+| Programs faster than Python | 24 | 24 |
+| Programs above 8x Rust | 0 | 0 |
 
 ### Per-Call Attribution
 
@@ -20166,7 +20398,7 @@ The host determines executable discovery, path syntax, the inherited environment
 
 ## Status
 
-Aura 0.11 implements one-shot execution, live children, standard-I/O configuration, pipes, completed output, status checking, supervisor restarts and events, typed failures, and Unix process-group cleanup. The fixed stream cap is an accepted design decision. So is the policy for omitted timeouts and invalid host timers.
+Aura 0.12 implements one-shot execution, live children, standard-I/O configuration, pipes, completed output, status checking, supervisor restarts and events, typed failures, and Unix process-group cleanup. The fixed stream cap is an accepted design decision. So is the policy for omitted timeouts and invalid host timers.
 
 These are not available: shell evaluation, pipelines, pseudo-terminals, Windows process groups, portable signal control, sandboxing, and operating-system service management. The current API does not provide any of them implicitly.
 
@@ -20413,13 +20645,13 @@ The secure byte count is an `int64`, but each request is capped at `2147483647`.
 
 The operating system chooses the secure entropy implementation and the actual values returned. Secure calls have no deterministic ordering across calls, tasks, backends, processes, or hosts.
 
-The deterministic algorithm and seeded results are not implementation-defined. They stay fixed, as specified above, throughout the Aura 0.3.x, 0.4.x, 0.5.x, 0.6.x, 0.7.x, 0.8.x, 0.9.x, 0.10.x, and 0.11.x series. They are unsuitable for cryptography even when the seed is secret.
+The deterministic algorithm and seeded results are not implementation-defined. They stay fixed, as specified above, throughout the Aura 0.3.x, 0.4.x, 0.5.x, 0.6.x, 0.7.x, 0.8.x, 0.9.x, 0.10.x, 0.11.x, and 0.12.x series. They are unsuitable for cryptography even when the seed is secret.
 
 ## Status
 
-The constructor, deterministic methods, secure functions, move-only ownership, backend parity, and the diagnostics on this page are maintained Aura 0.11 API. The exact algorithm, mapping, compatibility window, identity and rendering policy, and secure-failure boundary are accepted design decisions.
+The constructor, deterministic methods, secure functions, move-only ownership, backend parity, and the diagnostics on this page are maintained Aura 0.12 API. The exact algorithm, mapping, compatibility window, identity and rendering policy, and secure-failure boundary are accepted design decisions.
 
-Aura 0.11 has no other random distributions, no secure float function, no global generator, no derived sampling trait, and no `random.Error` type.
+Aura 0.12 has no other random distributions, no secure float function, no global generator, no derived sampling trait, and no `random.Error` type.
 
 Design records: [ADR-0020: Randomness algorithm and security boundary](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0020-randomness-algorithm-and-security-boundary.md) and [ADR-0033: Structural Transfer and task-result consumption](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0033-structural-transfer-and-task-results.md).
 
@@ -20431,7 +20663,7 @@ Statements introduce and update bindings, control execution, or evaluate an expr
 
 ## Statements, Items, And Suites
 
-Aura 0.11 has these statements:
+Aura 0.12 has these statements:
 
 - binding and assignment
 - local `view` bindings
@@ -20666,7 +20898,7 @@ def main():
         attempts += 1
 ```
 
-The condition must have type `bool`. If the condition is false the first time, the body runs zero times. Aura 0.11 has no loop `else` clause.
+The condition must have type `bool`. If the condition is false the first time, the body runs zero times. Aura 0.12 has no loop `else` clause.
 
 A `while` condition that tests a union place with `is None` or `is not None` narrows the place inside the body. A `continue` in the body after such a test narrows the rest of that iteration. The condition runs before every iteration, so its narrowing holds in the body on every pass. This is true even when the body assigns the place later.
 
@@ -20713,6 +20945,7 @@ Maintained iterable forms include:
 | `for left, right in zip(first, second):` | Yields one pair per shared position and stops at the shorter sequence. |
 | `for value in iterator:` | Consumes an `iter.Iterator[T]` implementation and yields each owned item. |
 | `for value in mut iterator:` | Borrows a mutable `iter.Iterator[T]` place and yields each owned item, leaving the iterator usable afterwards. |
+| `for value in source:` | Consumes an `iter.IntoIterator[T]` implementation through `source.into_iter()` and yields each owned item. |
 
 `for value in mut set:` is not supported in Aura 0.3.
 
@@ -20796,8 +21029,138 @@ def main():
 - `Step` is an ordinary generic enum, so code may also call `next` and
   `match` its result directly.
 
-Comprehensions, `enumerate`, and `zip` do not take iterator sources yet, and
-loop clauses (`invariant`) on an iterator loop report `AU2048` for now.
+- `invariant` clauses on an iterator loop are checked once per item, after
+  the target is bound.
+- `Iterator[T]` also provides `collect(own self) -> list[T]`, which drains
+  the iterator into a list.
+
+`for` loops over `enumerate(iterator)` and `zip(first, second)` with two
+iterators stay lazy: each iteration calls `next` on each operand in order,
+and the loop ends at the first `Step.End`. So an endless iterator may be
+zipped with a finite one. `enumerate` counts from `start` as it does over a
+list, and each item arrives owned. `zip` of a list or set with an iterator
+reports `AU2002`; zip two iterators, or call `.collect()` on the iterator to
+zip two lists.
+
+```aura
+from iter import Generator
+
+def naturals() -> Generator[int64]:
+    mut n = 0
+    while true:
+        yield n
+        n += 1
+
+def words() -> Generator[str]:
+    yield "ant"
+    yield "bee"
+
+def main():
+    for n, w in zip(naturals(), words()):
+        print(f"{n} {w}")  # 0 ant, then 1 bee
+    for i, w in enumerate(words(), start=1):
+        print(f"{i}: {w}")  # 1: ant, then 2: bee
+```
+
+A comprehension builds its whole result at once, so an iterator source,
+including an `enumerate` or `zip` operand, is collected into a list first,
+as if written `source.collect()`. The clause then reads the list's elements
+as shared values, the same as a list source, so a non-copy element that the
+result stores needs `.clone()`:
+
+```aura fragment
+print([len(w) for w in words()])  # [3, 3]
+print({w.clone(): i for i, w in enumerate(words())})  # {ant: 0, bee: 1}
+```
+
+An endless iterator in a comprehension never finishes collecting.
+
+### Values That Turn Into Iterators
+
+A type that is not an iterator itself can still be a loop source by
+implementing `IntoIterator[T]` from the `iter` module. Its associated type
+`Iter` names the iterator that `into_iter` returns:
+
+```aura
+from iter import Generator, IntoIterator
+
+class Bag:
+    items: list[str]
+
+def walk(items: own list[str]) -> Generator[str]:
+    for item in items:
+        yield item.clone()
+
+impl IntoIterator[str] for Bag:
+    type Iter = Generator[str]
+
+    def into_iter(own self) -> Self.Iter:
+        return walk(self.items)
+
+def main():
+    for word in Bag(items=["ant", "bee"]):
+        print(word)  # ant, then bee
+```
+
+- `for x in source:` over such a value means
+  `for x in source.into_iter():`, so the loop consumes the source. The
+  same holds for a comprehension clause and each operand of `enumerate` and
+  `zip`.
+- `for x in mut source:` and `for x in own source:` report `AU3004`.
+- A type that implements `Iterator[T]` is iterated as an iterator even if it
+  also implements `IntoIterator[T]`.
+- [Associated Types](/manual/generics-and-traits#associated-types) covers
+  `type` lines in traits and implementations.
+
+### Generator Functions
+
+A function whose body contains a `yield` statement is a generator function.
+Its declared result must be `Generator[T]` from the `iter` module, and each
+`yield value` hands one `T` to the caller. `Generator[T]` implements
+`Iterator[T]`, so a `for` loop takes it like any other iterator:
+
+```aura
+from iter import Generator
+
+def countdown(n: int64) -> Generator[int64]:
+    mut i = n
+    while i > 0:
+        yield i
+        i -= 1
+
+def main():
+    for x in countdown(3):
+        print(x)  # 3, then 2, then 1
+```
+
+- Calling a generator function runs none of its body. The first `next`
+  starts it, and it runs until the next `yield`, a bare `return`, or the end
+  of the body. A finished generator returns `Step.End` from every later
+  `next`.
+- `return value` reports `AU2049`; a bare `return` ends the generator. So
+  does a `yield` outside a module-level generator function (in a method or
+  in top-level statements), a `yield` with no value, and a result type that
+  is not `Generator[T]`. A `yield` whose value is not a `T` reports
+  `AU2002`.
+- The body runs after the call returns, so it cannot borrow the caller's
+  values. A parameter that is not a copy type must be `own` (`AU3002`), and
+  a `mut` parameter reports `AU2049`.
+- `close(mut self)` stops a generator. If the body is waiting at a `yield`,
+  that `yield` ends the body as a bare `return` would, so its `with` exits
+  run once, in reverse order. Closing a generator that has not started or
+  has finished does nothing, and `next` returns `Step.End` afterwards.
+- A generator that is dropped while waiting at a `yield` is closed no later
+  than the return of the function that owned it. Call `close()` when the
+  exits must run at a particular point.
+- A trap in the body is a trap of the task that called `next`. The call
+  chain names the generator function, then the caller.
+- `Generator[T]` cannot be copied or cloned, and it is not Transfer: it runs
+  only on the task that created it (`AU3008`).
+
+- The body may wait like any task code: a `Queue` receive, a `sleep`, or
+  file I/O suspends the task that called `next` until the wait ends, and
+  cancelling that task wakes the wait as it would wake one in the task's own
+  code.
 
 ### Range Iteration
 
@@ -21176,9 +21539,9 @@ This page states the rules that cut across the language. The chapters on individ
 
 ## Types And Type Equality
 
-Aura 0.11 has no general subtype relation and no implicit numeric widening. Types match by these rules:
+Aura 0.12 has no general subtype relation and no implicit numeric widening. Types match by these rules:
 
-- **Nominal types** match when their canonical names are equal and all type arguments are equal, recursively. Aura 0.11 primarily uses nominal types, and generic arguments are invariant.
+- **Nominal types** match when their canonical names are equal and all type arguments are equal, recursively. Aura 0.12 primarily uses nominal types, and generic arguments are invariant.
 - **Tuple types** are structural. Two tuple types match exactly when they have the same arity and every corresponding element type matches, recursively.
 
 Examples:
@@ -21355,7 +21718,7 @@ integer `/` is not supported; use `//` for floor division, or call `.to_float()`
 
 Operands are not implicitly widened. An integer literal may be contextually typed to match an integer operand. It may also match a `float32` or `float64` operand when the literal is exactly representable in that floating type. A floating literal may adopt the other operand's floating type. Non-literal values need an explicit numeric cast or an integer `.to_float()` conversion.
 
-**Operator traits.** Arithmetic and ordering operators may otherwise resolve through the corresponding `Add`, `Sub`, `Mul`, `Div`, `FloorDiv`, `Mod`, or `Ord` trait method. The builtin numeric and Duration rules take precedence over operator-trait dispatch. In Aura 0.11, builtin equality does not dispatch through an operator trait. Bitwise operations, shifts, and power are builtin numeric operations and do not dispatch through operator traits either.
+**Operator traits.** Arithmetic and ordering operators may otherwise resolve through the corresponding `Add`, `Sub`, `Mul`, `Div`, `FloorDiv`, `Mod`, or `Ord` trait method. The builtin numeric and Duration rules take precedence over operator-trait dispatch. In Aura 0.12, builtin equality does not dispatch through an operator trait. Bitwise operations, shifts, and power are builtin numeric operations and do not dispatch through operator traits either.
 
 **Integer power** requires a non-negative exponent. A negative exponent visible in source is `AU2003`. A negative value discovered only during execution is a runtime failure.
 
@@ -21663,7 +22026,7 @@ The local `main` takes no parameters and returns `None` or `int32`. An imported 
 
 # Status And Compatibility
 
-Aura 0.11.0 is a technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments. It is not a production systems-language release, and it is not a security boundary for untrusted programs.
+Aura 0.12.0 is a technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments. It is not a production systems-language release, and it is not a security boundary for untrusted programs.
 
 This page states what the maintained language contract is, which surface it currently covers, and how that surface may change.
 
@@ -21788,11 +22151,11 @@ The Manual is reference-frozen. Every semantic change, including any extension, 
 
 Compiler coverage is held at the current non-regression floor, not pushed to 100%. New behavior still requires focused tests. The freeze only ends marginal coverage work that does not reduce product risk.
 
-Seeded randomness has an extra observable-data promise. The algorithm, seed mapping, integer and floating mappings, and shuffle order documented in [Randomness Module](/manual/randomness) stay stable throughout Aura 0.3.x, 0.4.x, 0.5.x, 0.6.x, 0.7.x, 0.8.x, 0.9.x, 0.10.x, and 0.11.x. A later release may change them only with an explicit decision and new conformance vectors. OS-secure outputs are intentionally not stable.
+Seeded randomness has an extra observable-data promise. The algorithm, seed mapping, integer and floating mappings, and shuffle order documented in [Randomness Module](/manual/randomness) stay stable throughout Aura 0.3.x, 0.4.x, 0.5.x, 0.6.x, 0.7.x, 0.8.x, 0.9.x, 0.10.x, 0.11.x, and 0.12.x. A later release may change them only with an explicit decision and new conformance vectors. OS-secure outputs are intentionally not stable.
 
 ## Maintained Concurrency Surface
 
-Aura 0.11 uses structured concurrency:
+Aura 0.12 uses structured concurrency:
 
 - `TaskGroup()` owns child tasks inside `with`.
 - `TaskGroup.start(...)` returns a `Task[T]`.
@@ -21810,9 +22173,9 @@ There is no `Channel`, statement-form `select`, bare `spawn`, or detached task. 
 Task bodies run on pinned cooperative scheduler workers on both maintained backends.
 
 - The default worker count is the available parallelism reported by the host. The provisional `AURA_WORKERS=<positive integer>` override selects an explicit count.
-- A child receives a stable worker assignment when it is spawned. Its coroutine stack never migrates, and work is not stolen.
+- A child starts on its parent's worker, and an idle worker may steal it before it first runs. Once a task runs, its coroutine stack never migrates.
 - `yield_now()` yields only to runnable work on the same worker.
-- Compiler-inserted checks on every loop backedge keep a tight loop from starving ready timers, Queue operations, and sockets on the same worker indefinitely. Ordinary loop tails and `continue` take part. `break` and `return` bypass the backedge.
+- Compiler-inserted checks on every loop backedge keep a tight loop from starving ready timers, Queue operations, and sockets on the same worker indefinitely. Ordinary loop tails and `continue` take part. `break` and `return` bypass the backedge. The entry of every function on a call cycle carries the same check, so deep recursion with no loop yields too.
 - The checks do not inspect cancellation. One long loop body can still delay same-worker siblings.
 - Ordinary tasks request a guarded 768 KiB coroutine stack. Explicit requests may go up to 64 MiB.
 - Waits use persistent descriptor registrations, heap-managed deadlines, and direct Queue, task-completion, and blocking-pool notifications. An idle worker blocks until work, an event, or a deadline, with no periodic tick.
@@ -22082,7 +22445,7 @@ Maintained parity fixtures require both backends to produce the same output and 
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.11 does not have these tuple features:
+Aura 0.12 does not have these tuple features:
 
 - an empty tuple
 - tuple iteration
@@ -22228,7 +22591,7 @@ At those positions, values of type `int8`, `int16`, `int32`, `uint8`, `uint16`, 
 
 Literal lexing first requires a finite binary64 value. Contextual `float32` conversion may then round or overflow, as recorded in [Current Limits](/manual/current-limits).
 
-Runtime operations may produce NaN. In Aura 0.11, `/`, `//`, or `%` by a floating zero is an explicit runtime failure. Those operators never produce infinity or NaN.
+Runtime operations may produce NaN. In Aura 0.12, `/`, `//`, or `%` by a floating zero is an explicit runtime failure. Those operators never produce infinity or NaN.
 
 ### Duration And Range
 
@@ -22704,6 +23067,233 @@ Design records:
 - `architecture_docs/decisions/0026-minimal-tuples.md`: structural tuple types and tuple equality.
 - `architecture_docs/decisions/0033-structural-transfer-and-task-results.md`: Transfer classification and conditional `Task[T]` copies.
 
+## Source: docs/manual/verification.md
+
+# Verification
+
+`aura verify` proves, before a program runs, that its checks cannot fail.
+It reads the same [contracts](/manual/contracts) that `aura run` checks at
+run time, and it also proves that no integer overflows, no divisor is zero,
+and no list index is out of range. Each check it cannot prove is reported
+with the inputs that break it.
+
+```bash
+aura verify bank.au
+```
+
+`aura verify` needs an SMT solver: [Z3](https://github.com/Z3Prover/z3) or
+[cvc5](https://cvc5.github.io/). It runs the solver as a separate program, so
+nothing is added to the compiler or to built programs. Install one with your
+package manager (`brew install z3`, `apt install z3`, or
+`pip install z3-solver`), or with `scripts/install-z3.sh` from the Aura
+repository, which installs the version Aura's own tests use.
+
+## What It Proves
+
+`aura verify` proves each of these checks on every path through each
+function:
+
+| Check | Example | Runtime failure it rules out |
+| --- | --- | --- |
+| overflow | `a + b`, `-x`, `abs(x)`, `x as int32` | `AU4002` integer overflow |
+| division by zero | `a // b`, `a % b` | `AU4004` zero divisor |
+| index in range | `xs[i]`, `xs[i] = v`, `xs.pop()` | `AU4003` index out of range |
+| assert | `assert total >= 0` | `AU4001` assertion failed |
+| requires | each call of a function with `requires` | `AU4009` at the call |
+| ensures | each `return` of a function with `ensures` | `AU4009` on return |
+| loop invariant | each loop `invariant` | `AU4009` in the loop |
+| decreases | each `decreases` measure of a loop or a recursive function | `AU4009` in the loop or at the recursive call |
+| class invariant | constructions and calls of public `mut self` methods | `AU4009` at the check |
+
+A function is proved on its own. A call relies only on what its callee
+declares: the verifier proves the callee's `requires` at the call, and then
+assumes its `ensures`. A call through a trait, on a value whose type is a
+type parameter, relies on the trait method's contract, which every
+implementation is proved to keep. A call of a `lemma def` relies on the
+lemma's `ensures` the same way; see
+[Lemmas](/manual/contracts#lemmas). Nothing else about the callee's body is used, so
+what a caller needs to know must be in the contract.
+
+```aura
+def clamp(x: int64, lo: int64, hi: int64) -> int64:
+    requires lo <= hi
+    ensures lo <= result and result <= hi
+    if x < lo:
+        return lo
+    if x > hi:
+        return hi
+    return x
+
+def percent(x: int64) -> int64:
+    p = clamp(x, 0, 100)
+    return p * 1000  # proved: p is at most 100
+
+def main():
+    print(percent(250))  # 100000
+```
+
+Inside a function, its own `requires` clauses are assumed, since every call
+proves them.
+
+## Loops
+
+A loop is proved one iteration at a time. On entering the loop, the verifier
+forgets the value of every local the loop body assigns, and keeps only what
+the loop's `invariant` clauses say about them. It proves each invariant on
+entry and after every iteration, and the code after the loop learns only
+the invariants and the condition that ended the loop.
+
+```aura
+def sum_to(n: int64) -> int64:
+    requires 0 <= n and n <= 1000
+    mut i = 0
+    mut total = 0
+    while i < n:
+        invariant 0 <= i and i <= n
+        invariant 0 <= total and total <= i * 1000
+        total += i
+        i += 1
+    return total
+
+def main():
+    print(sum_to(10))  # 45
+```
+
+Without the second invariant, `total += i` cannot be proved: nothing would
+bound `total` in a later iteration. Two facts need no invariant: a local the
+loop never assigns keeps its value, and a counter the loop only steps up
+(`i += 1`) or only steps down stays on its side of its entry value. That
+covers indexes such as `for i in range(len(xs))` and `while i < len(xs)`.
+
+A `decreases` measure is proved to stay at least 0 and to get smaller in
+every iteration, which proves that the loop ends. On a function, it is
+proved to be at least 0 on entry and smaller at every call the function
+makes to itself, which proves that the recursion ends:
+
+```aura
+def gcd(a: int64, b: int64) -> int64:
+    requires a >= 0 and b >= 0
+    decreases b
+    ensures result >= 0
+    if b == 0:
+        return a
+    return gcd(b, a % b)
+```
+
+## Reports
+
+`aura verify` prints a diagnostic for each check it could not prove, then a
+summary line. It exits with status 0 only when every check was proved.
+
+```text
+error[AU5101]: cannot prove integer result in range
+ --> scale.au:2:12
+  |
+2 |     return x * 2
+  |            ^
+  = note: in `double` (overflow check)
+  = note: counterexample: x = 4611686018427387904
+verified scale.au: 0 of 1 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+| Code | Meaning |
+| --- | --- |
+| `AU5101` | The check can fail. The counterexample gives parameter values that make it fail, as far as the solver reports them. |
+| `AU5102` | The solver gave up before deciding. Raise `--timeout`, or add a `requires`, `invariant`, or `assert` that narrows the case. |
+| `AU5103` | No solver could be started. |
+| `AU5104` | The check depends on something the verifier does not model yet, such as floating-point arithmetic. It is not proved, and it stays a runtime check. |
+
+A check that fails to prove is not always a bug: the verifier may lack a
+fact that holds. Add it as a `requires` on the function, an `invariant` on
+the loop, or an `ensures` on the callee, and the verifier proves the fact
+where it is stated and uses it where it is needed.
+
+### Options
+
+| Option | Meaning |
+| --- | --- |
+| `--solver <path>` | The solver to run. The default is `AURA_SMT_SOLVER` when it is set, else `z3`, else `cvc5`, found on `PATH`. |
+| `--timeout <ms>` | The time limit for each check. The default is 10000. |
+| `--function <name>` | Verify only the functions whose name contains `name`. |
+| `--no-cache` | Solve every check again, without the proof cache. |
+| `--format json` | Print the report as JSON: one entry for each check, with its kind, function, line, column, message, and status (`proved`, `failed`, `unknown`, or `unsupported`), then the diagnostics. |
+
+### Proof Cache
+
+`aura verify` keeps each function's results in a proof cache, under
+`verify` in `AURA_CACHE_DIR` when it is set, or else in
+`~/.cache/aura/verify`. A function whose checks, the facts they rely on,
+the solver version, and the time limit are all unchanged is answered from
+the cache without starting the solver, so verifying again after a small
+edit solves only what the edit touched. The summary line says how many
+functions the cache answered. A check the solver gave up on is never
+cached.
+
+## What It Models
+
+The verifier reasons about values exactly, as mathematical integers and
+booleans, with each integer type's range as a check:
+
+- integers of every width, `bool`, and `None`
+- lists of integers and of `bool`, with their lengths and elements, and the
+  length of any other list
+- tuples, classes, enums, and unions such as `int64 | None`, field by field
+- `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
+  element reads and writes, and `copy`
+- `spec def` helpers, `old`, and `result` in contracts
+- quantifiers: `forall(x in xs, condition)`, `exists(...)`, and
+  `all([... for ...])` or `any(...)` with one `for` clause over a `range` or
+  a list of integers or `bool`, with `if` filters, in any contract, `assert`,
+  or loop `invariant`
+
+Anything else is a value the verifier knows nothing about: a `str`, a
+`dict`, a `set`, a float, the result of most library calls, and what a call
+through a function value returns. A check that depends on one of them can
+still be proved when the contract around it says enough.
+
+A loop that builds a list proves what it builds with a quantified
+invariant:
+
+```aura
+def squares(n: int64) -> list[int64]:
+    requires 0 <= n and n <= 1000
+    ensures len(result) == n
+    ensures forall(i in range(n), result[i] == i * i)
+    mut out: list[int64] = []
+    mut i = 0
+    while i < n:
+        invariant 0 <= i and i <= n
+        invariant len(out) == i
+        invariant forall(j in range(i), out[j] == j * j)
+        out.append(i * i)
+        i += 1
+    return out
+```
+
+A quantifier over several `for` clauses, over a tuple target, or over a list
+of other elements is reported as `AU5104`. `str`, `dict`, and `set` models
+are planned. See the
+[verification design](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/23-verification-design-checkpoint.md).
+
+## Trust
+
+A check counts as proved only when the solver answers that no input breaks
+it. `aura verify` itself removes nothing: every check stays in the program.
+
+`aura build --remove-proved-checks` builds a native binary without the list
+bounds checks of element reads and element borrows (`view x = xs[i]`) that
+the verifier proves can never fail, and prints how many it removed. It runs
+the verifier first, so it needs a solver, and it uses the proof cache. A read
+is left unchecked only when its index is proved to be in range and not
+negative on every path that reaches it, since an unchecked read does not
+count from the end of the list. Every other check stays, and a `--debug`
+build keeps every check.
+
+Removing a check moves the verifier and the solver into what the program
+trusts: a wrong proof would turn a trap into an out-of-bounds read. So the
+flag is off by default for now. It becomes the default for release builds
+once differential testing of such builds against the interpreter covers it.
+
 ## Source: docs/book/index.md
 
 # The Aura Programming Language
@@ -22717,7 +23307,7 @@ checks that every failure your code can meet is handled somewhere. Then it
 either runs the program straight away or compiles it to a native executable
 with no runtime to install alongside it.
 
-The book follows Aura 0.11, a technical preview. Most of the language is in
+The book follows Aura 0.12, a technical preview. Most of the language is in
 place and stable enough to learn from, and the places where it is still
 moving are called out where we meet them.
 
@@ -22922,7 +23512,7 @@ together with a small native runtime that it links into the programs you
 build. There is no separate interpreter, package manager, or language server
 to install: the one `aura` binary does all of those jobs.
 
-Aura 0.11 is a technical preview, and the set of platforms it ships for is
+Aura 0.12 is a technical preview, and the set of platforms it ships for is
 small. Release archives exist for these hosts:
 
 | Platform | Release archive |
@@ -23028,9 +23618,9 @@ Open a new terminal and ask `aura` for its version:
 $ aura --version
 ```
 
-A release build prints a line that starts with `aura 0.11.0-preview`,
+A release build prints a line that starts with `aura 0.12.0-preview`,
 followed by the source commit it was built from in parentheses. If you built
-Aura yourself, the line starts with `aura 0.11.0-dev` instead. Either way, if
+Aura yourself, the line starts with `aura 0.12.0-dev` instead. Either way, if
 you see a version, you are ready to go. `aura help` lists every command the
 tool understands; we will meet the important ones over the next two sections.
 
@@ -35024,7 +35614,8 @@ We'll build a generic stack and a `largest` function that first refuses to
 compile, then use traits to describe priced items in a small shop and fix
 `largest` along the way. By the end you'll be able to write generic code,
 define and implement traits, give your own types operators and custom printing,
-and convert between types deliberately.
+convert between types deliberately, and make `for` loops work over your own
+types with iterators and generators.
 
 ## Source: docs/book/ch10-01-generics.md
 
@@ -36353,9 +36944,307 @@ because a list of strings says nothing about which type to parse into. As with
 `parse_all[int64]` is rejected until someone writes `impl Parse for int64`.
 
 Calling an associated method through a type parameter has a few restrictions in
-Aura 0.11. The call has to be in a module-level function, not in a method, and
+Aura 0.12. The call has to be in a module-level function, not in a method, and
 a function that makes it can't be started directly as a task. The
 [Manual](/manual/generics-and-traits) lists them.
+
+Conversions are the last tool for making your own types fit in with the rest
+of the language. The next section covers the other one: making a `for` loop
+work over them.
+
+## Source: docs/book/ch10-04-iterators-and-generators.md
+
+# Iterators and generators
+
+A `for` loop over a list walks values that already exist. Sometimes the values
+don't exist yet. They might come from a file read a line at a time, from a
+counter that never stops, or from a calculation you'd rather not run for items
+nobody asks for. Python handles this with iterators and generators, and Aura
+does too. The difference is that Aura writes the protocol down as a trait, so
+the checker knows exactly what a loop over your type will do.
+
+## The `Iterator` trait
+
+The builtin `iter` module defines two things a loop needs. `Step[T]` is the
+answer to "what's next?": either `Item(value)` or `End`. `Iterator[T]` is the
+trait with one method, `next(mut self) -> Step[T]`. Any type that implements
+it can sit after `in`:
+
+```aura
+from iter import Iterator, Step
+
+class Countdown:
+    n: int64
+
+impl Iterator[int64] for Countdown:
+    def next(mut self) -> Step[int64]:
+        if self.n == 0:
+            return Step.End
+        self.n -= 1
+        return Step.Item(self.n + 1)
+
+def main():
+    for x in Countdown(n=3):
+        print(x)
+```
+
+```console
+$ aura run countdown.au
+3
+2
+1
+```
+
+`next` takes `mut self` because it changes the iterator: each call moves the
+countdown one step. The loop calls `next` until it gets `End`, binds each
+`Item` value to `x`, and runs the body. It also consumes the `Countdown`. Once
+the loop has used the iterator up there's nothing sensible left to do with it,
+so Aura doesn't let you try.
+
+Sometimes you do want the iterator afterwards, for example to read a header
+and then keep going with the rest. Write `for x in mut source:` and the loop
+borrows the iterator instead of consuming it:
+
+```aura
+from iter import Iterator, Step
+
+class Countdown:
+    n: int64
+
+impl Iterator[int64] for Countdown:
+    def next(mut self) -> Step[int64]:
+        if self.n == 0:
+            return Step.End
+        self.n -= 1
+        return Step.Item(self.n + 1)
+
+def main():
+    mut countdown = Countdown(n=5)
+    for first in mut countdown:
+        print(f"first: {first}")
+        break
+    for rest in countdown:
+        print(rest)
+```
+
+```console
+$ aura run header.au
+first: 5
+4
+3
+2
+1
+```
+
+The first loop stops after one item, and the second loop picks up where the
+first left off, because both loops advance the same `countdown`.
+
+## Generators
+
+Writing a class and an `impl` for every sequence gets tedious, and the state
+gets awkward fast. The countdown only needed one number, but a sequence that
+walks a tree or pairs up lines from two files has to remember where it was
+between calls, so you end up writing the loop inside out.
+
+A *generator function* lets you write the loop the right way round. Declare
+the result as `Generator[T]` and use `yield` to hand each value back:
+
+```aura
+from iter import Generator
+
+def evens(limit: int64) -> Generator[int64]:
+    mut n = 0
+    while n < limit:
+        yield n
+        n += 2
+
+def main():
+    for x in evens(7):
+        print(x)
+```
+
+```console
+$ aura run evens.au
+0
+2
+4
+6
+```
+
+Calling `evens(7)` doesn't run any of its body. It returns a generator, and
+each time the loop asks for the next item, the body runs until it reaches the
+next `yield`, hands over `n`, and pauses there with its local variables
+intact. When the body finishes, the loop gets `End`. `Generator[T]` implements
+`Iterator[T]`, so everything in the previous section works on it, including
+`for x in mut gen:`.
+
+Because nothing runs until it's asked for, a generator can describe a sequence
+that never ends. Let's number some words by zipping an endless counter with a
+list:
+
+```aura check-fail:AU2002
+from iter import Generator
+
+def naturals() -> Generator[int64]:
+    mut n = 0
+    while true:
+        yield n
+        n += 1
+
+def main():
+    for index, word in zip(naturals(), ["ant", "bee", "cat"]):
+        print(f"{index}: {word}")
+```
+
+```console
+$ aura run zip.au
+error[AU2002]: `zip` cannot pair a collection with an iterator
+```
+
+That doesn't compile, and the reason is worth a moment. `zip` of two lists pairs elements by position, and `zip` of two iterators
+pulls one item from each, so mixing the two would quietly mean one or the
+other. Aura makes you choose. Here we want the lazy kind, so we give `zip` two
+iterators. A list becomes an iterator through a small generator, and
+`enumerate` would also do the job:
+
+```aura
+from iter import Generator
+
+def naturals() -> Generator[int64]:
+    mut n = 0
+    while true:
+        yield n
+        n += 1
+
+def each(words: own list[str]) -> Generator[str]:
+    for word in words:
+        yield word.clone()
+
+def main():
+    for index, word in zip(naturals(), each(["ant", "bee", "cat"])):
+        print(f"{index}: {word}")
+```
+
+```console
+$ aura run zip.au
+0: ant
+1: bee
+2: cat
+```
+
+`zip` stops at the shorter source, so the endless `naturals()` is asked for
+exactly three numbers.
+
+There's one rule about generator parameters that surprises people coming from
+Python. The body runs after the call has returned, so it can't hold a borrow
+of the caller's values. A parameter that isn't a copy type has to be `own`, as
+`words` is in `each` above. Forget it and the checker tells you:
+
+```aura check-fail:AU3002
+from iter import Generator
+
+def each(words: list[str]) -> Generator[str]:
+    for word in words:
+        yield word.clone()
+
+def main():
+    for word in each(["ant"]):
+        print(word)
+```
+
+## Comprehensions, `collect`, and cleanup
+
+A comprehension can take an iterator too. It builds the whole result at once,
+so it collects the iterator into a list first, and `Iterator[T]` gives you that
+step directly as `collect()`:
+
+```aura
+from iter import Generator
+
+def evens(limit: int64) -> Generator[int64]:
+    mut n = 0
+    while n < limit:
+        yield n
+        n += 2
+
+def main():
+    print([x * x for x in evens(7)])
+    print(evens(5).collect())
+```
+
+```console
+$ aura run collect.au
+[0, 4, 16, 36]
+[0, 2, 4]
+```
+
+A generator that is paused at a `yield` might be holding a file open inside a
+`with` block. If the loop stops early, the generator is closed: its paused
+`yield` returns as a bare `return` would, so its `with` exits run once, in the
+usual order. You can also call `close()` yourself when the cleanup should
+happen at a particular point.
+
+## Making your own types iterable
+
+`Countdown` was an iterator itself. More often you have a container, like a
+playlist, and you want `for song in playlist:` to work without the playlist
+having to keep track of a position. The `IntoIterator[T]` trait covers that
+case. Its implementation says which iterator the value turns into, through an
+*associated type* called `Iter`, and `into_iter` builds one:
+
+```aura
+from iter import Generator, IntoIterator
+
+class Playlist:
+    songs: list[str]
+
+def play(songs: own list[str]) -> Generator[str]:
+    for song in songs:
+        yield song.clone()
+
+impl IntoIterator[str] for Playlist:
+    type Iter = Generator[str]
+
+    def into_iter(own self) -> Self.Iter:
+        return play(self.songs)
+
+def main():
+    playlist = Playlist(songs=["Intro", "Theme", "Outro"])
+    for song in playlist:
+        print(song)
+```
+
+```console
+$ aura run playlist.au
+Intro
+Theme
+Outro
+```
+
+The `type Iter = Generator[str]` line fixes the associated type, and inside the
+implementation `Self.Iter` means that type. The trait requires `Iter` to be an
+`Iterator[str]`, so the checker rejects an implementation whose `Iter` isn't
+one. A `for` loop over a `Playlist` calls `into_iter()` for you, and so do
+comprehensions, `enumerate`, and `zip`.
+
+A generic function can accept anything a loop can consume by bounding its
+parameter with `IntoIterator`:
+
+```aura
+from iter import IntoIterator
+
+def longest[S: IntoIterator[str]](words: own S) -> str:
+    mut best = ""
+    for word in words:
+        if len(word) > len(best):
+            best = word.clone()
+    return best
+```
+
+`longest(playlist)` works for a `Playlist`, and for any other type with an
+`IntoIterator[str]` implementation. Your own traits can declare associated
+types the same way; the [Manual](/manual/generics-and-traits#associated-types)
+has the details.
 
 ## Summary
 
@@ -36366,13 +37255,19 @@ them: `own T` for values the body keeps, and a trait bound for any method or
 operator it calls. Traits name behavior, implementations promise it explicitly,
 and bounds put the requirement in the signature where callers can read it. A
 few traits connect to the language itself: `Display` controls printing, `Add`,
-`Ord`, and friends give your types operators, and `From` lets `try` convert
-errors.
+`Ord`, and friends give your types operators, `From` lets `try` convert
+errors, and `Iterator` and `IntoIterator` decide what a `for` loop does with
+your types.
 
 Conversions follow the same philosophy of saying what you mean. `as` converts
 numbers exactly or traps, `.to_float()` rounds on purpose, parsing text returns
 a `Result`, and `str()` and f-strings render anything. Nothing converts behind
 your back.
+
+Generators let you write a lazy sequence as an ordinary loop with `yield`.
+Nothing runs until a loop asks for the next item, which makes endless sequences
+safe to zip with finite ones, and a generator that stops early still runs its
+cleanup.
 
 With error handling and generics in hand, you're ready to make sure your code
 does what you think it does. [Chapter 11](/book/ch11-00-testing) introduces
@@ -36401,7 +37296,9 @@ shopping cart, applies discounts, and formats prices. We'll write tests for it,
 watch one of them catch a real bug in code that looks correct, learn to read
 failure output and select which tests run, and then organize a growing test
 suite with shared fixtures, parameterized cases, and machine-readable output
-for CI.
+for CI. Finally we'll add contracts to the discount code and use
+`aura verify` to prove that they hold for every input, not only the ones we
+tested.
 
 ## Source: docs/book/ch11-01-writing-tests.md
 
@@ -37449,6 +38346,225 @@ stopped safely, so its teardown isn't guaranteed to run. A test that times out
 may leave its fixture behind, which is one more reason to keep fixtures in
 files with fixed names that the next setup overwrites.
 
+Tests check the cases you choose. In the next section we'll write down
+what must hold for every case, and have the compiler prove it.
+
+## Source: docs/book/ch11-04-contracts-and-proofs.md
+
+# Contracts and proofs
+
+A test checks the inputs you thought of. When `test_discount` passes, we know
+`apply_discount` works for the carts in that test, and we hope it works for
+the rest. Most of the time that hope is well founded. But the bugs that reach
+production tend to live in exactly the inputs nobody wrote down: a percentage
+above 100, a price near the top of `int64`, an empty list.
+
+Aura lets a function state what it needs and what it promises, as part of
+its signature, and then `aura verify` can prove that those statements hold
+for every input, not only the ones in your tests. In this section we'll add
+contracts to the discount function from `checkout`, watch the verifier find
+inputs that break it, and fix it until every check is proved.
+
+## Stating what a function needs
+
+Here is `apply_discount` with two new kinds of line at the top of its body:
+
+*Filename: src/main.au*
+
+```aura
+def apply_discount(cents: int64, percent: int64) -> int64:
+    requires 0 <= percent and percent <= 100
+    ensures 0 <= result and result <= cents
+    return cents - cents * percent // 100
+
+def main():
+    print(apply_discount(2500, 10))
+    print(apply_discount(2500, 150))
+```
+
+<span class="caption">Listing 11-8: A discount with a `requires` and an `ensures` clause</span>
+
+A `requires` clause is a condition the caller must meet: a percentage from 0
+to 100. An `ensures` clause is a promise the function makes about its
+`result`: the discounted price is never negative and never more than the
+original. Both are ordinary `bool` expressions, and both are checked while
+the program runs, so the second call stops the program at once:
+
+```console
+$ aura run src/main.au
+2250
+error[AU4009]: `requires` clause failed: `0 <= percent and percent <= 100`
+ --> src/main.au:2:14
+  |
+2 |     requires 0 <= percent and percent <= 100
+  |              ^
+  = note: Aura call chain (innermost first): apply_discount at 1:1 -> main at 6:1
+```
+
+That's already better than an `assert` buried in the body, because the
+condition is where every caller and every reader will look for it. The
+details of contracts, including `old()` for values on entry and `spec def`
+helpers, are in the [contracts manual page](/manual/contracts).
+
+## Proving it
+
+A failed `requires` at run time still needs a run that reaches it. Let's ask
+the verifier instead. `aura verify` needs an SMT solver, a program that
+answers logic questions; install Z3 with `brew install z3`, `apt install z3`,
+or `pip install z3-solver`.
+
+```console
+$ aura verify src/main.au
+error[AU5101]: cannot prove `ensures` clause `0 <= result and result <= cents`
+ --> src/main.au:3:13
+  |
+3 |     ensures 0 <= result and result <= cents
+  |             ^
+  = note: in `apply_discount` (ensures check)
+  = note: counterexample: cents = -1, percent = 1
+error[AU5101]: cannot prove integer result in range
+ --> src/main.au:4:20
+  |
+4 |     return cents - cents * percent // 100
+  |                    ^
+  = note: in `apply_discount` (overflow check)
+  = note: counterexample: cents = 9223372036854775807, percent = 100
+error[AU5101]: cannot prove `requires` of `apply_discount` holds: `0 <= percent and percent <= 100`
+ --> src/main.au:8:5
+  |
+8 |     print(apply_discount(2500, 150))
+  |     ^
+  = note: in `main` (requires check)
+verified src/main.au: 3 of 6 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+Nothing ran. The verifier read every path through both functions and found
+three checks that can fail, each with inputs that make it fail. The last one
+we expected: `main` passes 150. The other two are real bugs that no test of
+ours would have found. A negative price of `-1` cents breaks the promise that
+the result is at least 0, and a price near the top of `int64` overflows when
+it's multiplied by 100. Neither looks likely, but `cents` comes from a price
+file, and a price file can say anything.
+
+The fix is to say what a price is. Cart prices in `checkout` are never
+negative and never more than ten billion dollars, so we require that, and we
+fix the call in `main`:
+
+```aura
+def apply_discount(cents: int64, percent: int64) -> int64:
+    requires 0 <= cents and cents <= 1_000_000_000_000
+    requires 0 <= percent and percent <= 100
+    ensures 0 <= result and result <= cents
+    return cents - cents * percent // 100
+
+def main():
+    print(apply_discount(2500, 10))
+    print(apply_discount(2500, 100))
+```
+
+<span class="caption">Listing 11-9: A discount whose checks are all proved</span>
+
+```console
+$ aura verify src/main.au
+verified src/main.au: 8 of 8 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+Eight checks, all proved: both `requires` at both calls, the `ensures`, and
+the arithmetic, which cannot overflow because `cents * percent` is at most a
+hundred trillion. That is a statement about every possible input, which is
+something no number of tests can make.
+
+Notice how `main` was verified. The verifier didn't look inside
+`apply_discount` to see what it does; it only proved the `requires` at each
+call and then assumed the `ensures`. Each function is proved on its own, from
+the contracts of the functions it calls. That keeps proofs fast, and it means
+a contract is the whole agreement between a function and its callers: if a
+caller needs to know something about the result, the callee has to promise
+it.
+
+## Loops need invariants
+
+Totals are where overflow likes to hide. Here's a cart total that clamps each
+price to a sane range before adding it:
+
+```aura
+def cart_total(prices: list[int64]) -> int64:
+    requires len(prices) <= 10_000
+    mut total = 0
+    for i in range(len(prices)):
+        price = min(max(prices[i], 0), 1_000_000)
+        total += price
+    return total
+
+def main():
+    print(cart_total([1250, 499, 2000]))
+```
+
+Every price is at most a million cents and there are at most ten thousand of
+them, so the total can't overflow. The verifier disagrees:
+
+```console
+$ aura verify src/main.au
+error[AU5101]: cannot prove integer result in range
+ --> src/main.au:6:9
+  |
+6 |         total += price
+  |         ^
+  = note: in `cart_total` (overflow check)
+  = note: counterexample: len(prices) = 1
+verified src/main.au: 3 of 4 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The verifier proves a loop one iteration at a time, so it doesn't know how
+many times `total += price` has already run. It knows only what never changes
+in the loop and what the loop says about itself. Our reasoning above used a
+fact about `total` that we never wrote down: after `i` iterations it's at
+most `i` million. Writing that fact as an `invariant` gives the verifier what
+it needs:
+
+```aura
+def cart_total(prices: list[int64]) -> int64:
+    requires len(prices) <= 10_000
+    mut total = 0
+    for i in range(len(prices)):
+        invariant 0 <= total and total <= i * 1_000_000
+        price = min(max(prices[i], 0), 1_000_000)
+        total += price
+    return total
+
+def main():
+    print(cart_total([1250, 499, 2000]))
+```
+
+<span class="caption">Listing 11-10: A loop invariant that bounds the running total</span>
+
+```console
+$ aura verify src/main.au
+verified src/main.au: 6 of 6 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The verifier proves the invariant twice: once on entry, where `total` is 0,
+and once after an arbitrary iteration, assuming it held before. Then it can
+use it inside the loop to prove the addition safe. The invariant is also
+checked at run time, like every contract, so it documents the loop for the
+next reader and guards it in every run.
+
+## Proofs and run-time checks
+
+A proof doesn't remove anything by default. Every contract and every bounds
+check stays in the program, which is why a `requires` that the verifier
+couldn't prove still stops a bad call with a clear diagnostic. When you want
+the proofs to pay for themselves, `aura build --remove-proved-checks` builds
+a native binary without the list bounds checks the verifier proves can never
+fail, and keeps every other check.
+
+The verifier doesn't model everything yet. Floats, strings, dictionaries,
+and sets are outside what it reads today, and a check that depends on them
+is reported as `AU5104` and stays a run-time check. Quantifiers are modeled:
+a contract such as `requires forall(p in prices, 0 <= p)` is proved at every
+call and assumed inside the function. The [verification manual page](/manual/verification)
+lists exactly what is modeled.
+
 ## Summary
 
 You can now test Aura code with nothing but the `aura` command. A test is a
@@ -37458,15 +38574,19 @@ printed for you. A trap in the code under test fails the case with its full
 diagnostic and call chain. You can narrow a run to a file, a directory, or any
 case whose name contains a substring, set time limits, share setup and teardown
 between cases, generate cases from a list, and produce JSON for CI, while the
-exit status tells any script whether the suite passed.
+exit status tells any script whether the suite passed. Where a test checks
+the inputs you chose, a contract states what must hold for all of them, and
+`aura verify` proves it or shows you an input that breaks it.
 
 Along the way the tests did more than catch mistakes. They found a real bug in
 `format_cents`, forced a decision about the average of an empty cart, and
-pushed `load_prices` apart into a pure parser and a thin file reader. That's
-the usual effect of writing tests early, and it's the approach we'll take in
-the next chapter. In [Chapter 12](/book/ch12-00-log-analyzer) we'll put
-everything from the last few chapters together and build a command-line log
-analyzer, starting from an empty directory.
+pushed `load_prices` apart into a pure parser and a thin file reader. The
+verifier found two more, in inputs nobody would have written a test for.
+That's the usual effect of writing tests and contracts early, and it's the
+approach we'll take in the next chapter. In
+[Chapter 12](/book/ch12-00-log-analyzer) we'll put everything from the last
+few chapters together and build a command-line log analyzer, starting from an
+empty directory.
 
 ## Source: docs/book/ch12-00-log-analyzer.md
 
@@ -43952,7 +45072,7 @@ string early. The variant is information your control flow can use; a string
 is only information a person can read.
 
 Whole-file reads are capped at 256 MiB. A read over the cap fails with
-`io.Error.InvalidData` instead of quietly eating all your memory. Aura 0.11 has
+`io.Error.InvalidData` instead of quietly eating all your memory. Aura 0.12 has
 no chunked read API, so a tool that must process larger files has to split
 them first. For configuration files and reports, the cap is far away.
 
@@ -44213,7 +45333,7 @@ keep nothing, so the caller still owns them afterwards. The same is true of
 The rename is atomic only within one filesystem. If *report.txt* were on a
 different disk from its temporary file, `fs.rename` would fail with an
 `io.Error`, which is one reason the temporary file sits right next to the
-target. Aura 0.11 also has no call to sync the directory itself, which some
+target. Aura 0.12 also has no call to sync the directory itself, which some
 filesystems need before the rename survives a crash. For a health report that
 is regenerated on every run, this recipe is more than enough.
 
@@ -44448,7 +45568,7 @@ flag turns a byte read into a text read. When you need to convert, use
 because the bytes may not be valid UTF-8.
 
 The Manual's [Filesystem Module](/manual/filesystem) page lists every
-function and its exact contract, including what Aura 0.11 does not have yet:
+function and its exact contract, including what Aura 0.12 does not have yet:
 recursive directory operations, file metadata, permissions, and watchers.
 
 ## Standard input and output
@@ -45330,7 +46450,7 @@ matter.
 
 ## What the HTTP helpers do not do
 
-The HTTP client in Aura 0.11 is deliberately small. Each call makes one
+The HTTP client in Aura 0.12 is deliberately small. Each call makes one
 request on a fresh connection. It does not follow redirects, pool
 connections, speak HTTP/2, use a proxy, or decompress bodies. `https://` URLs
 work and verify the server's certificate against the standard public root
@@ -46426,7 +47546,7 @@ that setting it looks for Xcode's copy through `xcrun` on macOS, and then on
 
 ## What the debugger cannot show yet
 
-Debug support is new in Aura 0.11, and some values are not described yet.
+Debug support is new in Aura 0.12, and some values are not described yet.
 Unions (such as `str | None`), callables, and instances of a class with a
 field that is itself more than one machine word do not show their contents.
 lldb's expression evaluator speaks C, not Aura. Arithmetic on simple numbers
@@ -46461,8 +47581,9 @@ measurement with its workload, machine, compiler commit, and raw data.
 
 A word about the measurements made for this chapter. They ran on a Linux
 x86-64 container with four cores, shared with other work, using a release
-build of the Aura 0.11 compiler. A shared machine is noisy, so treat each
-number as a rough size rather than a benchmark result. The comparisons
+build of the Aura compiler (0.11.0-dev at the time of writing). A shared
+machine is noisy, so treat each number as a rough size rather than a
+benchmark result. The comparisons
 within one setup, and the advice that follows from them, are what to take
 away.
 
@@ -49663,7 +50784,7 @@ they divide the work:
 
 ```console
 $ aura version
-aura 0.11.0-dev (9e279b31f356)
+aura 0.12.0-dev (9e279b31f356)
 ```
 
 `aura check` and `aura run` also accept `--format json`, which prints

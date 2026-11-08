@@ -93,6 +93,7 @@ and promises to explain each later.
 - 11.1 How to write tests
 - 11.2 Running tests and reading failures
 - 11.3 Organizing tests (parameterized cases, CI output)
+- 11.4 Contracts and proofs (`requires`, `ensures`, `invariant`, `aura verify`)
 
 ## 12. An I/O project: building a log analyzer
 

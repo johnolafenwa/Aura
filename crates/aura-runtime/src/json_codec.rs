@@ -229,10 +229,30 @@ impl JsonTree for JsonValue {
 /// but the nesting one, which bounds the parser's recursion.
 pub fn parse_into<T: JsonTree>(source: &str) -> Result<T, JsonCodecError> {
     check_input_len(source.len())?;
-    if let Some(value) = FastJsonParser::<T>::parse(source) {
+    if let Some(value) = FastJsonParser::<T>::parse(source, MAX_JSON_DEPTH) {
         return Ok(value);
     }
     parse_with_serde(source)
+}
+
+/// [`parse_into`] for a source that may nest at most `limit` levels, or
+/// `None`, having built nothing, when an array or object in `source`
+/// opens deeper than that (see [`nesting_at_most`]). A source that parses
+/// is not scanned for its nesting first: the parse itself saw every level.
+pub fn parse_into_within_depth<T: JsonTree>(
+    source: &str,
+    limit: usize,
+) -> Option<Result<T, JsonCodecError>> {
+    if let Err(error) = check_input_len(source.len()) {
+        return nesting_at_most(source, limit).then_some(Err(error));
+    }
+    if let Some(value) = FastJsonParser::<T>::parse(source, limit.min(MAX_JSON_DEPTH)) {
+        return Some(Ok(value));
+    }
+    if !nesting_at_most(source, limit) {
+        return None;
+    }
+    Some(parse_with_serde(source))
 }
 
 /// `parse_into` through serde, which also ranks the errors.
@@ -269,17 +289,26 @@ struct FastJsonParser<'a, T> {
     source: &'a str,
     index: usize,
     nodes: usize,
-    tree: std::marker::PhantomData<T>,
+    /// The deepest an array or object may open.
+    max_depth: usize,
+    /// The items of every array still open, innermost last, so each array
+    /// is built once at its final size.
+    items: Vec<T>,
+    /// The entries of every object still open, innermost last, so each
+    /// object is built once at its final size.
+    entries: Vec<(std::borrow::Cow<'a, str>, T)>,
 }
 
 impl<'a, T: JsonTree> FastJsonParser<'a, T> {
-    fn parse(source: &'a str) -> Option<T> {
+    fn parse(source: &'a str, max_depth: usize) -> Option<T> {
         let mut parser = Self {
             bytes: source.as_bytes(),
             source,
             index: 0,
             nodes: 0,
-            tree: std::marker::PhantomData,
+            max_depth,
+            items: Vec::new(),
+            entries: Vec::new(),
         };
         let value = parser.value(0)?;
         parser.skip_whitespace();
@@ -319,24 +348,26 @@ impl<'a, T: JsonTree> FastJsonParser<'a, T> {
     }
 
     fn array(&mut self, depth: usize) -> Option<T> {
-        if depth > MAX_JSON_DEPTH {
+        if depth > self.max_depth {
             return None;
         }
         self.index += 1;
-        let mut values = Vec::new();
         self.skip_whitespace();
         if self.bytes.get(self.index) == Some(&b']') {
             self.index += 1;
-            return Some(T::array(values));
+            return Some(T::array(Vec::new()));
         }
+        let base = self.items.len();
         loop {
             let value = self.value(depth)?;
-            try_push(&mut values, value).ok()?;
+            try_push(&mut self.items, value).ok()?;
             self.skip_whitespace();
             match *self.bytes.get(self.index)? {
                 b',' => self.index += 1,
                 b']' => {
                     self.index += 1;
+                    let mut values = try_vec_with_capacity(self.items.len() - base).ok()?;
+                    values.extend(self.items.drain(base..));
                     return Some(T::array(values));
                 }
                 _ => return None,
@@ -345,7 +376,7 @@ impl<'a, T: JsonTree> FastJsonParser<'a, T> {
     }
 
     fn object(&mut self, depth: usize) -> Option<T> {
-        if depth > MAX_JSON_DEPTH {
+        if depth > self.max_depth {
             return None;
         }
         self.index += 1;
@@ -354,7 +385,7 @@ impl<'a, T: JsonTree> FastJsonParser<'a, T> {
             self.index += 1;
             return Some(T::object(T::object_with_capacity(0).ok()?));
         }
-        let mut entries = T::object_with_capacity(1).ok()?;
+        let base = self.entries.len();
         loop {
             self.skip_whitespace();
             if self.bytes.get(self.index) != Some(&b'"') {
@@ -367,13 +398,17 @@ impl<'a, T: JsonTree> FastJsonParser<'a, T> {
             }
             self.index += 1;
             let value = self.value(depth)?;
-            T::object_insert_str(&mut entries, &key, value).ok()?;
+            try_push(&mut self.entries, (key, value)).ok()?;
             self.skip_whitespace();
             match *self.bytes.get(self.index)? {
                 b',' => self.index += 1,
                 b'}' => {
                     self.index += 1;
-                    return Some(T::object(entries));
+                    let mut object = T::object_with_capacity(self.entries.len() - base).ok()?;
+                    for (key, value) in self.entries.drain(base..) {
+                        T::object_insert_str(&mut object, &key, value).ok()?;
+                    }
+                    return Some(T::object(object));
                 }
                 _ => return None,
             }
@@ -1177,6 +1212,23 @@ impl BoundedOutput {
         self.text.push_str(text);
         Ok(())
     }
+
+    /// `text` between double quotes, as three `push_str` calls would write
+    /// it.
+    pub(crate) fn push_quoted(&mut self, text: &str) -> Result<(), JsonCodecError> {
+        let added = text
+            .len()
+            .checked_add(2)
+            .ok_or(JsonCodecError::OutputTooLarge {
+                limit_bytes: MAX_JSON_OUTPUT_BYTES as u64,
+            })?;
+        check_output_len(self.text.len(), added)?;
+        self.text.try_reserve(added).map_err(allocation_error)?;
+        self.text.push('"');
+        self.text.push_str(text);
+        self.text.push('"');
+        Ok(())
+    }
 }
 
 fn allocation_error(_: std::collections::TryReserveError) -> JsonCodecError {
@@ -1458,46 +1510,54 @@ fn write_spaces(output: &mut BoundedOutput, count: usize) -> Result<(), JsonCode
 }
 
 pub(crate) fn write_string(output: &mut BoundedOutput, value: &str) -> Result<(), JsonCodecError> {
+    let bytes = value.as_bytes();
+    // Only ASCII bytes are escaped, and no byte of a multi-byte UTF-8
+    // sequence is ASCII, so the text splits at escapes on byte offsets.
+    let Some(first) = bytes.iter().position(|&byte| json_escape_needed(byte)) else {
+        return output.push_quoted(value);
+    };
     output.push_str("\"")?;
     let mut unescaped_start = 0usize;
-    for (offset, character) in value.char_indices() {
-        let escaped = match character {
-            '"' => Some("\\\""),
-            '\\' => Some("\\\\"),
-            '\u{08}' => Some("\\b"),
-            '\u{0c}' => Some("\\f"),
-            '\n' => Some("\\n"),
-            '\r' => Some("\\r"),
-            '\t' => Some("\\t"),
-            character if character <= '\u{1f}' => {
-                if unescaped_start < offset {
-                    output.push_str(&value[unescaped_start..offset])?;
-                }
+    for (offset, &byte) in bytes.iter().enumerate().skip(first) {
+        if !json_escape_needed(byte) {
+            continue;
+        }
+        if unescaped_start < offset {
+            output.push_str(&value[unescaped_start..offset])?;
+        }
+        let escaped = match byte {
+            b'"' => "\\\"",
+            b'\\' => "\\\\",
+            0x08 => "\\b",
+            0x0c => "\\f",
+            b'\n' => "\\n",
+            b'\r' => "\\r",
+            b'\t' => "\\t",
+            _ => {
                 const HEX: &[u8; 16] = b"0123456789abcdef";
-                let code = character as usize;
+                let code = usize::from(byte);
                 let escaped = [b'\\', b'u', b'0', b'0', HEX[code >> 4], HEX[code & 0x0f]];
                 // Every byte in the escape is ASCII.
                 output
                     .push_str(std::str::from_utf8(&escaped).expect("JSON escape is valid UTF-8"))?;
-                unescaped_start = offset + character.len_utf8();
+                unescaped_start = offset + 1;
                 continue;
             }
-            _ => None,
         };
-
-        let Some(escaped) = escaped else {
-            continue;
-        };
-        if unescaped_start < offset {
-            output.push_str(&value[unescaped_start..offset])?;
-        }
         output.push_str(escaped)?;
-        unescaped_start = offset + character.len_utf8();
+        unescaped_start = offset + 1;
     }
     if unescaped_start < value.len() {
         output.push_str(&value[unescaped_start..])?;
     }
     output.push_str("\"")
+}
+
+/// Whether a JSON string escapes `byte`: a quote, a backslash, or a
+/// control character.
+#[inline(always)]
+fn json_escape_needed(byte: u8) -> bool {
+    byte < 0x20 || byte == b'"' || byte == b'\\'
 }
 
 #[cfg(test)]

@@ -1,0 +1,29 @@
+# 16 CPU jobs; job i costs (i % 4 == 0 ? 8 : 1) units. Round-robin placement
+# over 4 workers puts every heavy job on worker 0.
+import sys
+
+
+def work(units: int64) -> int64:
+    mut state: int64 = units + 1
+    mut i: int64 = 0
+    while i < units * 4000000:
+        state = state * 48271 % 2147483647
+        i += 1
+    return state
+
+
+def main():
+    start = sys.monotonic_time_ms()
+    mut total: int64 = 0
+    with TaskGroup() as group:
+        mut handles: list[Task[int64]] = []
+        for i in range(16):
+            units: int64 = 8 if i % 4 == 0 else 1
+            handles.append(group.start(work, units))
+        for h in handles:
+            match h.result():
+                case TaskResult.Ready(v):
+                    total += v % 1000
+                case _:
+                    pass
+    print(f"total={total} ms={sys.monotonic_time_ms() - start}")

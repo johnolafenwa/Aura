@@ -7,6 +7,138 @@ in this file.
 
 ## Unreleased
 
+- `aura verify file.au` proves, with an external Z3 or cvc5, that a
+  program's checks cannot fail: integer overflow, zero divisors, list
+  indexes, `assert`, `requires`, `ensures`, loop `invariant` and
+  `decreases`, and class invariants. Each function is proved on its own
+  from its callees' contracts. A check that can fail is reported as
+  `AU5101` with a counterexample; `AU5102` when the solver gives up,
+  `AU5103` when no solver runs, and `AU5104` for a step outside the
+  modeled subset (floats, strings, and other collections for now).
+  `--format json` prints one entry per check. See the new Verification
+  manual page. Results are kept in a proof cache, so an unchanged function
+  is answered without the solver; `--no-cache` turns it off. Quantified
+  contracts (`forall`, `exists`, and `all`/`any` over one `for` clause) are
+  proved and assumed, so a loop invariant can describe a whole list.
+- A function may declare a `decreases` measure. It is checked on entry,
+  where it must be at least 0, and before each call the function makes to
+  itself, where the measure of the arguments must be smaller; `aura verify`
+  proves both, so a recursion with a measure is proved to end. The
+  arguments the measure reads must be pure.
+- A trait method may state `requires` and `ensures`. Every implementation
+  inherits them (it may repeat them exactly or leave them out), they are
+  checked in each implementation, and `aura verify` proves each
+  implementation keeps them and relies on them at calls through the trait.
+- `lemma def` declares a proof: a function with no result whose `ensures`
+  state a fact. `aura verify` proves it once and relies on it at each call;
+  a call written as a statement is erased at run time. A recursive lemma
+  with `decreases` is a proof by induction.
+- `aura build --remove-proved-checks` leaves out the list bounds checks of
+  element reads and borrows that `aura verify` proves can never fail. It is
+  off by default; debug builds keep every check.
+- The book gains a section on contracts and `aura verify` (11.4).
+- Generator functions: a module-level function declared `-> Generator[T]`
+  (from `iter`) may `yield` values. Calling it runs nothing; each `next`
+  runs the body to its next `yield` on a stack of its own, on both the
+  interpreter and native builds. `Generator[T]` implements `Iterator[T]`, so
+  `for` loops take it, and `close()` stops it with its `with` exits run
+  once. A trap in the body is a trap of the caller's task, and the call
+  chain names the generator. A body may sleep, receive from a `Queue`, or do
+  file I/O; the wait suspends the calling task. Misuse reports `AU2049`.
+- Comprehensions, `invariant` clauses, `enumerate`, and `zip` take
+  iterator sources. `for` loops over `enumerate(it)` and `zip(a, b)` of two
+  iterators stay lazy, so an endless generator can be zipped with a finite
+  one; a comprehension collects its iterator source first. `Iterator[T]`
+  gains `collect(own self) -> list[T]`. `zip` of a collection with an
+  iterator reports `AU2002`.
+- Associated types: a trait can declare `type Name: Bound` lines, written
+  `Self.Name` in its methods, and each implementation fixes them with
+  `type Name = T`. The fixed type must satisfy the bounds (`AU2002`).
+- New `iter.IntoIterator[T]` trait with `type Iter: Iterator[T]` and
+  `into_iter(own self) -> Self.Iter`. `for` loops, comprehensions,
+  `enumerate`, and `zip` consume an `IntoIterator` value through
+  `into_iter()`.
+- Fixed: a default trait method failed in the compiler's lowering ("assigns
+  untyped local") when an implementation with a bounded type parameter,
+  such as `impl[I: Iterator[int64]] Trait for Wrap[I]`, inherited it.
+- Fixed: a `for` loop over a generic `I: Iterator[T]` parameter failed in
+  the compiler's lowering with a wrong-enum match error.
+- Fixed: `for x in value.method():` where `method` takes `own self` reported
+  a false "use of moved value" on the receiver.
+- A function or method can bound a type parameter by a trait with
+  associated types, as in `def total[S: IntoIterator[int64]](source: own S)`.
+  Each associated type becomes a hidden type parameter `S.Iter` that the
+  signature and body can name, and a call infers it, and any type parameter
+  only the bound names, from the argument's implementation. A `for` loop
+  over such a parameter calls `into_iter()`. Class, enum, and
+  implementation bounds still report `AU2002`.
+- Fixed: a method of a bounded generic implementation, such as
+  `impl[T: Greet] Greet for Wrap[T]`, could not call another method of the
+  same trait on `self` ("unsupported method call").
+- Faster loops over user iterators and generators. A `for` loop over a
+  class with an explicit `impl Iterator[T]` (no type parameters, `T` a
+  number, `bool`, `str`, or a class of the module, and `next` returning
+  `Step.End` or `Step.Item(value)`) no longer builds a `Step` per item. A
+  `for` loop over a call of a module generator whose parameters and locals
+  are numbers, `bool`, or `str` runs the generator as a state machine
+  instead of on its own stack, and when the generator has one `yield` and
+  calls nothing, runs its body in place. The call may also be held in a
+  variable that only the loop reads. The operation probes now measure 2.3x
+  Rust for `iterator_next` (from 309x) and 1.2x for `generator_next` (from
+  1,620x). Output, diagnostics, and trap call chains are unchanged. Small
+  native functions that only compute on numbers also skip their call-frame
+  record.
+- Faster generators passed around as values and generators with
+  collection or class locals. A call such as `total(upto(n))`, or
+  `g = upto(n)` followed by `total(g)`, where `total` takes an
+  `own Generator[T]` parameter and loops over it once, now runs the loop
+  over the generator directly instead of switching stacks per item, and so
+  does a generator that loops over another one it was passed
+  (`total(doubled(upto(n)))`). Generators whose parameters and locals are
+  lists, dicts, sets, or classes of the module, that loop over a list or
+  over another generator call, or that assign a local's field or element,
+  run as state machines or in place too. The new operation probes measure
+  `generator_value` 1.2x Rust (from 1,617x), `generator_pipeline` 1.2x
+  (from 2,021x), `generator_list` 1.4x (from 1,619x), and
+  `generator_class` 5.6x (from 1,623x; the same loop without a generator
+  costs the same). Output, diagnostics, and trap call chains are unchanged,
+  except that a trap in a generator run in place inside another generator
+  run in place names only the innermost one.
+- Faster field access on class locals a function builds itself. A local
+  assigned only from a constructor call and otherwise used only through its
+  fields (`counter.count += 1`, `counter.name += "x"`) no longer checks the
+  instance's layout on each field read or write. `generator_class` drops to
+  2.0x Rust (from 5.6x).
+- Fixed: `aura fmt` removed the space in `yield (a, b)`, which turned the
+  statement into a call of a function named `yield`.
+
+## VS Code extension 0.12.0 — 2026-11-03
+
+- Highlights the contract clauses `requires`, `ensures`, `invariant`, and
+  `decreases`, the `spec def` modifier, and the new builtins `eprint`,
+  `ord`, and `chr`. Bundles language server 0.12.0; the semantic interface
+  version stays 20.
+
+## 0.12.0 — 2026-11-03 (technical preview)
+
+Aura 0.12.0 adds contracts, iteration over your own types, a builtin
+prelude, and a stricter task and error model. Functions, loops, and classes
+can declare `requires`, `ensures`, `invariant`, and `decreases` clauses that
+are checked at run time (verification V1), and a `for` loop iterates any
+type that implements the new `iter.Iterator[T]` trait. The prelude gives
+every module `Ord`, `Add`, and `From`, and `Result` gains `is_ok`,
+`unwrap_or`, `map`, and friends. New builtins `ord`, `chr`, `eprint`, and
+`str.chars()` arrive, `range` takes a step, and *The Aura Programming
+Language* book replaces the Learn track and tutorials. Breaking: an unused
+`Result` is an error (`AU2018`; discard one with `_ = expression`), a
+`TaskGroup` can only be a `with` item (`AU2019`), and the first child failure
+cancels its siblings. `ord`, `chr`, and `eprint` are now builtin names.
+There is no performance work in this release: measured against 0.11.0 on
+the Linux measurement host, the 30
+[cross-language programs](benchmarks/cross_language/README.md) execute the
+same instructions, and the median program stays near 3.8 times Rust's time.
+The semantic interface stays 20, and the native cache format stays `v10`.
+
 - **Breaking:** a `TaskGroup` can only be created as a `with` item
   (`with group = TaskGroup():`). `TaskGroup()` anywhere else is `AU2019`, so
   no task can outlive the block that started it. Pass the group to helpers as

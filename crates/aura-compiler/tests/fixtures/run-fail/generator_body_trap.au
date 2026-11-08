@@ -1,0 +1,14 @@
+# A trap in a generator body is a trap of the task that called `next`.
+from iter import Generator
+
+def check(i: int64):
+    assert i < 2, "too far"
+
+def risky(n: int64) -> Generator[int64]:
+    for i in range(n):
+        check(i)
+        yield i
+
+def main():
+    for x in risky(5):
+        print(x)

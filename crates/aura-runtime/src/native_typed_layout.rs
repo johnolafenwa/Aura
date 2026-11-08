@@ -12,10 +12,11 @@
 
 use std::alloc::{alloc, dealloc, handle_alloc_error, Layout as AllocLayout};
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
-use std::sync::{OnceLock, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use aura_core::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use aura_core::layout::{
@@ -27,7 +28,7 @@ use super::{
     canonical_runtime_type_name, consume_owned_untracked_value, element_boxed_value,
     is_unknown_runtime_type, release_untracked_value, retag_value, runtime_error,
     set_explicit_runtime_type_tag, shared_runtime_type_tag, value_type_name, ElementBox,
-    OpaqueValue,
+    OpaqueValue, RuntimeTypeTag,
 };
 use crate::runtime_value::{
     nominal_runtime_base_name, union_value, EnumVariantValue, InstanceFields, InstanceValue,
@@ -625,6 +626,10 @@ unsafe fn write_plain(table: &LayoutTable, id: LayoutId, value: &Value, dst: *mu
 pub(super) struct FieldOps {
     pub(super) fits: fn(&LayoutTable, LayoutId, &Value) -> bool,
     pub(super) field_box: fn(Value, &Type) -> ElementBox,
+    /// The tag a handle of a type carries, which a layout looks up once.
+    pub(super) handle_tag: fn(&Type) -> Option<Arc<RuntimeTypeTag>>,
+    /// A field's box with the tag its layout looked up.
+    pub(super) tagged_box: fn(Value, Option<&RuntimeTypeTag>) -> ElementBox,
     pub(super) write: unsafe fn(&LayoutTable, LayoutId, Value, *mut u8),
     pub(super) read: unsafe fn(&LayoutTable, LayoutId, *const u8) -> Value,
     pub(super) take: unsafe fn(&LayoutTable, LayoutId, *mut u8) -> Value,
@@ -635,6 +640,8 @@ pub(super) struct FieldOps {
 pub(super) static FIELD_OPS: FieldOps = FieldOps {
     fits,
     field_box: field_box_for,
+    handle_tag: uncached_handle_type_tag,
+    tagged_box: tagged_field_box,
     write: write_unchecked,
     read: read_at,
     take: take_at,
@@ -649,12 +656,85 @@ pub(super) static FIELD_OPS: FieldOps = FieldOps {
 /// it records no thread.
 fn untracked_box(value: Value, ty: &Type) -> *mut OpaqueValue {
     let boxed = element_boxed_value(value);
-    if !names_type_param(ty) && !is_unknown_runtime_type(ty) {
-        let tag = shared_runtime_type_tag(canonical_runtime_type_name(ty).as_bytes());
+    if let Some(tag) = handle_type_tag(ty) {
         // SAFETY: the box is new and confined to this thread.
         unsafe { set_explicit_runtime_type_tag(boxed, &tag) };
     }
     boxed
+}
+
+/// How many handle types [`handle_type_tag`] remembers per thread.
+const HANDLE_TAG_SLOTS: usize = 32;
+
+type HandleTagSlot = Option<(usize, Type, Arc<RuntimeTypeTag>)>;
+
+thread_local! {
+    /// The tags of the handle types boxes were made for lately, keyed by
+    /// the address of the layout's type. A hit also compares the type, so
+    /// a type freed and another made at its address cannot reuse a tag.
+    static HANDLE_TAGS: RefCell<[HandleTagSlot; HANDLE_TAG_SLOTS]> =
+        const { RefCell::new([const { None }; HANDLE_TAG_SLOTS]) };
+}
+
+/// The tag a box for a handle of `ty` carries, or `None` for an erased
+/// type. A layout makes a box of the same few types for every value it
+/// stores, so the tag is looked up once per type and thread instead of
+/// formatting and hashing the type's name for every box.
+fn handle_type_tag(ty: &Type) -> Option<Arc<RuntimeTypeTag>> {
+    let address = std::ptr::from_ref(ty) as usize;
+    // Each type may sit in its own slot or the one beside it, so the few
+    // types of one layout do not evict each other on every box.
+    let slot = (address.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 58) % HANDLE_TAG_SLOTS;
+    let slots = [slot, slot ^ 1];
+    let cached = HANDLE_TAGS
+        .try_with(|tags| {
+            let tags = tags.borrow();
+            slots.iter().find_map(|&index| match &tags[index] {
+                Some((cached_address, cached_ty, tag))
+                    if *cached_address == address && cached_ty == ty =>
+                {
+                    Some(tag.clone())
+                }
+                _ => None,
+            })
+        })
+        .ok()
+        .flatten();
+    if cached.is_some() {
+        return cached;
+    }
+    let tag = uncached_handle_type_tag(ty)?;
+    let _ = HANDLE_TAGS.try_with(|tags| {
+        let mut tags = tags.borrow_mut();
+        let index = slots
+            .into_iter()
+            .find(|&index| tags[index].is_none())
+            .unwrap_or(slot);
+        tags[index] = Some((address, ty.clone(), tag.clone()));
+    });
+    Some(tag)
+}
+
+/// The tag a box for a handle of `ty` carries, or `None` for an erased
+/// type, looked up in the registry.
+fn uncached_handle_type_tag(ty: &Type) -> Option<Arc<RuntimeTypeTag>> {
+    if names_type_param(ty) || is_unknown_runtime_type(ty) {
+        return None;
+    }
+    Some(shared_runtime_type_tag(
+        canonical_runtime_type_name(ty).as_bytes(),
+    ))
+}
+
+/// [`field_box_for`] with the tag the layout already looked up.
+fn tagged_field_box(value: Value, tag: Option<&RuntimeTypeTag>) -> ElementBox {
+    let boxed = element_boxed_value(value);
+    if let Some(tag) = tag {
+        // SAFETY: the box is new and confined to this thread.
+        unsafe { set_explicit_runtime_type_tag(boxed, tag) };
+    }
+    // SAFETY: the box is new, and its one reference is the field's.
+    unsafe { ElementBox::from_raw(boxed) }
 }
 
 /// The box of a field an instance keeps in its layout (see

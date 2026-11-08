@@ -2104,6 +2104,83 @@ def main() -> int32:
     assert!(!object.is_empty());
 }
 
+const RECURSIVE_TASK_SOURCE: &str = r#"
+def fib(n: int64) -> int64:
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+def worker(n: int64) -> int64:
+    return fib(n)
+
+def main() -> int32:
+    with TaskGroup() as group:
+        task = group.start(worker, 8)
+        match task.result():
+            case TaskResult.Ready(result):
+                return result as int32
+            case _:
+                return 1
+"#;
+
+#[test]
+fn native_recursive_entry_is_a_call_safepoint_when_tasks_can_run() {
+    let mir = lower_source_to_mir(RECURSIVE_TASK_SOURCE)
+        .expect("concurrent recursive source should lower to MIR");
+    assert!(
+        !mir.functions.iter().any(|function| {
+            function.blocks.iter().any(|block| {
+                block
+                    .instructions
+                    .iter()
+                    .any(|instruction| matches!(instruction, Instruction::Safepoint))
+            })
+        }),
+        "the fixture must have no loop safepoint"
+    );
+    let object = emit_host_object(&mir).expect("concurrent recursive source should compile");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aura_direct_yield_now")),
+        "a recursive entry must call the scheduler when its fuel runs out: {referenced:?}"
+    );
+
+    let plain = RECURSIVE_TASK_SOURCE.replace("fib(n - 1) + fib(n - 2)", "n - 1");
+    let mir = lower_source_to_mir(&plain).expect("concurrent plain source should lower to MIR");
+    let object = emit_host_object(&mir).expect("concurrent plain source should compile");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        !referenced
+            .iter()
+            .any(|symbol| symbol.contains("aura_direct_yield_now")),
+        "an entry of a function on no call cycle carries no safepoint: {referenced:?}"
+    );
+}
+
+#[test]
+fn native_call_safepoint_elides_runtime_call_when_no_sibling_can_run() {
+    let source = r#"
+def fib(n: int64) -> int64:
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+def main() -> int32:
+    return fib(8) as int32
+"#;
+    let mir = lower_source_to_mir(source).expect("sequential recursive source should lower");
+    let object = emit_host_object(&mir).expect("sequential recursive source should compile");
+    let referenced = object_referenced_symbols(&object);
+    assert!(
+        !referenced
+            .iter()
+            .any(|symbol| symbol.contains("aura_direct_yield_now")),
+        "a module with no task start must elide call safepoints: {referenced:?}"
+    );
+}
+
 #[test]
 fn native_loop_safepoint_elides_runtime_call_when_no_sibling_can_run() {
     let source = r#"
@@ -14753,6 +14830,113 @@ def main() -> int32:
     );
 }
 
+#[test]
+fn direct_str_appends_build_in_the_local_box() {
+    let appending = r#"
+def main() -> int32:
+    piece = "cd"
+    mut text = ""
+    for i in range(3):
+        text += "ab"
+        text += f"{i},"
+        text += piece
+    print(text)
+    return 0
+"#;
+    let mir = lower_source_to_mir(appending).expect("the appends should lower");
+    let object = emit_host_object(&mir).expect("the appends should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    for required in [
+        "aura_direct_format_append_begin",
+        "aura_direct_format_append_str",
+    ] {
+        assert!(referenced.contains(required), "{required}: {referenced:?}");
+    }
+    // No append concatenates or starts a new text.
+    for forbidden in ["aura_direct_binary_value_at", "aura_direct_format_begin"] {
+        assert!(
+            !referenced.contains(forbidden),
+            "{forbidden}: {referenced:?}"
+        );
+    }
+
+    // An append that reads the text it changes concatenates as before.
+    let aliasing = r#"
+def main() -> int32:
+    mut text = "a"
+    text += text
+    text += f"[{text}]"
+    print(text)
+    return 0
+"#;
+    let mir = lower_source_to_mir(aliasing).expect("the appends should lower");
+    let object = emit_host_object(&mir).expect("the appends should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    for forbidden in [
+        "aura_direct_format_append_begin",
+        "aura_direct_format_append_str",
+    ] {
+        assert!(
+            !referenced.contains(forbidden),
+            "{forbidden}: {referenced:?}"
+        );
+    }
+}
+
+#[test]
+fn str_append_root_needs_the_ownership_pass_form() {
+    let append = |first: &str, released: &str, moved: &str, rest: Operand| {
+        vec![
+            Instruction::Assign {
+                target: "%t1".to_string(),
+                value: Rvalue::FormatString {
+                    parts: vec![
+                        crate::mir::MirFormatPart::Value(Operand::Place(first.to_string())),
+                        crate::mir::MirFormatPart::Value(rest),
+                    ],
+                },
+            },
+            Instruction::Release {
+                place: released.to_string(),
+            },
+            Instruction::Assign {
+                target: "text".to_string(),
+                value: Rvalue::Use(Operand::MovePlace(moved.to_string())),
+            },
+        ]
+    };
+    let other = || Operand::Place("other".to_string());
+    assert_eq!(
+        super::str_append_root(&append("text", "text", "%t1", other())),
+        Some("text")
+    );
+    assert_eq!(
+        super::str_append_root(&append("other", "text", "%t1", other())),
+        None
+    );
+    assert_eq!(
+        super::str_append_root(&append("text", "other", "%t1", other())),
+        None
+    );
+    assert_eq!(
+        super::str_append_root(&append("text", "text", "%t2", other())),
+        None
+    );
+    assert_eq!(
+        super::str_append_root(&append(
+            "text",
+            "text",
+            "%t1",
+            Operand::Place("text".to_string())
+        )),
+        None
+    );
+    assert_eq!(
+        super::str_append_root(&append("text", "text", "%t1", other())[..2]),
+        None
+    );
+}
+
 /// The lookup slots of `LOOKUP_MATCH_SOURCE`'s `main` after `change`.
 fn lookup_slots_after(change: impl FnOnce(&mut MirFunction, &str)) -> BTreeSet<String> {
     let mir = lower_source_to_mir(LOOKUP_MATCH_SOURCE).expect("the lookup match should lower");
@@ -15917,4 +16101,60 @@ fn debug_source_paths_keep_the_directory_the_program_was_given_by() {
         super::debug_source_path_as_given("relative.au", "relative.au").ends_with("relative.au")
     );
     std::fs::remove_dir_all(&directory).expect("remove the test directory");
+}
+
+#[test]
+fn confined_instances_are_class_locals_built_here_and_reached_only_by_field() {
+    let module = lower_source_to_mir(
+        r#"
+class Counter:
+    name: str
+    count: int
+
+def keep(counter: Counter) -> int:
+    return counter.count
+
+def make() -> Counter:
+    return Counter(name="m", count=0)
+
+def run(seed: Counter) -> int:
+    mut local = Counter(name="a", count=0)
+    local.count += 1
+    local.name += "b"
+    mut passed = Counter(name="b", count=0)
+    passed.count += keep(passed)
+    mut copied = make()
+    copied.count += 1
+    mut bound = Counter(name="c", count=0)
+    bound.count += 1
+    mut other = Counter(name="d", count=0)
+    other = bound
+    return local.count + passed.count + copied.count + other.count + seed.count
+
+def main() -> None:
+    print(run(Counter(name="s", count=1)))
+"#,
+    )
+    .expect("class locals should lower");
+    let classes = module
+        .classes
+        .iter()
+        .map(|class| (class.name.clone(), class.clone()))
+        .collect::<HashMap<_, _>>();
+    let run = module
+        .functions
+        .iter()
+        .find(|function| function.name == "run")
+        .expect("run lowers");
+    let confined = super::classes::confined_instances(run, &classes);
+    assert!(confined.contains("local"), "{confined:?}");
+    for name in ["seed", "passed", "copied", "bound", "other"] {
+        assert!(!confined.contains(name), "{name} in {confined:?}");
+    }
+    let keep = module
+        .functions
+        .iter()
+        .find(|function| function.name == "keep")
+        .expect("keep lowers");
+    assert!(super::classes::confined_instances(keep, &classes).is_empty());
 }

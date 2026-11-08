@@ -56,10 +56,11 @@ pub fn runtime_member_type(value: &Value) -> Option<Type> {
         )),
         Value::Map(map) => Some(Type::Named(
             "dict".to_string(),
-            vec![map.key_type.clone(), map.value_type.clone()],
+            vec![Type::clone(&map.key_type), Type::clone(&map.value_type)],
         )),
         Value::Duration(_) => Some(Type::named("Duration")),
         Value::Rng(_) => Some(Type::named("random.Rng")),
+        Value::Generator(_) => Some(Type::named("iter.GeneratorHandle")),
         Value::Range(_) => Some(Type::named("Range")),
         Value::Function(function) => Some(function.signature.clone()),
         Value::Unit => Some(Type::Unit),

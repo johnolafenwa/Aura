@@ -1,6 +1,6 @@
 # Status And Compatibility
 
-Aura 0.11.0 is a technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments. It is not a production systems-language release, and it is not a security boundary for untrusted programs.
+Aura 0.12.0 is a technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments. It is not a production systems-language release, and it is not a security boundary for untrusted programs.
 
 This page states what the maintained language contract is, which surface it currently covers, and how that surface may change.
 
@@ -125,11 +125,11 @@ The Manual is reference-frozen. Every semantic change, including any extension, 
 
 Compiler coverage is held at the current non-regression floor, not pushed to 100%. New behavior still requires focused tests. The freeze only ends marginal coverage work that does not reduce product risk.
 
-Seeded randomness has an extra observable-data promise. The algorithm, seed mapping, integer and floating mappings, and shuffle order documented in [Randomness Module](/manual/randomness) stay stable throughout Aura 0.3.x, 0.4.x, 0.5.x, 0.6.x, 0.7.x, 0.8.x, 0.9.x, 0.10.x, and 0.11.x. A later release may change them only with an explicit decision and new conformance vectors. OS-secure outputs are intentionally not stable.
+Seeded randomness has an extra observable-data promise. The algorithm, seed mapping, integer and floating mappings, and shuffle order documented in [Randomness Module](/manual/randomness) stay stable throughout Aura 0.3.x, 0.4.x, 0.5.x, 0.6.x, 0.7.x, 0.8.x, 0.9.x, 0.10.x, 0.11.x, and 0.12.x. A later release may change them only with an explicit decision and new conformance vectors. OS-secure outputs are intentionally not stable.
 
 ## Maintained Concurrency Surface
 
-Aura 0.11 uses structured concurrency:
+Aura 0.12 uses structured concurrency:
 
 - `TaskGroup()` owns child tasks inside `with`.
 - `TaskGroup.start(...)` returns a `Task[T]`.
@@ -147,9 +147,9 @@ There is no `Channel`, statement-form `select`, bare `spawn`, or detached task. 
 Task bodies run on pinned cooperative scheduler workers on both maintained backends.
 
 - The default worker count is the available parallelism reported by the host. The provisional `AURA_WORKERS=<positive integer>` override selects an explicit count.
-- A child receives a stable worker assignment when it is spawned. Its coroutine stack never migrates, and work is not stolen.
+- A child starts on its parent's worker, and an idle worker may steal it before it first runs. Once a task runs, its coroutine stack never migrates.
 - `yield_now()` yields only to runnable work on the same worker.
-- Compiler-inserted checks on every loop backedge keep a tight loop from starving ready timers, Queue operations, and sockets on the same worker indefinitely. Ordinary loop tails and `continue` take part. `break` and `return` bypass the backedge.
+- Compiler-inserted checks on every loop backedge keep a tight loop from starving ready timers, Queue operations, and sockets on the same worker indefinitely. Ordinary loop tails and `continue` take part. `break` and `return` bypass the backedge. The entry of every function on a call cycle carries the same check, so deep recursion with no loop yields too.
 - The checks do not inspect cancellation. One long loop body can still delay same-worker siblings.
 - Ordinary tasks request a guarded 768 KiB coroutine stack. Explicit requests may go up to 64 MiB.
 - Waits use persistent descriptor registrations, heap-managed deadlines, and direct Queue, task-completion, and blocking-pool notifications. An idle worker blocks until work, an event, or a deadline, with no periodic tick.

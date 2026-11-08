@@ -132,6 +132,28 @@ pub(super) fn lower_trait_bounds(
     )
 }
 
+/// Bounds cannot name a trait with associated types yet: a bound written
+/// with the trait's own type arguments would leave them unknown.
+fn reject_assoc_type_bound(
+    trait_info: &TraitInfo,
+    written_args: usize,
+    span: crate::diag::Span,
+) -> Result<()> {
+    let assoc = trait_info.decl.assoc_types.len();
+    if assoc == 0 || written_args + assoc != trait_info.decl.type_params.len() {
+        return Ok(());
+    }
+    Err(Diagnostic::coded_at(
+        "AU2002",
+        span,
+        format!(
+            "only a function or method bound can name `{}` yet, because the trait has associated types",
+            trait_info.decl.name
+        ),
+    )
+    .with_help("bound a function's type parameter instead, or bound the iterator itself, as `I: Iterator[T]`"))
+}
+
 pub(super) fn lower_supertraits(
     supertraits: &[TypeRef],
     traits: &BTreeMap<String, TraitInfo>,
@@ -155,6 +177,7 @@ pub(super) fn lower_supertraits(
                 format!("unknown trait `{}`", trait_name),
             ));
         };
+        reject_assoc_type_bound(trait_info, trait_type_args.len(), supertrait.span)?;
         if trait_type_args.len() != trait_info.decl.type_params.len() {
             return Err(Diagnostic::at(
                 supertrait.span,
@@ -212,6 +235,7 @@ pub(super) fn lower_trait_bounds_with_self(
                     format!("unknown trait `{}`", trait_name),
                 ));
             };
+            reject_assoc_type_bound(trait_info, trait_type_args.len(), bound.span)?;
             if trait_type_args.len() != trait_info.decl.type_params.len() {
                 return Err(Diagnostic::at(
                     bound.span,
@@ -278,7 +302,7 @@ impl<'a> FunctionChecker<'a> {
     ) -> Result<()> {
         let method = &method_info.decl;
         self.validate_view_return_contract(method)?;
-        if method.body.is_empty() {
+        if method.body.is_empty() && method.contracts.is_empty() {
             return Ok(());
         }
 
@@ -298,6 +322,13 @@ impl<'a> FunctionChecker<'a> {
                 .map(Type::TypeParam)
                 .collect(),
         });
+        // A default body may use what an associated type's bounds promise.
+        for (param, bounds) in &trait_info.assoc_bounds {
+            type_param_bounds
+                .entry(param.clone())
+                .or_default()
+                .extend(bounds.iter().cloned());
+        }
         let return_type = method_info.signature.return_type.clone();
         let checker = self
             .with_type_params(method_type_param_scope.clone(), type_param_bounds)
@@ -375,6 +406,10 @@ impl<'a> FunctionChecker<'a> {
             );
         }
 
+        checker.check_contracts(method, &locals, &return_type)?;
+        if method.body.is_empty() {
+            return Ok(());
+        }
         let flow = checker.check_block(&method.body, &mut locals, &return_type, 0, true)?;
         if return_type != Type::Unit && flow != BlockFlow::AlwaysReturns {
             return Err(Diagnostic::at(
@@ -436,6 +471,77 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 
+    /// Checks that each associated type an implementation fixes satisfies
+    /// the bounds its trait declares.
+    pub(super) fn check_trait_impl_assoc_types(&self, trait_impl: &TraitImplInfo) -> Result<()> {
+        let Some(trait_info) = self.traits.get(&trait_impl.trait_name) else {
+            return Ok(());
+        };
+        let substitutions = self_type_substitutions(
+            &trait_info.decl,
+            &trait_impl.trait_args,
+            trait_impl.for_type.clone(),
+        );
+        for (param, bounds) in &trait_info.assoc_bounds {
+            let assigned = substitute_type(&Type::TypeParam(param.clone()), &substitutions);
+            for bound in bounds {
+                let bound = substitute_trait_bound(bound, &substitutions);
+                if !self.type_satisfies_bound_of_module(&assigned, &bound, &trait_info.module_name)
+                {
+                    let name = param.strip_prefix("Self.").unwrap_or(param);
+                    let span = trait_impl
+                        .decl
+                        .assoc_types
+                        .iter()
+                        .find(|binding| binding.name == name)
+                        .map_or(trait_impl.decl.span, |binding| binding.span);
+                    return Err(Diagnostic::coded_at(
+                        "AU2002",
+                        span,
+                        format!(
+                            "associated type `{name}` of `{}` must implement `{bound}`, but `{assigned}` does not",
+                            trait_info.decl.name
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether `ty` satisfies `bound`, a bound written in `bound_module`.
+    fn type_satisfies_bound_of_module(
+        &self,
+        ty: &Type,
+        bound: &TraitBound,
+        bound_module: &str,
+    ) -> bool {
+        let wanted = self.trait_bound_identity(bound, bound_module);
+        if let Type::TypeParam(name) = ty {
+            let current = self
+                .type_param_bounds
+                .get(name)
+                .cloned()
+                .unwrap_or_default();
+            return current.iter().any(|current| {
+                self.trait_bound_closure(current, ty)
+                    .into_iter()
+                    .any(|candidate| {
+                        self.trait_bound_identity(&candidate, self.module_name) == wanted
+                    })
+            });
+        }
+        self.trait_impls_in_scope().any(|candidate| {
+            let Some(substitutions) = self.trait_impl_substitutions(candidate, ty) else {
+                return false;
+            };
+            let implemented = self.resolved_trait_bound_for_impl(candidate, &substitutions);
+            self.trait_bound_closure(&implemented, ty)
+                .into_iter()
+                .any(|bound| self.trait_bound_identity(&bound, &candidate.module_name) == wanted)
+        })
+    }
+
     pub(super) fn check_trait_impl_method(
         &self,
         trait_name: &str,
@@ -445,19 +551,6 @@ impl<'a> FunctionChecker<'a> {
         method_info: &TraitImplMethodInfo,
     ) -> Result<()> {
         let method = &method_info.decl;
-        if let Some(clause) = method.contracts.first() {
-            // A trait method has no contract yet, so a clause here would
-            // change what callers through the trait may rely on.
-            return Err(Diagnostic::coded_at(
-                "AU2048",
-                clause.span,
-                format!(
-                    "the `{trait_name}` implementation of `{}` cannot declare `{}`: trait methods do not have contracts yet",
-                    method.name,
-                    clause.kind.keyword()
-                ),
-            ));
-        }
         self.validate_view_return_contract(method)?;
         let impl_type_param_scope = type_param_scope(impl_type_params);
         let type_param_scope = merged_type_param_scope(&impl_type_param_scope, &method.type_params);
@@ -564,6 +657,7 @@ impl<'a> FunctionChecker<'a> {
                 },
             );
         }
+        checker.check_contracts(method, &locals, &return_type)?;
         let flow = checker.check_block(&method.body, &mut locals, &return_type, 0, true)?;
         if return_type != Type::Unit && flow != BlockFlow::AlwaysReturns {
             return Err(Diagnostic::at(
@@ -904,6 +998,109 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    /// Infers a callee's type parameters that only its bounds name, such as
+    /// the hidden `S.Iter` of `S: IntoIterator[T]` (step 9e-2): once `S` is
+    /// known, the implementation of the trait for it fixes every argument of
+    /// the bound. A type parameter of the caller reads its own bounds.
+    pub(super) fn infer_bound_only_type_args(
+        &self,
+        callee_type_params: &[String],
+        bounds: &BTreeMap<String, Vec<TraitBound>>,
+        substitutions: &mut HashMap<String, Type>,
+    ) {
+        let unresolved =
+            |substitutions: &HashMap<String, Type>, name: &str| match substitutions.get(name) {
+                None => true,
+                Some(Type::TypeParam(resolved)) => {
+                    resolved == name && !self.type_params.contains_key(name)
+                }
+                Some(_) => false,
+            };
+        if !callee_type_params
+            .iter()
+            .any(|param| unresolved(substitutions, param))
+        {
+            return;
+        }
+        let type_params = callee_type_params.iter().cloned().collect::<BTreeSet<_>>();
+        for (param, param_bounds) in bounds {
+            let Some(actual) = substitutions
+                .get(param)
+                .filter(|_| !unresolved(substitutions, param))
+                .cloned()
+            else {
+                continue;
+            };
+            for bound in param_bounds {
+                let open = bound.trait_args.iter().any(|arg| {
+                    matches!(arg, Type::TypeParam(name) if type_params.contains(name) && unresolved(substitutions, name))
+                });
+                if !open {
+                    continue;
+                }
+                // Only the trait is compared here; the arguments unify below.
+                let trait_only = |bound: &TraitBound, module: &str| {
+                    let bare = TraitBound {
+                        trait_name: bound.trait_name.clone(),
+                        trait_args: Vec::new(),
+                    };
+                    self.trait_bound_identity(&bare, module)
+                };
+                let wanted = trait_only(bound, self.module_name);
+                let mut candidates = Vec::new();
+                if let Type::TypeParam(name) = &actual {
+                    for current in self.type_param_bounds.get(name).into_iter().flatten() {
+                        candidates.extend(
+                            self.trait_bound_closure(current, &actual)
+                                .into_iter()
+                                .filter(|candidate| {
+                                    trait_only(candidate, self.module_name) == wanted
+                                }),
+                        );
+                    }
+                } else {
+                    for trait_impl in self.trait_impls_in_scope() {
+                        let Some(impl_substitutions) =
+                            self.trait_impl_substitutions(trait_impl, &actual)
+                        else {
+                            continue;
+                        };
+                        let implemented =
+                            self.resolved_trait_bound_for_impl(trait_impl, &impl_substitutions);
+                        if trait_only(&implemented, &trait_impl.module_name) == wanted {
+                            candidates.push(implemented);
+                        }
+                    }
+                }
+                let matched = candidates
+                    .into_iter()
+                    .filter(|candidate| candidate.trait_args.len() == bound.trait_args.len())
+                    .find_map(|candidate| {
+                        let mut trial = substitutions.clone();
+                        trial.retain(|name, _| !unresolved(substitutions, name));
+                        bound
+                            .trait_args
+                            .iter()
+                            .zip(&candidate.trait_args)
+                            .all(|(pattern, implemented)| {
+                                super::types::type_pattern_matches(
+                                    pattern,
+                                    implemented,
+                                    &type_params,
+                                    &mut trial,
+                                )
+                            })
+                            .then_some(trial)
+                    });
+                for (name, ty) in matched.into_iter().flatten() {
+                    if unresolved(substitutions, &name) {
+                        substitutions.insert(name, ty);
+                    }
+                }
+            }
+        }
+    }
+
     fn trait_bound_identity(&self, bound: &TraitBound, module: &str) -> String {
         let local_qualified = (module == self.module_name)
             .then(|| self.traits.get(&bound.trait_name))
@@ -1013,6 +1210,12 @@ impl<'a> FunctionChecker<'a> {
                 Ok(true)
             );
         }
+        // A type parameter satisfies whatever its in-scope bounds promise,
+        // so a bounded generic impl matches its own receiver inside its
+        // methods (`self.other()` on `Box[T]` with `T: Trait`).
+        if matches!(ty, Type::TypeParam(_)) {
+            return self.type_satisfies_bound_of_module(ty, bound, self.module_name);
+        }
         self.trait_impls_in_scope().any(|trait_impl| {
             let Some(substitutions) = self.trait_impl_substitutions(trait_impl, ty) else {
                 return false;
@@ -1114,6 +1317,23 @@ impl<'a> FunctionChecker<'a> {
             .map(|(_, method)| method)
     }
 
+    /// The one trait declared with this short name, when every trait of
+    /// that name comes from the same module.
+    fn only_trait_named(&self, name: &str) -> Option<&TraitInfo> {
+        let mut found: Option<&TraitInfo> = None;
+        for info in self.traits.values() {
+            if info.decl.name != name {
+                continue;
+            }
+            match found {
+                Some(first) if first.module_name != info.module_name => return None,
+                Some(_) => {}
+                None => found = Some(info),
+            }
+        }
+        found
+    }
+
     /// The bound method and the name of the trait that declares it.
     pub(super) fn trait_method_from_type_param_with_trait(
         &self,
@@ -1129,7 +1349,14 @@ impl<'a> FunctionChecker<'a> {
             .flatten()
         {
             for bound in self.trait_bound_closure(bound, &self_ty) {
-                if let Some(trait_info) = self.traits.get(&bound.trait_name) {
+                // A default method of an imported trait is checked in the
+                // importer, which may know the trait only by a qualified
+                // name: fall back to the one trait declared with this name.
+                let trait_info = match self.traits.get(&bound.trait_name) {
+                    Some(info) => Some(info),
+                    None => self.only_trait_named(&bound.trait_name),
+                };
+                if let Some(trait_info) = trait_info {
                     if let Some(method) = trait_info.methods.get(method_name) {
                         let trait_substitutions = self_type_substitutions(
                             &trait_info.decl,

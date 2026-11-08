@@ -1,0 +1,13 @@
+# A trap in a generator body that a loop runs in place still names the
+# generator in its call chain.
+from iter import Generator
+
+def climb(start: int64) -> Generator[int64]:
+    mut i = start
+    while true:
+        yield i
+        i += 1
+
+def main():
+    for x in climb(9223372036854775806):
+        print(x)

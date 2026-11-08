@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 #[cfg(test)]
 use std::cell::Cell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io;
 use std::panic::{self, AssertUnwindSafe};
 use std::str;
@@ -38,7 +38,7 @@ use crate::runtime_value::{
     duration_to_host_timer, duration_to_milliseconds, duration_to_seconds,
     evaluate_bytes_host_builtin_ref, evaluate_host_builtin_with_program_args,
     evaluate_string_to_bytes_host_ref, float_floor_divmod, float_power, flush_buffered_files,
-    format_runtime_value_with, host_process_args, io_error, io_read_line,
+    format_runtime_value_with, generator_yield, host_process_args, io_error, io_read_line,
     json_array_metadata_is_exact, json_dump_error_to_diagnostic, json_int_metadata_is_exact,
     json_object_metadata_is_exact, json_parse_owned_to_runtime, lookup_found, lookup_missing,
     manager_exit_failure_note, nominal_runtime_base_name, optional_absent, optional_bytes_value,
@@ -63,15 +63,15 @@ use crate::runtime_value::{
     wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler,
     yield_now_with_runtime_scheduler, ArrayBinaryOp, ArrayDType, ArrayReduction, ArrayValue,
     CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, DictEntries,
-    EnumVariantValue, FfiHandleValue, FileValue, FloatPowerWidth, FunctionValue, HttpExchangeValue,
-    HttpListenerValue, HttpResponseValue, InstanceValue, IntegerArithmeticMode, MapValue,
-    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
+    EnumVariantValue, FfiHandleValue, FileValue, FloatPowerWidth, FunctionValue, GeneratorValue,
+    HttpExchangeValue, HttpListenerValue, HttpResponseValue, InstanceValue, IntegerArithmeticMode,
+    MapValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
     ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue,
     RunOutput, RuntimeName, RuntimeSchedulerWakeReason, SendValueError, SetElements, SetValue,
     TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
     TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue,
     UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
-    NANOS_PER_MILLISECOND, NANOS_PER_MINUTE, NANOS_PER_SECOND,
+    INTERPRETED_GENERATOR_STACK_BYTES, NANOS_PER_MILLISECOND, NANOS_PER_MINUTE, NANOS_PER_SECOND,
 };
 use crate::sema::{substitute_type, Type};
 use crate::text_methods;
@@ -793,14 +793,17 @@ struct MirRuntime {
     /// (ADR-0052 A9); an injection into an unplanned union is refused.
     union_layouts: Arc<HashMap<String, crate::union_layout::MirUnionLayout>>,
     safepoints_enabled: bool,
-    functions: HashMap<String, MirFunction>,
+    /// The functions on a call cycle (see `mir::recursion`), found at the
+    /// first call while safepoints are enabled and shared with child tasks.
+    recursive_functions: Option<Arc<HashSet<String>>>,
+    functions: Arc<HashMap<String, MirFunction>>,
     /// Runtime nominal type name to its synthesized `Display` wrapper.
     display_functions: Arc<HashMap<String, String>>,
     /// The `float32` fields and payloads the program declares, which render
     /// with `float32` digits.
     float32_slots: Arc<crate::runtime_value::Float32Slots>,
-    classes: HashMap<String, MirClass>,
-    trait_impls: Vec<MirTraitImpl>,
+    classes: Arc<HashMap<String, MirClass>>,
+    trait_impls: Arc<Vec<MirTraitImpl>>,
     stdout: Arc<Mutex<String>>,
     stdout_sink: Option<StdoutSink>,
     cancellation: CancellationContext,
@@ -815,6 +818,16 @@ struct MirRuntime {
     pending_returned_view_projection: Option<String>,
     /// Projection selected by ReturnLoan for the current function itself.
     outgoing_returned_view_projection: Option<String>,
+    /// Whether this runtime runs a generator body, whose traps also name
+    /// the calls that resumed it.
+    generator_body: bool,
+}
+
+thread_local! {
+    /// For each generator body running on this thread, innermost last, the
+    /// call frames (innermost first) of the code that resumed it.
+    static GENERATOR_RESUMERS: std::cell::RefCell<Vec<Vec<RuntimeCallFrame>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// The interpreter's per-frame exit-action stack: each registered place
@@ -2199,8 +2212,8 @@ fn arg_default_value(default: ArgDefault) -> Result<Value> {
         ArgDefault::Int64(value) => Value::Int(IntegerValue::from_i64(value)),
         ArgDefault::Int32(value) => Value::Int(IntegerValue::from_i32(value)),
         ArgDefault::EmptyStrDict => Value::Map(MapValue {
-            key_type: Type::named("str"),
-            value_type: Type::named("str"),
+            key_type: Type::named("str").into(),
+            value_type: Type::named("str").into(),
             entries: DictEntries::new(),
         }),
         ArgDefault::StdioNull => process_stdio_null(),
@@ -2649,11 +2662,12 @@ impl MirRuntime {
             module: Arc::new(module),
             union_layouts,
             safepoints_enabled,
-            functions,
+            recursive_functions: None,
+            functions: Arc::new(functions),
             display_functions,
             float32_slots,
-            classes,
-            trait_impls,
+            classes: Arc::new(classes),
+            trait_impls: Arc::new(trait_impls),
             stdout,
             stdout_sink,
             cancellation,
@@ -2665,6 +2679,7 @@ impl MirRuntime {
             constant_states: Arc::new(Mutex::new(HashMap::new())),
             pending_returned_view_projection: None,
             outgoing_returned_view_projection: None,
+            generator_body: false,
         }
     }
 
@@ -2780,7 +2795,7 @@ impl MirRuntime {
 
     fn annotate_runtime_trap_once(&self, mut error: Diagnostic) -> Diagnostic {
         error.capture_runtime_frames_once(
-            self.call_stack.iter().rev().cloned().collect(),
+            self.call_chain(),
             self.task_ancestry.iter().rev().cloned().collect(),
         );
         error
@@ -2798,7 +2813,7 @@ impl MirRuntime {
     ) -> Option<&MirMethod> {
         let mut best = None;
         let mut best_specificity = 0usize;
-        for trait_impl in &self.trait_impls {
+        for trait_impl in self.trait_impls.iter() {
             if trait_name.is_some_and(|name| trait_impl.trait_name != name) {
                 continue;
             }
@@ -2893,7 +2908,7 @@ impl MirRuntime {
     ) -> Option<MirFunction> {
         let mut best = None;
         let mut best_specificity = 0usize;
-        for trait_impl in &self.trait_impls {
+        for trait_impl in self.trait_impls.iter() {
             if trait_impl.trait_name != "From" || trait_impl.trait_args.len() != 1 {
                 continue;
             }
@@ -2980,7 +2995,7 @@ impl MirRuntime {
         let mut best = None;
         let mut best_specificity = 0usize;
         let mut ambiguous = false;
-        for trait_impl in &self.trait_impls {
+        for trait_impl in self.trait_impls.iter() {
             match &trait_impl.for_type {
                 Type::Named(name, _) if name == class_name => {
                     for method in &trait_impl.methods {
@@ -3071,10 +3086,11 @@ impl MirRuntime {
             )),
             Value::Map(map) => Some(Type::Named(
                 "dict".to_string(),
-                vec![map.key_type.clone(), map.value_type.clone()],
+                vec![Type::clone(&map.key_type), Type::clone(&map.value_type)],
             )),
             Value::Duration(_) => Some(Type::named("Duration")),
             Value::Rng(_) => Some(Type::named("random.Rng")),
+            Value::Generator(_) => Some(Type::named("iter.GeneratorHandle")),
             Value::Range(_) => Some(Type::named("Range")),
             Value::ModuleNamespace(_) => None,
             Value::Function(function) => Some(function.signature.clone()),
@@ -3634,7 +3650,29 @@ impl MirRuntime {
             .collect())
     }
 
+    /// Yields at an entry of `function` when it lies on a call cycle, so
+    /// deep recursion with no loop yields like a loop does. An interpreted
+    /// call costs far more than a yield, so the interpreter keeps no call
+    /// fuel. A task's own first call never yields: the call graph is
+    /// conservative and counts most task entry functions, and a child that
+    /// gave its turn back before its first operation would let a parent
+    /// cancel it before it started. Like a loop safepoint, it does not
+    /// observe cancellation.
+    fn call_safepoint(&mut self, function: &MirFunction) {
+        if !self.safepoints_enabled || self.call_depth <= 1 {
+            return;
+        }
+        let module = &self.module;
+        let recursive = self
+            .recursive_functions
+            .get_or_insert_with(|| Arc::new(crate::mir::recursion::recursive_functions(module)));
+        if recursive.contains(&function.name) {
+            yield_now_with_runtime_scheduler();
+        }
+    }
+
     fn execute_function(&mut self, function: &MirFunction, env: &mut Env) -> Result<Value> {
+        self.call_safepoint(function);
         let block_map = function
             .blocks
             .iter()
@@ -3688,6 +3726,7 @@ impl MirRuntime {
                         // trapping child call already published.
                         env.loans.clear();
                         return Err(self.unwind_cleanups_after_trap(
+                            Some(function),
                             &mut cleanup_stack,
                             env,
                             error,
@@ -3707,7 +3746,12 @@ impl MirRuntime {
                 Err(error) => {
                     let error = self.annotate_runtime_trap_once(error);
                     env.loans.clear();
-                    return Err(self.unwind_cleanups_after_trap(&mut cleanup_stack, env, error));
+                    return Err(self.unwind_cleanups_after_trap(
+                        Some(function),
+                        &mut cleanup_stack,
+                        env,
+                        error,
+                    ));
                 }
             };
             match outcome {
@@ -4174,7 +4218,7 @@ impl MirRuntime {
                 Err(error) => {
                     let error = self.annotate_runtime_trap_once(error);
                     env.loans.clear();
-                    return Err(self.unwind_cleanups_after_trap(cleanup_stack, env, error));
+                    return Err(self.unwind_cleanups_after_trap(None, cleanup_stack, env, error));
                 }
             }
         }
@@ -4186,10 +4230,30 @@ impl MirRuntime {
     /// too cannot replace it, and every exit below that one still runs.
     fn unwind_cleanups_after_trap(
         &mut self,
+        function: Option<&MirFunction>,
         cleanup_stack: &mut CleanupStack,
         env: &mut Env,
         error: Diagnostic,
     ) -> Diagnostic {
+        // A generator a local of the frame owns closes first, as the native
+        // backend runs a suspended body's exits before its caller's. The
+        // receiver and parameters stay: the caller may write them back.
+        // A trap in an exit (no `function`) leaves the frame's generators to
+        // the frame's own drop.
+        let generators = env
+            .values
+            .iter()
+            .filter(|(name, value)| {
+                function.is_some_and(|function| {
+                    name.as_str() != "self"
+                        && !function.params.iter().any(|param| &param.name == *name)
+                }) && owns_generator(value)
+            })
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        for name in generators {
+            drop(env.values.remove(&name));
+        }
         let mut exit_failures = Vec::new();
         while let Some((place, action)) = cleanup_stack.pop() {
             if let Ok(Some(failure)) = self.run_cleanup_place(&place, &action, env, true) {
@@ -4747,8 +4811,8 @@ impl MirRuntime {
                     values.insert(key, value);
                 }
                 Ok(RvalueOutcome::Value(Value::Map(MapValue {
-                    key_type: key_type.clone(),
-                    value_type: value_type.clone(),
+                    key_type: key_type.clone().into(),
+                    value_type: value_type.clone().into(),
                     entries: values,
                 })))
             }
@@ -4926,6 +4990,9 @@ impl MirRuntime {
         env: &mut Env,
         expected_return_type: Option<&Type>,
     ) -> Result<Value> {
+        if let Some(operation) = name.strip_prefix("iter::__aura_generator_") {
+            return self.evaluate_generator_builtin(operation, args, env);
+        }
         if name == "control::__retry_cancel_if_requested" {
             let values = evaluate_named_args(args, env)?;
             bind_builtin_args(&[], values)?;
@@ -5027,8 +5094,8 @@ impl MirRuntime {
             let values = evaluate_named_args(args, env)?;
             bind_builtin_args(&[], values)?;
             return Ok(Value::Map(MapValue {
-                key_type: Type::named("Unknown"),
-                value_type: Type::named("Unknown"),
+                key_type: Type::named("Unknown").into(),
+                value_type: Type::named("Unknown").into(),
                 entries: DictEntries::new(),
             }));
         }
@@ -5169,8 +5236,8 @@ impl MirRuntime {
                         Diagnostic::coded("AU4005", "dictionary capacity allocation failed")
                     })?;
                     Ok(Value::Map(MapValue {
-                        key_type: args[0].clone(),
-                        value_type: args[1].clone(),
+                        key_type: args[0].clone().into(),
+                        value_type: args[1].clone().into(),
                         entries,
                     }))
                 }
@@ -6411,6 +6478,138 @@ impl MirRuntime {
         Ok(value)
     }
 
+    /// A runtime that runs a generator body on the generator's own stack:
+    /// it shares this runtime's program, output, cancellation, constants,
+    /// and task ancestry, and starts with an empty call stack.
+    fn fork_for_generator(&self) -> MirRuntime {
+        MirRuntime {
+            module: Arc::clone(&self.module),
+            union_layouts: Arc::clone(&self.union_layouts),
+            safepoints_enabled: self.safepoints_enabled,
+            recursive_functions: self.recursive_functions.clone(),
+            functions: Arc::clone(&self.functions),
+            display_functions: Arc::clone(&self.display_functions),
+            float32_slots: Arc::clone(&self.float32_slots),
+            classes: Arc::clone(&self.classes),
+            trait_impls: Arc::clone(&self.trait_impls),
+            stdout: Arc::clone(&self.stdout),
+            stdout_sink: self.stdout_sink.clone(),
+            cancellation: self.cancellation.clone(),
+            program_args: Arc::clone(&self.program_args),
+            call_depth: 0,
+            call_stack: Vec::new(),
+            task_ancestry: self.task_ancestry.clone(),
+            return_type_stack: Vec::new(),
+            constant_states: Arc::clone(&self.constant_states),
+            pending_returned_view_projection: None,
+            outgoing_returned_view_projection: None,
+            generator_body: true,
+        }
+    }
+
+    /// This runtime's active calls, innermost first, followed by those of
+    /// the code that resumed it when it runs a generator body.
+    fn call_chain(&self) -> Vec<RuntimeCallFrame> {
+        let mut frames = self.call_stack.iter().rev().cloned().collect::<Vec<_>>();
+        if self.generator_body {
+            GENERATOR_RESUMERS.with(|resumers| {
+                if let Some(outer) = resumers.borrow().last() {
+                    frames.extend(outer.iter().cloned());
+                }
+            });
+        }
+        frames
+    }
+
+    /// Runs `work`, a resume or close of a generator, with this runtime's
+    /// calls recorded as the body's resumer.
+    fn with_generator_resumer<T>(&self, work: impl FnOnce() -> T) -> T {
+        let chain = self.call_chain();
+        GENERATOR_RESUMERS.with(|resumers| resumers.borrow_mut().push(chain));
+        struct Pop;
+        impl Drop for Pop {
+            fn drop(&mut self) {
+                GENERATOR_RESUMERS.with(|resumers| {
+                    resumers.borrow_mut().pop();
+                });
+            }
+        }
+        let _pop = Pop;
+        work()
+    }
+
+    /// The `iter.__aura_generator_*` helpers behind `Generator[T]`.
+    fn evaluate_generator_builtin(
+        &mut self,
+        operation: &str,
+        args: &[MirArg],
+        env: &mut Env,
+    ) -> Result<Value> {
+        // Generic helpers carry their type arguments in the call name.
+        let operation = operation.split('[').next().unwrap_or(operation);
+        let values = evaluate_named_args(args, env)?;
+        match operation {
+            "start" => {
+                let mut bound = bind_builtin_args(&["body"], values)?;
+                let body = bound.remove(0).value;
+                // The checker types these helpers' arguments.
+                let Value::Function(body) = body else {
+                    unreachable!("a generator starts from its body closure");
+                };
+                let function = self
+                    .functions
+                    .get(&body.name)
+                    .cloned()
+                    .expect("a generator body names a lowered function");
+                let mut supplied = Vec::new();
+                if let Some(environment) = &body.closure_environment {
+                    supplied.extend(environment.arguments(&body.name)?.into_iter().map(
+                        |capture| EvaluatedMirArg {
+                            name: None,
+                            value: capture.value,
+                            ty: Some(capture.ty),
+                            writeback_place: None,
+                        },
+                    ));
+                }
+                let bound_args = self.bind_function_args(&function, supplied, None, None)?;
+                let mut runtime = self.fork_for_generator();
+                let run = move || {
+                    runtime
+                        .call_function_for_target(&function, None, bound_args, None)
+                        .and_then(|outcome| outcome.value.into_result())
+                        .map(|_| ())
+                };
+                Ok(Value::Generator(GeneratorValue::new(
+                    run,
+                    INTERPRETED_GENERATOR_STACK_BYTES,
+                    true,
+                    None,
+                )))
+            }
+            "yield" => {
+                let mut bound = bind_builtin_args(&["item"], values)?;
+                generator_yield(bound.remove(0).value).map(Value::Bool)
+            }
+            "resume" | "take" | "close" => {
+                let bound = bind_builtin_args(&["handle"], values)?;
+                let Value::Generator(generator) = &bound[0].value else {
+                    unreachable!("a generator helper takes a generator");
+                };
+                match operation {
+                    "resume" => self
+                        .with_generator_resumer(|| generator.resume())
+                        .map(Value::Bool),
+                    "take" => generator.take_item(),
+                    _ => self
+                        .with_generator_resumer(|| generator.close())
+                        .map(|()| Value::Unit),
+                }
+            }
+            _ => unreachable!("unknown generator helper `{operation}`"),
+        }
+    }
+
     fn start_task(&mut self, request: StartTaskRequest<'_>, env: &mut Env) -> Result<Value> {
         let StartTaskRequest {
             returns_handle,
@@ -6485,6 +6684,7 @@ impl MirRuntime {
         let stdout_sink = self.stdout_sink.clone();
         let program_args = self.program_args.clone();
         let constant_states = self.constant_states.clone();
+        let recursive_functions = self.recursive_functions.clone();
         let function_for_task = function.clone();
         let function_signature = function_value.signature.clone();
         let mut task_ancestry = self.task_ancestry.clone();
@@ -6508,6 +6708,7 @@ impl MirRuntime {
             );
             runtime.constant_states = constant_states;
             runtime.task_ancestry = task_ancestry;
+            runtime.recursive_functions = recursive_functions;
             if is_closure {
                 runtime
                     .call_function_for_target(&function_for_task, None, bound_args, None)
@@ -7552,7 +7753,7 @@ impl MirRuntime {
                     elements.push(try_clone_mir_value(key)?);
                 }
                 Ok(Value::Vec(VecValue {
-                    element_type: map.key_type.clone(),
+                    element_type: Type::clone(&map.key_type),
                     elements: elements.into(),
                     str_view: Default::default(),
                 }))
@@ -7567,7 +7768,7 @@ impl MirRuntime {
                     elements.push(try_clone_mir_value(value)?);
                 }
                 Ok(Value::Vec(VecValue {
-                    element_type: map.value_type.clone(),
+                    element_type: Type::clone(&map.value_type),
                     elements: elements.into(),
                     str_view: Default::default(),
                 }))
@@ -7583,12 +7784,18 @@ impl MirRuntime {
                     try_array_buffer(map.entries.len(), "Array-containing Map entry copy")?;
                 for (key, value) in &map.entries {
                     elements.push(Value::Tuple(TupleValue {
-                        element_types: vec![map.key_type.clone(), map.value_type.clone()],
+                        element_types: vec![
+                            Type::clone(&map.key_type),
+                            Type::clone(&map.value_type),
+                        ],
                         elements: vec![try_clone_mir_value(key)?, try_clone_mir_value(value)?],
                     }));
                 }
                 Ok(Value::Vec(VecValue {
-                    element_type: Type::Tuple(vec![map.key_type.clone(), map.value_type.clone()]),
+                    element_type: Type::Tuple(vec![
+                        Type::clone(&map.key_type),
+                        Type::clone(&map.value_type),
+                    ]),
                     elements: elements.into(),
                     str_view: Default::default(),
                 }))
@@ -10864,6 +11071,15 @@ fn array_coordinates_from_runtime(value: &Value) -> Result<Box<[i64]>> {
         .into_boxed_slice())
 }
 
+/// Whether `value` is a generator handle or a `Generator[T]` holding one.
+fn owns_generator(value: &Value) -> bool {
+    match value {
+        Value::Generator(_) => true,
+        Value::Instance(instance) => instance.class_name == "iter.Generator",
+        _ => false,
+    }
+}
+
 fn evaluate_named_args(args: &[MirArg], env: &mut Env) -> Result<Vec<EvaluatedMirArg>> {
     args.iter()
         .map(|arg| {
@@ -11580,8 +11796,8 @@ fn expect_owned_headers_map(value: Value, label: &str) -> Result<Vec<(String, St
 
 fn headers_map_value(headers: Vec<(String, String)>) -> Value {
     Value::Map(MapValue {
-        key_type: Type::named("str"),
-        value_type: Type::named("str"),
+        key_type: Type::named("str").into(),
+        value_type: Type::named("str").into(),
         entries: headers
             .into_iter()
             .map(|(key, value)| (Value::String(key.into()), Value::String(value.into())))

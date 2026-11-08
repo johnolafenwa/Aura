@@ -1,0 +1,8 @@
+error[AU3002]: parameter `text` is borrowed; declare it as `own str` to take ownership, or clone the value before consuming it
+ --> crates/aura-compiler/tests/fixtures/check-fail/generator_borrowed_param.au:5:15
+  |
+5 |         yield text
+  |               ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/generator_borrowed_param.au:3:12: parameter `text` is borrowed here
+  = help: declare the parameter as `own str` when the function should consume it, or call `.clone()` to consume an independent copy
+  = fix: replace crates/aura-compiler/tests/fixtures/check-fail/generator_borrowed_param.au:5:19-5:19 with `.clone()`

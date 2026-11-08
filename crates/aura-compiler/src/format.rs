@@ -791,7 +791,7 @@ impl<'a> Formatter<'a> {
             && self.toks[index].class == Class::Name
             && matches!(
                 self.toks[index].text.as_str(),
-                "requires" | "ensures" | "invariant" | "decreases"
+                "requires" | "ensures" | "invariant" | "decreases" | "yield"
             )
             && self
                 .toks

@@ -7,6 +7,7 @@
 use mio::{Events, Poll, Token, Waker};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
+use std::hash::{BuildHasherDefault, Hasher};
 use std::io;
 use std::ops::BitOr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -67,6 +68,60 @@ enum InboxCommand {
     Deadline(WaitKey, Instant),
     Cancel(WaitKey),
 }
+
+/// A fast hasher for the runtime's own integer ids: wait keys, epochs,
+/// tokens and descriptors. None of them come from program input, so the
+/// SipHash flood protection of the default hasher buys nothing on these
+/// wake paths, where it was the largest single cost.
+#[derive(Clone, Copy, Default)]
+pub struct IdHasher(u64);
+
+impl IdHasher {
+    #[inline]
+    fn add(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+}
+
+impl Hasher for IdHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(8) {
+            let mut word = [0u8; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            self.add(u64::from_le_bytes(word));
+        }
+    }
+
+    #[inline]
+    fn write_u64(&mut self, value: u64) {
+        self.add(value);
+    }
+
+    #[inline]
+    fn write_u32(&mut self, value: u32) {
+        self.add(u64::from(value));
+    }
+
+    #[inline]
+    fn write_i32(&mut self, value: i32) {
+        self.add(value as u32 as u64);
+    }
+
+    #[inline]
+    fn write_usize(&mut self, value: usize) {
+        self.add(value as u64);
+    }
+}
+
+/// A map keyed by runtime ids, hashed with [`IdHasher`].
+pub type IdHashMap<K, V> = HashMap<K, V, BuildHasherDefault<IdHasher>>;
+/// A set of runtime ids, hashed with [`IdHasher`].
+pub type IdHashSet<K> = HashSet<K, BuildHasherDefault<IdHasher>>;
 
 struct ReactorInbox {
     id: u64,
@@ -201,18 +256,18 @@ pub struct RuntimeReactor {
     poll: Poll,
     events: Events,
     inbox: Arc<ReactorInbox>,
-    active_epochs: HashMap<u64, u64>,
+    active_epochs: IdHashMap<u64, u64>,
     deadlines: BinaryHeap<Reverse<TimerEntry>>,
-    timer_versions: HashMap<WaitKey, u64>,
+    timer_versions: IdHashMap<WaitKey, u64>,
     next_timer_sequence: u64,
     ready: VecDeque<WaitKey>,
-    ready_set: HashSet<WaitKey>,
+    ready_set: IdHashSet<WaitKey>,
     #[cfg(unix)]
-    fds: HashMap<RawFd, FdEntry>,
+    fds: IdHashMap<RawFd, FdEntry>,
     #[cfg(unix)]
-    token_fds: HashMap<Token, RawFd>,
+    token_fds: IdHashMap<Token, RawFd>,
     #[cfg(unix)]
-    key_fds: HashMap<WaitKey, BTreeSet<RawFd>>,
+    key_fds: IdHashMap<WaitKey, BTreeSet<RawFd>>,
     #[cfg(unix)]
     next_fd_token: usize,
 }
@@ -235,18 +290,18 @@ impl RuntimeReactor {
             poll,
             events: Events::with_capacity(128),
             inbox,
-            active_epochs: HashMap::new(),
+            active_epochs: IdHashMap::default(),
             deadlines: BinaryHeap::new(),
-            timer_versions: HashMap::new(),
+            timer_versions: IdHashMap::default(),
             next_timer_sequence: 0,
             ready: VecDeque::new(),
-            ready_set: HashSet::new(),
+            ready_set: IdHashSet::default(),
             #[cfg(unix)]
-            fds: HashMap::new(),
+            fds: IdHashMap::default(),
             #[cfg(unix)]
-            token_fds: HashMap::new(),
+            token_fds: IdHashMap::default(),
             #[cfg(unix)]
-            key_fds: HashMap::new(),
+            key_fds: IdHashMap::default(),
             #[cfg(unix)]
             next_fd_token: FIRST_FD_TOKEN,
         })
@@ -432,6 +487,12 @@ impl RuntimeReactor {
     /// descriptor learns of readiness only from the poller, so while one is
     /// armed this returns at once.
     pub fn spin_for_notification(&self, budget: Duration) {
+        self.spin_for_notification_or(budget, || false);
+    }
+
+    /// Like `spin_for_notification`, but also stops as soon as `stop`
+    /// returns true, which the scheduler uses to notice work it can steal.
+    pub fn spin_for_notification_or(&self, budget: Duration, mut stop: impl FnMut() -> bool) {
         #[cfg(unix)]
         if !self.key_fds.is_empty() {
             return;
@@ -447,7 +508,7 @@ impl RuntimeReactor {
                 }
                 std::hint::spin_loop();
             }
-            if start.elapsed() >= budget {
+            if stop() || start.elapsed() >= budget {
                 return;
             }
         }

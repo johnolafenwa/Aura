@@ -57,6 +57,7 @@ pub(crate) fn prelude_display_trait() -> TraitInfo {
         decl,
         supertraits: Vec::new(),
         methods,
+        assoc_bounds: Vec::new(),
     }
 }
 

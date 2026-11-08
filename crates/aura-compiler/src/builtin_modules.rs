@@ -276,6 +276,7 @@ fn function_info(
             doc: None,
             contracts: Vec::new(),
             spec: false,
+            lemma: false,
         },
         signature: FunctionSignature {
             params: lowered_params,
@@ -326,6 +327,7 @@ fn generic_function_info(
             doc: None,
             contracts: Vec::new(),
             spec: false,
+            lemma: false,
         },
         signature: FunctionSignature {
             params: lowered_params,
@@ -1634,6 +1636,61 @@ fn random_namespace() -> ModuleNamespace {
     }
 }
 
+/// The host part of `iter`: the generator handle and the runtime helpers
+/// that `Generator[T]` and generator functions use. `Step`, `Iterator`, and
+/// `Generator` are Aura source in `std/iter.au`. The helpers' names start
+/// with `__aura_`, which only the compiler and `iter` itself may spell.
+fn iter_namespace() -> ModuleNamespace {
+    let handle = || type_ref("iter.GeneratorHandle", Vec::new());
+    let body = TypeRef::callable(
+        false,
+        crate::ast::ReceiverKind::Value,
+        TypeRef::function(Vec::new(), type_ref("None", Vec::new()), builtin_span()),
+        builtin_span(),
+    );
+    let mut namespace = function_only_namespace(
+        "iter",
+        vec![
+            function_info(
+                "iter",
+                "__aura_generator_start",
+                vec![own_param("body", body)],
+                handle(),
+            ),
+            generic_function_info(
+                "iter",
+                "__aura_generator_yield",
+                vec!["T"],
+                vec![own_param("item", type_ref("T", Vec::new()))],
+                type_ref("bool", Vec::new()),
+            ),
+            function_info(
+                "iter",
+                "__aura_generator_resume",
+                vec![borrow_param("handle", handle())],
+                type_ref("bool", Vec::new()),
+            ),
+            generic_function_info(
+                "iter",
+                "__aura_generator_take",
+                vec!["T"],
+                vec![borrow_param("handle", handle())],
+                type_ref("T", Vec::new()),
+            ),
+            function_info(
+                "iter",
+                "__aura_generator_close",
+                vec![borrow_param("handle", handle())],
+                type_ref("None", Vec::new()),
+            ),
+        ],
+    );
+    let class = class_info("iter", "GeneratorHandle");
+    namespace.classes = BTreeMap::from([("GeneratorHandle".to_string(), class)]);
+    namespace.all_classes = namespace.classes.clone();
+    namespace
+}
+
 fn control_namespace() -> ModuleNamespace {
     let result_type = type_ref(
         "Result",
@@ -2318,8 +2375,7 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
         "math" => Some(math_namespace()),
         "bytes" => Some(bytes_namespace()),
         "json" => Some(json_namespace()),
-        // `Step` and `Iterator` are Aura source in `std/iter.au`.
-        "iter" => Some(function_only_namespace("iter", Vec::new())),
+        "iter" => Some(iter_namespace()),
         // The prelude's traits and implementations are Aura source in
         // `std/prelude.au`.
         "prelude" => Some(function_only_namespace("prelude", Vec::new())),
@@ -2330,7 +2386,7 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
 }
 
 const HOST_BUILTIN_MODULES: &[&str] = &[
-    "sys", "path", "math", "bytes", "json", "toml", "metrics", "log", "trace", "random",
+    "sys", "path", "math", "bytes", "json", "iter", "toml", "metrics", "log", "trace", "random",
 ];
 
 fn build_host_builtin_metadata() -> BTreeMap<String, HostBuiltinMetadata> {

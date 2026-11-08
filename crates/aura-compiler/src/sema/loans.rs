@@ -84,6 +84,7 @@ pub(crate) fn synthetic_returned_view_decl(
         doc: None,
         contracts: Vec::new(),
         spec: false,
+        lemma: false,
     })
 }
 
@@ -1024,7 +1025,17 @@ impl<'a> FunctionChecker<'a> {
         args: &[Argument],
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<Option<PlacePath>> {
-        let Some((decl, receiver, owner_module)) = self.returned_view_callee(callee, locals)?
+        // Resolving the callee reads only types. An owned receiver may
+        // already be moved by the call's own check, so look it up on a
+        // copy of the bindings with moves cleared.
+        let mut metadata_locals = locals.clone();
+        for binding in metadata_locals.values_mut() {
+            binding.moved = false;
+            binding.moved_fields.clear();
+            binding.stale_match_borrow_place = None;
+        }
+        let Some((decl, receiver, owner_module)) =
+            self.returned_view_callee(callee, &mut metadata_locals)?
         else {
             return Ok(None);
         };

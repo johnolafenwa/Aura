@@ -11,15 +11,29 @@ pub struct Span {
     pub column: usize,
 }
 
+/// Code the compiler generates from written code (a fast iteration form)
+/// gives each copied expression a span of its own: the written column plus
+/// a multiple of this stride. Rendering shows the written column.
+pub const GENERATED_COLUMN_STRIDE: usize = 1 << 12;
+
 impl Span {
     pub fn new(line: usize, column: usize) -> Self {
         Self { line, column }
+    }
+
+    /// The position as written, for a span of generated code.
+    pub fn written(self) -> Self {
+        Self {
+            line: self.line,
+            column: self.column % GENERATED_COLUMN_STRIDE,
+        }
     }
 }
 
 impl fmt::Display for Span {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.line, self.column)
+        let written = self.written();
+        write!(f, "{}:{}", written.line, written.column)
     }
 }
 
@@ -238,6 +252,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "invalid contract clause",
     },
     DiagnosticCodeInfo {
+        code: "AU2049",
+        band: "names/types",
+        title: "invalid generator",
+    },
+    DiagnosticCodeInfo {
         code: "AU2999",
         band: "names/types",
         title: "general compile-time rejection",
@@ -348,9 +367,34 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "contract violated",
     },
     DiagnosticCodeInfo {
+        code: "AU4010",
+        band: "runtime",
+        title: "generator misuse",
+    },
+    DiagnosticCodeInfo {
         code: "AU5001",
         band: "lint",
         title: "unused local binding",
+    },
+    DiagnosticCodeInfo {
+        code: "AU5101",
+        band: "verify",
+        title: "check not proved",
+    },
+    DiagnosticCodeInfo {
+        code: "AU5102",
+        band: "verify",
+        title: "solver could not decide",
+    },
+    DiagnosticCodeInfo {
+        code: "AU5103",
+        band: "verify",
+        title: "solver unavailable",
+    },
+    DiagnosticCodeInfo {
+        code: "AU5104",
+        band: "verify",
+        title: "check outside the verified subset",
     },
 ];
 
@@ -438,6 +482,139 @@ impl RuntimeSourceSpan {
 pub struct RuntimeCallFrame {
     pub function: String,
     pub span: RuntimeSourceSpan,
+}
+
+/// The name prefix of the function that holds a generator's body.
+pub const GENERATOR_BODY_PREFIX: &str = "__aura_generator_body_";
+
+/// The call frames a diagnostic shows. A generator body's frame is shown
+/// under the generator function's own name, and the frames that only carry
+/// the body (its packing closure and `Generator.next` or `close`) are left
+/// out, so the chain reads `generator -> caller`.
+pub fn visible_call_frames(frames: &[RuntimeCallFrame]) -> Vec<RuntimeCallFrame> {
+    let mut visible = Vec::with_capacity(frames.len());
+    let mut after_body = false;
+    for frame in frames {
+        let (module, name) = match frame.function.rsplit_once("::") {
+            Some((module, name)) => (Some(module), name),
+            None => (None, frame.function.as_str()),
+        };
+        if let Some(generator) = name.strip_prefix(GENERATOR_BODY_PREFIX) {
+            let generator = generator_copy_original(generator).unwrap_or(generator);
+            let function = match module {
+                Some(module) => format!("{module}::{generator}"),
+                None => generator.to_string(),
+            };
+            visible.push(RuntimeCallFrame {
+                function,
+                span: frame.span.clone(),
+            });
+            after_body = true;
+            continue;
+        }
+        // A simple generator's frame advances under the generator's name,
+        // and a fast iterator's advance method as its `next`.
+        if let Some(advance) = name.strip_suffix(".__aura_advance") {
+            let shown = match advance.strip_prefix("__aura_frame_") {
+                Some(generator) => generator_copy_original(generator)
+                    .unwrap_or(generator)
+                    .to_string(),
+                None => format!("Iterator for {advance}.next"),
+            };
+            visible.push(RuntimeCallFrame {
+                function: match module {
+                    Some(module) => format!("{module}::{shown}"),
+                    None => shown,
+                },
+                span: frame.span.clone(),
+            });
+            after_body = false;
+            continue;
+        }
+        if after_body
+            && (name.starts_with("__lambda_")
+                || frame.function.starts_with("Iterator for iter.Generator.")
+                || frame.function.starts_with("iter::Generator."))
+        {
+            continue;
+        }
+        after_body = false;
+        visible.push(frame.clone());
+    }
+    for frame in &mut visible {
+        let (module, name) = match frame.function.rsplit_once("::") {
+            Some((module, name)) => (Some(module), name),
+            None => (None, frame.function.as_str()),
+        };
+        if let Some(original) = generator_copy_original(name) {
+            frame.function = match module {
+                Some(module) => format!("{module}::{original}"),
+                None => original.to_string(),
+            };
+        }
+    }
+    visible
+}
+
+/// The name prefix of a copy of a function that takes a generator's
+/// arguments in place of the generator.
+pub const GENERATOR_COPY_PREFIX: &str = "__aura_with_";
+
+/// The function a generator copy was made from: `__aura_with_total__0_upto`
+/// is a copy of `total` whose parameter 0 calls `upto`. The copy's name
+/// ends in one `__<position>_<generator>` part per replaced parameter.
+pub fn generator_copy_original(name: &str) -> Option<&str> {
+    let rest = name.strip_prefix(GENERATOR_COPY_PREFIX)?;
+    let bytes = rest.as_bytes();
+    (1..rest.len()).find_map(|at| {
+        let digits = bytes[at..]
+            .strip_prefix(b"__")?
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+        (digits > 0 && bytes.get(at + 2 + digits) == Some(&b'_')).then(|| &rest[..at])
+    })
+}
+
+/// A loop can run a generator's body in place, so a trap there has no frame
+/// of the generator's own. Such code has generated spans; when the trap's
+/// line belongs to a module-level `def` other than the innermost frame's
+/// function, the chain shows that function first, as if it had a frame.
+pub fn name_inlined_generator(frames: &mut Vec<RuntimeCallFrame>, trap: Span, source: &str) {
+    if trap.column < GENERATED_COLUMN_STRIDE {
+        return;
+    }
+    let Some(innermost) = frames.first() else {
+        return;
+    };
+    let lines = source.lines().take(trap.line).collect::<Vec<_>>();
+    let Some((index, name)) = lines.iter().enumerate().rev().find_map(|(index, line)| {
+        let rest = line.strip_prefix("def ")?;
+        let end = rest.find(['(', '['])?;
+        Some((index, rest[..end].trim().to_string()))
+    }) else {
+        return;
+    };
+    let (module, shown) = match innermost.function.rsplit_once("::") {
+        Some((module, shown)) => (Some(module), shown),
+        None => (None, innermost.function.as_str()),
+    };
+    let declared = Span::new(index + 1, 1);
+    if shown == name || innermost.span.start.line == declared.line {
+        return;
+    }
+    let function = match module {
+        Some(module) => format!("{module}::{name}"),
+        None => name,
+    };
+    let path = innermost.span.path.clone();
+    frames.insert(
+        0,
+        RuntimeCallFrame {
+            function,
+            span: RuntimeSourceSpan::point(path, declared),
+        },
+    );
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -779,7 +956,7 @@ impl Diagnostic {
             code: self.code.clone(),
             severity: self.severity,
             message: self.message.clone(),
-            primary_span: self.span.map(|span| StructuredSpan {
+            primary_span: self.span.map(Span::written).map(|span| StructuredSpan {
                 path: path.clone(),
                 start: span,
                 end: Span::new(span.line, span.column.saturating_add(1)),
@@ -809,9 +986,8 @@ impl Diagnostic {
                     applicability: edit.applicability.clone(),
                 })
                 .collect(),
-            call_frames: self
-                .call_frames
-                .iter()
+            call_frames: visible_call_frames(&self.call_frames)
+                .into_iter()
                 .map(|frame| StructuredRuntimeCallFrame {
                     function: frame.function.clone(),
                     span: frame.span.structured(&path),
@@ -886,7 +1062,10 @@ impl Diagnostic {
         for secondary in &self.secondary_spans {
             rendered.push_str(&format!(
                 "\n  = related {}:{}:{}: {}",
-                path, secondary.span.line, secondary.span.column, secondary.label
+                path,
+                secondary.span.line,
+                secondary.span.written().column,
+                secondary.label
             ));
         }
         for note in &self.notes {
@@ -899,8 +1078,11 @@ impl Diagnostic {
             ));
         }
         if !self.call_frames.is_empty() {
-            let frames = self
-                .call_frames
+            let mut frames = visible_call_frames(&self.call_frames);
+            if let Some(span) = self.span {
+                name_inlined_generator(&mut frames, span, source);
+            }
+            let frames = frames
                 .iter()
                 .map(|frame| format!("{} at {}", frame.function, frame.span.start))
                 .collect::<Vec<_>>()
@@ -1051,6 +1233,7 @@ fn display_source_path(path: &str) -> String {
 }
 
 fn render_annotated(path: &str, source: &str, span: Span, code: &str, message: &str) -> String {
+    let span = span.written();
     let location = format!("{}:{}:{}", path, span.line, span.column);
     let Some(line_text) = source.lines().nth(span.line.saturating_sub(1)) else {
         return format!("error[{}]: {}\n --> {}", code, message, location);

@@ -1,0 +1,53 @@
+# `d[k]` passed to a parameter that only borrows it reads the value where
+# the dict keeps it, for a local dict and for a dict field.
+import json
+
+
+class Db:
+    docs: dict[int64, json.Value] = {}
+
+
+def score(doc: json.Value) -> int64:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup("score"):
+                case Lookup.Found(value):
+                    match json.as_int(value):
+                        case int64 as number:
+                            return number
+                        case None:
+                            return -1
+                case Lookup.Missing:
+                    return -2
+        case _:
+            return -3
+
+
+def name_len(doc: json.Value) -> int64:
+    match doc:
+        case json.Value.String(text):
+            return text.byte_len()
+        case _:
+            return 0
+
+
+def main() -> int32:
+    mut docs: dict[int64, json.Value] = {}
+    mut names: dict[str, json.Value] = {}
+    mut db = Db()
+    for i in range(5):
+        docs[i] = json.Value.Object({"score": json.Value.Int(i * 3)})
+        names[f"n{i}"] = json.Value.String(f"name-{i}")
+        db.docs[i] = json.Value.Object({"score": json.Value.Int(i * 5)})
+    mut total = 0
+    for i in range(5):
+        total += score(docs[i])
+        total += name_len(names[f"n{i}"])
+        total += score(db.docs[i])
+    docs[2] = json.Value.Object({"score": json.Value.Int(100)})
+    db.docs[3] = json.Value.Int(1)
+    total += score(docs[2]) + score(db.docs[3])
+    print(total)
+    print(json.dumps(docs[2]))
+    print(json.dumps(db.docs[3]))
+    return 0

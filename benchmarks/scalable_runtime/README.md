@@ -201,6 +201,29 @@ still proves cooperative safepoint progress on one worker, even though
 multicore is the default. Other non-multicore workloads explicitly remove any
 ambient `AURA_WORKERS` override, so they measure the production default.
 
+### `sleeper-vs-recursion` (probe)
+
+`sleeper_vs_recursion.au` is a manual probe; the host runner does not run it.
+One task sleeps 1 ms a hundred times and records its worst lateness while a
+sibling computes naive `fib(35)`, which recurses without a loop. Any progress
+for the sleeper must come from the call safepoints at the entries of
+recursive functions. Run it on one worker:
+
+```bash
+./target/release/aura build --backend direct \
+  -o target/scalable-runtime-benchmarks/sleeper-vs-recursion \
+  benchmarks/scalable_runtime/sleeper_vs_recursion.au
+AURA_WORKERS=1 target/scalable-runtime-benchmarks/sleeper-vs-recursion
+```
+
+```text
+SAMPLE recursion_ms fib35 <elapsed_ms>
+SAMPLE worst_sleep_lateness_ms 1 <worst_ms>
+DONE recursion_starvation
+```
+
+The Batch 8 step 8d gate is a worst lateness under 10 ms.
+
 ### `cpu-scaling`
 
 The program is built once and invoked with either `1` or `4` as its sole
@@ -303,3 +326,16 @@ high-frequency subprocess workload into timer measurements.
 The JSON report records the monitoring cadence. Every monitor is joined before
 the workload result is accepted. A monitor error, or a run with no process
 samples, invalidates the benchmark instead of producing partial evidence.
+
+## Batch 8 probes
+
+These manual probes back the [Batch 8 design checkpoint](../../architecture_docs/26-batch-8-design-checkpoint.md).
+The host runner does not run them. Build each one as above, then run it
+directly, once with the default worker count and once with `AURA_WORKERS=1`.
+
+| Probe | Run | Prints |
+| --- | --- | --- |
+| `spawn_join.au` | `spawn-join 30000` | `serial_ms` (start and join one child at a time) and `batch_ms` (start all, then join) |
+| `imbalance.au` | `imbalance` | `ms` for 16 CPU jobs, four of them 8x longer; the ideal on 4 workers is the 1-worker time divided by 4 |
+| `cancel_parked.au` | `cancel-parked` | milliseconds from `cancel()` to the last of 1,000 parked children exiting, and to group exit |
+| `parked_memory.au` | `parked-memory 10000` | resident bytes per parked sleeper (Linux only) |

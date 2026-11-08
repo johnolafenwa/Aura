@@ -1,0 +1,72 @@
+from iter import Generator, Iterator, Step
+
+def naturals() -> Generator[int64]:
+    mut n = 0
+    while true:
+        yield n
+        n += 1
+
+def words() -> Generator[str]:
+    yield "ant"
+    yield "bee"
+    yield "cat"
+
+class Countdown:
+    n: int64
+
+impl Iterator[int64] for Countdown:
+    def next(mut self) -> Step[int64]:
+        if self.n == 0:
+            return Step.End
+        self.n -= 1
+        return Step.Item(self.n)
+
+class Bag:
+    items: list[str]
+
+    def take(own self) -> list[str]:
+        return self.items
+
+def total[I: Iterator[int64]](it: own I) -> int64:
+    mut sum = 0
+    for x in it:
+        sum += x
+    return sum
+
+def main():
+    # Comprehensions collect an iterator source first.
+    print([x * x for x in Countdown(n=4)])
+    g = words()
+    print([f"{w}!" for w in g if w != "bee"])
+    print({w.clone(): i for i, w in enumerate(words())})
+    print([a + b for a, b in zip(Countdown(n=3), Countdown(n=5))])
+
+    # `for` over enumerate or zip of iterators stays lazy, so an endless
+    # generator stops with the shorter side.
+    for i, w in enumerate(words(), start=1):
+        invariant i >= 1
+        if w == "bee":
+            continue
+        print(f"{i}: {w}")
+    for n, w in zip(naturals(), words()):
+        print(f"{n} {w}")
+    for pair in zip(words(), naturals()):
+        print(pair)
+    for i, _ in enumerate(Countdown(n=2)):
+        print(i)
+
+    # Loop invariants check each item.
+    for x in naturals():
+        invariant x < 3
+        if x == 2:
+            break
+        print(x)
+
+    # An owned receiver call as a loop source moves the receiver once.
+    k = Countdown(n=2)
+    for x in k.collect():
+        print(x)
+    bag = Bag(items=["x", "y"])
+    for item in bag.take():
+        print(item)
+    print(total(Countdown(n=4)))

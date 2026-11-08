@@ -339,6 +339,12 @@ impl FunctionCompiler<'_> {
         slow_block: Blk,
         fast_block: Blk,
     ) {
+        // An instance only this function builds and reaches through its
+        // fields keeps its layout (see `confined_instances`).
+        if std::mem::take(&mut self.skip_class_check) {
+            self.builder.jump(fast_block, &[]);
+            return;
+        }
         let layout = aura_runtime::native_runtime::direct_list_layout();
         let actual = self.emit_list_access(object, &layout);
         let matches = self.builder.icmp_imm(IntCC::Equal, actual, access);
@@ -368,8 +374,10 @@ impl FunctionCompiler<'_> {
         };
         let object = self.load_root(&root)?.values[0];
         let slow_block = self.builder.create_block();
-        self.load_class_slot(place, object, slow_block, &slot, ty, false)
-            .map(Some)
+        self.skip_class_check = self.confined_instances.contains(&root);
+        let loaded = self.load_class_slot(place, object, slow_block, &slot, ty, false);
+        self.skip_class_check = false;
+        loaded.map(Some)
     }
 
     /// Reads the field at `slot` of the instance box `object` where it lies
@@ -500,6 +508,7 @@ impl FunctionCompiler<'_> {
         let join_block = self.builder.create_block();
         match &slot.kind {
             SlotKind::Leaves(leaves) => {
+                self.skip_class_check = self.confined_instances.contains(&root);
                 self.emit_class_check(object, slot.access, slow_block, fast_block);
                 self.builder.switch_to_block(fast_block);
                 self.builder.seal_block(fast_block);
@@ -522,6 +531,7 @@ impl FunctionCompiler<'_> {
             SlotKind::Handle => {
                 let boxed = self.ensure_opaque(value)?;
                 let boxed = self.transfer_owned_opaque_value(&boxed);
+                self.skip_class_check = self.confined_instances.contains(&root);
                 self.emit_class_check(object, slot.access, slow_block, fast_block);
                 self.builder.switch_to_block(fast_block);
                 self.builder.seal_block(fast_block);
@@ -825,4 +835,129 @@ impl FunctionCompiler<'_> {
         self.builder.declare_var(variable, types::I64);
         variable
     }
+}
+
+/// The class locals of `function` whose every value this function builds
+/// in place and reaches only through field places, so each keeps its
+/// layout's access code and stays confined to this thread for as long as
+/// the local holds it: a field read or write needs no check.
+///
+/// A local qualifies when each assignment of it moves in a temporary that
+/// one `Construct` naming every field of its class built (or is that
+/// `Construct`), the only other mention of the bare local is its `Release`,
+/// and every other mention is a field place (`local.field`). Nothing then
+/// passes, shares, sends, or lends the instance itself, which is what
+/// changes an access code.
+pub(super) fn confined_instances(
+    function: &MirFunction,
+    classes: &HashMap<String, MirClass>,
+) -> HashSet<String> {
+    use crate::mir::{Instruction, Operand, Rvalue};
+    let constructs = |value: &Rvalue, ty: Option<&Type>| match value {
+        Rvalue::Construct { class_name, fields } => {
+            let Some(class) = classes.get(class_name) else {
+                return false;
+            };
+            class.type_params.is_empty()
+                && matches!(ty, Some(Type::Named(name, args)) if name == class_name && args.is_empty())
+                && fields.len() == class.fields.len()
+                && class
+                    .fields
+                    .iter()
+                    .all(|field| fields.iter().filter(|init| init.name == field.name).count() == 1)
+        }
+        _ => false,
+    };
+    let types = function
+        .local_types
+        .iter()
+        .map(|local| (local.name.as_str(), &local.ty))
+        .collect::<HashMap<_, _>>();
+    let mut candidates = function
+        .local_types
+        .iter()
+        .filter(|local| {
+            matches!(&local.ty, Type::Named(name, args)
+                if args.is_empty() && classes.contains_key(name))
+        })
+        .map(|local| local.name.clone())
+        .collect::<HashSet<_>>();
+    candidates.remove("self");
+    for param in &function.params {
+        candidates.remove(&param.name);
+    }
+    if candidates.is_empty() {
+        return candidates;
+    }
+    // Every string each instruction and terminator mentions.
+    fn strings<'v>(value: &'v serde_json::Value, out: &mut Vec<&'v str>) {
+        match value {
+            serde_json::Value::String(text) => out.push(text),
+            serde_json::Value::Array(items) => items.iter().for_each(|item| strings(item, out)),
+            serde_json::Value::Object(map) => map.values().for_each(|item| strings(item, out)),
+            _ => {}
+        }
+    }
+    let mut bare = HashMap::<String, usize>::new();
+    let mut allowed = HashMap::<String, usize>::new();
+    let mut built = HashMap::<String, usize>::new();
+    let mut moved_in = Vec::new();
+    let mut assigned = HashSet::new();
+    let count = |value: serde_json::Value, bare: &mut HashMap<String, usize>| {
+        let mut found = Vec::new();
+        strings(&value, &mut found);
+        for text in found {
+            let root = text.split(['.', '[']).next().unwrap_or(text);
+            if text == root {
+                *bare.entry(root.to_string()).or_default() += 1;
+            }
+        }
+    };
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            if let Instruction::Assign { target, value } = instruction {
+                if constructs(value, types.get(target.as_str()).copied()) {
+                    *built.entry(target.clone()).or_default() += 1;
+                }
+            }
+            match instruction {
+                Instruction::Assign { target, value } if candidates.contains(target) => {
+                    assigned.insert(target.clone());
+                    *allowed.entry(target.clone()).or_default() += 1;
+                    match value {
+                        Rvalue::Use(Operand::MovePlace(temp)) => {
+                            moved_in.push((target.clone(), temp.clone()));
+                        }
+                        _ if constructs(value, types.get(target.as_str()).copied()) => {}
+                        _ => {
+                            candidates.remove(target);
+                        }
+                    }
+                }
+                Instruction::Release { place } => {
+                    *allowed.entry(place.clone()).or_default() += 1;
+                }
+                _ => {}
+            }
+            let Ok(value) = serde_json::to_value(instruction) else {
+                return HashSet::new();
+            };
+            count(value, &mut bare);
+        }
+        let Ok(value) = serde_json::to_value(&block.terminator) else {
+            return HashSet::new();
+        };
+        count(value, &mut bare);
+    }
+    // The moved temporary is built once and mentioned only by its build
+    // and the move.
+    for (local, temp) in moved_in {
+        if built.get(&temp) != Some(&1) || bare.get(&temp) != Some(&2) {
+            candidates.remove(&local);
+        }
+    }
+    candidates.retain(|local| {
+        assigned.contains(local) && bare.get(local).copied().unwrap_or(0) == allowed[local]
+    });
+    candidates
 }

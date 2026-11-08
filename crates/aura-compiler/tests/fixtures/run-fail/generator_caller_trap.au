@@ -1,0 +1,23 @@
+# A trap in the code that consumes a generator closes the paused generator first,
+# so its `with` exits run before the caller's.
+from iter import Generator
+
+class Tracer:
+    name: str
+
+    def __enter__(mut self) -> None:
+        print("enter " + self.name)
+
+    def __exit__(mut self) -> None:
+        print("exit " + self.name)
+
+def count(n: int64) -> Generator[int64]:
+    with Tracer(name="gen") as t:
+        for i in range(n):
+            yield i
+
+def main():
+    with Tracer(name="main") as m:
+        for x in count(5):
+            assert x < 2
+            print(x)
