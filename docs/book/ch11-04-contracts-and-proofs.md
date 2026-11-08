@@ -207,8 +207,9 @@ the verifier proves can never fail, and keeps every other check.
 
 The verifier reads strings, dictionaries, and sets too, so it proves that
 a `prices[item]` read finds its key when a `requires item in prices` says
-so. It doesn't model everything yet: floats and most library calls are
-outside what it reads today, and a check that depends on them is reported
+so. Floats are IEEE-754 values, so a contract over them means what the
+hardware computes, NaN included. It doesn't model everything yet: most
+library calls are outside what it reads today, and a check that depends on them is reported
 as `AU5104` and stays a run-time check. Quantifiers are modeled:
 a contract such as `requires forall(p in prices, 0 <= p)` is proved at every
 call and assumed inside the function. The [verification manual page](/manual/verification)

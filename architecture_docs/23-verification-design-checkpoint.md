@@ -192,7 +192,7 @@ obligations.
 | --- | --- |
 | `int32`, `int64`, `uint64` | Mathematical integers with range obligations from each trap. Wrapping and saturating methods use bit-vectors. |
 | `bool` | `Bool` |
-| `float32`, `float64` | Uninterpreted in V2; IEEE floating point (`FloatingPoint`) is a V4 option |
+| `float32`, `float64` | Uninterpreted in V2; IEEE floating point (`Float32`, `Float64` sorts, round to nearest even) in V4, implemented |
 | `list[T]` | Sequence of `T` with length |
 | Classes, tuples, records | Datatypes, one constructor |
 | Enums, unions, `Optional`, `Result` | Algebraic datatypes |

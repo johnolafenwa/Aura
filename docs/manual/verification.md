@@ -24,8 +24,8 @@ function:
 
 | Check | Example | Runtime failure it rules out |
 | --- | --- | --- |
-| overflow | `a + b`, `-x`, `abs(x)`, `x as int32` | `AU4002` integer overflow |
-| division by zero | `a // b`, `a % b` | `AU4004` zero divisor |
+| overflow | `a + b`, `-x`, `abs(x)`, `x as int32`, `f as int64`, `n as float64` | `AU4002` integer overflow or an inexact or out-of-range conversion |
+| division by zero | `a // b`, `a % b`, `x / y` of floats | `AU4004` zero divisor |
 | index in range | `xs[i]`, `xs[i] = v`, `xs.pop()` | `AU4003` index out of range |
 | key present | `d[k]`, `s.remove(x)` | `AU4003` missing key, `AU4008` missing element |
 | assert | `assert total >= 0` | `AU4001` assertion failed |
@@ -143,7 +143,7 @@ verified scale.au: 0 of 1 checks proved in 2 functions (/usr/bin/z3 (Z3 version 
 | `AU5101` | The check can fail. The counterexample gives parameter values that make it fail, as far as the solver reports them. |
 | `AU5102` | The solver gave up before deciding. Raise `--timeout`, or add a `requires`, `invariant`, or `assert` that narrows the case. |
 | `AU5103` | No solver could be started. |
-| `AU5104` | The check depends on something the verifier does not model yet, such as floating-point arithmetic. It is not proved, and it stays a runtime check. |
+| `AU5104` | The check depends on something the verifier does not model yet, such as floating-point `**`. It is not proved, and it stays a runtime check. |
 
 A check that fails to prove is not always a bug: the verifier may lack a
 fact that holds. Add it as a `requires` on the function, an `invariant` on
@@ -187,6 +187,10 @@ booleans, with each integer type's range as a check:
 - lists, with their lengths, and their elements when those are integers,
   `bool`, `str`, or tuples and classes of modeled values; the length of any
   other list
+- `float32` and `float64` as IEEE-754 values, rounding each `+`, `-`, `*`,
+  `/`, and `sqrt` to nearest, ties to even, with NaN, infinities, and signed
+  zeros; comparisons, `abs`, `to_float`, and casts between floats and
+  integers
 - `str`, as a sequence of characters: literals, `+`, `==`, `<` and the other
   comparisons, `len`, `in`, `contains`, `starts_with`, and `ends_with`
 - `dict` and `set` with integer or `str` keys: which keys they hold, their
@@ -205,8 +209,8 @@ booleans, with each integer type's range as a check:
   with tuple targets and `if` filters, nested, in any contract, `assert`, or
   loop `invariant`
 
-Anything else is a value the verifier knows nothing about: a float, a
-`dict` or `set` of other keys, the result of most library calls, such as
+Anything else is a value the verifier knows nothing about: a `dict` or
+`set` of other keys, the result of float `//`, `%`, and `**`, the result of most library calls, such as
 `str.split` or `dict.get`, and what a call through a function value returns. A check that depends on one of them can
 still be proved when the contract around it says enough.
 
@@ -243,6 +247,12 @@ def price(prices: dict[str, int64], item: str) -> int64:
     ensures result >= 0
     return prices[item]
 ```
+
+A float contract is about IEEE-754 values, so `x == x` fails for NaN, and a
+contract that needs `x / y` to be a number says so, as `requires y > 0.0`
+does about the divisor. Proofs about float division and square roots can
+take the solver longer than proofs about integers; one it cannot finish in
+time is reported as `AU5102`.
 
 A quantifier over a `str`, or over a list of other elements, is reported as
 `AU5104`. See the

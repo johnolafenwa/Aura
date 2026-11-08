@@ -27,7 +27,7 @@ use crate::mir::{
     ArithmeticTrap, AssertKind, BasicBlock, CallTarget, Instruction, MethodDispatch, MirArg,
     MirFunction, MirReceiverKind, Operand, Rvalue, Terminator,
 };
-use crate::runtime_ops::{DictOp, FunctionOp, ListOp, RuntimeOp, SetOp, StrOp, ValueOp};
+use crate::runtime_ops::{DictOp, FunctionOp, ListOp, RuntimeOp, ScalarOp, SetOp, StrOp, ValueOp};
 use crate::sema::Type;
 
 /// The inclusive range of an integer type.
@@ -85,7 +85,9 @@ pub(super) fn lit(value: i128) -> String {
 /// The SMT sort of a list's element store, when its elements are scalars
 /// the encoding models.
 fn element_sort(element: &Type) -> Option<&'static str> {
-    if IntTy::of(element).is_some() {
+    if let Some(float) = FloatTy::of(element) {
+        Some(float.sort())
+    } else if IntTy::of(element).is_some() {
         Some("Int")
     } else if is_bool(element) {
         Some("Bool")
@@ -130,9 +132,136 @@ pub(super) fn smt_string(text: &str) -> Option<String> {
     Some(literal)
 }
 
+/// An IEEE-754 binary floating-point type, as an SMT `FloatingPoint` sort.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FloatTy {
+    F32,
+    F64,
+}
+
+impl FloatTy {
+    pub(super) fn of(ty: &Type) -> Option<Self> {
+        match ty {
+            Type::Named(name, args) if args.is_empty() && name == "float32" => Some(Self::F32),
+            Type::Named(name, args) if args.is_empty() && name == "float64" => Some(Self::F64),
+            _ => None,
+        }
+    }
+
+    fn of_sort(sort: &str) -> Option<Self> {
+        match sort {
+            "Float32" => Some(Self::F32),
+            "Float64" => Some(Self::F64),
+            _ => None,
+        }
+    }
+
+    pub(super) fn sort(self) -> &'static str {
+        match self {
+            Self::F32 => "Float32",
+            Self::F64 => "Float64",
+        }
+    }
+
+    /// The `(_ to_fp e s)` indexes of the sort.
+    fn indexes(self) -> &'static str {
+        match self {
+            Self::F32 => "8 24",
+            Self::F64 => "11 53",
+        }
+    }
+
+    /// The exact SMT literal of a `float64` value.
+    pub(super) fn literal(value: f64) -> String {
+        let bits = value.to_bits();
+        format!(
+            "(fp #b{} #b{:011b} #b{:052b})",
+            bits >> 63,
+            (bits >> 52) & 0x7ff,
+            bits & ((1 << 52) - 1)
+        )
+    }
+
+    /// `term`, a float of type `from`, rounded to this type.
+    pub(super) fn convert(self, term: &str, from: FloatTy) -> String {
+        if self == from {
+            term.to_string()
+        } else {
+            format!("((_ to_fp {}) RNE {term})", self.indexes())
+        }
+    }
+
+    /// The largest integer below which every integer has an exact value
+    /// of this type.
+    fn exact_ints(self) -> u64 {
+        match self {
+            Self::F32 => 1 << 24,
+            Self::F64 => 1 << 53,
+        }
+    }
+
+    /// The SMT literal of the value of this type nearest `value`, and how
+    /// it compares with `value`.
+    fn nearest(self, value: i128) -> (String, std::cmp::Ordering) {
+        match self {
+            Self::F64 => {
+                let near = value as f64;
+                (Self::literal(near), (near as i128).cmp(&value))
+            }
+            Self::F32 => {
+                let near = value as f32;
+                let bits = near.to_bits();
+                (
+                    format!(
+                        "(fp #b{} #b{:08b} #b{:023b})",
+                        bits >> 31,
+                        (bits >> 23) & 0xff,
+                        bits & ((1 << 23) - 1)
+                    ),
+                    (near as i128).cmp(&value),
+                )
+            }
+        }
+    }
+
+    /// `term > value`, for an integer `value` this type may not hold.
+    fn above(self, term: &str, value: i128) -> String {
+        match self.nearest(value) {
+            // No value of the type lies between `value` and a nearest one
+            // above it.
+            (near, std::cmp::Ordering::Greater) => format!("(fp.geq {term} {near})"),
+            (near, _) => format!("(fp.gt {term} {near})"),
+        }
+    }
+
+    /// `term < value`, for an integer `value` this type may not hold.
+    fn below(self, term: &str, value: i128) -> String {
+        match self.nearest(value) {
+            (near, std::cmp::Ordering::Less) => format!("(fp.leq {term} {near})"),
+            (near, _) => format!("(fp.lt {term} {near})"),
+        }
+    }
+
+    /// The integer `term` rounded to this type.
+    pub(super) fn round_int(self, term: &str) -> String {
+        format!("((_ to_fp {}) RNE (to_real {term}))", self.indexes())
+    }
+}
+
+/// `value` as a value of `ty`: a `float64` literal written where a
+/// `float32` is expected rounds to it.
+pub(super) fn fit(value: Val, ty: &Type) -> Val {
+    match (value, FloatTy::of(ty)) {
+        (Val::Float(term, from), Some(to)) if from != to => Val::Float(to.convert(&term, from), to),
+        (value, _) => value,
+    }
+}
+
 /// The value a term of `ty`'s sort stands for.
 pub(super) fn scalar_val(term: String, ty: &Type) -> Val {
-    if let Some(int) = IntTy::of(ty) {
+    if let Some(float) = FloatTy::of(ty) {
+        Val::Float(term, float)
+    } else if let Some(int) = IntTy::of(ty) {
         Val::Int(term, int)
     } else if is_str(ty) {
         Val::Str(term)
@@ -158,6 +287,8 @@ pub(super) enum Val {
     /// A `str`, as an SMT string: a sequence of Unicode scalar values, as
     /// `len` counts them.
     Str(String),
+    /// A float, as an IEEE-754 SMT `FloatingPoint` term.
+    Float(String, FloatTy),
     /// A `dict`: its length, which keys it holds as an `(Array K Bool)`,
     /// and its values as an `(Array K S)` when the encoding models them.
     Map {
@@ -446,6 +577,20 @@ impl<'a> Exec<'a> {
 
     // ----- Types and fresh values ------------------------------------------
 
+    /// A float divisor is not zero of either sign: a float division by
+    /// zero stops the program.
+    fn oblige_float_divisor(&mut self, pc: &str, span: Span, divisor: &str, trap: ArithmeticTrap) {
+        if trap.checks_divisor() || trap == ArithmeticTrap::Runtime {
+            self.oblige(
+                ObligationKind::DivisionByZero,
+                span,
+                "divisor is not zero",
+                pc,
+                Goal::Holds(format!("(not (fp.isZero {divisor}))")),
+            );
+        }
+    }
+
     /// A fresh length and key set of a `dict` or `set` whose keys have
     /// `sort`: an empty one holds no key.
     fn fresh_keys(&mut self, sort: &str, hint: &str) -> (String, String) {
@@ -484,6 +629,9 @@ impl<'a> Exec<'a> {
         }
         if is_str(ty) {
             return Val::Str(self.fresh_const("String", hint));
+        }
+        if let Some(float) = FloatTy::of(ty) {
+            return Val::Float(self.fresh_const(float.sort(), hint), float);
         }
         if depth > MAX_DEPTH {
             return Val::Opaque;
@@ -629,6 +777,10 @@ impl<'a> Exec<'a> {
     }
 
     fn write_place(&mut self, state: &mut State, path: &str, value: Val) {
+        let value = match (&value, self.place_type(path)) {
+            (Val::Float(..), Some(ty)) => fit(value, &ty),
+            _ => value,
+        };
         let mut segments = path.split('.');
         let root = segments.next().unwrap_or(path).to_string();
         let rest: Vec<&str> = segments.collect();
@@ -665,6 +817,7 @@ impl<'a> Exec<'a> {
             Operand::Int(value) => Val::Int(value.to_string(), hint.unwrap_or(IntTy::INT64)),
             Operand::Bool(value) => Val::Bool(value.to_string()),
             Operand::String(text) => smt_string(text).map_or(Val::Opaque, Val::Str),
+            Operand::Float(value) => Val::Float(FloatTy::literal(*value), FloatTy::F64),
             Operand::Unit => Val::Unit,
             Operand::Function { name, .. } => {
                 let has_requires = self.cx.decl(name).is_some_and(|decl| {
@@ -753,10 +906,12 @@ impl<'a> Exec<'a> {
 
     fn record_inputs(&mut self, label: &str, value: &Val) {
         match value {
-            Val::Int(term, _) | Val::Bool(term) => {
+            Val::Int(term, _) | Val::Bool(term) | Val::Str(term) | Val::Float(term, _) => {
                 self.inputs.push((label.to_string(), term.clone()))
             }
-            Val::List { len, .. } => self.inputs.push((format!("len({label})"), len.clone())),
+            Val::List { len, .. } | Val::Map { len, .. } | Val::Set { len, .. } => {
+                self.inputs.push((format!("len({label})"), len.clone()))
+            }
             Val::Record(_, fields) => {
                 for (field, value) in fields {
                     self.record_inputs(&format!("{label}.{field}"), value);
@@ -1252,6 +1407,9 @@ impl<'a> Exec<'a> {
             Val::Int(_, ty) => Val::Int(self.merge_terms("Int", pcs, &scalars, hint), *ty),
             Val::Bool(_) => Val::Bool(self.merge_terms("Bool", pcs, &scalars, hint)),
             Val::Str(_) => Val::Str(self.merge_terms("String", pcs, &scalars, hint)),
+            Val::Float(_, float) => {
+                Val::Float(self.merge_terms(float.sort(), pcs, &scalars, hint), *float)
+            }
             Val::Map {
                 key,
                 value,
@@ -1808,6 +1966,15 @@ impl<'a> Exec<'a> {
     /// its scalars.
     fn store_put(&mut self, store: &Store, index: &str, value: &Val) -> Option<Store> {
         match (store, value) {
+            (Store::Leaf(array, sort), Val::Float(term, float)) => {
+                let term = FloatTy::of_sort(sort)?.convert(term, *float);
+                let array = self.define(
+                    &format!("(Array Int {sort})"),
+                    "store",
+                    format!("(store {array} {index} {term})"),
+                );
+                Some(Store::Leaf(array, sort))
+            }
             (Store::Leaf(array, sort), Val::Int(term, _) | Val::Bool(term) | Val::Str(term)) => {
                 let array = self.define(
                     &format!("(Array Int {sort})"),
@@ -1895,6 +2062,7 @@ impl<'a> Exec<'a> {
             }
             Val::Bool(term) => Val::Bool(self.define("Bool", hint, term)),
             Val::Str(term) => Val::Str(self.define("String", hint, term)),
+            Val::Float(term, float) => Val::Float(self.define(float.sort(), hint, term), float),
             Val::Tuple(items) => Val::Tuple(
                 items
                     .into_iter()
@@ -2049,6 +2217,10 @@ impl<'a> Exec<'a> {
                 let operand = self.operand(state, value, hint);
                 match (op, operand) {
                     (UnaryOp::Not, Val::Bool(term)) => Val::Bool(not(&term)),
+                    (UnaryOp::Neg, Val::Float(term, float)) => Val::Float(
+                        self.define(float.sort(), "neg", format!("(fp.neg {term})")),
+                        float,
+                    ),
                     (UnaryOp::Neg, Val::Int(term, ty)) => {
                         let ty = target_type.as_ref().and_then(IntTy::of).unwrap_or(ty);
                         let result = self.define("Int", "neg", format!("(- {term})"));
@@ -2073,6 +2245,53 @@ impl<'a> Exec<'a> {
             }
             Rvalue::Cast { value, ty, span } => {
                 let operand = self.operand(state, value, None);
+                if let Some(to) = FloatTy::of(ty) {
+                    return match operand {
+                        Val::Float(term, from) => {
+                            Val::Float(self.define(to.sort(), "cast", to.convert(&term, from)), to)
+                        }
+                        Val::Int(term, _) => {
+                            let result = self.define(to.sort(), "cast", to.round_int(&term));
+                            // Every integer up to the significand's width
+                            // converts exactly; a wider one must round to
+                            // itself.
+                            let exact = to.exact_ints();
+                            self.oblige(
+                                ObligationKind::Overflow,
+                                *span,
+                                "integer converts to a float exactly",
+                                &state.pc.clone(),
+                                Goal::Holds(format!(
+                                    "(or (and (<= (- {exact}) {term}) (<= {term} {exact})) (= (fp.to_real {result}) (to_real {term})))"
+                                )),
+                            );
+                            Val::Float(result, to)
+                        }
+                        _ => fresh_target(self),
+                    };
+                }
+                if let (Val::Float(term, _), Some(int)) = (&operand, IntTy::of(ty)) {
+                    // A cast truncates toward zero, and needs a finite value
+                    // whose truncation fits: one above `lo - 1` and below
+                    // `hi + 1`, which NaN is not.
+                    let Val::Float(_, float) = operand else {
+                        unreachable!("matched above")
+                    };
+                    let truncated = format!("(fp.to_real (fp.roundToIntegral RTZ {term}))");
+                    self.oblige(
+                        ObligationKind::Overflow,
+                        *span,
+                        "float converts to an integer in range",
+                        &state.pc.clone(),
+                        Goal::Holds(format!(
+                            "(and {} {})",
+                            float.above(term, int.lo - 1),
+                            float.below(term, int.hi + 1)
+                        )),
+                    );
+                    let result = self.define("Int", "cast", format!("(to_int {truncated})"));
+                    return Val::Int(result, int);
+                }
                 match (operand, IntTy::of(ty)) {
                     (Val::Int(term, _), Some(int)) => {
                         self.oblige(
@@ -2455,6 +2674,58 @@ impl<'a> Exec<'a> {
                 BinaryOp::NotEq => Val::Bool(format!("(not (= {a} {b}))")),
                 _ => fresh(self),
             },
+            (Val::Float(..), Val::Float(..)) => {
+                let (Val::Float(a, aty), Val::Float(b, bty)) = (&lhs, &rhs) else {
+                    unreachable!("matched above")
+                };
+                // A `float64` literal beside a `float32` rounds to it.
+                let float = if *aty == FloatTy::F32 || *bty == FloatTy::F32 {
+                    FloatTy::F32
+                } else {
+                    FloatTy::F64
+                };
+                let a = float.convert(a, *aty);
+                let b = float.convert(b, *bty);
+                let compare = |op: &str| Val::Bool(format!("({op} {a} {b})"));
+                match op {
+                    BinaryOp::Less => compare("fp.lt"),
+                    BinaryOp::LessEq => compare("fp.leq"),
+                    BinaryOp::Greater => compare("fp.gt"),
+                    BinaryOp::GreaterEq => compare("fp.geq"),
+                    BinaryOp::Eq => compare("fp.eq"),
+                    BinaryOp::NotEq => Val::Bool(format!("(not (fp.eq {a} {b}))")),
+                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
+                        let symbol = match op {
+                            BinaryOp::Add => "fp.add",
+                            BinaryOp::Sub => "fp.sub",
+                            BinaryOp::Mul => "fp.mul",
+                            _ => "fp.div",
+                        };
+                        if op == BinaryOp::Div {
+                            self.oblige_float_divisor(&pc, span, &b, trap);
+                        }
+                        let result =
+                            self.define(float.sort(), "arith", format!("({symbol} RNE {a} {b})"));
+                        Val::Float(result, float)
+                    }
+                    BinaryOp::FloorDiv | BinaryOp::Mod => {
+                        self.oblige_float_divisor(&pc, span, &b, trap);
+                        fresh(self)
+                    }
+                    _ => {
+                        self.oblige(
+                            ObligationKind::Overflow,
+                            span,
+                            "numeric result in range",
+                            &pc,
+                            Goal::Unsupported(format!(
+                                "floating-point `{op:?}` is not modeled yet"
+                            )),
+                        );
+                        fresh(self)
+                    }
+                }
+            }
             (Val::Str(a), Val::Str(b)) => match op {
                 BinaryOp::Add => {
                     Val::Str(self.define("String", "concat", format!("(str.++ {a} {b})")))
@@ -2819,7 +3090,7 @@ impl<'a> Exec<'a> {
             if let (Some(place), MirReceiverKind::BorrowMut) = (place, param.passing) {
                 post_places.push((param.name.clone(), place));
             }
-            pre.push((param.name.clone(), value));
+            pre.push((param.name.clone(), fit(value, &param.ty)));
         }
         let span = self.span;
         self.erasing = self.cx.decl(name).is_some_and(|decl| decl.lemma);
@@ -3299,6 +3570,10 @@ impl<'a> Exec<'a> {
                     .map(|index| arg(self, state, index, target_int))
                     .collect();
                 match (function, values.as_slice()) {
+                    (FunctionOp::Abs, [Val::Float(term, float)]) => Some(Val::Float(
+                        self.define(float.sort(), "abs", format!("(fp.abs {term})")),
+                        *float,
+                    )),
                     (FunctionOp::Abs, [Val::Int(term, ty)]) => {
                         let ty = target_int.unwrap_or(*ty);
                         let result = self.define(
@@ -3323,6 +3598,23 @@ impl<'a> Exec<'a> {
                     _ => None,
                 }
             }
+            RuntimeOp::Scalar(ScalarOp::ToFloat) => match receiver {
+                Some(Val::Int(term, _)) => {
+                    let float = FloatTy::F64;
+                    Some(Val::Float(
+                        self.define(float.sort(), "float", float.round_int(&term)),
+                        float,
+                    ))
+                }
+                _ => None,
+            },
+            RuntimeOp::Scalar(ScalarOp::Sqrt) => match receiver {
+                Some(Val::Float(term, float)) => Some(Val::Float(
+                    self.define(float.sort(), "sqrt", format!("(fp.sqrt RNE {term})")),
+                    float,
+                )),
+                _ => None,
+            },
             RuntimeOp::Value(ValueOp::Clone | ValueOp::Copy) => receiver,
             RuntimeOp::Print(_) => Some(Val::Unit),
             _ => None,
@@ -3418,6 +3710,7 @@ pub(super) fn structural_eq(left: &Val, right: &Val) -> Option<String> {
         | (Val::Set { members: a, .. }, Val::Set { members: b, .. }) => {
             Some(format!("(= {a} {b})"))
         }
+        (Val::Float(a, _), Val::Float(b, _)) => Some(format!("(fp.eq {a} {b})")),
         (
             Val::Map {
                 keys: a,
@@ -3830,6 +4123,7 @@ fn same_shape(a: &Val, b: &Val) -> bool {
     match (a, b) {
         (Val::Int(_, x), Val::Int(_, y)) => x == y,
         (Val::Bool(_), Val::Bool(_)) | (Val::Str(_), Val::Str(_)) | (Val::Unit, Val::Unit) => true,
+        (Val::Float(_, x), Val::Float(_, y)) => x == y,
         (
             Val::Map {
                 key: a, value: x, ..
@@ -3858,7 +4152,7 @@ fn same_shape(a: &Val, b: &Val) -> bool {
 
 fn scalar_term(value: &Val) -> Option<&str> {
     match value {
-        Val::Int(term, _) | Val::Bool(term) | Val::Str(term) => Some(term),
+        Val::Int(term, _) | Val::Bool(term) | Val::Str(term) | Val::Float(term, _) => Some(term),
         _ => None,
     }
 }

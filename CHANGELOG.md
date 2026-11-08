@@ -7,6 +7,11 @@ in this file.
 
 ## Unreleased
 
+- `aura verify` models `float32` and `float64` as IEEE-754 values, with
+  rounding, NaN, infinities, and signed zeros. It proves float division by
+  zero cannot happen, that `as` casts between floats and integers are exact
+  or in range, and float contracts and assertions. A solver answer stopped
+  at the time limit is reported as undecided instead of an error.
 - `aura verify` models `str`, `dict`, and `set`. Strings are sequences of
   characters with `+`, comparisons, `len`, `in`, `contains`, `starts_with`,
   and `ends_with`; dictionaries and sets with integer or `str` keys track

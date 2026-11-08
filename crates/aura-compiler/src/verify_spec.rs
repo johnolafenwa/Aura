@@ -12,7 +12,8 @@
 use std::collections::BTreeMap;
 
 use super::exec::{
-    conjoin, key_sort, not, scalar_val, smt_string, structural_eq, Exec, Goal, IntTy, State, Val,
+    conjoin, key_sort, not, scalar_val, smt_string, structural_eq, Exec, FloatTy, Goal, IntTy,
+    State, Val,
 };
 use super::ObligationKind;
 use crate::ast::{
@@ -396,6 +397,7 @@ impl Exec<'_> {
         match &expr.kind {
             ExprKind::Int(value) => Ok(Val::Int(value.to_string(), IntTy::INT64)),
             ExprKind::Bool(value) => Ok(Val::Bool(value.to_string())),
+            ExprKind::Float(value) => Ok(Val::Float(FloatTy::literal(*value), FloatTy::F64)),
             ExprKind::String(text) => smt_string(text)
                 .map(Val::Str)
                 .ok_or("this string literal is not modeled yet".to_string()),
@@ -408,6 +410,9 @@ impl Exec<'_> {
                 let value = self.spec(inner, env, wd, depth)?;
                 match (op, value) {
                     (UnaryOp::Not, Val::Bool(term)) => Ok(Val::Bool(not(&term))),
+                    (UnaryOp::Neg, Val::Float(term, float)) => {
+                        Ok(Val::Float(format!("(fp.neg {term})"), float))
+                    }
                     (UnaryOp::Neg, Val::Int(term, ty)) => {
                         let result = format!("(- {term})");
                         wd.push(ty.contains(&result));
@@ -481,6 +486,17 @@ impl Exec<'_> {
                     }
                     (Val::Str(a), Val::Str(b)) => {
                         Ok(Val::Str(format!("(ite {condition} {a} {b})")))
+                    }
+                    (Val::Float(a, aty), Val::Float(b, bty)) => {
+                        let float = wider_of(aty, bty);
+                        Ok(Val::Float(
+                            format!(
+                                "(ite {condition} {} {})",
+                                float.convert(&a, aty),
+                                float.convert(&b, bty)
+                            ),
+                            float,
+                        ))
                     }
                     _ => Err("a conditional of this type is not modeled yet".into()),
                 }
@@ -621,6 +637,9 @@ impl Exec<'_> {
                     ("len", [Val::Str(text)]) => {
                         Ok(Val::Int(format!("(str.len {text})"), IntTy::INT64))
                     }
+                    ("abs", [Val::Float(term, float)]) => {
+                        Ok(Val::Float(format!("(fp.abs {term})"), *float))
+                    }
                     ("abs", [Val::Int(term, ty)]) => {
                         let result = format!("(ite (< {term} 0) (- {term}) {term})");
                         wd.push(ty.contains(&result));
@@ -753,6 +772,25 @@ impl Exec<'_> {
             | BinaryOp::LessEq
             | BinaryOp::Greater
             | BinaryOp::GreaterEq => compare(op, &lhs, &rhs).map(Val::Bool),
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
+                if matches!((&lhs, &rhs), (Val::Float(..), Val::Float(..))) =>
+            {
+                let (Val::Float(a, aty), Val::Float(b, bty)) = (&lhs, &rhs) else {
+                    unreachable!("matched above")
+                };
+                let float = wider_of(*aty, *bty);
+                let (a, b) = (float.convert(a, *aty), float.convert(b, *bty));
+                let symbol = match op {
+                    BinaryOp::Add => "fp.add",
+                    BinaryOp::Sub => "fp.sub",
+                    BinaryOp::Mul => "fp.mul",
+                    _ => {
+                        wd.push(format!("(not (fp.isZero {b}))"));
+                        "fp.div"
+                    }
+                };
+                Ok(Val::Float(format!("({symbol} RNE {a} {b})"), float))
+            }
             BinaryOp::Add if matches!((&lhs, &rhs), (Val::Str(_), Val::Str(_))) => {
                 let (Val::Str(a), Val::Str(b)) = (&lhs, &rhs) else {
                     unreachable!("matched above")
@@ -1043,6 +1081,18 @@ fn compare(op: BinaryOp, lhs: &Val, rhs: &Val) -> Result<String, String> {
     let term = match (lhs, rhs) {
         (Val::Int(a, _), Val::Int(b, _)) => format!("({symbol} {a} {b})"),
         (Val::Bool(a), Val::Bool(b)) if symbol == "=" => format!("(= {a} {b})"),
+        (Val::Float(a, aty), Val::Float(b, bty)) => {
+            let float = wider_of(*aty, *bty);
+            let (a, b) = (float.convert(a, *aty), float.convert(b, *bty));
+            let symbol = match op {
+                BinaryOp::Less => "fp.lt",
+                BinaryOp::LessEq => "fp.leq",
+                BinaryOp::Greater => "fp.gt",
+                BinaryOp::GreaterEq => "fp.geq",
+                _ => "fp.eq",
+            };
+            format!("({symbol} {a} {b})")
+        }
         (Val::Str(a), Val::Str(b)) => match op {
             BinaryOp::Less => format!("(str.< {a} {b})"),
             BinaryOp::LessEq => format!("(str.<= {a} {b})"),
@@ -1059,6 +1109,16 @@ fn compare(op: BinaryOp, lhs: &Val, rhs: &Val) -> Result<String, String> {
     } else {
         term
     })
+}
+
+/// The type two float operands meet at: a `float64` literal beside a
+/// `float32` rounds to it.
+fn wider_of(a: FloatTy, b: FloatTy) -> FloatTy {
+    if a == FloatTy::F32 || b == FloatTy::F32 {
+        FloatTy::F32
+    } else {
+        FloatTy::F64
+    }
 }
 
 /// A MIR function name without the type arguments of a specialized copy.

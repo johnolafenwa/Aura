@@ -377,13 +377,13 @@ def main():
 fn reports_steps_outside_the_modeled_subset() {
     assert_open(
         r#"
-def ratio(a: float64, b: float64) -> float64:
-    return a / b
+def power(a: float64, b: float64) -> float64:
+    return a ** b
 
 def main():
-    print(ratio(1.0, 2.0))
+    print(power(1.0, 2.0))
 "#,
-        &["3 division by zero unsupported"],
+        &["3 overflow unsupported"],
     );
 }
 
@@ -425,6 +425,26 @@ fn the_function_filter_limits_the_report() {
 fn solver_answers_parse() {
     assert_eq!(smt::render_int("(- 5)"), "-5");
     assert_eq!(smt::render_int(" 7 "), "7");
+    assert_eq!(
+        smt::render_int("(fp #b0 #b01111111111 #x0000000000000)"),
+        "1"
+    );
+    assert_eq!(
+        smt::render_int("(fp #b1 #b10000000 #b10000000000000000000000)"),
+        "-3"
+    );
+    for (special, rendered) in [
+        ("(_ +zero 11 53)", "0.0"),
+        ("(_ -zero 11 53)", "-0.0"),
+        ("(_ +oo 8 24)", "inf"),
+        ("(_ -oo 8 24)", "-inf"),
+        ("(_ NaN 11 53)", "nan"),
+        ("(_ bv5 8)", "(_ bv5 8)"),
+        ("(fp #b0 #b01 #b1)", "(fp #b0 #b01 #b1)"),
+        ("(fq #b0 #b0 #b0)", "(fq #b0 #b0 #b0)"),
+    ] {
+        assert_eq!(smt::render_int(special), rendered);
+    }
 }
 
 #[test]
@@ -747,6 +767,13 @@ fn solver_failures_and_unknown_answers_are_reported() {
     };
     // A solver that answers `unknown` leaves the check undecided.
     let report = run(script(&dir, "cvc5", UNKNOWN_SOLVER, true)).expect("runs");
+    assert_eq!(open_checks(&report), ["2 overflow unknown"]);
+    // A query stopped at the time limit is undecided too.
+    let canceled = UNKNOWN_SOLVER.replace(
+        "echo unknown",
+        "echo '(error \"line 1 column 7: canceled\")'; echo unknown",
+    );
+    let report = run(script(&dir, "cvc5", &canceled, true)).expect("runs");
     assert_eq!(open_checks(&report), ["2 overflow unknown"]);
     let command = smt::SolverCommand {
         kind: smt::SolverKind::Z3,
@@ -2228,4 +2255,87 @@ def main():
         Some("\"a\"\"\\u{5c}\\u{e9}\"".to_string())
     );
     assert_eq!(exec::smt_string("\u{10FFFF}"), None);
+}
+
+#[test]
+fn floats_are_ieee_754_values() {
+    let Some(report) = assert_open(
+        r#"
+def half(x: float64) -> float64:
+    requires 0.0 <= x and x <= 100.0
+    ensures 0.0 <= result and result <= 50.0
+    return x / 2.0
+
+def bad(a: float64, b: float64) -> float64:
+    return a / b
+
+def conv(n: int64, x: float64) -> int64:
+    requires 0 <= n and n <= 1000
+    requires 0.0 <= x and x < 10.0
+    f = n as float64
+    assert f >= 0.0
+    g = n.to_float()
+    assert g == f
+    return x as int64
+
+def small(x: float32) -> float32:
+    requires x >= 1.0
+    y = x * 2.0
+    assert y >= 2.0
+    assert -y <= -2.0 and abs(-y) == y
+    return y
+
+def mean(xs: list[float64]) -> float64:
+    requires len(xs) == 2
+    requires all([0.0 <= x and x <= 1.0 for x in xs])
+    ensures 0.0 <= result
+    return (xs[0] + xs[1]) * 0.5
+
+def narrow(x: float64) -> float32:
+    requires 0.0 <= x and x <= 1.0
+    ensures result >= 0.0
+    ys: list[float32] = [1.5, 2.5]
+    assert ys[0] < ys[1]
+    return x as float32
+
+def pick(flag: bool, x: float64) -> float64:
+    requires x > 1.0
+    ensures result > 0.0
+    mut y = 1.0
+    if flag:
+        y = x
+    return y
+
+def root(x: float64) -> float64:
+    requires x >= 4.0 and x <= 100.0
+    return x.sqrt()
+
+def main():
+    print(half(3.0))
+    print(bad(1.0, 0.5))
+    print(conv(3, 2.5))
+    print(small(1.5))
+    print(mean([0.5, 0.25]))
+    print(narrow(0.5))
+    print(pick(true, 2.0))
+    print(root(9.0))
+"#,
+        &["8 division by zero failed"],
+    ) else {
+        return;
+    };
+    let failed = report
+        .obligations
+        .iter()
+        .find_map(|obligation| match &obligation.status {
+            Status::Failed { counterexample } => Some(counterexample.clone()),
+            _ => None,
+        })
+        .expect("a failed check");
+    assert!(
+        failed
+            .iter()
+            .any(|(name, value)| name == "b" && value.contains('0')),
+        "{failed:?}"
+    );
 }
