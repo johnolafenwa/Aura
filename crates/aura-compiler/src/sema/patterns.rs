@@ -621,7 +621,7 @@ impl FunctionChecker<'_> {
                 if wildcard_span.is_none() && !missing.is_empty() {
                     return Err(enum_match_not_exhaustive(
                         match_stmt.span,
-                        &enum_name,
+                        enum_name,
                         &missing,
                     ));
                 }
@@ -1578,7 +1578,7 @@ impl FunctionChecker<'_> {
                     .collect::<Vec<_>>();
                 let missing = self.missing_patterns_for_type(&pattern_refs, &scrutinee_ty);
                 if !wildcard_seen && !missing.is_empty() {
-                    return Err(enum_match_not_exhaustive(span, &enum_name, &missing));
+                    return Err(enum_match_not_exhaustive(span, enum_name, &missing));
                 }
 
                 return Ok(result_ty.unwrap_or(Type::Unit));

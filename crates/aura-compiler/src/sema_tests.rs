@@ -32653,6 +32653,7 @@ fn non_exhaustive_enum_match_help_spells_out_missing_cases() {
     );
 }
 
+#[test]
 fn generator_error_mapping_keeps_unrelated_diagnostics() {
     let params = generators::GeneratorParams::default();
     let unplaced = Diagnostic::new("`__aura_generator_yield` failed");
