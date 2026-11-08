@@ -1,0 +1,12 @@
+def ping(n: int64) -> int64:
+    decreases n
+    if n <= 0:
+        return 0
+    return pong(n)
+
+def pong(n: int64) -> int64:
+    decreases n
+    return ping(n - 1)
+
+def main():
+    print(ping(3))

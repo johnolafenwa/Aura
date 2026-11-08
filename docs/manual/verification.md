@@ -34,6 +34,15 @@ function:
 | decreases | each `decreases` measure of a loop or a recursive function | `AU4009` in the loop or at the recursive call |
 | class invariant | constructions and calls of public `mut self` methods | `AU4009` at the check |
 
+`aura verify` also proves that an object of a class with invariants holds
+them wherever it crosses a function boundary: at each call of a public
+method that only reads `self`, for each argument passed to a function, and
+for a function's result and `mut` parameters on return. Each function's
+proof assumes the same on its side, so a public getter, or a function that
+takes an `Account`, starts from an object that keeps its invariants. No run
+checks these places, so while one of them is unproved
+`aura build --remove-proved-checks` removes nothing.
+
 A function is proved on its own. A call relies only on what its callee
 declares: the verifier proves the callee's `requires` at the call, and then
 assumes its `ensures`. A call through a trait, on a value whose type is a
@@ -167,16 +176,18 @@ The verifier reasons about values exactly, as mathematical integers and
 booleans, with each integer type's range as a check:
 
 - integers of every width, `bool`, and `None`
-- lists of integers and of `bool`, with their lengths and elements, and the
-  length of any other list
+- lists, with their lengths, and their elements when those are integers,
+  `bool`, or tuples and classes of modeled values; the length of any other
+  list
 - tuples, classes, enums, and unions such as `int64 | None`, field by field
 - `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
   element reads and writes, and `copy`
-- `spec def` helpers, `old`, and `result` in contracts
+- `spec def` helpers, `old`, and `result` in contracts, and `ghost` locals
 - quantifiers: `forall(x in xs, condition)`, `exists(...)`, and
-  `all([... for ...])` or `any(...)` with one `for` clause over a `range` or
-  a list of integers or `bool`, with `if` filters, in any contract, `assert`,
-  or loop `invariant`
+  `all([... for ...])` or `any(...)`, with any number of `for` clauses, each
+  over a `range`, a modeled list, or `enumerate` or `zip` of modeled lists,
+  with tuple targets and `if` filters, nested, in any contract, `assert`, or
+  loop `invariant`
 
 Anything else is a value the verifier knows nothing about: a `str`, a
 `dict`, a `set`, a float, the result of most library calls, and what a call
@@ -202,9 +213,12 @@ def squares(n: int64) -> list[int64]:
     return out
 ```
 
-A quantifier over several `for` clauses, over a tuple target, or over a list
-of other elements is reported as `AU5104`. `str`, `dict`, and `set` models
-are planned. See the
+A `for` loop over a `range(...)` call can say the same with less: its
+invariants also hold when the range runs out, with the target at the end,
+so `len(out) == i` gives `len(out) == n` after `for i in range(n)`.
+
+A quantifier over a `str`, a `dict`, a `set`, or a list of other elements is
+reported as `AU5104`. `str`, `dict`, and `set` models are planned. See the
 [verification design](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/23-verification-design-checkpoint.md).
 
 ## Trust

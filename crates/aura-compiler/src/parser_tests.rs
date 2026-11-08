@@ -5343,9 +5343,16 @@ fn quantifiers_old_values_and_spec_functions_parse() {
     let rendered = format!("{:?}", function.contracts[1].condition);
     assert_eq!(rendered.matches("\"forall\"").count(), 3, "{rendered}");
 
-    let error = crate::parser::parse(
-        "class C:\n    n: int64\n\n    spec def p(self) -> bool:\n        return true\n",
+    let module = crate::parser::parse(
+        "class C:\n    n: int64\n\n    public spec def p(self) -> bool:\n        return forall(i in range(self.n), i >= 0)\n",
     )
-    .expect_err("spec methods are rejected");
+    .expect("spec methods parse");
+    let Item::Class(class) = &module.items[0] else {
+        panic!("a class");
+    };
+    assert!(class.methods[0].spec && class.methods[0].public);
+    let error =
+        crate::parser::parse("class C:\n    n: int64\n\n    lemma def p(self):\n        pass\n")
+            .expect_err("lemma methods are rejected");
     assert_eq!(error.code, "AU2048");
 }

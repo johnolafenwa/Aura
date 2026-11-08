@@ -7,6 +7,33 @@ in this file.
 
 ## Unreleased
 
+- `ghost name = value` declares a local only the verifier reads. The program
+  never computes it, and an `assert` or loop clause that reads one is
+  proved by `aura verify` and not checked when the program runs. Ghost
+  values are pure and may call `spec def` functions; ordinary code cannot
+  read a ghost local.
+- A `for` loop over a `range(...)` call checks its invariants once more when
+  the range runs out, with the target at the range's end, so after
+  `for i in range(n)` an invariant holds with `i == n`. An invariant that
+  only held inside the range, such as `invariant i < n`, now fails at the
+  end of the loop. `aura verify` models lists of tuples and classes element
+  by element, and quantifiers over several `for` clauses, tuple targets,
+  `enumerate`, and `zip`; `enumerate` and `zip` may now appear in
+  contracts. It also proves that objects of classes with invariants keep
+  them where they cross a function boundary (calls of public read-only
+  methods, arguments, results, and `mut` parameters) and assumes it on the
+  other side, so a public getter starts from a valid object.
+- Methods may declare `decreases`, and functions that call each other in a
+  cycle check at each call between them that the callee's measure is
+  smaller than the caller's; `aura verify` proves both. A measured function
+  calling a measured helper outside its cycle is not compared.
+- A class may declare `spec def` methods, which conditions may call (and
+  `old(self.headroom())` may read), and a `spec def` may state `requires`
+  clauses that `aura verify` proves wherever a contract uses it.
+- A trait implementation may add `ensures` clauses to the trait method's
+  and state its own `requires` in place of the trait's; `aura verify`
+  proves that the trait's `requires` imply the implementation's, and calls
+  through the trait rely on the trait's contract.
 - `aura verify file.au` proves, with an external Z3 or cvc5, that a
   program's checks cannot fail: integer overflow, zero divisors, list
   indexes, `assert`, `requires`, `ensures`, loop `invariant` and

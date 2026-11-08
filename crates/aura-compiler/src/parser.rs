@@ -443,6 +443,9 @@ struct Parser {
     /// The source, line by line, for contract clause text. Empty for
     /// generated source.
     source_lines: Vec<String>,
+    /// The `ghost` locals of the function being parsed. Reads of one in a
+    /// ghost value, an `assert`, or a loop clause name it `ghost <name>`.
+    ghost_locals: std::collections::BTreeSet<String>,
 }
 
 impl Parser {
@@ -458,7 +461,16 @@ impl Parser {
             current_function_returns_view: false,
             impl_assoc_types: Vec::new(),
             source_lines: Vec::new(),
+            ghost_locals: Default::default(),
         }
+    }
+
+    /// Names each read of a `ghost` local in `expr` by its ghost name.
+    fn rename_ghost_reads(&self, expr: &mut Expr) {
+        if self.ghost_locals.is_empty() {
+            return;
+        }
+        rename_ghost_reads(&self.ghost_locals, expr);
     }
 
     fn enter_recursion(&mut self, kind: &str) -> Result<()> {
@@ -930,17 +942,34 @@ impl Parser {
         let mut methods = Vec::new();
         let mut invariants = Vec::new();
         while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
-            if self.at_spec_def_start() || self.at_lemma_def_start() {
-                let keyword = if self.at_spec_def_start() {
-                    "spec"
-                } else {
-                    "lemma"
-                };
+            if self.at_lemma_def_start() {
                 return Err(Diagnostic::coded_at(
                     "AU2048",
                     self.current_span(),
-                    format!("a `{keyword} def` is a module-level function; `{keyword} def` methods are not available yet"),
+                    "a `lemma def` is a module-level function; state the lemma outside the class",
                 ));
+            }
+            // `spec def` and `public spec def` declare a spec method.
+            let public_spec = self.at_simple(&TokenKind::KwPublic)
+                && matches!(self.peek_kind_at(self.index + 1), Some(TokenKind::Identifier(name)) if name == "spec")
+                && matches!(self.peek_kind_at(self.index + 2), Some(TokenKind::KwDef));
+            if public_spec || self.at_spec_def_start() {
+                if public_spec {
+                    self.bump();
+                }
+                self.bump();
+                let mut method = self.parse_function_with_receiver(true, public_spec)?;
+                method.spec = true;
+                for stmt in &mut method.body {
+                    if let Stmt::Return(ReturnStmt {
+                        value: Some(value), ..
+                    }) = stmt
+                    {
+                        rewrite_quantifiers(value);
+                    }
+                }
+                methods.push(method);
+                continue;
             }
             if let Some(kind) = self.at_contract_clause() {
                 if kind != ContractKind::Invariant {
@@ -1238,7 +1267,9 @@ impl Parser {
         self.expect_newline()?;
         let previous_view_return = self.current_function_returns_view;
         self.current_function_returns_view = view_return.is_some();
+        let previous_ghosts = std::mem::take(&mut self.ghost_locals);
         let body = self.parse_function_body();
+        self.ghost_locals = previous_ghosts;
         self.current_function_returns_view = previous_view_return;
         let (doc, contracts, mut body) = body?;
         if body.is_empty() {
@@ -1492,7 +1523,9 @@ impl Parser {
             self.expect_newline()?;
             let previous_view_return = self.current_function_returns_view;
             self.current_function_returns_view = view_return.is_some();
+            let previous_ghosts = std::mem::take(&mut self.ghost_locals);
             let body = self.parse_trait_method_body();
+            self.ghost_locals = previous_ghosts;
             self.current_function_returns_view = previous_view_return;
             body?
         } else {
@@ -1829,8 +1862,22 @@ impl Parser {
             && matches!(self.peek_kind(1), Some(TokenKind::Equal))
         {
             self.parse_discard_stmt()
+        } else if self.at_ghost_stmt() {
+            self.parse_ghost_stmt()
         } else if self.is_assignment_stmt() {
-            self.parse_assign_stmt()
+            let stmt = self.parse_assign()?;
+            if let AssignTarget::Name(name) = &stmt.target {
+                if self.ghost_locals.contains(name) {
+                    return Err(Diagnostic::coded_at(
+                        "AU2048",
+                        stmt.span,
+                        format!(
+                            "`{name}` is a `ghost` local; only `ghost {name} = value` may change it"
+                        ),
+                    ));
+                }
+            }
+            Ok(Stmt::Assign(stmt))
         } else {
             self.parse_expr_stmt()
         }
@@ -1890,9 +1937,44 @@ impl Parser {
         }))
     }
 
+    /// Whether a `ghost` local's assignment starts here: `ghost` before a
+    /// name, or before `mut`.
+    fn at_ghost_stmt(&self) -> bool {
+        matches!(self.current_kind(), TokenKind::Identifier(name) if name == "ghost")
+            && match self.peek_kind(1) {
+                Some(TokenKind::KwMut) => true,
+                Some(TokenKind::Identifier(_)) => !matches!(
+                    self.peek_kind(2),
+                    Some(TokenKind::Newline | TokenKind::Eof | TokenKind::LParen | TokenKind::Dot)
+                ),
+                _ => false,
+            }
+    }
+
+    /// `ghost [mut] name[: T] = value`: a local only the verifier reads. It
+    /// is named `ghost <name>`, which no source name can collide with.
+    fn parse_ghost_stmt(&mut self) -> Result<Stmt> {
+        let ghost_span = self.bump().span;
+        let mut stmt = self.parse_assign()?;
+        let AssignTarget::Name(name) = &stmt.target else {
+            return Err(Diagnostic::coded_at(
+                "AU2048",
+                ghost_span,
+                "`ghost` declares a local: write `ghost name = value`",
+            ));
+        };
+        let name = name.clone();
+        self.rename_ghost_reads(&mut stmt.value);
+        self.ghost_locals.insert(name.clone());
+        stmt.target = AssignTarget::Name(ghost_name(&name));
+        stmt.span = ghost_span;
+        Ok(Stmt::Assign(stmt))
+    }
+
     fn parse_assert_stmt(&mut self) -> Result<Stmt> {
         let span = self.expect_keyword(TokenKind::KwAssert)?.span;
-        let condition = self.parse_non_tuple_expr()?;
+        let mut condition = self.parse_non_tuple_expr()?;
+        self.rename_ghost_reads(&mut condition);
         let message = if self.eat_simple(&TokenKind::Comma).is_some() {
             Some(self.parse_non_tuple_expr()?)
         } else {
@@ -1907,7 +1989,7 @@ impl Parser {
         }))
     }
 
-    fn parse_assign_stmt(&mut self) -> Result<Stmt> {
+    fn parse_assign(&mut self) -> Result<AssignStmt> {
         let mutable = self.eat_simple(&TokenKind::KwMut).is_some();
         let span = self.current_span();
         let target = self.parse_assign_target()?;
@@ -1922,14 +2004,14 @@ impl Parser {
         let value = self.parse_expr()?;
         self.expect_statement_terminator()?;
 
-        Ok(Stmt::Assign(AssignStmt {
+        Ok(AssignStmt {
             mutable,
             target,
             annotation,
             op,
             value,
             span,
-        }))
+        })
     }
 
     fn parse_destructure_stmt(&mut self) -> Result<Stmt> {
@@ -2595,6 +2677,7 @@ impl Parser {
             self.expect_statement_terminator()?;
             let text = self.clause_text(kind, span.line, end_line);
             let mut condition = condition;
+            self.rename_ghost_reads(&mut condition);
             rewrite_quantifiers(&mut condition);
             let mut olds = Vec::new();
             if kind == ContractKind::Ensures {
@@ -5419,3 +5502,41 @@ fn offset_type_ref_span(type_ref: &mut TypeRef, line: usize, column_offset: usiz
 #[cfg(test)]
 #[path = "parser_tests.rs"]
 mod tests;
+
+/// The local a `ghost name` declares.
+pub(crate) fn ghost_name(name: &str) -> String {
+    format!("ghost {name}")
+}
+
+/// Whether `name` is a local a `ghost` statement declares.
+pub(crate) fn is_ghost_name(name: &str) -> bool {
+    name.starts_with("ghost ")
+}
+
+fn rename_ghost_reads(ghosts: &std::collections::BTreeSet<String>, expr: &mut Expr) {
+    if let ExprKind::Name(name) = &mut expr.kind {
+        if ghosts.contains(name.as_str()) {
+            *name = ghost_name(name);
+        }
+        return;
+    }
+    expr.for_each_child_mut(&mut |child| rename_ghost_reads(ghosts, child));
+}
+
+/// Whether `expr` reads a `ghost` local. Such a condition is erased when the
+/// program runs, as the local is.
+pub(crate) fn mentions_ghost(expr: &Expr) -> bool {
+    fn visit(expr: &mut Expr, found: &mut bool) {
+        if *found {
+            return;
+        }
+        if let ExprKind::Name(name) = &expr.kind {
+            *found = is_ghost_name(name);
+            return;
+        }
+        expr.for_each_child_mut(&mut |child| visit(child, found));
+    }
+    let mut found = false;
+    visit(&mut expr.clone(), &mut found);
+    found
+}

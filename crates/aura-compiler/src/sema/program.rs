@@ -2811,23 +2811,10 @@ fn inherit_trait_contracts(
             if method.contracts.is_empty() && inherited.is_empty() {
                 continue;
             }
-            let key = |clauses: &[crate::ast::ContractClause]| {
-                clauses
-                    .iter()
-                    .map(|clause| (clause.kind, clause.text.clone()))
-                    .collect::<Vec<_>>()
-            };
-            if !method.contracts.is_empty() && key(&method.contracts) != key(inherited) {
-                let clause = &method.contracts[0];
-                return Err(Diagnostic::coded_at(
-                    "AU2048",
-                    clause.span,
-                    format!(
-                        "the `{}` implementation of `{}` must repeat the trait method's clauses exactly or leave them out",
-                        impl_decl.trait_name, method.name
-                    ),
-                ));
-            }
+            // An implementation may weaken the trait's `requires` by
+            // stating its own, and strengthen its `ensures` by adding more;
+            // it keeps every `ensures` the trait states. `aura verify`
+            // proves that the trait's `requires` imply its own.
             if let Some(param) = method
                 .params
                 .iter()
@@ -2843,9 +2830,26 @@ fn inherit_trait_contracts(
                     ),
                 ));
             }
-            if method.contracts.is_empty() {
-                method.contracts = inherited.clone();
+            let states_requires = method
+                .contracts
+                .iter()
+                .any(|clause| clause.kind == crate::ast::ContractKind::Requires);
+            let mut contracts: Vec<crate::ast::ContractClause> = Vec::new();
+            for clause in inherited {
+                if clause.kind == crate::ast::ContractKind::Requires && states_requires {
+                    continue;
+                }
+                contracts.push(clause.clone());
             }
+            for clause in &method.contracts {
+                let repeated = contracts
+                    .iter()
+                    .any(|kept| kept.kind == clause.kind && kept.text == clause.text);
+                if !repeated {
+                    contracts.push(clause.clone());
+                }
+            }
+            method.contracts = contracts;
         }
     }
     Ok(())

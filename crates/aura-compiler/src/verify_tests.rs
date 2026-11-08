@@ -1229,7 +1229,6 @@ def main():
             "20 assert failed",
             "25 requires unsupported",
             "25 requires unsupported",
-            "25 requires unsupported",
         ],
     );
 }
@@ -1409,4 +1408,541 @@ def main():
     let report = verify_with(&proved, &options).expect("a solver ran above");
     assert!(report.is_proved());
     assert_eq!(report.proved_sites.len(), 1);
+}
+
+#[test]
+fn a_range_loop_invariant_holds_when_the_loop_ends() {
+    assert_proved(
+        r#"
+def fill(n: int64) -> list[int64]:
+    requires 0 <= n and n <= 100
+    ensures len(result) == n
+    ensures forall(i in range(n), result[i] == i)
+    mut out: list[int64] = []
+    for i in range(n):
+        invariant len(out) == i
+        invariant forall(j in range(i), out[j] == j)
+        out.append(i)
+    return out
+
+def count(a: int64, b: int64) -> int64:
+    requires 0 <= a and a <= 100 and 0 <= b and b <= 100
+    ensures result == 0 or result == b - a
+    mut c = 0
+    for i in range(a, b):
+        invariant c == i - a
+        c += 1
+    return c
+
+def main():
+    print(fill(3))
+    print(count(3, 7))
+    print(count(7, 3))
+"#,
+    );
+    // The last check runs with the target at the end of the range.
+    assert_open(
+        r#"
+def steps(n: int64) -> int64:
+    requires 0 <= n and n <= 10
+    mut s = 0
+    for i in range(n):
+        invariant s == i
+        invariant i < n
+        s += 1
+    return s
+
+def main():
+    print(steps(2))
+"#,
+        &["7 loop invariant failed"],
+    );
+}
+
+#[test]
+fn lists_of_tuples_and_classes_model_their_elements() {
+    assert_proved(
+        r#"
+class Point:
+    x: int64
+    y: int64
+
+def first_x(ps: list[Point]) -> int64:
+    requires len(ps) > 0 and ps[0].x == 3
+    ensures result == 3
+    return ps[0].x
+
+def bump(ps: mut list[Point]):
+    requires len(ps) > 1
+    requires forall(p in ps, 0 <= p.x and p.x < 1000)
+    ensures ps[1].x == old(ps[1].x) + 1
+    ensures ps[0].y == old(ps[0].y)
+    ps[1].x = ps[1].x + 1
+
+def pairs(n: int64) -> list[(int64, bool)]:
+    requires 0 <= n and n <= 100
+    ensures len(result) == n
+    ensures forall(p in result, p[0] >= 0 and p[1])
+    mut out: list[(int64, bool)] = []
+    for i in range(n):
+        invariant len(out) == i
+        invariant forall(q in out, q[0] >= 0 and q[1])
+        out.append((i, true))
+    return out
+
+def sum_x(ps: list[Point]) -> int64:
+    requires len(ps) <= 100
+    requires forall(p in ps, 0 <= p.x and p.x <= 10)
+    ensures 0 <= result and result <= 1000
+    mut t = 0
+    for i in range(len(ps)):
+        invariant 0 <= t and t <= 10 * i
+        t += ps[i].x
+    return t
+
+def main():
+    mut ps = [Point(x=3, y=4), Point(x=5, y=6)]
+    print(first_x(ps))
+    bump(ps)
+    print(ps[1].x)
+    print(len(pairs(3)))
+"#,
+    );
+}
+
+#[test]
+fn quantifiers_take_several_clauses_and_tuple_targets() {
+    assert_proved(
+        r#"
+def first_le_last(xs: list[int64]) -> bool:
+    requires len(xs) > 1
+    requires all([xs[i] <= xs[j] for i in range(len(xs)) for j in range(len(xs)) if i <= j])
+    ensures result
+    return xs[0] <= xs[len(xs) - 1]
+
+def third(xs: list[int64]) -> int64:
+    requires len(xs) > 3
+    requires forall((i, x) in enumerate(xs), x == i)
+    ensures result == 3
+    return xs[3]
+
+def ordered(xs: list[int64], ys: list[int64]) -> bool:
+    requires len(xs) > 0 and len(ys) > 0
+    requires forall((x, y) in zip(xs, ys), x < y)
+    ensures result
+    return xs[0] < ys[0]
+
+def total(ps: list[(int64, int64)]) -> int64:
+    requires len(ps) > 0
+    requires forall((a, b) in ps, 0 <= a and a <= 5 and b == 10 - a)
+    ensures result == 10
+    return ps[0][0] + ps[0][1]
+
+def main():
+    print(first_le_last([1, 2, 3]))
+    print(third([0, 1, 2, 3]))
+    print(ordered([1], [2]))
+    print(total([(4, 6)]))
+"#,
+    );
+}
+
+#[test]
+fn class_invariants_hold_where_objects_cross_function_boundaries() {
+    let source = r#"
+class Account:
+    balance: int64
+    limit: int64 = 1000
+    invariant 0 <= self.balance and self.balance <= self.limit
+    invariant self.limit <= 1_000_000
+
+    public def headroom(self) -> int64:
+        ensures result >= 0
+        return self.limit - self.balance
+
+def outside(a: Account) -> int64:
+    ensures result >= 0
+    return a.headroom()
+
+def make() -> Account:
+    return Account(balance=3)
+
+def chain() -> int64:
+    ensures result >= 0
+    return make().headroom()
+
+def broken() -> int64:
+    mut a = Account(balance=3)
+    a.balance = -1
+    return outside(a)
+
+def main():
+    print(outside(Account(balance=10)))
+    print(chain())
+    xs = [1, 2]
+    print(xs[min(outside(Account(balance=1000)), 1)])
+"#;
+    let options = Options {
+        prove_sites: true,
+        ..Options::default()
+    };
+    let Some(report) = verify_with(source, &options) else {
+        return;
+    };
+    assert_eq!(open_checks(&report), ["26 class invariant failed"]);
+    // No run checks an object passed to a function, so while that check is
+    // open a build removes no check.
+    assert!(report.proved_sites.is_empty());
+    let fixed = source.replace("a.balance = -1", "a.balance = 4");
+    let report = verify_with(&fixed, &options).expect("a solver ran above");
+    assert!(report.is_proved(), "{report:#?}");
+    assert_eq!(report.proved_sites.len(), 1);
+    crate::run_source(&fixed).expect("the program runs");
+}
+
+#[test]
+fn measures_cover_methods_and_mutual_recursion() {
+    assert_proved(
+        r#"
+def is_even(n: int64) -> bool:
+    requires n >= 0
+    decreases n
+    if n == 0:
+        return true
+    return is_odd(n - 1)
+
+def is_odd(n: int64) -> bool:
+    requires n >= 0
+    decreases n
+    if n == 0:
+        return false
+    return is_even(n - 1)
+
+def countdown(k: int64) -> int64:
+    requires 0 <= k and k <= 1000
+    decreases k
+    ensures result == 0
+    if k == 0:
+        return 0
+    return countdown(k - 1)
+
+def start(n: int64) -> int64:
+    requires 0 <= n and n <= 10
+    decreases n
+    ensures result == 0
+    # Not a cycle: `countdown` never calls back, so its larger measure is
+    # fine here.
+    return countdown(100)
+
+class Counter:
+    depth: int64
+
+    def down(self, k: int64) -> int64:
+        requires k >= 0
+        decreases k
+        if k == 0:
+            return self.depth
+        return self.down(k - 1)
+
+def main():
+    print(is_even(10))
+    print(start(3))
+    c = Counter(depth=4)
+    print(c.down(3))
+"#,
+    );
+    assert_open(
+        r#"
+def ping(n: int64) -> int64:
+    requires n >= 0
+    decreases n
+    if n == 0:
+        return 0
+    return pong(n)
+
+def pong(n: int64) -> int64:
+    requires n >= 0
+    decreases n
+    return ping(n - 1)
+
+def main():
+    print(ping(0))
+"#,
+        &["7 decreases failed", "12 requires failed"],
+    );
+}
+
+#[test]
+fn spec_methods_and_spec_requires_are_unfolded() {
+    assert_proved(
+        r#"
+class Account:
+    balance: int64
+    limit: int64 = 1000
+
+    spec def headroom(self) -> int64:
+        return self.limit - self.balance
+
+    public def deposit(mut self, amount: int64):
+        requires 0 <= self.balance and self.balance <= self.limit
+        requires amount > 0 and amount <= self.headroom()
+        ensures self.headroom() == old(self.headroom()) - amount
+        self.balance += amount
+
+spec def ratio(a: int64, b: int64) -> int64:
+    requires b > 0
+    return a // b
+
+def half(n: int64) -> int64:
+    requires 0 <= n and n <= 100
+    ensures result == ratio(n, 2)
+    return n // 2
+
+def main():
+    mut a = Account(balance=10)
+    a.deposit(5)
+    print(a.headroom())
+    print(half(7))
+"#,
+    );
+    assert_open(
+        r#"
+spec def ratio(a: int64, b: int64) -> int64:
+    requires b > 0
+    return a // b
+
+def zero(n: int64, d: int64) -> int64:
+    requires n >= 0
+    ensures ratio(n, d) >= 0 or result == 0
+    return 0
+
+def main():
+    print(zero(1, 1))
+"#,
+        &["8 ensures failed", "9 assert failed"],
+    );
+}
+
+#[test]
+fn spec_methods_with_arguments_and_shifted_enumerate_are_modeled() {
+    assert_proved(
+        r#"
+class Box:
+    n: int64
+
+    spec def plus(self, extra: int64) -> int64:
+        return self.n + extra
+
+    public def grow(mut self, k: int64):
+        requires 0 <= self.n and self.n <= 100 and 0 <= k and k <= 100
+        ensures self.n == old(self.plus(k))
+        self.n = self.plus(k)
+
+def second(xs: list[int64]) -> int64:
+    requires len(xs) > 2
+    requires forall((i, x) in enumerate(xs, 0), x == i + 1)
+    ensures result == 2
+    return xs[1]
+
+def pairs(xs: list[int64], ys: list[int64]) -> int64:
+    mut n = 0
+    for (x, y) in zip(xs, ys):
+        if 0 <= x and x <= 10 and 0 <= y and y <= 10 and n < 1000:
+            n += x * y
+    return n
+
+def main():
+    mut b = Box(n=1)
+    b.grow(2)
+    print(b.n)
+    print(second([1, 2, 3]))
+    print(pairs([1, 2], [3, 4]))
+"#,
+    );
+    assert_proved(
+        r#"
+class Node:
+    depth: int64
+
+    def count(self, n: int64) -> int64:
+        requires n >= 0
+        decreases n
+        if n == 0:
+            return 0
+        return (self).count(n - 1)
+
+class Tree:
+    root: Node
+
+    def walk(self, n: int64) -> int64:
+        requires n >= 0
+        decreases n
+        if n == 0:
+            return self.root.count(3)
+        return self.walk(n - 1)
+
+def down(n: int64) -> int64:
+    requires n >= 0
+    decreases n
+    if n == 0:
+        return 0
+    return (down)(n - 1)
+
+def main():
+    t = Tree(root=Node(depth=1))
+    print(t.walk(2))
+    print(down(3))
+"#,
+    );
+    assert_open(
+        r#"
+class Box:
+    n: int64
+
+    spec def plus(self, extra: int64) -> int64:
+        return self.n + extra
+
+def kw(b: Box) -> int64:
+    requires b.plus(extra=1) > 0
+    return 0
+
+def meth(xs: list[int64]) -> int64:
+    requires all([x > 0 for x in xs.copy()])
+    return 0
+
+def strs(xs: list[str]) -> int64:
+    requires all([len(x) > i for (i, x) in enumerate(xs, start=1)])
+    return 0
+
+def shifted(xs: list[int64]) -> int64:
+    requires forall((i, x) in enumerate(xs, 1), x == i)
+    return 0
+
+def main():
+    print(kw(Box(n=1)))
+"#,
+        &[
+            "8 assert failed",
+            "17 overflow failed",
+            "21 overflow failed",
+            "25 requires unsupported",
+        ],
+    );
+}
+
+#[test]
+fn trait_implementations_may_weaken_requires_and_strengthen_ensures() {
+    let source = r#"
+trait Scaler:
+    def scale(self, x: int64) -> int64:
+        requires 0 <= x and x <= 100
+        ensures result >= 0
+
+class Double:
+    pad: int64
+
+impl Scaler for Double:
+    def scale(self, x: int64) -> int64:
+        requires 0 <= x and x <= 1000
+        ensures result == 2 * x
+        return 2 * x
+
+class Narrow:
+    pad: int64
+
+impl Scaler for Narrow:
+    def scale(self, x: int64) -> int64:
+        requires x == 5
+        return x
+
+def through[T: Scaler](s: T) -> int64:
+    ensures result >= 0
+    return s.scale(50)
+
+def direct(d: Double) -> int64:
+    ensures result == 1000
+    return d.scale(500)
+
+def main():
+    print(through(Double(pad=0)))
+    print(direct(Double(pad=0)))
+"#;
+    assert_open(source, &["21 requires failed"]);
+}
+
+#[test]
+fn ghost_locals_are_verified_and_erased_when_the_program_runs() {
+    let source = r#"
+spec def sq(n: int64) -> int64:
+    return n * n
+
+def total(xs: list[int64]) -> int64:
+    requires len(xs) <= 100
+    requires all([0 <= x and x <= 10 for x in xs])
+    ensures result <= 1000
+    mut s = 0
+    ghost mut steps = 0
+    for i in range(len(xs)):
+        invariant steps == i and 0 <= s and s <= 10 * i
+        s += xs[i]
+        ghost steps = steps + 1
+    assert steps == len(xs)
+    return s
+
+def square(n: int64) -> int64:
+    requires 0 <= n and n <= 10
+    ghost k: int64 = sq(n)
+    ghost mut seen = n
+    ghost seen += 1
+    mut j = 0
+    while j < 3:
+        invariant 0 <= j and j <= 3 and seen == n + 1 + j and k == n * n
+        decreases 3 - j
+        ghost seen = seen + 1
+        j += 1
+    assert seen == n + 4
+    return n * n
+
+def main():
+    print(total([1, 2, 3]))
+    print(square(4))
+"#;
+    assert_proved(source);
+    let program = crate::check_source(source).expect("checks");
+    // The program's own lowering has no trace of the ghost locals.
+    let plain = format!("{:?}", crate::mir::lower(&program));
+    assert!(!plain.contains("ghost"), "{plain}");
+    if smt::SolverCommand::find(None).is_ok() {
+        let (_, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+            let options = Options {
+                prove_sites: true,
+                ..Options::default()
+            };
+            verify_module(&program, module, &options).map(|report| report.proved_sites)
+        })
+        .expect("verifies");
+        // The read of `xs[i]` maps across the ghost code around it.
+        assert!(removed >= 1, "{removed}");
+    }
+
+    // A ghost `assert` no run checks: until it is proved, nothing counts as
+    // proved.
+    let Some(report) = assert_open(
+        r#"
+def f(n: int64) -> int64:
+    requires 0 <= n and n <= 10
+    ghost mut seen = n * 2
+    ghost seen = seen + 1
+    assert seen == 2 * n + 1
+    assert seen > 100
+    return n
+
+def main():
+    print(f(3))
+"#,
+        &["7 assert failed"],
+    ) else {
+        return;
+    };
+    assert!(report.proved_sites.is_empty());
 }

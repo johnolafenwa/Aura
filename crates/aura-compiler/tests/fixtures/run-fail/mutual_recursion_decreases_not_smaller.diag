@@ -1,0 +1,8 @@
+error[AU4009]: `decreases` clause failed: `n` did not get smaller at the recursive call
+ --> crates/aura-compiler/tests/fixtures/run-fail/mutual_recursion_decreases_not_smaller.au:5:12
+  |
+5 |     return pong(n)
+  |            ^
+  = note: left = 3
+  = note: right = 3
+  = note: Aura call chain (innermost first): ping at 1:1 -> main at 11:1

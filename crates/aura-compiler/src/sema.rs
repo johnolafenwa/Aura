@@ -3334,6 +3334,10 @@ impl<'a> FunctionChecker<'a> {
             );
         }
 
+        if method.spec {
+            *checker.recursion_measure.borrow_mut() = None;
+            return checker.check_spec_function(method, &mut locals, &return_type);
+        }
         checker.check_contracts(method, &locals, &return_type)?;
         let flow = checker.check_block(&method.body, &mut locals, &return_type, 0, true)?;
         if return_type != Type::Unit && flow != BlockFlow::AlwaysReturns {
@@ -4093,8 +4097,14 @@ impl<'a> FunctionChecker<'a> {
 
         for (stmt_index, stmt) in body.iter().enumerate() {
             self.expire_views_before(statement_span(stmt), locals);
+            // `ghost` code, which only the verifier reads, may use `spec def`s.
+            let _ghost_spec = is_ghost_stmt(stmt).then(|| SpecScope::enter(&self.in_spec));
             match stmt {
                 Stmt::Assign(assign) => {
+                    if matches!(&assign.target, AssignTarget::Name(name) if crate::parser::is_ghost_name(name))
+                    {
+                        self.check_ghost_use(&assign.value, locals, "a `ghost` value")?;
+                    }
                     let transferred_closure_loans = match &assign.target {
                         AssignTarget::Name(target)
                             if grouped_name(&assign.value)
@@ -4405,6 +4415,13 @@ impl<'a> FunctionChecker<'a> {
                 Stmt::Destructure(destructure) => self.check_destructure(destructure, locals)?,
                 Stmt::Pass(_) => {}
                 Stmt::Assert(assert_stmt) => {
+                    if crate::parser::mentions_ghost(&assert_stmt.condition) {
+                        self.check_ghost_use(
+                            &assert_stmt.condition,
+                            locals,
+                            "an `assert` that reads a `ghost` local",
+                        )?;
+                    }
                     if let Some(clause) = &assert_stmt.clause {
                         self.check_loop_clauses(
                             std::slice::from_ref(clause.as_ref()),
@@ -7411,6 +7428,15 @@ impl<'a> FunctionChecker<'a> {
                         expr.span,
                         "unknown name `False`; did you mean `false`?",
                     )),
+                    _ if locals.contains_key(&crate::parser::ghost_name(name)) => {
+                        Err(Diagnostic::coded_at(
+                            "AU2048",
+                            expr.span,
+                            format!(
+                                "`{name}` is a `ghost` local; only `ghost` values, `assert`s, and loop clauses may read it"
+                            ),
+                        ))
+                    }
                     _ => Err(Diagnostic::at(
                         expr.span,
                         format!("unknown name `{}`", name),
@@ -17045,4 +17071,38 @@ pub(crate) fn compound_index_borrows_key(object_ty: &Type) -> bool {
         map_key_value_types(object_ty),
         Some((Type::Named(name, args), _)) if args.is_empty() && matches!(name.as_str(), "str" | "bytes")
     )
+}
+
+/// Whether `stmt` is `ghost` code: a `ghost` local's assignment, or an
+/// `assert` that reads one.
+fn is_ghost_stmt(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Assign(AssignStmt {
+            target: AssignTarget::Name(name),
+            ..
+        }) => crate::parser::is_ghost_name(name),
+        Stmt::Assert(assert_stmt) => crate::parser::mentions_ghost(&assert_stmt.condition),
+        _ => false,
+    }
+}
+
+/// Allows `spec def` references until dropped.
+struct SpecScope {
+    in_spec: Rc<std::cell::Cell<bool>>,
+    outer: bool,
+}
+
+impl SpecScope {
+    fn enter(in_spec: &Rc<std::cell::Cell<bool>>) -> Self {
+        Self {
+            in_spec: in_spec.clone(),
+            outer: in_spec.replace(true),
+        }
+    }
+}
+
+impl Drop for SpecScope {
+    fn drop(&mut self) {
+        self.in_spec.set(self.outer);
+    }
 }
