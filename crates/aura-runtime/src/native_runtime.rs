@@ -11041,16 +11041,40 @@ pub extern "C-unwind" fn aura_direct_map_with_capacity(entries: i64) -> *mut Opa
 
 fn infer_literal_entry_types(map: &mut MapValue, key: &Value, value: &Value) {
     if is_unknown_runtime_type(&map.key_type) {
-        let inferred = inferred_collection_type(key);
-        if !is_unknown_runtime_type(&inferred) {
-            map.key_type = inferred.into();
+        if let Some(inferred) = shared_literal_entry_type(key) {
+            map.key_type = inferred;
+        } else {
+            let inferred = inferred_collection_type(key);
+            if !is_unknown_runtime_type(&inferred) {
+                map.key_type = inferred.into();
+            }
         }
     }
     if is_unknown_runtime_type(&map.value_type) {
-        let inferred = inferred_collection_type(value);
-        if !is_unknown_runtime_type(&inferred) {
-            map.value_type = inferred.into();
+        if let Some(inferred) = shared_literal_entry_type(value) {
+            map.value_type = inferred;
+        } else {
+            let inferred = inferred_collection_type(value);
+            if !is_unknown_runtime_type(&inferred) {
+                map.value_type = inferred.into();
+            }
         }
+    }
+}
+
+/// The type [`inferred_collection_type`] gives `value`, as the shared copy
+/// [`SharedType::named`] keeps, for a `str` or a `json.Value` kept in its
+/// layout: no name is parsed for them.
+fn shared_literal_entry_type(value: &Value) -> Option<SharedType> {
+    match value {
+        Value::String(_) => Some(SharedType::named("str")),
+        Value::EnumVariant(EnumVariantValue {
+            payloads: VariantPayloads::Typed(typed),
+            ..
+        }) if &**typed.layout().runtime_type() == "json.Value" => {
+            Some(SharedType::named("json.Value"))
+        }
+        _ => None,
     }
 }
 

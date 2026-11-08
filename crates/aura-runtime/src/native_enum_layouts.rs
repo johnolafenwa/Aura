@@ -454,6 +454,28 @@ impl TypedPayloads {
         Ok(typed)
     }
 
+    /// [`Self::from_value`] for the variant at index `variant`, which the
+    /// caller looked up once.
+    pub fn from_value_at(
+        layout: &'static EnumLayout,
+        variant: usize,
+        payload: Value,
+    ) -> Result<Self, Value> {
+        let Some(plan) = layout.variants.get(variant) else {
+            return Err(payload);
+        };
+        let [place] = plan.payloads.as_slice() else {
+            return Err(payload);
+        };
+        if !layout.is_box(*place) && !(layout.ops.fits)(layout.table(), place.layout, &payload) {
+            return Err(payload);
+        }
+        let mut typed = Self::uninit(layout, variant);
+        // SAFETY: the place is dead, and the value fits it.
+        unsafe { typed.write_dead(0, payload) };
+        Ok(typed)
+    }
+
     /// Variant `variant` with a block whose bytes are dead. The caller
     /// writes every payload before the variant is read, copied, or dropped.
     fn uninit(layout: &'static EnumLayout, variant: usize) -> Self {

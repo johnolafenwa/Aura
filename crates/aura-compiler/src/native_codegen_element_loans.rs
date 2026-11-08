@@ -769,6 +769,7 @@ impl FunctionCompiler<'_> {
                 self.builder.jump(join_block, &[copy]);
                 self.builder.switch_to_block(slow_block);
                 self.builder.seal_block(slow_block);
+                let baseline = self.layout_scratch.clone();
                 let map_value = self.load_place(map)?;
                 // The field's value may be a copy this read frees, so the
                 // slow read copies the found value too.
@@ -781,6 +782,9 @@ impl FunctionCompiler<'_> {
                     .builder
                     .call(self.runtime[slow_find], &[map_value.values[0], key])
                     .results[0];
+                // A field's value this read loaded is released here, in the
+                // block that loaded it.
+                self.release_temporary_owned_since(&baseline);
                 self.builder.jump(join_block, &[copy]);
                 self.builder.switch_to_block(join_block);
                 self.builder.seal_block(join_block);
@@ -795,6 +799,51 @@ impl FunctionCompiler<'_> {
             values: vec![self.builder.uextend(types::I64, found)],
             ty: DirectType::Scalar(ScalarKind::Bool),
         }))
+    }
+
+    /// Begins `d[k]`, a checked entry loan with no `contains_key` test
+    /// before it, whose every read borrows the value, as the fused test
+    /// does: a shadow box reads the value where the dict keeps it, and a
+    /// missing key takes the runtime probe, which reports it. Returns false
+    /// when the loan takes the usual path.
+    pub(super) fn begin_shadow_entry_loan(
+        &mut self,
+        loan: &str,
+        source: &str,
+        selector: &Operand,
+    ) -> std::result::Result<bool, String> {
+        if !self.shadow_entry_copies.contains(loan) || self.fused_entry_copies.contains_key(loan) {
+            return Ok(false);
+        }
+        let map_ty = direct_type_to_type(&self.type_of_place(source)?);
+        let Type::Named(_, types) = &map_ty else {
+            return Ok(false);
+        };
+        let op = match types.first() {
+            Some(Type::Named(name, args)) if name == "int64" && args.is_empty() => {
+                DictOp::ContainsKeyInt64
+            }
+            _ => DictOp::ContainsKey,
+        };
+        let Some(found) = self.compile_fused_entry_copy(loan.to_string(), op, source, selector)?
+        else {
+            return Ok(false);
+        };
+        let missing_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder
+            .brif(found.values[0], join_block, &[], missing_block, &[]);
+        self.builder.switch_to_block(missing_block);
+        self.builder.seal_block(missing_block);
+        let baseline = self.layout_scratch.clone();
+        self.emit_element_path_probe(loan, false)?;
+        self.release_temporary_owned_since(&baseline);
+        self.builder.jump(join_block, &[]);
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        // Reads go through the copy, as for a fused test's loan.
+        self.view_places.remove(loan);
+        Ok(true)
     }
 
     /// A read of a loan [`compile_fused_entry_copy`] copied for: the copy

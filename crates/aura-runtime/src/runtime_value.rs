@@ -18456,12 +18456,21 @@ pub fn json_value_to_runtime(value: JsonValue) -> Result<Value> {
 struct RuntimeJson(Value);
 
 impl RuntimeJson {
-    fn variant(variant_name: &'static str, payload: Value) -> Self {
+    /// A `json.Value` variant a parse builds, `slot` naming it in
+    /// [`json_variant_index`]'s table.
+    #[inline]
+    fn variant_at(slot: usize, variant_name: &'static str, payload: Value) -> Self {
         let payloads = match crate::native_runtime::json_value_layout() {
-            Some(layout) => match TypedPayloads::from_value(layout, variant_name, payload) {
-                Ok(typed) => VariantPayloads::Typed(typed),
-                Err(payload) => vec![payload].into(),
-            },
+            Some(layout) => {
+                let built = match json_variant_index(layout, slot) {
+                    Some(index) => TypedPayloads::from_value_at(layout, index, payload),
+                    None => TypedPayloads::from_value(layout, variant_name, payload),
+                };
+                match built {
+                    Ok(typed) => VariantPayloads::Typed(typed),
+                    Err(payload) => vec![payload].into(),
+                }
+            }
             None => vec![payload].into(),
         };
         Self(Value::EnumVariant(EnumVariantValue {
@@ -18484,24 +18493,25 @@ impl json_codec::JsonTree for RuntimeJson {
     }
 
     fn boolean(value: bool) -> Self {
-        Self::variant("Bool", Value::Bool(value))
+        Self::variant_at(0, "Bool", Value::Bool(value))
     }
 
     fn int(value: i64) -> Self {
-        Self::variant("Int", Value::Int(IntegerValue::from_i64(value)))
+        Self::variant_at(1, "Int", Value::Int(IntegerValue::from_i64(value)))
     }
 
     fn float(value: f64) -> Self {
-        Self::variant("Float", Value::Float(value))
+        Self::variant_at(2, "Float", Value::Float(value))
     }
 
     fn string(value: &str) -> std::result::Result<Self, std::collections::TryReserveError> {
-        Ok(Self::variant("String", Value::String(value.into())))
+        Ok(Self::variant_at(3, "String", Value::String(value.into())))
     }
 
     fn array(values: Vec<Self>) -> Self {
         let elements: Vec<Value> = values.into_iter().map(|value| value.0).collect();
-        Self::variant(
+        Self::variant_at(
+            4,
             "Array",
             Value::Vec(VecValue {
                 element_type: Type::named("json.Value"),
@@ -18538,7 +18548,8 @@ impl json_codec::JsonTree for RuntimeJson {
     }
 
     fn object(object: DictEntries) -> Self {
-        Self::variant(
+        Self::variant_at(
+            5,
             "Object",
             Value::Map(MapValue {
                 key_type: SharedType::named("str"),
@@ -18718,6 +18729,15 @@ enum RuntimeJsonNode<'a> {
 /// `value` as a node [`runtime_value_to_json`] would convert without
 /// error, or `None`.
 fn runtime_json_node(value: &Value) -> Option<RuntimeJsonNode<'_>> {
+    if let Value::EnumVariant(EnumVariantValue {
+        payloads: VariantPayloads::Typed(typed),
+        ..
+    }) = value
+    {
+        if let Some(node) = typed_json_node(typed) {
+            return node;
+        }
+    }
     let Value::EnumVariant(EnumVariantValue {
         enum_name,
         variant_name,
@@ -18763,6 +18783,114 @@ fn runtime_json_node(value: &Value) -> Option<RuntimeJsonNode<'_>> {
         }
         ("Object", [Value::Map(entries)]) if json_object_metadata_is_exact(entries) => {
             RuntimeJsonNode::Object(&entries.entries)
+        }
+        _ => return None,
+    })
+}
+
+/// The kind of each variant of `json.Value`'s layout, by variant index.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JsonVariantKind {
+    Null,
+    Bool,
+    Int,
+    Float,
+    String,
+    Array,
+    Object,
+    Other,
+}
+
+/// The index in `layout`, `json.Value`'s layout, of the variant a parse
+/// builds as `name`, looked up once per process.
+#[inline]
+fn json_variant_index(
+    layout: &'static crate::native_runtime::EnumLayout,
+    slot: usize,
+) -> Option<usize> {
+    const NAMES: [&str; 5] = ["Bool", "Int", "Float", "String", "Array"];
+    static INDICES: OnceLock<(usize, [Option<usize>; 6])> = OnceLock::new();
+    let (address, indices) = INDICES.get_or_init(|| {
+        let mut indices = [None; 6];
+        for (slot, wanted) in NAMES.iter().chain(["Object"].iter()).enumerate() {
+            indices[slot] = layout.variant_index(wanted);
+        }
+        (std::ptr::from_ref(layout) as usize, indices)
+    });
+    if *address != std::ptr::from_ref(layout) as usize {
+        return None;
+    }
+    *indices.get(slot)?
+}
+
+/// [`runtime_json_node`] of a variant kept in `json.Value`'s layout, read
+/// by its variant's index instead of its names: `None` for a variant of
+/// another layout, which takes the general path.
+#[inline]
+fn typed_json_node<'a>(typed: &'a TypedPayloads) -> Option<Option<RuntimeJsonNode<'a>>> {
+    use aura_core::layout::ScalarLayout;
+    static KINDS: OnceLock<(usize, Vec<JsonVariantKind>)> = OnceLock::new();
+    let layout = crate::native_runtime::json_value_layout()?;
+    if !std::ptr::eq(typed.layout(), layout) {
+        return None;
+    }
+    let (address, kinds) = KINDS.get_or_init(|| {
+        let kinds = (0..)
+            .map_while(|index| layout.variant_name(index))
+            .map(|name| match name.as_str() {
+                "Null" => JsonVariantKind::Null,
+                "Bool" => JsonVariantKind::Bool,
+                "Int" => JsonVariantKind::Int,
+                "Float" => JsonVariantKind::Float,
+                "String" => JsonVariantKind::String,
+                "Array" => JsonVariantKind::Array,
+                "Object" => JsonVariantKind::Object,
+                _ => JsonVariantKind::Other,
+            })
+            .collect();
+        (std::ptr::from_ref(layout) as usize, kinds)
+    });
+    if *address != std::ptr::from_ref(layout) as usize {
+        return None;
+    }
+    let kind = *kinds.get(typed.variant())?;
+    Some(match kind {
+        JsonVariantKind::Null if typed.is_empty() => Some(RuntimeJsonNode::Null),
+        JsonVariantKind::Bool => match typed.scalar_bits(0) {
+            Some((ScalarLayout::Bool, bits)) => Some(RuntimeJsonNode::Bool(bits != 0)),
+            _ => return None,
+        },
+        JsonVariantKind::Int => match typed.scalar_bits(0) {
+            Some((ScalarLayout::Int64, bits)) => Some(RuntimeJsonNode::Int(bits)),
+            _ => return None,
+        },
+        JsonVariantKind::Float => match typed.scalar_bits(0) {
+            Some((ScalarLayout::Float64, bits)) => {
+                let value = f64::from_bits(bits as u64);
+                value.is_finite().then_some(RuntimeJsonNode::Float(value))
+            }
+            _ => return None,
+        },
+        JsonVariantKind::String | JsonVariantKind::Array | JsonVariantKind::Object => {
+            let Some(Cow::Borrowed(payload)) = typed.get(0) else {
+                return None;
+            };
+            match (kind, payload) {
+                (JsonVariantKind::String, Value::String(text)) => {
+                    Some(RuntimeJsonNode::String(text))
+                }
+                (JsonVariantKind::Array, Value::Vec(values))
+                    if json_array_metadata_is_exact(values) =>
+                {
+                    Some(RuntimeJsonNode::Array(&values.elements))
+                }
+                (JsonVariantKind::Object, Value::Map(entries))
+                    if json_object_metadata_is_exact(entries) =>
+                {
+                    Some(RuntimeJsonNode::Object(&entries.entries))
+                }
+                _ => return None,
+            }
         }
         _ => return None,
     })

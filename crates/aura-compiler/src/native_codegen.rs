@@ -9288,6 +9288,7 @@ impl<'a> FunctionCompiler<'a> {
         if self.fused_entry_copies.contains_key(loan) {
             return Ok(());
         }
+        let selector_operand = selector;
         let collection_ty = direct_type_to_type(&self.type_of_place(source)?);
         let (kind, selector_ty) = match &collection_ty {
             Type::Named(name, args) if name == "list" && args.len() == 1 => (
@@ -9345,6 +9346,12 @@ impl<'a> FunctionCompiler<'a> {
         }
         self.view_places.insert(loan.to_string(), resolved);
         if self.begin_native_element_loan(loan)? {
+            return Ok(());
+        }
+        if checked
+            && kind == DirectElementKind::Dict
+            && self.begin_shadow_entry_loan(loan, source, selector_operand)?
+        {
             return Ok(());
         }
         // Bounds or presence are checked once at creation. A single
