@@ -1,0 +1,8 @@
+def halve(n: int64) -> int64:
+    decreases n
+    if n == 0:
+        return 0
+    return 1 + halve(n // 2 - 1)
+
+def main():
+    print(halve(5))

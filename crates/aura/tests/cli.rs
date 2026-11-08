@@ -16890,6 +16890,7 @@ fn verify_reports_proved_and_failed_checks_in_human_and_json_form() {
         return;
     }
     let temp = TempDir::new("aura-verify-cli");
+    let cache = temp.path().join("cache");
     let proved = temp.path().join("proved.au");
     fs::write(
         &proved,
@@ -16897,6 +16898,7 @@ fn verify_reports_proved_and_failed_checks_in_human_and_json_form() {
     )
     .expect("write the proved program");
     let output = Command::new(aura_bin())
+        .env("AURA_CACHE_DIR", &cache)
         .args(["verify"])
         .arg(&proved)
         .output()
@@ -16908,9 +16910,29 @@ fn verify_reports_proved_and_failed_checks_in_human_and_json_form() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        stdout.contains("4 of 4 checks proved in 2 functions"),
+        stdout.contains("4 of 4 checks proved in 2 functions ("),
         "{stdout}"
     );
+    // A second run answers both functions from the proof cache, and
+    // `--no-cache` solves them again.
+    for (flag, expected) in [
+        (
+            None,
+            "4 of 4 checks proved in 2 functions, 2 from the proof cache (",
+        ),
+        (Some("--no-cache"), "4 of 4 checks proved in 2 functions ("),
+    ] {
+        let output = Command::new(aura_bin())
+            .env("AURA_CACHE_DIR", &cache)
+            .arg("verify")
+            .args(flag)
+            .arg(&proved)
+            .output()
+            .expect("run aura verify again");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "{stdout}");
+        assert!(stdout.contains(expected), "{stdout}");
+    }
 
     let failed = temp.path().join("failed.au");
     fs::write(
@@ -16919,6 +16941,7 @@ fn verify_reports_proved_and_failed_checks_in_human_and_json_form() {
     )
     .expect("write the failing program");
     let output = Command::new(aura_bin())
+        .env("AURA_CACHE_DIR", &cache)
         .args(["verify"])
         .arg(&failed)
         .output()
@@ -16932,6 +16955,7 @@ fn verify_reports_proved_and_failed_checks_in_human_and_json_form() {
     assert!(stderr.contains("counterexample: x = "), "{stderr}");
 
     let output = Command::new(aura_bin())
+        .env("AURA_CACHE_DIR", &cache)
         .args([
             "verify",
             "--format",
@@ -16955,6 +16979,7 @@ fn verify_reports_proved_and_failed_checks_in_human_and_json_form() {
     assert_eq!(report["diagnostics"][0]["code"], "AU5101");
 
     let output = Command::new(aura_bin())
+        .env("AURA_CACHE_DIR", &cache)
         .args(["verify", "--solver", "/nonexistent/z3"])
         .arg(&proved)
         .output()

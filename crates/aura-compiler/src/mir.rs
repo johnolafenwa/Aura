@@ -1550,6 +1550,18 @@ const DECREASES_CURRENT: &str = "decreases measure";
 const DECREASES_PREVIOUS: &str = "previous measure";
 const DECREASES_STARTED: &str = "measured before";
 
+/// A function's `decreases` measure, for the checks at its recursive
+/// calls.
+#[derive(Clone)]
+struct RecursionMeasure {
+    function: String,
+    clause: crate::ast::ContractClause,
+    /// Each parameter in order, with its default.
+    params: Vec<(String, Option<Expr>)>,
+    /// The local holding the measure's value on entry.
+    entry: String,
+}
+
 struct DecreasesState {
     clause: crate::ast::ContractClause,
     previous: String,
@@ -10408,6 +10420,9 @@ pub fn lower(program: &Program) -> MirModule {
 
 thread_local! {
     static SOURCE_LOCATIONS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while lowering for the verifier, which reads each check's clause
+    /// as written and so needs the local behind each source name in scope.
+    static VERIFICATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Lowers `program` as `lower` does and puts a `SourceLocation` before each
@@ -10441,7 +10456,14 @@ pub fn lower_for_verification(program: &Program) -> MirModule {
             SOURCE_LOCATIONS.with(|enabled| enabled.set(self.0));
         }
     }
+    struct RestoreVerification(bool);
+    impl Drop for RestoreVerification {
+        fn drop(&mut self) {
+            VERIFICATION.with(|enabled| enabled.set(self.0));
+        }
+    }
     let _restore = Restore(SOURCE_LOCATIONS.with(|enabled| enabled.replace(true)));
+    let _verification = RestoreVerification(VERIFICATION.with(|enabled| enabled.replace(true)));
     let mut module = lower_unresolved(program);
     specialize::specialize_generic_functions(&mut module);
     resolve_runtime_ops_and_unions(program, &mut module);
@@ -10449,6 +10471,40 @@ pub fn lower_for_verification(program: &Program) -> MirModule {
     type_args::record_call_type_args(&mut module);
     methods::resolve_methods(&mut module);
     module
+}
+
+/// Lowers `program` as `lower` does, or as `lower_with_source_locations`
+/// does for a `debug` build, and leaves unchecked each element read and
+/// loan that `prove` shows in range. `prove` reads the module
+/// `lower_for_verification` gives and names the proved accesses as
+/// `verify::Report::proved_sites` does. Returns the module and how many
+/// accesses lost their check.
+pub fn lower_with_proved_checks<E>(
+    program: &Program,
+    debug: bool,
+    prove: impl FnOnce(
+        &MirModule,
+    )
+        -> std::result::Result<std::collections::BTreeSet<(String, usize, usize)>, E>,
+) -> std::result::Result<(MirModule, usize), E> {
+    let verified = lower_for_verification(program);
+    let proved = prove(&verified)?;
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SOURCE_LOCATIONS.with(|enabled| enabled.set(self.0));
+        }
+    }
+    let _restore = Restore(SOURCE_LOCATIONS.with(|enabled| enabled.replace(debug)));
+    let mut module = lower_unresolved(program);
+    specialize::specialize_generic_functions(&mut module);
+    resolve_runtime_ops_and_unions(program, &mut module);
+    checks::resolve_checks(&mut module);
+    type_args::record_call_type_args(&mut module);
+    methods::resolve_methods(&mut module);
+    let covered = checks::insert_proved_index_facts(&mut module, &verified, &proved);
+    ownership::insert_ownership(&mut module);
+    Ok((module, covered))
 }
 
 fn make_explicit(program: &Program, mut module: MirModule) -> MirModule {
@@ -11631,6 +11687,8 @@ struct Lowerer<'a> {
     specialized_bound_roots: BTreeMap<String, String>,
     non_owning_roots: BTreeSet<String>,
     scoped_names: Vec<std::collections::HashMap<String, String>>,
+    /// The `decreases` measure of the function being lowered.
+    recursion_measure: Option<RecursionMeasure>,
     /// The source name of each compiler-made local that holds a source
     /// variable, kept for a debug build once the variable's scope ends.
     debug_names: BTreeMap<String, String>,
@@ -11856,6 +11914,7 @@ impl<'a> Lowerer<'a> {
             specialized_bound_roots: BTreeMap::new(),
             non_owning_roots: BTreeSet::new(),
             scoped_names: Vec::new(),
+            recursion_measure: None,
             debug_names: BTreeMap::new(),
             binding_blocks: vec![BindingBlock::default()],
             ended_bindings: BTreeSet::new(),
@@ -12348,6 +12407,25 @@ impl<'a> Lowerer<'a> {
         } else {
             self.program.module_registry.get(self.module_name)
         }
+    }
+
+    /// Whether `expr`, a statement, calls a `lemma def`, which only the
+    /// verifier reads: outside verification the call is erased. Its
+    /// arguments are pure, so nothing is lost.
+    fn erased_lemma_call(&self, expr: &Expr) -> bool {
+        if VERIFICATION.with(std::cell::Cell::get) {
+            return false;
+        }
+        let ExprKind::Call { callee, .. } = &expr.kind else {
+            return false;
+        };
+        let ExprKind::Name(name) = &callee.kind else {
+            return false;
+        };
+        !self.local_types.contains_key(&self.render_local_name(name))
+            && self
+                .resolve_function_info(name)
+                .is_some_and(|function| function.decl.lemma)
     }
 
     fn resolve_function_info(&self, name: &str) -> Option<&crate::sema::FunctionInfo> {
@@ -13325,6 +13403,26 @@ impl<'a> Lowerer<'a> {
         self.end_binding_block();
     }
 
+    /// For the verifier, records in the current block the local behind
+    /// each source name in scope that lowering renamed.
+    fn name_scope_for_verifier(&mut self) {
+        if !VERIFICATION.with(std::cell::Cell::get) {
+            return;
+        }
+        let mut names: BTreeMap<String, String> = BTreeMap::new();
+        let rebound = self.binding_blocks.iter().map(|block| &block.rebound);
+        for scope in rebound.chain(self.scoped_names.iter()) {
+            for (name, local) in scope {
+                names.insert(name.clone(), local.clone());
+            }
+        }
+        for (name, local) in names {
+            if local != name {
+                self.emit(Instruction::SourceName { local, name });
+            }
+        }
+    }
+
     fn current_binding_block(&mut self) -> &mut BindingBlock {
         self.binding_blocks
             .last_mut()
@@ -13725,6 +13823,7 @@ impl<'a> Lowerer<'a> {
                 true
             }
             Stmt::Pass(_) => true,
+            Stmt::Expr(expr_stmt) if self.erased_lemma_call(&expr_stmt.expr) => true,
             Stmt::Expr(expr_stmt) => {
                 let value_type = self.infer_expr_type(&expr_stmt.expr);
                 let value = self.lower_expr_for_owned_value(&expr_stmt.expr, value_type.as_ref());
@@ -13946,6 +14045,7 @@ impl<'a> Lowerer<'a> {
     /// with `result` naming the returned value.
     fn lower_contracted_body(&mut self, function: &crate::ast::FunctionDecl) {
         self.lower_contract_checks(function, crate::ast::ContractKind::Requires);
+        self.lower_recursion_measure(function);
         // Only the hidden class invariant method has `invariant` clauses.
         self.lower_contract_checks(function, crate::ast::ContractKind::Invariant);
         let guarded = self.guarded_self_class(function);
@@ -14089,6 +14189,124 @@ impl<'a> Lowerer<'a> {
         self.lower_check(&check, assert_kind);
     }
 
+    /// On entry to a function with a `decreases` measure, checks that it is
+    /// not negative and records it, so each recursive call can check that
+    /// the measure of its arguments is smaller.
+    fn lower_recursion_measure(&mut self, function: &crate::ast::FunctionDecl) {
+        let Some(clause) = function
+            .contracts
+            .iter()
+            .find(|clause| clause.kind == crate::ast::ContractKind::Decreases)
+        else {
+            return;
+        };
+        let entry = self.new_typed_temp(Type::named("int64"));
+        let value = self.lower_expr(&clause.condition);
+        self.emit(Instruction::Assign {
+            target: entry.clone(),
+            value: Rvalue::Use(value),
+        });
+        let span = clause.condition.span;
+        let non_negative = Expr {
+            kind: ExprKind::Binary {
+                op: BinaryOp::GreaterEq,
+                left: Box::new(Expr {
+                    kind: ExprKind::Name(DECREASES_CURRENT.to_string()),
+                    span,
+                }),
+                right: Box::new(Expr {
+                    kind: ExprKind::Int(0),
+                    span,
+                }),
+            },
+            span,
+        };
+        self.scoped_names.push(std::collections::HashMap::from([(
+            DECREASES_CURRENT.to_string(),
+            entry.clone(),
+        )]));
+        self.lower_clause_check(
+            &non_negative,
+            format!("`decreases` clause failed: `{}` went below 0", clause.text),
+            clause.span,
+            crate::ast::ContractKind::Decreases,
+        );
+        self.scoped_names.pop();
+        self.recursion_measure = Some(RecursionMeasure {
+            function: function.name.clone(),
+            clause: clause.clone(),
+            params: function
+                .params
+                .iter()
+                .map(|param| (param.name.clone(), param.default.clone()))
+                .collect(),
+            entry,
+        });
+    }
+
+    /// Before a call of the function being lowered, when it has a
+    /// `decreases` measure, checks that the measure of the call's
+    /// arguments is smaller than on entry. Each argument is evaluated again
+    /// for it, which the checker allows because each is pure.
+    fn lower_recursive_call_measure(&mut self, callee: &Expr, args: &[Argument]) {
+        let (Some(measure), ExprKind::Name(name)) = (&self.recursion_measure, &callee.kind) else {
+            return;
+        };
+        if *name != measure.function || self.local_types.contains_key(&self.render_local_name(name))
+        {
+            return;
+        }
+        let measure = measure.clone();
+        let mut scope = std::collections::HashMap::from([(
+            DECREASES_PREVIOUS.to_string(),
+            measure.entry.clone(),
+        )]);
+        for (index, (param, default)) in measure.params.iter().enumerate() {
+            if !crate::sema::expr_references_name(&measure.clause.condition, param) {
+                continue;
+            }
+            let value = args
+                .iter()
+                .find(|arg| arg.name.as_deref() == Some(param.as_str()))
+                .or_else(|| args.get(index).filter(|arg| arg.name.is_none()))
+                .map(|arg| &arg.value)
+                .or(default.as_ref());
+            let Some(value) = value else {
+                return;
+            };
+            let place = self.new_temp_for_expr(value);
+            let operand = self.lower_expr(value);
+            self.emit(Instruction::Assign {
+                target: place.clone(),
+                value: Rvalue::Use(operand),
+            });
+            scope.insert(param.clone(), place);
+        }
+        let span = callee.span;
+        let smaller = Expr {
+            kind: ExprKind::Binary {
+                op: BinaryOp::Less,
+                left: Box::new(measure.clause.condition.clone()),
+                right: Box::new(Expr {
+                    kind: ExprKind::Name(DECREASES_PREVIOUS.to_string()),
+                    span,
+                }),
+            },
+            span,
+        };
+        self.scoped_names.push(scope);
+        self.lower_clause_check(
+            &smaller,
+            format!(
+                "`decreases` clause failed: `{}` did not get smaller at the recursive call",
+                measure.clause.text
+            ),
+            span,
+            crate::ast::ContractKind::Decreases,
+        );
+        self.scoped_names.pop();
+    }
+
     /// Lowers the hidden state a `while` loop's `decreases` measure needs:
     /// the measure's value at the previous body entry, and whether there
     /// was one.
@@ -14210,6 +14428,7 @@ impl<'a> Lowerer<'a> {
         });
 
         self.switch_to(failure_block);
+        self.name_scope_for_verifier();
         // Render retained operands only on failure, before evaluating the lazy
         // source message. The comparison itself has already consumed the raw
         // captures, so formatting cannot alter its result or evaluate either
@@ -23384,6 +23603,7 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         expected: Option<&Type>,
     ) -> Operand {
+        self.lower_recursive_call_measure(callee, args);
         match &callee.kind {
             ExprKind::Name(name) if name == "len" && args.len() == 1 => {
                 if let Some(len) = self.lower_span_len(&args[0].value) {

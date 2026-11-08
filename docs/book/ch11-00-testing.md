@@ -18,4 +18,6 @@ shopping cart, applies discounts, and formats prices. We'll write tests for it,
 watch one of them catch a real bug in code that looks correct, learn to read
 failure output and select which tests run, and then organize a growing test
 suite with shared fixtures, parameterized cases, and machine-readable output
-for CI.
+for CI. Finally we'll add contracts to the discount code and use
+`aura verify` to prove that they hold for every input, not only the ones we
+tested.

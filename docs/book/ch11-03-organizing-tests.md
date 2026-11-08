@@ -437,21 +437,5 @@ stopped safely, so its teardown isn't guaranteed to run. A test that times out
 may leave its fixture behind, which is one more reason to keep fixtures in
 files with fixed names that the next setup overwrites.
 
-## Summary
-
-You can now test Aura code with nothing but the `aura` command. A test is a
-parameterless `test_` function that asserts what should be true, and the runner
-reports each case by file and name, with the operands of a failed comparison
-printed for you. A trap in the code under test fails the case with its full
-diagnostic and call chain. You can narrow a run to a file, a directory, or any
-case whose name contains a substring, set time limits, share setup and teardown
-between cases, generate cases from a list, and produce JSON for CI, while the
-exit status tells any script whether the suite passed.
-
-Along the way the tests did more than catch mistakes. They found a real bug in
-`format_cents`, forced a decision about the average of an empty cart, and
-pushed `load_prices` apart into a pure parser and a thin file reader. That's
-the usual effect of writing tests early, and it's the approach we'll take in
-the next chapter. In [Chapter 12](/book/ch12-00-log-analyzer) we'll put
-everything from the last few chapters together and build a command-line log
-analyzer, starting from an empty directory.
+Tests check the cases you choose. In the next section we'll write down
+what must hold for every case, and have the compiler prove it.

@@ -19,7 +19,7 @@ pub mod smt;
 #[path = "verify_spec.rs"]
 mod spec;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::{ContractClause, ContractKind, FunctionDecl};
 use crate::diag::{Diagnostic, Span};
@@ -66,7 +66,7 @@ impl ObligationKind {
 }
 
 /// The outcome of one obligation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Status {
     Proved,
     /// The solver found inputs that break the check.
@@ -107,6 +107,11 @@ pub struct ObligationReport {
 pub struct Report {
     pub solver: String,
     pub functions: usize,
+    /// How many functions the proof cache answered.
+    pub cached: usize,
+    /// With [`Options::prove_sites`], the element accesses proved to need
+    /// no bounds check, by MIR function name, block, and position.
+    pub proved_sites: BTreeSet<(String, usize, usize)>,
     pub obligations: Vec<ObligationReport>,
 }
 
@@ -182,6 +187,11 @@ pub struct Options {
     /// Print each query's SMT text to standard error. The default is
     /// whether `AURA_VERIFY_TRACE` is set.
     pub trace: bool,
+    /// The proof cache directory; `None` solves every query.
+    pub cache_dir: Option<std::path::PathBuf>,
+    /// Also prove which element accesses can skip their bounds check, for
+    /// a build that removes proved checks.
+    pub prove_sites: bool,
 }
 
 impl Default for Options {
@@ -191,6 +201,8 @@ impl Default for Options {
             timeout_ms: 10_000,
             function_filter: None,
             trace: std::env::var_os("AURA_VERIFY_TRACE").is_some(),
+            cache_dir: None,
+            prove_sites: false,
         }
     }
 }
@@ -231,6 +243,26 @@ impl<'a> VerifyContext<'a> {
                             .cloned()
                             .collect(),
                     );
+                }
+            }
+        }
+        // A method of a trait implementation has the contract of its
+        // declaration, found by its span: the implementation's own method,
+        // or the trait's default.
+        let mut impl_methods = BTreeMap::new();
+        for trait_impl in &program.trait_impls {
+            for method in trait_impl.methods.values() {
+                impl_methods.insert(
+                    (method.decl.span.line, method.decl.span.column),
+                    &method.decl,
+                );
+            }
+        }
+        for function in &module.functions {
+            let name = spec::base_name(&function.name);
+            if !decls.contains_key(name) && name.contains(" for ") {
+                if let Some(decl) = impl_methods.get(&(function.span.line, function.span.column)) {
+                    decls.insert(name.to_string(), decl);
                 }
             }
         }
@@ -403,14 +435,17 @@ pub fn verify_module(
     let command = smt::SolverCommand::find(options.solver.as_deref())
         .map_err(|message| Diagnostic::coded("AU5103", message))?;
     let cx = VerifyContext::new(program, module);
+    let version = command.version();
     let mut report = Report {
-        solver: format!("{} ({})", command.program.display(), command.version()),
+        solver: format!("{} ({version})", command.program.display()),
         ..Report::default()
     };
     let mut merged: BTreeMap<((usize, usize), ObligationKind, String), ObligationReport> =
         BTreeMap::new();
-    let mut solver = smt::Solver::start(&command, options.timeout_ms)
-        .map_err(|message| Diagnostic::coded("AU5103", message))?;
+    let mut proved_sites = BTreeSet::new();
+    let mut erased_open = false;
+    // The solver starts at the first function the cache cannot answer.
+    let mut solver: Option<smt::Solver> = None;
     let trace = options.trace;
     for function in &module.functions {
         if !verified_function(program, &cx, function) {
@@ -424,6 +459,7 @@ pub fn verify_module(
         report.functions += 1;
         let public = crate::mir::public_function_name(&function.name);
         let mut exec = exec::Exec::new(&cx, function);
+        exec.prove_sites = options.prove_sites;
         let entry = exec.entry_state();
         exec.assume_entry_requires(&entry);
         exec.assume_entry_invariant(&entry);
@@ -446,9 +482,39 @@ pub fn verify_module(
             );
             continue;
         }
-        let statuses = solve(&mut solver, &exec, trace)
-            .map_err(|message| Diagnostic::coded("AU5103", message))?;
+        let cache = options
+            .cache_dir
+            .as_deref()
+            .map(|dir| dir.join(format!("{}.json", cache_key(&version, options, &exec))));
+        let statuses = match cache.as_deref().and_then(|path| read_cache(path, &exec)) {
+            Some(statuses) => {
+                report.cached += 1;
+                statuses
+            }
+            None => {
+                let solver = match &mut solver {
+                    Some(solver) => solver,
+                    None => solver.insert(
+                        smt::Solver::start(&command, options.timeout_ms)
+                            .map_err(|message| Diagnostic::coded("AU5103", message))?,
+                    ),
+                };
+                let statuses = solve(solver, &exec, trace)
+                    .map_err(|message| Diagnostic::coded("AU5103", message))?;
+                if let Some(path) = &cache {
+                    write_cache(path, &statuses);
+                }
+                statuses
+            }
+        };
+        // A site is proved only when every path that reaches it is.
+        let mut sites: BTreeMap<(usize, usize), bool> = BTreeMap::new();
         for (obligation, status) in exec.obligations.iter().zip(statuses) {
+            erased_open |= obligation.erased && status != Status::Proved;
+            if let Some(site) = obligation.site {
+                *sites.entry(site).or_insert(true) &= status == Status::Proved;
+                continue;
+            }
             let key = (
                 (obligation.span.line, obligation.span.column),
                 obligation.kind,
@@ -458,6 +524,7 @@ pub fn verify_module(
                 Some(existing) => {
                     if status.rank() > existing.status.rank() {
                         existing.status = status;
+                        existing.function = public.clone();
                     }
                 }
                 None => {
@@ -474,9 +541,86 @@ pub fn verify_module(
                 }
             }
         }
+        proved_sites.extend(
+            sites
+                .into_iter()
+                .filter(|(_, proved)| *proved)
+                .map(|((block, position), _)| (function.name.clone(), block, position)),
+        );
     }
     report.obligations = merged.into_values().collect();
+    // A lemma that is not proved may have let the verifier assume what no
+    // run checks, so no access counts as proved.
+    if !erased_open {
+        report.proved_sites = proved_sites;
+    }
     Ok(report)
+}
+
+/// The proof cache key of a function's queries: everything the solver
+/// sees, the solver's version, and the time limit.
+fn cache_key(version: &str, options: &Options, exec: &exec::Exec<'_>) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    let mut part = |text: &str| {
+        hasher.update(text.len().to_le_bytes());
+        hasher.update(text.as_bytes());
+    };
+    part("aura-verify-cache-1");
+    part(version);
+    part(&options.timeout_ms.to_string());
+    for decl in &exec.decls {
+        part(decl);
+    }
+    part("facts");
+    for fact in &exec.facts {
+        part(fact);
+    }
+    part("inputs");
+    for (name, term) in &exec.inputs {
+        part(name);
+        part(term);
+    }
+    for obligation in &exec.obligations {
+        part(&obligation.facts.to_string());
+        part(&obligation.pc);
+        match &obligation.goal {
+            exec::Goal::Holds(goal) => part(goal),
+            exec::Goal::Unsupported(reason) => {
+                part("unsupported");
+                part(reason);
+            }
+        }
+    }
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// The cached statuses at `path`, when there is one for every obligation.
+fn read_cache(path: &std::path::Path, exec: &exec::Exec<'_>) -> Option<Vec<Status>> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let statuses: Vec<Status> = serde_json::from_str(&text).ok()?;
+    (statuses.len() == exec.obligations.len()).then_some(statuses)
+}
+
+/// Records decided statuses. An answer the solver gave up on depends on the
+/// machine's speed, so it is solved again next time. Failing to write only
+/// loses the cache entry.
+fn write_cache(path: &std::path::Path, statuses: &[Status]) {
+    if statuses.contains(&Status::Unknown) {
+        return;
+    }
+    let text = serde_json::to_string(statuses).expect("statuses serialize");
+    let temp = path.with_extension(format!("tmp{}", std::process::id()));
+    let written = std::fs::create_dir_all(path.parent().expect("a cache file has a directory"))
+        .and_then(|()| std::fs::write(&temp, text))
+        .and_then(|()| std::fs::rename(&temp, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
 }
 
 /// Checks each obligation of `exec` against its declarations and facts.

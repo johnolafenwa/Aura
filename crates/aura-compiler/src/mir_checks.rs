@@ -603,3 +603,91 @@ fn unchecked_read_op(instruction: &Instruction) -> Option<RuntimeOp> {
 #[cfg(test)]
 #[path = "mir_checks_tests.rs"]
 mod tests;
+
+/// Puts an `IndexInRange` fact before each element read or loan that
+/// `aura verify` proved in range and not negative, then marks what the
+/// facts cover, so those accesses skip their bounds check. `proved` names
+/// sites by function, block, and position in `verified`, the module the
+/// verifier read; it was lowered with source locations, which `module`
+/// may lack, so positions are matched by the instructions both share. A
+/// site that does not match is left checked. Returns how many accesses
+/// the facts cover.
+pub(crate) fn insert_proved_index_facts(
+    module: &mut MirModule,
+    verified: &MirModule,
+    proved: &std::collections::BTreeSet<(String, usize, usize)>,
+) -> usize {
+    // Each target block's facts, by position.
+    let mut inserts: std::collections::BTreeMap<(usize, usize), Vec<(usize, Instruction)>> =
+        Default::default();
+    for (name, block, position) in proved {
+        if let Some((function, block, position, fact)) =
+            proved_fact(module, verified, name, *block, *position)
+        {
+            inserts
+                .entry((function, block))
+                .or_default()
+                .push((position, fact));
+        }
+    }
+    let mut covered = 0;
+    for ((function, block), mut facts) in inserts {
+        facts.sort_by_key(|(position, _)| std::cmp::Reverse(*position));
+        let instructions = &mut module.functions[function].blocks[block].instructions;
+        for (position, fact) in facts {
+            instructions.insert(position, fact);
+            covered += 1;
+        }
+    }
+    mark_covered_accesses(module);
+    covered
+}
+
+/// The fact that covers the access at `position` of block `block` of
+/// `name` in `verified`, and where it goes in `module`: the function,
+/// block, and position of the same access there.
+fn proved_fact(
+    module: &MirModule,
+    verified: &MirModule,
+    name: &str,
+    block: usize,
+    position: usize,
+) -> Option<(usize, usize, usize, Instruction)> {
+    let debug_only = |instruction: &&Instruction| {
+        matches!(
+            instruction,
+            Instruction::SourceLocation { .. } | Instruction::SourceName { .. }
+        )
+    };
+    let source = verified.functions.iter().find(|f| f.name == name)?;
+    let source_block = source.blocks.get(block)?;
+    let instruction = source_block.instructions.get(position)?;
+    let (function_index, target) = module
+        .functions
+        .iter()
+        .enumerate()
+        .find(|(_, f)| f.name == name)?;
+    let (block_index, target_block) = target
+        .blocks
+        .iter()
+        .enumerate()
+        .find(|(_, b)| b.label == source_block.label)?;
+    // The access is the n-th instruction both lowerings emit.
+    let shared = source_block.instructions[..position]
+        .iter()
+        .filter(|instruction| !debug_only(instruction))
+        .count();
+    let (target_position, found) = target_block
+        .instructions
+        .iter()
+        .enumerate()
+        .filter(|(_, instruction)| !debug_only(instruction))
+        .nth(shared)?;
+    (format!("{found:?}") == format!("{instruction:?}")).then_some(())?;
+    let (list, index) = element_read(found).or_else(|| element_loan(found))?;
+    let fact = Instruction::IndexInRange {
+        list: list.to_string(),
+        index: index.to_string(),
+    };
+    Some((function_index, block_index, target_position, fact))
+}

@@ -360,6 +360,7 @@ fn function_decl(name: &str, return_type: &str) -> FunctionDecl {
         doc: None,
         contracts: Vec::new(),
         spec: false,
+        lemma: false,
     }
 }
 
