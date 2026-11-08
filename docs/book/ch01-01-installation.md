@@ -5,7 +5,7 @@ together with a small native runtime that it links into the programs you
 build. There is no separate interpreter, package manager, or language server
 to install: the one `aura` binary does all of those jobs.
 
-Aura 0.12 is a technical preview, and the set of platforms it ships for is
+Aura 0.13 is a technical preview, and the set of platforms it ships for is
 small. Release archives exist for these hosts:
 
 | Platform | Release archive |
@@ -111,9 +111,9 @@ Open a new terminal and ask `aura` for its version:
 $ aura --version
 ```
 
-A release build prints a line that starts with `aura 0.12.0-preview`,
+A release build prints a line that starts with `aura 0.13.0-preview`,
 followed by the source commit it was built from in parentheses. If you built
-Aura yourself, the line starts with `aura 0.12.0-dev` instead. Either way, if
+Aura yourself, the line starts with `aura 0.13.0-dev` instead. Either way, if
 you see a version, you are ready to go. `aura help` lists every command the
 tool understands; we will meet the important ones over the next two sections.
 

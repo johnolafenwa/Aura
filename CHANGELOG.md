@@ -177,6 +177,28 @@ in this file.
 - Fixed: `aura fmt` removed the space in `yield (a, b)`, which turned the
   statement into a call of a function named `yield`.
 
+- Tasks start on their parent's worker, and an idle worker steals half of
+  another worker's queued tasks that have not run yet. A task stays on the
+  worker that first runs it. Spawning and then joining a task drops from
+  about 119 to 7 microseconds on 4 workers, and 16 uneven CPU jobs finish
+  in about 300 ms instead of 686.
+- Finished task stacks are kept in a per-worker pool and handed to the next
+  task of the same size. Cancelling 1,000 parked children takes about 10 ms
+  instead of 60, wakes and task starts do less work, and a parked task
+  holds about 7.3 KB instead of 7.7.
+- The entry of each function on a call cycle is a scheduling point, so a
+  deeply recursive task with no loop no longer starves the other tasks on
+  its worker (a 1 ms sleep beside `fib(35)` on one worker wakes 1 to 7 ms
+  late instead of 137 to 187).
+- `text += x` on a `str` local appends in place when nothing else holds
+  the string, so a loop of appends is no longer quadratic.
+- Faster `json.parse`, `json` writes, small-dict lookups and inserts, and
+  `json.Value` copies (`docdb` and `json_roundtrip`).
+- A `match` on an enum that misses cases names the exact `case` arms to
+  add (or `case _:`), and for `Result.Ok(None)` says that this is how
+  `io.read_line` reports end of input. The book's first `read_line`
+  listing now runs as written.
+
 ## VS Code extension 0.12.0 — 2026-11-03
 
 - Highlights the contract clauses `requires`, `ensures`, `invariant`, and

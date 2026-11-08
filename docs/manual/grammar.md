@@ -147,7 +147,7 @@ as follows:
 
 - Two opening braces insert one literal opening brace.
 - Two closing braces insert one literal closing brace.
-- In Aura 0.12, a lone closing brace outside an interpolation is also literal.
+- In Aura 0.13, a lone closing brace outside an interpolation is also literal.
 
 Interpolations may contain nested braces and ordinary single- or
 double-quoted strings. Braces inside those strings do not change the
@@ -1231,7 +1231,7 @@ instead of risking host stack exhaustion:
 These are observable implementation limits of Aura 0.3. Inputs that exceed
 them must be rejected cleanly.
 
-## Syntax Not In Aura 0.12
+## Syntax Not In Aura 0.13
 
 The grammar intentionally excludes:
 
