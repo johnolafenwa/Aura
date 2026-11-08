@@ -78,6 +78,10 @@ struct VariantPlan {
     /// Whether every payload is held in place and needs no drop, so the
     /// block copies as bytes and drops by freeing it.
     bytes_only: bool,
+    /// Whether the block is a word or less of bytes only, which the
+    /// variant keeps in its own [`TypedPayloads::bits`] instead of on the
+    /// heap: a JSON number or bool costs no allocation.
+    inline: bool,
 }
 
 /// A payload's offset in the block and its layout.
@@ -199,7 +203,7 @@ impl EnumLayout {
         let tag = shared_runtime_type_tag(runtime_type.as_bytes());
         let enum_name = match (&root.ty, &tag.tagged_enum_name) {
             (Type::Named(_, args), Some(tagged)) if !args.is_empty() => tagged.clone(),
-            _ => RuntimeName::from(base.as_str()),
+            _ => layout_name(base.as_str()),
         };
         let variants: Vec<VariantPlan> = variants
             .iter()
@@ -224,11 +228,14 @@ impl EnumLayout {
                         .pad_to_align()
                 });
                 let bytes_only = payloads.iter().all(|place| !table.needs_drop(place.layout));
+                let inline = bytes_only
+                    && block.is_some_and(|block| block.size() <= 8 && block.align() <= 8);
                 VariantPlan {
-                    name: RuntimeName::from(variant.name.as_str()),
+                    name: layout_name(variant.name.as_str()),
                     payloads,
                     block,
                     bytes_only,
+                    inline,
                 }
             })
             .collect();
@@ -289,6 +296,14 @@ pub fn register_enum_layout(descriptor: &str, access: u32) -> Result<&'static En
         JSON_VALUE_LAYOUT.store(std::ptr::from_ref(layout).cast_mut(), Ordering::Release);
     }
     Ok(layout)
+}
+
+/// A name a layout keeps for as long as the program runs, as a static
+/// name: every variant built in the layout copies it, and copying or
+/// dropping a static name touches no count. A layout is built once per
+/// program, so the leaked text is bounded by the program's enums.
+fn layout_name(name: &str) -> RuntimeName {
+    RuntimeName::from_static(Box::leak(name.to_owned().into_boxed_str()))
 }
 
 /// The layout of `json.Value` once the program registered it, which a
@@ -384,7 +399,14 @@ pub unsafe fn registered_enum_layout(
 pub struct TypedPayloads {
     layout: &'static EnumLayout,
     variant: u32,
+    /// The heap block, for a variant with payloads that does not keep them
+    /// in `bits`.
     data: Option<NonNull<u8>>,
+    /// The block of a variant whose plan is `inline`. Its address is where
+    /// the variant lies, so a box that holds the variant points its view
+    /// here once the variant is in the box (see `allocate_box`), and any
+    /// move of the variant refreshes the view of the box it lands in.
+    bits: std::cell::UnsafeCell<u64>,
 }
 
 // SAFETY: the block is reached only through its variant, under the
@@ -411,11 +433,13 @@ impl TypedPayloads {
         let plan = &layout.variants[variant];
         let data = plan
             .block
+            .filter(|_| !plan.inline)
             .map(|block| super::allocate_layout_block(block, true));
         Self {
             layout,
             variant: variant as u32,
             data,
+            bits: std::cell::UnsafeCell::new(0),
         }
     }
 
@@ -499,11 +523,13 @@ impl TypedPayloads {
         let plan = &layout.variants[variant];
         let data = plan
             .block
+            .filter(|_| !plan.inline)
             .map(|block| super::allocate_layout_block(block, false));
         Self {
             layout,
             variant: variant as u32,
             data,
+            bits: std::cell::UnsafeCell::new(0),
         }
     }
 
@@ -523,7 +549,20 @@ impl TypedPayloads {
     /// The block's address, which generated code reads payloads at, or 0
     /// for a variant with no payloads.
     pub fn data(&self) -> usize {
-        self.data.map_or(0, |data| data.as_ptr() as usize)
+        self.block().map_or(0, |data| data as usize)
+    }
+
+    /// Whether the variant keeps its block in itself, so the block's
+    /// address changes when the variant moves.
+    pub fn is_inline(&self) -> bool {
+        self.layout.variants[self.variant()].inline
+    }
+
+    fn block(&self) -> Option<*mut u8> {
+        if self.is_inline() {
+            return Some(self.bits.get().cast());
+        }
+        self.data.map(NonNull::as_ptr)
     }
 
     fn places(&self) -> &'static [Place] {
@@ -535,10 +574,7 @@ impl TypedPayloads {
     }
 
     fn address(&self, place: Place) -> *mut u8 {
-        let data = self
-            .data
-            .expect("a variant with payloads has a block")
-            .as_ptr();
+        let data = self.block().expect("a variant with payloads has a block");
         // SAFETY: every place lies inside the block.
         unsafe { data.add(place.offset) }
     }
@@ -744,6 +780,8 @@ impl Clone for TypedPayloads {
                 layout: self.layout,
                 variant: self.variant,
                 data,
+                // SAFETY: nothing writes the bits while `&self` lives.
+                bits: std::cell::UnsafeCell::new(unsafe { *self.bits.get() }),
             };
         }
         let copy = Self::new(self.layout, self.variant());

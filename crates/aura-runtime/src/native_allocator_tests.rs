@@ -36,10 +36,24 @@ fn a_full_list_hands_half_its_blocks_to_the_shared_list() {
         }
         THREAD_BLOCKS
             .with(|lists| assert_eq!(lists.lists[class].len.get(), CAPACITY - CAPACITY / 2 + 1));
-        // The shared half comes back once the thread's list runs dry.
-        let again = (0..CAPACITY + 1)
+        // The shared half comes back once the thread's list runs dry, with
+        // its length known without a walk.
+        let mut again = (0..CAPACITY - CAPACITY / 2 + 2)
             .map(|_| unsafe { allocator.alloc(layout) })
             .collect::<Vec<_>>();
+        // Other threads that end may share odd blocks of the class too, so
+        // check the count against the list, whichever batch came.
+        THREAD_BLOCKS.with(|lists| {
+            let list = &lists.lists[class];
+            let (mut walked, mut block) = (0, list.head.get());
+            while !block.is_null() {
+                walked += 1;
+                // SAFETY: the blocks on the thread's list are its own.
+                block = unsafe { (*block).next };
+            }
+            assert_eq!(list.len.get(), walked);
+        });
+        again.extend((0..CAPACITY / 2 - 1).map(|_| unsafe { allocator.alloc(layout) }));
         let mut sorted = again.clone();
         sorted.sort();
         sorted.dedup();
@@ -130,7 +144,7 @@ fn a_thread_that_ends_hands_its_blocks_and_chunk_to_the_shared_lists() {
     );
     for block in shared {
         // SAFETY: each block was free on the shared list.
-        unsafe { share_batch(class, block as *mut FreeBlock, block as *mut FreeBlock) };
+        unsafe { share_batch(class, block as *mut FreeBlock, block as *mut FreeBlock, 1) };
     }
 }
 
@@ -182,7 +196,7 @@ fn a_block_made_without_thread_lists_comes_from_the_shared_list_or_the_system() 
     unsafe {
         let (first, second) = (first.cast::<FreeBlock>(), second.cast::<FreeBlock>());
         (*first).next = second;
-        share_batch(class, first, second);
+        share_batch(class, first, second, 2);
     }
     // Other tests' threads may share blocks of the class meanwhile, so
     // take blocks until both come back.
@@ -193,6 +207,6 @@ fn a_block_made_without_thread_lists_comes_from_the_shared_list_or_the_system() 
     assert!(taken.contains(&first) && taken.contains(&second));
     for block in taken {
         // SAFETY: each taken block is the test's.
-        unsafe { share_batch(class, block.cast(), block.cast()) };
+        unsafe { share_batch(class, block.cast(), block.cast(), 1) };
     }
 }

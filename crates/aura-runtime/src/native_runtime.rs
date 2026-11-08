@@ -2015,10 +2015,34 @@ fn untracked_boxed_value(value: Value, runtime_type_name: Option<Arc<str>>) -> *
 
 fn allocate_box(value: OpaqueValue) -> *mut OpaqueValue {
     let value = Box::into_raw(Box::new(value));
+    // A variant that keeps its block in itself moved with the box's value,
+    // so the view points at the block where it now lies.
+    // SAFETY: the box is new and nothing else reads it yet.
+    unsafe { follow_inline_block(&*value) };
     #[cfg(coverage)]
     DIRECT_VALUE_LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
     crate::runtime_value::representation_stats::note_opaque_box();
     value
+}
+
+/// Points `header`'s view at the block of the variant it holds when the
+/// variant keeps the block in itself (see `TypedPayloads::is_inline`).
+///
+/// # Safety
+///
+/// The caller has exclusive access to the box.
+#[inline(always)]
+unsafe fn follow_inline_block(header: &OpaqueValue) {
+    // SAFETY: the caller's contract.
+    if let Value::EnumVariant(EnumVariantValue {
+        payloads: VariantPayloads::Typed(typed),
+        ..
+    }) = unsafe { &*header.value.get() }
+    {
+        if typed.is_inline() {
+            header.list_elements.set(typed.data());
+        }
+    }
 }
 
 /// The thread a box of a list element records in debug builds: none. Such
