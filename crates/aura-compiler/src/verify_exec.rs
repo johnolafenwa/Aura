@@ -3195,8 +3195,7 @@ impl<'a> Exec<'a> {
                 return Some((first.function.clone(), Some(contract)));
             }
         }
-        self.shared_contract(candidates)
-            .map(|function| (function, None))
+        Some((self.shared_contract(candidates)?, None))
     }
 
     /// The first of `candidates` when every one is a function with the same
@@ -3217,7 +3216,7 @@ impl<'a> Exec<'a> {
         candidates
             .iter()
             .all(|candidate| contract(&candidate.function).as_ref() == Some(&expected))
-            .then(|| first.function.clone())
+            .then_some(first.function.clone())
     }
 
     /// The value of the hidden function that computes a parameter's

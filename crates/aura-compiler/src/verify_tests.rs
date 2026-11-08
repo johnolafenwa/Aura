@@ -2634,6 +2634,10 @@ def jump(n: int64) -> int64:
     requires n < 10
     return n + 5
 
+def odd(n: int64) -> int64:
+    requires n ** 2 >= 0
+    return n + 1
+
 def apply_twice(f: Step, x: int64) -> int64:
     requires 0 <= x and x < 50
     ensures result > x
@@ -2662,13 +2666,18 @@ def main():
     print(apply_twice(lambda n: n + 1, 3))
     print(boxed(Boxed(inc)))
     print(leak(inc))
+    print(apply_twice(odd, 3))
 "#,
         &[
-            "34 requires unsupported",
-            "42 requires failed",
-            "42 ensures failed",
-            "44 requires unsupported",
-            "44 overflow failed",
+            "20 overflow failed",
+            "21 overflow failed",
+            "38 requires unsupported",
+            "46 requires failed",
+            "46 ensures failed",
+            "48 requires unsupported",
+            "48 overflow failed",
+            "51 requires unsupported",
+            "51 ensures unsupported",
         ],
     );
     for (source, message) in [
@@ -2728,4 +2737,44 @@ def main():
     print(smaller(1, 2))
 "#;
     assert_proved(source);
+}
+
+#[test]
+fn record_equality_lookups_and_unmodeled_spec_methods() {
+    let Some(report) = verify(
+        r#"
+class P:
+    x: int64
+    y: int64
+
+    spec def power(self) -> int64:
+        return self.x ** 2
+
+def same(a: P) -> bool:
+    b = P(x=a.x, y=a.y)
+    assert a == b
+    return a == b
+
+def at(xs: list[int64]) -> int64:
+    requires len(xs) >= 1
+    match xs.lookup(0):
+        case Lookup.Found(v):
+            return v
+        case Lookup.Missing:
+            assert false
+            return 0
+
+def squared(p: P) -> int64:
+    requires p.x == 3
+    ensures result >= 0
+    return p.power()
+
+def main():
+    print(same(P(x=1, y=2)))
+    print(at([1]))
+"#,
+    ) else {
+        return;
+    };
+    assert_eq!(open_checks(&report), ["25 ensures failed"], "{report:#?}");
 }
