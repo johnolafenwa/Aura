@@ -197,7 +197,7 @@ obligations.
 | Classes, tuples, records | Datatypes, one constructor |
 | Enums, unions, `Optional`, `Result` | Algebraic datatypes |
 | `mut` parameter | A pair of values: on entry and on exit |
-| `str`, `dict`, `set` | Opaque in V2; sequence, map and set models in V4 |
+| `str`, `dict`, `set` | Opaque in V2; sequence, map and set models in V4 (implemented: SMT strings, and key sets as `(Array K Bool)` with values as `(Array K V)`) |
 | Resources, tasks, FFI, `Callable` | Opaque; callers see only declared contracts |
 
 ## D. Solver

@@ -27,6 +27,7 @@ function:
 | overflow | `a + b`, `-x`, `abs(x)`, `x as int32` | `AU4002` integer overflow |
 | division by zero | `a // b`, `a % b` | `AU4004` zero divisor |
 | index in range | `xs[i]`, `xs[i] = v`, `xs.pop()` | `AU4003` index out of range |
+| key present | `d[k]`, `s.remove(x)` | `AU4003` missing key, `AU4008` missing element |
 | assert | `assert total >= 0` | `AU4001` assertion failed |
 | requires | each call of a function with `requires` | `AU4009` at the call |
 | ensures | each `return` of a function with `ensures` | `AU4009` on return |
@@ -184,21 +185,29 @@ booleans, with each integer type's range as a check:
 
 - integers of every width, `bool`, and `None`
 - lists, with their lengths, and their elements when those are integers,
-  `bool`, or tuples and classes of modeled values; the length of any other
-  list
+  `bool`, `str`, or tuples and classes of modeled values; the length of any
+  other list
+- `str`, as a sequence of characters: literals, `+`, `==`, `<` and the other
+  comparisons, `len`, `in`, `contains`, `starts_with`, and `ends_with`
+- `dict` and `set` with integer or `str` keys: which keys they hold, their
+  length, and a `dict`'s values when those are integers, `bool`, or `str`;
+  literals, `d[k]`, `d[k] = v`, `in`, `len`, `is_empty`, `clear`, `keys`,
+  `values`, and `items` of a `dict`, and `add`, `remove`, `discard`, and
+  `clear` of a `set`, with `==` of whole collections
 - tuples, classes, enums, and unions such as `int64 | None`, field by field
 - `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
   element reads and writes, and `copy`
 - `spec def` helpers, `old`, and `result` in contracts, and `ghost` locals
 - quantifiers: `forall(x in xs, condition)`, `exists(...)`, and
   `all([... for ...])` or `any(...)`, with any number of `for` clauses, each
-  over a `range`, a modeled list, or `enumerate` or `zip` of modeled lists,
+  over a `range`, a modeled list, a `set`, the `keys()` of a `dict`, or
+  `enumerate` or `zip` of modeled lists,
   with tuple targets and `if` filters, nested, in any contract, `assert`, or
   loop `invariant`
 
-Anything else is a value the verifier knows nothing about: a `str`, a
-`dict`, a `set`, a float, the result of most library calls, and what a call
-through a function value returns. A check that depends on one of them can
+Anything else is a value the verifier knows nothing about: a float, a
+`dict` or `set` of other keys, the result of most library calls, such as
+`str.split` or `dict.get`, and what a call through a function value returns. A check that depends on one of them can
 still be proved when the contract around it says enough.
 
 A loop that builds a list proves what it builds with a quantified
@@ -224,8 +233,19 @@ A `for` loop over a `range(...)` call can say the same with less: its
 invariants also hold when the range runs out, with the target at the end,
 so `len(out) == i` gives `len(out) == n` after `for i in range(n)`.
 
-A quantifier over a `str`, a `dict`, a `set`, or a list of other elements is
-reported as `AU5104`. `str`, `dict`, and `set` models are planned. See the
+A dictionary read proves its key is there from what the code and contracts
+say about it:
+
+```aura
+def price(prices: dict[str, int64], item: str) -> int64:
+    requires item in prices
+    requires all([prices[k] >= 0 for k in prices.keys()])
+    ensures result >= 0
+    return prices[item]
+```
+
+A quantifier over a `str`, or over a list of other elements, is reported as
+`AU5104`. See the
 [verification design](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/23-verification-design-checkpoint.md).
 
 ## Trust

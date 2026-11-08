@@ -48,6 +48,9 @@ pub enum ObligationKind {
     Decreases,
     /// A class invariant holds where it is checked.
     ClassInvariant,
+    /// A `dict` key read with brackets, or a `set` element removed, is
+    /// there.
+    KeyPresent,
 }
 
 impl ObligationKind {
@@ -62,6 +65,7 @@ impl ObligationKind {
             Self::LoopInvariant => "loop invariant",
             Self::Decreases => "decreases",
             Self::ClassInvariant => "class invariant",
+            Self::KeyPresent => "key present",
         }
     }
 }

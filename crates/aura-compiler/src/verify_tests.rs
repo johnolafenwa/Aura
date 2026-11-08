@@ -564,6 +564,7 @@ fn every_kind_and_status_has_a_report() {
         ObligationKind::LoopInvariant,
         ObligationKind::Decreases,
         ObligationKind::ClassInvariant,
+        ObligationKind::KeyPresent,
     ];
     let names: Vec<&str> = kinds.iter().map(|kind| kind.name()).collect();
     assert_eq!(
@@ -577,7 +578,8 @@ fn every_kind_and_status_has_a_report() {
             "ensures",
             "loop invariant",
             "decreases",
-            "class invariant"
+            "class invariant",
+            "key present"
         ]
     );
     let statuses = [
@@ -944,12 +946,7 @@ def main():
 "#,
         &[
             "22 assert failed",
-            "25 index in range failed",
             "34 requires unsupported",
-            "35 requires unsupported",
-            "35 requires unsupported",
-            "35 requires unsupported",
-            "35 requires unsupported",
             "35 requires unsupported",
             "35 requires unsupported",
         ],
@@ -970,7 +967,7 @@ def f(a: int64, xs: list[int64]) -> int64:
 def main():
     print(f(1, [1]))
 "#,
-        &["10 requires unsupported"],
+        &[],
     );
 }
 
@@ -2041,4 +2038,194 @@ def main():
         crate::run_source(source).expect("runs").stdout,
         "6\n23\n9\n"
     );
+}
+
+#[test]
+fn strings_dicts_and_sets_are_modeled() {
+    assert_proved(
+        r#"
+def greet(name: str) -> str:
+    requires len(name) > 0
+    ensures len(result) == len(name) + 7
+    ensures result == "hello, " + name
+    ensures result.starts_with("hello, ") and result.ends_with(name) and "llo" in result
+    assert len("a\\b") == 3 and len("\"") == 1 and len("é") == 1
+    return "hello, " + name
+
+def order(a: str, b: str) -> bool:
+    requires a < b
+    ensures result
+    ensures not (b <= a) and b > a and b >= a and a != b
+    return a.contains("") and a.starts_with("") and b.ends_with("")
+
+def lookup(d: dict[str, int64], k: str) -> int64:
+    requires k in d
+    requires all([d[v] >= 0 for v in d.keys()])
+    ensures result == d[k] and result >= 0
+    return d[k]
+
+def counts() -> int64:
+    mut d = {"a": 1, "b": 2}
+    d["c"] = 3
+    d["a"] = 4
+    assert len(d) == 3 and not d.is_empty()
+    assert "a" in d and not ("z" in d)
+    assert d["a"] == 4 and d["b"] == 2
+    mut total = 0
+    for k in d.keys():
+        total = 0 if k == "" else 1
+    for v in d.values():
+        assert v >= 0 or v < 0
+    for (k, v) in d.items():
+        assert k in d and d[k] == v
+    d.clear()
+    assert len(d) == 0 and not ("a" in d)
+    return total
+
+def by_number() -> None:
+    mut d: dict[int64, bool] = {1: true}
+    assert d[1]
+    d[2] = false
+    assert 2 in d and not d[2] and len(d) == 2
+    names = {7: "seven"}
+    assert names[7] == "seven" and len(names[7]) == 5
+
+def total(s: set[int64]) -> int64:
+    requires 3 in s and len(s) >= 1
+    requires all([x > 0 for x in s])
+    ensures result == len(s)
+    assert 3 in s and not (0 in s)
+    mut seen = 0
+    for x in s:
+        assert x > 0
+        seen = x
+    return len(s)
+
+def adds(t: mut set[int64]) -> None:
+    requires len(t) < 100
+    n = len(t)
+    t.add(7)
+    assert 7 in t and len(t) <= n + 1 and len(t) >= n
+    t.remove(7)
+    assert not (7 in t)
+    t.discard(7)
+    t.clear()
+    assert len(t) == 0 and t.is_empty()
+
+def words() -> None:
+    mut w = {"a", "b"}
+    w.add("a")
+    assert len(w) == 2 and "b" in w
+    same = {"b", "a"}
+    assert w == same
+    assert {"x": 1} == {"x": 1}
+    xs = ["p", "q"]
+    assert "q" in xs
+
+def pick(flag: bool) -> str:
+    ensures len(result) == 1
+    mut s = "a"
+    mut d = {1: 1}
+    mut t = {1}
+    if flag:
+        s = "b"
+        d[2] = 2
+        t.add(2)
+    assert 1 in d and 1 in t
+    return s
+
+def main():
+    print(greet("ada"))
+    print(order("a", "b"))
+    print(lookup({"x": 1}, "x"))
+    print(counts())
+    by_number()
+    print(total({3, 4}))
+    mut s = {1}
+    adds(s)
+    words()
+    print(pick(true))
+"#,
+    );
+    let Some(report) = assert_open(
+        r#"
+def bad(d: dict[str, int64]) -> int64:
+    requires "k" in d
+    return d["missing"]
+
+def drop():
+    mut t = {1}
+    t.remove(2)
+
+def caller(d: dict[str, int64]) -> int64:
+    return bad(d)
+
+def main():
+    drop()
+    print(caller({"k": 1}))
+"#,
+        &[
+            "4 key present failed",
+            "8 key present failed",
+            "11 requires failed",
+        ],
+    ) else {
+        return;
+    };
+    assert!(report
+        .obligations
+        .iter()
+        .any(|o| o.message == "key is in the dict"));
+}
+
+#[test]
+fn collections_outside_the_model_stay_open() {
+    assert_open(
+        r#"
+class P:
+    x: int64
+
+def edges(a: str, b: str, d: dict[str, int64], e: dict[str, int64], s: set[str], t: set[str], xs: list[str]) -> bool:
+    requires d == e and s == t
+    requires "a" in xs and xs.contains("a") and not ("zz" in xs) or true
+    requires "b" in "abc" and "a" not in s or true
+    requires (a if len(a) > 0 else b) == a or true
+    requires a + b == a + b
+    requires a <= b or a >= b or a > b
+    ensures result == (a >= b)
+    return a >= b or (a > b and a <= b)
+
+def unmodeled(m: dict[(int64, int64), int64], q: set[float64], flag: bool) -> int64:
+    requires len(m) >= 0
+    mut c = {2: P(x=0)}
+    if flag:
+        c[1] = P(x=1)
+    mut w = {(1, 2): 3}
+    w[(3, 4)] = 5
+    mut z = {1.0}
+    z.add(2.0)
+    return len(c)
+
+def unsupported(a: str, d: dict[str, P]) -> int64:
+    requires "k" in d and d["k"].x >= 0
+    requires a.split(",") == []
+    return 0
+
+def main():
+    print(edges("a", "b", {"x": 1}, {"x": 1}, {"a"}, {"a"}, ["a"]))
+    print(unmodeled({(1, 1): 1}, {1.0}, true))
+    print(unsupported("ax", {"k": P(x=1)}))
+"#,
+        &[
+            "33 requires unsupported",
+            "34 requires unsupported",
+            "34 requires unsupported",
+        ],
+    );
+    // Characters past what SMT strings hold leave a literal unmodeled.
+    assert_eq!(
+        exec::smt_string("a\"\\\u{e9}"),
+        Some("\"a\"\"\\u{5c}\\u{e9}\"".to_string())
+    );
+    assert_eq!(exec::smt_string("\u{10FFFF}"), None);
 }

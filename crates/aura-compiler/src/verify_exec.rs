@@ -27,7 +27,7 @@ use crate::mir::{
     ArithmeticTrap, AssertKind, BasicBlock, CallTarget, Instruction, MethodDispatch, MirArg,
     MirFunction, MirReceiverKind, Operand, Rvalue, Terminator,
 };
-use crate::runtime_ops::{FunctionOp, ListOp, RuntimeOp, ValueOp};
+use crate::runtime_ops::{DictOp, FunctionOp, ListOp, RuntimeOp, SetOp, StrOp, ValueOp};
 use crate::sema::Type;
 
 /// The inclusive range of an integer type.
@@ -89,9 +89,61 @@ fn element_sort(element: &Type) -> Option<&'static str> {
         Some("Int")
     } else if is_bool(element) {
         Some("Bool")
+    } else if is_str(element) {
+        Some("String")
     } else {
         None
     }
+}
+
+/// The SMT sort of a `dict` key or `set` element the encoding models: an
+/// integer or a `str`.
+pub(super) fn key_sort(key: &Type) -> Option<&'static str> {
+    if IntTy::of(key).is_some() {
+        Some("Int")
+    } else if is_str(key) {
+        Some("String")
+    } else {
+        None
+    }
+}
+
+pub(super) fn is_str(ty: &Type) -> bool {
+    matches!(ty, Type::Named(name, args) if name == "str" && args.is_empty())
+}
+
+/// `text` as an SMT-LIB string literal, or `None` when it holds a
+/// character past what SMT-LIB strings hold (`U+2FFFF`).
+pub(super) fn smt_string(text: &str) -> Option<String> {
+    let mut literal = String::from("\"");
+    for character in text.chars() {
+        match character {
+            '"' => literal.push_str("\"\""),
+            ' '..='~' if character != '\\' => literal.push(character),
+            _ if u32::from(character) <= 0x2FFFF => {
+                literal.push_str(&format!("\\u{{{:x}}}", u32::from(character)));
+            }
+            _ => return None,
+        }
+    }
+    literal.push('"');
+    Some(literal)
+}
+
+/// The value a term of `ty`'s sort stands for.
+pub(super) fn scalar_val(term: String, ty: &Type) -> Val {
+    if let Some(int) = IntTy::of(ty) {
+        Val::Int(term, int)
+    } else if is_str(ty) {
+        Val::Str(term)
+    } else {
+        Val::Bool(term)
+    }
+}
+
+/// An empty `(Array K Bool)`: no key is held.
+pub(super) fn no_keys(sort: &str) -> String {
+    format!("((as const (Array {sort} Bool)) false)")
 }
 
 fn is_bool(ty: &Type) -> bool {
@@ -103,6 +155,25 @@ fn is_bool(ty: &Type) -> bool {
 pub(super) enum Val {
     Int(String, IntTy),
     Bool(String),
+    /// A `str`, as an SMT string: a sequence of Unicode scalar values, as
+    /// `len` counts them.
+    Str(String),
+    /// A `dict`: its length, which keys it holds as an `(Array K Bool)`,
+    /// and its values as an `(Array K S)` when the encoding models them.
+    Map {
+        len: String,
+        keys: String,
+        values: Option<String>,
+        key: Type,
+        value: Type,
+    },
+    /// A `set`: its length, and which elements it holds as an
+    /// `(Array K Bool)`.
+    Set {
+        len: String,
+        members: String,
+        elem: Type,
+    },
     /// A list: its length, and the store of its elements when the
     /// encoding models them.
     List {
@@ -375,6 +446,29 @@ impl<'a> Exec<'a> {
 
     // ----- Types and fresh values ------------------------------------------
 
+    /// A fresh length and key set of a `dict` or `set` whose keys have
+    /// `sort`: an empty one holds no key.
+    fn fresh_keys(&mut self, sort: &str, hint: &str) -> (String, String) {
+        let len = self.fresh_const("Int", &format!("{hint}_len"));
+        self.fact(format!("(and (<= 0 {len}) (<= {len} {}))", i64::MAX));
+        let keys = self.fresh_const(&format!("(Array {sort} Bool)"), &format!("{hint}_keys"));
+        self.fact(format!("(=> (= {len} 0) (= {keys} {}))", no_keys(sort)));
+        (len, keys)
+    }
+
+    /// The length of a `dict` or `set` of `len` keys once `key` is added
+    /// to `keys`.
+    fn len_after_add(&mut self, len: &str, keys: &str, key: &str) -> String {
+        let after = self.define(
+            "Int",
+            "len",
+            format!("(ite (select {keys} {key}) {len} (+ {len} 1))"),
+        );
+        // One more key than `int64` can count stops the program first.
+        self.fact(format!("(<= {after} {})", i64::MAX));
+        after
+    }
+
     pub(super) fn fresh(&mut self, ty: &Type, hint: &str) -> Val {
         self.fresh_at(ty, hint, 0)
     }
@@ -388,11 +482,40 @@ impl<'a> Exec<'a> {
         if is_bool(ty) {
             return Val::Bool(self.fresh_const("Bool", hint));
         }
+        if is_str(ty) {
+            return Val::Str(self.fresh_const("String", hint));
+        }
         if depth > MAX_DEPTH {
             return Val::Opaque;
         }
         match ty {
             Type::Unit => Val::Unit,
+            Type::Named(name, args) if name == "dict" && args.len() == 2 => {
+                let Some(sort) = key_sort(&args[0]) else {
+                    return Val::Opaque;
+                };
+                let (len, keys) = self.fresh_keys(sort, hint);
+                let values = element_sort(&args[1])
+                    .map(|value| self.fresh_const(&format!("(Array {sort} {value})"), hint));
+                Val::Map {
+                    len,
+                    keys,
+                    values,
+                    key: args[0].clone(),
+                    value: args[1].clone(),
+                }
+            }
+            Type::Named(name, args) if name == "set" && args.len() == 1 => {
+                let Some(sort) = key_sort(&args[0]) else {
+                    return Val::Opaque;
+                };
+                let (len, members) = self.fresh_keys(sort, hint);
+                Val::Set {
+                    len,
+                    members,
+                    elem: args[0].clone(),
+                }
+            }
             Type::Named(name, args) if name == "list" && args.len() == 1 => {
                 let len = self.fresh_const("Int", &format!("{hint}_len"));
                 self.fact(format!("(and (<= 0 {len}) (<= {len} {}))", i64::MAX));
@@ -541,6 +664,7 @@ impl<'a> Exec<'a> {
             Operand::Place(place) | Operand::MovePlace(place) => self.read_place(state, place),
             Operand::Int(value) => Val::Int(value.to_string(), hint.unwrap_or(IntTy::INT64)),
             Operand::Bool(value) => Val::Bool(value.to_string()),
+            Operand::String(text) => smt_string(text).map_or(Val::Opaque, Val::Str),
             Operand::Unit => Val::Unit,
             Operand::Function { name, .. } => {
                 let has_requires = self.cx.decl(name).is_some_and(|decl| {
@@ -575,6 +699,7 @@ impl<'a> Exec<'a> {
             Operand::Place(place) | Operand::MovePlace(place) => self.place_type(place),
             Operand::Int(_) => Some(Type::named("int64")),
             Operand::Float(_) => Some(Type::named("float64")),
+            Operand::String(_) => Some(Type::named("str")),
             _ => None,
         }
     }
@@ -1126,6 +1251,76 @@ impl<'a> Exec<'a> {
         match first {
             Val::Int(_, ty) => Val::Int(self.merge_terms("Int", pcs, &scalars, hint), *ty),
             Val::Bool(_) => Val::Bool(self.merge_terms("Bool", pcs, &scalars, hint)),
+            Val::Str(_) => Val::Str(self.merge_terms("String", pcs, &scalars, hint)),
+            Val::Map {
+                key,
+                value,
+                values: first_values,
+                ..
+            } => {
+                let sort = key_sort(key).expect("a modeled dict has a modeled key");
+                let mut lens = Vec::new();
+                let mut key_sets = Vec::new();
+                let mut stores = Vec::new();
+                for each in values {
+                    if let Val::Map {
+                        len, keys, values, ..
+                    } = each
+                    {
+                        lens.push(len.as_str());
+                        key_sets.push(keys.as_str());
+                        stores.extend(values.as_deref());
+                    }
+                }
+                let len = self.merge_terms("Int", pcs, &lens, &format!("{hint}_len"));
+                let keys = self.merge_terms(
+                    &format!("(Array {sort} Bool)"),
+                    pcs,
+                    &key_sets,
+                    &format!("{hint}_keys"),
+                );
+                let merged = match (first_values, element_sort(value)) {
+                    (Some(_), Some(value_sort)) if stores.len() == values.len() => {
+                        Some(self.merge_terms(
+                            &format!("(Array {sort} {value_sort})"),
+                            pcs,
+                            &stores,
+                            hint,
+                        ))
+                    }
+                    _ => None,
+                };
+                Val::Map {
+                    len,
+                    keys,
+                    values: merged,
+                    key: key.clone(),
+                    value: value.clone(),
+                }
+            }
+            Val::Set { elem, .. } => {
+                let sort = key_sort(elem).expect("a modeled set has a modeled element");
+                let mut lens = Vec::new();
+                let mut member_sets = Vec::new();
+                for each in values {
+                    if let Val::Set { len, members, .. } = each {
+                        lens.push(len.as_str());
+                        member_sets.push(members.as_str());
+                    }
+                }
+                let len = self.merge_terms("Int", pcs, &lens, &format!("{hint}_len"));
+                let members = self.merge_terms(
+                    &format!("(Array {sort} Bool)"),
+                    pcs,
+                    &member_sets,
+                    &format!("{hint}_members"),
+                );
+                Val::Set {
+                    len,
+                    members,
+                    elem: elem.clone(),
+                }
+            }
             Val::List { elem, data, .. } => {
                 let mut lens = Vec::new();
                 let mut datas = Vec::new();
@@ -1585,13 +1780,7 @@ impl<'a> Exec<'a> {
     /// The index may name a quantifier's bound variable.
     pub(super) fn store_select(&self, store: &Store, elem: &Type, index: &str) -> Val {
         match store {
-            Store::Leaf(array, _) => {
-                let term = format!("(select {array} {index})");
-                match IntTy::of(elem) {
-                    Some(int) => Val::Int(term, int),
-                    None => Val::Bool(term),
-                }
-            }
+            Store::Leaf(array, _) => scalar_val(format!("(select {array} {index})"), elem),
             Store::Items(stores) => {
                 let Some(items) = self.element_items(elem) else {
                     return Val::Opaque;
@@ -1619,7 +1808,7 @@ impl<'a> Exec<'a> {
     /// its scalars.
     fn store_put(&mut self, store: &Store, index: &str, value: &Val) -> Option<Store> {
         match (store, value) {
-            (Store::Leaf(array, sort), Val::Int(term, _) | Val::Bool(term)) => {
+            (Store::Leaf(array, sort), Val::Int(term, _) | Val::Bool(term) | Val::Str(term)) => {
                 let array = self.define(
                     &format!("(Array Int {sort})"),
                     "store",
@@ -1697,7 +1886,7 @@ impl<'a> Exec<'a> {
 
     /// Names each scalar of a value built from `select` terms, with the
     /// range of its integer type.
-    fn name_scalars(&mut self, value: Val, hint: &str) -> Val {
+    pub(super) fn name_scalars(&mut self, value: Val, hint: &str) -> Val {
         match value {
             Val::Int(term, int) => {
                 let term = self.define("Int", hint, term);
@@ -1705,6 +1894,7 @@ impl<'a> Exec<'a> {
                 Val::Int(term, int)
             }
             Val::Bool(term) => Val::Bool(self.define("Bool", hint, term)),
+            Val::Str(term) => Val::Str(self.define("String", hint, term)),
             Val::Tuple(items) => Val::Tuple(
                 items
                     .into_iter()
@@ -1937,6 +2127,76 @@ impl<'a> Exec<'a> {
                     len,
                     data,
                     elem: element_type.clone(),
+                }
+            }
+            Rvalue::SetLiteral {
+                elements,
+                element_type,
+            } => {
+                let Some(sort) = key_sort(element_type) else {
+                    return fresh_target(self);
+                };
+                let mut len = "0".to_string();
+                let mut members = no_keys(sort);
+                for element in elements {
+                    let value = self.operand(state, element, IntTy::of(element_type));
+                    let Some(k) = key_term(&value) else {
+                        return fresh_target(self);
+                    };
+                    len = self.len_after_add(&len, &members, &k);
+                    members = self.define(
+                        &format!("(Array {sort} Bool)"),
+                        "members",
+                        format!("(store {members} {k} true)"),
+                    );
+                }
+                Val::Set {
+                    len,
+                    members,
+                    elem: element_type.clone(),
+                }
+            }
+            Rvalue::MapLiteral {
+                entries,
+                key_type,
+                value_type,
+            } => {
+                let Some(sort) = key_sort(key_type) else {
+                    return fresh_target(self);
+                };
+                let mut len = "0".to_string();
+                let mut keys = no_keys(sort);
+                let value_sort = element_sort(value_type);
+                let mut values = value_sort.map(|value_sort| {
+                    self.fresh_const(&format!("(Array {sort} {value_sort})"), "values")
+                });
+                for entry in entries {
+                    let k = self.operand(state, &entry.key, IntTy::of(key_type));
+                    let Some(k) = key_term(&k) else {
+                        return fresh_target(self);
+                    };
+                    let stored = self.operand(state, &entry.value, IntTy::of(value_type));
+                    values = match (values, scalar_term(&stored), value_sort) {
+                        (Some(array), Some(term), Some(value_sort)) => Some(self.define(
+                            &format!("(Array {sort} {value_sort})"),
+                            "values",
+                            format!("(store {array} {k} {term})"),
+                        )),
+                        _ => None,
+                    };
+                    len = self.len_after_add(&len, &keys, &k);
+                    keys = self.define(
+                        &format!("(Array {sort} Bool)"),
+                        "keys",
+                        format!("(store {keys} {k} true)"),
+                    );
+                }
+                Val::Map {
+                    len,
+                    keys,
+                    values,
+                    key: key_type.clone(),
+                    value: value_type.clone(),
                 }
             }
             Rvalue::TupleLiteral {
@@ -2193,6 +2453,18 @@ impl<'a> Exec<'a> {
             (Val::Bool(a), Val::Bool(b)) => match op {
                 BinaryOp::Eq => Val::Bool(format!("(= {a} {b})")),
                 BinaryOp::NotEq => Val::Bool(format!("(not (= {a} {b}))")),
+                _ => fresh(self),
+            },
+            (Val::Str(a), Val::Str(b)) => match op {
+                BinaryOp::Add => {
+                    Val::Str(self.define("String", "concat", format!("(str.++ {a} {b})")))
+                }
+                BinaryOp::Eq => Val::Bool(format!("(= {a} {b})")),
+                BinaryOp::NotEq => Val::Bool(format!("(not (= {a} {b}))")),
+                BinaryOp::Less => Val::Bool(format!("(str.< {a} {b})")),
+                BinaryOp::LessEq => Val::Bool(format!("(str.<= {a} {b})")),
+                BinaryOp::Greater => Val::Bool(format!("(str.< {b} {a})")),
+                BinaryOp::GreaterEq => Val::Bool(format!("(str.<= {b} {a})")),
                 _ => fresh(self),
             },
             _ => {
@@ -2763,6 +3035,259 @@ impl<'a> Exec<'a> {
                     _ => None,
                 }
             }
+            RuntimeOp::Str(str_op) => {
+                let Some(Val::Str(text)) = receiver else {
+                    return None;
+                };
+                let other = |exec: &mut Self, state: &mut State| match arg(exec, state, 0, None) {
+                    Val::Str(other) => Some(other),
+                    _ => None,
+                };
+                match str_op {
+                    StrOp::Len => {
+                        let len = self.define("Int", "len", format!("(str.len {text})"));
+                        self.fact(format!("(<= {len} {})", i64::MAX));
+                        Some(Val::Int(len, IntTy::INT64))
+                    }
+                    StrOp::Contains => {
+                        let other = other(self, state)?;
+                        Some(Val::Bool(format!("(str.contains {text} {other})")))
+                    }
+                    StrOp::StartsWith => {
+                        let other = other(self, state)?;
+                        Some(Val::Bool(format!("(str.prefixof {other} {text})")))
+                    }
+                    StrOp::EndsWith => {
+                        let other = other(self, state)?;
+                        Some(Val::Bool(format!("(str.suffixof {other} {text})")))
+                    }
+                    _ => None,
+                }
+            }
+            RuntimeOp::Dict(dict_op) => {
+                let Some(Val::Map {
+                    len,
+                    keys,
+                    values,
+                    key,
+                    value,
+                }) = receiver
+                else {
+                    return None;
+                };
+                let sort = key_sort(&key).expect("a modeled dict has a modeled key");
+                let key_arg = |exec: &mut Self, state: &mut State| {
+                    key_term(&arg(exec, state, 0, IntTy::of(&key)))
+                };
+                match dict_op {
+                    DictOp::Len => Some(Val::Int(len, IntTy::INT64)),
+                    DictOp::IsEmpty => Some(Val::Bool(format!("(= {len} 0)"))),
+                    DictOp::ContainsKey | DictOp::ContainsKeyInt64 => {
+                        let k = key_arg(self, state)?;
+                        Some(Val::Bool(format!("(select {keys} {k})")))
+                    }
+                    DictOp::Index => {
+                        let k = key_arg(self, state)?;
+                        let span = span_of(self, 1);
+                        let present = format!("(select {keys} {k})");
+                        self.oblige(
+                            ObligationKind::KeyPresent,
+                            span,
+                            "key is in the dict",
+                            &pc,
+                            Goal::Holds(present.clone()),
+                        );
+                        self.assume(&pc, present);
+                        let hint = target.unwrap_or("value");
+                        Some(match &values {
+                            Some(values) => {
+                                let read = scalar_val(format!("(select {values} {k})"), &value);
+                                self.name_scalars(read, hint)
+                            }
+                            None => self.fresh(&value, hint),
+                        })
+                    }
+                    DictOp::SetIndex | DictOp::Set => {
+                        let k = key_arg(self, state)?;
+                        let stored = arg(self, state, 1, IntTy::of(&value));
+                        let new_len = self.len_after_add(&len, &keys, &k);
+                        let new_keys = self.define(
+                            &format!("(Array {sort} Bool)"),
+                            "keys",
+                            format!("(store {keys} {k} true)"),
+                        );
+                        let new_values = match (&values, scalar_term(&stored), element_sort(&value))
+                        {
+                            (Some(values), Some(term), Some(value_sort)) => Some(self.define(
+                                &format!("(Array {sort} {value_sort})"),
+                                "values",
+                                format!("(store {values} {k} {term})"),
+                            )),
+                            _ => None,
+                        };
+                        if let Some(place) = receiver_place {
+                            self.write_place(
+                                state,
+                                place,
+                                Val::Map {
+                                    len: new_len,
+                                    keys: new_keys,
+                                    values: new_values,
+                                    key,
+                                    value,
+                                },
+                            );
+                        }
+                        Some(Val::Unit)
+                    }
+                    DictOp::Keys | DictOp::Values | DictOp::Items => {
+                        // A list of `len` entries, each holding a key of the
+                        // dict and, for values and items, its value there.
+                        let entries = self.fresh_const(&format!("(Array Int {sort})"), "keys");
+                        let i = self.bound_name();
+                        let at = format!("(select {entries} {i})");
+                        let mut holds = vec![format!("(select {keys} {at})")];
+                        let value_store = match (&values, element_sort(&value)) {
+                            (Some(values), Some(value_sort)) => {
+                                let store = self
+                                    .fresh_const(&format!("(Array Int {value_sort})"), "values");
+                                holds.push(format!(
+                                    "(= (select {store} {i}) (select {values} {at}))"
+                                ));
+                                Some(Store::Leaf(store, value_sort))
+                            }
+                            _ => None,
+                        };
+                        self.fact(format!(
+                            "(forall (({i} Int)) (=> (and (<= 0 {i}) (< {i} {len})) {}))",
+                            conjoin(&holds)
+                        ));
+                        let key_store = Store::Leaf(entries, sort);
+                        let (data, elem) = match dict_op {
+                            DictOp::Keys => (Some(key_store), key),
+                            DictOp::Values => (value_store, value),
+                            _ => (
+                                value_store.map(|values| Store::Items(vec![key_store, values])),
+                                Type::Tuple(vec![key, value]),
+                            ),
+                        };
+                        Some(Val::List { len, data, elem })
+                    }
+                    DictOp::Clear => {
+                        if let Some(place) = receiver_place {
+                            self.write_place(
+                                state,
+                                place,
+                                Val::Map {
+                                    len: "0".to_string(),
+                                    keys: no_keys(sort),
+                                    values,
+                                    key,
+                                    value,
+                                },
+                            );
+                        }
+                        Some(Val::Unit)
+                    }
+                    _ => None,
+                }
+            }
+            RuntimeOp::Set(set_op) => {
+                let Some(Val::Set { len, members, elem }) = receiver else {
+                    return None;
+                };
+                let sort = key_sort(&elem).expect("a modeled set has a modeled element");
+                let member = |exec: &mut Self, state: &mut State| {
+                    key_term(&arg(exec, state, 0, IntTy::of(&elem)))
+                };
+                let array = format!("(Array {sort} Bool)");
+                match set_op {
+                    SetOp::Len => Some(Val::Int(len, IntTy::INT64)),
+                    SetOp::IsEmpty => Some(Val::Bool(format!("(= {len} 0)"))),
+                    SetOp::Contains | SetOp::ContainsInt64 => {
+                        let k = member(self, state)?;
+                        Some(Val::Bool(format!("(select {members} {k})")))
+                    }
+                    SetOp::Add | SetOp::AddInt64 | SetOp::Remove | SetOp::Discard => {
+                        let k = member(self, state)?;
+                        let present = format!("(select {members} {k})");
+                        let (len, members) = if matches!(set_op, SetOp::Add | SetOp::AddInt64) {
+                            let len = self.len_after_add(&len, &members, &k);
+                            let members = self.define(
+                                &array,
+                                "members",
+                                format!("(store {members} {k} true)"),
+                            );
+                            (len, members)
+                        } else {
+                            if set_op == SetOp::Remove {
+                                let span = self.span;
+                                self.oblige(
+                                    ObligationKind::KeyPresent,
+                                    span,
+                                    "element is in the set",
+                                    &pc,
+                                    Goal::Holds(present.clone()),
+                                );
+                                self.assume(&pc, present.clone());
+                            }
+                            let len = self.define(
+                                "Int",
+                                "len",
+                                format!("(ite {present} (- {len} 1) {len})"),
+                            );
+                            let members = self.define(
+                                &array,
+                                "members",
+                                format!("(store {members} {k} false)"),
+                            );
+                            (len, members)
+                        };
+                        if let Some(place) = receiver_place {
+                            self.write_place(state, place, Val::Set { len, members, elem });
+                        }
+                        Some(Val::Unit)
+                    }
+                    SetOp::IndexOption | SetOp::TakeIndexOption => {
+                        // Iteration reads the elements by position: each
+                        // position below `len` holds one of them.
+                        let Val::Int(index, _) = arg(self, state, 0, Some(IntTy::INT64)) else {
+                            return None;
+                        };
+                        let element = self.fresh(&elem, target.unwrap_or("element"));
+                        let in_range = format!("(and (<= 0 {index}) (< {index} {len}))");
+                        if let Some(k) = key_term(&element) {
+                            self.fact(format!("(=> {in_range} (select {members} {k}))"));
+                        }
+                        let tag = self.define("Int", "lookup", format!("(ite {in_range} 0 1)"));
+                        if set_op == SetOp::TakeIndexOption {
+                            if let Some(place) = receiver_place {
+                                self.havoc_place(state, place);
+                            }
+                        }
+                        Some(Val::Enum(
+                            super::LOOKUP.to_string(),
+                            tag,
+                            vec![vec![element], Vec::new()],
+                        ))
+                    }
+                    SetOp::Clear => {
+                        if let Some(place) = receiver_place {
+                            self.write_place(
+                                state,
+                                place,
+                                Val::Set {
+                                    len: "0".to_string(),
+                                    members: no_keys(sort),
+                                    elem,
+                                },
+                            );
+                        }
+                        Some(Val::Unit)
+                    }
+                    _ => None,
+                }
+            }
             RuntimeOp::Function(
                 function @ (FunctionOp::Abs | FunctionOp::Min | FunctionOp::Max),
             ) => {
@@ -2810,16 +3335,38 @@ fn runtime_op_is_pure(op: RuntimeOp) -> bool {
     match op {
         RuntimeOp::List(op) => list_op_is_pure(op),
         RuntimeOp::Str(_) | RuntimeOp::Scalar(_) | RuntimeOp::Value(_) => true,
+        RuntimeOp::Dict(op) => matches!(
+            op,
+            DictOp::Len
+                | DictOp::IsEmpty
+                | DictOp::Get
+                | DictOp::GetStr
+                | DictOp::GetInt64
+                | DictOp::ContainsKey
+                | DictOp::ContainsKeyInt64
+                | DictOp::Keys
+                | DictOp::Values
+                | DictOp::Items
+                | DictOp::Index
+        ),
+        RuntimeOp::Set(op) => matches!(
+            op,
+            SetOp::Len
+                | SetOp::IsEmpty
+                | SetOp::Contains
+                | SetOp::ContainsInt64
+                | SetOp::IndexOption
+        ),
         _ => false,
     }
 }
 
-/// What a failure block's check states, for the report: the clause as
-/// written, or the `assert` and its message.
 /// The position that names a check failure block's own check as a build
 /// site: the branch into it.
 pub(crate) const CHECK_FAILURE_SITE: usize = usize::MAX;
 
+/// What a failure block's check states, for the report: the clause as
+/// written, or the `assert` and its message.
 pub(super) fn check_message(kind: AssertKind, message: Option<&Operand>) -> String {
     let text = match message {
         Some(Operand::String(text)) => text.as_str(),
@@ -2863,10 +3410,31 @@ fn list_op_is_pure(op: ListOp) -> bool {
     )
 }
 
-fn structural_eq(left: &Val, right: &Val) -> Option<String> {
+pub(super) fn structural_eq(left: &Val, right: &Val) -> Option<String> {
     match (left, right) {
-        (Val::Int(a, _), Val::Int(b, _)) | (Val::Bool(a), Val::Bool(b)) => {
+        (Val::Int(a, _), Val::Int(b, _))
+        | (Val::Bool(a), Val::Bool(b))
+        | (Val::Str(a), Val::Str(b))
+        | (Val::Set { members: a, .. }, Val::Set { members: b, .. }) => {
             Some(format!("(= {a} {b})"))
+        }
+        (
+            Val::Map {
+                keys: a,
+                values: Some(x),
+                key,
+                ..
+            },
+            Val::Map {
+                keys: b,
+                values: Some(y),
+                ..
+            },
+        ) => {
+            let sort = key_sort(key)?;
+            Some(format!(
+                "(and (= {a} {b}) (forall ((k {sort})) (=> (select {a} k) (= (select {x} k) (select {y} k)))))"
+            ))
         }
         (Val::Unit, Val::Unit) => Some("true".to_string()),
         (Val::Tuple(a), Val::Tuple(b)) if a.len() == b.len() => {
@@ -3261,7 +3829,16 @@ fn rvalue_writes(value: &Rvalue, place: &mut impl FnMut(&str)) {
 fn same_shape(a: &Val, b: &Val) -> bool {
     match (a, b) {
         (Val::Int(_, x), Val::Int(_, y)) => x == y,
-        (Val::Bool(_), Val::Bool(_)) | (Val::Unit, Val::Unit) => true,
+        (Val::Bool(_), Val::Bool(_)) | (Val::Str(_), Val::Str(_)) | (Val::Unit, Val::Unit) => true,
+        (
+            Val::Map {
+                key: a, value: x, ..
+            },
+            Val::Map {
+                key: b, value: y, ..
+            },
+        ) => a == b && x == y,
+        (Val::Set { elem: x, .. }, Val::Set { elem: y, .. }) => x == y,
         (Val::List { elem: x, .. }, Val::List { elem: y, .. }) => x == y,
         (Val::Tuple(x), Val::Tuple(y)) => x.len() == y.len(),
         (Val::Record(x, xs), Val::Record(y, ys)) => {
@@ -3281,7 +3858,15 @@ fn same_shape(a: &Val, b: &Val) -> bool {
 
 fn scalar_term(value: &Val) -> Option<&str> {
     match value {
-        Val::Int(term, _) | Val::Bool(term) => Some(term),
+        Val::Int(term, _) | Val::Bool(term) | Val::Str(term) => Some(term),
+        _ => None,
+    }
+}
+
+/// The term of a `dict` key or `set` element the encoding models.
+fn key_term(value: &Val) -> Option<String> {
+    match value {
+        Val::Int(term, _) | Val::Str(term) => Some(term.clone()),
         _ => None,
     }
 }

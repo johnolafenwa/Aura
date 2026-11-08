@@ -7,6 +7,13 @@ in this file.
 
 ## Unreleased
 
+- `aura verify` models `str`, `dict`, and `set`. Strings are sequences of
+  characters with `+`, comparisons, `len`, `in`, `contains`, `starts_with`,
+  and `ends_with`; dictionaries and sets with integer or `str` keys track
+  which keys they hold, their length, and a dictionary's values. A new
+  `key present` check proves each `d[k]` read and `set.remove` finds what
+  it looks for, and quantifiers range over a `set` or a dictionary's
+  `keys()`. Lists of `str` are modeled element by element.
 - The VS Code extension shows proof results inline: on open and save it
   runs `aura verify`, shows each check it cannot prove as a diagnostic
   with the counterexample, and ends each line whose checks are all proved
