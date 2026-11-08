@@ -520,6 +520,7 @@ impl FunctionCompiler<'_> {
         slow_block: Blk,
         fast_block: Blk,
     ) {
+        self.expect_list_access(list, record.access);
         let actual = self.emit_list_access(list, layout);
         let matches = self.builder.icmp_imm(IntCC::Equal, actual, record.access);
         self.builder.brif(matches, fast_block, &[], slow_block, &[]);
@@ -550,12 +551,7 @@ impl FunctionCompiler<'_> {
 
         self.builder.switch_to_block(fast_block);
         self.builder.seal_block(fast_block);
-        let elements = self.builder.load(
-            types::I64,
-            MemFlags::trusted(),
-            list,
-            layout.elements_offset,
-        );
+        let elements = self.list_view_word(list, super::list_snapshots::ViewWord::Elements);
         let position = if proven {
             index
         } else {

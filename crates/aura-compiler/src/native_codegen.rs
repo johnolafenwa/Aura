@@ -1748,6 +1748,58 @@ impl<'a> NativeCodegen<'a> {
             key_loop_keys.insert(key_loop.key.clone(), list.clone());
             key_loops.insert(list, (key_loop, at, next));
         }
+        let list_snapshots = list_snapshots::list_snapshot_regions(
+            function,
+            |list| {
+                list != "self"
+                    && !explicit_locals.loans.contains(list)
+                    && !writeback_locals.iter().any(|(writeback, _)| writeback == list)
+                    && !function.params.iter().any(|param| {
+                        param.name == list && param.passing == MirReceiverKind::BorrowMut
+                    })
+                    && matches!(
+                        variable_types.get(list),
+                        Some(DirectType::Opaque(Type::Named(name, args)))
+                            if name == "list"
+                                && matches!(args.as_slice(), [element]
+                                    if !matches!(element, Type::Named(element, _) if element == "str"))
+                    )
+            },
+            |list| {
+                matches!(
+                    variable_types.get(list),
+                    Some(DirectType::Opaque(Type::Named(_, args)))
+                        if matches!(args.as_slice(), [element]
+                            if matches!(
+                                direct_type(element, &self.classes),
+                                Some(DirectType::Scalar(_) | DirectType::PlainClass(_))
+                            ))
+                )
+            },
+        )
+        .into_iter()
+        .map(|region| {
+            let [ok, access, len, elements] = [0, 1, 2, 3].map(|offset| {
+                let variable = Var(variable_index as u32 + offset);
+                builder.declare_var(variable, types::I64);
+                let zero = builder.iconst(types::I64, 0);
+                builder.def_var(variable, zero);
+                variable
+            });
+            variable_index += 4;
+            list_snapshots::ListSnapshot {
+                region,
+                ok,
+                access,
+                len,
+                elements,
+                ir_blocks: Vec::new(),
+                selects: Vec::new(),
+                entries: Vec::new(),
+                expected: Vec::new(),
+            }
+        })
+        .collect::<Vec<_>>();
         let mut compiler = FunctionCompiler {
             builder,
             blocks,
@@ -1824,6 +1876,10 @@ impl<'a> NativeCodegen<'a> {
             shaped_boxes: HashSet::new(),
             confined_instances: classes::confined_instances(function, &self.classes),
             skip_class_check: false,
+            list_snapshots,
+            snapshot_vals: HashMap::new(),
+            current_snapshot_label: String::new(),
+            pending_snapshot_pads: Vec::new(),
             fresh_str_copies: HashSet::new(),
             program_shapes: &self.program_shapes,
             view_places: HashMap::new(),
@@ -3097,6 +3153,16 @@ struct FunctionCompiler<'a> {
     /// Class locals whose fields need no layout check (see
     /// `classes::confined_instances`).
     confined_instances: HashSet<String>,
+    /// The loops that read a list's view once (see `list_snapshots`).
+    list_snapshots: Vec<list_snapshots::ListSnapshot>,
+    /// The list boxes the block being compiled reads views of from its
+    /// loops' variables, with the index of each one's snapshot.
+    snapshot_vals: HashMap<Val, usize>,
+    /// The MIR block being compiled.
+    current_snapshot_label: String,
+    /// The blocks the terminator being compiled jumps through to enter
+    /// loops, with each one's target and snapshots, filled once it is done.
+    pending_snapshot_pads: Vec<(Blk, Blk, Vec<usize>)>,
     /// Set for the next `emit_class_check` of a confined instance.
     skip_class_check: bool,
     /// The `mut` arguments and receivers the MIR moves into their call,
@@ -3281,7 +3347,12 @@ struct FunctionCompiler<'a> {
 }
 
 impl<'a> FunctionCompiler<'a> {
-    fn compiled_block(&self, label: &str) -> std::result::Result<Blk, String> {
+    fn compiled_block(&mut self, label: &str) -> std::result::Result<Blk, String> {
+        let target = self.compiled_block_id(label)?;
+        Ok(self.snapshot_edge(label, target))
+    }
+
+    fn compiled_block_id(&self, label: &str) -> std::result::Result<Blk, String> {
         self.blocks.get(label).copied().ok_or_else(|| {
             format!(
                 "direct backend could not find MIR block `{label}` in `{}`",
@@ -3991,7 +4062,10 @@ impl<'a> FunctionCompiler<'a> {
                         function.name
                     )
                 })?;
+            let first_block = self.builder.block_count();
             self.compile_block(block, return_ty)?;
+            let own = self.compiled_block_id(&label)?;
+            self.note_snapshot_blocks(&label, own, first_block);
             compiled.insert(label.clone());
             let outgoing_views = self.view_places.clone();
             let outgoing_writebacks = self.closure_capture_writebacks.clone();
@@ -4045,6 +4119,7 @@ impl<'a> FunctionCompiler<'a> {
                 function.name
             ));
         }
+        self.version_snapshot_loops();
         Ok(())
     }
 
@@ -4067,6 +4142,7 @@ impl<'a> FunctionCompiler<'a> {
             "layout temporaries outlived the block before `{}`",
             block.label
         );
+        self.enter_snapshot_block(&block.label);
 
         let mut skipped = 0;
         for (instruction_index, instruction) in block.instructions.iter().enumerate() {
@@ -4098,7 +4174,9 @@ impl<'a> FunctionCompiler<'a> {
         if !matches!(block.terminator, Terminator::Return(_)) {
             self.release_unconsumed_retains();
         }
-        let compiled = self.compile_terminator(&block.label, &block.terminator, return_ty);
+        let compiled = self
+            .compile_terminator(&block.label, &block.terminator, return_ty)
+            .and_then(|()| self.fill_snapshot_pads());
         self.layout_scratch.consumers.clear();
         debug_assert!(
             self.layout_scratch.retained.is_empty(),
@@ -10443,9 +10521,12 @@ impl<'a> FunctionCompiler<'a> {
             .into_iter()
             .map(|var| self.builder.use_var(var))
             .collect::<Vec<_>>();
-        let value = ValueRef { values, ty };
+        let mut value = ValueRef { values, ty };
         if matches!(value.ty, DirectType::Opaque(_)) {
             self.clear_temporary_opaque_owned(&value);
+            if let [handle] = value.values.as_mut_slice() {
+                *handle = self.snapshot_handle(name, *handle);
+            }
         }
         Ok(value)
     }
@@ -11042,9 +11123,7 @@ impl<'a> FunctionCompiler<'a> {
 
         self.builder.switch_to_block(fast_block);
         self.builder.seal_block(fast_block);
-        let len = self
-            .builder
-            .load(types::I64, MemFlags::trusted(), list, layout.len_offset);
+        let len = self.list_view_word(list, list_snapshots::ViewWord::Len);
         self.builder.jump(join_block, &[len]);
 
         self.builder.switch_to_block(slow_block);
@@ -11195,10 +11274,9 @@ impl<'a> FunctionCompiler<'a> {
     fn emit_list_access(
         &mut self,
         list: Val,
-        layout: &aura_runtime::native_runtime::DirectListLayout,
+        _layout: &aura_runtime::native_runtime::DirectListLayout,
     ) -> Val {
-        self.builder
-            .uload32(MemFlags::trusted(), list, layout.access_offset)
+        self.list_view_word(list, list_snapshots::ViewWord::Access)
     }
 
     /// Branches to `fast_block` when the list view of `list` has the layout
@@ -11212,6 +11290,7 @@ impl<'a> FunctionCompiler<'a> {
         slow_block: Blk,
         fast_block: Blk,
     ) {
+        self.expect_list_access(list, access as i64);
         let actual = self.emit_list_access(list, layout);
         let matches = self.builder.icmp_imm(IntCC::Equal, actual, access as i64);
         self.builder.brif(matches, fast_block, &[], slow_block, &[]);
@@ -11311,10 +11390,7 @@ impl<'a> FunctionCompiler<'a> {
         self.emit_list_access_check(list, access, &layout, slow_block, fast_block);
         self.builder.switch_to_block(fast_block);
         self.builder.seal_block(fast_block);
-        let flags = MemFlags::trusted();
-        let elements = self
-            .builder
-            .load(types::I64, flags, list, layout.elements_offset);
+        let elements = self.list_view_word(list, list_snapshots::ViewWord::Elements);
         let position = if proven {
             index
         } else {
@@ -11373,9 +11449,7 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(fast_block);
         self.builder.seal_block(fast_block);
         let flags = MemFlags::trusted();
-        let elements = self
-            .builder
-            .load(types::I64, flags, list, layout.elements_offset);
+        let elements = self.list_view_word(list, list_snapshots::ViewWord::Elements);
         let position = if proven {
             index
         } else {
@@ -11634,12 +11708,10 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         list: Val,
         index: Val,
-        layout: &aura_runtime::native_runtime::DirectListLayout,
+        _layout: &aura_runtime::native_runtime::DirectListLayout,
         slow: Blk,
     ) -> Val {
-        let len = self
-            .builder
-            .load(types::I64, MemFlags::trusted(), list, layout.len_offset);
+        let len = self.list_view_word(list, list_snapshots::ViewWord::Len);
         let zero = self.builder.iconst(types::I64, 0);
         let negative = self.builder.icmp(IntCC::SignedLessThan, index, zero);
         let from_end = self.builder.iadd(len, index);
@@ -18337,6 +18409,8 @@ mod elements;
 mod enums;
 #[path = "native_codegen_key_loops.rs"]
 mod key_loops;
+#[path = "native_codegen_list_snapshots.rs"]
+mod list_snapshots;
 #[path = "native_codegen_lookups.rs"]
 mod lookups;
 #[path = "native_codegen_math.rs"]

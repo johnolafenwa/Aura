@@ -1179,3 +1179,96 @@ fn proved_integer_operations_tell_llvm_they_do_not_wrap() {
         }
     }
 }
+
+/// A loop over `count` that adds the select of `flag` between 7 and the
+/// loaded word at `address` into a variable, entered through a block that
+/// tests `flag`. With `escape`, the block after the loop uses a value the
+/// loop defines. The flag says whether the loop got its copy.
+fn define_versioned_loop(
+    module: &mut LlvmModule,
+    name: &str,
+    escape: bool,
+) -> std::rc::Rc<std::cell::Cell<bool>> {
+    let sig = signature(
+        CallConv::C,
+        &[types::I64, types::I64, types::I64],
+        &[types::I64],
+    );
+    let copied = std::rc::Rc::new(std::cell::Cell::new(false));
+    let result = std::rc::Rc::clone(&copied);
+    define(module, name, Linkage::Export, &sig, move |builder| {
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        builder.seal_block(entry);
+        let [count, flag, address] = builder.block_params(entry)[..] else {
+            unreachable!("three parameters")
+        };
+        let total = Var(0);
+        builder.declare_var(total, types::I64);
+        let header = builder.create_block();
+        let index = builder.append_block_param(header, types::I64);
+        let body = builder.create_block();
+        let exit = builder.create_block();
+        let zero = builder.iconst(types::I64, 0);
+        builder.def_var(total, zero);
+        builder.jump(header, &[zero]);
+
+        builder.switch_to_block(header);
+        let more = builder.icmp(IntCC::SignedLessThan, index, count);
+        builder.brif(more, body, &[], exit, &[]);
+
+        builder.switch_to_block(body);
+        builder.seal_block(body);
+        let seven = builder.iconst(types::I64, 7);
+        let loaded = builder.load(types::I64, MemFlags::trusted(), address, 0);
+        let holds = builder.icmp_imm(IntCC::NotEqual, flag, 0);
+        let select = builder.select(holds, seven, loaded);
+        let sum = builder.use_var(total);
+        let added = builder.iadd(sum, select);
+        builder.def_var(total, added);
+        let next = builder.iadd_imm(index, 1);
+        builder.jump(header, &[next]);
+        builder.seal_block(header);
+
+        builder.switch_to_block(exit);
+        builder.seal_block(exit);
+        let returned = if escape {
+            builder.uextend(types::I64, more)
+        } else {
+            builder.use_var(total)
+        };
+        builder.return_(&[returned]);
+        result.set(builder.version_blocks(
+            &[header, body],
+            &[(select, None)],
+            &[(entry, flag, Some((flag, 1)))],
+        ));
+    });
+    copied
+}
+
+#[test]
+fn versioned_blocks_get_a_copy_that_keeps_the_true_side_of_their_selects() {
+    let mut module = module();
+    let copied = define_versioned_loop(&mut module, "versioned", false);
+    let ir = ir(&module);
+    assert!(copied.get(), "{ir}");
+    // The entry tests the flag and that it equals 1 before it picks a copy.
+    assert!(ir.contains("icmp eq i64"), "{ir}");
+    // The copy adds 7 and the original the load, with no select left.
+    assert!(!ir.contains("select"), "{ir}");
+    assert!(ir.contains(", 7\n"), "{ir}");
+    assert_eq!(ir.matches("icmp slt i64").count(), 2, "{ir}");
+}
+
+#[test]
+fn blocks_whose_values_are_used_after_them_keep_one_copy_and_the_false_side() {
+    let mut module = module();
+    let copied = define_versioned_loop(&mut module, "escaping", true);
+    let ir = ir(&module);
+    assert!(!copied.get(), "{ir}");
+    assert!(!ir.contains("select"), "{ir}");
+    assert!(!ir.contains("icmp eq i64"), "{ir}");
+    assert_eq!(ir.matches("icmp slt i64").count(), 1, "{ir}");
+}
