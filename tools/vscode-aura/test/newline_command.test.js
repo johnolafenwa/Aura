@@ -236,3 +236,17 @@ test("aura.compilerPath reaches the server and a change restarts it", async () =
   assert.equal(clients.length, 3);
   assert.equal(clients[1].stopped, true);
 });
+
+test("aura.verifyOnSave reaches the server and a change restarts it", async () => {
+  const settings = {};
+  const { clients, configurationListeners } = await activateWithEditor(
+    createFakeEditor(["x"], [[0, 1]]),
+    settings
+  );
+  assert.equal(clients[0].serverOptions.run.options.env.AURA_LSP_VERIFY, "1");
+  settings.verifyOnSave = false;
+  configurationListeners[0]({ affectsConfiguration: (section) => section === "aura.verifyOnSave" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(clients.length, 2);
+  assert.equal(clients[1].serverOptions.run.options.env.AURA_LSP_VERIFY, "0");
+});

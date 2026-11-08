@@ -605,6 +605,9 @@ test("extension exposes the compiler path setting, a restart command, and untitl
   assert.match(source, /affectsConfiguration\("aura\.compilerPath"\)/);
   assert.match(source, /scheme: "untitled"/);
   assert.match(source, /env\.AURA_LSP_AURA_PATH = configuredPath/);
+  const verify = manifest.contributes.configuration.properties["aura.verifyOnSave"];
+  assert.equal(verify.type, "boolean");
+  assert.equal(verify.default, true);
 });
 
 test("Aura newline indentation inherits the current block indent", () => {

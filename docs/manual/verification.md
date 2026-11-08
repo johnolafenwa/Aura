@@ -170,6 +170,13 @@ edit solves only what the edit touched. The summary line says how many
 functions the cache answered. A check the solver gave up on is never
 cached.
 
+
+In VS Code, the Aura extension runs `aura verify` each time an Aura file
+opens or is saved. Each check it cannot prove shows as a diagnostic at the
+check, with the counterexample, and each line whose checks are all proved
+ends with a `✓ proved` hint. The results show until the file is edited
+again. Set `aura.verifyOnSave` to `false` to turn this off.
+
 ## What It Models
 
 The verifier reasons about values exactly, as mathematical integers and

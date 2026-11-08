@@ -7,6 +7,10 @@ in this file.
 
 ## Unreleased
 
+- The VS Code extension shows proof results inline: on open and save it
+  runs `aura verify`, shows each check it cannot prove as a diagnostic
+  with the counterexample, and ends each line whose checks are all proved
+  with a `✓ proved` hint. The `aura.verifyOnSave` setting turns it off.
 - `aura build --remove-proved-checks` also removes the integer overflow and
   zero-divisor checks, and the `assert`, `ensures`, loop `invariant`, and
   `decreases` checks, that `aura verify` proves can never fail, and tells
