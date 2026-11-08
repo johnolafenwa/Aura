@@ -2438,3 +2438,66 @@ def main():
         &["31 requires failed"],
     );
 }
+
+#[test]
+fn extern_functions_have_trusted_contracts() {
+    let dir = script_dir("extern-contract");
+    std::fs::write(
+        dir.join("Aura.toml"),
+        "[package]\nname = \"ffi_spec\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    )
+    .expect("manifest");
+    std::fs::create_dir_all(dir.join("src")).expect("src");
+    let main = dir.join("src/main.au");
+    std::fs::write(
+        &main,
+        r#"extern "C" def abs_value(x: int32) -> int32:
+    requires x > -2147483648
+    ensures result >= 0
+    ensures result == x or result == -x
+
+extern "C" def fill(data: mut list[uint8], n: int64) -> None:
+    requires n <= len(data)
+    ensures len(data) >= n
+
+def use_it(x: int32) -> int32:
+    requires x > -100
+    y = abs_value(x)
+    assert y >= 0
+    return y
+
+def bad() -> int32:
+    return abs_value(-2147483648)
+
+def buffers() -> int64:
+    mut data: list[uint8] = [0, 0, 0]
+    fill(data, 2)
+    assert len(data) >= 2
+    fill(data, 9)
+    return len(data)
+
+def main():
+    print(use_it(-5))
+"#,
+    )
+    .expect("source");
+    let program = crate::check_path(&main).expect("an extern contract checks");
+    if smt::SolverCommand::find(None).is_ok() {
+        let module = crate::mir::lower_for_verification(&program);
+        let report = verify_module(&program, &module, &Options::default()).expect("verifies");
+        assert_eq!(
+            open_checks(&report),
+            ["17 requires failed", "23 requires failed"],
+            "{report:#?}"
+        );
+    }
+    // The contract checks like a function's.
+    std::fs::write(
+        &main,
+        "extern \"C\" def f(x: int32) -> int32:\n    ensures result > y\n\ndef main():\n    print(f(1))\n",
+    )
+    .expect("source");
+    let error = crate::check_path(&main).expect_err("an unknown name");
+    assert!(error.message.contains("`y`"), "{}", error.message);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -74,7 +74,12 @@ The rules for these declarations:
 - **Return type.** Every extern function spells an explicit `-> Type`. Use
   `-> None` for a C function that returns no value.
 - **No body.** An extern function has no Aura body, type parameters, receiver,
-  defaults, or trailing colon.
+  or defaults. Its only block is an optional trusted contract.
+- **Trusted contract.** An indented block of `requires` and `ensures` clauses
+  states what the C function needs and promises. `aura verify` proves each
+  `requires` at every call and assumes each `ensures` after it, without
+  proof. The program checks neither when it runs, because the contract is
+  trusted. See [Verification](/manual/verification#trust).
 - **Opaque handles.** An opaque declaration is written
   `extern "C" opaque class Name`. It has no fields, methods, body, or type
   parameters.

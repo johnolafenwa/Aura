@@ -70,6 +70,7 @@ fn item_name_matches_decl_name() {
         params: vec![],
         return_type: dummy_type("int32"),
         span: Span::new(1, 1),
+        contracts: Vec::new(),
     });
     let extern_opaque_item = Item::ExternOpaqueClass(ExternOpaqueClassDecl {
         public: true,

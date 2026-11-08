@@ -232,6 +232,11 @@ impl<'a> VerifyContext<'a> {
     fn new(program: &'a Program, module: &'a MirModule) -> Self {
         let mut decls = BTreeMap::new();
         let mut spec_defs = BTreeMap::new();
+        for function in program.extern_functions.values() {
+            if let Some(decl) = &function.contract_decl {
+                decls.entry(function.decl.name.clone()).or_insert(decl);
+            }
+        }
         for (name, function) in &program.functions {
             decls.insert(name.clone(), &function.decl);
             if function.decl.spec {

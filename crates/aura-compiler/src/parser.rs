@@ -779,12 +779,33 @@ impl Parser {
                 "`extern` functions cannot return Aura views",
             ));
         }
-        if self.at_simple(&TokenKind::Colon) {
-            return Err(self.error_here(
-                "`extern` function declarations have no Aura body; remove `:` and the indented block",
-            ));
-        }
-        self.expect_newline()?;
+        // An indented block holds only the trusted contract.
+        let contracts = if self.eat_simple(&TokenKind::Colon).is_some() {
+            self.expect_newline()?;
+            self.expect_simple(TokenKind::Indent)?;
+            let contracts = self.parse_contract_clauses(ClauseContext::Function)?;
+            self.skip_newlines();
+            if let Some(clause) = contracts
+                .iter()
+                .find(|clause| clause.kind == ContractKind::Decreases)
+            {
+                return Err(Diagnostic::coded_at(
+                    "AU2048",
+                    clause.span,
+                    "an `extern` function states only `requires` and `ensures`, which `aura verify` trusts",
+                ));
+            }
+            if contracts.is_empty() || !self.at_simple(&TokenKind::Dedent) {
+                return Err(self.error_here(
+                    "an `extern` function has no Aura body; its indented block holds only `requires` and `ensures` clauses",
+                ));
+            }
+            self.expect_simple(TokenKind::Dedent)?;
+            contracts
+        } else {
+            self.expect_newline()?;
+            Vec::new()
+        };
 
         Ok(Item::ExternFunction(ExternFunctionDecl {
             public,
@@ -794,6 +815,7 @@ impl Parser {
             params,
             return_type,
             span,
+            contracts,
         }))
     }
 

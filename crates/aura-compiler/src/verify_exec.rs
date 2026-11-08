@@ -3048,6 +3048,40 @@ impl<'a> Exec<'a> {
                     fresh_target(self)
                 }
             },
+            CallTarget::Extern(call) if self.cx.decl(&call.symbol).is_some() => {
+                // A trusted contract: the call proves the `requires` and
+                // the result and `mut` arguments have the `ensures`.
+                let mut pre = Vec::new();
+                let mut post = Vec::new();
+                for (param, arg) in call.params.iter().zip(args) {
+                    let value = fit(
+                        self.operand(state, &arg.value, IntTy::of(&param.ty)),
+                        &param.ty,
+                    );
+                    pre.push((param.name.clone(), value.clone()));
+                    let after = match (&arg.writeback_place, param.passing) {
+                        (Some(place), MirReceiverKind::BorrowMut) => {
+                            let after = self.fresh(&param.ty, &param.name);
+                            self.write_place(state, place, after.clone());
+                            after
+                        }
+                        (Some(place), _) => {
+                            self.havoc_place(state, place);
+                            value
+                        }
+                        _ => value,
+                    };
+                    post.push((param.name.clone(), after));
+                }
+                let span = self.span;
+                self.call_requires(state, &call.symbol, &pre, span);
+                let result = match target_type.as_ref().unwrap_or(&call.return_type) {
+                    Type::Unit => Val::Unit,
+                    ty => self.fresh(ty, target.unwrap_or("result")),
+                };
+                self.call_ensures(state, &call.symbol, &pre, &post, &result);
+                result
+            }
             CallTarget::Extern(_) => {
                 self.havoc_writebacks(state, args);
                 fresh_target(self)

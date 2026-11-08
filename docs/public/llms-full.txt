@@ -11147,7 +11147,12 @@ The rules for these declarations:
 - **Return type.** Every extern function spells an explicit `-> Type`. Use
   `-> None` for a C function that returns no value.
 - **No body.** An extern function has no Aura body, type parameters, receiver,
-  defaults, or trailing colon.
+  or defaults. Its only block is an optional trusted contract.
+- **Trusted contract.** An indented block of `requires` and `ensures` clauses
+  states what the C function needs and promises. `aura verify` proves each
+  `requires` at every call and assumes each `ensures` after it, without
+  proof. The program checks neither when it runs, because the contract is
+  trusted. See [Verification](/manual/verification#trust).
 - **Opaque handles.** An opaque declaration is written
   `extern "C" opaque class Name`. It has no fields, methods, body, or type
   parameters.
@@ -13371,7 +13376,8 @@ type-alias-declaration
 
 extern-function-declaration
     = "extern", STRING, "def", identifier,
-      "(", [ parameter-list ], ")", "->", type, NEWLINE ;
+      "(", [ parameter-list ], ")", "->", type,
+      ( NEWLINE | ":", NEWLINE, INDENT, contract-clause, { contract-clause }, DEDENT ) ;
 
 extern-opaque-declaration
     = "extern", STRING, "opaque", "class", identifier, NEWLINE ;
@@ -13388,7 +13394,9 @@ own type parameters. Anywhere else, `type` is an ordinary identifier. Static
 checking rejects alias expansion cycles with `AU2012`.
 
 Parsing requires the extern ABI string to be exactly `"C"`. Extern
-declarations are bodyless and non-generic.
+declarations are bodyless and non-generic. An extern function's optional
+indented block holds only `requires` and `ensures` clauses, its trusted
+contract.
 [FFI v0](/manual/ffi) restricts their parameter modes and types.
 
 ## Type References And Type Parameters
@@ -23398,6 +23406,9 @@ booleans, with each integer type's range as a check:
 - `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
   element reads and writes, and `copy`
 - `spec def` helpers, `old`, and `result` in contracts, and `ghost` locals
+- `extern "C"` functions with a trusted contract: an indented block of
+  `requires` and `ensures` after the signature. Each call proves the
+  `requires`, and the result and `mut` arguments have the `ensures`
 - task starts: `group.start(work, n)` proves `work`'s `requires` on the
   arguments the child receives, and the value of `Ready` from
   `task.result()`, `poll()`, or `result_or(...)` has `work`'s `ensures`.
@@ -23492,6 +23503,19 @@ trusts: a wrong proof would turn a trap into an out-of-bounds read, a
 wrapped integer, or a broken contract. So the
 flag is off by default for now. It becomes the default for release builds
 once differential testing of such builds against the interpreter covers it.
+
+A trusted contract on an `extern "C"` function is the other thing a proof
+relies on without checking. The verifier cannot read C, so it takes the
+`ensures` as given:
+
+```aura fragment
+extern "C" def clamp_index(i: int64, n: int64) -> int64:
+    requires n > 0
+    ensures 0 <= result and result < n
+```
+
+A wrong `ensures` there makes proofs that rely on it wrong too. Keep such a
+contract to what the C function's own documentation promises.
 
 ## Source: docs/book/index.md
 

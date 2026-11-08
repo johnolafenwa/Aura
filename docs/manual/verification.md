@@ -202,6 +202,9 @@ booleans, with each integer type's range as a check:
 - `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
   element reads and writes, and `copy`
 - `spec def` helpers, `old`, and `result` in contracts, and `ghost` locals
+- `extern "C"` functions with a trusted contract: an indented block of
+  `requires` and `ensures` after the signature. Each call proves the
+  `requires`, and the result and `mut` arguments have the `ensures`
 - task starts: `group.start(work, n)` proves `work`'s `requires` on the
   arguments the child receives, and the value of `Ready` from
   `task.result()`, `poll()`, or `result_or(...)` has `work`'s `ensures`.
@@ -296,3 +299,16 @@ trusts: a wrong proof would turn a trap into an out-of-bounds read, a
 wrapped integer, or a broken contract. So the
 flag is off by default for now. It becomes the default for release builds
 once differential testing of such builds against the interpreter covers it.
+
+A trusted contract on an `extern "C"` function is the other thing a proof
+relies on without checking. The verifier cannot read C, so it takes the
+`ensures` as given:
+
+```aura fragment
+extern "C" def clamp_index(i: int64, n: int64) -> int64:
+    requires n > 0
+    ensures 0 <= result and result < n
+```
+
+A wrong `ensures` there makes proofs that rely on it wrong too. Keep such a
+contract to what the C function's own documentation promises.

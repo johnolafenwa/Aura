@@ -145,7 +145,7 @@ fn p64_extern_declarations_reject_unsupported_abis_bodies_and_defaults() {
         .expect_err("extern functions have no Aura body");
     assert_eq!(
         body.message,
-        "`extern` function declarations have no Aura body; remove `:` and the indented block"
+        "an `extern` function has no Aura body; its indented block holds only `requires` and `ensures` clauses"
     );
 
     let missing_return = parse("extern \"C\" def flush()\n")
@@ -182,6 +182,28 @@ fn p64_extern_declarations_reject_unsupported_abis_bodies_and_defaults() {
         opaque_body.message,
         "`extern` opaque classes have no Aura body; remove `:` and the indented block"
     );
+
+    // The block holds only a trusted contract.
+    let module =
+        parse("extern \"C\" def getpid() -> int32:\n    requires true\n\n    ensures result > 0\n")
+            .expect("an extern contract parses");
+    let Item::ExternFunction(decl) = &module.items[0] else {
+        panic!("an extern function");
+    };
+    assert_eq!(decl.contracts.len(), 2);
+    let measure = parse("extern \"C\" def getpid() -> int32:\n    decreases 1\n")
+        .expect_err("an extern function has no measure");
+    assert_eq!(
+        measure.message,
+        "an `extern` function states only `requires` and `ensures`, which `aura verify` trusts"
+    );
+    for source in [
+        "extern \"C\" def getpid() -> int32:\n    requires true\n    return 1\n",
+        "extern \"C\" def getpid() -> int32:\n    pass\n",
+    ] {
+        let error = parse(source).expect_err("only clauses");
+        assert_eq!(error.message, "an `extern` function has no Aura body; its indented block holds only `requires` and `ensures` clauses");
+    }
 }
 
 #[test]

@@ -7,6 +7,10 @@ in this file.
 
 ## Unreleased
 
+- An `extern "C"` function may end its signature with `:` and an indented
+  block of `requires` and `ensures` clauses: a trusted contract. `aura
+  verify` proves the `requires` at each call and assumes the `ensures`
+  after it; the program checks neither.
 - `aura verify` proves the `requires` of a task's target where the task
   starts, and gives the task's result the target's `ensures` when
   `result`, `poll`, or `result_or` reads it.

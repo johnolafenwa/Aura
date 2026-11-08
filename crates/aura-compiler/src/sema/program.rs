@@ -333,6 +333,9 @@ pub struct ExternFunctionInfo {
     pub module_name: String,
     pub decl: crate::ast::ExternFunctionDecl,
     pub signature: FunctionSignature,
+    /// The declaration's trusted contract as a bodyless function, which
+    /// the checker and `aura verify` read like any other contract.
+    pub contract_decl: Option<FunctionDecl>,
 }
 
 #[derive(Clone, Debug)]
@@ -1508,6 +1511,24 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             ExternFunctionInfo {
                 module_name: module_name.clone(),
                 decl: extern_decl.clone(),
+                contract_decl: (!extern_decl.contracts.is_empty()).then(|| FunctionDecl {
+                    public: extern_decl.public,
+                    name: extern_decl.name.clone(),
+                    type_params: Vec::new(),
+                    type_param_bounds: BTreeMap::new(),
+                    receiver: None,
+                    params: extern_decl.params.clone(),
+                    return_type: extern_decl.return_type.clone(),
+                    view_return: None,
+                    body: Vec::new(),
+                    span: extern_decl.span,
+                    property: None,
+                    decorators: Vec::new(),
+                    doc: None,
+                    contracts: extern_decl.contracts.clone(),
+                    spec: false,
+                    lemma: false,
+                }),
                 signature: FunctionSignature {
                     params,
                     param_passings: resolve_param_passings(&extern_decl.params),
@@ -2141,6 +2162,24 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                         (trait_name.clone(), method_name.clone()),
                         equality_sink.borrow().clone(),
                     );
+                }
+            }
+            // A trusted `extern` contract checks like a function's, with no
+            // body.
+            for function in program.extern_functions.values() {
+                if function.module_name != program.module_name {
+                    continue;
+                }
+                if let Some(decl) = &function.contract_decl {
+                    let info = FunctionInfo {
+                        module_name: function.module_name.clone(),
+                        decl: decl.clone(),
+                        signature: function.signature.clone(),
+                        type_param_bounds: BTreeMap::new(),
+                    };
+                    checker
+                        .with_module_name(&function.module_name)
+                        .check_function_contracts(&info)?;
                 }
             }
             for (function_name, function) in &program.functions {
