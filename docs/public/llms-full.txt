@@ -6395,6 +6395,40 @@ run. Because nothing checks an erased call when the program runs, a lemma
 or a lemma call that the verifier cannot prove keeps
 `aura build --remove-proved-checks` from removing any check.
 
+## Ghost Locals
+
+A `ghost` local holds a value only the verifier reads: a count of steps, a
+copy of an earlier value, or the result of a `spec def`. Declare it with
+`ghost name = value`, or `ghost mut name = value` to change it later with
+`ghost name = value` or `ghost name += value`. The program never computes a
+ghost local, and an `assert` or loop clause that reads one is checked by
+`aura verify` but not when the program runs.
+
+```aura
+def total(xs: list[int64]) -> int64:
+    requires len(xs) <= 100
+    requires all([0 <= x and x <= 10 for x in xs])
+    ensures result <= 1000
+    mut s = 0
+    ghost mut steps = 0
+    for i in range(len(xs)):
+        invariant steps == i and 0 <= s and s <= 10 * i
+        s += xs[i]
+        ghost steps += 1
+    assert steps == len(xs)
+    return s
+
+def main():
+    print(total([1, 2, 3]))  # 6
+```
+
+A ghost value, and an `assert` that reads a ghost local, must be pure, and
+either may call `spec def` functions. Only ghost values, `assert`s, and
+loop clauses may read a ghost local; ordinary code that reads one, or
+assigns its name without `ghost`, reports `AU2048`. As with an erased
+lemma call, a ghost `assert` that the verifier cannot prove keeps
+`aura build --remove-proved-checks` from removing any check.
+
 ## Class Invariants
 
 A class can state what is true of every one of its objects, with
@@ -6459,7 +6493,8 @@ followed by the method or construction that ran the check.
 ## Contextual Keywords
 
 `requires`, `ensures`, `invariant`, and `decreases` are keywords only at
-the start of a clause line, and `spec` and `lemma` only before `def`. Elsewhere they
+the start of a clause line, `spec` and `lemma` only before `def`, and
+`ghost` only before a local's assignment. Elsewhere they
 are ordinary names, so `requires = 1`, `invariant: int64`, and the call
 `requires(x)` keep their meaning. Write a space before a parenthesis that
 starts a condition: `requires (a or b) and c`. `result`, `old`, `forall`,
@@ -23344,7 +23379,7 @@ booleans, with each integer type's range as a check:
 - tuples, classes, enums, and unions such as `int64 | None`, field by field
 - `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
   element reads and writes, and `copy`
-- `spec def` helpers, `old`, and `result` in contracts
+- `spec def` helpers, `old`, and `result` in contracts, and `ghost` locals
 - quantifiers: `forall(x in xs, condition)`, `exists(...)`, and
   `all([... for ...])` or `any(...)`, with any number of `for` clauses, each
   over a `range`, a modeled list, or `enumerate` or `zip` of modeled lists,

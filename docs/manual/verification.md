@@ -182,7 +182,7 @@ booleans, with each integer type's range as a check:
 - tuples, classes, enums, and unions such as `int64 | None`, field by field
 - `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
   element reads and writes, and `copy`
-- `spec def` helpers, `old`, and `result` in contracts
+- `spec def` helpers, `old`, and `result` in contracts, and `ghost` locals
 - quantifiers: `forall(x in xs, condition)`, `exists(...)`, and
   `all([... for ...])` or `any(...)`, with any number of `for` clauses, each
   over a `range`, a modeled list, or `enumerate` or `zip` of modeled lists,

@@ -477,6 +477,20 @@ impl FunctionChecker<'_> {
         Ok(())
     }
 
+    /// A `ghost` local's value, or an `assert` that reads one, is erased
+    /// when the program runs, so it must be pure: nothing it does may be
+    /// lost.
+    pub(super) fn check_ghost_use(
+        &self,
+        expr: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+        what: &str,
+    ) -> Result<()> {
+        let mut receivers = Vec::new();
+        self.reject_impure(expr, what, &mut receivers)?;
+        self.check_receivers(receivers, &mut locals.clone(), what)
+    }
+
     /// Runs `check` with `spec def` references allowed.
     fn with_spec<T>(&self, check: impl FnOnce() -> Result<T>) -> Result<T> {
         let outer = self.in_spec.replace(true);

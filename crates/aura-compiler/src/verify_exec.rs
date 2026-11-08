@@ -230,6 +230,8 @@ pub(super) struct Exec<'a> {
     pub(super) assumed_fails: BTreeSet<usize>,
     /// Set while the `requires` of a `lemma def` call are proved.
     pub(super) erasing: bool,
+    /// Set while a block of `ghost` code runs.
+    in_ghost: bool,
     /// The declaration whose contract the call being made uses instead of
     /// its callee's own: a trait method's, for a call through the trait.
     pub(super) contract_override: Option<&'a crate::ast::FunctionDecl>,
@@ -275,6 +277,7 @@ impl<'a> Exec<'a> {
             span: function.span,
             assumed_fails: BTreeSet::new(),
             erasing: false,
+            in_ghost: false,
             contract_override: None,
             labels,
             unsupported: None,
@@ -346,6 +349,7 @@ impl<'a> Exec<'a> {
             facts: self.facts.len(),
             site: None,
             erased: self.erasing
+                || self.in_ghost
                 || self
                     .cx
                     .decl(&self.function.name)
@@ -1175,6 +1179,7 @@ impl<'a> Exec<'a> {
 
     fn block(&mut self, index: usize, mut state: State) -> Vec<(usize, State)> {
         let block: &'a BasicBlock = &self.function.blocks[index];
+        self.in_ghost = crate::mir::is_ghost_label(&block.label);
         for (position, instruction) in block.instructions.iter().enumerate() {
             self.position = (index, position);
             self.instruction(&mut state, instruction);

@@ -10475,6 +10475,21 @@ pub fn lower_for_verification(program: &Program) -> MirModule {
 /// `lower_for_verification` gives and names the proved accesses as
 /// `verify::Report::proved_sites` does. Returns the module and how many
 /// accesses lost their check.
+/// The first block and temporary number of `ghost` code, which only the
+/// verifier's lowering emits. Numbering it apart leaves the blocks and
+/// temporaries of the code around it as the program's own lowering numbers
+/// them, so proved checks still map onto that lowering.
+const GHOST_NUMBERING: usize = 1_000_000_000;
+
+/// Whether a block holds `ghost` code, whose checks no run performs.
+pub(crate) fn is_ghost_label(label: &str) -> bool {
+    label
+        .rsplit('_')
+        .next()
+        .and_then(|suffix| suffix.parse::<usize>().ok())
+        .is_some_and(|suffix| suffix >= GHOST_NUMBERING)
+}
+
 pub fn lower_with_proved_checks<E>(
     program: &Program,
     debug: bool,
@@ -11755,6 +11770,10 @@ struct Lowerer<'a> {
     current_block: usize,
     temp_counter: usize,
     block_counter: usize,
+    /// The block and temporary counters of `ghost` code.
+    ghost_counters: (usize, usize),
+    /// Set while `ghost` code is lowered.
+    in_ghost: bool,
     loop_stack: Vec<LoopLabels>,
     return_redirects: Vec<ReturnRedirect>,
     with_stack: Vec<String>,
@@ -11987,6 +12006,8 @@ impl<'a> Lowerer<'a> {
             current_block: 0,
             temp_counter: 0,
             block_counter: 0,
+            ghost_counters: (GHOST_NUMBERING, GHOST_NUMBERING),
+            in_ghost: false,
             loop_stack: Vec::new(),
             return_redirects: Vec::new(),
             with_stack: Vec::new(),
@@ -13747,6 +13768,15 @@ impl<'a> Lowerer<'a> {
 
     fn lower_stmt(&mut self, stmt: &Stmt, needed_after: &BTreeSet<String>) -> bool {
         match stmt {
+            Stmt::Assign(
+                assign @ AssignStmt {
+                    target: AssignTarget::Name(name),
+                    ..
+                },
+            ) if crate::parser::is_ghost_name(name) => {
+                self.lower_ghost(|this| this.lower_assign(assign));
+                true
+            }
             Stmt::Assign(assign) => {
                 self.lower_assign(assign);
                 true
@@ -13906,6 +13936,15 @@ impl<'a> Lowerer<'a> {
             }
             Stmt::Pass(_) => true,
             Stmt::Expr(expr_stmt) if self.erased_lemma_call(&expr_stmt.expr) => true,
+            Stmt::Assert(assert_stmt) if crate::parser::mentions_ghost(&assert_stmt.condition) => {
+                self.lower_ghost(|this| match &assert_stmt.clause {
+                    Some(clause) => {
+                        this.lower_clause_checks(std::slice::from_ref(clause.as_ref()), clause.kind)
+                    }
+                    None => this.lower_assert(assert_stmt),
+                });
+                true
+            }
             Stmt::Expr(expr_stmt) => {
                 let value_type = self.infer_expr_type(&expr_stmt.expr);
                 let value = self.lower_expr_for_owned_value(&expr_stmt.expr, value_type.as_ref());
@@ -14242,6 +14281,12 @@ impl<'a> Lowerer<'a> {
     ) {
         for clause in clauses.iter().filter(|clause| clause.kind == kind) {
             let message = format!("`{}` clause failed: `{}`", kind.keyword(), clause.text);
+            if crate::parser::mentions_ghost(&clause.condition) && !self.in_ghost {
+                self.lower_ghost(|this| {
+                    this.lower_clause_check(&clause.condition, message, clause.span, kind)
+                });
+                continue;
+            }
             self.lower_clause_check(&clause.condition, message, clause.span, kind);
         }
     }
@@ -28958,6 +29003,28 @@ impl<'a> Lowerer<'a> {
         } else {
             self.new_temp()
         }
+    }
+
+    /// Lowers `ghost` code: erased outside verification, and otherwise in
+    /// blocks of its own, numbered apart.
+    fn lower_ghost(&mut self, lower: impl FnOnce(&mut Self)) {
+        if !VERIFICATION.with(std::cell::Cell::get) {
+            return;
+        }
+        if self.in_ghost {
+            lower(self);
+            return;
+        }
+        std::mem::swap(&mut self.block_counter, &mut self.ghost_counters.0);
+        std::mem::swap(&mut self.temp_counter, &mut self.ghost_counters.1);
+        self.in_ghost = true;
+        let start = self.new_block("ghost");
+        self.terminate(Terminator::Goto(self.label(start)));
+        self.switch_to(start);
+        lower(self);
+        self.in_ghost = false;
+        std::mem::swap(&mut self.block_counter, &mut self.ghost_counters.0);
+        std::mem::swap(&mut self.temp_counter, &mut self.ghost_counters.1);
     }
 
     fn new_block(&mut self, prefix: &str) -> usize {

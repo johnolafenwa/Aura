@@ -7,6 +7,11 @@ in this file.
 
 ## Unreleased
 
+- `ghost name = value` declares a local only the verifier reads. The program
+  never computes it, and an `assert` or loop clause that reads one is
+  proved by `aura verify` and not checked when the program runs. Ghost
+  values are pure and may call `spec def` functions; ordinary code cannot
+  read a ghost local.
 - A `for` loop over a `range(...)` call checks its invariants once more when
   the range runs out, with the target at the range's end, so after
   `for i in range(n)` an invariant holds with `i == n`. An invariant that

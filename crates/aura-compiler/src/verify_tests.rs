@@ -1869,3 +1869,80 @@ def main():
 "#;
     assert_open(source, &["21 requires failed"]);
 }
+
+#[test]
+fn ghost_locals_are_verified_and_erased_when_the_program_runs() {
+    let source = r#"
+spec def sq(n: int64) -> int64:
+    return n * n
+
+def total(xs: list[int64]) -> int64:
+    requires len(xs) <= 100
+    requires all([0 <= x and x <= 10 for x in xs])
+    ensures result <= 1000
+    mut s = 0
+    ghost mut steps = 0
+    for i in range(len(xs)):
+        invariant steps == i and 0 <= s and s <= 10 * i
+        s += xs[i]
+        ghost steps = steps + 1
+    assert steps == len(xs)
+    return s
+
+def square(n: int64) -> int64:
+    requires 0 <= n and n <= 10
+    ghost k: int64 = sq(n)
+    ghost mut seen = n
+    ghost seen += 1
+    mut j = 0
+    while j < 3:
+        invariant 0 <= j and j <= 3 and seen == n + 1 + j and k == n * n
+        decreases 3 - j
+        ghost seen = seen + 1
+        j += 1
+    assert seen == n + 4
+    return n * n
+
+def main():
+    print(total([1, 2, 3]))
+    print(square(4))
+"#;
+    assert_proved(source);
+    let program = crate::check_source(source).expect("checks");
+    // The program's own lowering has no trace of the ghost locals.
+    let plain = format!("{:?}", crate::mir::lower(&program));
+    assert!(!plain.contains("ghost"), "{plain}");
+    if smt::SolverCommand::find(None).is_ok() {
+        let (_, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+            let options = Options {
+                prove_sites: true,
+                ..Options::default()
+            };
+            verify_module(&program, module, &options).map(|report| report.proved_sites)
+        })
+        .expect("verifies");
+        // The read of `xs[i]` maps across the ghost code around it.
+        assert!(removed >= 1, "{removed}");
+    }
+
+    // A ghost `assert` no run checks: until it is proved, nothing counts as
+    // proved.
+    let Some(report) = assert_open(
+        r#"
+def f(n: int64) -> int64:
+    requires 0 <= n and n <= 10
+    ghost mut seen = n * 2
+    ghost seen = seen + 1
+    assert seen == 2 * n + 1
+    assert seen > 100
+    return n
+
+def main():
+    print(f(3))
+"#,
+        &["7 assert failed"],
+    ) else {
+        return;
+    };
+    assert!(report.proved_sites.is_empty());
+}

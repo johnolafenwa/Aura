@@ -32755,3 +32755,57 @@ fn associated_type_misuse_reports_clear_diagnostics() {
         assert!(error.message.contains(expected), "{source}\n{error:?}");
     }
 }
+
+#[test]
+fn ghost_locals_are_pure_and_read_only_by_ghost_code() {
+    crate::check_source(concat!(
+        "spec def sq(n: int64) -> int64:\n",
+        "    return n * n\n",
+        "\n",
+        "def f(n: int64, xs: list[int64]) -> int64:\n",
+        "    ghost k: int64 = sq(n)\n",
+        "    ghost mut m = len(xs)\n",
+        "    ghost m += k\n",
+        "    for x in xs:\n",
+        "        invariant m >= 0 or k < 0\n",
+        "        pass\n",
+        "    assert m == m, \"a ghost assert\"\n",
+        "    ghost = 3\n",
+        "    return n + ghost\n",
+        "\n",
+        "def main():\n",
+        "    print(f(1, [2]))\n",
+    ))
+    .expect("ghost locals check");
+    for (source, code, message) in [
+        (
+            "def f(xs: list[int64]):\n    ghost k = xs.pop()\n",
+            "AU2048",
+            "a `ghost` value must not change program state",
+        ),
+        (
+            "def f(n: int64) -> int64:\n    ghost k = n\n    return k\n",
+            "AU2048",
+            "`k` is a `ghost` local; only `ghost` values",
+        ),
+        (
+            "def g(n: int64) -> int64:\n    print(n)\n    return n\n\ndef f(n: int64):\n    ghost k = n\n    assert k == g(n)\n",
+            "AU2048",
+            "an `assert` that reads a `ghost` local must not change program state",
+        ),
+        (
+            "def f(n: int64):\n    ghost k = n\n    k = 3\n",
+            "AU2048",
+            "`k` is a `ghost` local; only `ghost k = value` may change it",
+        ),
+        (
+            "def f(xs: list[int64]):\n    ghost xs[0] = 1\n",
+            "AU2048",
+            "`ghost` declares a local",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err(source);
+        assert_eq!(error.code, code, "{source}: {}", error.message);
+        assert!(error.message.contains(message), "{source}: {}", error.message);
+    }
+}
