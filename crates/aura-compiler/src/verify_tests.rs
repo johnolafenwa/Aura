@@ -2258,6 +2258,54 @@ def main():
 }
 
 #[test]
+fn contracts_read_float_and_str_values() {
+    assert_proved(
+        r#"
+def scale(a: float64, b: float64) -> float64:
+    requires a >= 1.0 and a <= 2.0 and b >= 1.0 and b <= 2.0
+    ensures result == a * b and result - a * b == 0.0
+    ensures result == (a + b) - (a + b) + a * b
+    return a * b
+
+def halve(x: float64) -> float64:
+    requires x >= 1.0 and x <= 2.0
+    ensures result == x / 2.0
+    return x / 2.0
+
+def join(a: str, b: str) -> str:
+    ensures result == a + b
+    ensures len(result) == len(a) + len(b)
+    return a + b
+
+def choose(flag: bool, a: str, b: str) -> str:
+    ensures result == (a if flag else b)
+    if flag:
+        return a.clone()
+    return b.clone()
+
+def fchoose(flag: bool, x: float64) -> float64:
+    requires x >= 1.0 and x <= 2.0
+    ensures result == (x if flag else 1.0)
+    if flag:
+        return x
+    return 1.0
+
+def back(x: float32) -> int32:
+    requires 0.0 <= x and x <= 10.0
+    return x as int32
+
+def main():
+    print(scale(1.5, 1.5))
+    print(halve(1.5))
+    print(join("a", "b"))
+    print(choose(true, "a", "b"))
+    print(fchoose(false, 1.5))
+    print(back(2.5))
+"#,
+    );
+}
+
+#[test]
 fn floats_are_ieee_754_values() {
     let Some(report) = assert_open(
         r#"
@@ -2456,6 +2504,8 @@ fn extern_functions_have_trusted_contracts() {
     ensures result >= 0
     ensures result == x or result == -x
 
+extern "C" def plain(x: int32) -> int32
+
 extern "C" def fill(data: mut list[uint8], n: int64) -> None:
     requires n <= len(data)
     ensures len(data) >= n
@@ -2464,7 +2514,7 @@ def use_it(x: int32) -> int32:
     requires x > -100
     y = abs_value(x)
     assert y >= 0
-    return y
+    return plain(y)
 
 def bad() -> int32:
     return abs_value(-2147483648)
@@ -2487,7 +2537,7 @@ def main():
         let report = verify_module(&program, &module, &Options::default()).expect("verifies");
         assert_eq!(
             open_checks(&report),
-            ["17 requires failed", "23 requires failed"],
+            ["19 requires failed", "25 requires failed"],
             "{report:#?}"
         );
     }
